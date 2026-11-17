@@ -138,9 +138,9 @@ async fn control(
         desired: c.desired,
         generation: c.generation,
         handoff,
-        // No node is pinned to a measured fact (spec 0014 §8); the field
-        // leaves the response with the protocol step.
+        // No node is pinned to a measured fact (spec 0014 §8). Slot count: not sent yet (0015).
         qualification: None,
+        slots: None,
     }))
 }
 

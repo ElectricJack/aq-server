@@ -11,6 +11,6 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 aq-lifecycle-api = { path = "../aq-lifecycle-api", version = "=0.1.0" }
-aq-admission = { path = "../aq-admission", version = "=0.1.12" }
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 anyhow.workspace = true
 semver.workspace = true

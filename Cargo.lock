@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "aq-admission"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aq-lifecycle-protocol",
  "aq-session-protocol",
@@ -224,7 +224,7 @@ name = "aq-dashboard-contract"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-lifecycle-api",
  "schemars",
  "semver",
@@ -257,7 +257,7 @@ dependencies = [
 name = "aq-environment-templates"
 version = "0.1.0"
 dependencies = [
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "serde",
  "serde_json",
 ]
@@ -467,9 +467,9 @@ dependencies = [
 
 [[package]]
 name = "aq-phase-terminal-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-session-protocol",
  "schemars",
  "serde",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "aq-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "serde",
@@ -773,7 +773,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aq-accounting",
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-admission 0.3.3",
  "aq-agent-api",
  "aq-agent-grants",
