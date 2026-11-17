@@ -163,6 +163,16 @@ no task running.
 - Attempts from before keep their history. Each gets a `ran_with` summary
   from its launch record (the old agent, intelligence and execution profile
   ids without their version) with `snapshot_digest: null`.
-- A supervisor whose chosen profile came from the catalog is switched off;
-  choose a level for it again. An internal-work setting that names an old
-  profile id is reported as missing and runs on the default.
+- A supervisor keeps its control: `enabled` is not changed, and its stored
+  choice becomes a level id plus the chosen candidate (provider, model,
+  reasoning, harness). The old profile id is the level id; `fast-low` becomes
+  `simple-low` and `fast-high` becomes `simple-high`; any other id is kept. A
+  stored choice names no snapshot: it is resolved against the active snapshot
+  each time the control is read or the supervisor starts. When the level does
+  not exist or does not list that candidate, the supervisor stays enabled,
+  does not start, and `GET /api/supervisors` shows `unavailable_reason` on its
+  entry (the service's `stage` says the same), for example
+  ``its level `standard-medium` no longer lists gpt-6.1-sol on codex; choose a
+  level``. It starts by itself once the level lists the candidate again.
+- An internal-work setting that names an old profile id is reported as
+  missing and runs on the default.

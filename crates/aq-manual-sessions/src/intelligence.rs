@@ -73,3 +73,86 @@ pub(super) async fn first_of(s: &Service, id: &str) -> Result<Value> {
         .find(|c| c["profile_id"] == id)
         .ok_or_else(|| conflict("No installed interactive provider is configured for this project"))
 }
+
+/// Why the stored choice `profile` (a level id and one of its candidates)
+/// cannot run on `snapshot`, or the digest of the snapshot it resolves
+/// against. A stored choice names no snapshot: it is resolved against the
+/// active one each time it is read or started, so it runs again as soon as
+/// the level lists the candidate again.
+pub fn stored_choice(
+    snapshot: Option<&aq_profiles::roles::Snapshot>,
+    profile: &Value,
+) -> std::result::Result<String, String> {
+    let text = |key: &str| profile[key].as_str().unwrap_or_default();
+    let (level, model, harness) = (text("profile_id"), text("model"), text("harness"));
+    let Some(found) = snapshot.and_then(|s| s.intelligence(level)) else {
+        return Err(format!(
+            "its level `{level}` no longer exists; choose a level"
+        ));
+    };
+    let listed = found.candidates.iter().any(|c| {
+        c.provider == text("provider")
+            && c.model == model
+            && c.reasoning == text("reasoning")
+            && c.harnesses.iter().any(|h| h == harness)
+    });
+    if !listed {
+        return Err(format!(
+            "its level `{level}` no longer lists {model} on {harness}; choose a level"
+        ));
+    }
+    Ok(snapshot.map(|s| s.digest().to_string()).unwrap_or_default())
+}
+/// [`stored_choice`] against the active snapshot.
+pub async fn resolve_stored(
+    pool: &PgPool,
+    profile: &Value,
+) -> Result<std::result::Result<String, String>> {
+    let active = aq_role_settings::active_snapshot(pool)
+        .await
+        .map_err(|error| match error {
+            aq_role_settings::Error::Database(error) => Error::from(error),
+            _ => bad("The stored roles and profiles are invalid"),
+        })?;
+    Ok(stored_choice(active.as_ref().map(|a| &a.snapshot), profile))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stored_choice;
+    use aq_profiles::roles::{DocumentLimits, SelectionDefaults, compile, default_documents};
+    use serde_json::json;
+
+    #[test]
+    fn a_stored_choice_resolves_against_the_snapshot_or_says_why_not() {
+        let snapshot = compile(
+            &default_documents(),
+            &SelectionDefaults::default(),
+            &DocumentLimits::default(),
+        )
+        .unwrap();
+        let level = snapshot.intelligence("standard-medium").unwrap();
+        let c = &level.candidates[0];
+        let choice = json!({"profile_id":"standard-medium","provider":c.provider,"model":c.model,"reasoning":c.reasoning,"harness":c.harnesses[0]});
+        assert_eq!(
+            stored_choice(Some(&snapshot), &choice),
+            Ok(snapshot.digest().to_string())
+        );
+        let mut other = choice.clone();
+        other["model"] = json!("gpt-6.1-sol");
+        other["harness"] = json!("codex");
+        assert_eq!(
+            stored_choice(Some(&snapshot), &other),
+            Err(
+                "its level `standard-medium` no longer lists gpt-6.1-sol on codex; choose a level"
+                    .into()
+            )
+        );
+        other["profile_id"] = json!("fast-low");
+        assert_eq!(
+            stored_choice(Some(&snapshot), &other),
+            Err("its level `fast-low` no longer exists; choose a level".into())
+        );
+        assert!(stored_choice(None, &choice).is_err());
+    }
+}

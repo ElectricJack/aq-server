@@ -398,6 +398,7 @@ version = "0.1.0"
 dependencies = [
  "aq-human-http",
  "aq-machine-control",
+ "aq-profiles",
  "aq-project-policy",
  "aq-role-settings",
  "aq-swarm-settings",

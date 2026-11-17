@@ -631,6 +631,22 @@ async fn start_turn(
     generation: u64,
     session: Uuid,
 ) -> Result<()> {
+    // The saved level and candidate are resolved against the active role
+    // snapshot at each start: a level that is gone or no longer lists the
+    // candidate keeps the supervisor waiting with the reason, and it starts
+    // by itself once the level lists it again.
+    let resolved = aq_supervisor_control::resolve_stored(pool, &ctl.profile).await;
+    let digest = match resolved.map_err(|e| anyhow::anyhow!(e.1))? {
+        Ok(digest) => digest,
+        Err(reason) => {
+            let stage = format!("Waiting: {reason}");
+            report(pool, config, instance, "waiting", &stage, None).await?;
+            return Ok(());
+        }
+    };
+    let mut ctl = ctl.clone();
+    ctl.profile["snapshot_digest"] = serde_json::json!(digest);
+    let ctl = &ctl;
     if let Some(reason) = crate::config::swarm_wait(pool, Some(&ctl.profile)).await? {
         report(pool, config, instance, "waiting", swarm_stage(reason), None).await?;
         return Ok(());

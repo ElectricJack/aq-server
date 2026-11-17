@@ -9,6 +9,7 @@ aq-machine-control = { path = "../aq-machine-control" }
 axum = { workspace = true, features = ["ws"] }
 futures-util = "0.3"
 aq-role-settings = { path = "../aq-role-settings" }
+aq-profiles = { path = "../aq-profiles" }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-human-http = { path = "../aq-human-http" }
 chrono.workspace = true

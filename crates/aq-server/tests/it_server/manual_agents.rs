@@ -252,7 +252,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     // level's id on the candidate's provider.
     assert_eq!(
         receipt["profile"],
-        json!({"snapshot_digest":snapshot_digest,"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
+        json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
     );
     let class = aq_swarm_settings::admission::pinned_cell(&receipt["profile"]).unwrap();
     assert_eq!(
@@ -265,6 +265,85 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
             .1,
         receipt
     );
+    // The stored choice names no snapshot: every read and every start
+    // resolves it against the active one. While the level does not list the
+    // candidate, or does not exist, the control stays enabled with its
+    // profile and says why the supervisor is not running.
+    let entry = |fleet: &Value| {
+        let all = fleet["supervisors"].as_array().unwrap();
+        all.iter()
+            .find(|s| s["id"] == conversation)
+            .unwrap()
+            .clone()
+    };
+    let read = || async { entry(&call(&admin, "/api/supervisors", None, None, false).await.1) };
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(snapshot_digest.clone())
+    );
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(claude_row),
+    )
+    .await;
+    let unlisted = read().await;
+    assert_eq!(
+        unlisted["unavailable_reason"],
+        "its level `manual-model` no longer lists gpt-test on codex; choose a level"
+    );
+    assert_eq!(unlisted["enabled"], true);
+    assert_eq!(unlisted["profile"], receipt["profile"]);
+    assert!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap()
+            .is_err()
+    );
+    // Once the level lists the candidate again it resolves, with no owner
+    // action, against the snapshot that is active now.
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "manual-model",
+        &level(&format!("{claude_row}{codex_row}")),
+    )
+    .await;
+    assert!(read().await.get("unavailable_reason").is_none());
+    assert_eq!(
+        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
+            .await
+            .ok()
+            .unwrap(),
+        Ok(common::roles::active(&pool).await.digest().to_owned())
+    );
+    // A carried choice whose level has no document (migration 0134 keeps an
+    // old profile id that is no level).
+    sqlx::query("UPDATE supervisor_controls SET profile=jsonb_set(profile,'{profile_id}','\"engineering\"') WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let gone = read().await;
+    assert_eq!(
+        gone["unavailable_reason"],
+        "its level `engineering` no longer exists; choose a level"
+    );
+    assert_eq!(gone["enabled"], true);
+    sqlx::query("UPDATE supervisor_controls SET profile=$2 WHERE conversation_id=$1::uuid")
+        .bind(conversation)
+        .bind(&receipt["profile"])
+        .execute(&pool)
+        .await
+        .unwrap();
     let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
     assert_eq!(
         call(&admin, &uri, Some(stale), None, true).await.0,

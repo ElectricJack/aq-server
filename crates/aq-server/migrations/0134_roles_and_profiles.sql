@@ -174,11 +174,26 @@ UPDATE intelligence_node_snapshots s
  WHERE jsonb_typeof(s.snapshot->'harnesses') = 'array'
    AND EXISTS (SELECT 1 FROM jsonb_array_elements(s.snapshot->'harnesses') h WHERE h ? 'models');
 
--- A supervisor's chosen profile named an entry of the old catalog. It cannot
--- be resolved any more: the supervisor is switched off and the owner chooses
--- a level again.
+-- A supervisor keeps its control and its choice. The stored choice becomes a
+-- level id and the chosen candidate (provider, model, reasoning, harness);
+-- `enabled` and the revision are untouched. The old profile id is the level
+-- id, except the two renamed classes (`fast-low` is `simple-low`, `fast-high`
+-- is `simple-high`); an id with no level of that name keeps its id. No
+-- snapshot digest is stored: the server resolves the level and candidate
+-- against the active snapshot each time the control is read or the
+-- supervisor starts, and says why when the level does not list them.
 UPDATE supervisor_controls
-   SET enabled = FALSE, profile = NULL, revision = revision + 1
- WHERE profile IS NOT NULL AND NOT (profile ? 'snapshot_digest');
+   SET profile = jsonb_strip_nulls(jsonb_build_object(
+         'profile_id', CASE profile->>'profile_id'
+                         WHEN 'fast-low' THEN 'simple-low'
+                         WHEN 'fast-high' THEN 'simple-high'
+                         ELSE profile->>'profile_id' END,
+         'candidate_id', concat_ws(':', profile->>'provider', profile->>'model', profile->>'reasoning'),
+         'name', profile->'name',
+         'provider', profile->'provider',
+         'model', profile->'model',
+         'reasoning', profile->'reasoning',
+         'harness', profile->'harness'))
+ WHERE jsonb_typeof(profile) = 'object';
 
 UPDATE meta SET value='134' WHERE key='state_format_version';

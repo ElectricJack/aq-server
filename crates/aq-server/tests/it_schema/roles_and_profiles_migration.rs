@@ -170,6 +170,8 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
     let partial_attempt = Uuid::new_v4();
     let plain_attempt = Uuid::new_v4();
     let supervisor = Uuid::new_v4();
+    let renamed_supervisor = Uuid::new_v4();
+    let stopped_supervisor = Uuid::new_v4();
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET LOCAL session_replication_role='replica'")
         .execute(&mut *tx)
@@ -229,15 +231,26 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
             .await
             .unwrap();
     }
-    // A supervisor switched on with a choice from the old catalog.
-    sqlx::query("INSERT INTO supervisor_controls(conversation_id,enabled,revision,profile,approved_by) VALUES($1,TRUE,3,$2,$3)")
-        .bind(supervisor)
-        .bind(json!({"catalog_digest": digest, "profile_id": "engineering", "profile_version": 2,
-            "provider": "openai", "model": "gpt", "harness": "codex"}))
-        .bind(owner)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    // Supervisors with a choice from the old catalog: two switched on (one
+    // on a renamed class), one switched off.
+    for (id, enabled, profile_id) in [
+        (supervisor, true, "standard-medium"),
+        (renamed_supervisor, true, "fast-low"),
+        (stopped_supervisor, false, "deep-high"),
+    ] {
+        sqlx::query("INSERT INTO supervisor_controls(conversation_id,enabled,revision,profile,approved_by) VALUES($1,$2,3,$3,$4)")
+            .bind(id)
+            .bind(enabled)
+            .bind(json!({"catalog_digest": digest, "profile_id": profile_id, "profile_version": 2,
+                "candidate_id": "v1-codex", "name": "Standard · Medium",
+                "provider": "openai", "model": "gpt-6.1-sol", "harness": "codex",
+                "reasoning": "medium", "reasoning_configuration_reference": "codex:medium",
+                "options": {"service_tier": "fast"}}))
+            .bind(owner)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
     tx.commit().await.unwrap();
     let mut before = Vec::new();
     for table in HISTORY {
@@ -328,15 +341,25 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
         json!({"revision": 1, "harnesses": [
             {"harness": "claude", "cli_version": "1"}, {"harness": "codex", "cli_version": "2"}]})
     );
-    // The supervisor's old choice cannot be resolved: it is switched off.
-    let control: (bool, Option<Value>, i64) = sqlx::query_as(
-        "SELECT enabled,profile,revision FROM supervisor_controls WHERE conversation_id=$1",
-    )
-    .bind(supervisor)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(control, (false, None, 4));
+    // Supervisors are carried: `enabled` and the revision as they were, the
+    // choice as a level id and its candidate, with no snapshot digest.
+    for (id, enabled, level) in [
+        (supervisor, true, "standard-medium"),
+        (renamed_supervisor, true, "simple-low"),
+        (stopped_supervisor, false, "deep-high"),
+    ] {
+        let control: (bool, Option<Value>, i64) = sqlx::query_as(
+            "SELECT enabled,profile,revision FROM supervisor_controls WHERE conversation_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let carried = json!({"profile_id": level, "candidate_id": "openai:gpt-6.1-sol:medium",
+            "name": "Standard · Medium", "provider": "openai", "model": "gpt-6.1-sol",
+            "reasoning": "medium", "harness": "codex"});
+        assert_eq!(control, (enabled, Some(carried), 3));
+    }
     // The swarm's occupancy count reads the old attempts without an error.
     let mut conn = pool.acquire().await.unwrap();
     aq_swarm_settings::admission::counts(&mut conn)
