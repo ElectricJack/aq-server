@@ -50,7 +50,6 @@ pub async fn fence_locked(
 ) -> Result<Current, AppError> {
     if fresh.project.revision != p.spec.project_revision
         || fresh.node_id != request.identity.node_id
-        || fresh.project.binding.catalog_digest != p.selection.catalog_digest.as_str()
         || serde_json::to_value(&fresh.project.binding).map_err(|_| AppError::Internal)?
             != serde_json::to_value(&p.project.binding).map_err(|_| AppError::Internal)?
     {
