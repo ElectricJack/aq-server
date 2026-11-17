@@ -220,15 +220,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aq-context-renewal"
-version = "0.1.0"
-dependencies = [
- "aq-protocol",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "aq-dashboard-contract"
 version = "0.1.0"
 dependencies = [
@@ -809,7 +800,6 @@ dependencies = [
  "aq-agent-grants",
  "aq-central-authority",
  "aq-command-registry",
- "aq-context-renewal",
  "aq-dashboard-contract",
  "aq-delivery",
  "aq-environment-templates",
