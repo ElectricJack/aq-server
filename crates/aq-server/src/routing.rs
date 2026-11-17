@@ -297,7 +297,7 @@ pub async fn placements(
     ready: &[crate::agent_access::scheduling::ReadyTask],
 ) -> Result<std::collections::BTreeMap<Uuid, Placement>, AppError> {
     let mut out = std::collections::BTreeMap::new();
-    if ready.is_empty() {
+    if ready.is_empty() || !crate::role_settings::tables(state) {
         return Ok(out);
     }
     let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);

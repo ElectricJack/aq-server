@@ -74,6 +74,25 @@ pub async fn save(pool: &sqlx::PgPool, actor: Uuid, kind: Kind, id: &str, markdo
         .await
         .unwrap_or_else(|error| panic!("save {} `{id}`: {error:?}", kind.label()));
 }
+/// Whether this store has the role tables. A fixture held at an earlier
+/// migration prefix (`with_store_profile`) does not until [`install`].
+async fn stored(pool: &sqlx::PgPool) -> bool {
+    sqlx::query_scalar("SELECT to_regclass('role_documents') IS NOT NULL")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+/// Drop the role tables [`install`] gave a historical fixture store, so the
+/// store can be upgraded by its registered migrations.
+pub async fn remove_from_historical_store(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(
+        "DROP TABLE attempt_ran_with,role_snapshot_pins,role_settings_operations,\
+         role_default_installs,role_settings,role_documents,role_snapshots",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
 pub async fn active(pool: &sqlx::PgPool) -> Snapshot {
     aq_role_settings::active_snapshot(pool)
         .await
@@ -86,16 +105,6 @@ pub async fn active(pool: &sqlx::PgPool) -> Snapshot {
 /// execution profile, the fixture levels, and the selection defaults the
 /// fixture's tests were written for.
 pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
-    save(pool, actor, Kind::Execution, "sandbox", &execution(8192)).await;
-    for (id, candidates) in levels() {
-        let document = if candidates[0].1 == "model-a" {
-            level(id, &candidates)
-        } else {
-            open_level(id, &candidates)
-        };
-        save(pool, actor, Kind::Intelligence, id, &document).await;
-    }
-    let settings = aq_role_settings::settings(pool).await.unwrap();
     let defaults = SelectionDefaults {
         max_attempts: 3,
         max_lineage_elapsed_ms: 60_000,
@@ -103,6 +112,36 @@ pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
         unknown_cost: aq_profiles::UnknownCostPolicy::Deny,
         ..SelectionDefaults::default()
     };
+    let mut documents = vec![(Kind::Execution, "sandbox", execution(8192))];
+    for (id, candidates) in levels() {
+        let document = if candidates[0].1 == "model-a" {
+            level(id, &candidates)
+        } else {
+            open_level(id, &candidates)
+        };
+        documents.push((Kind::Intelligence, id, document));
+    }
+    // A fixture held at a migration prefix from before the role tables
+    // (`with_store_profile`) is given them: the role migration creates only
+    // its own tables, and the offer path reads the active snapshot from
+    // them. The rest of that store, and its format, stay at the prefix.
+    if !stored(pool).await {
+        let migration = include_str!("../../migrations/0134_roles_and_profiles.sql");
+        // Without its last statement, which stamps the store's format.
+        let (tables, stamp) = migration.rsplit_once("UPDATE meta").unwrap();
+        assert!(stamp.contains("state_format_version"));
+        sqlx::raw_sql(tables)
+            .execute(pool)
+            .await
+            .expect("role tables on a historical fixture store");
+        aq_role_settings::startup(pool, 0)
+            .await
+            .expect("install the shipped roles and profiles");
+    }
+    for (kind, id, document) in &documents {
+        save(pool, actor, *kind, id, document).await;
+    }
+    let settings = aq_role_settings::settings(pool).await.unwrap();
     let revision = settings.selection_defaults_revision;
     aq_role_settings::save_selection_defaults(pool, actor, &defaults, revision, Uuid::new_v4(), 1)
         .await

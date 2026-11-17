@@ -10,6 +10,9 @@ async fn actual32_open_owner_history_survives_registered33_upgrade() {
     issue(&f).await;
     let pool = &f.c.env.env.pool;
     let before = history(pool).await;
+    // The fixture gave this prefix-32 store the role tables to make its
+    // offer; the registered migrations create them themselves.
+    crate::common::roles::remove_from_historical_store(pool).await;
     let mut old = pool.acquire().await.unwrap();
     let backend: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut *old)
