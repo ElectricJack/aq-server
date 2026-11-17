@@ -20,7 +20,11 @@ pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     let scoped = include_str!("../../migrations/0109_supervisor_service.sql");
     // Spec 0012 §8: internal work tells a supervisor as the system component.
     let internal = include_str!("../../migrations/0119_internal_work.sql");
-    let source = if version >= 119 && internal.contains(&format!("FUNCTION {name}(")) {
+    // A handed-off turn that stopped without a reply is terminal.
+    let stopped = include_str!("../../migrations/0136_stopped_handoff_consumption.sql");
+    let source = if version >= 136 && stopped.contains(&format!("FUNCTION {name}(")) {
+        stopped
+    } else if version >= 119 && internal.contains(&format!("FUNCTION {name}(")) {
         internal
     } else if version >= 109 && scoped.contains(&format!("FUNCTION {name}(")) {
         scoped

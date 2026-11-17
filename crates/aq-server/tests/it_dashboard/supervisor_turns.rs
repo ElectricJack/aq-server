@@ -690,6 +690,68 @@ async fn upgrade_consumes_known_failure_and_retains_unknown_delivery() {
     }
 }
 
+/// Hands the plan's input to the agent, then stops it before any reply (an operator stop).
+async fn stop_after_handoff(f: &Fixture, p: &CentralPlan) {
+    let s = f.start(p).await;
+    f.report(
+        p,
+        Event::Handoff {
+            evidence: HandoffEvidence {
+                association: s.run.association().unwrap().clone(),
+                disposition: HandoffDisposition::HandedOff,
+                receipt: artifact(),
+            },
+        },
+    )
+    .await;
+    f.report(
+        p,
+        Event::Stopped {
+            evidence: StopEvidenceRef {
+                host: observation(p),
+                stopped_writers: artifact(),
+            },
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stopped_handed_off_turn_without_reply_consumes_and_never_resends() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let first = f.send().await;
+    let r = f.reserve().await.reservation.unwrap();
+    let p = f.plan(r.id, 1).await;
+    stop_after_handoff(&f, &p).await;
+    f.assert_consumed(r.id).await;
+    let second = f.send().await;
+    let next = f.reserve().await.reservation.unwrap();
+    let ids: Vec<_> = next.batch.messages.iter().map(|m| m.message_id).collect();
+    assert_eq!(
+        ids,
+        vec![second],
+        "handed-off input {first} is not sent again"
+    );
+    f.db.store().await;
+}
+
+#[tokio::test]
+async fn upgrade_consumes_a_stopped_handed_off_turn_stranded_before_136() {
+    let f = Fixture::new(135).await;
+    f.send().await;
+    let r = f.reserve().await.reservation.unwrap();
+    let p = f.plan(r.id, 1).await;
+    stop_after_handoff(&f, &p).await;
+    assert_eq!(
+        f.preview().await.status,
+        PreviewStatus::ReservationOutstanding,
+        "format 135 strands the reservation"
+    );
+    f.db.store().await;
+    f.assert_consumed(r.id).await;
+    assert_eq!(f.preview().await.status, PreviewStatus::NoEligibleMail);
+}
+
 fn conversation_schema(v: &Value) {
     let s: Value = serde_json::from_str(include_str!(
         "../../../../protocol/human-supervisor-conversation/v1/schema.json"
