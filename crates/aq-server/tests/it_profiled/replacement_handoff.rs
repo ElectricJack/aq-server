@@ -283,9 +283,9 @@ async fn handoff_observation_is_the_saved_commit() {
     let row = sqlx::query("SELECT revision,binding,binding_observation FROM project_execution_bindings WHERE project_id=$1").bind(request.project_id).fetch_one(&pool).await.unwrap();
     let project = FrozenProjectBinding {
         project: serde_json::from_value(json!({"revision":row.get::<i64,_>("revision"),"binding":row.get::<Value,_>("binding"),"validated_at_ms":NOW,"validation":row.get::<Value,_>("binding_observation")})).unwrap(),
-        catalog_activation_revision: 1, worker_membership_digest: "synthetic".into(),
+        snapshot_digest: "synthetic".into(), worker_membership_digest: "synthetic".into(),
         binding_observation: serde_json::from_value(row.get("binding_observation")).unwrap(), node_id: f.node.node_id,
-        environment: "synthetic".into(), agent_profile: "synthetic".into(), intelligence_profile: "synthetic".into(), execution_profile: "synthetic".into(),
+        environment: "synthetic".into(), role: "synthetic".into(), intelligence_profile: "synthetic".into(), execution_profile: "synthetic".into(),
     };
     let policy = f
         .state

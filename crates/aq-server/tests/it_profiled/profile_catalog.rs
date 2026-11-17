@@ -916,9 +916,8 @@ fn automatic_router_prefers_configured_models_and_retains_recipe_and_permission_
         .iter()
         .find(|p| p.automatic_routing == Some(true))
         .unwrap();
-    // `any-model`: the router's candidates are not picked from the model choices by
-    // "not preference-only"; they are the Settings profiles' own, in the listed order.
-    #[cfg(feature = "any-model")]
+    // The router's candidates are the Settings profiles' own, in the listed order;
+    // they are not picked from the model choices.
     assert_eq!(
         (router.candidates.iter())
             .map(|c| (&c.model, &c.reasoning_configuration_reference, &c.harnesses))
@@ -927,15 +926,6 @@ fn automatic_router_prefers_configured_models_and_retains_recipe_and_permission_
             .map(|c| (&c.model, &c.reasoning_configuration_reference, &c.harnesses))
             .collect::<Vec<_>>()
     );
-    #[cfg(not(feature = "any-model"))]
-    {
-        assert_eq!(router.candidates.len(), 1);
-        assert_eq!(router.candidates[0].model, "configured-model");
-        assert_eq!(
-            router.candidates[0].reasoning_configuration_reference,
-            "configured-high@1"
-        );
-    }
     assert!(
         router
             .selection_policy
@@ -1255,33 +1245,15 @@ async fn intelligence_structure_bounds_utf8_and_rejects_stale_catalog_unknown_pr
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// Epic `any-model`: a profile candidate's reference resolves to the native
-/// reasoning of the Settings choice it names on an installed harness, and to
-/// nothing when no choice has it or the harness does not accept the value.
+/// A Settings choice states the native reasoning its harness accepts, or none
+/// when its label is not an effort the harness takes.
 #[test]
-fn settings_choice_resolves_to_the_native_reasoning_its_harness_accepts() {
-    use aq_profile_settings::{ModelChoice, native_reasoning, resolve_candidates};
-    use aq_profiles::ModelCandidate;
+fn settings_choice_states_the_native_reasoning_its_harness_accepts() {
+    use aq_profile_settings::{ModelChoice, native_reasoning};
     let choice = |harness: &str, model: &str, reference: &str, reasoning: &str, options: Value| {
         serde_json::from_value::<ModelChoice>(json!({"provider":"anthropic","model":model,
             "harness":harness,"reasoning_configuration_reference":reference,"reasoning":reasoning,
             "preference_only":true,"options":options}))
-        .unwrap()
-    };
-    let candidate = |id: &str, model: &str, reference: &str, harnesses: &[&str]| ModelCandidate {
-        id: id.into(),
-        provider: "anthropic".into(),
-        model: model.into(),
-        reasoning_configuration_reference: reference.into(),
-        harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
-    };
-    let a = |id: &str| json!(crate::common::profiled::artifact(id, id.as_bytes()));
-    let installed = |harness: &str| {
-        serde_json::from_value::<aq_selection::InstalledHarness>(json!({"harness":harness,
-            "cli_version":"1","adapter":a("adapter"),"environment":a("environment"),
-            "qualification":a("qualification"),"failure_classifier":null,"models":[],
-            "capabilities":[],"limits":{"context_bytes":1,"max_output_tokens":1,"wall_time_ms":1,
-            "memory_bytes":1,"cpu_millis":1,"process_limit":1,"hard_cost_enforcer":null}}))
         .unwrap()
     };
     let choices = [
@@ -1302,34 +1274,4 @@ fn settings_choice_resolves_to_the_native_reasoning_its_harness_accepts() {
         choices.iter().map(native_reasoning).collect::<Vec<_>>(),
         [Some("default"), Some("high"), None, Some("low"), None, None]
     );
-    let candidates = [
-        candidate("a", "opus", "default@1", &["claude-code"]),
-        candidate("b", "opus", "high@1", &["claude-code", "codex"]),
-        candidate("c", "opus", "label@1", &["claude-code"]),
-        candidate("d", "opus", "absent@1", &["claude-code"]),
-        candidate("e", "gpt", "fast@1", &["codex"]),
-        candidate("f", "gpt", "default@1", &["codex"]),
-        candidate("g", "pro", "medium@1", &["gemini"]),
-        candidate("h", "opus", "high@1", &["claude-code"]),
-    ];
-    let harnesses = [installed("claude-code"), installed("codex")];
-    let resolved = resolve_candidates(&choices, &candidates, &harnesses);
-    assert_eq!(
-        resolved
-            .iter()
-            .map(|r| (
-                r.harness.as_str(),
-                r.model.as_str(),
-                r.reasoning_configuration_reference.as_str(),
-                r.native_reasoning.as_str()
-            ))
-            .collect::<Vec<_>>(),
-        [
-            ("claude-code", "opus", "default@1", "default"),
-            ("claude-code", "opus", "high@1", "high"),
-            ("codex", "gpt", "fast@1", "low"),
-        ]
-    );
-    // A harness that is not installed resolves nothing.
-    assert!(resolve_candidates(&choices, &candidates, &harnesses[1..1]).is_empty());
 }
