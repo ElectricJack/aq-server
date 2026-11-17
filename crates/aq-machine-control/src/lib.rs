@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
 pub mod holds;
+pub mod lapse;
 pub mod launch;
 pub mod lost;
 pub mod management;

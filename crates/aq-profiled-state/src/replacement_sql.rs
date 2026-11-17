@@ -20,7 +20,8 @@ pub const PRIORS: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))"
 );
 pub const PRIORS_PRE_101: &str = priors!("FALSE");
-/// From migration 102: a lost attempt released after a reboot is not charged (D2 ruling C).
+/// From migration 102: a lost attempt released after a reboot is not charged (D2 ruling C),
+/// nor is a granted attempt that never started (`aq_machine_control::lapse`).
 pub const PRIORS_102: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)"
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)"
 );

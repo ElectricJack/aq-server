@@ -18,6 +18,7 @@
 //! It never releases the claim, completes the task or touches Graph: B4's
 //! replacement owner re-assesses everything under its locks and releases.
 use super::database;
+use crate::machine_api::mapped;
 use crate::{
     AppState,
     error::AppError,
@@ -27,6 +28,7 @@ use crate::{
     },
 };
 use aq_admission::{ArtifactRef, Digest, LaunchBinding, Text, granted_closure};
+use aq_machine_control::lapse;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -56,24 +58,6 @@ pub(crate) fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRe
     })
 }
 
-/// Whether the worker's retained closure evidence shows that no harness pane
-/// ever existed. Pure; the closure route already verified its correlation.
-pub fn proves_never_started(evidence: &granted_closure::Evidence) -> bool {
-    match evidence {
-        granted_closure::Evidence::Suppressed { .. } => true,
-        granted_closure::Evidence::HostStopped { proof, .. } => paneless(&proof.observation),
-    }
-}
-/// A host whose stopped proof shows that no process ever ran under it: no
-/// pane root status, no reaped process, and a kernel wait that sees no
-/// children. This is the "host started, harness never launched" case (the
-/// guardian stopped before its gate created a pane). A host that created a
-/// pane always reaped at least its tmux processes, so any pane fails this
-/// rule and the attempt stays held for an operator.
-fn paneless(o: &granted_closure::StoppedObservation) -> bool {
-    o.kernel_wait_echild && o.root_status.is_none() && o.reaped_count == 0
-}
-
 pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(database)?;
     for sql in [
@@ -82,18 +66,23 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     ] {
         sqlx::query(sql).execute(&mut *tx).await.map_err(database)?;
     }
-    let Some(closure) = sqlx::query(
+    let closure = sqlx::query(
         "SELECT binding,operation_id,request_bytes,receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(database)?
-    else {
-        return Ok(ClosureSettlement::Unchanged);
+    .map_err(database)?;
+    // Without a closure only a granted, never-started attempt is settled here, once its grant
+    // has expired (`aq_machine_control::lapse`).
+    let binding = match &closure {
+        Some(closure) => closure.get("binding"),
+        None => match lapse::pending(&mut tx, attempt).await.map_err(mapped)? {
+            Some((binding, _)) => binding,
+            None => return Ok(ClosureSettlement::Unchanged),
+        },
     };
-    let binding: LaunchBinding =
-        serde_json::from_value(closure.get("binding")).map_err(|_| AppError::Internal)?;
+    let binding: LaunchBinding = serde_json::from_value(binding).map_err(|_| AppError::Internal)?;
     if binding.attempt_id != attempt {
         return Err(AppError::Internal);
     }
@@ -119,18 +108,33 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         tx.commit().await.map_err(database)?;
         return Ok(ClosureSettlement::Unchanged);
     }
-    if hot.status != Status::Cancelling || !hot.revoked {
-        return Ok(ClosureSettlement::Held("closure_authority_not_revoked"));
-    }
-    let request: granted_closure::Request =
-        serde_json::from_slice(&closure.get::<Vec<u8>, _>("request_bytes"))
-            .map_err(|_| AppError::Internal)?;
-    request.validate().map_err(|_| AppError::Internal)?;
-    if request.binding != binding {
-        return Err(AppError::Internal);
-    }
-    if !proves_never_started(&request.evidence) {
-        return Ok(ClosureSettlement::Held("closure_does_not_prove_nonstart"));
+    if let Some(closure) = &closure {
+        if hot.status != Status::Cancelling || !hot.revoked {
+            return Ok(ClosureSettlement::Held("closure_authority_not_revoked"));
+        }
+        let request: granted_closure::Request =
+            serde_json::from_slice(&closure.get::<Vec<u8>, _>("request_bytes"))
+                .map_err(|_| AppError::Internal)?;
+        request.validate().map_err(|_| AppError::Internal)?;
+        if request.binding != binding {
+            return Err(AppError::Internal);
+        }
+        if !request.evidence.proves_never_started() {
+            return Ok(ClosureSettlement::Held("closure_does_not_prove_nonstart"));
+        }
+    } else {
+        // Sampled under the locks Started and renewal take: both refuse an expired grant, so
+        // from here on this attempt can never start. A closure recorded meanwhile owns it.
+        let now = (state.clock)().timestamp_millis().max(0) as u64;
+        let expired = (hot.grant.as_ref()).is_some_and(|g| now >= g.expires_at_ms);
+        if !expired
+            || !matches!(hot.status, Status::Granted | Status::Cancelling)
+            || super::ensure_launch_open_locked(&mut tx, &binding)
+                .await
+                .is_err()
+        {
+            return Ok(ClosureSettlement::Unchanged);
+        }
     }
     let history: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1) \
@@ -158,12 +162,27 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         format!("aq.source-export/{export}"),
         &json!({"operation_id": export, "manifest_digest": manifest.manifest_digest, "bundle_digest": manifest.bundle_digest, "checkpoint": manifest.checkpoint}),
     )?;
-    let operation: Uuid = closure.get("operation_id");
-    let stop_receipt = ArtifactRef {
-        id: Text::new(format!("aq.launch-closure/{operation}")).map_err(|_| AppError::Internal)?,
-        version: Text::new("1").map_err(|_| AppError::Internal)?,
-        digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
-            .map_err(|_| AppError::Internal)?,
+    let (operation, stop_receipt) = match &closure {
+        Some(closure) => {
+            let operation: Uuid = closure.get("operation_id");
+            let stop = ArtifactRef {
+                id: Text::new(format!("aq.launch-closure/{operation}"))
+                    .map_err(|_| AppError::Internal)?,
+                version: Text::new("1").map_err(|_| AppError::Internal)?,
+                digest: serde_json::from_value(json!(closure.get::<String, _>("receipt_digest")))
+                    .map_err(|_| AppError::Internal)?,
+            };
+            (operation, stop)
+        }
+        None => {
+            tracing::warn!(%attempt, reason = lapse::REASON, "granted attempt never started and its grant expired; closed by the server");
+            crate::profiled_execution::journal::revoke(&mut tx, attempt).await?;
+            hot.revoked = true;
+            let record =
+                json!({"attempt_id": attempt, "reason": lapse::REASON, "grant": hot.grant});
+            let stop = reference(format!("{}{attempt}", lapse::RECEIPT), &record)?;
+            (attempt, stop)
+        }
     };
     let effects_receipt = reference(
         format!("aq.closure-effects/{operation}"),
@@ -241,20 +260,28 @@ pub async fn settle_and_release(
     if matches!(settled, ClosureSettlement::Held(_)) {
         return Ok(settled);
     }
-    let row: Option<(Uuid, bool, Option<String>)> = sqlx::query_as(
-        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}' FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) JOIN profiled_launch_closures c USING(attempt_id) WHERE a.attempt_id=$1",
+    let row: Option<(Uuid, bool, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT a.task_id,a.holds_task,h.state#>>'{stop,kind}',h.state#>>'{stop,receipt,id}' FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1",
     )
     .bind(attempt)
     .fetch_optional(&state.store.pool)
     .await
     .map_err(database)?;
-    let Some((task, true, Some(stop))) = row else {
+    let Some((task, true, Some(stop), receipt)) = row else {
         return Ok(settled);
     };
     if stop != "not_started" {
         return Ok(settled);
     }
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
+    // A lapsed attempt always frees its task and node; a later offer is assessed by B4.
+    if receipt.is_some_and(|id| id.starts_with(lapse::RECEIPT)) {
+        let freed = lapse::release(&state.store.pool, attempt, now as i64).await;
+        return Ok(match freed.map_err(mapped)? {
+            true => ClosureSettlement::Released,
+            false => settled,
+        });
+    }
     match replacement::assess_task(state, task, now).await? {
         Assessment::Replace(r) if r.predecessor == attempt => {
             replacement::release(state, task, &r).await?;
@@ -265,56 +292,12 @@ pub async fn settle_and_release(
     }
 }
 
-/// Held closed attempts with no known stop, after `after`. Bounded cursor.
+/// Held closed or lapsed attempts awaiting this owner, after `after`. Bounded cursor.
 pub async fn awaiting(
     state: &AppState,
     after: Option<Uuid>,
     limit: i64,
 ) -> Result<Vec<Uuid>, AppError> {
-    sqlx::query_scalar(
-        "SELECT c.attempt_id FROM profiled_launch_closures c JOIN execution_attempts a USING(attempt_id) \
-         JOIN profiled_authority_hot h USING(attempt_id) WHERE a.kind='profiled_v1' AND a.holds_task \
-         AND h.state#>>'{stop,kind}' IN ('unknown','not_started') AND ($1::UUID IS NULL OR c.attempt_id>$1) \
-         ORDER BY c.attempt_id LIMIT $2",
-    )
-    .bind(after)
-    .bind(limit)
-    .fetch_all(&state.store.pool)
-    .await
-    .map_err(database)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use granted_closure::StoppedObservation;
-    fn observation(pane: bool) -> StoppedObservation {
-        let session = json!({"kind":"remote","node_id":Uuid::new_v4(),"boot_id":Uuid::new_v4(),"session_id":Uuid::new_v4(),"attempt_id":Uuid::new_v4(),"assignment_generation":1});
-        let guardian = json!({"intent":{"launch_id":Uuid::new_v4(),"session":session,"manifest_digest":"a".repeat(64),"configuration_digest":"b".repeat(64)},"process":{"pid":10,"start_ticks":5},"nonce":Uuid::new_v4(),"machine_boot_id":Uuid::new_v4(),"pid_namespace":"pid:[4026531836]"});
-        let p = pane.then(|| json!({"server":{"pid":11,"start_ticks":6},"pane":{"pid":12,"start_ticks":7},"pane_id":"%1","session_name":"aq"}));
-        serde_json::from_value(json!({"guardian":guardian,"phase":"stopped","pane":p,"permit_sequence":1,"permit_deadline_boot_ms":1,"observed_boot_ms":1,"reaped_count":u64::from(pane),"kernel_wait_echild":true,"root_status":if pane {json!(0)} else {Value::Null},"stop_reason":null})).unwrap()
-    }
-    #[test]
-    fn only_a_host_stopped_before_any_pane_proves_nonstart() {
-        let none = observation(false);
-        none.validate().unwrap();
-        assert!(paneless(&none));
-        let ran = observation(true);
-        ran.validate().unwrap();
-        assert!(
-            !paneless(&ran),
-            "a pane that existed may have run the harness"
-        );
-        let mut reaped = observation(false);
-        reaped.reaped_count = 1;
-        assert!(!paneless(&reaped));
-        // A pane that ran and was reaped, even without a root status, holds.
-        let mut paned = observation(true);
-        paned.root_status = None;
-        assert!(!paneless(&paned));
-        // Children still waited on (no ECHILD) is not a stop proof of nothing.
-        let mut waiting = observation(false);
-        waiting.kernel_wait_echild = false;
-        assert!(!paneless(&waiting));
-    }
+    let now = (state.clock)().timestamp_millis();
+    (lapse::awaiting(&state.store.pool, after, now, limit).await).map_err(mapped)
 }

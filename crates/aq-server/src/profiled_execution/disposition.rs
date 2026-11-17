@@ -165,7 +165,19 @@ pub async fn abandon(
             .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?
     };
     if !row.get::<bool, _>("holds_task") || !unsettled || !(stopped || closed) || stop.is_none() {
-        return Err(conflict());
+        // Granted and never started: it may still start until its grant expires, and then the
+        // server closes it itself.
+        let pending = aq_machine_control::lapse::pending(&mut tx, attempt).await;
+        return Err(match pending.map_err(crate::machine_api::mapped)? {
+            Some((_, at)) => AppError::Conflict(format!(
+                "this granted attempt has not started and may still start until its grant expires at {}; the server then closes it as {} and frees its task and node, without a disposition",
+                chrono::DateTime::from_timestamp_millis(at)
+                    .unwrap_or_default()
+                    .to_rfc3339(),
+                aq_machine_control::lapse::REASON
+            )),
+            None => conflict(),
+        });
     }
     let recorded_at_ms = (state.clock)().timestamp_millis();
     if recorded_at_ms <= 0 {

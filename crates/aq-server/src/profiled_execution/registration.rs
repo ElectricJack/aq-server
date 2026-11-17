@@ -114,12 +114,13 @@ pub async fn register(
     auth: &crate::worker_api::AuthenticatedNode,
     request: &Register,
 ) -> Result<Register, AppError> {
-    let mut tx = state
-        .store
-        .pool
-        .begin()
-        .await
-        .map_err(|_| AppError::Internal)?;
+    // A granted attempt that never started and whose grant expired must not fence a restart.
+    let (pool, now) = (&state.store.pool, (state.clock)().timestamp_millis());
+    let lapsed = aq_machine_control::lapse::on_node(pool, auth.id(), now).await;
+    for attempt in lapsed.unwrap_or_default() {
+        let _ = super::closure::settlement::settle_and_release(state, attempt).await;
+    }
+    let mut tx = pool.begin().await.map_err(|_| AppError::Internal)?;
     let reply = register_locked(state, &mut tx, auth, request).await?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
     Ok(reply)

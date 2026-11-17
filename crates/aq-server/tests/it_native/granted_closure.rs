@@ -667,3 +667,204 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
     let (status, replay) = abandon("owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
+
+mod never_started {
+    //! A granted attempt that never started is closed by the server once its grant expired
+    //! (`aq_machine_control::lapse`): nothing it holds is held forever.
+    use super::*;
+    use aq_server::profiled_execution::{
+        cancellation, closure::settlement, closure::settlement::ClosureSettlement,
+        expiry::ClosureSweep, registration, replacement, started as started_owner,
+    };
+    use std::sync::atomic::Ordering;
+
+    async fn field(c: &Prepared, sql: &str) -> Option<String> {
+        sqlx::query_scalar(sql)
+            .bind(c.request.binding.attempt_id)
+            .fetch_one(&c.case.env.env.pool)
+            .await
+            .unwrap()
+    }
+    async fn held(c: &Prepared) -> bool {
+        field(
+            c,
+            "SELECT holds_task::TEXT FROM execution_attempts WHERE attempt_id=$1",
+        )
+        .await
+            == Some("true".into())
+    }
+    async fn stop_kind(c: &Prepared) -> String {
+        let sql = "SELECT state#>>'{stop,kind}' FROM profiled_authority_hot WHERE attempt_id=$1";
+        field(c, sql).await.unwrap()
+    }
+    /// Moves the server clock to the instant the grant expires.
+    async fn expire(c: &Prepared) {
+        let sql = "SELECT state#>>'{grant,expires_at_ms}' FROM profiled_authority_hot WHERE attempt_id=$1";
+        let at: i64 = field(c, sql).await.unwrap().parse().unwrap();
+        c.clock.store(at, Ordering::SeqCst);
+    }
+    /// The node's registration after a restart: the same runtime under a new boot identity.
+    async fn restarted(c: &Prepared) -> Result<(), aq_server::error::AppError> {
+        let row: (serde_json::Value,) = sqlx::query_as("SELECT convert_from(metadata_bytes,'UTF8')::JSONB FROM profiled_native_registration_history h JOIN profiled_launch_registrations l USING(registration_id) WHERE l.attempt_id=$1")
+            .bind(c.request.binding.attempt_id).fetch_one(&c.case.env.env.pool).await.unwrap();
+        let metadata: registration::NativeRegistration = serde_json::from_value(row.0).unwrap();
+        let mut changed = metadata.request;
+        changed.operation_id = Uuid::new_v4();
+        changed.identity.boot_id = Uuid::new_v4();
+        let auth = closure::auth(c).await;
+        registration::register(&c.case.env.env.state, &auth, &changed)
+            .await
+            .map(drop)
+    }
+    async fn settle(c: &Prepared) -> ClosureSettlement {
+        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id)
+            .await
+            .unwrap()
+    }
+    async fn abandon(c: &Prepared) -> String {
+        let attempt = c.request.binding.attempt_id;
+        let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "the launch never started"});
+        let response = aq_server::build_admin_router(c.case.env.env.state.clone())
+            .oneshot(
+                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                    .header("content-type", "application/json")
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .header("X-AQ-Request", "1")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&body).into_owned()
+    }
+
+    #[tokio::test]
+    async fn expired_grant_without_a_start_is_closed_and_frees_its_task_and_node() {
+        let c = closure::setup().await;
+        let r = request(&c).await;
+        let (state, attempt) = (&c.case.env.env.state, r.binding.attempt_id);
+        // Not expired: it may still start, so everything stays held.
+        assert_eq!(settle(&c).await, ClosureSettlement::Unchanged);
+        assert!(held(&c).await);
+        let refused = abandon(&c).await;
+        assert!(
+            refused.contains("may still start until its grant expires at")
+                && refused.contains("granted_never_started"),
+            "{refused}"
+        );
+        let fenced = format!("{:?}", restarted(&c).await.unwrap_err());
+        assert!(
+            fenced.contains("prior execution claims remain held"),
+            "{fenced}"
+        );
+        assert_eq!(stop_kind(&c).await, "unknown");
+        // Expired: a Started report is refused from this instant on ...
+        expire(&c).await;
+        let auth = closure::auth(&c).await;
+        let late = started(&r, c.request.journal_revision);
+        assert!(started_owner::record(state, &auth, &late).await.is_err());
+        // ... and the restarted node's registration closes the attempt and is admitted.
+        restarted(&c).await.unwrap();
+        assert!(!held(&c).await, "the task claim is released");
+        let hot: serde_json::Value =
+            sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(&c.case.env.env.pool)
+                .await
+                .unwrap();
+        assert_eq!(hot["status"], "finished");
+        assert_eq!(hot["revoked"], true);
+        assert_eq!(hot["stop"]["kind"], "not_started");
+        assert_eq!(
+            hot["stop"]["receipt"]["id"],
+            format!("aq.granted-never-started/{attempt}")
+        );
+        assert_eq!(hot["retention"]["kind"], "retained");
+        assert_eq!(hot["effects"]["kind"], "quiescent");
+        let (released, task): (i64, Uuid) = sqlx::query_as("SELECT (SELECT count(*) FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id),a.task_id FROM execution_attempts a WHERE a.attempt_id=$1")
+            .bind(attempt).fetch_one(&c.case.env.env.pool).await.unwrap();
+        assert_eq!(released, 1);
+        // The task is replaceable by the normal rules, and the attempt is not charged.
+        let now = (state.clock)().timestamp_millis() as u64;
+        let assessed = replacement::assess_task(state, task, now).await.unwrap();
+        let replace = assessed.replacement().expect("{assessed:?}");
+        assert_eq!(replace.predecessor, attempt);
+        assert_eq!((replace.attempts_started, replace.exempt_attempts), (1, 1));
+        assert!(!replace.needs_release);
+        // Idempotent, and a start stays refused.
+        assert_eq!(settle(&c).await, ClosureSettlement::Unchanged);
+        assert!(
+            settlement::awaiting(state, None, 8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(started_owner::record(state, &auth, &late).await.is_err());
+        assert_eq!(released, 1);
+    }
+
+    #[tokio::test]
+    async fn the_sweep_closes_a_cancelled_never_started_attempt_once() {
+        let c = closure::setup().await;
+        let r = request(&c).await;
+        let state = &c.case.env.env.state;
+        cancellation::cancel(
+            state,
+            r.binding.attempt_id,
+            Uuid::new_v4(),
+            "owner cancelled",
+        )
+        .await
+        .unwrap();
+        let mut sweep = ClosureSweep::default();
+        assert_eq!(sweep.tick(state).await.unwrap().inspected, 0, "not expired");
+        assert!(held(&c).await);
+        expire(&c).await;
+        // Racing closers and a late Started report: one closure, no start.
+        let auth = closure::auth(&c).await;
+        let late = started(&r, c.request.journal_revision);
+        let attempt = r.binding.attempt_id;
+        let (_, _, start) = tokio::join!(
+            settlement::settle_and_release(state, attempt),
+            settlement::settle_and_release(state, attempt),
+            started_owner::record(state, &auth, &late)
+        );
+        assert!(start.is_err());
+        let mut sweep = ClosureSweep::default();
+        sweep.tick(state).await.unwrap();
+        assert!(!held(&c).await);
+        assert_eq!(stop_kind(&c).await, "not_started");
+        let progress = sweep.tick(state).await.unwrap();
+        assert_eq!((progress.inspected, progress.closed), (0, 0));
+        let releases: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM profiled_replacement_releases")
+                .fetch_one(&c.case.env.env.pool)
+                .await
+                .unwrap();
+        assert_eq!(releases, 1);
+        restarted(&c).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_started_attempt_with_an_expired_grant_is_left_to_its_stop_owners() {
+        let c = closure::setup().await;
+        let r = request(&c).await;
+        let state = &c.case.env.env.state;
+        let auth = closure::auth(&c).await;
+        let report = started(&r, c.request.journal_revision);
+        started_owner::record(state, &auth, &report).await.unwrap();
+        expire(&c).await;
+        assert_eq!(settle(&c).await, ClosureSettlement::Unchanged);
+        let progress = ClosureSweep::default().tick(state).await.unwrap();
+        assert_eq!(progress.inspected, 0);
+        assert!(held(&c).await);
+        assert_eq!(stop_kind(&c).await, "running");
+        let fenced = format!("{:?}", restarted(&c).await.unwrap_err());
+        assert!(
+            fenced.contains("prior execution claims remain held"),
+            "{fenced}"
+        );
+    }
+}
