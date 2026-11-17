@@ -580,7 +580,7 @@ impl Store {
 
     pub async fn connect_with(options: PgConnectOptions) -> Result<Store> {
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(aq_machine_control::limits::current().connections as u32)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(options)
             .await?;
@@ -618,27 +618,17 @@ impl Store {
     }
 
     async fn initialize_pools(pool: PgPool) -> Result<Store> {
+        let limits = aq_machine_control::limits::current();
         let control_pool = PgPoolOptions::new()
-            .max_connections(4)
+            .max_connections(limits.control_connections as u32)
             .acquire_timeout(Duration::from_secs(2))
             .connect_lazy_with(pool.connect_options().as_ref().clone());
         let ms = Duration::from_millis;
-        let renewal_pool = timed(
-            &pool,
-            2,
-            ms(250),
-            "750ms",
-            "150ms",
-            Some("aq-native-renewal"),
-        );
-        let presence_pool = timed(
-            &pool,
-            2,
-            ms(250),
-            "750ms",
-            "150ms",
-            Some("aq-material-presence"),
-        );
+        let (renewals, presences) = (limits.renewal_connections, limits.presence_connections);
+        let name = Some("aq-native-renewal");
+        let renewal_pool = timed(&pool, renewals as u32, ms(250), "750ms", "150ms", name);
+        let name = Some("aq-material-presence");
+        let presence_pool = timed(&pool, presences as u32, ms(250), "750ms", "150ms", name);
         let notification_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
         let observation_pool = timed(&pool, 4, ms(2000), "3s", "2s", None);
         let terminal_pool = timed(&pool, 4, ms(1000), "750ms", "100ms", Some("aq-terminal"));

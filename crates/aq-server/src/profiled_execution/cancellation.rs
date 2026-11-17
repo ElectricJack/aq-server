@@ -209,7 +209,7 @@ pub(crate) async fn pending(
         return Err(AppError::Forbidden("cancellation node differs".into()));
     }
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    crate::worker_api::read_current_node(&mut tx, auth).await?;
     super::registration::admitted_runtime_locked(&mut tx, auth.id(), identity.boot_id).await?;
     // Frozen fixture binaries predate cancellation delivery. Only explicit
     // historical construction selects this path; current startup still refuses

@@ -60,6 +60,7 @@ pub fn level(route: Option<&aq_routing::CompactRoute>, default_intelligence: &st
 /// role lists are agent grants, sealed from the manifest's permission plan.
 const GRAPH_OPERATIONS: [&str; 3] = ["task.read", "knowledge.read", roles::SOURCE_WRITE];
 
+pub const INELIGIBLE: &str = "project binding does not admit this node now: ";
 pub async fn compile(
     state: &AppState,
     record: &ProjectRecord,
@@ -98,10 +99,11 @@ pub async fn compile(
         },
     )
     .await?;
-    let frozen = eligibility
-        .frozen_binding
+    // Not this node's task now: the poll goes on with the next one.
+    let ineligible = || AppError::Conflict(format!("{INELIGIBLE}{:?}", eligibility.reasons));
+    let frozen = (eligibility.frozen_binding.clone())
         .filter(|_| eligibility.eligible)
-        .ok_or_else(|| refused())?;
+        .ok_or_else(ineligible)?;
     // Spec 0014 §6.2: the role's operations, scoped to this project and its
     // repository, within the project's ceilings. The scheduler is the caller
     // and holds exactly the project's ceilings.

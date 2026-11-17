@@ -139,6 +139,8 @@ pub struct WorkersConfig {
     /// `[workers.registration_history]`: the same for the native registration history.
     pub registration_history: aq_row_retention::HeartbeatLog,
     pub install: aq_machine_control::install::WorkerInstall,
+    /// `[workers.limits]`: concurrency limits of the launch path.
+    pub limits: aq_machine_control::limits::LaunchLimits,
 }
 
 impl Default for WorkersConfig {
@@ -149,6 +151,7 @@ impl Default for WorkersConfig {
             heartbeat_log: Default::default(),
             registration_history: Default::default(),
             install: Default::default(),
+            limits: Default::default(),
         }
     }
 }
@@ -270,6 +273,9 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
         }
     }
     let w = &c.workers;
+    if let Err(reason) = w.limits.validate() {
+        return invalid("workers.limits", reason.into());
+    }
     if w.heartbeat_log.bounds().is_none() || w.registration_history.bounds().is_none() {
         return invalid("workers.heartbeat_log", "must be at least 1".into());
     }

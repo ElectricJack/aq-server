@@ -654,6 +654,83 @@ async fn exact_replay_survives_group_configuration_changes_but_new_mutations_do_
 // AQ-20 composes the already-qualified project seam with synthetic selection
 // facts. No provider or worker execution is started by this test.
 #[tokio::test]
+async fn a_republished_identical_inventory_keeps_a_decision_and_a_changed_one_refuses_it() {
+    use aq_server::intelligence::resolver::{self, ResolveRequest};
+    let SelectionFixture {
+        env,
+        snapshot,
+        frozen,
+        actor,
+        lineage,
+        operation,
+        ..
+    } = selection_fixture().await;
+    let req = ResolveRequest {
+        operation_id: operation,
+        lineage,
+        project: frozen,
+        launches: vec![common::roles::prepared_launch()],
+        replacement: None,
+        record_refused: true,
+        route: None,
+    };
+    let decision = resolver::resolve_trusted(&env.state, actor, req, &snapshot)
+        .await
+        .unwrap();
+    assert!(decision.outcome.resolved.is_some());
+    let fence = || async {
+        let mut tx = env.pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let result = resolver::fence_for_offer(&env.state, &mut tx, &decision).await;
+        tx.rollback().await.unwrap();
+        result.map_err(|e| format!("{e:?}"))
+    };
+    let store = |snapshot: serde_json::Value, revision: u64| {
+        sqlx::query("UPDATE intelligence_node_snapshots SET sequence=sequence+1,revision=$2,snapshot=$3 WHERE node_id=$1")
+            .bind(env.node)
+            .bind(revision as i64)
+            .bind(snapshot)
+            .execute(&env.pool)
+    };
+    // A sibling slot republishes the same installation: later sequence and
+    // revision, a later validity window, nothing else.
+    let mut same = decision.inputs.node.clone();
+    same.revision += 1;
+    same.observed_at_ms += 1;
+    same.expires_at_ms += 1;
+    for binding in &mut same.credential_bindings {
+        binding.observed_at_ms += 1;
+        binding.expires_at_ms += 1;
+    }
+    store(serde_json::json!(same), same.revision).await.unwrap();
+    assert_eq!(fence().await, Ok(()));
+    // The same content under an older revision is not the report that carries it.
+    let mut older = same.clone();
+    older.revision = decision.inputs.node.revision - 1;
+    store(serde_json::json!(older), same.revision)
+        .await
+        .unwrap();
+    let changed = Err(r#"Conflict("installed capability snapshot changed")"#.to_string());
+    assert_eq!(fence().await, changed);
+    // A changed installation refuses the decision, whatever its revision.
+    let mut other = same.clone();
+    other.harnesses[0].cli_version.push_str("-changed");
+    store(serde_json::json!(other), other.revision)
+        .await
+        .unwrap();
+    assert_eq!(fence().await, changed);
+    let mut removed = same.clone();
+    removed.credential_bindings.clear();
+    store(serde_json::json!(removed), removed.revision)
+        .await
+        .unwrap();
+    assert_eq!(fence().await, changed);
+}
+
+#[tokio::test]
 async fn intelligence_decision_is_immutable_and_final_fence_rechecks_scoped_facts() {
     use aq_server::intelligence::resolver::{self, ResolveRequest};
     let SelectionFixture {

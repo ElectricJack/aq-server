@@ -18,7 +18,7 @@ pub async fn existing(
         .begin()
         .await
         .map_err(|_| AppError::Internal)?;
-    crate::worker_api::lock_current_node(&mut tx, auth).await?;
+    crate::worker_api::read_current_node(&mut tx, auth).await?;
     if !aq_machine_control::slots::redelivery_allowed(&mut tx, auth.id())
         .await
         .map_err(crate::machine_api::mapped)?

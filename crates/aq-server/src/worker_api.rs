@@ -141,14 +141,31 @@ pub async fn lock_current_node(
     if let Some(delegate) = &context.delegated {
         return crate::delegated_permits::runtime::lock_authenticated(tx, delegate).await;
     }
-    let current: Option<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR UPDATE",
-    )
-    .bind(context.node.id)
-    .bind(context.verifier.as_str())
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(crate::error::db)?;
+    node_locked(tx, context, "UPDATE").await
+}
+/// The same recheck for a transaction that only reads the node's facts. The
+/// slots of one node hold this together; registration, slot allocation and an
+/// inventory swap take `lock_current_node`, which waits for and excludes them.
+pub async fn read_current_node(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &AuthenticatedNode,
+) -> Result<uuid::Uuid, AppError> {
+    node_locked(tx, context, "SHARE").await
+}
+async fn node_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &AuthenticatedNode,
+    mode: &str,
+) -> Result<uuid::Uuid, AppError> {
+    let sql = format!(
+        "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL AND credential_hash=$2 FOR {mode}"
+    );
+    let current = sqlx::query_scalar(&sql).bind(context.node.id);
+    let current = current.bind(context.verifier.as_str());
+    let current: Option<uuid::Uuid> = current
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(crate::error::db)?;
     current.ok_or(AppError::CredentialRevoked)
 }
 /// Existing callers keep the Node snapshot API and its authentication behavior.

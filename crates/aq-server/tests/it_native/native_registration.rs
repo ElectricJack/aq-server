@@ -733,11 +733,13 @@ async fn placement_peers_use_the_same_setting_as_the_polling_node() {
         .await
         .unwrap();
     sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,1,1,$3)").bind(peer).bind(Uuid::new_v4()).bind(json!({"expires_at_ms":2000})).execute(&pool).await.unwrap();
-    let attempt=Uuid::new_v4();
+    let attempt = Uuid::new_v4();
     sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6)")
         .bind(attempt).bind(Uuid::new_v4()).bind(peer).bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(json!(f.profiled)).execute(&pool).await.unwrap();
-    let mut tx=pool.begin().await.unwrap();
-    aq_machine_control::slots::assign(&mut tx,attempt,peer,1).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    aq_machine_control::slots::assign(&mut tx, attempt, peer, 1)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     let book = aq_accounting::pricing::RateCardBook::default();
     let ledger = Ledger {

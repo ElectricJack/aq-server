@@ -198,6 +198,7 @@ async fn import_login(
 
 async fn connect(vault: &std::path::Path) -> anyhow::Result<(aq_server::config::Config, Store)> {
     let config = aq_server::config::load(vault)?;
+    aq_machine_control::limits::configure(config.workers.limits);
     // Checked before touching the database so a misconfigured production
     // deployment fails fast.
     aq_server::config::check_deployment(&config, std::env::var("AQ_DEPLOYMENT").ok().as_deref())?;

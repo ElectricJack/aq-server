@@ -274,13 +274,8 @@ pub async fn accept(
         selection.credential_revision,
     )
     .await?;
-    static READS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    let permit = READS
-        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| refused())?;
+    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
+    let permit = permit.ok_or_else(|| refused())?;
     let lease = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         tokio::task::spawn_blocking(move || {

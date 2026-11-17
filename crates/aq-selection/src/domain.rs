@@ -94,6 +94,38 @@ pub struct CapabilitySnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_delivery: Option<DeliveryCapability>,
 }
+impl CapabilitySnapshot {
+    /// What a selection was resolved against: the target (node and boot), the
+    /// installed harnesses, their limits, the credential bindings and delivery.
+    /// The revision and the validity windows change on every republish and are
+    /// left out, so a later report of the same boot with the same installation
+    /// is the same content.
+    pub fn content(&self) -> Self {
+        let mut content = self.clone();
+        (
+            content.revision,
+            content.observed_at_ms,
+            content.expires_at_ms,
+        ) = (0, 0, 0);
+        for binding in &mut content.credential_bindings {
+            (binding.observed_at_ms, binding.expires_at_ms) = (0, 0);
+            if let Some(preparation) = &mut binding.preparation {
+                (preparation.observed_at_ms, preparation.expires_at_ms) = (0, 0);
+            }
+        }
+        content
+    }
+    /// Whether `current`, the node's stored report, still carries what this
+    /// snapshot was resolved against: never an older report, never another
+    /// boot, never a changed installation.
+    pub fn carried_by(&self, current: &Self) -> bool {
+        current.revision >= self.revision
+            && matches!(
+                (crate::digest(&self.content()), crate::digest(&current.content())),
+                (Ok(mine), Ok(theirs)) if mine == theirs
+            )
+    }
+}
 /// Operator authority to provision a specific profile/account/endpoint. Presence
 /// is separate from the node's installed binding and provider availability.
 #[derive(JsonSchema, Debug, Clone, Serialize, Deserialize)]

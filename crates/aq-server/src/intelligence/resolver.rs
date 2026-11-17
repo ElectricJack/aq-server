@@ -618,9 +618,8 @@ async fn fence_snapshot(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
-    if digest(&snapshot).map_err(|_| AppError::Internal)?
-        != digest(&decision.inputs.node).map_err(|_| AppError::Internal)?
-    {
+    // A sibling slot's republish of the same installation is not a change.
+    if !serde_json::from_value(snapshot).is_ok_and(|s| decision.inputs.node.carried_by(&s)) {
         return Err(conflict("installed capability snapshot changed"));
     }
     let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
