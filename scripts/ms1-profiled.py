@@ -483,6 +483,10 @@ def configure():
     private_write(target, toml)
     for name, text in built["files"].items():
         private_write(NODE / "config" / name, text)
+    # The worker resolves the template's state_dir and host root when it loads
+    # native.json (each slot then uses its own), so both must exist.
+    for directory in (NODE / "state", NODE / "state" / "host"):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     public = dict(intelligence_sha256=sha(toml),
                   definitions=definition_digests(built), revision=_REV,
                   renderer=built["renderer"], policy=built["policy"], node_id=built["node_id"],
