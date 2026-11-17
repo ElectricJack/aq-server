@@ -28,10 +28,6 @@ fn input() -> ActualSetup {
             repository_adapter_reference: "aq.git.configured".into(),
             graph_adapter_reference: "aq.graph.configured".into(),
             graph_workspace_id: workspace,
-            catalog_digest: catalog.digest().into(),
-            allowed_agent_profiles: vec!["implementer@1".into()],
-            allowed_intelligence_profiles: vec!["engineering@1".into()],
-            allowed_execution_profiles: vec!["confined-development@1".into()],
             default_role: "developer".into(),
             default_intelligence: "standard-high".into(),
             role_notes: Default::default(),
@@ -87,19 +83,15 @@ fn input() -> ActualSetup {
 #[test]
 fn explicit_canonical_catalog_scope_is_validated_without_owner_effects() {
     let input = input();
-    let catalog = input.validate().unwrap();
-    assert_eq!(catalog.digest(), input.project.catalog_digest);
+    input.validate().unwrap();
     assert_eq!(input.task.version, 1);
     assert_eq!(input.task.content_revision, 1);
 }
 #[test]
-fn actual_setup_refuses_mismatched_scope_digest_and_noncanonical_artifact() {
+fn actual_setup_refuses_mismatched_scope_and_noncanonical_artifact() {
     let input = input();
     let mut changed = input.clone();
     changed.project.graph_workspace_id = Uuid::new_v4();
-    assert!(changed.validate().is_err());
-    let mut changed = input.clone();
-    changed.project.catalog_digest = "0".repeat(64);
     assert!(changed.validate().is_err());
     let mut changed = input.clone();
     changed.catalog_artifact_json.push('\n');

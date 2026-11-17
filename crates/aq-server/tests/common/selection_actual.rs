@@ -101,10 +101,6 @@ impl ActualSetup {
             catalog.canonical_bytes()? == self.catalog_artifact_json.as_bytes(),
             "actual catalog must be canonical original bytes"
         );
-        ensure!(
-            catalog.digest() == self.project.catalog_digest,
-            "actual project/catalog digest mismatch"
-        );
         Ok(catalog)
     }
 }

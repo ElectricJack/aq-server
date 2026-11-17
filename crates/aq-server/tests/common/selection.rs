@@ -313,11 +313,7 @@ enabled=true
     };
     let app = aq_server::build_admin_router(state.clone());
     let snapshot = super::roles::install(&pool, owner.id).await;
-    let catalog = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
-    let body = json!({"schema_version":1,"project_id":Uuid::from_u128(1),"name":"Example project","enabled":true,"repository_id":repository,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":workspace,"catalog_digest":catalog.digest(),"allowed_agent_profiles":["implementer@1"],"allowed_intelligence_profiles":["engineering@1"],"allowed_execution_profiles":["confined-development@1"],"allowed_node_ids":[],"allowed_worker_groups":["engineering"],"allowed_environments":["confined-worktree"],"policy":{"identity":"policy","revision":"1","digest":"b".repeat(64)},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":"project:example"}],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
+    let body = json!({"schema_version":1,"project_id":Uuid::from_u128(1),"name":"Example project","enabled":true,"repository_id":repository,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":workspace,"allowed_node_ids":[],"allowed_worker_groups":["engineering"],"allowed_environments":["confined-worktree"],"policy":{"identity":"policy","revision":"1","digest":"b".repeat(64)},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":"project:example"}],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
     Env {
         app,
         state,
@@ -379,10 +375,6 @@ pub async fn selection_fixture() -> SelectionFixture {
     let fixture: Value =
         serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
     let mut input: SelectionInputs = serde_json::from_value(fixture["inputs"].clone()).unwrap();
-    env.body["catalog_digest"] = json!(input.project.catalog_digest);
-    env.body["allowed_agent_profiles"] = json!(["implementer@2"]);
-    env.body["allowed_intelligence_profiles"] = json!(["engineering@2"]);
-    env.body["allowed_execution_profiles"] = json!(["confined-development@2"]);
     // The project's ceilings hold each fixture operation at this project's
     // own scope: its project id, and its repository for `source.write`.
     let repository = env.body["repository_id"].as_str().unwrap().to_owned();

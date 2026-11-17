@@ -26,7 +26,6 @@
     {"path": "/api/human/result-media-uploads/{operation}/finalize", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media-uploads", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media/{artifact}/content", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
-    {"path": "/api/intelligence/explain", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/intelligence/observations", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/intelligence/register", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/me", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},

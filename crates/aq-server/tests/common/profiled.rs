@@ -322,10 +322,12 @@ async fn insert_spec(
     sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,kind,state,execution_deadline_ms) VALUES($1,$2,$3,$4,$5,'profiled_v1',$6,$7)").bind(binding.attempt_id).bind(f.selection.lineage.task_id).bind(f.node.node_id).bind(binding.offer_id).bind(session_id).bind(json!(p)).bind(p.execution_deadline_ms.map(|v|v as i64)).execute(&pool).await.unwrap();
     // A real admission stores real owner observations. These synthetic table rows
     // exercise the same concrete decoder and manifest/selection digest checks.
-    let project = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic authority fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"catalog_digest":f.selection.catalog_digest,"allowed_agent_profiles":["implementer@2"],"allowed_intelligence_profiles":["engineering@2"],"allowed_execution_profiles":["confined-development@2"],"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":"synthetic-policy","revision":"1","digest":Digest::of(b"synthetic-policy")},"context":[],"ceilings":{"permissions":[],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
+    let project = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic authority fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":"synthetic-policy","revision":"1","digest":Digest::of(b"synthetic-policy")},"context":[],"ceilings":{"permissions":[],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
     let typed: aq_server::project_bindings::domain::ProjectBinding =
-        serde_json::from_value(project.clone()).unwrap();
+        serde_json::from_value(project).unwrap();
     typed.validate(&Default::default()).unwrap();
+    // The stored record is the binding as the server writes it, defaults named.
+    let project = serde_json::to_value(&typed).unwrap();
     let observed = aq_server::project_bindings::domain::BindingObservation {
         repository_id: p.source.repository_id,
         graph_workspace_id: f.selection.lineage.workspace_id,

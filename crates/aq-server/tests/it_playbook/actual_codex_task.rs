@@ -865,7 +865,7 @@ async fn actual_case() -> Result<Value> {
     let result = Box::pin(async {
         let catalog =
             codex_runtime_recipe::catalog(project, repository).context("gate04_catalog")?;
-        let binding = codex_runtime_recipe::project(project, repository, 1, workspace, &catalog)
+        let binding = codex_runtime_recipe::project(project, repository, 1, workspace)
             .context("gate04_project")?;
         let pin = graph.task_pin();
         let task = aq_admission::TaskRevision {

@@ -696,35 +696,6 @@ pub(crate) fn check_time(state: &AppState, decision: &Decision) -> Result<()> {
     }
     Ok(())
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ExplainRequest {
-    pub catalog_artifact_json: String,
-    pub inputs: SelectionInputs,
-}
-pub(super) async fn explain(
-    RequireOwner(_): RequireOwner,
-    Json(request): Json<ExplainRequest>,
-) -> Result<Json<Value>> {
-    if request.catalog_artifact_json.len() > 2 * 1024 * 1024 {
-        return Err(AppError::PayloadTooLarge("catalog byte bound".into()));
-    }
-    tokio::task::spawn_blocking(move || {
-        let catalog =
-            aq_profiles::ValidatedCatalog::from_artifact(request.catalog_artifact_json.as_bytes())
-                .map_err(|_| bad("catalog artifact refused"))?;
-        let outcome =
-            select(&catalog, &request.inputs).map_err(|_| bad("selection snapshot refused"))?;
-        let human = aq_selection::human_selection(&catalog, &request.inputs, &outcome)
-            .map_err(|_| bad("human explanation refused"))?;
-        Ok(Json(
-            json!({"authority_admission":false,"snapshot_explanation":outcome,"selection":human}),
-        ))
-    })
-    .await
-    .map_err(|_| AppError::Internal)?
-}
-
 /// Current principal fence for already accepted no-launch input retrieval only.
 /// Does not renew snapshots, select a candidate or authorize execution.
 pub(crate) async fn fence_preparation_input_principal(

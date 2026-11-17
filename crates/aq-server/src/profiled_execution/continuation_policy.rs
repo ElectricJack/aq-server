@@ -137,19 +137,15 @@ mod tests {
     fn fixture() -> (ArtifactRef, Vec<u8>, BudgetSnapshot) {
         let value: Value =
             serde_json::from_str(include_str!("../../tests/fixtures/selection-v2.json")).unwrap();
-        let catalog = aq_profiles::ValidatedCatalog::from_artifact(
-            value["catalog_artifact_json"].as_str().unwrap().as_bytes(),
-        )
-        .unwrap();
         // The level as an offer retains it: its id and the selection policy
         // in effect, under the identity `intelligence:<id>`.
-        let definition = &catalog.artifact().catalog.intelligence[0];
-        let mut json = serde_json::json!({"id": definition.id,
-            "selection_policy": definition.selection_policy});
+        let id = "standard-high";
+        let policy = aq_profiles::roles::SelectionDefaults::default().policy(4096, Vec::new());
+        let mut json = serde_json::json!({"id": id, "selection_policy": policy});
         json.sort_all_objects();
         let body = serde_json::to_vec(&json).unwrap();
         let reference = ArtifactRef {
-            id: aq_admission::Text::new(format!("intelligence:{}", definition.id)).unwrap(),
+            id: aq_admission::Text::new(format!("intelligence:{id}")).unwrap(),
             version: aq_admission::Text::new("1").unwrap(),
             digest: aq_admission::Digest::of(&body),
         };

@@ -202,18 +202,19 @@ async fn binding_role_defaults_are_checked_and_protect_what_they_name() {
         .fetch_one(&env.pool)
         .await
         .unwrap();
-    // A binding written without the new fields (every existing row) is
-    // stored as it was and loads with the defaults.
+    // A binding saved without naming its defaults gets them, and the stored
+    // record always names them.
     let bound = bind(&env).await;
     let stored = &bound["record"]["binding"];
-    for key in ["default_role", "default_intelligence", "role_notes"] {
-        assert!(stored.get(key).is_none(), "{key}: {stored}");
-    }
+    assert_eq!(stored["default_role"], "developer", "{stored}");
+    assert_eq!(stored["default_intelligence"], "standard-high", "{stored}");
+    assert!(stored.get("role_notes").is_none(), "{stored}");
     let row: Value = sqlx::query_scalar("SELECT binding FROM project_execution_bindings")
         .fetch_one(&env.pool)
         .await
         .unwrap();
-    assert!(row.get("default_role").is_none());
+    assert_eq!(row["default_role"], "developer");
+    assert_eq!(row["default_intelligence"], "standard-high");
     assert_eq!(
         call(&env.app, &path(), None, "owner@localhost").await.0,
         200
@@ -1248,4 +1249,47 @@ async fn committed_binding_installs_pending_policy_and_historical_ack_survives_r
     .await
     .unwrap();
     assert!(!enabled, "historical ack reinstalled a retired policy");
+}
+
+/// Spec 0014 §5.4: the catalog digest and the three allowlists are gone from
+/// the binding. A save that still sends one is refused and the answer names
+/// the field; a binding with only the remaining fields saves and reads back.
+#[tokio::test]
+async fn a_binding_that_names_a_removed_catalog_field_is_refused_by_name() {
+    let env = setup(false).await;
+    for (field, value) in [
+        ("catalog_digest", json!("a".repeat(64))),
+        ("allowed_agent_profiles", json!(["implementer@1"])),
+        ("allowed_intelligence_profiles", json!(["engineering@1"])),
+        (
+            "allowed_execution_profiles",
+            json!(["confined-development@1"]),
+        ),
+    ] {
+        let mut binding = env.body.clone();
+        binding[field] = value;
+        let request =
+            json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"binding":binding});
+        let (status, body) = call(&env.app, &path(), Some(request), "owner@localhost").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}: {body}");
+        let text = body.to_string();
+        assert!(
+            text.contains(&format!("unknown field `{field}`")),
+            "{field}: {text}"
+        );
+    }
+    for field in [
+        "catalog_digest",
+        "allowed_agent_profiles",
+        "allowed_intelligence_profiles",
+        "allowed_execution_profiles",
+    ] {
+        assert!(env.body.get(field).is_none(), "{field}");
+    }
+    let saved = bind(&env).await;
+    assert_eq!(saved["record"]["revision"], 1, "{saved}");
+    let (status, read) = call(&env.app, &path(), None, "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["binding"], saved["record"]["binding"], "{read}");
+    assert_eq!(read["binding"]["default_role"], "developer");
 }

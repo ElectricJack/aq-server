@@ -76,10 +76,11 @@ pub(super) fn context_bytes(f: &Fixture) -> Vec<u8> {
 pub(super) async fn initial_project(f: &Fixture) {
     let p = &f.profiled;
     let a = policy();
-    let binding = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic settlement fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"catalog_digest":f.selection.catalog_digest,"allowed_agent_profiles":["implementer@2"],"allowed_intelligence_profiles":["engineering@2"],"allowed_execution_profiles":["confined-development@2"],"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":a.artifact().id,"revision":a.artifact().version,"digest":a.artifact().digest},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":format!("project:{}",f.selection.lineage.project_id)}],"context_bytes":1048576,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
+    let binding = json!({"schema_version":1,"project_id":f.selection.lineage.project_id,"name":"Synthetic settlement fixture","enabled":true,"repository_id":p.source.repository_id,"repository_binding_generation":1,"repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured","graph_workspace_id":f.selection.lineage.workspace_id,"allowed_node_ids":[f.node.node_id],"allowed_worker_groups":[],"allowed_environments":["confined-worktree"],"policy":{"identity":a.artifact().id,"revision":a.artifact().version,"digest":a.artifact().digest},"context":[],"ceilings":{"permissions":[{"operation":"task.read","scope_reference":format!("project:{}",f.selection.lineage.project_id)}],"context_bytes":1048576,"wall_time_ms":60000,"memory_bytes":268435456,"cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,"require_hard_cost_enforcement":false}});
     let typed: aq_server::project_bindings::domain::ProjectBinding =
-        serde_json::from_value(binding.clone()).unwrap();
+        serde_json::from_value(binding).unwrap();
     typed.validate(&Default::default()).unwrap();
+    let binding = serde_json::to_value(&typed).unwrap();
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,$3,'{}')").bind(f.selection.lineage.project_id).bind(binding).bind(NOW as i64).execute(&f.db.pool().await).await.unwrap();
 }
 fn external(attempt: Uuid) -> ExternalDeclaration {

@@ -142,7 +142,6 @@ pub fn project(
     repository: Uuid,
     generation: u64,
     workspace: Uuid,
-    catalog: &ValidatedCatalog,
 ) -> Result<ProjectBinding> {
     let policy = policy(project, repository)?;
     Ok(ProjectBinding {
@@ -155,10 +154,6 @@ pub fn project(
         repository_adapter_reference: "aq.git.configured".into(),
         graph_adapter_reference: "aq.graph.configured".into(),
         graph_workspace_id: workspace,
-        catalog_digest: catalog.digest().into(),
-        allowed_agent_profiles: vec![AGENT.into()],
-        allowed_intelligence_profiles: vec![INTELLIGENCE.into()],
-        allowed_execution_profiles: vec![EXECUTION.into()],
         default_role: "developer".into(),
         default_intelligence: "standard-high".into(),
         role_notes: Default::default(),
@@ -335,16 +330,14 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared> {
     );
     let project = &input.actual.project.binding;
     ensure!(
-        input.actual.task == input.context.revision
-            && project.catalog_digest == input.catalog.digest(),
-        "exact original actual task/catalog"
+        input.actual.task == input.context.revision,
+        "exact original actual task"
     );
     let expected_project = self::project(
         project.project_id,
         project.repository_id,
         project.repository_binding_generation,
         project.graph_workspace_id,
-        input.catalog,
     )?;
     ensure!(
         serde_json::to_value(project)? == serde_json::to_value(expected_project)?,
@@ -902,8 +895,7 @@ mod tests {
         let project_id = Uuid::new_v4();
         let repository = Uuid::new_v4();
         let workspace = Uuid::new_v4();
-        let catalog = catalog(project_id, repository).unwrap();
-        let project = project(project_id, repository, 7, workspace, &catalog).unwrap();
+        let project = project(project_id, repository, 7, workspace).unwrap();
         let config = aq_server::project_bindings::domain::ProjectConfig {
             worker_groups: BTreeMap::from([(GROUP.into(), vec![Uuid::new_v4()])]),
         };
@@ -913,7 +905,6 @@ mod tests {
         assert!(invalid.validate(&config).is_err());
         assert_eq!(project.repository_binding_generation, 7);
         assert_eq!(project.graph_workspace_id, workspace);
-        assert_eq!(project.catalog_digest, catalog.digest());
         assert_eq!(project.ceilings.wall_time_ms, 20_000);
         assert!(project.allowed_node_ids.is_empty());
         let definition = policy(project_id, repository).unwrap();
