@@ -73,25 +73,11 @@ priority to choose anything. Priority only orders the queue.
 
 ## Who may take it
 
-A local model means the OpenCode agent. It may or may not be available when a
-task is routed. When a rule sends work to a local model and it isn't
-available, use your judgement and send the work to the next agent these rules
-allow.
+Any kind of agent that Settings offers may take any task. Don't restrict a
+task to particular kinds of agent, don't prefer one kind over another, and
+never hold a task back to wait for a particular one.
 
-- High and very high risk work goes only to Claude or Codex.
-- Medium risk work goes to Claude or Codex. It may go to a local model only
-  when the task is narrow, covered by a test, and Standard.
-- Low risk work that is narrow and covered by a test should go to a local
-  model first, to save Claude and Codex usage.
-- Any agent other than Claude, Codex and the local model takes only low risk
-  work.
-- Design and planning go to Claude first, and to Codex only when Claude can't
-  take them, even when the work is low risk and narrow.
-- Art and visual design go to Codex, and wait for it rather than going
-  elsewhere. For visual design this rule decides who takes it, not the design
-  rule above.
-- Never spend Deep on bug fixes, escalated or not.
-- Repairs to a failed integration or build never go to a local model.
+Never spend Deep on bug fixes, escalated or not.
 
 "Narrow" means the requirements are settled and the files to change are named
 or obvious. "Covered by a test" means an existing or specified test checks
@@ -101,8 +87,9 @@ the result. Work that needs manual or end-to-end verification is not covered.
 
 - If the risk or the kind of work can't be worked out, don't block the task.
   Use what is known. An unknown risk counts as medium, and you say that it
-  was assumed. An unknown kind gets at least Standard, high effort. A risk
-  that is known still applies in full. Keep the task on Claude or Codex.
+  was assumed. An unknown kind gets Standard, high effort, unless whoever
+  filed the task asked for a level: then use that level, but never Deep, and
+  Complex at most. A risk that is known still applies in full.
 - If nothing allowed can take the task right now, hold it until something can.
   That is a wait, not a failure.
 - If nothing allowed could ever take it, leave it unrouted and visible, say
