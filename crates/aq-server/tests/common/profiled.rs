@@ -89,10 +89,6 @@ pub async fn fixture() -> Fixture {
         .await
         .unwrap();
     let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(
-        raw["catalog_artifact_json"].as_str().unwrap().as_bytes(),
-    )
-    .unwrap();
     let mut input: aq_selection::SelectionInputs =
         serde_json::from_value(raw["inputs"].clone()).unwrap();
     input.project.target = aq_selection::ExecutionTarget::Worker {
@@ -115,10 +111,7 @@ pub async fn fixture() -> Fixture {
         o.expires_at_ms = NOW + 30_000;
         o.cooldown_until_ms = NOW - 10;
     }
-    let selected = aq_selection::select(&catalog, &input)
-        .unwrap()
-        .resolved
-        .unwrap();
+    let selected = fixture_selection(&mut input);
     let state_projection = state_from_selection(&selected, &identity);
     let cfg: Config = toml::from_str(
         r#"format_version=1
@@ -162,6 +155,83 @@ enabled=true
         time,
     }
 }
+/// The fixture's selection: a launch of one role on one level whose first
+/// candidate is the fixture's `model-a` on the fixture node's `codex`
+/// harness. The documents are built in place, not compiled: the fixture's
+/// synthetic provider is not one a `codex` document may name.
+fn fixture_selection(input: &mut aq_selection::SelectionInputs) -> aq_selection::ResolvedSelection {
+    use aq_profiles::roles::{
+        Candidate, Confinement, Execution, Intelligence, Launch, Limits, Role,
+    };
+    let role = Role {
+        id: "developer".into(),
+        name: "Developer".into(),
+        description: "Makes changes.".into(),
+        execution: "sandbox".into(),
+        operations: vec!["task.read".into()],
+        enabled: true,
+        role_md: "You make the change.".into(),
+        rules_md: String::new(),
+    };
+    let candidate = Candidate {
+        provider: "fixture-a".into(),
+        model: "model-a".into(),
+        reasoning: "high".into(),
+        harnesses: vec!["codex".into()],
+    };
+    let intelligence = Intelligence {
+        id: "standard-high".into(),
+        name: "Standard, high".into(),
+        description: "Ordinary work.".into(),
+        candidates: vec![candidate.clone()],
+        selection: Default::default(),
+    };
+    let execution = Execution {
+        id: "sandbox".into(),
+        name: "Sandbox".into(),
+        description: "The fixture node.".into(),
+        harnesses: vec!["codex".into()],
+        environment: "confined-worktree".into(),
+        confinement: Confinement::Native,
+        credentials: [("codex".to_string(), "account-a".to_string())].into(),
+        limits: Limits {
+            wall_time_ms: 60000,
+            memory_bytes: 268435456,
+            cpu_millis: 60000,
+            process_limit: 8,
+            startup_context_bytes: 8192,
+            max_output_tokens: 128,
+        },
+    };
+    let defaults = aq_profiles::roles::SelectionDefaults {
+        max_attempts: 3,
+        max_lineage_elapsed_ms: 60_000,
+        observation_max_age_ms: 5_000,
+        unknown_cost: aq_profiles::UnknownCostPolicy::Deny,
+        ..Default::default()
+    };
+    input.project.role = role.id.clone();
+    input.project.intelligence_profile = intelligence.id.clone();
+    input.project.execution_profile = execution.id.clone();
+    input.launches = vec![aq_selection::PreparedLaunch {
+        digest: aq_admission::Digest::of(b"fixture startup text"),
+        harness: "codex".into(),
+        environment: execution.environment.clone(),
+        startup_bytes: 20,
+        startup_limit_bytes: 8192,
+    }];
+    let launch = Launch {
+        role: &role,
+        intelligence: &intelligence,
+        execution: &execution,
+        candidates: vec![candidate],
+        selection_policy: defaults.policy(execution.limits.max_output_tokens, Vec::new()),
+    };
+    aq_selection::select_for_offer(&launch, input)
+        .unwrap()
+        .resolved
+        .expect("the fixture selection resolves")
+}
 /// Synthetic full authority shape from an actual selected value. This helper
 /// supplies no public graph/source owner qualification by itself.
 pub fn state_from_selection(
@@ -203,7 +273,7 @@ pub fn state_from_selection(
     offer.manifest.catalog = ArtifactRef {
         id: Text::new("profile-catalog").unwrap(),
         version: Text::new("1").unwrap(),
-        digest: selected.catalog_digest.clone(),
+        digest: selected.role_snapshot_digest.clone(),
     };
     offer.manifest.bindings.project_revision = selected.project_revision;
     let choice = &selected.choice;

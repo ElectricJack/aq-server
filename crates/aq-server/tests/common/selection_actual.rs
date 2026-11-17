@@ -11,15 +11,18 @@ use aq_server::{
     source_retention::SourceRetentionConfig,
 };
 
-/// No example catalog/model or source is implicitly selected. Every field comes
-/// from the outer actual recipe BEFORE project creation or eligibility checks.
+/// No example model or source is implicitly selected. Every field comes from
+/// the outer actual recipe BEFORE project creation or eligibility checks.
 #[derive(Clone)]
 pub struct ActualSetup {
     /// Declared enrolled worker version from the caller's pinned recipe, not a
     /// claim that a process has started. The real heartbeat replaces this metadata.
     pub enrollment_worker_version: String,
     pub project: ProjectBinding,
-    pub catalog_artifact_json: String,
+    /// The recipe's own role, intelligence profile and execution profile
+    /// documents (`kind`, `id`, Markdown), saved over the shipped defaults
+    /// before the project is bound. Empty uses the shipped documents alone.
+    pub documents: Vec<(aq_profiles::roles::Kind, String, String)>,
     pub graph: AgentAccessConfig,
     pub task: TaskRevision,
     pub source: SourceRetentionConfig,
@@ -27,14 +30,13 @@ pub struct ActualSetup {
 #[derive(Clone)]
 pub struct ActualProfileChoice {
     pub environment: String,
-    pub agent_profile: String,
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
 }
 pub struct ActualSelectionFixture {
     pub env: Env,
     pub project: ProjectRecord,
-    pub catalog_activation_revision: u64,
     pub lineage: aq_selection::TaskLineage,
     /// Immutable caller starting pin, checked against real owner reads. It is
     /// never replaced by a newer task revision to make admission pass.
@@ -45,7 +47,7 @@ pub struct ActualSelectionFixture {
 }
 impl ActualSetup {
     /// Pure/local validation, before database creation or network observation.
-    pub fn validate(&self) -> Result<aq_profiles::ValidatedCatalog> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             semver::Version::parse(&self.enrollment_worker_version).is_ok(),
             "actual enrollment worker version must come from a pinned recipe"
@@ -94,14 +96,25 @@ impl ActualSetup {
                 .is_some_and(|s| !s.is_empty()),
             "actual Graph writer actor required"
         );
-        let catalog =
-            aq_profiles::ValidatedCatalog::from_artifact(self.catalog_artifact_json.as_bytes())
-                .context("actual canonical catalog refused")?;
-        ensure!(
-            catalog.canonical_bytes()? == self.catalog_artifact_json.as_bytes(),
-            "actual catalog must be canonical original bytes"
-        );
-        Ok(catalog)
+        // The recipe's documents with the shipped ones must be a valid set
+        // before any store exists.
+        let mut sources = aq_profiles::roles::default_documents();
+        for (kind, id, markdown) in &self.documents {
+            let label = format!("recipe/{id}.md");
+            sources.retain(|s| !(s.kind == *kind && s.label.ends_with(&format!("/{id}.md"))));
+            sources.push(aq_profiles::roles::SourceDocument {
+                kind: *kind,
+                label,
+                text: markdown.clone(),
+            });
+        }
+        aq_profiles::roles::compile(
+            &sources,
+            &aq_profiles::roles::SelectionDefaults::default(),
+            &aq_profiles::roles::DocumentLimits::default(),
+        )
+        .map_err(|problems| anyhow::anyhow!("actual role documents refused: {problems:?}"))?;
+        Ok(())
     }
 }
 impl ActualSelectionFixture {
@@ -116,7 +129,7 @@ impl ActualSelectionFixture {
             expected_project_revision: self.project.revision,
             node_id: self.env.node,
             environment: profiles.environment.clone(),
-            role: profiles.agent_profile.clone(),
+            role: profiles.role.clone(),
             intelligence_profile: profiles.intelligence_profile.clone(),
             execution_profile: profiles.execution_profile.clone(),
             snapshot_digest: self.env.snapshot.digest().to_string(),
@@ -139,7 +152,7 @@ impl ActualSelectionFixture {
     }
 }
 pub async fn setup_actual(input: &ActualSetup) -> Result<ActualSelectionFixture> {
-    let catalog = input.validate()?;
+    input.validate()?;
     let gate = fixture_gate().await;
     // These configured adapters exist before even the first project PUT. No
     // synthetic peer can be verified and then relabelled as a real owner later.
@@ -221,11 +234,11 @@ enabled=true
         "actual base must not seed synthetic model/runtime configuration"
     );
     let app = aq_server::build_admin_router(state.clone());
-    // Not converted to roles and profiles (spec 0014): the old catalog has
-    // no activation route. The actual fixtures run only when their
-    // environment inputs are given.
-    let _ = &catalog;
-    let catalog_revision = 0_i64;
+    // The store installed the shipped documents; the recipe's own are saved
+    // over them before the binding names its default role and level.
+    for (kind, id, markdown) in &input.documents {
+        super::super::roles::save(&pool, owner.id, *kind, id, markdown).await;
+    }
     let body = serde_json::to_value(&input.project)?;
     let path = format!("/api/projects/{}", input.project.project_id);
     let (status, put) = call(
@@ -311,7 +324,6 @@ enabled=true
     Ok(ActualSelectionFixture {
         env,
         project,
-        catalog_activation_revision: catalog_revision as u64,
         lineage: aq_selection::TaskLineage {
             project_id: input.project.project_id,
             workspace_id: input.task.workspace_id,

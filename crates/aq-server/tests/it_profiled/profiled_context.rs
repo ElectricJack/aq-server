@@ -27,7 +27,7 @@ async fn context_fact_changes_are_fenced_by_installed_global_revision_and_digest
             provider: c.provider.clone(),
             model: c.model.clone(),
             native_reasoning: c.native_reasoning.clone(),
-            reasoning_configuration_reference: c.reasoning_configuration_reference.clone(),
+            reasoning_configuration_reference: "synthetic-reasoning@1".into(),
             credential_profile: c.credential_profile.clone(),
             credential_revision: f.selection.credential_revision,
             account_reference: c.account_reference.clone(),

@@ -388,11 +388,14 @@ async fn an_attempt_recorded_before_roles_is_counted_unclassified() {
         running(counts(&mut tx).await.unwrap()),
         [("standard-high".to_owned(), 1)]
     );
-    // The decision as an attempt from before roles recorded it. A decision
-    // is sealed, so the guard is off for this rolled-back transaction only.
+    // The decision as an attempt from before roles recorded it: it names a
+    // catalog, not a role snapshot. A decision is sealed, so the guard is
+    // off for this rolled-back transaction only.
     sqlx::raw_sql(
         "ALTER TABLE intelligence_decisions DISABLE TRIGGER USER;
-         UPDATE intelligence_decisions SET decision = decision #- '{inputs,launches}'",
+         UPDATE intelligence_decisions SET decision = jsonb_set(
+             decision #- '{inputs,launches}' #- '{inputs,project,role_snapshot_digest}',
+             '{inputs,project,catalog_digest}', to_jsonb(repeat('a',64)))",
     )
     .execute(&mut *tx)
     .await

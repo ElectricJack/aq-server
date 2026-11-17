@@ -196,12 +196,11 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     let choice = &decision["outcome"]["resolved"]["choice"];
     assert_eq!(choice["profile_candidate_id"], "fixture-a:model-a:high");
     assert_eq!(choice["harness"], roles::HARNESS);
-    assert_eq!(decision["inputs"]["project"]["catalog_digest"], digest);
-    assert!(
-        decision["inputs"]
-            .get("compositions")
-            .is_none_or(|c| c == &json!([]))
+    assert_eq!(
+        decision["inputs"]["project"]["role_snapshot_digest"],
+        digest
     );
+    assert!(decision["inputs"].get("compositions").is_none());
 
     // A document saved after the offer does not change what the attempt
     // resolved from: its snapshot stays stored, and names the old model.

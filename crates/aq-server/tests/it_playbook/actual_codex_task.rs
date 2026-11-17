@@ -863,8 +863,6 @@ async fn actual_case() -> Result<Value> {
     let graph=Box::pin(real_graph::RealGraphFixture::start(real_graph::BinaryPin{path:std::env::var("AQ_GATE04_GRAPH_BINARY")?.into(),sha256:std::env::var("AQ_GATE04_GRAPH_SHA256")?},real_graph::TaskSeed {workspace_id:workspace,task_id,title:"Disposable finite Codex source task".into(),body:"Create only gate04-proof.txt containing exactly AQ native result fixture proof and a newline. Compare exact bytes, then submit a factual local AQ result claim using the counted instructions. This is a finite local Responses integration, not an external model or real human review.".into(),acceptance_criteria:"Fixed source file is retained centrally; actual tool cmp passes; scoped claim is acknowledged; protected simulated fixture review precedes actual task CAS.".into()})).await?;
     let mut source = Box::pin(source(&root, repository)).await?;
     let result = Box::pin(async {
-        let catalog =
-            codex_runtime_recipe::catalog(project, repository).context("gate04_catalog")?;
         let binding = codex_runtime_recipe::project(project, repository, 1, workspace)
             .context("gate04_project")?;
         let pin = graph.task_pin();
@@ -877,7 +875,7 @@ async fn actual_case() -> Result<Value> {
         let setup = common::selection::ActualSetup {
             enrollment_worker_version: "0.5.1".into(),
             project: binding,
-            catalog_artifact_json: String::from_utf8(catalog.canonical_bytes()?)?,
+            documents: codex_runtime_recipe::documents(),
             graph: graph.agent_access_config(),
             task,
             source: source.configuration.clone(),
@@ -889,7 +887,6 @@ async fn actual_case() -> Result<Value> {
             codex_runtime_recipe::prepare(codex_runtime_recipe::PrepareInput {
                 actual: &actual,
                 context: &actual.context,
-                catalog: &catalog,
                 images: &pins.images,
                 now_ms: chrono::Utc::now().timestamp_millis().try_into()?,
                 base: source.base.clone(),
@@ -938,7 +935,6 @@ async fn actual_case() -> Result<Value> {
 fn refusal_stage(error: &anyhow::Error) -> &'static str {
     for cause in error.chain() {
         match cause.to_string().as_str() {
-            "gate04_catalog" => return "catalog",
             "gate04_project" => return "project_definition",
             "gate04_actual_setup" => return "actual_project_setup",
             "gate04_recipe" => return "runtime_recipe",
