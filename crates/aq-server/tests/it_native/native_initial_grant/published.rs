@@ -466,6 +466,49 @@ async fn mounted_prepare_uses_typed_outbound_control_and_never_mounts_on_human_l
 #[path = "published/actual_git.rs"]
 mod actual_git;
 
+/// Spec 0014 §5.5, §5.1: an offer is for the task's effective role. A role
+/// set on the task after the offer, or the role disabled after it, refuses
+/// the grant. A change of the active snapshot alone refuses nothing: the
+/// offer stays on the snapshot it was resolved from.
+#[tokio::test]
+async fn a_role_changed_or_disabled_after_the_offer_refuses_the_grant() {
+    use crate::common::save_role;
+    let c = setup().await;
+    let (pool, owner) = (c.case.env.env.pool.clone(), c.case.env.actor);
+    let offered = c.case.env.snapshot.digest().to_string();
+    *c.case.metadata.lock().unwrap() = serde_json::json!({"aq:role":"reviewer"});
+    assert!(grant(&c).await.is_err(), "the task now names another role");
+    ungranted(&c).await;
+    *c.case.metadata.lock().unwrap() = serde_json::json!({});
+    save_role(&pool, owner, "developer", "developer", false).await;
+    assert!(grant(&c).await.is_err(), "its role is disabled");
+    ungranted(&c).await;
+    // Enabled again, and another document saved: the active snapshot is no
+    // longer the offer's, and the offer is still granted, from the snapshot
+    // it pinned.
+    use crate::common::roles;
+    save_role(&pool, owner, "developer", "developer", true).await;
+    let level = roles::level("deep-low", &[("fixture-a", "model-later", "low")]);
+    roles::save(
+        &pool,
+        owner,
+        aq_profiles::roles::Kind::Intelligence,
+        "deep-low",
+        &level,
+    )
+    .await;
+    let active = roles::active(&pool).await;
+    assert_ne!(active.digest(), offered);
+    grant(&c).await.unwrap();
+    let pinned: String =
+        sqlx::query_scalar("SELECT digest FROM role_snapshot_pins WHERE attempt_id=$1")
+            .bind(c.request.binding.attempt_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pinned, offered);
+}
+
 #[tokio::test]
 async fn graph_changes_during_preparation_refuse_without_retiming_original_inputs() {
     let c = setup().await;

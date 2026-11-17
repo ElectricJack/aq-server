@@ -478,3 +478,45 @@ fn internal_work_attention_is_an_additive_pinned_schema_kind() {
             serde_json::from_value(fixture["data"].clone()).unwrap();
     }
 }
+
+/// Spec 0014 §8: placement needs no measurement, so the swarm read shows no
+/// measurement hold: not for a node with a registered native runtime that
+/// nothing ever measured.
+#[tokio::test]
+async fn a_node_nothing_measured_has_no_measurement_hold() {
+    let now = common::profiled::NOW;
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let a = |id: &str| json!(common::profiled::artifact(id, id.as_bytes()));
+    let (runtime, qualification) = (a("swarm-runtime"), a("swarm-runtime-qualification"));
+    sqlx::query(
+        "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
+    )
+    .bind(f.node.node_id)
+    .bind(now as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2) ON CONFLICT(node_id) DO UPDATE SET state=execution_nodes.state||excluded.state")
+        .bind(f.node.node_id)
+        .bind(json!({"native":{"request":{"runtime":runtime},"qualification":qualification}}))
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let app = aq_server::build_admin_router(f.state.clone());
+    let (status, body) = read(&app, "/api/v1/swarm").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let nodes: Vec<&Value> = (body["data"]["machines"].as_array().unwrap().iter())
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .collect();
+    assert!(!nodes.is_empty(), "{body}");
+    let measurement: Vec<&str> = (nodes.iter())
+        .flat_map(|n| n["holding"].as_array().unwrap())
+        .filter_map(|h| h["code"].as_str().filter(|c| c.starts_with("measurement")))
+        .collect();
+    assert!(measurement.is_empty(), "{body}");
+}
