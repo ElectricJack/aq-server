@@ -25,6 +25,7 @@
 #   all               doctor, build, up, seed, pins, internal-work, worker, task, routing
 #   reload PART       rebuild one part after a code change and restart what uses it
 #   status            containers, workers and settings at a glance
+#   compose ARGS      `docker compose` with this stack's files and environment
 #   worker-stop       stop the local worker service
 #   down [-v]         stop the worker and the stack; -v also deletes its volumes
 #
@@ -470,8 +471,9 @@ case ${1:-} in
   worker-stop) cmd_worker_stop ;;
   task) shift; cmd_task "$@" ;;
   status) cmd_status ;;
+  compose) shift; compose "$@" ;;
   reload) cmd_reload "${2:-}" ;;
   down) cmd_down "${2:-}" ;;
   all) cmd_doctor; cmd_build; cmd_up; cmd_seed; cmd_pins; cmd_internal_work; cmd_worker; cmd_task --note first; cmd_routing ;;
-  *) sed -n '2,52p' "$0"; exit 2 ;;
+  *) sed -n '2,53p' "$0"; exit 2 ;;
 esac
