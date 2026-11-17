@@ -773,6 +773,69 @@ async fn owner_commands_reach_the_same_handlers() {
     assert!(owner_rows >= 3);
 }
 
+/// Spec 0014 step 3b: an agent may not hand out more than it holds. An attempt
+/// that runs as the reviewer files a reviewer task, and is refused a developer
+/// task, whose role may write source.
+#[tokio::test]
+async fn an_agent_files_a_task_only_for_a_role_within_its_own_operations() {
+    let e = setup_with(Some(json!([
+        {"operation":"task.create.subtask","scope":"task:subtree","limits":{"max_created_tasks":3,"max_depth":2}},
+        {"operation":"task.read","scope":"project:self"}
+    ])))
+    .await;
+    let attempt = Uuid::parse_str(e.binding["attempt_id"].as_str().unwrap()).unwrap();
+    let active = aq_role_settings::active_snapshot(&e.pool).await.unwrap();
+    let digest = active.unwrap().snapshot.digest().to_string();
+    let ran_with = aq_role_settings::attempts::RanWith {
+        role: "reviewer".into(),
+        level: "standard-high".into(),
+        provider: "anthropic".into(),
+        model: "claude-sonnet-5-5".into(),
+        reasoning: "high".into(),
+        harness: "claude".into(),
+        execution_profile: "sandbox".into(),
+        snapshot_digest: digest,
+    };
+    let mut conn = e.pool.acquire().await.unwrap();
+    aq_role_settings::attempts::record(&mut conn, attempt, &ran_with)
+        .await
+        .unwrap();
+    drop(conn);
+    let create = |role: &str| {
+        let (app, token) = (e.app.clone(), e.token.clone());
+        let params =
+            json!({"operation_id":Uuid::new_v4(),"title":"x","parent_id":"self","role":role});
+        async move {
+            let path = "/api/v1/commands/task.create";
+            send(&app, path, Some(&token), Some(json!({"params":params}))).await
+        }
+    };
+    let (status, body) = create("developer").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_request", "{body}");
+    assert_eq!(
+        body["message"],
+        "Role `developer` is not within your own role `reviewer`: it may use source.write, which you may not. An agent can file a task only for a role whose operations it holds itself."
+    );
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0, "refused before the quota is reserved");
+    // Within its own operations the rule does not refuse it.
+    let (_, body) = create("reviewer").await;
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(!message.contains("is not within your own role"), "{body}");
+    let reserved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        reserved, 1,
+        "the reviewer task passed the role rule: {body}"
+    );
+}
+
 /// Spec 0006 phase 2: subtask creation is confined to the attempt's subtree,
 /// limited in count and depth, and cannot pick a child's profile.
 #[tokio::test]

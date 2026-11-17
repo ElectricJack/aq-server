@@ -103,6 +103,52 @@ pub(crate) async fn named(
     let check = |role: &_| tasks::named_role(snapshot.as_ref(), AsRef::as_ref(role));
     Ok(roles.iter().try_for_each(check))
 }
+/// An agent may not hand out more than it holds (spec 0014 step 3b): the
+/// role an agent files a task with (`named`, else the project's default) may
+/// list only operations of the role the filing attempt itself runs as, read
+/// from the snapshot that attempt launched with. `Err` is the refusal, naming
+/// the operations it lacks. An attempt with no summary was not launched from
+/// a role and is not restricted; people and playbooks never come here.
+pub(crate) async fn within_filer(
+    state: &AppState,
+    attempt: Uuid,
+    project: Uuid,
+    named: Option<&str>,
+) -> Result<Result<(), String>, AppError> {
+    if !tables(state) {
+        return Ok(Ok(()));
+    }
+    let pool = &state.store.pool;
+    let mut conn = pool.acquire().await.map_err(crate::error::db)?;
+    let ran_with = aq_role_settings::attempts::ran_with(&mut conn, attempt).await;
+    drop(conn);
+    let Some(ran_with) = ran_with.map_err(error)? else {
+        return Ok(Ok(()));
+    };
+    let own = aq_role_settings::snapshot(pool, &ran_with.snapshot_digest).await;
+    let (own, active) = (own.map_err(error)?, active(pool).await?);
+    let filer = own
+        .as_ref()
+        .and_then(|snapshot| snapshot.role(&ran_with.role));
+    let role = match named {
+        Some(role) => role.to_owned(),
+        None => {
+            let record = crate::project_bindings::current(state, project).await?;
+            record.binding.default_role
+        }
+    };
+    let target = active.as_ref().and_then(|snapshot| snapshot.role(&role));
+    // A role that does not exist is refused (or held) by its own rule.
+    let (Some(filer), Some(target)) = (filer, target) else {
+        return Ok(Ok(()));
+    };
+    let lacking = tasks::operations_beyond(&filer.operations, &target.operations);
+    Ok(if lacking.is_empty() {
+        Ok(())
+    } else {
+        Err(tasks::beyond_message(&filer.id, &target.id, &lacking))
+    })
+}
 /// [`named`] for the action surface: 422 `unknown_role`, naming the role and
 /// listing the roles that exist.
 pub(crate) async fn named_api(state: &AppState, roles: &[impl AsRef<str>]) -> Result<(), ApiError> {

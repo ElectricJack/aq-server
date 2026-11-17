@@ -27,14 +27,32 @@ pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> 
     .fetch_all(pool)
     .await
     .map_err(|_| unavailable())?;
+    // Spec 0014 §7.1: what each attempt ran with, from its own record. A
+    // store without the summaries (an attempt from before roles) shows none.
+    let attempts: Vec<Uuid> = (rows.iter())
+        .filter_map(|row| row.try_get::<Uuid, _>("attempt_id").ok())
+        .collect();
+    let ran_with = match pool.acquire().await {
+        Ok(mut conn) => aq_role_settings::attempts::ran_with_many(&mut conn, &attempts)
+            .await
+            .unwrap_or_default(),
+        Err(_) => return Err(unavailable()),
+    };
     rows.iter()
         .map(|row| {
-            Ok(json!({
+            let attempt = row
+                .try_get::<Uuid, _>("attempt_id")
+                .map_err(|_| unavailable())?;
+            let mut execution = json!({
                 "task_id": row.try_get::<Uuid, _>("task_id").map_err(|_| unavailable())?,
-                "attempt_id": row.try_get::<Uuid, _>("attempt_id").map_err(|_| unavailable())?,
+                "attempt_id": attempt,
                 "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
                 "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            }))
+            });
+            if let Some(summary) = ran_with.get(&attempt) {
+                execution["ran_with"] = json!(summary);
+            }
+            Ok(execution)
         })
         .collect()
 }

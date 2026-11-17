@@ -944,6 +944,9 @@
           "status": {
             "type": "string",
             "maxLength": 64
+          },
+          "ran_with": {
+            "$ref": "#/components/schemas/HumanRanWith"
           }
         },
         "required": [
@@ -951,6 +954,63 @@
           "attempt_id",
           "session_id",
           "status"
+        ],
+        "additionalProperties": false
+      },
+      "HumanRanWith": {
+        "type": "object",
+        "description": "What an attempt ran with (spec 0014 §7.1): its role, the intelligence profile (level), the model and reasoning effort, the harness, the execution profile and the digest of the role snapshot it launched from. Absent for an attempt from before roles.",
+        "properties": {
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "level": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "reasoning": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "execution_profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "snapshot_digest": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "role",
+          "level",
+          "provider",
+          "model",
+          "reasoning",
+          "harness",
+          "execution_profile",
+          "snapshot_digest"
         ],
         "additionalProperties": false
       },

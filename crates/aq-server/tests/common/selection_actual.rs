@@ -123,10 +123,7 @@ impl ActualSelectionFixture {
             role: profiles.agent_profile.clone(),
             intelligence_profile: profiles.intelligence_profile.clone(),
             execution_profile: profiles.execution_profile.clone(),
-            snapshot_digest: super::super::roles::active(&self.env.pool)
-                .await
-                .digest()
-                .to_string(),
+            snapshot_digest: self.env.snapshot.digest().to_string(),
         };
         let current = aq_server::project_bindings::check_eligibility(
             &self.env.state,
@@ -305,7 +302,10 @@ enabled=true
         empty == (0, 0, 0, 0, 0, 0, 0),
         "actual constructor cannot install synthetic selection/registration facts"
     );
+    // The actual base uses the shipped documents the store installed.
+    let snapshot = super::super::roles::active(&pool).await;
     let env = Env {
+        snapshot,
         app,
         state,
         pool,

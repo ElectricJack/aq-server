@@ -173,6 +173,12 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
             "reasoning":"high","harness":roles::HARNESS,"execution_profile":"sandbox","snapshot_digest":digest})
     );
     assert_eq!(pins(&c, attempt).await, [digest.to_string()]);
+    // The task's work read shows it on the attached execution (schema-checked).
+    let work = super::holds::full_work(&c, c.env.lineage.task_id).await;
+    assert_eq!(
+        work["execution"]["ran_with"],
+        serde_json::to_value(&summary).unwrap()
+    );
     // The selection decision records role, level, candidate, harness and snapshot.
     let decision: Value = sqlx::query_scalar(
         "SELECT d.decision FROM intelligence_decisions d JOIN profiled_launches l USING(decision_id) WHERE l.attempt_id=$1",

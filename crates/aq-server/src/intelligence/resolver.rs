@@ -413,7 +413,24 @@ pub async fn fence_for_offer(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     decision: &Decision,
 ) -> Result<()> {
+    fence_role(state, decision).await?;
     fence_retained_decision(state, tx, decision, None).await
+}
+/// Spec 0014 §5.1: a disabled role is handed no new work. An offer made
+/// before its role was disabled (or removed) is not granted; the task is then
+/// held by its role. A change of the active snapshot alone refuses nothing:
+/// the offer stays on the snapshot it was resolved from.
+async fn fence_role(state: &AppState, decision: &Decision) -> Result<()> {
+    if !crate::role_settings::tables(state) {
+        return Ok(());
+    }
+    let active = crate::role_settings::active(&state.store.pool).await?;
+    let role = active.as_ref().and_then(|s| s.role(&decision.project.role));
+    match role {
+        Some(role) if role.enabled => Ok(()),
+        Some(_) => Err(conflict("role_disabled")),
+        None => Err(conflict("role_missing")),
+    }
 }
 /// Only the current locked, never-granted native reservation may be discounted
 /// when comparing its original pre-offer decision. No durable count is changed.
@@ -423,6 +440,7 @@ pub(crate) async fn fence_for_preparation(
     decision: &Decision,
     binding: &aq_session_protocol::LaunchBinding,
 ) -> Result<()> {
+    fence_role(state, decision).await?;
     fence_owned_attempt(state, tx, decision, binding, None).await
 }
 /// Exact initial-grant receipt replay only; this never admits another attempt

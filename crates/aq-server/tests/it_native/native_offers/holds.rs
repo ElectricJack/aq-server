@@ -317,7 +317,7 @@ async fn a_task_completed_with_no_change_says_so_in_its_work_view() {
     );
 }
 /// The whole work view data of `task` (schema-checked by [`work`]).
-async fn full_work(c: &Case, task: Uuid) -> Value {
+pub(super) async fn full_work(c: &Case, task: Uuid) -> Value {
     work(c, task).await;
     let state = &c.env.env.state;
     let project = c.env.lineage.project_id;

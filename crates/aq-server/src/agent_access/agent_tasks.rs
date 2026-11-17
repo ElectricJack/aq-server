@@ -91,6 +91,18 @@ async fn admit(
         ));
     }
     let (project, own) = (a.ids.project_id, a.ids.task_id);
+    // An agent may not hand out more than it holds: the role of the new task
+    // (named, or the project's default) stays within the filer's own role.
+    let filer = a.ids.attempt_id;
+    let named = b.role.as_deref();
+    if let Err(message) = crate::role_settings::within_filer(state, filer, project, named)
+        .await
+        .map_err(internal)?
+    {
+        let r = Refusal::error(RefusalCode::InvalidRequest, spec.name, &message);
+        audit(state, &entry(&Decision::Deny(r.clone()))).await;
+        return Err(r);
+    }
     let parent = b.parent(own);
     // Reserve the create against the quota; a replay of the same operation
     // finds its own row and is not counted again.
