@@ -504,9 +504,13 @@ def apply():
     for kind, name in (("roles", DEFAULT_ROLE), ("intelligence-profiles", DEFAULT_INTELLIGENCE)):
         require(http(f"{SERVER}/api/settings/{kind}/{name}") is not None, f"no {kind} document {name!r} exists")
     binding = binding_rev(built, current.get("binding", {}))
-    if current.get("binding") != binding:
+    # The server may return a default role and level explicitly or leave them
+    # out; either way they are the same binding.
+    defaults = {"default_role": "developer", "default_intelligence": "standard-high"}
+    if {**defaults, **current.get("binding", {})} != {**defaults, **binding}:
         http(SERVER + "/api/projects/" + PROJECT, dict(
-            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "ms1-binding-" + sha(canonical(binding)))),
+            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "ms1-binding-" + sha(canonical(binding))
+                                        + "-" + str(current.get("revision")))),
             expected_revision=current.get("revision"), binding=binding))
     after = http(SERVER + "/api/projects/" + PROJECT)
     snapshot = http(SERVER + "/api/settings/profiles/snapshot")
