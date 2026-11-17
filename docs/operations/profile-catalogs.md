@@ -121,3 +121,23 @@ id, added after the role's prompt), not in a role.
 The context qualification list of `[profiled_execution]` and the `models` list
 of each `[intelligence] qualified_harnesses` entry no longer exist. A config
 that still has either fails to load with a message naming the key.
+
+## Upgrading a store that had a profile catalog
+
+Migration 0134 is not reversible; take a database backup first and run it with
+no task running.
+
+- The catalog, its environment pins, the context measurements and the
+  Intelligence structure tables are dropped. Only the routing document's text
+  is carried, as the first saved routing document.
+- Every project binding loses `catalog_digest` and the three `allowed_*`
+  lists and gets `default_role: developer` and
+  `default_intelligence: standard-high`. Ceilings, nodes, groups,
+  environments, repository and graph references and publication are kept. Set
+  the real defaults afterwards with `scripts/bind-project.py`.
+- Attempts from before keep their history. Each gets a `ran_with` summary
+  from its launch record (the old agent, intelligence and execution profile
+  ids without their version) with `snapshot_digest: null`.
+- A supervisor whose chosen profile came from the catalog is switched off;
+  choose a level for it again. An internal-work setting that names an old
+  profile id is reported as missing and runs on the default.
