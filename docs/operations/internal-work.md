@@ -331,10 +331,12 @@ Optional: `AQ_DEV_INTERNAL_POLL_MS`. The generated file is owned by you and hold
 A supervisor can change Intelligence settings and see and retry internal runs
 (spec 0012 §8). It calls the owner handlers through `/v1/supervisor/admin` on the
 machine listener, with its bearer and no CSRF header. The credential needs the
-`settings` scope. Only paths under these three prefixes are reachable; every other
+`settings` scope. Only paths under these prefixes are reachable; every other
 path is 404:
 
-- `/api/settings/intelligence` (profiles, and the routing policy at `/structure`)
+- `/api/settings/routing` (the routing switch and the routing playbook's status)
+- `/api/settings/routing-document` (the routing document; GET and PUT)
+- `/api/settings/intelligence-profiles` (the level documents; GET, PUT and DELETE)
 - `/api/settings/internal-work` (the internal work default and overrides)
 - `/api/internal-work/` (runs, a run, and retry)
 

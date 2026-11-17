@@ -33,6 +33,8 @@ need `X-AQ-Request: 1`):
 | `/selection-defaults` | the selection policy every intelligence profile starts from | replace | |
 | `/profiles/limits` | document sizes, snapshots and save receipts kept | replace | |
 | `/profiles/snapshot` | the active snapshot digest and the store revision | | |
+| `/routing-document` | the routing document: `markdown`, `revision` | replace | |
+| `/model-suggestions` | models discovered per harness (suggestions only) | | |
 
 - A PUT sends `{"markdown": "...", "expected_revision": "<n>", "operation_id": "<uuid>"}`.
   `expected_revision` is the revision last read (`"0"` for a new document).
