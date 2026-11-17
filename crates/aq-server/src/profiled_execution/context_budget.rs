@@ -178,7 +178,7 @@ pub struct Proof {
     pub renderer: ArtifactRef,
     pub selection_digest: Digest,
     /// The digest of the prepared launch the selection chose.
-    pub composition_digest: Digest,
+    pub launch_digest: Digest,
     pub rendering: Rendering,
     pub rendered_digest: Digest,
     pub rendered_bytes: u64,
@@ -250,7 +250,7 @@ pub fn count(
         schema_version: 2,
         renderer: renderer.definition.clone(),
         selection_digest: aq_selection::digest(selection).map_err(|_| Error::Input)?,
-        composition_digest: selection.choice.composition_digest.clone(),
+        launch_digest: selection.choice.launch_digest.clone(),
         rendering: Rendering::Utf8DoubleNewlineV1,
         rendered_digest: Digest::of(&bytes),
         rendered_bytes: bytes.len() as u64,

@@ -1,5 +1,5 @@
 use crate::candidate_core::*;
-use crate::validate::{fresh, validate};
+use crate::validate::fresh;
 use crate::*;
 use aq_profiles::{SelectionPolicy, UnknownCostPolicy};
 fn global_budget(input: &SelectionInputs, policy: &SelectionPolicy) -> Option<&'static str> {
@@ -117,12 +117,6 @@ fn cost(
 /// Actual input expirations can shorten this window; admission must recheck them.
 pub const OFFER_SELECTION_TTL_MS: u64 = 30_000;
 
-pub fn select(
-    catalog: &aq_profiles::ValidatedCatalog,
-    input: &SelectionInputs,
-) -> Result<SelectionOutcome> {
-    select_native(catalog, input, 2000)
-}
 /// Select for a live native offer among the candidates of the launch a role
 /// snapshot resolved (spec 0014), on the harnesses the node has installed.
 /// The decision allows time for poll, proposal and accept.
@@ -136,7 +130,7 @@ pub fn select_for_offer(
         .validate()
         .map_err(|e| SelectionError::Invalid(e.to_string()))?;
     let prepared: Vec<_> = (input.launches.iter())
-        .map(|l| CoreComposition {
+        .map(|l| CoreLaunch {
             digest: &l.digest,
             harness: &l.harness,
             environment: &l.environment,
@@ -147,106 +141,11 @@ pub fn select_for_offer(
     let profile = CoreProfile::launch(launch);
     finish(&profile, policy, &prepared, input, OFFER_SELECTION_TTL_MS)
 }
-fn select_native(
-    catalog: &aq_profiles::ValidatedCatalog,
-    input: &SelectionInputs,
-    ttl_ms: u64,
-) -> Result<SelectionOutcome> {
-    for composition in &input.compositions {
-        composition.composition.validate_native_v2().map_err(|_| {
-            SelectionError::Invalid("native selection requires schema2 composition".into())
-        })?;
-    }
-    select_internal(catalog, input, ttl_ms)
-}
-/// Historical schema1 inspection/replay compatibility only. Never use this
-/// entrypoint for a new native admission or offer fence.
-pub fn select_legacy_for_inspection(
-    catalog: &aq_profiles::ValidatedCatalog,
-    input: &SelectionInputs,
-) -> Result<SelectionOutcome> {
-    ensure(
-        input.compositions.iter().all(|c| {
-            c.composition.schema_version == 1
-                && c.composition.graph_access_policy_digest.is_none()
-                && c.composition.graph_access_policy_kind.is_none()
-                && c.composition.requested_permissions.is_none()
-        }),
-        "legacy composition shape",
-    )?;
-    select_internal(catalog, input, 2000)
-}
-fn select_internal(
-    catalog: &aq_profiles::ValidatedCatalog,
-    input: &SelectionInputs,
-    ttl_ms: u64,
-) -> Result<SelectionOutcome> {
-    validate(catalog, input)?;
-    let definitions = &catalog.artifact().catalog;
-    let agent = definitions
-        .agents
-        .iter()
-        .find(|a| aq_profiles::key(&a.id, a.version) == input.project.agent_profile)
-        .ok_or_else(|| SelectionError::Invalid("agent absent".into()))?;
-    ensure(
-        agent.intelligence == input.project.intelligence_profile
-            && agent.execution == input.project.execution_profile,
-        "profile combination mismatch",
-    )?;
-    let routed = input.intelligence_override.as_deref();
-    let intelligence = crate::routed_intelligence(definitions, &agent.intelligence, routed)
-        .ok_or_else(|| SelectionError::Invalid("routed intelligence profile".into()))?;
-    let execution = definitions
-        .execution
-        .iter()
-        .find(|e| aq_profiles::key(&e.id, e.version) == agent.execution)
-        .unwrap();
-    // A level profile saved in Settings carries no selection policy of its own: a routed
-    // task then runs under the policy of the automatic router the level stands in for.
-    let router_policy = || {
-        let router = (definitions.intelligence.iter())
-            .find(|i| aq_profiles::key(&i.id, i.version) == agent.intelligence)?;
-        routed.and(router.selection_policy.as_ref())
-    };
-    let Some(policy) = intelligence
-        .selection_policy
-        .as_ref()
-        .or_else(router_policy)
-    else {
-        return Ok(SelectionOutcome {
-            resolved: None,
-            traces: vec![],
-            reason_codes: vec!["selection_policy_missing".into()],
-        });
-    };
-    policy
-        .validate()
-        .map_err(|e| SelectionError::Invalid(e.to_string()))?;
-    let compositions: Vec<_> = input
-        .compositions
-        .iter()
-        .map(|c| CoreComposition {
-            digest: &c.digest,
-            harness: &c.composition.harness,
-            environment: &c.composition.environment,
-            context_limit_bytes: c.composition.context_limit_bytes,
-            startup_bytes: c
-                .composition
-                .instruction_order
-                .iter()
-                .filter(|i| i.delivery == aq_profiles::Delivery::Startup)
-                .map(|i| i.text.len() as u64)
-                .sum(),
-        })
-        .collect();
-    let profile = CoreProfile::catalog(intelligence, execution);
-    finish(&profile, policy, &compositions, input, ttl_ms)
-}
-/// The evaluation and the sealed result, whichever documents named the profile.
+/// The evaluation and the sealed result.
 fn finish(
     profile: &CoreProfile<'_>,
     policy: &SelectionPolicy,
-    compositions: &[CoreComposition<'_>],
+    launches: &[CoreLaunch<'_>],
     input: &SelectionInputs,
     ttl_ms: u64,
 ) -> Result<SelectionOutcome> {
@@ -275,7 +174,7 @@ fn finish(
             credentials: &input.credentials,
             observations: &input.observations,
             estimates: &input.estimates,
-            compositions,
+            launches,
             ceilings: &input.project.ceilings,
             allowed_environments: &input.project.allowed_environments,
             placement: input.placement.as_ref(),
@@ -322,9 +221,8 @@ fn finish(
             target: input.project.target.clone(),
             choice,
             snapshot_digest: digest(input)?,
-            catalog_digest: input.project.catalog_digest.clone(),
+            role_snapshot_digest: input.project.role_snapshot_digest.clone(),
             project_revision: input.project.revision,
-            catalog_revision: input.project.catalog_revision,
             node_revision: input.node.revision,
             registry_revision: input.registry_revision,
             credential_revision,

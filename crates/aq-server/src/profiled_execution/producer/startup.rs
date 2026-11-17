@@ -56,7 +56,7 @@ pub async fn retain(
     renderer: &Renderer,
 ) -> Result<Startup, AppError> {
     let text = &prepared.startup;
-    if counted.proof.composition_digest != prepared.launch.digest
+    if counted.proof.launch_digest != prepared.launch.digest
         || counted.proof.renderer != renderer.definition
         || counted.proof.rendered_digest != Digest::of(&counted.bytes)
         || counted.proof.rendered_bytes != counted.bytes.len() as u64

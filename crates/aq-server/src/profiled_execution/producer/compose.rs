@@ -153,7 +153,7 @@ pub async fn compile(
     let thread =
         crate::agent_access::task_thread::startup_input(state, project, context.revision.task_id)
             .await;
-    let thread_identity = thread.as_ref().map(|input| input.source.identity.clone());
+    let thread_identity = thread.as_ref().map(|input| input.identity.clone());
     let thread = thread.map(|input| input.text);
     let limit = execution
         .limits

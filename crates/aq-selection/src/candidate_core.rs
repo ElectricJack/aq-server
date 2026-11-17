@@ -11,58 +11,27 @@ pub(crate) enum ObservationTarget {
     },
     CentralInstallation,
 }
-pub(crate) struct CoreComposition<'a> {
+/// One prepared launch: a startup text for a harness and environment.
+pub(crate) struct CoreLaunch<'a> {
     pub digest: &'a Digest,
     pub harness: &'a str,
     pub environment: &'a str,
     pub context_limit_bytes: u64,
     pub startup_bytes: u64,
 }
-/// One candidate of an intelligence profile, whatever document it came from.
+/// One candidate of an intelligence profile.
 pub(crate) struct CoreCandidate<'a> {
     /// Its identity in decision records.
     pub id: String,
     pub provider: &'a str,
     pub model: &'a str,
-    /// What the choice records as its reasoning configuration.
-    pub reasoning_reference: &'a str,
-    /// The reasoning effort the candidate states itself (spec 0014 §5.2). It
-    /// is used as stated, or the candidate is unsupported on a harness that
-    /// does not accept it. `None` is the old catalog's candidate, whose
-    /// native reasoning is looked up in the harness's model list.
-    pub stated_reasoning: Option<&'a str>,
+    /// The reasoning effort the candidate states (spec 0014 §5.2). It is used
+    /// as stated, or the candidate is unsupported on a harness that does not
+    /// accept it.
+    pub reasoning: &'a str,
     pub harnesses: &'a [String],
 }
-/// Which credential profiles an execution profile names for a harness.
-pub(crate) enum CoreCredentials<'a> {
-    /// The old catalog: one list for every harness.
-    Listed(&'a [String]),
-    /// Spec 0014 §5.3: one credential profile per harness.
-    PerHarness(&'a std::collections::BTreeMap<String, String>),
-}
 impl<'a> CoreProfile<'a> {
-    /// The old catalog's profiles (central work; removed with the catalog).
-    pub fn catalog(
-        intelligence: &'a aq_profiles::Intelligence,
-        execution: &'a aq_profiles::Execution,
-    ) -> Self {
-        Self {
-            candidates: (intelligence.candidates.iter())
-                .map(|c| CoreCandidate {
-                    id: c.id.clone(),
-                    provider: &c.provider,
-                    model: &c.model,
-                    reasoning_reference: &c.reasoning_configuration_reference,
-                    stated_reasoning: None,
-                    harnesses: &c.harnesses,
-                })
-                .collect(),
-            harnesses: &execution.harnesses,
-            environments: &execution.environments,
-            credentials: CoreCredentials::Listed(&execution.credential_profile_references),
-            confinement: execution.confinement,
-        }
-    }
     /// The launch a role snapshot resolved: each candidate states its
     /// reasoning, and the execution profile names one environment and one
     /// credential profile per harness.
@@ -73,29 +42,26 @@ impl<'a> CoreProfile<'a> {
                     id: c.derived_id(),
                     provider: &c.provider,
                     model: &c.model,
-                    reasoning_reference: &c.reasoning,
-                    stated_reasoning: Some(&c.reasoning),
+                    reasoning: &c.reasoning,
                     harnesses: &c.harnesses,
                 })
                 .collect(),
             harnesses: &launch.execution.harnesses,
             environments: std::slice::from_ref(&launch.execution.environment),
-            credentials: CoreCredentials::PerHarness(&launch.execution.credentials),
+            credentials: &launch.execution.credentials,
             confinement: launch.execution.confinement.execution_confinement(),
         }
     }
 }
-impl CoreCredentials<'_> {
-    fn references(&self, harness: &str) -> Vec<String> {
-        let named: Vec<String> = match self {
-            Self::Listed(all) => all.to_vec(),
-            Self::PerHarness(by) => by.get(harness).cloned().into_iter().collect(),
-        };
-        if named.is_empty() {
-            vec!["unconfigured".to_string()]
-        } else {
-            named
-        }
+/// The credential profile an execution profile names for `harness` (spec
+/// 0014 §5.3: one per harness).
+fn credential_references(
+    by: &std::collections::BTreeMap<String, String>,
+    harness: &str,
+) -> Vec<String> {
+    match by.get(harness) {
+        Some(named) => vec![named.clone()],
+        None => vec!["unconfigured".to_string()],
     }
 }
 /// The candidates in preference order and where they may run.
@@ -103,7 +69,7 @@ pub(crate) struct CoreProfile<'a> {
     pub candidates: Vec<CoreCandidate<'a>>,
     pub harnesses: &'a [String],
     pub environments: &'a [String],
-    pub credentials: CoreCredentials<'a>,
+    pub credentials: &'a std::collections::BTreeMap<String, String>,
     pub confinement: aq_profiles::ExecutionConfinement,
 }
 /// A credential profile reference names a profile by `id@version` or by id.
@@ -127,7 +93,7 @@ pub(crate) struct CoreInputs<'a> {
     pub credentials: &'a [AuthorizedCredential],
     pub observations: &'a [AvailabilityObservation],
     pub estimates: &'a [CandidateEstimate],
-    pub compositions: &'a [CoreComposition<'a>],
+    pub launches: &'a [CoreLaunch<'a>],
     pub ceilings: &'a ResourceCeilings,
     pub allowed_environments: &'a [String],
     pub placement: Option<&'a Placement>,
@@ -333,14 +299,14 @@ pub(crate) fn evaluate(
                             .iter()
                             .any(|e| e == h.environment.id.as_str()))
             }) {
-                let Some(composition) = input.compositions.iter().find(|c| {
+                let Some(launch) = input.launches.iter().find(|c| {
                     c.harness == name.as_str()
                         && (c.environment == harness.environment.id.as_str()
                             || c.environment == profile_key(&harness.environment))
                 }) else {
                     continue;
                 };
-                for reference in execution.credentials.references(name) {
+                for reference in credential_references(execution.credentials, name) {
                     if input.credentials.iter().any(|c| {
                         names_profile(&reference, &c.profile) && c.provider != candidate.provider
                     }) {
@@ -449,22 +415,12 @@ pub(crate) fn evaluate(
                                 )
                             })?;
                             // The candidate's stated reasoning, as stated, when the
-                            // harness accepts it; never a substitute. The old
-                            // catalog's candidate is looked up in the harness list.
-                            let native_reasoning = match candidate.stated_reasoning {
-                                Some(stated) => {
-                                    aq_profiles::roles::harness_supports(&harness.harness, stated)
-                                        .then(|| stated.to_string())
-                                }
-                                None => (harness.models.iter())
-                                    .find(|m| {
-                                        m.provider == candidate.provider
-                                            && m.model == candidate.model
-                                            && m.reasoning_configuration_reference
-                                                == candidate.reasoning_reference
-                                    })
-                                    .map(|m| m.native_reasoning.clone()),
-                            }
+                            // harness accepts it; never a substitute.
+                            let native_reasoning = aq_profiles::roles::harness_supports(
+                                &harness.harness,
+                                candidate.reasoning,
+                            )
+                            .then(|| candidate.reasoning.to_string())
                             .ok_or((
                                 CandidateState::Unsupported,
                                 "model_or_reasoning_unsupported",
@@ -486,7 +442,7 @@ pub(crate) fn evaluate(
                             resources.context_bytes = resources
                                 .context_bytes
                                 .min(limits.context_bytes)
-                                .min(composition.context_limit_bytes);
+                                .min(launch.context_limit_bytes);
                             resources.wall_time_ms =
                                 resources.wall_time_ms.min(limits.wall_time_ms);
                             resources.memory_bytes =
@@ -494,7 +450,7 @@ pub(crate) fn evaluate(
                             resources.cpu_millis = resources.cpu_millis.min(limits.cpu_millis);
                             resources.process_limit =
                                 resources.process_limit.min(limits.process_limit);
-                            let bytes = composition.startup_bytes;
+                            let bytes = launch.startup_bytes;
                             if bytes > resources.context_bytes {
                                 return Err((
                                     CandidateState::Unsupported,
@@ -527,9 +483,6 @@ pub(crate) fn evaluate(
                                 provider: candidate.provider.into(),
                                 model: candidate.model.into(),
                                 native_reasoning,
-                                reasoning_configuration_reference: candidate
-                                    .reasoning_reference
-                                    .into(),
                                 harness: harness.harness.clone(),
                                 cli_version: harness.cli_version.clone(),
                                 adapter: harness.adapter.clone(),
@@ -540,7 +493,7 @@ pub(crate) fn evaluate(
                                 credential_delivery: delivery,
                                 account_reference: credential.account_reference.clone(),
                                 endpoint_reference: credential.endpoint_reference.clone(),
-                                composition_digest: composition.digest.clone(),
+                                launch_digest: launch.digest.clone(),
                                 resources,
                                 max_output_tokens: policy.max_output_tokens,
                                 estimate: estimate.cloned(),

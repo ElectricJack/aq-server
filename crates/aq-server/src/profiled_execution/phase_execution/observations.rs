@@ -210,7 +210,7 @@ async fn binding(state: &AppState, input: &Input) -> Result<FrozenProjectBinding
             role: profile(&manifest.agent_profile, "role")?,
             intelligence_profile: profile(&manifest.intelligence_profile, "intelligence")?,
             execution_profile: profile(&manifest.execution_profile, "execution")?,
-            snapshot_digest: input.selection.catalog_digest.as_str().to_owned(),
+            snapshot_digest: input.selection.role_snapshot_digest.as_str().to_owned(),
         },
     )
     .await?;

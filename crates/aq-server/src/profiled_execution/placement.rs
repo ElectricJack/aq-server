@@ -923,12 +923,12 @@ mod tests {
             |id: &str, digest: String| serde_json::json!({"id":id,"version":"1","digest":digest});
         let choice: aq_selection::ConcreteChoice = serde_json::from_value(serde_json::json!({
             "candidate_id":"c","profile_candidate_id":"p","provider":"openai","model":"m",
-            "native_reasoning":"high","reasoning_configuration_reference":"r",
+            "native_reasoning":"high",
             "harness":"codex","cli_version":"1",
             "adapter":artifact("adapter",hex('1')),"environment":artifact("ci",hex('a')),
             "qualification":artifact("q",hex('2')),"failure_classifier":null,
             "credential_profile":artifact("cred",hex('3')),
-            "account_reference":"acct","endpoint_reference":"ep","composition_digest":hex('4'),
+            "account_reference":"acct","endpoint_reference":"ep","launch_digest":hex('4'),
             "resources":{"context_bytes":1,"wall_time_ms":1,"memory_bytes":1,"cpu_millis":1,
                 "process_limit":1,"cost_limit_microunits":null,"currency":null,
                 "require_hard_cost_enforcement":false},

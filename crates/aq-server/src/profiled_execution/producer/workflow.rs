@@ -703,7 +703,7 @@ async fn offers(
         compiled
             .prepared
             .iter()
-            .find(|p| p.launch.digest == selected.choice.composition_digest)
+            .find(|p| p.launch.digest == selected.choice.launch_digest)
             .ok_or_else(|| refused())?;
         let policy_record = config
             .project_policy_record(policy.project_id)

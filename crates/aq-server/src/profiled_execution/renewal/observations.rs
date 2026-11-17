@@ -79,7 +79,7 @@ async fn binding(state: &AppState, p: &Pinned) -> Result<FrozenProjectBinding, A
         role: profile(&p.offer.manifest.agent_profile, "role")?,
         intelligence_profile: profile(&p.offer.manifest.intelligence_profile, "intelligence")?,
         execution_profile: profile(&p.offer.manifest.execution_profile, "execution")?,
-        snapshot_digest: p.selection.catalog_digest.as_str().to_owned(),
+        snapshot_digest: p.selection.role_snapshot_digest.as_str().to_owned(),
     };
     let result = crate::project_bindings::check_execution_eligibility(
         state,

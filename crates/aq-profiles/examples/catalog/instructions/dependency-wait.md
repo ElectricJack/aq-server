@@ -1,1 +1,0 @@
-Register only scoped wait conditions. Checkpoint and end the turn after an accepted suspension request. Bootstrap with verified outcome and acknowledge its exact continuation generation before ordinary work. No operator recovery authority is granted.

@@ -180,13 +180,7 @@ impl SelectionDefaults {
     /// The rules of [`SelectionPolicy::validate`] that do not depend on an
     /// execution profile.
     pub fn check(&self) -> Result<(), String> {
-        match self.policy(1, Vec::new()).validate() {
-            Ok(()) => Ok(()),
-            Err(error) => Err(match error {
-                crate::Error::Invalid(message) => message,
-                other => other.to_string(),
-            }),
-        }
+        (self.policy(1, Vec::new()).validate()).map_err(|crate::Error::Invalid(message)| message)
     }
 }
 

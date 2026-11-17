@@ -30,7 +30,7 @@ pub async fn apply(conn: &mut PgConnection, swarm: &mut Swarm) -> Result<(), sql
     if attempts.is_empty() {
         return Ok(());
     }
-    let rows=sqlx::query("SELECT l.attempt_id,d.decision#>>'{inputs,project,catalog_digest}' AS snapshot,d.decision#>>'{inputs,project,intelligence_profile}' AS profile FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) WHERE l.attempt_id=ANY($1)")
+    let rows=sqlx::query("SELECT l.attempt_id,d.decision#>>'{inputs,project,role_snapshot_digest}' AS snapshot,d.decision#>>'{inputs,project,intelligence_profile}' AS profile FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) WHERE l.attempt_id=ANY($1)")
         .bind(&attempts).fetch_all(&mut *conn).await?;
     let digests: Vec<String> = rows
         .iter()

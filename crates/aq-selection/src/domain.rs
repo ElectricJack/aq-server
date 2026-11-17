@@ -1,4 +1,3 @@
-use aq_profiles::FrozenComposition;
 use aq_session_protocol::{ArtifactRef, Capability, Digest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,15 +33,15 @@ pub struct ResourceCeilings {
 pub struct ProjectSnapshot {
     pub lineage: TaskLineage,
     pub revision: u64,
-    pub catalog_revision: u64,
-    pub catalog_digest: Digest,
+    /// The digest of the role snapshot the launch was resolved from.
+    pub role_snapshot_digest: Digest,
     pub admission_snapshot_digest: Digest,
     pub expires_at_ms: u64,
     pub target: ExecutionTarget,
     pub ceilings: ResourceCeilings,
     pub permission_ceiling: Vec<aq_session_protocol::Scope>,
     pub allowed_environments: Vec<String>,
-    pub agent_profile: String,
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
 }
@@ -226,12 +225,6 @@ pub struct CandidateEstimate {
     pub currency: String,
     pub rate_card: ArtifactRef,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreparedComposition {
-    pub digest: Digest,
-    pub composition: FrozenComposition,
-}
 /// One startup text an offer could launch with: the role, level and execution
 /// profile of the project snapshot, rendered for one installed harness. The
 /// digest is the server's, over the rendered text and the permissions.
@@ -256,29 +249,16 @@ pub struct SelectionInputs {
     pub budget: BudgetSnapshot,
     pub replacement: Option<ReplacementEvidence>,
     pub estimates: Vec<CandidateEstimate>,
-    pub compositions: Vec<PreparedComposition>,
     pub now_ms: u64,
     /// Sandbox placement facts (C4); absent for host-native workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<crate::Placement>,
-    /// A routed task's class profile, used in place of the automatic router (spec 0011 §4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
     /// A routed task's harness and provider limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteLimits>,
-    /// The startup texts of a launch resolved from a role snapshot, one per
-    /// harness and environment (spec 0014). Empty is omitted, so a selection
-    /// over the old catalog keeps its bytes and digest.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The startup texts of the launch, one per harness and environment
+    /// (spec 0014).
     pub launches: Vec<PreparedLaunch>,
-}
-impl SelectionInputs {
-    /// The intelligence profile this selection uses. For a launch from a
-    /// role snapshot it is the level the project snapshot names.
-    pub fn intelligence_key(&self) -> &str {
-        (self.intelligence_override.as_deref()).unwrap_or(&self.project.intelligence_profile)
-    }
 }
 #[derive(JsonSchema, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -312,7 +292,6 @@ pub struct ConcreteChoice {
     pub provider: String,
     pub model: String,
     pub native_reasoning: String,
-    pub reasoning_configuration_reference: String,
     pub harness: String,
     pub cli_version: String,
     pub adapter: ArtifactRef,
@@ -324,7 +303,8 @@ pub struct ConcreteChoice {
     pub credential_delivery: Option<CredentialDelivery>,
     pub account_reference: String,
     pub endpoint_reference: String,
-    pub composition_digest: Digest,
+    /// The digest of the prepared launch this choice runs.
+    pub launch_digest: Digest,
     pub resources: ResourceCeilings,
     pub max_output_tokens: u64,
     pub estimate: Option<CandidateEstimate>,
@@ -338,10 +318,10 @@ pub struct ResolvedSelection {
     pub lineage: TaskLineage,
     pub target: ExecutionTarget,
     pub choice: ConcreteChoice,
+    /// The digest of the selection inputs.
     pub snapshot_digest: Digest,
-    pub catalog_digest: Digest,
+    pub role_snapshot_digest: Digest,
     pub project_revision: u64,
-    pub catalog_revision: u64,
     pub node_revision: u64,
     pub registry_revision: u64,
     pub credential_revision: u64,

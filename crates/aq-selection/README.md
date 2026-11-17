@@ -4,19 +4,22 @@
 provider clients, database, daemon dependency, or credential values. Run its
 qualification with `cargo test -p aq-selection --locked --offline`.
 
-Selection preserves configured candidate order, execution harness order, and
-credential profile order. Installed adapter variants have a canonical tie order.
-Provider-native model and reasoning mappings must match exactly. An explicit
-versioned `selection_policy` is required; old catalogs retain identical bytes and
-digests, but have no inferred runnable model. Every fallback reason needs policy
-permission. Unknown availability requires explicit permission and independently
-present, authorized credentials; unknown never means missing credentials.
+`select_for_offer` selects among the candidates of the launch a role snapshot
+resolved (`aq_profiles::roles::Launch`, spec 0014) on the harnesses the node has
+installed. It preserves the level's candidate order and the execution profile's
+harness order; installed adapter variants have a canonical tie order. A
+candidate's stated reasoning effort is used as stated, or the candidate is
+unsupported on a harness that does not accept it. An execution profile names one
+credential profile per harness. Every fallback reason needs policy permission.
+Unknown availability requires explicit permission and independently present,
+authorized credentials; unknown never means missing credentials.
 
 The result freezes model/provider, native reasoning, tested harness CLI/adapter,
 environment and qualification artifacts, credential profile/account/endpoint,
-composition digest, effective resource limits, estimates, snapshot revisions,
-observation provenance and candidate reasons. It is metadata, not an offer or
-launch grant. It cannot override daemon authorization or prove external facts.
+the digest of the prepared launch, effective resource limits, estimates, the
+role snapshot digest, snapshot revisions, observation provenance and candidate
+reasons. It is metadata, not an offer or launch grant. It cannot override daemon
+authorization or prove external facts.
 
 Live server offers use `select_for_offer` with a 30-second selection and budget
 snapshot bound (`OFFER_SELECTION_TTL_MS`) so poll, proposal and accept can tolerate
@@ -26,9 +29,7 @@ as do source, graph and context proof expirations in offer assembly. With fresh
 facts valid for at least 30 seconds, selection leaves at least 29 seconds after
 900 ms of assembly latency; a five-second availability policy instead permits a
 five-second window at a fresh poll. Expired facts never gain extra lifetime, and
-replays retain their original absolute deadline. The `select` and
-`select_legacy_for_inspection` entrypoints retain the historical two-second bound
-for existing deterministic replay consumers.
+replays retain their original absolute deadline.
 
 Task budgets use `(project_id, workspace_id, original_task_id)`, deliberately
 stronger than an individual lifecycle lineage UUID. All replacement/continuation

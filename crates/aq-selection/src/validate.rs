@@ -99,21 +99,6 @@ impl AvailabilityObservation {
         Ok(())
     }
 }
-pub(crate) fn validate(
-    catalog: &aq_profiles::ValidatedCatalog,
-    input: &SelectionInputs,
-) -> Result<()> {
-    common(input)?;
-    ensure(
-        input.launches.is_empty(),
-        "catalog selection takes no launch",
-    )?;
-    ensure(
-        catalog.digest() == input.project.catalog_digest.as_str(),
-        "catalog snapshot mismatch",
-    )?;
-    compositions(catalog, input)
-}
 /// A selection over the launch a role snapshot resolved (spec 0014): the
 /// project names that role, level and execution profile, and each prepared
 /// startup text is for one harness and environment.
@@ -123,11 +108,7 @@ pub(crate) fn validate_launch(
 ) -> Result<()> {
     common(input)?;
     ensure(
-        input.compositions.is_empty() && input.intelligence_override.is_none(),
-        "launch selection takes no catalog composition",
-    )?;
-    ensure(
-        input.project.agent_profile == launch.role.id
+        input.project.role == launch.role.id
             && input.project.intelligence_profile == launch.intelligence.id
             && input.project.execution_profile == launch.execution.id,
         "launch differs from the project snapshot",
@@ -147,110 +128,7 @@ pub(crate) fn validate_launch(
     }
     Ok(())
 }
-fn compositions(catalog: &aq_profiles::ValidatedCatalog, input: &SelectionInputs) -> Result<()> {
-    let mut total = 0usize;
-    let mut compositions = BTreeSet::new();
-    for prepared in &input.compositions {
-        let composition = &prepared.composition;
-        ensure(
-            compositions.insert((&composition.harness, &composition.environment)),
-            "duplicate composition combination",
-        )?;
-        bounds(&composition.instruction_order, 128)?;
-        for instruction in &composition.instruction_order {
-            if let Some(key) = instruction.source.identity.strip_prefix("module:") {
-                let expected = catalog
-                    .source("module", key)
-                    .map_err(|_| SelectionError::Invalid("unknown instruction module".into()))?;
-                ensure(
-                    instruction.source.digest == expected.digest
-                        && instruction.source.revision == expected.revision
-                        && catalog.artifact().instructions.get(key) == Some(&instruction.text),
-                    "instruction module differs from immutable catalog",
-                )?;
-            } else if let Some(key) = instruction.source.identity.strip_prefix("agent:") {
-                let expected = catalog
-                    .source("agent", key)
-                    .map_err(|_| SelectionError::Invalid("unknown instruction agent".into()))?;
-                ensure(
-                    instruction.source.digest == expected.digest
-                        && instruction.source.revision == expected.revision
-                        && catalog.artifact().catalog.agents.iter().any(|a| {
-                            aq_profiles::key(&a.id, a.version) == key && a.role == instruction.text
-                        }),
-                    "instruction role differs from immutable catalog",
-                )?;
-            }
-            ensure(instruction.text.len() <= 65_536, "instruction bound")?;
-            total = total
-                .checked_add(instruction.text.len())
-                .ok_or_else(|| SelectionError::Invalid("snapshot overflow".into()))?;
-            ensure(total <= 8_388_608, "composition aggregate bound")?;
-        }
-        ensure(
-            prepared.digest == digest(composition)?
-                && composition.catalog_digest == catalog.digest()
-                && composition.project_binding_id == input.project.lineage.project_id
-                && composition.project_revision == input.project.revision
-                && composition.agent_profile.identity
-                    == format!("agent:{}", input.project.agent_profile)
-                && composition.intelligence_profile.identity
-                    == format!("intelligence:{}", input.intelligence_key())
-                && composition.execution_profile.identity
-                    == format!("execution:{}", input.project.execution_profile),
-            "composition binding mismatch",
-        )?;
-        for (namespace, key, source) in [
-            (
-                "agent",
-                input.project.agent_profile.as_str(),
-                &composition.agent_profile,
-            ),
-            (
-                "intelligence",
-                input.intelligence_key(),
-                &composition.intelligence_profile,
-            ),
-            (
-                "execution",
-                input.project.execution_profile.as_str(),
-                &composition.execution_profile,
-            ),
-        ] {
-            let expected = catalog.source(namespace, key).map_err(|_| {
-                SelectionError::Invalid("missing composition profile source".into())
-            })?;
-            ensure(
-                source.digest == expected.digest && source.revision == expected.revision,
-                "composition source digest mismatch",
-            )?;
-        }
-        let execution = catalog
-            .artifact()
-            .catalog
-            .execution
-            .iter()
-            .find(|e| aq_profiles::key(&e.id, e.version) == input.project.execution_profile)
-            .ok_or_else(|| SelectionError::Invalid("execution profile absent".into()))?;
-        bounds(&composition.effective_permissions, 128)?;
-        for permission in &composition.effective_permissions {
-            text(&permission.operation)?;
-            text(&permission.scope_reference)?;
-            ensure(
-                execution.permissions.iter().any(|p| {
-                    p.operation == permission.operation
-                        && p.scope_reference == permission.scope_reference
-                }) && input.project.permission_ceiling.iter().any(|p| {
-                    p.operation.as_str() == permission.operation
-                        && p.resource.as_str() == permission.scope_reference
-                }),
-                "composition permissions exceed selected ceilings",
-            )?;
-        }
-    }
-    Ok(())
-}
-/// Everything that does not depend on where the profiles come from.
+/// The checks of the inputs themselves.
 fn common(input: &SelectionInputs) -> Result<()> {
     lineage(&input.project.lineage)?;
     target(&input.project.target)?;
@@ -262,7 +140,6 @@ fn common(input: &SelectionInputs) -> Result<()> {
     ensure(
         input.now_ms > 0
             && input.project.revision > 0
-            && input.project.catalog_revision > 0
             && input.node.revision > 0
             && input.registry_revision > 0
             && input.budget.revision > 0,
@@ -272,14 +149,11 @@ fn common(input: &SelectionInputs) -> Result<()> {
         placement(p)?;
     }
     for value in [
-        &input.project.agent_profile,
+        &input.project.role,
         &input.project.intelligence_profile,
         &input.project.execution_profile,
     ] {
         text(value)?;
-    }
-    if let Some(routed) = &input.intelligence_override {
-        text(routed)?;
     }
     if let Some(r) = &input.route {
         for limit in [&r.harnesses, &r.providers, &r.prefer] {
@@ -325,7 +199,6 @@ fn common(input: &SelectionInputs) -> Result<()> {
     bounds(&input.credentials, 32)?;
     bounds(&input.observations, 128)?;
     bounds(&input.estimates, 128)?;
-    bounds(&input.compositions, 16)?;
     bounds(&input.launches, 16)?;
     validate_installation(
         &input.credentials,
@@ -423,7 +296,6 @@ pub(crate) fn validate_installation(
     for harness in harness_rows {
         text(&harness.harness)?;
         text(&harness.cli_version)?;
-        bounds(&harness.models, 64)?;
         bounds(&harness.capabilities, 64)?;
         ensure(
             harnesses.insert((
@@ -433,25 +305,6 @@ pub(crate) fn validate_installation(
             )),
             "duplicate harness identity",
         )?;
-        let mut models = BTreeSet::new();
-        for model in &harness.models {
-            for value in [
-                &model.provider,
-                &model.model,
-                &model.reasoning_configuration_reference,
-                &model.native_reasoning,
-            ] {
-                text(value)?;
-            }
-            ensure(
-                models.insert((
-                    &model.provider,
-                    &model.model,
-                    &model.reasoning_configuration_reference,
-                )),
-                "conflicting model mapping",
-            )?;
-        }
         for capability in &harness.capabilities {
             capability
                 .validate()

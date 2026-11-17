@@ -613,14 +613,10 @@ dependencies = [
  "aq-agent-grants",
  "aq-session-api",
  "aq-session-protocol",
- "clap",
- "nix",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
- "toml",
  "uuid",
 ]
 
@@ -761,7 +757,6 @@ version = "0.1.5"
 dependencies = [
  "aq-profiles",
  "aq-routing",
- "aq-session-api",
  "aq-session-protocol",
  "schemars",
  "serde",

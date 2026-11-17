@@ -2,8 +2,7 @@
 //! execution profile, each one Markdown document, compiled together into an
 //! immutable content-addressed [`Snapshot`]. Pure: no database, HTTP or I/O.
 //!
-//! This module is built alongside the catalog it replaces. The document
-//! grammar is specified in the crate README.
+//! The document grammar is specified in the crate README.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -31,6 +30,8 @@ pub const HARNESSES: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
 /// project's repository; it is not an agent grant, so `aq-agent-grants` does
 /// not list it.
 pub const SOURCE_WRITE: &str = "source.write";
+/// The most startup text a renderer delivers, whatever a profile asks for.
+pub const MAX_STARTUP_BYTES: usize = 1_048_576;
 
 /// Whether a role may list `operation`: the agent-grant vocabulary
 /// (`aq_agent_grants::op::ALL`) and [`SOURCE_WRITE`].

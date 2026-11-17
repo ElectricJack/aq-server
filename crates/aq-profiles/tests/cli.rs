@@ -1,113 +1,39 @@
-mod common;
-use common::*;
+//! `aq-profile validate <directory>` on the shipped defaults and on a broken set.
 use std::process::Command;
-fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_aq-profile"))
-}
-fn catalog() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/catalog")
-}
-#[test]
-fn profile_cli_uses_distinct_binary_name() {
-    let output = binary().arg("--help").output().unwrap();
-    assert!(output.status.success());
-    let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("Usage: aq-profile <COMMAND>"), "{help}");
-}
-#[test]
-fn requested_aq_profile_commands_work_without_db_and_separate_selection_pending() {
-    let output = binary()
-        .args(["profile", "validate", "--catalog"])
-        .arg(catalog())
-        .env_remove("DATABASE_URL")
+
+fn validate(directory: &std::path::Path) -> (Option<i32>, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_aq-profile"))
+        .arg("validate")
+        .arg(directory)
         .output()
         .unwrap();
-    assert!(output.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(v["catalog_valid"], true);
-    assert_eq!(v["selection_pending"], true);
-    let c = seed();
-    let r = request(&c);
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("request.json");
-    std::fs::write(&path, serde_json::to_vec(&r).unwrap()).unwrap();
-    for command in ["validate", "explain"] {
-        let output = binary()
-            .args(["profile", command, "--catalog"])
-            .arg(catalog())
-            .arg("--request")
-            .arg(&path)
-            .arg("--graph-access-profile-digest")
-            .arg(access())
-            .env_remove("DATABASE_URL")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(v["composition_valid"], true);
-        assert_eq!(v["explanation"]["valid"], false);
-        assert!(v["explanation"]["selection"]["selected_candidate_id"].is_null());
-    }
-    let mut r = r;
-    r.available_adapters.clear();
-    std::fs::write(&path, serde_json::to_vec(&r).unwrap()).unwrap();
-    let output = binary()
-        .args(["profile", "explain", "--catalog"])
-        .arg(catalog())
-        .arg("--request")
-        .arg(&path)
-        .arg("--graph-access-profile-digest")
-        .arg(access())
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["composition_valid"],
-        false
-    );
+    (
+        output.status.code(),
+        String::from_utf8(output.stdout).unwrap(),
+    )
 }
 
 #[test]
-fn canonical_artifact_export_is_not_an_activation() {
-    let temp = tempfile::tempdir().unwrap();
-    let out = temp.path().join("catalog.json");
-    let output = binary()
-        .args(["profile", "validate", "--catalog"])
-        .arg(catalog())
-        .arg("--artifact-out")
-        .arg(&out)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let validated =
-        aq_profiles::ValidatedCatalog::from_artifact(&std::fs::read(out).unwrap()).unwrap();
-    assert_eq!(validated.digest(), seed().digest());
-    assert!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout)
-            .unwrap()
-            .get("active_digest")
-            .is_none()
-    );
+fn the_shipped_defaults_are_a_valid_set() {
+    let defaults = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("defaults");
+    let (code, out) = validate(&defaults);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.starts_with("valid: 12 documents, snapshot "), "{out}");
 }
-#[cfg(unix)]
+
 #[test]
-fn request_fifo_refuses_without_waiting_for_a_writer() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("request.json");
-    nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
-    let output = binary()
-        .args(["profile", "explain", "--catalog"])
-        .arg(catalog())
-        .arg("--request")
-        .arg(path)
-        .arg("--graph-access-profile-digest")
-        .arg(access())
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+fn every_problem_is_printed_with_its_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let roles = dir.path().join("roles");
+    std::fs::create_dir(&roles).unwrap();
+    // A role whose execution profile does not exist, and no level at all.
+    std::fs::write(
+        roles.join("developer.md"),
+        "---\nid: developer\nname: Developer\ndescription: Makes changes.\nexecution: absent\noperations: [task.read]\nenabled: true\n---\n## Role\nYou make the change.\n",
+    )
+    .unwrap();
+    let (code, out) = validate(dir.path());
+    assert_eq!(code, Some(3), "{out}");
+    assert!(out.contains("developer"), "{out}");
+    assert!(out.contains("absent"), "{out}");
 }

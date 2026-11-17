@@ -244,7 +244,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let index = compiled
         .prepared
         .iter()
-        .position(|p| p.launch.digest == selected.choice.composition_digest)
+        .position(|p| p.launch.digest == selected.choice.launch_digest)
         .ok_or_else(|| refused())?;
     let prepared = compiled.prepared.swap_remove(index);
     let policy = prepared.policy.clone();
@@ -366,10 +366,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         provider: selected.choice.provider.clone(),
         model: selected.choice.model.clone(),
         native_reasoning: selected.choice.native_reasoning.clone(),
-        reasoning_configuration_reference: selected
-            .choice
-            .reasoning_configuration_reference
-            .clone(),
     };
     let profile = policy
         .resolve_profile(

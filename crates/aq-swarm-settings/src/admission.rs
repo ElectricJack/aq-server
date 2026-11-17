@@ -52,15 +52,15 @@ pub fn pinned_cell(choice: &Value) -> Option<Cell> {
 }
 
 async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::Error> {
-    let rows=sqlx::query("SELECT COALESCE(d.decision#>>'{inputs,intelligence_override}', d.decision#>>'{inputs,project,intelligence_profile}') AS profile, s.selection->'choice' AS choice, jsonb_typeof(d.decision#>'{inputs,launches}')='array' AS launched FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
+    let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,intelligence_profile}' AS profile, s.selection->'choice' AS choice, d.decision#>>'{inputs,project,role_snapshot_digest}' IS NOT NULL AS launched FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
     for row in rows {
         let profile: Option<String> = row.get("profile");
         let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
         // A launch from a role snapshot names its level by id, and the choice
-        // names the provider. An attempt recorded before roles and profiles
-        // has no launches; it is counted, unclassified, and nothing of its
-        // old catalog is read.
+        // names the provider. A decision recorded before roles and profiles
+        // names no role snapshot; its attempt is counted, unclassified, and
+        // nothing of its old catalog is read.
         let launched: Option<bool> = row.get("launched");
         let provider = text(&choice, "provider");
         let cell = match (launched, profile, provider) {

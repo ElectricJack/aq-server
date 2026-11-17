@@ -237,11 +237,7 @@ async fn resolve_with_principal(
         project: ProjectSnapshot {
             lineage: request.lineage.clone(),
             revision: request.project.project.revision,
-            // The role snapshot the launch is resolved from. It has no
-            // activation revision of its own; the field stays until the
-            // old catalog's selection inputs go (step 3c).
-            catalog_revision: 1,
-            catalog_digest: serde_json::from_value(json!(snapshot.digest()))
+            role_snapshot_digest: serde_json::from_value(json!(snapshot.digest()))
                 .map_err(|_| AppError::Internal)?,
             admission_snapshot_digest: digest(&request.project).map_err(|_| AppError::Internal)?,
             expires_at_ms: request.project.binding_observation.expires_at_ms,
@@ -268,7 +264,7 @@ async fn resolve_with_principal(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
-            agent_profile: request.project.role.clone(),
+            role: request.project.role.clone(),
             intelligence_profile: request.project.intelligence_profile.clone(),
             execution_profile: request.project.execution_profile.clone(),
         },
@@ -308,10 +304,8 @@ async fn resolve_with_principal(
         },
         replacement: replacement.map(|r| r.evidence),
         estimates: vec![],
-        compositions: vec![],
         now_ms: time,
         placement,
-        intelligence_override: None,
         route: request.route,
         launches: request.launches,
     };
@@ -401,7 +395,7 @@ fn capacity_cell(
 ) -> aq_swarm_settings::admission::Cell {
     aq_swarm_settings::admission::Cell {
         provider: choice.provider.clone(),
-        intelligence_class: inputs.intelligence_key().to_string(),
+        intelligence_class: inputs.project.intelligence_profile.clone(),
     }
 }
 /// AQ-08 must call inside its SERIALIZABLE offer transaction, after resolving

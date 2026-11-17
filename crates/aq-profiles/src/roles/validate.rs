@@ -27,9 +27,9 @@ pub struct DocumentLimits {
 impl Default for DocumentLimits {
     fn default() -> Self {
         Self {
-            max_document_bytes: crate::MAX_INSTRUCTION_BYTES,
-            max_set_bytes: crate::MAX_CATALOG_BYTES,
-            max_documents_per_kind: crate::MAX_MODULES,
+            max_document_bytes: 65_536,
+            max_set_bytes: 1_048_576,
+            max_documents_per_kind: 128,
             max_name_bytes: 128,
             max_description_bytes: 2000,
         }
@@ -466,12 +466,12 @@ fn check_execution(r: &mut Report<'_>, profile: &Execution) {
             ),
         );
     }
-    if l.startup_context_bytes > crate::central::MAX_STARTUP_BYTES as u64 {
+    if l.startup_context_bytes > super::MAX_STARTUP_BYTES as u64 {
         r.add(
             "## Limits",
             format!(
                 "`startup_context_bytes` is over the renderer's bound of {} bytes",
-                crate::central::MAX_STARTUP_BYTES
+                super::MAX_STARTUP_BYTES
             ),
         );
     }

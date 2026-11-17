@@ -42,15 +42,14 @@ fn defaults() -> SelectionDefaults {
 fn offer_inputs(snapshot: &Snapshot) -> SelectionInputs {
     let (_, mut input) = fixture();
     let launch = snapshot.resolve("developer", "standard-high").unwrap();
-    input.compositions.clear();
-    input.project.agent_profile = launch.role.id.clone();
+    input.project.role = launch.role.id.clone();
     input.project.intelligence_profile = launch.intelligence.id.clone();
     input.project.execution_profile = launch.execution.id.clone();
-    input.project.catalog_digest = serde_json::from_value(snapshot.digest().into()).unwrap();
+    input.project.role_snapshot_digest = serde_json::from_value(snapshot.digest().into()).unwrap();
+    input.node.harnesses.truncate(1);
     for harness in &mut input.node.harnesses {
         harness.harness = HARNESS.into();
         harness.capabilities = launch.execution.required_capabilities();
-        harness.models.clear();
     }
     input.launches = vec![PreparedLaunch {
         digest: digest(&"startup text").unwrap(),
@@ -97,8 +96,8 @@ fn a_model_no_harness_lists_runs_on_an_installed_harness_with_its_stated_reasoni
         resolved.choice.profile_candidate_id,
         "fixture-a:a-model-no-harness-lists:high"
     );
-    assert_eq!(resolved.choice.composition_digest, input.launches[0].digest);
-    assert_eq!(resolved.catalog_digest.as_str(), snapshot.digest());
+    assert_eq!(resolved.choice.launch_digest, input.launches[0].digest);
+    assert_eq!(resolved.role_snapshot_digest.as_str(), snapshot.digest());
     assert_eq!(resolved.choice.max_output_tokens, 128);
     // Deterministic: the same inputs give the same sealed selection.
     let again = selected(&snapshot, &input).resolved.unwrap();
@@ -181,16 +180,12 @@ fn live_offer_selection_still_expires_with_each_underlying_fact() {
 }
 
 #[test]
-fn a_launch_that_differs_from_the_project_snapshot_or_carries_a_catalog_composition_is_refused() {
+fn a_launch_that_differs_from_the_project_snapshot_or_exceeds_its_startup_limit_is_refused() {
     let snapshot = snapshot(&[("fixture-a", "model-a", "high")], &defaults());
     let launch = snapshot.resolve("developer", "standard-high").unwrap();
     let mut other_role = offer_inputs(&snapshot);
-    other_role.project.agent_profile = "reviewer".into();
+    other_role.project.role = "reviewer".into();
     assert!(select_for_offer(&launch, &other_role).is_err());
-    let (_, old) = fixture();
-    let mut with_composition = offer_inputs(&snapshot);
-    with_composition.compositions = old.compositions;
-    assert!(select_for_offer(&launch, &with_composition).is_err());
     let mut over = offer_inputs(&snapshot);
     over.launches[0].startup_bytes = 9000;
     assert!(select_for_offer(&launch, &over).is_err());

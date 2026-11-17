@@ -473,7 +473,7 @@ async fn load_profiled_compat(
     let manifest = &value.offer.manifest;
     if admitted_selection
         != serde_json::to_value(&selected).map_err(|_| AuthorityError::InvalidState)?
-        || selected.catalog_digest != manifest.catalog.digest
+        || selected.role_snapshot_digest != manifest.catalog.digest
         || selected.project_revision != manifest.bindings.project_revision
         || immutable.get::<String, _>("selection_digest") != selection_digest.as_str()
         || aq_selection::digest(&spec).map_err(|_| AuthorityError::InvalidState)?
