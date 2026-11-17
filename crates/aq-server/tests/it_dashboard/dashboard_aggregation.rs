@@ -328,6 +328,19 @@ async fn overview_workers_use_configured_threshold_and_project_association() {
         .await
         .unwrap();
     assert_eq!(worker["subject"]["id"], json!(f.node.node_id));
+    // A node the owner removed in worker settings is not listed, though stale.
+    let removed = |removed: bool| {
+        sqlx::query("WITH absent AS (INSERT INTO worker_settings(kind,id,revision) SELECT 'node',$1,1 WHERE NOT EXISTS(SELECT 1 FROM worker_settings WHERE kind='node' AND id=$1)) UPDATE worker_settings SET removed=$2 WHERE kind='node' AND id=$1")
+            .bind(f.node.node_id.to_string())
+            .bind(removed)
+            .execute(&pool)
+    };
+    removed(true).await.unwrap();
+    removed(true).await.unwrap();
+    let (_, hidden) = read(&app, "/api/v1/overview").await;
+    let attention = hidden["data"]["attention"].as_array().unwrap();
+    assert!(!attention.iter().any(|v| v["kind"] == "worker_offline"));
+    removed(false).await.unwrap();
     assert_eq!(worker["subject"]["revision"], revision);
     assert_eq!(
         worker["project"]["id"],
