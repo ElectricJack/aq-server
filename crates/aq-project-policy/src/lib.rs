@@ -57,14 +57,8 @@ pub const DEFAULT_INTELLIGENCE: &str = "standard-high";
 fn default_role() -> String {
     DEFAULT_ROLE.into()
 }
-fn is_default_role(v: &String) -> bool {
-    v == DEFAULT_ROLE
-}
 fn default_intelligence() -> String {
     DEFAULT_INTELLIGENCE.into()
-}
-fn is_default_intelligence(v: &String) -> bool {
-    v == DEFAULT_INTELLIGENCE
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,22 +73,12 @@ pub struct ProjectBinding {
     pub repository_adapter_reference: String,
     pub graph_adapter_reference: String,
     pub graph_workspace_id: Uuid,
-    // Spec 0014 §5.4: `catalog_digest` and the three `allowed_*_profiles`
-    // lists are removed in step 3c; until then the offer path reads them.
-    pub catalog_digest: String,
-    pub allowed_agent_profiles: Vec<String>,
-    pub allowed_intelligence_profiles: Vec<String>,
-    pub allowed_execution_profiles: Vec<String>,
-    /// The role of a task that names none. Absent on records written before
-    /// spec 0014, and not serialized at its default, like the fields below,
-    /// so those records load and keep their serialized digest.
-    #[serde(default = "default_role", skip_serializing_if = "is_default_role")]
+    /// The role of a task that names none (spec 0014 §5.4). A request that
+    /// leaves it out gets [`DEFAULT_ROLE`]; a stored record always names it.
+    #[serde(default = "default_role")]
     pub default_role: String,
     /// The intelligence profile used when a task was not routed to a level.
-    #[serde(
-        default = "default_intelligence",
-        skip_serializing_if = "is_default_intelligence"
-    )]
+    #[serde(default = "default_intelligence")]
     pub default_intelligence: String,
     /// Markdown per role id, added after the role's prompt; it never replaces
     /// it. Each note is bounded by the role store's document byte limit,
@@ -241,32 +225,11 @@ impl ProjectBinding {
                 && self.graph_adapter_reference == "aq.graph.configured",
             "unknown configured adapter reference",
         )?;
-        require(hex(&self.catalog_digest), "catalog digest")?;
-        for list in [
-            &self.allowed_agent_profiles,
-            &self.allowed_intelligence_profiles,
-            &self.allowed_execution_profiles,
-            &self.allowed_environments,
-        ] {
-            labels(list, 32)?;
-            require(!list.is_empty(), "empty profile/environment allowlist")?;
-        }
-        for list in [
-            &self.allowed_agent_profiles,
-            &self.allowed_intelligence_profiles,
-            &self.allowed_execution_profiles,
-        ] {
-            for profile in list {
-                let (id, version) = profile
-                    .rsplit_once('@')
-                    .ok_or("profile needs exact version")?;
-                label(id)?;
-                require(
-                    version.parse::<u32>().is_ok_and(|v| v > 0),
-                    "profile version",
-                )?;
-            }
-        }
+        labels(&self.allowed_environments, 32)?;
+        require(
+            !self.allowed_environments.is_empty(),
+            "empty environment allowlist",
+        )?;
         label(&self.default_role).map_err(|_| "default role")?;
         label(&self.default_intelligence).map_err(|_| "default intelligence profile")?;
         for (role, note) in &self.role_notes {
@@ -451,10 +414,6 @@ pub(crate) mod tests {
             repository_adapter_reference: "aq.git.configured".into(),
             graph_adapter_reference: "aq.graph.configured".into(),
             graph_workspace_id: Uuid::from_u128(3),
-            catalog_digest: "a".repeat(64),
-            allowed_agent_profiles: vec!["implementer@1".into()],
-            allowed_intelligence_profiles: vec!["engineering@1".into()],
-            allowed_execution_profiles: vec!["confined-development@1".into()],
             default_role: DEFAULT_ROLE.into(),
             default_intelligence: DEFAULT_INTELLIGENCE.into(),
             role_notes: BTreeMap::new(),
@@ -631,14 +590,17 @@ pub(crate) mod tests {
         assert!(b.validate(&config).is_err());
     }
     #[test]
-    fn role_defaults_are_absent_on_old_records_and_not_written_at_their_default() {
+    fn role_defaults_are_always_written_and_a_request_without_them_gets_the_defaults() {
         let config = ProjectConfig::default();
-        let old = serde_json::to_value(binding()).unwrap();
-        for key in ["default_role", "default_intelligence", "role_notes"] {
-            assert!(old.get(key).is_none(), "{key}");
-        }
-        // A record written before spec 0014 loads with the defaults.
-        let loaded: ProjectBinding = serde_json::from_value(old.clone()).unwrap();
+        let mut stored = serde_json::to_value(binding()).unwrap();
+        assert_eq!(stored["default_role"], "developer");
+        assert_eq!(stored["default_intelligence"], "standard-high");
+        assert!(stored.get("role_notes").is_none());
+        // A request that names neither default gets them.
+        let request = stored.as_object_mut().unwrap();
+        request.remove("default_role");
+        request.remove("default_intelligence");
+        let loaded: ProjectBinding = serde_json::from_value(stored.clone()).unwrap();
         assert_eq!(
             (
                 loaded.default_role.as_str(),
@@ -646,6 +608,23 @@ pub(crate) mod tests {
             ),
             ("developer", "standard-high")
         );
+        // The fields spec 0014 removed are unknown and refused by name.
+        for field in [
+            "catalog_digest",
+            "allowed_agent_profiles",
+            "allowed_intelligence_profiles",
+            "allowed_execution_profiles",
+        ] {
+            let mut old = stored.clone();
+            old[field] = serde_json::json!([]);
+            let error = serde_json::from_value::<ProjectBinding>(old).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
+        }
         assert!(loaded.role_notes.is_empty() && loaded.validate(&config).is_ok());
         let mut b = binding();
         b.default_role = "reviewer".into();

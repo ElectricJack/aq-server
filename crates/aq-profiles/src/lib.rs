@@ -6,8 +6,6 @@ mod compile;
 mod composition_core;
 mod graph_policy;
 pub use graph_policy::*;
-mod project;
-pub use project::validate_project_profiles;
 mod registry;
 pub mod roles;
 mod selection_policy;
