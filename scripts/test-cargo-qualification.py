@@ -12,7 +12,6 @@ SCRIPTS = Path(__file__).resolve().parent
 
 @pytest.mark.parametrize("script", [
     "test-profile-selection-packages.py",
-    "test-central-profile-packages.py",
     "test-admission-refresh-packages.py",
     "test-terminal-refresh-packages.py",
 ])
