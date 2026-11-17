@@ -638,7 +638,6 @@ pub async fn build_state(
         clock.clone(),
         config.internal_work.as_ref(),
         config.intelligence.clone(),
-        config.intelligence_preferences_file.clone(),
     )?;
     Ok(AppState {
         agent_access,

@@ -1,10 +1,11 @@
-//! Which intelligence profile internal work uses (spec 0012 §5): one default
-//! and per-purpose overrides, saved with a revision fence and replayable
-//! receipts. The structure follows `aq-profile-settings`' `structure.rs`.
+//! Which level (intelligence profile document, spec 0014 §5.2) internal work
+//! uses (spec 0012 §5): one default and per-purpose overrides, saved with a
+//! revision fence and replayable receipts. A choice names a level of the
+//! active role snapshot.
 use crate::{Error, Purpose, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -20,7 +21,6 @@ pub struct Document {
 pub struct SaveRequest {
     pub operation_id: Uuid,
     pub expected_revision: String,
-    pub expected_catalog_revision: String,
     #[serde(flatten)]
     pub document: Document,
 }
@@ -35,69 +35,64 @@ fn value<T: Serialize>(v: &T) -> Result<Value> {
     serde_json::to_value(v).map_err(|_| Error::Corrupt)
 }
 
-/// Catalog revision and the ids of the active profiles that may be chosen
-/// (every profile except the automatic router).
-async fn catalog(conn: &mut PgConnection) -> Result<(String, BTreeSet<String>)> {
-    let (revision, catalog) = active_catalog(conn).await?;
-    let ids = catalog
+/// The ids of the levels (intelligence profile documents) of the active role
+/// snapshot: what a purpose may name. Empty when no snapshot is active.
+async fn levels(pool: &PgPool) -> Result<BTreeSet<String>> {
+    let active = aq_role_settings::active_snapshot(pool)
+        .await
+        .map_err(|error| match error {
+            aq_role_settings::Error::Database(e) => Error::Database(e),
+            _ => Error::Corrupt,
+        })?;
+    Ok(active
         .iter()
-        .flat_map(|c| &c.artifact().catalog.intelligence);
-    let ids = ids
-        .filter(|p| p.automatic_routing != Some(true))
+        .flat_map(|a| a.snapshot.intelligence_profiles())
         .map(|p| p.id.clone())
-        .collect();
-    Ok((revision.to_string(), ids))
+        .collect())
 }
 
-/// The catalog registry revision and the active catalog, if one is active.
-pub async fn active_catalog(
-    conn: &mut PgConnection,
-) -> Result<(i64, Option<aq_profiles::ValidatedCatalog>)> {
-    let row =
-        sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&mut *conn)
-            .await?;
-    let revision = row.get("revision");
-    let Some(digest) = row.get::<Option<String>, _>("active_digest") else {
-        return Ok((revision, None));
-    };
-    let bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&digest)
-            .fetch_one(&mut *conn)
-            .await?;
-    let catalog =
-        aq_profiles::ValidatedCatalog::from_artifact(&bytes).map_err(|_| Error::Corrupt)?;
-    if catalog.digest() != digest {
-        return Err(Error::Corrupt);
-    }
-    Ok((revision, Some(catalog)))
+/// A stored choice whose level no longer exists. `purpose` is `None` for the
+/// default.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Missing {
+    pub purpose: Option<Purpose>,
+    pub profile_id: String,
+}
+/// The choices of `document` that name no level in `levels`: the default
+/// first, then the overrides in purpose order.
+pub fn missing(document: &Document, levels: &BTreeSet<String>) -> Vec<Missing> {
+    let default = document.default_profile_id.iter().map(|id| (None, id));
+    let overrides = document.overrides.iter().map(|(p, id)| (Some(*p), id));
+    default
+        .chain(overrides)
+        .filter(|(_, id)| !levels.contains(*id))
+        .map(|(purpose, id)| Missing {
+            purpose,
+            profile_id: id.clone(),
+        })
+        .collect()
 }
 
 fn decode(row: &sqlx::postgres::PgRow) -> Result<Document> {
     serde_json::from_value(row.get("document")).map_err(|_| Error::Corrupt)
 }
 
-fn snapshot(revision: i64, catalog_revision: &str, document: &Document) -> Result<Value> {
+/// The document with its revision, the purposes, and every stored choice
+/// whose level no longer exists (`missing`; such a purpose runs on the
+/// default, see [`level_for`]).
+fn snapshot(revision: i64, levels: &BTreeSet<String>, document: &Document) -> Result<Value> {
     let mut out = value(document)?;
     out["revision"] = json!(revision.to_string());
-    out["catalog_revision"] = json!(catalog_revision);
+    out["missing"] = value(&missing(document, levels))?;
     out["purposes"] = value(&Purpose::ALL)?;
     Ok(out)
 }
 
 pub async fn read(pool: &PgPool) -> Result<Value> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *tx)
-        .await?;
-    let (catalog_revision, _) = catalog(&mut tx).await?;
     let row = sqlx::query("SELECT revision,document FROM internal_work_settings WHERE singleton")
-        .fetch_one(&mut *tx)
+        .fetch_one(pool)
         .await?;
-    let out = snapshot(row.get("revision"), &catalog_revision, &decode(&row)?)?;
-    tx.commit().await?;
-    Ok(out)
+    snapshot(row.get("revision"), &levels(pool).await?, &decode(&row)?)
 }
 
 pub async fn operation(pool: &PgPool, actor: Uuid, id: Uuid) -> Result<Value> {
@@ -106,18 +101,38 @@ pub async fn operation(pool: &PgPool, actor: Uuid, id: Uuid) -> Result<Value> {
         .ok_or_else(|| Error::NotFound("Save has not been recorded".into()))
 }
 
-/// The profile id for `purpose`: its override, else the default, else none.
-pub async fn profile_for(pool: &PgPool, purpose: Purpose) -> Result<Option<String>> {
+/// The level for `purpose` among `levels`: its override, else the default.
+/// An override naming a level that no longer exists falls back to the
+/// default. `Err` says why there is none: nothing is configured, or the
+/// default names a level that no longer exists.
+pub fn level_for(
+    document: &Document,
+    purpose: Purpose,
+    levels: &BTreeSet<String>,
+) -> std::result::Result<String, String> {
+    if let Some(id) = document
+        .overrides
+        .get(&purpose)
+        .filter(|id| levels.contains(*id))
+    {
+        return Ok(id.clone());
+    }
+    match &document.default_profile_id {
+        Some(id) if levels.contains(id) => Ok(id.clone()),
+        Some(id) => Err(format!(
+            "the default internal work level {id:?} no longer exists"
+        )),
+        None => Err("no internal work profile configured".into()),
+    }
+}
+
+/// The stored document.
+pub async fn document(pool: &PgPool) -> Result<Document> {
     let document: Value =
         sqlx::query_scalar("SELECT document FROM internal_work_settings WHERE singleton")
             .fetch_one(pool)
             .await?;
-    let document: Document = serde_json::from_value(document).map_err(|_| Error::Corrupt)?;
-    Ok(document
-        .overrides
-        .get(&purpose)
-        .cloned()
-        .or(document.default_profile_id))
+    serde_json::from_value(document).map_err(|_| Error::Corrupt)
 }
 
 fn check_id(id: &str) -> Result<()> {
@@ -144,16 +159,15 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
         check_id(id)?;
     }
     let digest = aq_profiles::digest(&value(&req)?).map_err(|_| Error::Corrupt)?;
+    // Read before the transaction: a level deleted after this check is
+    // reported on read and its purpose falls back to the default.
+    let ids = levels(pool).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout='1s'")
         .execute(&mut *tx)
         .await?;
     sqlx::query("SET LOCAL statement_timeout='5s'")
         .execute(&mut *tx)
-        .await?;
-    // Catalog first, as catalog saves do.
-    sqlx::query("SELECT revision FROM profile_catalog_registry WHERE singleton FOR SHARE")
-        .fetch_one(&mut *tx)
         .await?;
     let row = sqlx::query(
         "SELECT revision,document FROM internal_work_settings WHERE singleton FOR UPDATE",
@@ -169,10 +183,7 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
         tx.commit().await?;
         return Ok(response);
     }
-    let (catalog_revision, ids) = catalog(&mut tx).await?;
-    if row.get::<i64, _>("revision") != expected
-        || req.expected_catalog_revision != catalog_revision
-    {
+    if row.get::<i64, _>("revision") != expected {
         return Err(conflict(
             "Internal work settings changed. Your draft is preserved; reload before saving",
         ));
@@ -184,9 +195,9 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
         .chain(req.document.overrides.values())
     {
         if !ids.contains(id) {
-            return Err(invalid(
-                "Choose an Intelligence profile that exists and is not automatic routing",
-            ));
+            return Err(invalid(&format!(
+                "Choose an Intelligence profile that exists: there is no level {id:?}"
+            )));
         }
     }
     let changed = req.document != decode(&row)?;
@@ -204,7 +215,7 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
             "Internal work settings save history limit reached",
         ));
     }
-    let mut response = snapshot(revision, &catalog_revision, &req.document)?;
+    let mut response = snapshot(revision, &ids, &req.document)?;
     response["operation_id"] = json!(req.operation_id);
     response["disposition"] = json!(if changed { "saved" } else { "unchanged" });
     sqlx::query("INSERT INTO internal_work_settings_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)")
