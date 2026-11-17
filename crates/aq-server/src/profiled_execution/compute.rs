@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 /// Caller owns the current enrolled-node lock. Bound work and fail closed when
 /// history is unavailable; never infer stop from `holds_task` or status alone.
+/// From format 136 the SQL proof is the release recorded when the stop was accepted.
 pub(crate) async fn busy_locked(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
@@ -62,12 +63,8 @@ pub(crate) async fn busy_locked(
         }
         let pin = super::results::compute_stop_locked(tx, node, &binding, grant.grant_id, receipt)
             .await?;
-        let valid: bool = sqlx::query_scalar("SELECT profiled_compute_stopped_valid($1,$2)")
-            .bind(id)
-            .bind(node)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|_| AppError::Internal)?;
+        let valid = aq_machine_control::slots::stop_recorded(tx, id, node).await;
+        let valid = valid.map_err(crate::machine_api::mapped)?;
         if !valid {
             busy = true;
             continue;

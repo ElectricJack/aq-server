@@ -367,3 +367,55 @@ async fn an_owner_disposition_clears_the_tasks_hold_in_both_reads() {
             .unwrap();
     assert_eq!(by.as_deref(), Some("claim_released"));
 }
+
+/// An attempt still running on a node that was then revoked can never report its stop (the
+/// node's credential is gone), so nothing but the owner can end it: the disposition accepts
+/// it once the node is revoked, names the revocation as its proof and releases the claim.
+#[tokio::test]
+async fn owner_abandons_a_running_attempt_once_its_node_is_revoked() {
+    use sha2::{Digest, Sha256};
+    let (f, start) = setup(true).await;
+    let auth = context(&f).await;
+    started::record(&f.state, &auth, &start).await.unwrap();
+    let attempt = start.binding.attempt_id;
+    let request = request();
+    let (status, _) = call(&f, attempt, "POST", json!(request), "owner@localhost").await;
+    assert_eq!(
+        status, 409,
+        "a running attempt of an enrolled node stays held"
+    );
+    assert!(held(&f, attempt).await);
+    let pool = f.db.pool().await;
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(auth.id())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, receipt) = call(&f, attempt, "POST", json!(request), "owner@localhost").await;
+    assert_eq!(status, 200, "{receipt}");
+    assert_eq!(receipt["disposition"], "abandoned");
+    let proof = format!("aq.node-revoked/{}", auth.id());
+    assert_eq!(
+        receipt["stop_receipt_digest"],
+        json!(format!("{:x}", Sha256::digest(proof.as_bytes())))
+    );
+    assert!(!held(&f, attempt).await);
+    let holding: bool = sqlx::query_scalar("SELECT native_attempt_holds_compute($1,$2)")
+        .bind(attempt)
+        .bind(auth.id())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!holding, "a released claim occupies no slot");
+    // Exactly idempotent, and storage still refuses the same record for an enrolled node.
+    assert_eq!(
+        call(&f, attempt, "POST", json!(request), "owner@localhost").await,
+        (StatusCode::OK, receipt)
+    );
+    // A task may carry a disposition per attempt (several attempts of one task can be stuck).
+    let unique: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_constraint WHERE conrelid='profiled_stopped_dispositions'::regclass AND contype='u' AND conname='profiled_stopped_dispositions_task_id_key'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(unique, 0);
+}

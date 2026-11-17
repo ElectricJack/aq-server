@@ -207,22 +207,41 @@ pub fn attested_index_rows() -> Vec<serde_json::Value> {
 }
 
 /// The R6 trigger (migration 0106) that clears a task's hold when the task gets a new attempt
-/// or its claim is released, and its function, whose body is the migration's own.
-pub fn attested_trigger_rows() -> Vec<serde_json::Value> {
-    const SQL: &str = include_str!("../../aq-server/migrations/0106_task_holds.sql");
-    const HEAD: &str = "task_holds_clear() RETURNS trigger LANGUAGE plpgsql AS $$";
-    let body = (SQL
-        .split_once(HEAD)
-        .and_then(|(_, rest)| rest.split_once("$$")))
-    .map_or("", |(body, _)| body);
-    vec![
+/// or its claim is released, and its function, whose body is the migration's own. From format
+/// 136 a failed attempt's replacement release leaves the task's hold in place, and the stop's
+/// transaction records its compute release through a trigger on the hot row (migration 0136).
+pub fn attested_trigger_rows(supported: u32) -> Vec<serde_json::Value> {
+    const HELD: &str = include_str!("../../aq-server/migrations/0106_task_holds.sql");
+    const KEPT: &str = include_str!("../../aq-server/migrations/0136_recorded_compute_release.sql");
+    let body = |sql: &'static str, name: &str| {
+        let head = format!("{name}() RETURNS trigger LANGUAGE plpgsql AS $$");
+        (sql.split_once(&head)
+            .and_then(|(_, rest)| rest.split_once("$$")))
+        .map_or("", |(body, _)| body)
+    };
+    let function = |name: &str, body: &str| {
+        serde_json::json!({"kind": "function", "name": name, "body": {"set": false, "args": "",
+            "body": body, "kind": "f", "config": null, "strict": false, "returns": "trigger",
+            "language": "plpgsql", "parallel": "u", "volatility": "v", "security_definer": false}})
+    };
+    let clear = "task_holds_clear";
+    let mut rows = vec![
         serde_json::json!({"kind": "trigger", "name": "execution_attempts.execution_attempts_clear_task_holds",
             "body": {"definition": "CREATE TRIGGER execution_attempts_clear_task_holds AFTER INSERT OR UPDATE OF holds_task ON public.execution_attempts FOR EACH ROW EXECUTE FUNCTION task_holds_clear()",
             "enabled": "O", "type": 21, "deferrable": false, "deferred": false}}),
-        serde_json::json!({"kind": "function", "name": "task_holds_clear", "body": {"set": false, "args": "",
-            "body": body, "kind": "f", "config": null, "strict": false, "returns": "trigger",
-            "language": "plpgsql", "parallel": "u", "volatility": "v", "security_definer": false}}),
-    ]
+        function(
+            clear,
+            body(if supported >= 136 { KEPT } else { HELD }, clear),
+        ),
+    ];
+    if supported >= 136 {
+        let record = "native_compute_release_on_stop";
+        rows.push(serde_json::json!({"kind": "trigger", "name": "profiled_authority_hot.native_compute_release_on_stop",
+            "body": {"definition": "CREATE TRIGGER native_compute_release_on_stop AFTER INSERT OR UPDATE ON public.profiled_authority_hot FOR EACH ROW WHEN ((((new.state ->> 'status'::text) = 'finished'::text) AND ((new.state #>> '{stop,kind}'::text[]) = 'stopped'::text))) EXECUTE FUNCTION native_compute_release_on_stop()",
+            "enabled": "O", "type": 21, "deferrable": false, "deferred": false}}));
+        rows.push(function(record, body(KEPT, record)));
+    }
+    rows
 }
 
 /// Whether the attested catalog equals the expected one. From format 103 the
@@ -241,7 +260,7 @@ pub fn catalog_matches(
                 expected.extend(attested_index_rows());
             }
             if supported >= 106 {
-                expected.extend(attested_trigger_rows());
+                expected.extend(attested_trigger_rows(supported));
             }
             expected.sort_by_key(key);
             actual.sort_by_key(key);
@@ -456,13 +475,16 @@ pub async fn swarm_holds(
 mod tests {
     #[test]
     fn the_task_holds_trigger_function_body_is_read_from_its_migration() {
-        let rows = attested_trigger_rows();
-        let body = rows[1]["body"]["body"].as_str().unwrap();
-        assert!(
-            body.starts_with("\nBEGIN\n") && body.ends_with("END "),
-            "{body:?}"
-        );
-        assert!(body.contains("cleared_by = 'claim_released'"));
+        for (supported, kept) in [(135, false), (136, true)] {
+            let rows = attested_trigger_rows(supported);
+            let body = rows[1]["body"]["body"].as_str().unwrap();
+            assert!(
+                body.starts_with("\nBEGIN\n") && body.ends_with("END "),
+                "{body:?}"
+            );
+            assert!(body.contains("cleared_by = 'claim_released'"));
+            assert_eq!(body.contains("profiled_replacement_releases"), kept);
+        }
     }
     use super::*;
 

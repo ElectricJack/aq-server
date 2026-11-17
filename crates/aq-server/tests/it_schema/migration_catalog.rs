@@ -92,3 +92,70 @@ async fn node_slots_135_preserves_existing_counts_at_one_and_defaults_new_nodes_
         2
     );
 }
+
+/// Migration 0136: occupancy is the recorded compute release. Both startup guards accept
+/// exactly the migrated functions, with no per-function settings (a hand-applied
+/// `ALTER FUNCTION ... SET` once kept the server from starting) and no other body.
+#[tokio::test]
+async fn recorded_compute_release_136_upgrades_from_135_and_startup_refuses_drift() {
+    use aq_server::{
+        store::Store,
+        test_support::{TestDb, migrate_profile},
+    };
+    let db = TestDb::create().await;
+    let pool = db.pool().await;
+    migrate_profile(&pool, 135).await.unwrap();
+    let languages = "SELECT string_agg(l.lanname,',' ORDER BY p.proname) FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.proname IN ('native_attempt_holds_compute','native_compute_reuse_proven')";
+    let before: String = sqlx::query_scalar(languages)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, "plpgsql,sql");
+    migrate_profile(&pool, 136).await.unwrap();
+    let format: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(format, "136");
+    let after: String = sqlx::query_scalar(languages)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        after, "plpgsql,plpgsql",
+        "no SQL-language proof is planned per call"
+    );
+    // The occupancy read never reaches the stop proof: its plan names only the two tables.
+    let source: String = sqlx::query_scalar(
+        "SELECT prosrc FROM pg_proc WHERE proname='native_attempt_holds_compute'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(source.contains("execution_attempt_compute_releases"));
+    assert!(!source.contains("profiled_compute_stopped_valid"));
+    // Nothing but the validating owner writes a release.
+    let direct = sqlx::query("INSERT INTO execution_attempt_compute_releases(attempt_id,node_id,proof,stop_receipt_digest,witnesses) VALUES(gen_random_uuid(),gen_random_uuid(),'stopped',repeat('a',64),'[]')")
+        .execute(&pool)
+        .await;
+    assert!(direct.is_err());
+    // A fresh start on the migrated database passes both guards; each drift is refused.
+    Store::connect_with(db.options()).await.unwrap();
+    for drift in [
+        "ALTER FUNCTION native_attempt_holds_compute(uuid,uuid) SET join_collapse_limit=1",
+        "ALTER FUNCTION native_compute_reuse_proven(uuid,uuid) SET from_collapse_limit=1",
+        "CREATE OR REPLACE FUNCTION native_compute_release_record(attempt UUID) RETURNS BOOLEAN LANGUAGE plpgsql AS 'BEGIN RETURN TRUE; END'",
+        "ALTER TABLE profiled_authority_hot DISABLE TRIGGER native_compute_release_on_stop",
+        "ALTER TABLE execution_attempt_compute_releases DISABLE TRIGGER execution_attempt_compute_release_guard",
+    ] {
+        let db = TestDb::create().await;
+        let pool = db.pool().await;
+        migrate_profile(&pool, 136).await.unwrap();
+        sqlx::raw_sql(drift).execute(&pool).await.unwrap();
+        assert!(
+            Store::connect_with(db.options()).await.is_err(),
+            "startup accepted: {drift}"
+        );
+    }
+}

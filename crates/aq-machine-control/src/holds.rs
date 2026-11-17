@@ -6,8 +6,10 @@
 //!
 //! "Held" has one definition, the `task_holds_current` view: the task view ([`current`]) and the
 //! swarm read ([`counts`]) both read it. A hold is cleared when the task gets a new attempt or
-//! its claim is released (migration 0106 triggers, whatever the path), and when AQ observes the
-//! task closed or retired in Graph ([`clear_closed`] from the task view, [`sweep`]).
+//! its claim is released by an owner's disposition or a completion (migration 0106 triggers),
+//! and when AQ observes the task closed or retired in Graph ([`clear_closed`] from the task
+//! view, [`sweep`]). A failed attempt's replacement release does not clear it (migration 0136):
+//! the attempt stops holding the task ([`crate::settled`]) while the task stays held.
 use crate::Error;
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool, Row};

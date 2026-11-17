@@ -30,6 +30,34 @@ async fn verified_stopped_frees_node_compute_without_releasing_task_or_requiring
         .await
         .unwrap();
     assert!(valid);
+    // The stop's own transaction recorded the release (migration 0136): occupancy is that
+    // row, and the proof is not run again by any read.
+    let recorded = "SELECT proof FROM execution_attempt_compute_releases WHERE attempt_id=$1";
+    let holds = "SELECT native_attempt_holds_compute($1,$2)";
+    let attempt = report.binding.attempt_id;
+    let proof = |pool| sqlx::query_scalar::<_, String>(recorded).bind(attempt).fetch_optional(pool);
+    let held = |pool| sqlx::query_scalar::<_, bool>(holds).bind(attempt).bind(auth.id()).fetch_one(pool);
+    assert_eq!(proof(pool).await.unwrap().as_deref(), Some("stopped"));
+    assert!(!held(pool).await.unwrap());
+    // It is immutable and only its validating owner writes it.
+    assert!(sqlx::query("DELETE FROM execution_attempt_compute_releases WHERE attempt_id=$1").bind(attempt).execute(pool).await.is_err());
+    assert!(sqlx::query("INSERT INTO execution_attempt_compute_releases SELECT gen_random_uuid(),node_id,proof,stop_receipt_digest,witnesses FROM execution_attempt_compute_releases").execute(pool).await.is_err());
+    // A format-135 database has the stopped attempt and no recorded release: the attempt
+    // counts as occupying until the migration's backfill validates its proof once.
+    for sql in [
+        "ALTER TABLE execution_attempt_compute_releases DISABLE TRIGGER execution_attempt_compute_release_guard",
+        "DELETE FROM execution_attempt_compute_releases",
+        "ALTER TABLE execution_attempt_compute_releases ENABLE TRIGGER execution_attempt_compute_release_guard",
+    ] {
+        sqlx::query(sql).execute(pool).await.unwrap();
+    }
+    assert!(held(pool).await.unwrap());
+    sqlx::query("SELECT native_compute_release_record(attempt_id) FROM execution_attempts WHERE holds_task AND kind='profiled_v1'")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(proof(pool).await.unwrap().as_deref(), Some("stopped"));
+    assert!(!held(pool).await.unwrap());
     // A direct incarnation write cannot bypass the typed Rust validator just
     // by pointing at a plausible stopped projection or actual existing rows.
     assert!(sqlx::query("UPDATE execution_nodes SET state=jsonb_set(jsonb_set(state,'{identity}', $2),'{native,request,identity}',$2) WHERE node_id=$1")
@@ -91,4 +119,25 @@ async fn running_or_missing_stopped_owner_keeps_node_compute_busy() {
             .is_err()
     );
     assert_eq!(before, invariant(&f).await);
+    // No proof, no recorded release: the backfill records nothing and the slot stays occupied.
+    let pool = &f.c.env.env.pool;
+    let recorded: bool = sqlx::query_scalar("SELECT native_compute_release_record($1)")
+        .bind(report.binding.attempt_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert!(!recorded);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_attempt_compute_releases")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT native_attempt_holds_compute($1,$2)")
+            .bind(report.binding.attempt_id)
+            .bind(auth.id())
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    );
 }

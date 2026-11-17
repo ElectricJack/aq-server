@@ -140,6 +140,7 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
     let mut sweep = Sweep::default();
     let mut rework = ReworkSweep::default();
     let mut closures = ClosureSweep::default();
+    let mut settled = None;
     let mut terminations = crate::agent_access::human::task_termination::Sweep::default();
     let mut tick_count: u32 = 0;
     let mut ticks = tokio::time::interval(Duration::from_secs(1));
@@ -174,6 +175,10 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
                     }
                 }
             }
+            // Nothing finished holds its task: settled failed attempts release their claims.
+            let now = (state.clock)().timestamp_millis();
+            let release = aq_machine_control::settled::sweep(&state.store.pool, &mut settled, now);
+            let _ = tokio::time::timeout(Duration::from_secs(4), release).await;
         }
         tokio::select! {
             biased;

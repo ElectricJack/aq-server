@@ -15,7 +15,7 @@ pub mod limits;
 pub mod lost;
 pub mod management;
 pub mod offer_assembly;
-pub mod recent;
+pub mod settled;
 pub mod slots;
 
 /// First `state_format_version` with these tables.
