@@ -1,8 +1,8 @@
 //! Route storage on the task graph, route history and the routing switch
 //! (spec 0011 §3, §4), against a minimal fake Graph service.
+use aq_profiles::roles::Kind;
 use aq_routing::{
-    Class, CompactRoute, ProviderIntent, Route, RouteReason, Source,
-    classify::{Offer, Options},
+    Class, CompactRoute, ProviderIntent, Route, RouteReason, Source, classify::Offer,
 };
 use aq_server::{
     AppState,
@@ -357,74 +357,6 @@ async fn clear_removes_the_key_and_records_a_cleared_entry() {
     assert_eq!(history[1].route, Some(first));
 }
 
-fn catalog() -> aq_profiles::ValidatedCatalog {
-    let base = aq_profiles::load(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
-    )
-    .unwrap();
-    let instructions = base.artifact().instructions.clone();
-    let mut catalog = base.artifact().catalog.clone();
-    let mut assigned = catalog.intelligence[0].clone();
-    assigned.id = "careful".into();
-    assigned.version = 3;
-    let mut router = catalog.intelligence[0].clone();
-    router.id = "router".into();
-    router.automatic_routing = Some(true);
-    catalog.intelligence.extend([assigned, router]);
-    aq_profiles::validate(catalog, instructions).unwrap()
-}
-
-async fn assign(pool: &PgPool, revision: i64, assignments: Value) {
-    let parents: Vec<Value> = ["simple", "standard", "complex", "deep"]
-        .iter()
-        .map(|id| json!({"id": id, "description": ""}))
-        .collect();
-    sqlx::query("UPDATE intelligence_structure SET revision=$1, document=$2 WHERE singleton")
-        .bind(revision)
-        .bind(json!({"routing_markdown":"","parents":parents,"assignments":assignments}))
-        .execute(pool)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn class_profile_follows_structure_assignments_and_is_none_for_an_unassigned_slot() {
-    let e = setup().await;
-    let catalog = catalog();
-    let profile = |c: &'static str| {
-        let (pool, catalog) = (&e.pool, &catalog);
-        async move {
-            routing::class_profile(pool, catalog, class(c))
-                .await
-                .unwrap()
-        }
-    };
-    assign(
-        &e.pool,
-        1,
-        json!([
-            {"profile_id":"careful","parent_id":"standard","effort":"high"},
-            {"profile_id":"router","parent_id":"deep","effort":"max"},
-        ]),
-    )
-    .await;
-    assert_eq!(profile("standard-high").await.as_deref(), Some("careful@3"));
-    assert_eq!(profile("simple-low").await, None);
-    assert_eq!(
-        profile("deep-max").await,
-        None,
-        "the router is never a class profile"
-    );
-    assign(
-        &e.pool,
-        2,
-        json!([{"profile_id":"careful","parent_id":"complex","effort":"high"}]),
-    )
-    .await;
-    assert_eq!(profile("standard-high").await, None);
-    assert_eq!(profile("complex-high").await.as_deref(), Some("careful@3"));
-}
-
 const ROUTING: &str = "/api/settings/intelligence/routing";
 
 /// Bootstraps the owner, so the admin router admits the dev login.
@@ -555,51 +487,36 @@ async fn routing_cannot_be_switched_on_without_a_routing_playbook() {
     assert!(!routing::enabled(&e.pool).await.unwrap());
 }
 
-/// Spec 0013 §4.2: what Settings offers is each assigned class (never the router) with every
-/// (provider, harness) pair its profile lists, once each. No harness is qualified on a worker
-/// here: qualification is placement's question, not what is offered (a309a837).
+/// Spec 0014 §5.2: what Settings offers is each class that has a level document, with every
+/// (provider, harness) pair that level's candidates list, once each. No harness is qualified on
+/// a worker here: qualification is placement's question, not what is offered (a309a837).
 #[tokio::test]
-async fn options_offer_each_assigned_class_every_pair_its_profile_lists() {
+async fn options_offer_each_level_every_pair_its_candidates_list() {
+    use crate::common::roles;
     let e = setup().await;
-    assert_eq!(
-        routing::options(&e.state).await.unwrap(),
-        Options::default()
-    );
     owner(&e).await;
-    let catalog = catalog();
-    sqlx::query(
-        "INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms)
-         SELECT $1,$2,id,0 FROM users LIMIT 1",
-    )
-    .bind(catalog.digest())
-    .bind(catalog.canonical_bytes().unwrap())
-    .execute(&e.pool)
-    .await
-    .unwrap();
-    sqlx::query("UPDATE profile_catalog_registry SET revision=1,active_digest=$1")
-        .bind(catalog.digest())
-        .execute(&e.pool)
+    let actor: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
+        .fetch_one(&e.pool)
         .await
         .unwrap();
-    assign(
-        &e.pool,
-        1,
-        json!([
-            {"profile_id":"careful","parent_id":"standard","effort":"high"},
-            {"profile_id":"router","parent_id":"deep","effort":"max"},
-            {"profile_id":"missing","parent_id":"simple","effort":"low"},
-        ]),
-    )
-    .await;
-    let offer = |harness: &str| Offer {
-        provider: "configuration-required".into(),
-        harness: harness.into(),
+    let shipped = routing::options(&e.state).await.unwrap();
+    let snapshot = roles::active(&e.pool).await;
+    // The shipped defaults: every offered class has a level document.
+    assert!(!shipped.classes.is_empty());
+    assert!((shipped.classes.keys()).all(|c| snapshot.intelligence(&c.to_string()).is_some()));
+    let candidates = [
+        ("fixture-a", "model-a", "high"),
+        ("fixture-a", "model-b", "low"),
+        ("fixture-b", "model-c", "high"),
+    ];
+    let level = roles::level("standard-high", &candidates);
+    roles::save(&e.pool, actor, Kind::Intelligence, "standard-high", &level).await;
+    let offer = |provider: &str| Offer {
+        provider: provider.into(),
+        harness: roles::HARNESS.into(),
     };
-    let listed = ["codex", "claude-code", "gemini", "opencode"].map(offer);
     assert_eq!(
-        routing::options(&e.state).await.unwrap(),
-        Options {
-            classes: BTreeMap::from([(class("standard-high"), listed.to_vec())]),
-        }
+        routing::options(&e.state).await.unwrap().classes[&class("standard-high")],
+        ["fixture-a", "fixture-b"].map(offer)
     );
 }
