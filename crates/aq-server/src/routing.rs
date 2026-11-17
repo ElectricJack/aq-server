@@ -277,16 +277,6 @@ pub async fn class_assigned(state: &AppState, class: Class) -> Result<bool, AppE
     Ok(snapshot.is_some_and(|s| s.intelligence(&class.to_string()).is_some()))
 }
 
-/// Every project's tasks are routed: no binding names a router profile any
-/// more (spec 0014 §5.2). Kept for the callers that still ask; removed with
-/// the old catalog.
-pub(crate) async fn on_router(
-    _state: &AppState,
-    _record: &crate::project_bindings::domain::ProjectRecord,
-) -> Result<bool, AppError> {
-    Ok(true)
-}
-
 /// Spec 0011 §4: how placement treats each ready task of `record`'s project, keyed by
 /// task; a task left out is placed unchanged. A route names its level by class id; a
 /// class with no level document holds the task (`role_settings::held`), it is not

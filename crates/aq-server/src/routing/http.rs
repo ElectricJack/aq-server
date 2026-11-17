@@ -1,9 +1,7 @@
 //! What the owner sees of a task's routing (spec 0011 §3, §4, §8): the `routing` object of the
 //! task work read and the route history.
-use super::{enabled, history, on_router};
-use crate::{
-    AppState, authz::RequireOwner, error::AppError, project_bindings::domain::ProjectRecord,
-};
+use super::{enabled, history};
+use crate::{AppState, authz::RequireOwner, error::AppError};
 use aq_routing::{CompactRoute, Placement};
 use axum::{
     Json, Router,
@@ -93,14 +91,10 @@ fn compact(route: &CompactRoute) -> Value {
 /// ready); otherwise `unrouted` (no route, nothing held back).
 pub(crate) async fn view(
     state: &AppState,
-    record: &ProjectRecord,
     task: Uuid,
     node: &Value,
     ready_state: &str,
 ) -> Result<Option<Value>, AppError> {
-    if !on_router(state, record).await? {
-        return Ok(None);
-    }
     let pool = &state.store.pool;
     let on = enabled(pool).await?;
     let updated = node["updated_at"]

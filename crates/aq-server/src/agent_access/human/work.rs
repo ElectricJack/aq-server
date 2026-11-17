@@ -145,7 +145,7 @@ pub(super) async fn work(
     }
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
     // Optional field: when it cannot be computed the read still succeeds without it.
-    match crate::routing::view(&s, &a.record, id, &raw["node"], ready).await {
+    match crate::routing::view(&s, id, &raw["node"], ready).await {
         Ok(Some(routing)) => data["routing"] = routing,
         Ok(None) => {}
         Err(error) => {
