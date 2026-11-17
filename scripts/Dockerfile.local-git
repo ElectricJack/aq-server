@@ -1,0 +1,18 @@
+# Local development only (scripts/local-stack): the stack's aq-git service
+# image with `aq-git` built from a sibling aq-git checkout instead of the
+# vendored release executable. Context: the aq-git checkout.
+#   docker build -f scripts/Dockerfile.local-git --build-arg BASE=<server image> ../aq-git
+ARG BASE
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS build
+WORKDIR /src
+COPY . .
+ARG CARGO_BUILD_JOBS=4
+# The cache id is this Dockerfile's own, and the touch makes cargo rebuild the
+# context's sources instead of trusting another tree's mtimes (AGENTS.md).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=aq-local-git,sharing=locked,target=/src/target \
+    find crates -type f -exec touch {} + \
+    && CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --locked --release -p aq-git-cli --bin aq-git \
+    && cp target/release/aq-git /aq-git
+FROM ${BASE}
+COPY --from=build --chmod=0755 /aq-git /usr/local/bin/aq-git

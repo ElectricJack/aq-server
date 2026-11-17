@@ -236,9 +236,18 @@ def internal_config(state):
     return dict(AQ_INTERNAL_CONFIG_DIR=str(directory))
 
 
+def compose_files():
+    """compose.yaml and compose.dev.yaml, then any overlays named by
+    AQ_DEV_COMPOSE_FILES (colon-separated paths, relative to the checkout), so
+    a command that recreates a service here keeps the overlays it was started
+    with (scripts/local-stack: the dashboard bundle, local images)."""
+    files = [ROOT / "compose.yaml", ROOT / "compose.dev.yaml"]
+    files += [ROOT / name for name in os.environ.get("AQ_DEV_COMPOSE_FILES", "").split(":") if name]
+    return [part for path in files for part in ("-f", str(path))]
+
+
 def compose(env, *args, capture=True, input=None, timeout=None):
-    result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.yaml"),
-                             "-f", str(ROOT / "compose.dev.yaml"), *args],
+    result = subprocess.run(["docker", "compose", *compose_files(), *args],
                             cwd=ROOT, env=dict(os.environ, **env), text=True,
                             capture_output=capture, input=input, timeout=timeout)
     if result.returncode:
