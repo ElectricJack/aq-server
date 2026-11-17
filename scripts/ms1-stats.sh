@@ -6,7 +6,7 @@
 #                       (memory.current, memory.peak, cumulative CPU)
 #   PREFIX-node.csv     the node controller process RSS, every 5 s
 # Usage: scripts/ms1-stats.sh PREFIX
-# Summarize with: scripts/ms1-demo.sh stats-summary PREFIX
+# Summarize with: scripts/local-stack stats-summary PREFIX
 set -uo pipefail
 prefix=${1:?usage: ms1-stats.sh PREFIX}
 project=${COMPOSE_PROJECT_NAME:-aq-ms1}

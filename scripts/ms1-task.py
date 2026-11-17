@@ -8,7 +8,7 @@ usage: ms1-task.py ID TITLE BODY [--blocks OTHER_ID] [--priority N]
 import json, os, sys, urllib.request
 from pathlib import Path
 BASE = Path(os.environ.get("AQ_MS1_HOME", Path.home() / ".local/share/aq-ms1"))
-GRAPH = os.environ.get("AQ_DEV_GRAPH_URL", "http://127.0.0.1:28741")  # set by ms1-demo.sh per stack
+GRAPH = os.environ.get("AQ_DEV_GRAPH_URL", "http://127.0.0.1:28741")  # set by local-stack per stack
 URL = GRAPH + "/v1/workspaces/e0000000-0000-4000-8000-000000000001"
 TOKEN = (BASE / "secrets/graph_token").read_text().strip()
 

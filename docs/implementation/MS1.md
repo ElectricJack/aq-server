@@ -1,5 +1,10 @@
 # MS1 — real agent, sandboxed, local
 
+> **Historical record.** `scripts/ms1-demo.sh` named below became
+> `scripts/local-stack` on 2026-11-17 and lost its MS1-only commands (`node`,
+> `live`, `drill`, `gaps`, `run`). To run a stack today see
+> [getting-started.md](../getting-started.md).
+
 Task `stark-zenith-16.2`. Run on 2026-11-05, 05:00–05:35 UTC, on the owner's
 desktop (WSL2). Owner decision of 2026-11-04: the agent is **Claude Code**
 signed in with the owner's Claude subscription login (no API key), not Codex.

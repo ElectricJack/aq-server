@@ -468,7 +468,7 @@ def configure():
                 toml += f"{key} = {toml_value(value)}\n"
     # Private result-media store (dashboard Results view: results.media.read
     # and results.media.upload). The root lives on the server's /var/lib/aq
-    # volume (created 0700 by `ms1-demo.sh media`); the storage id is stable.
+    # volume (created 0700 by `local-stack pins`); the storage id is stable.
     media_id = BASE / "state" / "result-media-storage-id"
     if not media_id.exists():
         private_write(media_id, str(uuid.uuid4()) + "\n")

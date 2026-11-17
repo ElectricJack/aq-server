@@ -114,9 +114,9 @@ in the copy. Rollback: remove the throwaway container and its volume.
 2.2. Start the new server image against the copy, with a copy of the vault
 (config, the playbook engine connection file pointed at the copy, and the
 engine keyring, without which the engine cannot open its state), on ports
-other than 28080/28081. `scripts/ms1-demo.sh` runs a second stack with
-`AQ_MS1_PROJECT`, `AQ_MS1_ADMIN_PORT`, `AQ_MS1_WORKER_PORT` and
-`AQ_MS1_GRAPH_PORT`. No worker, no internal-work host and no login is given
+other than 28080/28081. `scripts/local-stack` runs a second stack with
+`AQ_LOCAL_PROJECT`, `AQ_LOCAL_ADMIN_PORT`, `AQ_LOCAL_WORKER_PORT` and
+`AQ_LOCAL_GRAPH_PORT`. No worker, no internal-work host and no login is given
 to the rehearsal. **(command to confirm)** Rollback: stop and remove the
 rehearsal stack.
 

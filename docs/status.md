@@ -6,6 +6,11 @@
 > and drain on a copy of the live namespace under `[playbooks.engine_timeouts]`
 > first ([note](implementation/playbook-authoring-B1-interim-vendor.md)).
 
+> **2026-11-17:** the rows below were last reviewed on 2026-11-12 and are
+> behind `main`: routing, playbook authoring, roles and profiles and
+> multi-agent nodes have merged since and run in the local stack
+> ([getting-started.md](getting-started.md)). Review each row before relying on it.
+
 **As of:** 2026-11-12. **Scope:** all six repositories (aq-server, aq-worker,
 aq-dashboard, aq-playbooks, aq-git, aq-graph).
 
