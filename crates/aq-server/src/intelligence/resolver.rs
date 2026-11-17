@@ -18,7 +18,8 @@ pub struct ResolveRequest {
     pub operation_id: Uuid,
     pub lineage: TaskLineage,
     pub project: FrozenProjectBinding,
-    pub compositions: Vec<PreparedComposition>,
+    /// The launch rendered for each installed harness (spec 0014).
+    pub launches: Vec<PreparedLaunch>,
     /// Owner-assessed failed-predecessor replacement (B4). Absent for a first
     /// attempt; legacy history without it stays conservatively unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -28,9 +29,7 @@ pub struct ResolveRequest {
     /// Not part of the request payload or its digest.
     #[serde(skip, default = "yes")]
     pub record_refused: bool,
-    /// A routed task's class profile and limits (spec 0011 §4); absent unrouted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
+    /// A routed task's harness and provider limits (spec 0011 §4); absent unrouted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<RouteLimits>,
 }
@@ -92,23 +91,36 @@ pub async fn resolve_trusted(
     state: &AppState,
     actor: Uuid,
     request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
-    resolve_with_principal(state, principal::Principal::human(actor)?, request).await
+    let subject = principal::Principal::human(actor)?;
+    resolve_with_principal(state, subject, request, snapshot).await
 }
 /// Scheduled selection derives its principal only from this daemon's configured
 /// project policy. No user identity or worker-selected policy enters this path.
 pub async fn resolve_for_project_policy(
     state: &AppState,
     request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
     let subject = principal::Principal::configured(state, request.lineage.project_id)?;
-    resolve_with_principal(state, subject, request).await
+    resolve_with_principal(state, subject, request, snapshot).await
 }
+/// `snapshot` is the role snapshot the request's frozen binding names; the
+/// candidates and the selection policy are resolved from it alone.
 async fn resolve_with_principal(
     state: &AppState,
     subject: principal::Principal,
     mut request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
+    if snapshot.digest() != request.project.snapshot_digest {
+        return Err(bad("role snapshot differs from the frozen binding"));
+    }
+    let (role, level) = (&request.project.role, &request.project.intelligence_profile);
+    let launch = snapshot
+        .resolve(role, level)
+        .map_err(|_| bad("role snapshot does not resolve the frozen launch"))?;
     if request.operation_id.is_nil()
         || request.lineage.task_id.is_nil()
         || request.lineage.project_id != request.project.project.binding.project_id
@@ -136,14 +148,6 @@ async fn resolve_with_principal(
             .map_err(db)?
             .ok_or_else(|| conflict("installed harness/credential evidence unavailable"))?;
     let node: CapabilitySnapshot = serde_json::from_value(node).map_err(|_| AppError::Internal)?;
-    let catalog_bytes: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(&request.project.project.binding.catalog_digest)
-            .fetch_one(&state.store.pool)
-            .await
-            .map_err(db)?;
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&catalog_bytes)
-        .map_err(|_| AppError::Internal)?;
     let mut credentials = aq_intelligence_config::node_credentials(loaded, node_id);
     let mut membership = state.store.pool.acquire().await.map_err(db)?;
     aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
@@ -194,7 +198,6 @@ async fn resolve_with_principal(
     let placement = crate::profiled_execution::placement::facts(
         state,
         node_id,
-        &request.project.project.binding.catalog_digest,
         request.lineage.project_id,
         &request.project.environment,
         time,
@@ -230,23 +233,15 @@ async fn resolve_with_principal(
             .map(|budget| budget.snapshot()),
         Err(_) => None,
     };
-    // `any-model`: the Settings model choices this selection's candidates name,
-    // resolved here so the chosen native reasoning is part of the digested inputs.
-    let routed = request.intelligence_override.as_deref();
-    let agent = &request.project.intelligence_profile;
-    let model_choices = routed_intelligence(&catalog.artifact().catalog, agent, routed)
-        .filter(|_| cfg!(feature = "any-model"))
-        .map(|profile| {
-            let choices = crate::profile_catalog::settings::choices(state);
-            aq_profile_settings::resolve_candidates(&choices, &profile.candidates, &node.harnesses)
-        })
-        .unwrap_or_default();
     let input = SelectionInputs {
         project: ProjectSnapshot {
             lineage: request.lineage.clone(),
             revision: request.project.project.revision,
-            catalog_revision: request.project.catalog_activation_revision,
-            catalog_digest: serde_json::from_value(json!(catalog.digest()))
+            // The role snapshot the launch is resolved from. It has no
+            // activation revision of its own; the field stays until the
+            // old catalog's selection inputs go (step 3c).
+            catalog_revision: 1,
+            catalog_digest: serde_json::from_value(json!(snapshot.digest()))
                 .map_err(|_| AppError::Internal)?,
             admission_snapshot_digest: digest(&request.project).map_err(|_| AppError::Internal)?,
             expires_at_ms: request.project.binding_observation.expires_at_ms,
@@ -273,7 +268,7 @@ async fn resolve_with_principal(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
-            agent_profile: request.project.agent_profile.clone(),
+            agent_profile: request.project.role.clone(),
             intelligence_profile: request.project.intelligence_profile.clone(),
             execution_profile: request.project.execution_profile.clone(),
         },
@@ -313,26 +308,20 @@ async fn resolve_with_principal(
         },
         replacement: replacement.map(|r| r.evidence),
         estimates: vec![],
-        compositions: request.compositions,
+        compositions: vec![],
         now_ms: time,
         placement,
-        intelligence_override: request.intelligence_override,
+        intelligence_override: None,
         route: request.route,
-        model_choices,
+        launches: request.launches,
     };
     let mut outcome =
-        select_for_offer(&catalog, &input).map_err(|_| bad("selection snapshot refused"))?;
+        select_for_offer(&launch, &input).map_err(|_| bad("selection snapshot refused"))?;
     // Route from task requirements first. Capacity can wait on this exact class,
     // and never influences the router's model or class selection.
     if let Some(resolved) = &outcome.resolved {
         let mut capacity = state.store.pool.begin().await.map_err(db)?;
-        let choice = serde_json::to_value(&resolved.choice).map_err(|_| AppError::Internal)?;
-        let artifact = serde_json::to_value(catalog.artifact()).map_err(|_| AppError::Internal)?;
-        let cell = aq_swarm_settings::admission::classify(
-            &artifact,
-            Some(input.intelligence_key()),
-            &choice,
-        );
+        let cell = Some(capacity_cell(&input, &resolved.choice));
         let reason = aq_swarm_settings::admission::observe(
             &mut capacity,
             input.project.lineage.task_id,
@@ -404,6 +393,17 @@ async fn resolve_with_principal(
     Ok(decision)
 }
 
+/// The swarm capacity cell of a choice: its provider at the level it runs on.
+/// A level's id is the intelligence class the swarm limits count.
+fn capacity_cell(
+    inputs: &SelectionInputs,
+    choice: &ConcreteChoice,
+) -> aq_swarm_settings::admission::Cell {
+    aq_swarm_settings::admission::Cell {
+        provider: choice.provider.clone(),
+        intelligence_class: inputs.intelligence_key().to_string(),
+    }
+}
 /// AQ-08 must call inside its SERIALIZABLE offer transaction, after resolving
 /// current task/context authority, and retain all locks through atomic offer +
 /// frozen selection insertion. Retry serialization failures; never do external
@@ -561,16 +561,8 @@ async fn fence_retained_decision(
     )
     .await?;
     if owned_attempt.is_none() {
-        let choice = serde_json::to_value(&decision.outcome.resolved.as_ref().unwrap().choice)
-            .map_err(|_| AppError::Internal)?;
-        let cell = aq_swarm_settings::admission::resolve(
-            tx,
-            Some(decision.inputs.project.catalog_digest.as_str()),
-            Some(decision.inputs.intelligence_key()),
-            &choice,
-        )
-        .await
-        .map_err(db)?;
+        let choice = &decision.outcome.resolved.as_ref().unwrap().choice;
+        let cell = Some(capacity_cell(&decision.inputs, choice));
         if let Some(reason) = aq_swarm_settings::admission::check(tx, cell.as_ref())
             .await
             .map_err(db)?

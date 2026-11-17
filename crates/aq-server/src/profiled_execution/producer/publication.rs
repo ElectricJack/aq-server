@@ -156,6 +156,23 @@ pub async fn publish(
         .as_ref()
         .ok_or_else(|| refused())?;
     sqlx::query("INSERT INTO intelligence_attempt_selections(attempt_id,selection_digest,selection) VALUES($1,$2,$3)").bind(binding.attempt_id).bind(aq_selection::digest(selection).map_err(|_|AppError::Internal)?.as_str()).bind(serde_json::to_value(selection).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
+    // Spec 0014 §7.1: what the attempt ran with is part of its record, and
+    // its snapshot stays while the record does.
+    if crate::role_settings::tables(state) {
+        let ran_with = aq_role_settings::attempts::RanWith {
+            role: built.decision.project.role.clone(),
+            level: built.decision.project.intelligence_profile.clone(),
+            provider: selection.choice.provider.clone(),
+            model: selection.choice.model.clone(),
+            reasoning: selection.choice.native_reasoning.clone(),
+            harness: selection.choice.harness.clone(),
+            execution_profile: built.decision.project.execution_profile.clone(),
+            snapshot_digest: built.decision.project.snapshot_digest.clone(),
+        };
+        aq_role_settings::attempts::record(&mut tx, binding.attempt_id, &ran_with)
+            .await
+            .map_err(crate::role_settings::error)?;
+    }
     let hot = crate::execution::authority::hot::HotState::from_compat(&built.state)
         .map_err(|_| refused())?;
     sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)").bind(binding.attempt_id).bind(serde_json::to_value(hot).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;

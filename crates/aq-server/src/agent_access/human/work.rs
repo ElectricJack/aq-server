@@ -95,7 +95,15 @@ pub(super) async fn work(
         &a.record.binding.default_role,
     );
     let role_hold = crate::role_settings::hold(&s, &r.pool, &role).await?;
-    let held = held.into_iter().chain(role_hold);
+    // Spec 0014 §5.2: so is a task whose level has no document.
+    let level_hold = match role_hold {
+        Some(_) => None,
+        None => {
+            let binding = &a.record.binding;
+            crate::role_settings::level_hold(&s, &r.pool, binding, &raw["node"]).await?
+        }
+    };
+    let held = held.into_iter().chain(role_hold).chain(level_hold);
     let readiness = aq_human_work::readiness_with(
         root["task_state"].as_str(),
         hold.as_ref(),

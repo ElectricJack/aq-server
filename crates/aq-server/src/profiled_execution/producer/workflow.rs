@@ -231,12 +231,12 @@ async fn selection(
             operation_id: Uuid::new_v4(),
             lineage,
             project: compiled.frozen.clone(),
-            compositions: compiled.candidates.clone(),
+            launches: compiled.prepared.iter().map(|p| p.launch.clone()).collect(),
             replacement,
             record_refused: false,
-            intelligence_override: compiled.intelligence_override.clone(),
             route: compiled.route.clone(),
         },
+        &compiled.snapshot,
     )
     .await
 }
@@ -546,17 +546,20 @@ async fn offers(
                         skipped.insert(candidate.revision.task_id);
                     }
                 }
-                // Spec 0014 §5.5, step 3a ONLY: a task whose effective role is
-                // disabled or missing gets no offer. The offer itself is still
-                // composed from the old catalog; step 3b replaces this check
-                // with role selection.
-                let roles = ready.items.iter().map(|c| (c.revision.task_id, &c.node));
-                let default_role = &record.binding.default_role;
-                let role_held = crate::role_settings::held(state, default_role, roles).await?;
                 // Spec 0011 §4, before any context read: a task's route, or its wait for one.
                 let placements =
                     on_heap(|| crate::routing::placements(state, &record, &ready.items));
                 let placements = placements.await?;
+                // Spec 0014 §5.5, §5.2: a task whose effective role is disabled
+                // or missing, or whose level has no document, gets no offer.
+                let nodes = ready.items.iter().map(|c| {
+                    let class = match placements.get(&c.revision.task_id) {
+                        Some(Placement::Routed(route)) => Some(route.c.to_string()),
+                        _ => None,
+                    };
+                    (c.revision.task_id, &c.node, class)
+                });
+                let role_held = crate::role_settings::held(state, &record.binding, nodes).await?;
                 let (revision, project) = (record.revision, policy.project_id);
                 let (placed, items, role_held) = (&placements, &ready.items, &role_held);
                 if let Some((task, assessment)) = on_heap(|| {
@@ -586,7 +589,7 @@ async fn offers(
                             let attempt = a.replacement().map(|r| (r.predecessor, seen));
                             let r = crate::routing::reroute(state, project, items, task, attempt);
                             r.await;
-                            return Ok(Assessment::Blocked("route_class_unassigned"));
+                            return Ok(Assessment::Blocked("route_unreadable"));
                         }
                         Ok(a)
                     })
@@ -643,13 +646,36 @@ async fn offers(
         let generation =
             on_heap(|| super::super::no_grant::next_generation(&state.store.pool, task.task_id))
                 .await?;
+        let metadata = (ready.items.iter())
+            .find(|r| r.revision == task)
+            .map(|r| r.node["metadata"].clone())
+            .ok_or_else(|| refused())?;
         let context = on_heap(|| {
             graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref())
         })
         .await
         .map_err(|_| refused())?;
-        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
-        let compiled = on_heap(compile).await?;
+        let compile = || {
+            compose::compile(
+                state,
+                &record,
+                auth.id(),
+                &snapshot,
+                &context,
+                &metadata,
+                route,
+            )
+        };
+        let compiled = match on_heap(compile).await {
+            // Spec 0014 §6.1: a startup text over its byte limit is refused,
+            // with the two numbers; the poll goes on with the next task.
+            Err(AppError::Conflict(reason)) if reason.starts_with(compose::OVER_LIMIT) => {
+                tracing::warn!(task_id = %task.task_id, %reason, "task not offered");
+                skipped.insert(task.task_id);
+                continue;
+            }
+            compiled => compiled?,
+        };
         super::observation::ReadProvenance::capture(
             &task,
             &ready,
@@ -674,20 +700,11 @@ async fn offers(
             .resolved
             .as_ref()
             .ok_or_else(|| refused())?;
-        let composition = compiled
-            .candidates
+        compiled
+            .prepared
             .iter()
-            .find(|c| c.digest == selected.choice.composition_digest)
+            .find(|p| p.launch.digest == selected.choice.composition_digest)
             .ok_or_else(|| refused())?;
-        // Qualification and exact startup counting precede expensive source export.
-        super::super::context_renewal::evaluate(
-            state,
-            &runtime,
-            selected,
-            &composition.composition,
-            now(state)?,
-        )
-        .await?;
         let policy_record = config
             .project_policy_record(policy.project_id)
             .map_err(|_| refused())?;
@@ -799,7 +816,17 @@ async fn offers(
         })
         .await
         .map_err(|_| refused())?;
-        let compile = || compose::compile(state, &record, auth.id(), &snapshot, &context, route);
+        let compile = || {
+            compose::compile(
+                state,
+                &record,
+                auth.id(),
+                &snapshot,
+                &context,
+                &metadata,
+                route,
+            )
+        };
         let compiled = on_heap(compile).await?;
         let decision = on_heap(|| selection(state, &task, &compiled, replacement.as_ref())).await?;
         if refused_successor(state, &decision, successor, &mut skipped).await {

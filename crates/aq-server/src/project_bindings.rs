@@ -507,34 +507,40 @@ pub async fn check_eligibility(
 }
 /// Fresh current binding facts for continuing a pinned execution. This chooses
 /// no model and does not reuse an original admission observation or decision.
+/// The attempt stays on the role snapshot it launched with (spec 0014 §7.1):
+/// its role, level and execution profile are not looked up again.
 pub(crate) async fn check_execution_eligibility(
     state: &AppState,
     id: Uuid,
     request: &EligibilityRequest,
 ) -> Result<Eligibility> {
-    let routed = routed_launch(state, id, request).await?;
-    check_eligibility_current(state, id, routed.as_ref().unwrap_or(request), true).await
+    check_eligibility_current(state, id, request, true).await
 }
-/// Spec 0011 §4: a routed launch's intelligence profile is its class profile, outside the
-/// binding's allowlist; it is checked as an override of the agent's automatic router.
-async fn routed_launch(
+/// A new launch names documents of the active role snapshot: the role exists
+/// and is enabled, the level exists, the execution profile is the role's and
+/// runs in the named environment.
+async fn launch_reason(
     state: &AppState,
-    id: Uuid,
     request: &EligibilityRequest,
-) -> Result<Option<EligibilityRequest>> {
-    let record = current(state, id).await?;
-    let allowed = &record.binding.allowed_intelligence_profiles;
-    if request.intelligence_override.is_some() || allowed.contains(&request.intelligence_profile) {
-        return Ok(None);
+) -> Result<Option<&'static str>> {
+    let Some(snapshot) = crate::role_settings::active(&state.store.pool).await? else {
+        return Ok(Some("role_snapshot_absent"));
+    };
+    if snapshot.digest() != request.snapshot_digest {
+        return Ok(Some("role_snapshot_changed"));
     }
-    let catalog = catalog(state, &record.binding.catalog_digest).await?;
-    let (agent, launched) = (&request.agent_profile, &request.intelligence_profile);
-    let router = aq_selection::router_of_launch(&catalog.artifact().catalog, agent, launched);
-    Ok(router.map(|router| EligibilityRequest {
-        intelligence_profile: router.into(),
-        intelligence_override: Some(launched.clone()),
-        ..request.clone()
-    }))
+    let Ok(launch) = snapshot.resolve(&request.role, &request.intelligence_profile) else {
+        return Ok(Some("launch_documents_missing"));
+    };
+    Ok(if !launch.role.enabled {
+        Some("role_disabled")
+    } else if launch.execution.id != request.execution_profile
+        || launch.execution.environment != request.environment
+    {
+        Some("profile_combination_denied")
+    } else {
+        None
+    })
 }
 async fn check_eligibility_current(
     state: &AppState,
@@ -542,23 +548,12 @@ async fn check_eligibility_current(
     request: &EligibilityRequest,
     execution_read: bool,
 ) -> Result<Eligibility> {
-    if request.expected_project_revision == 0
-        || request.expected_catalog_revision == 0
-        || request.node_id.is_nil()
-    {
+    if request.expected_project_revision == 0 || request.node_id.is_nil() {
         return Err(bad("invalid eligibility identity/revision"));
     }
     let record = current(state, id).await?;
-    let (initial_catalog_revision, initial_active) = active_catalog(state).await?;
     let initial_node_live = node_current(state, request.node_id).await?;
-    let early = local_reasons(
-        &record,
-        request,
-        &state.config.projects,
-        initial_active.as_deref(),
-        initial_catalog_revision,
-        initial_node_live,
-    );
+    let early = local_reasons(&record, request, &state.config.projects, initial_node_live);
     if !early.is_empty() {
         return Ok(Eligibility {
             eligible: false,
@@ -573,16 +568,12 @@ async fn check_eligibility_current(
     };
     // Read local admission-sensitive revisions after external I/O.
     let latest = current(state, id).await?;
-    let (revision, active) = active_catalog(state).await?;
     let node_live = node_current(state, request.node_id).await?;
-    let catalog = catalog(state, &latest.binding.catalog_digest).await?;
     let mut result = decide(
         &latest,
         request,
         &state.config.projects,
         &observation,
-        active.as_deref(),
-        revision,
         node_live,
         (state.clock)().timestamp_millis().max(1) as u64,
     );
@@ -591,18 +582,8 @@ async fn check_eligibility_current(
             .reasons
             .push("project_changed_during_external_validation".into());
     }
-    let artifact = &catalog.artifact().catalog;
-    let routed = request.intelligence_override.as_deref();
-    if !artifact.agents.iter().any(|a| {
-        aq_profiles::key(&a.id, a.version) == request.agent_profile
-            && a.intelligence == request.intelligence_profile
-            && a.execution == request.execution_profile
-            && aq_selection::routed_intelligence(artifact, &a.intelligence, routed).is_some()
-    }) || !artifact.execution.iter().any(|e| {
-        aq_profiles::key(&e.id, e.version) == request.execution_profile
-            && e.environments.contains(&request.environment)
-    }) {
-        result.reasons.push("profile_combination_denied".into());
+    if !execution_read && let Some(reason) = launch_reason(state, request).await? {
+        result.reasons.push(reason.into());
     }
     if result.reasons.is_empty() {
         let mut tx = state.store.pool.begin().await.map_err(db)?;
@@ -645,22 +626,15 @@ pub(crate) async fn fence_for_offer(
         .map_err(db)?
         .ok_or_else(|| conflict("node_not_eligible"))?;
     let row=sqlx::query("SELECT revision,binding,validated_at_ms,binding_observation FROM project_execution_bindings WHERE project_id=$1 FOR SHARE").bind(frozen.project.binding.project_id).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(||conflict("project_absent"))?;
-    let registry = sqlx::query(
-        "SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton FOR SHARE",
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(db)?;
     let record = record(row)?;
     let request = EligibilityRequest {
         expected_project_revision: frozen.project.revision,
-        expected_catalog_revision: frozen.catalog_activation_revision,
         node_id: frozen.node_id,
         environment: frozen.environment.clone(),
-        agent_profile: frozen.agent_profile.clone(),
+        role: frozen.role.clone(),
         intelligence_profile: frozen.intelligence_profile.clone(),
         execution_profile: frozen.execution_profile.clone(),
-        intelligence_override: None,
+        snapshot_digest: frozen.snapshot_digest.clone(),
     };
     let now = (state.clock)();
     let live = node
@@ -672,14 +646,11 @@ pub(crate) async fn fence_for_offer(
                 at >= now
                     - chrono::Duration::seconds(state.config.workers.offline_after_secs as i64)
             });
-    let active: Option<String> = registry.get("active_digest");
     let result = decide(
         &record,
         &request,
         &state.config.projects,
         &frozen.binding_observation,
-        active.as_deref(),
-        registry.get::<i64, _>("revision") as u64,
         live,
         now.timestamp_millis().max(1) as u64,
     );

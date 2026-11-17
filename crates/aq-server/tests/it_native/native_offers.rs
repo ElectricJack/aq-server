@@ -10,15 +10,14 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
-#[cfg(feature = "any-model")]
-#[path = "native_offers/any_model.rs"]
-mod any_model;
 #[path = "native_offers/handoff.rs"]
 mod handoff;
 #[path = "native_offers/history_caps.rs"]
 mod history_caps;
 #[path = "native_offers/holds.rs"]
 mod holds;
+#[path = "native_offers/launches.rs"]
+mod launches;
 #[path = "native_offers/lost.rs"]
 mod lost;
 #[path = "native_offers/routed.rs"]
@@ -176,33 +175,6 @@ async fn task_cas_and_same_cas_content_mismatch_never_publish_an_offer() {
         0
     );
 }
-#[cfg(not(feature = "any-model"))]
-#[tokio::test]
-async fn missing_qualified_capacity_never_invents_zero_or_exports_source() {
-    let mut c = setup().await;
-    let mut config = (*c.env.env.state.config).clone();
-    let mut native = (*config.profiled_execution.as_ref().unwrap().as_ref()).clone();
-    native.revision += 1;
-    native.context_qualifications.clear();
-    config.profiled_execution = Some(std::sync::Arc::new(native));
-    c.env.env.state.config = std::sync::Arc::new(config);
-    aq_server::profiled_execution::policies::install(&c.env.env.state)
-        .await
-        .unwrap();
-    let (status, _) = poll(&c).await;
-    assert_eq!(status, 409);
-    for table in [
-        "execution_attempts",
-        "profiled_source_exports",
-        "admission_material_leases",
-    ] {
-        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 0, "{table}");
-    }
-}
 #[tokio::test]
 async fn poll_rejects_chosen_scope_duplicate_fields_and_oversized_body_before_admission() {
     let c = setup().await;
@@ -289,7 +261,8 @@ async fn startup_context_carries_the_task_thread() {
                 .starts_with("aq.task-thread/")
         })
         .unwrap_or_else(|| panic!("no task thread in {refs:?}"));
-    assert_eq!(thread["required"], false);
+    // Nothing in the startup text is optional (spec 0014 §6.1).
+    assert_eq!(thread["required"], true);
     let bytes = thread["bytes"].as_u64().unwrap() as usize;
     assert!(bytes > 0 && bytes <= aq_task_thread::BUDGET_BYTES);
     // The assignment comes first.
@@ -697,13 +670,8 @@ async fn switch_of_a_demoted_owner_makes_no_offer() {
 async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_admitted() {
     let c = setup().await;
     let pool = &c.env.env.pool;
-    let class = c
-        .env
-        .frozen
-        .intelligence_profile
-        .rsplit_once('@')
-        .unwrap()
-        .0;
+    // A level's id is the intelligence class the swarm limits count.
+    let class = c.env.frozen.intelligence_profile.as_str();
     let provider = c.env.input.credentials[0].provider.clone();
     sqlx::query("UPDATE swarm_settings SET normal=$1 WHERE singleton")
         .bind(serde_json::json!([{"provider":provider,"intelligence_class":class,"limit":0}]))

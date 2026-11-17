@@ -140,21 +140,49 @@ pub(crate) async fn granted(pool: &PgPool, task: Uuid) -> Result<bool, AppError>
     .await
     .map_err(crate::error::db)
 }
-/// The ready tasks whose effective role is disabled or missing, with the
-/// hold code: the producer offers none of them.
+/// The ready tasks that get no offer, with the hold code: the effective
+/// role is disabled or missing, or the level the task would run on (the class
+/// it was routed to, else the project's default) has no document.
 pub(crate) async fn held(
     state: &AppState,
-    default_role: &str,
-    nodes: impl Iterator<Item = (Uuid, &Value)>,
+    binding: &crate::project_bindings::domain::ProjectBinding,
+    nodes: impl Iterator<Item = (Uuid, &Value, Option<String>)>,
 ) -> Result<std::collections::BTreeMap<Uuid, &'static str>, AppError> {
     if !tables(state) {
         return Ok(Default::default());
     }
     let snapshot = active(&state.store.pool).await?;
+    let snapshot = snapshot.as_ref();
     Ok(nodes
-        .filter_map(|(task, node)| {
-            let role = tasks::effective_role(&node["metadata"], default_role);
-            tasks::role_hold(snapshot.as_ref(), &role.id).map(|hold| (task, hold.code))
+        .filter_map(|(task, node, class)| {
+            let role = tasks::effective_role(&node["metadata"], &binding.default_role);
+            let role = tasks::role_hold(snapshot, &role.id).map(|hold| hold.code);
+            let level = || {
+                let default = &binding.default_intelligence;
+                let hold = tasks::level_hold(snapshot, class.as_deref(), default)?;
+                tracing::info!(%task, level = %hold.level, "{}", hold.message());
+                Some(tasks::LevelHold::CODE)
+            };
+            role.or_else(level).map(|code| (task, code))
         })
         .collect())
+}
+/// The level hold of a task as the work read lists it.
+pub(crate) async fn level_hold(
+    state: &AppState,
+    pool: &PgPool,
+    binding: &crate::project_bindings::domain::ProjectBinding,
+    node: &Value,
+) -> Result<Option<Value>, AppError> {
+    if !tables(state) {
+        return Ok(None);
+    }
+    let class = match aq_routing::CompactRoute::from_metadata(&node["metadata"]) {
+        Ok(Some(route)) => Some(route.c.to_string()),
+        _ => None,
+    };
+    let snapshot = active(pool).await?;
+    let default = &binding.default_intelligence;
+    let hold = tasks::level_hold(snapshot.as_ref(), class.as_deref(), default);
+    Ok(hold.map(|hold| hold.shown()))
 }

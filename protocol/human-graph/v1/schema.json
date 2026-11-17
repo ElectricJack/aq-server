@@ -1052,6 +1052,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanRoleHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanLevelHoldReason"
                     }
                   ]
                 }
@@ -1760,6 +1763,32 @@
         "required": [
           "code",
           "role",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "HumanLevelHoldReason": {
+        "type": "object",
+        "description": "Why AQ does not offer an active task because of its level (spec 0014 §5.2): no intelligence profile has the id of the class the task was routed to, or of the project's default.",
+        "properties": {
+          "code": {
+            "enum": [
+              "level_missing"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "code",
+          "level",
           "message"
         ],
         "additionalProperties": false

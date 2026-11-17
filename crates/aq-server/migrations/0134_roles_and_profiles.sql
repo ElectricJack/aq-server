@@ -59,4 +59,14 @@ CREATE TABLE role_snapshot_pins (
     digest TEXT NOT NULL REFERENCES role_snapshots(digest)
 );
 CREATE INDEX role_snapshot_pins_digest ON role_snapshot_pins(digest);
+-- What an attempt ran with (spec 0014 §7.1): role, level, provider, model,
+-- reasoning, harness, execution profile and snapshot digest; a few hundred
+-- bytes. One row per attempt, written in the transaction that creates the
+-- attempt and removed with the attempt's record (aq_role_settings::attempts).
+-- The attempt tables' own shape is sealed by earlier formats, so the summary
+-- has its own table keyed by the attempt.
+CREATE TABLE attempt_ran_with (
+    attempt_id UUID PRIMARY KEY,
+    ran_with JSONB NOT NULL CHECK(jsonb_typeof(ran_with) = 'object')
+);
 UPDATE meta SET value='134' WHERE key='state_format_version';

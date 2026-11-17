@@ -136,6 +136,8 @@ pub mod native_started;
 
 pub mod source_exports;
 
+/// The role documents of the selection fixture and their one install helper.
+pub mod roles;
 pub mod selection;
 
 pub mod native_preparation;

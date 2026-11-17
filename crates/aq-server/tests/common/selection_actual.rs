@@ -118,13 +118,15 @@ impl ActualSelectionFixture {
     ) -> Result<FrozenProjectBinding> {
         let request = EligibilityRequest {
             expected_project_revision: self.project.revision,
-            expected_catalog_revision: self.catalog_activation_revision,
             node_id: self.env.node,
             environment: profiles.environment.clone(),
-            agent_profile: profiles.agent_profile.clone(),
+            role: profiles.agent_profile.clone(),
             intelligence_profile: profiles.intelligence_profile.clone(),
             execution_profile: profiles.execution_profile.clone(),
-            intelligence_override: None,
+            snapshot_digest: super::super::roles::active(&self.env.pool)
+                .await
+                .digest()
+                .to_string(),
         };
         let current = aq_server::project_bindings::check_eligibility(
             &self.env.state,

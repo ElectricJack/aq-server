@@ -43,6 +43,8 @@ pub struct Env {
     pub _dir: tempfile::TempDir,
     pub _db: Arc<TestDb>,
     pub credential: String,
+    /// The active role snapshot (`roles::install`): the fixture's documents.
+    pub snapshot: aq_profiles::roles::Snapshot,
     pub _gate: FixtureGate,
 }
 impl Drop for Env {
@@ -310,6 +312,7 @@ enabled=true
         source_retention: Some(Arc::new(git)),
     };
     let app = aq_server::build_admin_router(state.clone());
+    let snapshot = super::roles::install(&pool, owner.id).await;
     let catalog = aq_profiles::load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../aq-profiles/examples/catalog"),
     )
@@ -331,14 +334,16 @@ enabled=true
         _dir: dir,
         _db: db,
         credential: token,
+        snapshot,
         _gate: gate,
     }
 }
 pub fn path() -> String {
     format!("/api/projects/{}", Uuid::from_u128(1))
 }
+/// A launch of the fixture project as the active role snapshot names it.
 pub fn admission(env: &Env) -> Value {
-    json!({"expected_project_revision":1,"expected_catalog_revision":1,"node_id":env.node,"environment":"confined-worktree","agent_profile":"implementer@1","intelligence_profile":"engineering@1","execution_profile":"confined-development@1"})
+    json!({"expected_project_revision":1,"node_id":env.node,"environment":super::roles::ENVIRONMENT,"role":"developer","intelligence_profile":super::roles::DEFAULT_LEVEL,"execution_profile":"sandbox","snapshot_digest":env.snapshot.digest()})
 }
 pub async fn bind(env: &Env) -> Value {
     let (status, v) = call(
@@ -353,6 +358,8 @@ pub async fn bind(env: &Env) -> Value {
 }
 pub struct SelectionFixture {
     pub env: Env,
+    /// The active role snapshot (`roles::install`).
+    pub snapshot: aq_profiles::roles::Snapshot,
     pub input: aq_selection::SelectionInputs,
     pub frozen: aq_server::project_bindings::domain::FrozenProjectBinding,
     pub actor: Uuid,
@@ -380,16 +387,37 @@ pub async fn selection_fixture() -> SelectionFixture {
     env.body["allowed_agent_profiles"] = json!(["implementer@2"]);
     env.body["allowed_intelligence_profiles"] = json!(["engineering@2"]);
     env.body["allowed_execution_profiles"] = json!(["confined-development@2"]);
+    // The project's ceilings hold each fixture operation at this project's
+    // own scope: its project id, and its repository for `source.write`.
+    let repository = env.body["repository_id"].as_str().unwrap().to_owned();
     env.body["ceilings"]["permissions"] = json!(
         input
             .project
             .permission_ceiling
             .iter()
-            .map(|p| json!({"operation":p.operation,"scope_reference":p.resource}))
+            .map(|p| {
+                let scope = if p.operation.as_str() == "source.write" {
+                    format!("repository:{repository}")
+                } else {
+                    p.resource.as_str().to_owned()
+                };
+                json!({"operation":p.operation,"scope_reference":scope})
+            })
             .collect::<Vec<_>>()
     );
+    env.body["default_intelligence"] = json!(super::roles::DEFAULT_LEVEL);
     bind(&env).await;
-    let request=serde_json::from_value(json!({"expected_project_revision":1,"expected_catalog_revision":2,"node_id":env.node,"environment":"confined-worktree","agent_profile":"implementer@2","intelligence_profile":"engineering@2","execution_profile":"confined-development@2"})).unwrap();
+    let snapshot = env.snapshot.clone();
+    // The node's one harness is the one the fixture's execution profile names.
+    // It lists the capabilities the execution profile requires of a worker.
+    let execution = snapshot
+        .execution("sandbox")
+        .expect("fixture execution profile");
+    for harness in &mut input.node.harnesses {
+        harness.harness = super::roles::HARNESS.into();
+        harness.capabilities = execution.required_capabilities();
+    }
+    let request = serde_json::from_value(admission(&env)).unwrap();
     let frozen =
         aq_server::project_bindings::check_eligibility(&env.state, Uuid::from_u128(1), &request)
             .await
@@ -518,6 +546,7 @@ pub async fn selection_fixture() -> SelectionFixture {
     };
     SelectionFixture {
         env,
+        snapshot,
         input,
         frozen,
         actor,

@@ -30,15 +30,8 @@ pub(crate) fn choice_supported_by_harness(
         && h.adapter == c.adapter
         && h.environment == c.environment
         && h.qualification == c.qualification
-        // `any-model`: an installed harness runs any model; the held choice's model
-        // and native reasoning were resolved and sealed at selection.
-        && (cfg!(feature = "any-model")
-            || h.models.iter().any(|m| {
-                m.provider == c.provider
-                    && m.model == c.model
-                    && m.reasoning_configuration_reference == c.reasoning_configuration_reference
-                    && m.native_reasoning == c.native_reasoning
-            }))
+        // An installed harness runs any model (spec 0014 §5.2): the held choice's
+        // model and reasoning were resolved and sealed at selection.
         && limits.context_bytes >= c.resources.context_bytes
         && limits.wall_time_ms >= c.resources.wall_time_ms
         && limits.memory_bytes >= c.resources.memory_bytes

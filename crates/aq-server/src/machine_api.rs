@@ -1,8 +1,8 @@
 //! Service-machine routes (spec 0007 phase 1), under a node credential.
 use aq_machine_control::{self as mc, Error as McError, NewSlot};
 use aq_protocol::{
-    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, MeasurementSubmission,
-    QualificationPin, SlotEnrollment, SlotsRequest, SlotsResponse, valid_machine_key,
+    ControlRequest, ControlResponse, HandoffNotice, MAX_MACHINE_SLOTS, SlotEnrollment,
+    SlotsRequest, SlotsResponse, valid_machine_key,
 };
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
@@ -18,10 +18,6 @@ use crate::worker_api::{authenticate_context, lock_current_node};
 pub fn machine_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/worker/slots", post(slots))
-        .route(
-            "/v1/worker/qualifications",
-            post(qualifications).layer(DefaultBodyLimit::max(128 * 1024)),
-        )
         .with_state(state.clone())
         .merge(
             Router::new()
@@ -131,16 +127,6 @@ async fn control(
         .await
         .map_err(mapped)?;
     drop(conn);
-    // `any-model`: no node is pinned to a measured fact.
-    let qualification = if cfg!(feature = "any-model") {
-        None
-    } else {
-        crate::profiled_execution::context_renewal::current_pin(
-            &state,
-            u64::try_from(now.timestamp_millis()).map_err(|_| AppError::Internal)?,
-        )
-        .await?
-    };
     // The control poll counts as liveness.
     state
         .store
@@ -152,7 +138,9 @@ async fn control(
         desired: c.desired,
         generation: c.generation,
         handoff,
-        qualification,
+        // No node is pinned to a measured fact (spec 0014 §8); the field
+        // leaves the response with the protocol step.
+        qualification: None,
     }))
 }
 
@@ -189,17 +177,6 @@ async fn lost_attempts(
     Ok(Json(
         crate::profiled_execution::lost::release(&state, &auth, &req).await?,
     ))
-}
-
-/// A node's context measurement renews the configured qualifications it may (spec 0007 §7.3).
-async fn qualifications(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    ApiJson(req): ApiJson<MeasurementSubmission>,
-) -> Result<Json<QualificationPin>, AppError> {
-    let auth = authenticate_context(&state, &headers).await?;
-    let pin = crate::profiled_execution::context_renewal::record(&state, &auth, &req).await?;
-    Ok(Json(pin))
 }
 
 #[cfg(test)]

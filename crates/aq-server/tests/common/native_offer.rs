@@ -10,7 +10,6 @@ use aq_server::{
     AppState,
     profiled_execution::{
         config::{ProfiledConfig, ProjectPolicy, QualifiedRuntime},
-        context_budget::{CapacityKind, Qualification, Rendering, Subject},
         definitions::Definition,
         policies,
     },
@@ -188,7 +187,6 @@ pub async fn setup() -> Case {
         .unwrap(),
     ));
     let policy_body = "Synthetic owner policy: scoped read and mandatory review.";
-    env.env.body["allowed_agent_profiles"] = json!(["reviewer@2"]);
     env.env.body["policy"] = json!({"identity":"native-test-policy","revision":"1","digest":Digest::of(policy_body.as_bytes())});
     env.env.app = aq_server::build_admin_router(env.env.state.clone());
     let (status, body) = selection::call(
@@ -224,38 +222,6 @@ pub async fn setup() -> Case {
     ];
     let harness = &env.input.node.harnesses[0];
     let credential = &env.input.credentials[0];
-    let now = (env.env.state.clock)().timestamp_millis() as u64;
-    let count = art("native-test-counting", "Synthetic counting bound");
-    let capacity = art("native-test-capacity", "Synthetic capacity bound");
-    let fact = Qualification {
-        schema_version: 1,
-        subject: Subject {
-            runtime: runtime.clone(),
-            runtime_qualification: runtime_q.clone(),
-            harness: harness.harness.clone(),
-            cli_version: harness.cli_version.clone(),
-            adapter: harness.adapter.clone(),
-            environment: harness.environment.clone(),
-            harness_qualification: harness.qualification.clone(),
-            provider: credential.provider.clone(),
-            model: "model-a".into(),
-            native_reasoning: "high".into(),
-            reasoning_configuration_reference: "reasoning-a@1".into(),
-            credential_profile: credential.profile.clone(),
-            credential_revision: credential.revision,
-            account_reference: credential.account_reference.clone(),
-            endpoint_reference: credential.endpoint_reference.clone(),
-        },
-        rendering: Rendering::Utf8DoubleNewlineV1,
-        maximum_tokens_per_utf8_byte: 1,
-        fixed_overhead_tokens: 37,
-        counting_evidence: count.clone(),
-        capacity_kind: CapacityKind::QualifiedConservativePlanningCeiling,
-        capacity_tokens: 65536,
-        capacity_evidence: capacity.clone(),
-        observed_at_ms: now - 1,
-        expires_at_ms: now + 60000,
-    };
     let mut definitions = vec![];
     for (r, body) in [
         (runtime.clone(), "Synthetic runtime definition".to_owned()),
@@ -273,8 +239,6 @@ pub async fn setup() -> Case {
             credential.profile.clone(),
             credential.profile.id.as_str().into(),
         ),
-        (count, "Synthetic counting bound".into()),
-        (capacity, "Synthetic capacity bound".into()),
         (art("native-test-policy", policy_body), policy_body.into()),
     ] {
         definitions.push(Definition::new(r, ArtifactKind::Definition, body).unwrap());
@@ -316,7 +280,7 @@ pub async fn setup() -> Case {
             placement: None,
             agent_grants: None,
         }],
-        context_qualifications: vec![fact],
+        context_qualifications: vec![],
         definition_bodies: definitions,
     }));
     env.env.state.config = Arc::new(config);
@@ -431,43 +395,20 @@ pub async fn setup() -> Case {
         tasks,
     }
 }
-/// Activates a catalog whose selection policies `edit` changes (version 3)
-/// and binds the project to it, as the pinned lineage policy test does.
-pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::SelectionPolicy)) {
-    let env = &mut c.env.env;
-    let original: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(env.body["catalog_digest"].as_str().unwrap())
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
-    let mut artifact = catalog.artifact().clone();
-    for profile in &mut artifact.catalog.intelligence {
-        if let Some(policy) = profile.selection_policy.as_mut() {
-            edit(policy);
-            profile.version = 3;
-        }
-    }
-    for profile in &mut artifact.catalog.agents {
-        profile.version = 3;
-        profile.intelligence = "engineering@3".into();
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    let app = aq_server::build_admin_router(env.state.clone());
-    let (status,body)=selection::call(&app,"/api/profiles/catalogs/activate",Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()})),"owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    env.body["catalog_digest"] = json!(updated.digest());
-    env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
-    env.body["allowed_intelligence_profiles"] = json!(["engineering@3"]);
-    let (status, body) = selection::call(
-        &app,
-        &selection::path(),
-        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":env.body})),
-        "owner@localhost",
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
+/// Saves selection defaults that `edit` changes, as the owner would in
+/// Settings. Every level of the fixture uses the defaults, so the next offer
+/// runs under them; an attempt already offered keeps the snapshot it has.
+pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::roles::SelectionDefaults)) {
+    let pool = &c.env.env.pool;
+    let settings = aq_role_settings::settings(pool).await.unwrap();
+    let mut defaults = settings.selection_defaults.clone();
+    edit(&mut defaults);
+    let revision = settings.selection_defaults_revision;
+    let (actor, op) = (c.env.actor, Uuid::new_v4());
+    aq_role_settings::save_selection_defaults(pool, actor, &defaults, revision, op, 1)
+        .await
+        .unwrap();
+    c.env.snapshot = super::roles::active(pool).await;
 }
 /// The published attempt fails: synthetic stopped, retained and quiescent
 /// owner facts (written with guards bypassed in this disposable database),

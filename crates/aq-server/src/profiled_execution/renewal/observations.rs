@@ -50,10 +50,8 @@ fn profile(reference: &aq_admission::ArtifactRef, kind: &str) -> Result<String, 
         .ok_or_else(changed)
 }
 async fn binding(state: &AppState, p: &Pinned) -> Result<FrozenProjectBinding, AppError> {
-    let (revision, digest) = crate::project_bindings::active_catalog(state).await?;
-    if digest.as_deref() != Some(p.selection.catalog_digest.as_str()) {
-        return Err(changed());
-    }
+    // The attempt stays on the role snapshot it launched with (spec 0014
+    // §7.1): a document saved since does not change what it runs as.
     let environment = p
         .project
         .binding
@@ -76,13 +74,12 @@ async fn binding(state: &AppState, p: &Pinned) -> Result<FrozenProjectBinding, A
     };
     let request = EligibilityRequest {
         expected_project_revision: p.spec.project_revision,
-        expected_catalog_revision: revision,
         node_id: node,
         environment,
-        agent_profile: profile(&p.offer.manifest.agent_profile, "agent")?,
+        role: profile(&p.offer.manifest.agent_profile, "role")?,
         intelligence_profile: profile(&p.offer.manifest.intelligence_profile, "intelligence")?,
         execution_profile: profile(&p.offer.manifest.execution_profile, "execution")?,
-        intelligence_override: None,
+        snapshot_digest: p.selection.catalog_digest.as_str().to_owned(),
     };
     let result = crate::project_bindings::check_execution_eligibility(
         state,

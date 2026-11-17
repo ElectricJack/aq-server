@@ -1,6 +1,7 @@
 //! One central render; the worker verifies and consumes these exact bytes.
 use super::{
     artifacts::{RetainedSet, canonical, reference},
+    compose::Prepared,
     refused,
 };
 use crate::{
@@ -16,75 +17,85 @@ use aq_admission::{
     ArtifactKind, ArtifactRef, Digest, Text,
     startup::{Descriptor, InputSpan},
 };
-use aq_profiles::{Delivery, FrozenComposition};
+use aq_profiles::roles::StartupPart;
 use aq_session_protocol::{ContextDelivery, ContextPlan, ContextRef};
 pub struct Startup {
     pub descriptor: Descriptor,
     pub context: ContextPlan,
     pub modules: Vec<ArtifactRef>,
 }
+/// Where an instruction of the startup text comes from, as the context plan
+/// records it.
+fn provenance(part: StartupPart, origin: &Origin<'_>) -> String {
+    let role = origin.role;
+    match part {
+        StartupPart::Platform => "aq.platform-text".into(),
+        StartupPart::Role => format!("role:{role}"),
+        StartupPart::Rules => format!("role:{role}:rules"),
+        StartupPart::ProjectNotes => format!("project-notes:{role}"),
+        StartupPart::RepositoryNotes => "repository-notes".into(),
+        StartupPart::Task => origin.task.into(),
+        StartupPart::TaskThread => origin.thread.unwrap_or("aq.task-thread").into(),
+        StartupPart::Reporting => super::result_startup::STARTUP_ID.into(),
+    }
+}
+/// The names the context plan gives the parts that have an identity of
+/// their own: the role, the task's context artifact and the task thread.
+pub struct Origin<'a> {
+    pub role: &'a str,
+    pub task: &'a str,
+    pub thread: Option<&'a str>,
+}
 pub async fn retain(
     state: &AppState,
     set: &mut RetainedSet,
-    composition: &FrozenComposition,
+    prepared: &Prepared,
+    origin: &Origin<'_>,
     counted: &CountedStartup,
     projection: &Projection,
     renderer: &Renderer,
-    adapter: &ArtifactRef,
 ) -> Result<Startup, AppError> {
-    if composition
-        .instruction_order
-        .iter()
-        .any(|i| i.delivery != Delivery::Startup)
-        || counted.proof.composition_digest
-            != aq_selection::digest(composition).map_err(|_| AppError::Internal)?
-        || counted.proof.renderer() != &renderer.definition
+    let text = &prepared.startup;
+    if counted.proof.composition_digest != prepared.launch.digest
+        || counted.proof.renderer != renderer.definition
         || counted.proof.rendered_digest != Digest::of(&counted.bytes)
         || counted.proof.rendered_bytes != counted.bytes.len() as u64
+        || counted.bytes != text.rendered.as_bytes()
     {
         return Err(refused());
     }
-    let reporting = super::result_startup::for_adapter(state, adapter)?;
-    let mut reporting_count = 0;
     let mut reconstructed = Vec::new();
     let mut spans = Vec::new();
     let mut contexts = Vec::new();
-    let mut task_count = 0;
-    for (index, instruction) in composition.instruction_order.iter().enumerate() {
+    let (mut tasks, mut reports) = (0, 0);
+    for (index, (part, instruction)) in text.instructions.iter().enumerate() {
         if !spans.is_empty() {
             reconstructed.extend_from_slice(b"\n\n");
         }
         let offset = reconstructed.len() as u64;
-        let bytes = instruction.text.as_bytes();
+        let bytes = instruction.as_bytes();
         reconstructed.extend_from_slice(bytes);
-        let artifact = if instruction.source.identity == super::result_startup::STARTUP_ID {
-            let reporting = reporting.as_ref().ok_or_else(|| refused())?;
-            if !reporting.matches(&instruction.source)
-                || bytes != reporting.text.as_bytes()
-                || !instruction.required
-            {
-                return Err(refused());
+        let (artifact, owner) = match part {
+            StartupPart::Reporting => {
+                let reporting = prepared.reporting.as_ref().ok_or_else(|| refused())?;
+                if bytes != reporting.text.as_bytes() {
+                    return Err(refused());
+                }
+                reports += 1;
+                (reporting.artifact.clone(), OwnerKind::Startup)
             }
-            reporting_count += 1;
-            reporting.artifact.clone()
-        } else if instruction.source.identity == projection.artifact.id.as_str() {
-            task_count += 1;
-            if bytes != projection.bytes
-                || instruction.source.digest != projection.artifact.digest.as_str()
-                || !instruction.required
-            {
-                return Err(refused());
+            StartupPart::Task => {
+                if bytes != projection.bytes {
+                    return Err(refused());
+                }
+                tasks += 1;
+                (projection.artifact.clone(), OwnerKind::GraphSnapshot)
             }
-            projection.artifact.clone()
-        } else {
-            let origin =
-                aq_selection::digest(&instruction.source).map_err(|_| AppError::Internal)?;
-            reference(&format!("aq.startup-input/{}", origin.as_str()), bytes)?
-        };
-        let owner = if artifact == projection.artifact {
-            OwnerKind::GraphSnapshot
-        } else {
-            OwnerKind::Startup
+            _ => {
+                let from = Digest::of(provenance(*part, origin).as_bytes());
+                let artifact = reference(&format!("aq.startup-input/{}", from.as_str()), bytes)?;
+                (artifact, OwnerKind::Startup)
+            }
         };
         set.retain(state, owner, ArtifactKind::Context, artifact.clone(), bytes)
             .await?;
@@ -96,11 +107,11 @@ pub async fn retain(
             .ok_or_else(|| refused())?;
         contexts.push(ContextRef {
             artifact: artifact.clone(),
-            provenance: Text::new(&instruction.source.identity).map_err(|_| refused())?,
+            provenance: Text::new(provenance(*part, origin)).map_err(|_| refused())?,
             delivery: ContextDelivery::Startup,
             bytes: bytes.len() as u64,
             tokens: bound.tokens_upper_bound,
-            required: instruction.required,
+            required: true,
         });
         spans.push(InputSpan {
             artifact,
@@ -108,10 +119,10 @@ pub async fn retain(
             bytes: bytes.len() as u64,
         });
     }
-    if let Some(reporting) = &reporting {
-        reporting.validate_rendered(reporting_count, &counted.bytes)?;
+    if let Some(reporting) = &prepared.reporting {
+        reporting.validate_rendered(reports, &counted.bytes)?;
     }
-    if task_count != 1 || reconstructed != counted.bytes {
+    if tasks != 1 || reconstructed != counted.bytes {
         return Err(refused());
     }
     let payload = reference("aq.rendered-startup", &counted.bytes)?;
@@ -142,18 +153,16 @@ pub async fn retain(
         &proof_bytes,
     )
     .await?;
+    // The wire still carries token fields (spec 0014 §8 removes them with the
+    // protocol): each is the byte count, and the renderer adds none.
     let descriptor = Descriptor {
         schema_version: 1,
         payload,
         renderer_qualification: qualification.clone(),
         startup_inputs: spans,
         payload_bytes: counted.bytes.len() as u64,
-        payload_tokens_upper_bound: counted
-            .proof
-            .input_tokens_upper_bound
-            .checked_sub(renderer.implicit_tokens)
-            .ok_or_else(|| refused())?,
-        implicit_tokens_upper_bound: renderer.implicit_tokens,
+        payload_tokens_upper_bound: counted.proof.input_tokens_upper_bound,
+        implicit_tokens_upper_bound: 0,
     };
     descriptor
         .verify_payload(&counted.bytes)
@@ -168,8 +177,8 @@ pub async fn retain(
     )
     .await?;
     let mut modules = vec![descriptor_ref, qualification, proof];
-    if let Some(reporting) = reporting {
-        modules.push(reporting.artifact);
+    if let Some(reporting) = &prepared.reporting {
+        modules.push(reporting.artifact.clone());
     }
     Ok(Startup {
         descriptor,

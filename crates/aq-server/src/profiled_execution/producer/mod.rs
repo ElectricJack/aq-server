@@ -2,8 +2,6 @@
 //! compositions, readiness, retention or qualification success flags.
 pub mod api;
 mod artifacts;
-#[cfg(not(feature = "any-model"))]
-pub(super) use artifacts::canonical;
 mod build;
 mod compose;
 pub(crate) mod fairness;

@@ -5,7 +5,6 @@ use crate::{
     AppState,
     agent_access::{self, human::graph_actions::current},
     error::{AppError, db},
-    profile_catalog::settings::error as settings_error,
 };
 mod http;
 use aq_routing::{
@@ -253,26 +252,17 @@ pub(crate) async fn reconcile(state: AppState) {
     }
 }
 
-/// What Settings offers: each class with an assigned profile in the active catalog, and every
-/// (provider, harness) pair of that profile's candidates. Worker qualification is not read: a
+/// What Settings offers: each class that has a level document in the active role
+/// snapshot (a level's id is the router's class, spec 0014 §5.2), and every
+/// (provider, harness) pair of that level's candidates. Worker inventory is not read: a
 /// route may name what no worker can run now, and placement makes such a route wait.
 pub async fn options(state: &AppState) -> Result<Options, AppError> {
-    let (_, digest) = crate::project_bindings::active_catalog(state).await?;
-    let Some(digest) = digest else {
-        return Ok(Options::default());
-    };
-    let catalog = crate::project_bindings::catalog(state, &digest).await?;
-    let pool = &state.store.pool;
-    let (document, _, _) = aq_profile_settings::structure::document(pool)
-        .await
-        .map_err(settings_error)?;
-    let profiles = &catalog.artifact().catalog.intelligence;
     let mut options = Options::default();
-    for a in &document.assignments {
-        let class = format!("{}-{}", a.parent_id, a.effort).parse::<Class>();
-        let profile =
-            (profiles.iter()).find(|p| p.id == a.profile_id && p.automatic_routing != Some(true));
-        if let (Ok(class), Some(profile)) = (class, profile) {
+    let Some(snapshot) = crate::role_settings::active(&state.store.pool).await? else {
+        return Ok(options);
+    };
+    for profile in snapshot.intelligence_profiles() {
+        if let Ok(class) = profile.id.parse::<Class>() {
             let candidates =
                 (profile.candidates.iter()).map(|c| (c.provider.as_str(), c.harnesses.as_slice()));
             options.classes.insert(class, classify::offers(candidates));
@@ -281,80 +271,33 @@ pub async fn options(state: &AppState) -> Result<Options, AppError> {
     Ok(options)
 }
 
-/// The profile Settings assigns to the class's parent and effort, as `id@version`.
-/// The automatic router is never a class's profile.
-pub async fn class_profile(
-    pool: &PgPool,
-    catalog: &aq_profiles::ValidatedCatalog,
-    class: Class,
-) -> Result<Option<String>, AppError> {
-    let (document, _, _) = aq_profile_settings::structure::document(pool)
-        .await
-        .map_err(settings_error)?;
-    let Some(assignment) = document
-        .assignments
-        .iter()
-        .find(|a| a.parent_id == class.parent.as_str() && a.effort == class.effort.as_str())
-    else {
-        return Ok(None);
-    };
-    Ok(catalog
-        .artifact()
-        .catalog
-        .intelligence
-        .iter()
-        .find(|p| p.id == assignment.profile_id && p.automatic_routing != Some(true))
-        .map(|p| aq_profiles::key(&p.id, p.version)))
-}
-
-/// Whether Settings assigns a profile to the class in the active catalog.
+/// Whether the active role snapshot has the level document of the class.
 pub async fn class_assigned(state: &AppState, class: Class) -> Result<bool, AppError> {
-    let (_, digest) = crate::project_bindings::active_catalog(state).await?;
-    let Some(digest) = digest else {
-        return Ok(false);
-    };
-    let catalog = crate::project_bindings::catalog(state, &digest).await?;
-    Ok(class_profile(&state.store.pool, &catalog, class)
-        .await?
-        .is_some())
+    let snapshot = crate::role_settings::active(&state.store.pool).await?;
+    Ok(snapshot.is_some_and(|s| s.intelligence(&class.to_string()).is_some()))
 }
 
-fn router_agent(catalog: &aq_profiles::ValidatedCatalog, agent: &str) -> bool {
-    let artifact = &catalog.artifact().catalog;
-    (artifact.agents.iter())
-        .find(|a| aq_profiles::key(&a.id, a.version) == agent)
-        .is_some_and(|a| aq_selection::is_automatic_router(artifact, &a.intelligence))
-}
-
-/// Whether `record`'s binding runs its agent on an automatic router.
+/// Every project's tasks are routed: no binding names a router profile any
+/// more (spec 0014 §5.2). Kept for the callers that still ask; removed with
+/// the old catalog.
 pub(crate) async fn on_router(
-    state: &AppState,
-    record: &crate::project_bindings::domain::ProjectRecord,
+    _state: &AppState,
+    _record: &crate::project_bindings::domain::ProjectRecord,
 ) -> Result<bool, AppError> {
-    let [agent] = record.binding.allowed_agent_profiles.as_slice() else {
-        return Ok(false);
-    };
-    let catalog = crate::project_bindings::catalog(state, &record.binding.catalog_digest).await?;
-    Ok(router_agent(&catalog, agent))
+    Ok(true)
 }
 
 /// Spec 0011 §4: how placement treats each ready task of `record`'s project, keyed by
-/// task; a task left out is placed unchanged. Empty unless the binding's agent is on an
-/// automatic router, so a route is ignored for a binding pinned to a named profile.
+/// task; a task left out is placed unchanged. A route names its level by class id; a
+/// class with no level document holds the task (`role_settings::held`), it is not
+/// routed again.
 pub async fn placements(
     state: &AppState,
     record: &crate::project_bindings::domain::ProjectRecord,
     ready: &[crate::agent_access::scheduling::ReadyTask],
 ) -> Result<std::collections::BTreeMap<Uuid, Placement>, AppError> {
     let mut out = std::collections::BTreeMap::new();
-    let [agent] = record.binding.allowed_agent_profiles.as_slice() else {
-        return Ok(out);
-    };
     if ready.is_empty() {
-        return Ok(out);
-    }
-    let catalog = crate::project_bindings::catalog(state, &record.binding.catalog_digest).await?;
-    if !router_agent(&catalog, agent) {
         return Ok(out);
     }
     let (pool, on) = (&state.store.pool, enabled(&state.store.pool).await?);
@@ -372,12 +315,11 @@ pub async fn placements(
         (state.clock)().timestamp_millis(),
         record.binding.project_id,
     );
-    let mut assigned = std::collections::BTreeMap::new();
     let mut routed_ids = vec![];
     for task in ready {
         let (id, metadata) = (task.revision.task_id, &task.node["metadata"]);
         let attempts = ended.get(&id).map_or(0, |n| *n as u64);
-        let mut placement = Placement::of(true, on, metadata, attempts);
+        let placement = Placement::of(true, on, metadata, attempts);
         if placement == Placement::Reroute
             && matches!(CompactRoute::from_metadata(metadata), Ok(Some(_)))
         {
@@ -395,17 +337,6 @@ pub async fn placements(
             wanted(pool, now, project, &task.revision).await?;
         } else if matches!(placement, Placement::Routed(_)) {
             routed_ids.push(id);
-        }
-        if let Placement::Routed(route) = &placement {
-            let known = assigned.get(&route.c).copied();
-            let has = match known {
-                Some(has) => has,
-                None => class_profile(pool, &catalog, route.c).await?.is_some(),
-            };
-            assigned.insert(route.c, has);
-            if !has {
-                placement = Placement::Reroute;
-            }
         }
         if placement != Placement::Unchanged {
             out.insert(task.revision.task_id, placement);

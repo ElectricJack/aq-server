@@ -1,124 +1,40 @@
-//! Spec 0011 §4: placement honors a task's route. Under a binding whose agent runs on the
-//! automatic router, a routed task is offered on its class's assigned profile within the
-//! route's limits, an unrouted one waits while routing is on, and a route that cannot be
-//! placed is cleared so the task is routed again; it never runs on the router instead. A
-//! binding pinned to a named profile ignores routes. The actual mounted poll, selection and
-//! publication run; the Graph peer, the routing switch and the Intelligence structure are
-//! synthetic owner facts (no routing policy is compiled and no provider is called).
+//! Spec 0011 §4 and spec 0014 §5.2: placement honors a task's route. A route names its
+//! level by class id, so a routed task is offered on the level document of that id within
+//! the route's limits; an unrouted one waits while routing is on and otherwise runs on the
+//! project's default level; a route that cannot be read is cleared so the task is routed
+//! again, and a class with no level document holds the task. The actual mounted poll,
+//! selection and publication run; the Graph peer and the routing switch are synthetic owner
+//! facts (no routing policy is compiled and no provider is called).
 use crate::common::native_offer::{Case, fail_and_release, poll, poll_offered, setup};
+use crate::common::roles;
 use aq_admission::control::{ControlReply, decode_reply};
+use aq_profiles::roles::Kind;
 use serde_json::{Value, json};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
-const ROUTER: &str = "engineering@3";
-const CLASS_PROFILE: &str = "standard-high@1";
+/// The level the routed tasks of these tests run on.
+const LEVEL: &str = "intelligence:standard-high";
+/// The level of an unrouted task: the project's default.
+const DEFAULT: &str = "intelligence:standard-medium";
 
-/// The class profile's own model for fixture-a; the router's candidates do not have it.
+/// The routed level's own model; no other level of the fixture names it.
 const CLASS_MODEL: &str = "model-c";
 
-/// Activates a catalog whose agents run on an automatic router (`engineering@3`) and that
-/// has a class profile `standard-high@1` whose fixture-a candidate is its own model
-/// ([`CLASS_MODEL`], installed on the node and context-qualified here) with unknown
-/// availability allowed, assigns that profile to the standard parent at high effort, and
-/// binds the project to the router.
+/// Saves the level document `standard-high` with its own model ([`CLASS_MODEL`]) and
+/// unknown availability allowed, as the owner would in Settings.
 async fn on_the_router(c: &mut Case) {
-    class_on_the_router(c, ("standard-high", "high"), |_| {}, true).await;
-}
-/// [`on_the_router`] for the class profile `level` (its id and the effort it is assigned at
-/// under the standard parent), after `edit` changed it. Unless `installed`, the node does
-/// not list the class model and no context fact covers it.
-async fn class_on_the_router(
-    c: &mut Case,
-    level: (&str, &str),
-    edit: impl FnOnce(&mut aq_profiles::Intelligence),
-    installed: bool,
-) {
-    let env = &mut c.env.env;
-    let original: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(env.body["catalog_digest"].as_str().unwrap())
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    let catalog = aq_profiles::ValidatedCatalog::from_artifact(&original).unwrap();
-    let mut artifact = catalog.artifact().clone();
-    let profiles = &mut artifact.catalog.intelligence;
-    assert_eq!(
-        profiles.len(),
-        1,
-        "the fixture has one intelligence profile"
-    );
-    let mut class = profiles[0].clone();
-    profiles[0].version = 3;
-    profiles[0].automatic_routing = Some(true);
-    (class.id, class.version, class.automatic_routing) = (level.0.into(), 1, None);
-    assert_eq!(class.candidates[0].provider, "fixture-a");
-    class.candidates[0].model = CLASS_MODEL.into();
-    class
-        .selection_policy
-        .as_mut()
-        .unwrap()
-        .allow_unknown_availability = true;
-    edit(&mut class);
-    profiles.push(class);
-    for agent in &mut artifact.catalog.agents {
-        agent.version = 3;
-        agent.intelligence = ROUTER.into();
-    }
-    let updated = aq_profiles::validate(artifact.catalog, artifact.instructions).unwrap();
-    let app = aq_server::build_admin_router(env.state.clone());
-    let activate = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,
-        "artifact_json":String::from_utf8(updated.canonical_bytes().unwrap()).unwrap()});
-    let path = "/api/profiles/catalogs/activate";
-    let (status, body) =
-        crate::common::selection::call(&app, path, Some(activate), "owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    env.body["catalog_digest"] = json!(updated.digest());
-    env.body["allowed_agent_profiles"] = json!(["reviewer@3"]);
-    env.body["allowed_intelligence_profiles"] = json!([ROUTER]);
-    let bind = json!({"operation_id":Uuid::new_v4(),"expected_revision":2,"binding":env.body});
-    let path = crate::common::selection::path();
-    let (status, body) =
-        crate::common::selection::call(&app, &path, Some(bind), "owner@localhost").await;
-    assert_eq!(status, 200, "{body}");
-    let (mut document, _, _) = aq_profile_settings::structure::document(&env.pool)
-        .await
-        .unwrap();
-    document.assignments = vec![aq_profile_settings::structure::Assignment {
-        profile_id: level.0.into(),
-        parent_id: "standard".into(),
-        effort: level.1.into(),
-    }];
-    sqlx::query(
-        "UPDATE intelligence_structure SET revision=revision+1,document=$1 WHERE singleton",
+    let level = roles::open_level("standard-high", &[("fixture-a", CLASS_MODEL, "high")]);
+    let pool = &c.env.env.pool;
+    roles::save(
+        pool,
+        c.env.actor,
+        Kind::Intelligence,
+        "standard-high",
+        &level,
     )
-    .bind(serde_json::to_value(&document).unwrap())
-    .execute(&env.pool)
-    .await
-    .unwrap();
-    if !installed {
-        return;
-    }
-    let model = json!([{"provider":"fixture-a","model":CLASS_MODEL,
-        "reasoning_configuration_reference":"reasoning-a@1","native_reasoning":"high"}]);
-    sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses,0,models}',(snapshot#>'{harnesses,0,models}')||$1::jsonb)")
-        .bind(model)
-        .execute(&env.pool)
-        .await
-        .unwrap();
-    let mut config = (*env.state.config).clone();
-    let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
-    let mut fact = profiled.context_qualifications[0].clone();
-    assert_eq!(fact.subject.provider, "fixture-a");
-    fact.subject.model = CLASS_MODEL.into();
-    profiled.context_qualifications.push(fact);
-    profiled.revision += 1;
-    config.profiled_execution = Some(Arc::new(profiled));
-    env.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&env.state)
-        .await
-        .unwrap();
+    .await;
+    c.env.snapshot = roles::active(pool).await;
 }
 /// The installation's routing switch, written directly (no compiled policy is needed here).
 async fn routing(c: &Case, on: bool) {
@@ -240,20 +156,14 @@ async fn holds(c: &Case) -> i64 {
 }
 
 #[tokio::test]
-async fn routed_task_is_offered_on_the_class_profile_not_the_router() {
+async fn routed_task_is_offered_on_the_level_document_of_its_class() {
     let mut c = setup().await;
     on_the_router(&mut c).await;
     routing(&c, true).await;
     route(&c, "standard-high", &[]);
-    assert_eq!(
-        offered_on(&c).await,
-        format!("intelligence:{CLASS_PROFILE}")
-    );
-    // Selection ran on the class profile; the frozen binding still names the router.
-    assert_eq!(
-        decided(&c).await,
-        (json!(ROUTER), Some(json!(CLASS_PROFILE)))
-    );
+    assert_eq!(offered_on(&c).await, LEVEL);
+    // The decision names the level itself: nothing stands in for it.
+    assert_eq!(decided(&c).await, (json!("standard-high"), None));
     assert!(stored_route(&c).is_some(), "a placed route is kept");
 }
 
@@ -278,24 +188,10 @@ async fn unrouted_task_is_not_offered_when_routing_is_on_and_is_offered_when_off
     assert!(wanted[0].0 >= 1, "the task version that waits");
     assert_eq!(wanted[0].1..=wanted[0].2, 0..=0, "nothing asked yet");
     assert_eq!((wanted[0].3, wanted[0].4), (l.workspace_id, l.project_id));
-    // Off, placement is as before: the router's own profile.
+    // Off, an unrouted task runs on the project's default level.
     routing(&c, false).await;
-    assert_eq!(offered_on(&c).await, format!("intelligence:{ROUTER}"));
-    assert_eq!(decided(&c).await, (json!(ROUTER), None));
-}
-
-#[tokio::test]
-async fn route_is_ignored_for_a_binding_pinned_to_a_named_profile() {
-    let c = setup().await;
-    routing(&c, true).await;
-    // Unassigned and excluding every harness: honored, it would refuse the task.
-    route(&c, "deep-max", &["no-such-harness"]);
-    assert_eq!(offered_on(&c).await, "intelligence:engineering@2");
-    assert_eq!(decided(&c).await, (json!("engineering@2"), None));
-    assert!(stored_route(&c).is_some(), "the route is left alone");
-    assert!(history(&c).await.is_empty());
-    // And without a route: placed as before, and no route is asked for.
-    assert_eq!(waiting(&c).await, 0);
+    assert_eq!(offered_on(&c).await, DEFAULT);
+    assert_eq!(decided(&c).await, (json!("standard-medium"), None));
 }
 
 /// Codex review 1: a task that waits at the head of the ready list does not hide the ready
@@ -378,55 +274,40 @@ async fn a_task_retried_after_routing_is_routed_again() {
 }
 
 #[tokio::test]
-async fn route_whose_class_lost_its_profile_is_cleared_and_not_launched_on_the_router() {
+async fn an_unreadable_route_is_cleared_and_a_class_with_no_level_document_holds_the_task() {
     let mut c = setup().await;
     on_the_router(&mut c).await;
     routing(&c, true).await;
     // A route that cannot be read is cleared, keeping the task's other metadata.
-    *c.metadata.lock().unwrap() = json!({"aq:route": {"c": "fast-high"}, "aq:priority": 1});
+    *c.metadata.lock().unwrap() = json!({"aq:route": {"c": "simple-wrong"}, "aq:priority": 1});
     assert_eq!(not_offered(&c).await, 0, "a route to redo is not a refusal");
     assert_eq!(*c.metadata.lock().unwrap(), json!({"aq:priority": 1}));
-    // No profile is assigned to deep-max. The task never had an attempt: no refusal is recorded.
-    route(&c, "deep-max", &[]);
-    assert_eq!(not_offered(&c).await, 0, "a route to redo is not a refusal");
-    assert_eq!(
-        stored_route(&c),
-        None,
-        "cleared, so the router routes it again"
-    );
     assert_eq!(
         history(&c).await,
-        [None, None],
-        "each clear is in the route history"
+        [None],
+        "the clear is in the route history"
     );
-    assert_eq!((skips(&c).await, holds(&c).await), (0, 0));
-
-    // A task that has had an attempt: the refusal is recorded against that attempt.
-    route(&c, "standard-high", &[]);
-    let (status, body) = poll_offered(&c).await;
-    assert_eq!(status, 200, "{body}");
-    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-    else {
-        panic!("{body}")
-    };
-    fail_and_release(&c, page.offers.remove(0).offered.offer.binding.attempt_id).await;
-    // Routed after that attempt ended (`a` 1), to a class without a profile.
-    let unassigned = json!({"c":"deep-max","h":[],"p":[],"pf":[],"l":null,"i":"any","d":null,"s":"router","n":1,"a":1});
-    *c.metadata.lock().unwrap() = json!({"aq:route": unassigned});
-    for _ in 0..4 {
-        let (status, body) = poll(&c).await;
-        assert_eq!(status, 200, "{body}");
-        assert!(offered(&body).is_empty(), "{body}");
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
-    assert_eq!(attempts(&c).await, 1, "no attempt on the router");
-    assert_eq!(stored_route(&c), None);
+    // `deep-max` is a class the router may name, and no level document has that id: the
+    // task is held with the reason. It is not routed again and not run on another level.
+    route(&c, "deep-max", &[]);
+    assert_eq!(not_offered(&c).await, 0, "a hold is not a refusal");
+    assert!(stored_route(&c).is_some(), "the route is left alone");
+    assert_eq!(history(&c).await, [None]);
+    assert_eq!((skips(&c).await, holds(&c).await), (0, 0), "read live");
+    let readiness = super::holds::work(&c, c.env.lineage.task_id).await;
+    assert_eq!(readiness["state"], "held", "{readiness}");
+    let reason = &readiness["reasons"][0];
+    assert_eq!(reason["code"], "level_missing", "{readiness}");
+    assert_eq!(reason["level"], "deep-max");
     assert_eq!(
-        skips(&c).await,
-        1,
-        "route_class_unassigned counted against the attempt"
+        reason["message"],
+        "AQ does not offer this task: it was routed to `deep-max`, and no intelligence profile `deep-max` exists. Add that intelligence profile in Settings or route the task again."
     );
-    assert_eq!(holds(&c).await, 0, "a route to redo is not a hold");
+    // Once the level exists the task is offered on it.
+    let level = roles::level("deep-max", &[("fixture-a", "model-a", "high")]);
+    let pool = &c.env.env.pool;
+    roles::save(pool, c.env.actor, Kind::Intelligence, "deep-max", &level).await;
+    assert_eq!(offered_on(&c).await, "intelligence:deep-max");
 }
 
 #[tokio::test]
@@ -444,17 +325,14 @@ async fn route_excluding_every_candidate_is_refused_and_no_offer_is_published() 
     // Positive control: allowing the installed harness places it.
     let harness = c.env.input.node.harnesses[0].harness.clone();
     route(&c, "standard-high", &[harness.as_str()]);
-    assert_eq!(
-        offered_on(&c).await,
-        format!("intelligence:{CLASS_PROFILE}")
-    );
+    assert_eq!(offered_on(&c).await, LEVEL);
 }
 
 /// Review finding 2: a running routed attempt is counted in its class profile's capacity
 /// cell, not the router's, so a cell limit holds for routed work. The class profile's model
 /// is not among the router's candidates.
 #[tokio::test]
-async fn a_running_routed_attempt_occupies_its_class_profiles_cell_not_the_routers() {
+async fn a_running_routed_attempt_occupies_the_cell_of_its_level() {
     use aq_swarm_settings::admission::{Cell, check};
     let mut c = setup().await;
     on_the_router(&mut c).await;
@@ -466,17 +344,14 @@ async fn a_running_routed_attempt_occupies_its_class_profiles_cell_not_the_route
     };
     let limits = json!({"cell_limits":[
         {"provider":"fixture-a","intelligence_class":"standard-high","limit":1},
-        {"provider":"fixture-a","intelligence_class":"engineering","limit":1}]});
+        {"provider":"fixture-a","intelligence_class":"standard-medium","limit":1}]});
     sqlx::query("UPDATE swarm_settings SET limits=$1 WHERE singleton")
         .bind(limits)
         .execute(&pool)
         .await
         .unwrap();
     route(&c, "standard-high", &[]);
-    assert_eq!(
-        offered_on(&c).await,
-        format!("intelligence:{CLASS_PROFILE}")
-    );
+    assert_eq!(offered_on(&c).await, LEVEL);
     let mut conn = pool.acquire().await.unwrap();
     // The admission check the offer path makes for the next task of each cell.
     let routed = check(&mut conn, Some(&cell("standard-high")))
@@ -486,8 +361,10 @@ async fn a_running_routed_attempt_occupies_its_class_profiles_cell_not_the_route
         routed.is_some(),
         "a second routed task of the class is not admitted"
     );
-    let unrouted = check(&mut conn, Some(&cell("engineering"))).await.unwrap();
-    assert_eq!(unrouted, None, "an unrouted task under the router still is");
+    let unrouted = check(&mut conn, Some(&cell("standard-medium")))
+        .await
+        .unwrap();
+    assert_eq!(unrouted, None, "a task on another level still is");
 }
 
 /// Review finding 3: a routed first attempt this node cannot serve (its route allows only a
@@ -535,175 +412,4 @@ async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
         "the route is valid, so it is kept"
     );
     assert_eq!(holds(&c).await, 0);
-}
-
-/// Epic `any-model`: a worker runs any model on an installed harness, and no
-/// measured context fact is needed for an offer.
-#[cfg(feature = "any-model")]
-mod any_model {
-    use super::*;
-    use aq_admission::startup::NativeOffer;
-
-    /// Settings' cached model choices (`intelligence_preferences_file`).
-    fn settings(c: &mut Case, choices: Value) {
-        let path = c.env.env._dir.path().join("model-choices.json");
-        std::fs::write(&path, serde_json::to_vec(&choices).unwrap()).unwrap();
-        let mut config = (*c.env.env.state.config).clone();
-        config.intelligence_preferences_file = Some(path);
-        c.env.env.state.config = Arc::new(config);
-    }
-    fn choice(model: &str, reference: &str, reasoning: &str, options: Value) -> Value {
-        json!({"provider":"fixture-a","model":model,"harness":"codex",
-            "reasoning_configuration_reference":reference,"reasoning":reasoning,"options":options})
-    }
-    /// The one offer of a successful poll, checked by the worker's own validators.
-    async fn offer(c: &Case) -> NativeOffer {
-        let (status, body) = poll_offered(c).await;
-        assert_eq!(status, 200, "{body}");
-        let ControlReply::Poll(mut page) =
-            decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        page.validate_for(&c.request).unwrap();
-        assert_eq!(page.offers.len(), 1, "{body}");
-        let native = page.offers.remove(0);
-        native.validate().unwrap();
-        aq_session_protocol::Validate::validate(&native.offered.offer.manifest).unwrap();
-        native
-    }
-    /// The latest decision's candidate traces: `(model, reason codes)`.
-    async fn traces(c: &Case) -> Vec<(String, Vec<String>)> {
-        let traces: Value = sqlx::query_scalar(
-            "SELECT decision#>'{outcome,traces}' FROM intelligence_decisions \
-             WHERE decision#>>'{inputs,project,lineage,task_id}'=$1::TEXT \
-             ORDER BY decision#>'{inputs,now_ms}' DESC LIMIT 1",
-        )
-        .bind(c.env.lineage.task_id)
-        .fetch_one(&c.env.env.pool)
-        .await
-        .unwrap();
-        serde_json::from_value::<Vec<Value>>(traces)
-            .unwrap()
-            .iter()
-            .map(|t| {
-                let model = t["model"].as_str().unwrap().to_owned();
-                (
-                    model,
-                    serde_json::from_value(t["reason_codes"].clone()).unwrap(),
-                )
-            })
-            .collect()
-    }
-    /// The class level `level` runs `model`, which the node's harness does not list and no
-    /// context fact covers; Settings holds `choices`. The routed task's offer.
-    async fn level_offer(level: (&str, &str), model: &str, choices: Value) -> NativeOffer {
-        let mut c = setup().await;
-        let model = model.to_owned();
-        class_on_the_router(&mut c, level, |p| p.candidates[0].model = model, false).await;
-        settings(&mut c, choices);
-        routing(&c, true).await;
-        route(&c, level.0, &[]);
-        offer(&c).await
-    }
-
-    #[tokio::test]
-    async fn a_model_the_harness_does_not_list_is_offered_with_the_settings_reasoning() {
-        let choices = json!([choice(CLASS_MODEL, "reasoning-a@1", "high", json!({}))]);
-        let native = level_offer(("standard-high", "high"), CLASS_MODEL, choices).await;
-        let manifest = &native.offered.offer.manifest;
-        assert_eq!(manifest.model.model.as_str(), CLASS_MODEL);
-        assert_eq!(manifest.model.reasoning.as_str(), "high");
-        assert_eq!(
-            manifest.intelligence_profile.id.as_str(),
-            format!("intelligence:{CLASS_PROFILE}")
-        );
-    }
-
-    #[tokio::test]
-    async fn the_reasoning_effort_option_of_the_choice_is_the_native_reasoning() {
-        let choices = json!([choice(
-            CLASS_MODEL,
-            "reasoning-a@1",
-            "extra high (fast service)",
-            json!({"reasoning_effort":"xhigh","service_tier":"fast"})
-        )]);
-        let native = level_offer(("standard-high", "high"), CLASS_MODEL, choices).await;
-        let manifest = &native.offered.offer.manifest;
-        assert_eq!(manifest.model.model.as_str(), CLASS_MODEL);
-        assert_eq!(manifest.model.reasoning.as_str(), "xhigh");
-    }
-
-    #[tokio::test]
-    async fn an_unresolvable_reference_falls_through_to_the_next_candidate() {
-        let mut c = setup().await;
-        // First a reference no Settings choice has, then one whose choice the harness
-        // does not accept; neither is given a default.
-        let edit = |p: &mut aq_profiles::Intelligence| {
-            let base = p.candidates[0].clone();
-            let candidate = |id: &str, model: &str, reference: &str| aq_profiles::ModelCandidate {
-                id: id.into(),
-                model: model.into(),
-                reasoning_configuration_reference: reference.into(),
-                ..base.clone()
-            };
-            p.candidates = vec![
-                candidate("unknown-reference", "model-x", "absent@1"),
-                candidate("refused-reasoning", "model-y", "label-only@1"),
-                candidate("resolvable", CLASS_MODEL, "reasoning-a@1"),
-            ];
-        };
-        class_on_the_router(&mut c, ("standard-high", "high"), edit, false).await;
-        settings(
-            &mut c,
-            json!([
-                choice("model-y", "label-only@1", "deliberate", json!({})),
-                choice(CLASS_MODEL, "reasoning-a@1", "high", json!({})),
-            ]),
-        );
-        routing(&c, true).await;
-        route(&c, "standard-high", &[]);
-        let native = offer(&c).await;
-        assert_eq!(
-            native.offered.offer.manifest.model.model.as_str(),
-            CLASS_MODEL
-        );
-        let unsupported = vec!["model_or_reasoning_unsupported".to_owned()];
-        let traces = traces(&c).await;
-        assert_eq!(
-            traces[0],
-            ("model-x".into(), unsupported.clone()),
-            "{traces:?}"
-        );
-        assert_eq!(traces[1], ("model-y".into(), unsupported), "{traces:?}");
-        assert_eq!(traces[2].0, CLASS_MODEL, "{traces:?}");
-    }
-
-    #[tokio::test]
-    async fn two_models_in_two_levels_share_one_renderer_qualification() {
-        let high = json!([choice(CLASS_MODEL, "reasoning-a@1", "high", json!({}))]);
-        let first = level_offer(("standard-high", "high"), CLASS_MODEL, high).await;
-        let low = json!([choice("model-d", "reasoning-a@1", "low", json!({}))]);
-        let second = level_offer(("standard-low", "low"), "model-d", low).await;
-        let (a, b) = (
-            &first.offered.offer.manifest,
-            &second.offered.offer.manifest,
-        );
-        assert_eq!(
-            (a.model.model.as_str(), a.model.reasoning.as_str()),
-            (CLASS_MODEL, "high")
-        );
-        assert_eq!(
-            (b.model.model.as_str(), b.model.reasoning.as_str()),
-            ("model-d", "low")
-        );
-        assert_ne!(a.intelligence_profile, b.intelligence_profile);
-        assert_eq!(
-            first.startup.renderer_qualification,
-            second.startup.renderer_qualification
-        );
-        assert!(
-            (first.startup.renderer_qualification.id.as_str()).starts_with("aq.startup-renderer/")
-        );
-    }
 }

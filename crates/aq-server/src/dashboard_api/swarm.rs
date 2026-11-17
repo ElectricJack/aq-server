@@ -8,9 +8,7 @@ use super::{
 };
 use crate::execution::authority::{self, Policy};
 use crate::{store::User, version_info};
-use aq_swarm::assemble::{
-    MAX_AGENTS, MAX_CANDIDATES, MeasuredWindow, NodeExtra, SwarmInput, assemble,
-};
+use aq_swarm::assemble::{MAX_AGENTS, MAX_CANDIDATES, NodeExtra, SwarmInput, assemble};
 
 fn projects_of(state: &AppState) -> Vec<Uuid> {
     (state.config.profiled_execution.as_ref())
@@ -30,27 +28,10 @@ pub(super) async fn swarm(
     let cap = super::capacity::capacity(state, runtime, user, scope.clone()).await?;
     let ids: Vec<Uuid> = cap.data.nodes.iter().map(|n| n.node.id).collect();
     let now = stamp(state)?;
-    // Renewed facts count: a renewed node does not show measurement_expired.
-    let windows: Vec<MeasuredWindow> = if cfg!(feature = "any-model") {
-        vec![]
-    } else {
-        crate::profiled_execution::context_renewal::current_facts(state, now)
-            .await?
-            .into_iter()
-            .map(|q| MeasuredWindow {
-                runtime: q.subject.runtime,
-                qualification: q.subject.runtime_qualification,
-                observed_at_ms: q.observed_at_ms,
-                expires_at_ms: q.expires_at_ms,
-            })
-            .collect()
-    };
     let mut tx = tx(runtime).await?;
-    let mut extras = NodeExtra::load(&mut tx, &ids, &windows, now).await?;
-    // `any-model`: placement needs no measurement, so none is ever a hold.
-    if cfg!(feature = "any-model") {
-        extras.iter_mut().for_each(|e| e.measurement = None);
-    }
+    // Placement needs no measurement (spec 0014 §8), so none is ever a hold.
+    let mut extras = NodeExtra::load(&mut tx, &ids, &[], now).await?;
+    extras.iter_mut().for_each(|e| e.measurement = None);
     let machines = aq_swarm::machine::latest(&mut tx, &ids, now).await?;
     let services = aq_swarm::service::states(&mut tx, &ids).await?;
     let controls = aq_swarm::service::controls(&mut tx, &ids).await?;

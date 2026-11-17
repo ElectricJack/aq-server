@@ -264,11 +264,11 @@ pub async fn loads(
 pub async fn facts(
     state: &AppState,
     node_id: Uuid,
-    catalog_digest: &str,
     project_id: Uuid,
     environment: &str,
     now_ms: u64,
 ) -> Result<Option<aq_selection::Placement>, AppError> {
+    let template = template(state, environment);
     let book = crate::observations::catalog::rate_book(state);
     facts_in(
         &state.store.pool,
@@ -278,11 +278,18 @@ pub async fn facts(
         },
         policy(state, project_id).as_ref(),
         node_id,
-        catalog_digest,
+        template.as_deref(),
         environment,
         now_ms,
     )
     .await
+}
+/// The template digest the operator's allowlist resolves `environment` to;
+/// `None` without an allowlist or when it names none or several.
+pub fn template(state: &AppState, environment: &str) -> Option<String> {
+    let allowlist = state.config.templates.as_deref()?;
+    let resolved = crate::templates::resolve([environment], allowlist).ok()?;
+    (resolved.into_iter().next()).map(|r| r.template_digest.as_str().to_owned())
 }
 
 pub async fn facts_in(
@@ -290,7 +297,7 @@ pub async fn facts_in(
     ledger: &Ledger<'_>,
     policy: Option<&PlacementPolicy>,
     node_id: Uuid,
-    catalog_digest: &str,
+    template: Option<&str>,
     environment: &str,
     now_ms: u64,
 ) -> Result<Option<aq_selection::Placement>, AppError> {
@@ -300,7 +307,7 @@ pub async fn facts_in(
         ledger,
         policy,
         node_id,
-        catalog_digest,
+        template,
         environment,
         now_ms,
         Derivation::SELECTION,
@@ -350,7 +357,8 @@ pub async fn derive(
     ledger: &Ledger<'_>,
     policy: Option<&PlacementPolicy>,
     node_id: Uuid,
-    catalog_digest: &str,
+    // The template digest the environment resolves to, if any.
+    template: Option<&str>,
     environment: &str,
     now_ms: u64,
     derivation: Derivation,
@@ -377,11 +385,7 @@ pub async fn derive(
     } else {
         policy.preference.clone()
     };
-    let resolutions = crate::templates::load(&mut *conn, catalog_digest).await?;
-    let resolved = resolutions
-        .iter()
-        .find(|r| r.environment == environment)
-        .map(|r| r.template_digest.as_str().to_owned());
+    let resolved = template.map(str::to_owned);
 
     let peers: Vec<(Uuid, serde_json::Value)> = if derivation.peers {
         sqlx::query_as(
@@ -481,12 +485,12 @@ pub async fn derive(
                 })
             })
             .collect::<Result<_, AppError>>()?,
-        environment_templates: resolutions
+        environment_templates: resolved
             .iter()
-            .map(|r| {
+            .map(|digest| {
                 Ok(aq_selection::EnvironmentTemplate {
-                    environment: r.environment.clone(),
-                    template: convert(&r.template_digest)?,
+                    environment: environment.to_owned(),
+                    template: convert(digest)?,
                 })
             })
             .collect::<Result<_, AppError>>()?,
@@ -522,12 +526,13 @@ pub(crate) async fn fence_locked(
         pool: &state.store.observation_pool,
         book: &book,
     };
+    let template = template(state, &project.environment);
     let current = derive(
         tx,
         &ledger,
         policy(state, decision.inputs.project.lineage.project_id).as_ref(),
         project.node_id,
-        &project.project.binding.catalog_digest,
+        template.as_deref(),
         &project.environment,
         now_ms,
         Derivation {
