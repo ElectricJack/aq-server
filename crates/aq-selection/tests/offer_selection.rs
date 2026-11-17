@@ -77,7 +77,7 @@ fn selected(snapshot: &Snapshot, input: &SelectionInputs) -> SelectionOutcome {
 }
 
 #[test]
-fn any_model_runs_on_an_installed_harness_with_its_stated_reasoning() {
+fn a_model_no_harness_lists_runs_on_an_installed_harness_with_its_stated_reasoning() {
     let snapshot = snapshot(
         &[("fixture-a", "a-model-no-harness-lists", "high")],
         &defaults(),

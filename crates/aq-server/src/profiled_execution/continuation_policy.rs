@@ -141,20 +141,17 @@ mod tests {
             value["catalog_artifact_json"].as_str().unwrap().as_bytes(),
         )
         .unwrap();
+        // The level as an offer retains it: its id and the selection policy
+        // in effect, under the identity `intelligence:<id>`.
         let definition = &catalog.artifact().catalog.intelligence[0];
-        let mut json = serde_json::to_value(definition).unwrap();
+        let mut json = serde_json::json!({"id": definition.id,
+            "selection_policy": definition.selection_policy});
         json.sort_all_objects();
         let body = serde_json::to_vec(&json).unwrap();
-        let source = catalog
-            .source(
-                "intelligence",
-                &aq_profiles::key(&definition.id, definition.version),
-            )
-            .unwrap();
         let reference = ArtifactRef {
-            id: aq_admission::Text::new(source.identity).unwrap(),
-            version: aq_admission::Text::new(source.revision).unwrap(),
-            digest: serde_json::from_value(serde_json::json!(source.digest)).unwrap(),
+            id: aq_admission::Text::new(format!("intelligence:{}", definition.id)).unwrap(),
+            version: aq_admission::Text::new("1").unwrap(),
+            digest: aq_admission::Digest::of(&body),
         };
         (
             reference,
@@ -187,8 +184,9 @@ mod tests {
         let mut legacy = reference.clone();
         legacy.digest = aq_admission::Digest::of(&bytes);
         assert!(decode(legacy, &bytes, budget.clone()).is_err());
+        // A reference that names another level than the body does.
         let mut wrong = reference;
-        wrong.version = aq_admission::Text::new("999").unwrap();
+        wrong.id = aq_admission::Text::new("intelligence:another").unwrap();
         assert!(decode(wrong, &body, budget).is_err());
     }
 }

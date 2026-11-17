@@ -774,20 +774,6 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,'\x7b\x7d',$2,1)")
-            .bind(hex('f')).bind(user).execute(&pool).await.unwrap();
-        let mut tx = pool.begin().await.unwrap();
-        crate::templates::store(
-            &mut tx,
-            &hex('f'),
-            &[crate::templates::Resolution {
-                environment: "ci@1".into(),
-                template_digest: serde_json::from_value(serde_json::json!(hex('a'))).unwrap(),
-            }],
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
         let node = |kind: &str, expires: u64| {
             let pool = pool.clone();
             let kind = kind.to_owned();
@@ -806,13 +792,14 @@ mod tests {
             }
         };
         let cloud = node("cloudflare-containers", 2_000).await;
-        let catalog = hex('f');
+        // The template the operator's allowlist resolves `ci@1` to.
+        let template = hex('a');
         let book = aq_accounting::pricing::RateCardBook::default();
         let ledger = Ledger {
             pool: &pool,
             book: &book,
         };
-        let facts = |id, now| facts_in(&pool, &ledger, None, id, &catalog, "ci@1", now);
+        let facts = |id, now| facts_in(&pool, &ledger, None, id, Some(&template), "ci@1", now);
         let only = facts(cloud, 1_000).await.unwrap().unwrap();
         assert_eq!(only.preferred_peer, None);
         assert_eq!(only.ceiling, None);
@@ -837,7 +824,7 @@ mod tests {
             &ledger,
             Some(&nested),
             cloud,
-            &hex('f'),
+            Some(&template),
             "ci@1",
             1_000,
         )
@@ -906,28 +893,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let catalog = hex('f');
-        sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,'\x7b\x7d',$2,1)")
-            .bind(&catalog).bind(user).execute(&pool).await.unwrap();
-        let pin = |template: Option<String>| {
-            let pool = pool.clone();
-            let catalog = catalog.clone();
-            async move {
-                let resolutions: Vec<_> = template
-                    .into_iter()
-                    .map(|t| crate::templates::Resolution {
-                        environment: "ci@1".into(),
-                        template_digest: serde_json::from_value(serde_json::json!(t)).unwrap(),
-                    })
-                    .collect();
-                let mut tx = pool.begin().await.unwrap();
-                crate::templates::store(&mut tx, &catalog, &resolutions)
-                    .await
-                    .unwrap();
-                tx.commit().await.unwrap();
-            }
-        };
-        pin(Some(hex('a'))).await;
+        // The template the operator's allowlist resolves `ci@1` to, as each
+        // derivation is handed it.
+        let resolved = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let pin = |template: Option<String>| *resolved.lock().unwrap() = template;
+        pin(Some(hex('a')));
         let registration = |kind: &str, templates: serde_json::Value| {
             serde_json::json!({"backend":{"kind":kind,"capabilities":["vm-isolation"],
                 "max_concurrent_sandboxes":1,"spend_ceiling":null,"templates":templates}})
@@ -967,7 +937,7 @@ mod tests {
         .unwrap();
         let fence_facts = |exclude_attempt| {
             let pool = pool.clone();
-            let catalog = catalog.clone();
+            let template = resolved.lock().unwrap().clone();
             async move {
                 let mut conn = pool.acquire().await.unwrap();
                 let book = aq_accounting::pricing::RateCardBook::default();
@@ -980,7 +950,14 @@ mod tests {
                     exclude_attempt,
                 };
                 derive(
-                    &mut conn, &ledger, None, boat, &catalog, "ci@1", 1_000, derivation,
+                    &mut conn,
+                    &ledger,
+                    None,
+                    boat,
+                    template.as_deref(),
+                    "ci@1",
+                    1_000,
+                    derivation,
                 )
                 .await
                 .unwrap()
@@ -991,7 +968,7 @@ mod tests {
             pool: &pool,
             book: &book,
         };
-        let selected = facts_in(&pool, &ledger, None, boat, &catalog, "ci@1", 1_000)
+        let selected = facts_in(&pool, &ledger, None, boat, Some(&hex('a')), "ci@1", 1_000)
             .await
             .unwrap();
         assert!(selected.is_some());
@@ -1012,7 +989,7 @@ mod tests {
         // The preference hold is selection-only: a preferred peer coming
         // online after selection does not refuse the fence.
         node("docker-local").await;
-        let held = facts_in(&pool, &ledger, None, boat, &catalog, "ci@1", 1_000)
+        let held = facts_in(&pool, &ledger, None, boat, Some(&hex('a')), "ci@1", 1_000)
             .await
             .unwrap()
             .unwrap();
@@ -1040,18 +1017,18 @@ mod tests {
             .await
             .unwrap();
 
-        // A later activation re-pinned or dropped the environment's template.
-        pin(Some(hex('b'))).await;
+        // The allowlist later resolves the environment to another template, or to none.
+        pin(Some(hex('b')));
         assert_eq!(
             at_fence(fence_facts(None).await).as_deref(),
             Some("environment_template_digest_mismatch")
         );
-        pin(None).await;
+        pin(None);
         assert_eq!(
             at_fence(fence_facts(None).await).as_deref(),
             Some("environment_template_unresolved")
         );
-        pin(Some(hex('a'))).await;
+        pin(Some(hex('a')));
         assert_eq!(at_fence(fence_facts(None).await), None);
 
         // The node's registration no longer advertises the template.
