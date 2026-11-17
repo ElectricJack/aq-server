@@ -31,7 +31,7 @@ need `X-AQ-Request: 1`):
 | `/roles`, `/intelligence-profiles`, `/execution-profiles` | every document of that kind | | |
 | `/<one of those>/{id}` | one document: `markdown`, parsed `fields`, `revision` | create or replace | delete |
 | `/selection-defaults` | the selection policy every intelligence profile starts from | replace | |
-| `/profiles/limits` | document sizes, snapshots and save receipts kept | replace | |
+| `/profiles/limits` | document sizes, snapshots, save receipts and offer refusals kept | replace | |
 | `/profiles/snapshot` | the active snapshot digest and the store revision | | |
 | `/routing-document` | the routing document: `markdown`, `revision` | replace | |
 | `/model-suggestions` | models discovered per harness (suggestions only) | | |
@@ -64,6 +64,31 @@ stays pinned to it. Two things are kept, both bounded:
   active snapshot, snapshots that live attempts are pinned to, and the most
   recent N others (`snapshots_kept` in `/profiles/limits`, default 20).
   Storage never refuses a save or a launch.
+
+An attempt is live while it holds its task. The pins of attempts that no
+longer do (settled, cancelled, abandoned, lost and released, never granted)
+are released when the next attempt is created and before every activation
+rolls, so a finished attempt never keeps a snapshot.
+
+## A task that gets no offer
+
+The task's work read lists why under `readiness.reasons`:
+
+- `role_disabled`, `role_missing`, `level_missing`: a document the task needs
+  is disabled or does not exist.
+- `startup_over_limit`: the startup text (platform text, role, project notes,
+  task, reporting contract) is larger than the limit. The reason gives both
+  numbers and says whether the limit is the execution profile's
+  `startup_context_bytes` or the project's `context_bytes` ceiling.
+- `platform_text_missing`: the server has no platform text for the execution
+  profile's environment. Platform text ships with the server
+  (`crates/aq-profiles/defaults/platform`); an environment without its own
+  file gets `default.md`.
+
+The last two are recorded by the offer path, one row per task, and removed
+when a later offer of the task composes, so they clear at the next worker
+poll after the cause is fixed. The newest `refusals_kept` tasks are kept
+(`/profiles/limits`, default 1000).
 
 There is no rollback route: to go back, save the earlier text again.
 
