@@ -27,3 +27,15 @@ spec and migration were reviewed before implementation; the migration is not yet
 registered or verified. No live server access is permitted.
 
 2026-11-17: Step 0 git add/commit blocked: index.lock in the shared Git worktree metadata is read-only. Continuing implementation; changes will remain uncommitted unless Git becomes writable.
+
+## Final verification — 2026-11-17
+
+Implementation checkpoint f882225b was created externally by the owner while
+verification ran. Steps 0–6 are implemented. Full run: 2494 passed, one reproduced
+Swarm read regression, 41 skipped. The occupancy fast path corrected it: isolated
+1/1, touched suites 232/232, final placement/core 31/31 passed. Workspace build,
+clippy with -D warnings, fmt, protocol checks, migration catalog and build budget
+all passed. aq-server ratchet lowered to 105119; 75 integration binaries unchanged.
+Full results, exact commands, wire, file:line mapping, five-sentence two-writers
+argument and worker qualification limits are in report.md. Final report edits
+follow the owner's checkpoint; Git writes remain subject to the sandbox block.
