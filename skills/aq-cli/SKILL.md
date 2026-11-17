@@ -5,7 +5,7 @@ description: Check AQ Platform v2 health, discover commands, and use its CLI for
 
 # AQ Platform v2 CLI
 
-On a host, use `aqv2`. Inside an AQ v2 sandbox with `AQ_CHANNEL` set, use `/opt/aq/bin/aq` with no host connection flags. A host command named `aq` may still resolve to the v1 Python CLI. In particular, `aq status` can report a stopped v1 daemon while v2 is healthy.
+Use `aq` for AQ v2. Inside an AQ v2 sandbox with `AQ_CHANNEL` set, use `/opt/aq/bin/aq` without host connection flags. Use `aq1` for the legacy Python CLI on a host with both versions. Check v2 health with `/healthz`. The `aq1 status` command checks the v1 daemon.
 
 ## Local host
 
@@ -13,13 +13,13 @@ Use the stack's configured development origin. On the `aq-ms1` desktop stack it 
 
 ```sh
 curl -fsS --max-time 5 http://127.0.0.1:28080/healthz
-aqv2 --local --origin http://127.0.0.1:28080 commands
-aqv2 --local --origin http://127.0.0.1:28080 projects list
-aqv2 --local --origin http://127.0.0.1:28080 tasks list
-aqv2 --local --origin http://127.0.0.1:28080 workers list
+aq --local --origin http://127.0.0.1:28080 commands
+aq --local --origin http://127.0.0.1:28080 projects list
+aq --local --origin http://127.0.0.1:28080 tasks list
+aq --local --origin http://127.0.0.1:28080 workers list
 ```
 
-`--local` uses the loopback server's configured development identity. For an HTTPS deployment, use its admin origin and `--cf-access-token-file /absolute/private/access.jwt` instead of `--local`. If `aqv2` is absent, install a matching release binary as `aqv2`, or run `cargo build --locked -p aqv2` from the server checkout and use `target/debug/aqv2`.
+`--local` uses the loopback server's configured development identity. For an HTTPS deployment, use its admin origin and `--cf-access-token-file /absolute/private/access.jwt` instead of `--local`. Install the `aqv2-x86_64-linux` release binary as `aq` on an x86-64 Linux host. To build from the server checkout, run `cargo build --locked -p aqv2` and install `target/debug/aqv2` as `aq`.
 
 ## Command discovery and results
 

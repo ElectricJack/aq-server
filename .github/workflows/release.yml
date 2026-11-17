@@ -185,8 +185,7 @@ jobs:
 
       # The v2 CLI, static so any sandbox image can run it. The sandbox runtime
       # bundle pins this asset by digest and installs it as /opt/aq/bin/aq;
-      # hosts install it as aqv2 while v1 owns `aq` (spec 0006 D1, owner
-      # decision 5). The binary names itself after the name it is run as.
+      # hosts also install it as aq. Keep the asset name stable for consumers.
       - name: Build the v2 CLI (release, static)
         run: |
           sudo apt-get update -q

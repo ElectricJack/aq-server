@@ -83,7 +83,7 @@ v1 did not make new commands agent-usable automatically. The central allowlist `
 
 | # | Decision | Instead of |
 | --- | --- | --- |
-| D1 | **One CLI.** The `aqv2` crate becomes the only v2 CLI. In sandboxes it is installed as `/opt/aq/bin/aq`; on hosts it stays `aqv2` until v1 retires. `aq-agent` is retired (§9). | Keeping two clients that drift apart, which is how questions and waits ended up missing from `aq-agent`. |
+| D1 | **One CLI.** The `aqv2` crate becomes the only v2 CLI. In sandboxes it is installed as `/opt/aq/bin/aq`. Hosts use `aq` for v2 and `aq1` for the legacy CLI where both are installed. `aq-agent` is retired (§9). | Keeping two clients that drift apart, which is how questions and waits ended up missing from `aq-agent`. |
 | D2 | **One generic command surface.** Every command, read or mutation, is registered once in a server command registry. It is invocable as `POST /api/v1/commands/{name}` and discoverable at `GET /api/v1/commands`. | Adding agent-specific routes per feature (`/v1/agent/*`). |
 | D3 | **The channel is route-agnostic transport.** The worker exposes a per-attempt endpoint inside the sandbox that forwards to aq-server's machine listener without knowing any commands. | A per-command proxy or allowlist. |
 | D4 | **The proxy holds the credential.** The agent holds no secret. The proxy strips any caller `Authorization` and injects the attempt's credential (and Access headers in production). | Installing the credential in the agent's home (B7). See §5.2. |
@@ -425,5 +425,5 @@ The owner accepted every recommendation ("All of your assumptions look correct t
 2. **Knowledge** reach is the whole project by default: `knowledge.read @ project:self`.
 3. **Top-level tasks:** agents create subtasks only by default. `task.create.project` is a grant made per project or per task.
 4. **Messaging** by default reaches the supervisor and the agent's own task tree. Peer messaging across the project is a grant.
-5. **The `aq` name:** the v2 CLI ships as `aq` inside sandboxes now, reversing B7's rule. Hosts keep `aqv2` until v1 retires.
+5. **The `aq` name:** the v2 CLI ships as `aq` inside sandboxes now, reversing B7's rule. Hosts now use `aq` for v2 and `aq1` for v1 when both are installed. The v2 release asset keeps its existing name for pinned consumers.
 6. **Grant overrides:** project-level ceilings first. Per-task overrides (`task.agent_grants.set` and the dashboard control) come later.

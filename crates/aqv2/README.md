@@ -1,4 +1,4 @@
-# aqv2
+# AQ v2 CLI
 
 The v2 command line: the owner's terminal and, inside a sandbox, the agent's
 channel to AQ (spec [0006](../../docs/specs/0006-agent-channel.md) §4). Build
@@ -6,17 +6,13 @@ with `cargo build --locked -p aqv2 --release`.
 
 ## Names
 
-One binary, installed under two names (owner decision 5):
+Hosts use `aq`. Sandboxes use `/opt/aq/bin/aq`. If both versions are installed
+on a host, give the legacy Python CLI the name `aq1` before installing v2.
 
-| Where | Installed as | Why |
-| --- | --- | --- |
-| Sandboxes | `/opt/aq/bin/aq` | The agent's CLI. |
-| Hosts | `aqv2` | v1 still owns `aq` and `agent-queue` on hosts. |
-
-The binary names itself after the name it was run as: run as `aq`, its help,
-usage and recovery hints say `aq`; under any other name they say `aqv2`.
-Nothing else changes. Releases publish a static build,
-`aqv2-x86_64-linux` (listed in `SHA256SUMS`), which runs in any image.
+The static Linux release asset is `aqv2-x86_64-linux`, with its checksum in
+`SHA256SUMS`. Install it as `aq` on the host. For a local release build,
+install `target/release/aqv2` as `aq`. Help and recovery hints use the
+name `aq` when the binary is invoked under that name.
 
 ## Modes
 
@@ -221,7 +217,7 @@ For a local development deployment, supply `--local` and its loopback HTTP
 origin. The server supplies its configured development identity. For example:
 
 ```sh
-aqv2 --local --origin http://127.0.0.1:28080 projects list
+aq --local --origin http://127.0.0.1:28080 projects list
 ```
 
 Authentication, origin checks, CSRF headers, byte budgets, timeouts and
@@ -231,21 +227,21 @@ authorization.
 The following examples omit the connection flags.
 
 ```text
-aqv2 tasks list
-aqv2 tasks list --project PROJECT_UUID --limit 25 --cursor CURSOR
-aqv2 tasks show TASK_UUID --project PROJECT_UUID
-aqv2 tasks create --project PROJECT_UUID --expected-project-revision 1 --title "Write launch notes" --body "Document accepted behavior" --acceptance-criteria "Notes reviewed" --label docs --task-state draft
-aqv2 decisions list --project PROJECT_UUID --state open
-aqv2 decisions show DECISION_UUID
-aqv2 decisions respond DECISION_UUID --request answer.json
-aqv2 messages inbox --after 0 --limit 16
-aqv2 messages send "Please inspect the pending decision."
-aqv2 chat
-aqv2 chat --once "Please summarize the queue" --timeout 120
-aqv2 workers list
-aqv2 projects list --limit 25
-aqv2 projects show PROJECT_UUID
-aqv2 operations show OPERATION_UUID
+aq tasks list
+aq tasks list --project PROJECT_UUID --limit 25 --cursor CURSOR
+aq tasks show TASK_UUID --project PROJECT_UUID
+aq tasks create --project PROJECT_UUID --expected-project-revision 1 --title "Write launch notes" --body "Document accepted behavior" --acceptance-criteria "Notes reviewed" --label docs --task-state draft
+aq decisions list --project PROJECT_UUID --state open
+aq decisions show DECISION_UUID
+aq decisions respond DECISION_UUID --request answer.json
+aq messages inbox --after 0 --limit 16
+aq messages send "Please inspect the pending decision."
+aq chat
+aq chat --once "Please summarize the queue" --timeout 120
+aq workers list
+aq projects list --limit 25
+aq projects show PROJECT_UUID
+aq operations show OPERATION_UUID
 ```
 
 `tasks list` without a project reads the bounded task overview; `--limit` sets
