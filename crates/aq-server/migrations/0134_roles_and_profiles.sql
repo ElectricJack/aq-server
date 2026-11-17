@@ -65,7 +65,8 @@ CREATE TABLE role_snapshot_pins (
 CREATE INDEX role_snapshot_pins_digest ON role_snapshot_pins(digest);
 -- What an attempt ran with (spec 0014 §7.1): role, level, provider, model,
 -- reasoning, harness, execution profile and snapshot digest; a few hundred
--- bytes. One row per attempt, written in the transaction that creates the
+-- bytes. `snapshot_digest` is JSON null for an attempt recorded before roles
+-- and profiles (filled below): no snapshot of that time exists. One row per attempt, written in the transaction that creates the
 -- attempt and removed with the attempt's record (aq_role_settings::attempts).
 -- The attempt tables' own shape is sealed by earlier formats, so the summary
 -- has its own table keyed by the attempt.
@@ -73,4 +74,93 @@ CREATE TABLE attempt_ran_with (
     attempt_id UUID PRIMARY KEY,
     ran_with JSONB NOT NULL CHECK(jsonb_typeof(ran_with) = 'object')
 );
+-- == The profile catalog is removed ==
+-- Everything above only creates the role tables. Everything below removes
+-- the old way (spec 0014 §9, §10) and is not reversible: the old catalog
+-- bodies, measurements and class structure are not carried over. A database
+-- backup is taken before this migration runs.
+
+-- The owner's routing document moves from the Intelligence structure to its
+-- own place in the role store, as its first saved revision. Parents and
+-- assignments are not carried: a level's id is the router's class.
+UPDATE role_settings r
+   SET routing_markdown = s.document->>'routing_markdown',
+       routing_revision = 1,
+       revision = 1
+  FROM intelligence_structure s
+ WHERE btrim(COALESCE(s.document->>'routing_markdown', '')) <> '';
+
+DROP TABLE profile_catalog_environment_templates;
+DROP TABLE profile_catalog_operations;
+DROP TABLE profile_catalog_registry;
+DROP TABLE profile_catalog_artifacts;
+DROP TABLE context_qualification_renewals;
+DROP TABLE intelligence_structure_operations;
+DROP TABLE intelligence_structure;
+
+-- Project bindings (spec 0014 §5.4): the catalog digest and the three profile
+-- allowlists go. This migration cannot know a project's defaults, so a
+-- binding that names none gets `developer` and `standard-high`; ceilings,
+-- nodes, groups, environments, repository and graph references and
+-- publication are kept. The same rewrite is applied to every stored copy a
+-- read returns: the history records and the save receipts.
+CREATE FUNCTION pg_temp.binding_0134(b JSONB) RETURNS JSONB LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN jsonb_typeof(b) = 'object' THEN
+    jsonb_build_object('default_role', 'developer', 'default_intelligence', 'standard-high')
+    || (b - 'catalog_digest' - 'allowed_agent_profiles'
+          - 'allowed_intelligence_profiles' - 'allowed_execution_profiles')
+  ELSE b END
+$$;
+UPDATE project_execution_bindings SET binding = pg_temp.binding_0134(binding);
+UPDATE project_execution_binding_history
+   SET record = jsonb_set(record, '{binding}', pg_temp.binding_0134(record->'binding'))
+ WHERE jsonb_typeof(record->'binding') = 'object';
+UPDATE project_execution_operations
+   SET response = jsonb_set(response, '{record,binding}', pg_temp.binding_0134(response#>'{record,binding}'))
+ WHERE jsonb_typeof(response#>'{record,binding}') = 'object';
+DROP FUNCTION pg_temp.binding_0134(JSONB);
+
+-- Attempts from before roles and profiles get their summary from the launch
+-- manifest they already hold: provider, model, reasoning and harness as
+-- launched; role, level and execution profile are the old agent,
+-- intelligence and execution profile ids without their namespace prefix and
+-- `@version`. The snapshot digest is null and no snapshot is pinned. An
+-- attempt without a profiled launch, or whose manifest lacks one of these
+-- values, gets no summary rather than an invented one.
+INSERT INTO attempt_ran_with(attempt_id, ran_with)
+SELECT attempt_id, jsonb_build_object(
+         'role', role, 'level', level, 'provider', provider, 'model', model,
+         'reasoning', reasoning, 'harness', harness,
+         'execution_profile', execution_profile, 'snapshot_digest', NULL)
+  FROM (SELECT attempt_id,
+               regexp_replace(regexp_replace(launch_manifest#>>'{agent_profile,id}', '^[a-z]+:', ''), '@[0-9]+$', '') AS role,
+               regexp_replace(regexp_replace(launch_manifest#>>'{intelligence_profile,id}', '^[a-z]+:', ''), '@[0-9]+$', '') AS level,
+               regexp_replace(regexp_replace(launch_manifest#>>'{execution_profile,id}', '^[a-z]+:', ''), '@[0-9]+$', '') AS execution_profile,
+               launch_manifest#>>'{model,provider}' AS provider,
+               launch_manifest#>>'{model,model}' AS model,
+               launch_manifest#>>'{model,reasoning}' AS reasoning,
+               launch_manifest#>>'{harness,harness}' AS harness
+          FROM profiled_launches) l
+ WHERE role IS NOT NULL AND level IS NOT NULL AND execution_profile IS NOT NULL
+   AND provider IS NOT NULL AND model IS NOT NULL AND reasoning IS NOT NULL
+   AND harness IS NOT NULL
+ON CONFLICT (attempt_id) DO NOTHING;
+
+-- A node's stored inventory listed the models of each harness. The key is
+-- gone from the harness shape (any model a level names is allowed), so it is
+-- stripped; the worker's next inventory replaces the row anyway.
+UPDATE intelligence_node_snapshots s
+   SET snapshot = jsonb_set(s.snapshot, '{harnesses}',
+         (SELECT COALESCE(jsonb_agg(h - 'models' ORDER BY n), '[]'::jsonb)
+            FROM jsonb_array_elements(s.snapshot->'harnesses') WITH ORDINALITY AS e(h, n)))
+ WHERE jsonb_typeof(s.snapshot->'harnesses') = 'array'
+   AND EXISTS (SELECT 1 FROM jsonb_array_elements(s.snapshot->'harnesses') h WHERE h ? 'models');
+
+-- A supervisor's chosen profile named an entry of the old catalog. It cannot
+-- be resolved any more: the supervisor is switched off and the owner chooses
+-- a level again.
+UPDATE supervisor_controls
+   SET enabled = FALSE, profile = NULL, revision = revision + 1
+ WHERE profile IS NOT NULL AND NOT (profile ? 'snapshot_digest');
+
 UPDATE meta SET value='134' WHERE key='state_format_version';

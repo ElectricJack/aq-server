@@ -126,9 +126,12 @@ pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
     // them. The rest of that store, and its format, stay at the prefix.
     if !stored(pool).await {
         let migration = include_str!("../../migrations/0134_roles_and_profiles.sql");
-        // Without its last statement, which stamps the store's format.
-        let (tables, stamp) = migration.rsplit_once("UPDATE meta").unwrap();
-        assert!(stamp.contains("state_format_version"));
+        // Only its first part, which creates the role tables: the rest
+        // removes the profile catalog and stamps the store's format.
+        let (tables, removal) = migration
+            .split_once("-- == The profile catalog is removed ==")
+            .unwrap();
+        assert!(removal.contains("state_format_version"));
         sqlx::raw_sql(tables)
             .execute(pool)
             .await

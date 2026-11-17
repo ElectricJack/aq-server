@@ -146,7 +146,11 @@ pub(crate) async fn within_filer(
     let Some(ran_with) = ran_with.map_err(error)? else {
         return Ok(Ok(()));
     };
-    let own = aq_role_settings::snapshot(pool, &ran_with.snapshot_digest).await;
+    // An attempt recorded before roles names no snapshot: not restricted.
+    let Some(digest) = &ran_with.snapshot_digest else {
+        return Ok(Ok(()));
+    };
+    let own = aq_role_settings::snapshot(pool, digest).await;
     let (own, active) = (own.map_err(error)?, active(pool).await?);
     let filer = own
         .as_ref()

@@ -167,7 +167,7 @@ pub async fn publish(
             reasoning: selection.choice.native_reasoning.clone(),
             harness: selection.choice.harness.clone(),
             execution_profile: built.decision.project.execution_profile.clone(),
-            snapshot_digest: built.decision.project.snapshot_digest.clone(),
+            snapshot_digest: Some(built.decision.project.snapshot_digest.clone()),
         };
         aq_role_settings::attempts::record(&mut tx, binding.attempt_id, &ran_with)
             .await

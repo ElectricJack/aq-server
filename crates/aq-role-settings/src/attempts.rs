@@ -19,10 +19,13 @@ pub struct RanWith {
     pub reasoning: String,
     pub harness: String,
     pub execution_profile: String,
-    pub snapshot_digest: String,
+    /// The snapshot the attempt launched from. `None` (JSON null) for an
+    /// attempt recorded before roles and profiles: its summary was filled
+    /// from its launch record and no snapshot of that time exists.
+    pub snapshot_digest: Option<String>,
 }
 
-/// Store the attempt's summary and pin its snapshot. Call it in the
+/// Store the attempt's summary and pin the snapshot it names. Call it in the
 /// transaction that creates the attempt.
 pub async fn record(conn: &mut PgConnection, attempt_id: Uuid, ran_with: &RanWith) -> Result<()> {
     let summary = serde_json::to_value(ran_with).map_err(|_| crate::Error::Internal)?;
@@ -34,7 +37,10 @@ pub async fn record(conn: &mut PgConnection, attempt_id: Uuid, ran_with: &RanWit
     .bind(summary)
     .execute(&mut *conn)
     .await?;
-    store::pin(conn, &ran_with.snapshot_digest, attempt_id).await
+    match &ran_with.snapshot_digest {
+        Some(digest) => store::pin(conn, digest, attempt_id).await,
+        None => Ok(()),
+    }
 }
 /// The summary of an attempt, or `None` for an attempt from before roles
 /// (it has none) or one that does not exist.

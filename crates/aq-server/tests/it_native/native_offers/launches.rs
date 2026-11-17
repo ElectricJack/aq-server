@@ -232,6 +232,88 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     assert!(pins(&c, attempt).await.is_empty());
 }
 
+/// An attempt recorded before roles and profiles (spec 0014 §10): its stored
+/// selection has the old catalog's shape and its summary names no snapshot.
+/// The task's work read still answers and shows what it ran with.
+#[tokio::test]
+async fn an_attempt_recorded_before_roles_is_still_read() {
+    let c = setup().await;
+    let native = offered(&c).await;
+    let attempt = native.offered.offer.binding.attempt_id;
+    let pool = &c.env.env.pool;
+    // As migration 0134 leaves such an attempt: the old key in the stored
+    // selection and decision, a null snapshot digest and no pin.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role='replica'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let old = "jsonb_build_object('catalog_digest',{0}->'role_snapshot_digest','catalog_revision',1)||({0}-'role_snapshot_digest')";
+    sqlx::query(&format!(
+        "UPDATE intelligence_attempt_selections SET selection={} WHERE attempt_id=$1",
+        old.replace("{0}", "selection")
+    ))
+    .bind(attempt)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "UPDATE intelligence_decisions d SET decision=jsonb_set(decision,'{{outcome,resolved}}',{}) FROM profiled_launches l WHERE l.decision_id=d.decision_id AND l.attempt_id=$1",
+        old.replace("{0}", "(decision#>'{outcome,resolved}')")
+    ))
+    .bind(attempt)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE attempt_ran_with SET ran_with=ran_with||'{\"snapshot_digest\":null}' WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM role_snapshot_pins WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let stored: Value = sqlx::query_scalar(
+        "SELECT selection FROM intelligence_attempt_selections WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(serde_json::from_value::<aq_selection::ResolvedSelection>(stored).is_err());
+
+    // The upgraded server starts with nothing verified in memory.
+    c.env.env.state.store.forget_verified_profiled_facts();
+
+    let summary = ran_with(&c, attempt).await.expect("a summary");
+    assert_eq!(summary.snapshot_digest, None);
+    let work = super::holds::full_work(&c, c.env.lineage.task_id).await;
+    assert_eq!(work["execution"]["ran_with"]["role"], "developer");
+    assert_eq!(
+        work["execution"]["ran_with"]["snapshot_digest"],
+        Value::Null
+    );
+    // The attempt's authority record is still readable: its stored selection
+    // digest stands without the old shape being parsed.
+    let mut tx = pool.begin().await.unwrap();
+    let node = c.env.env.node;
+    let view = aq_server::execution::authority::read_attempt(
+        &c.env.env.state,
+        &mut tx,
+        node,
+        attempt,
+        aq_server::execution::authority::Policy::TerminalHistorical,
+    )
+    .await
+    .expect("the authority view of an attempt recorded before roles");
+    assert!(view.selection_digest.is_some());
+    // The swarm's occupancy and pill reads count it without an error.
+    aq_swarm_settings::admission::counts(&mut tx).await.unwrap();
+}
+
 /// A routed task runs on the level document of its class id: another model,
 /// and the harness's own reasoning setting (`default`).
 #[tokio::test]

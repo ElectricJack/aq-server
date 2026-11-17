@@ -959,7 +959,7 @@
       },
       "HumanRanWith": {
         "type": "object",
-        "description": "What an attempt ran with (spec 0014 §7.1): its role, the intelligence profile (level), the model and reasoning effort, the harness, the execution profile and the digest of the role snapshot it launched from. Absent for an attempt from before roles.",
+        "description": "What an attempt ran with (spec 0014 §7.1): its role, the intelligence profile (level), the model and reasoning effort, the harness, the execution profile and the digest of the role snapshot it launched from. For an attempt recorded before roles and profiles the summary comes from its launch record and `snapshot_digest` is null. Absent when the attempt has no such record.",
         "properties": {
           "role": {
             "type": "string",
@@ -997,9 +997,16 @@
             "maxLength": 256
           },
           "snapshot_digest": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

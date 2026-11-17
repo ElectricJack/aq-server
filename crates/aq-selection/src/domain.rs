@@ -369,3 +369,44 @@ pub enum CredentialDelivery {
         version: u32,
     },
 }
+
+/// Whether a stored selection was recorded before roles and profiles (spec
+/// 0014): it names the old catalog and not a role snapshot. Such a row is
+/// attempt history; no type here reads its shape.
+pub fn recorded_before_roles(selection: &serde_json::Value) -> bool {
+    selection.get("catalog_digest").is_some() && selection.get("role_snapshot_digest").is_none()
+}
+impl ResolvedSelection {
+    /// Whether this selection disagrees with the launch manifest its attempt
+    /// was offered, on the node `target`.
+    pub fn differs_from(
+        &self,
+        manifest: &aq_session_protocol::LaunchManifest,
+        target: &ExecutionTarget,
+    ) -> bool {
+        let choice = &self.choice;
+        self.role_snapshot_digest != manifest.catalog.digest
+            || self.project_revision != manifest.bindings.project_revision
+            || self.lineage.task_id != manifest.bindings.task_id
+            || self.lineage.workspace_id != manifest.bindings.graph_id
+            || self.lineage.project_id != manifest.bindings.project_id
+            || self.target != *target
+            || choice.provider != manifest.model.provider.as_str()
+            || choice.model != manifest.model.model.as_str()
+            || choice.native_reasoning != manifest.model.reasoning.as_str()
+            || choice.max_output_tokens != manifest.model.max_output_tokens
+            || choice.harness != manifest.harness.harness.as_str()
+            || choice.cli_version != manifest.harness.cli_version.as_str()
+            || choice.adapter != manifest.harness.adapter
+            || choice.environment != manifest.harness.environment
+            || choice.resources.memory_bytes != manifest.resources.memory_bytes
+            || choice.resources.cpu_millis != manifest.resources.cpu_millis
+            || choice.resources.process_limit != manifest.resources.process_limit
+            || choice.resources.wall_time_ms != manifest.resources.wall_time_ms
+            || manifest.credentials.is_empty()
+            || manifest
+                .credentials
+                .iter()
+                .any(|c| c.credential_profile != choice.credential_profile)
+    }
+}

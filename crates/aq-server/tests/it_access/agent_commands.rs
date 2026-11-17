@@ -788,7 +788,7 @@ async fn an_agent_files_a_task_only_for_a_role_within_its_own_operations() {
         reasoning: "high".into(),
         harness: "claude".into(),
         execution_profile: "sandbox".into(),
-        snapshot_digest: digest,
+        snapshot_digest: Some(digest),
     };
     let mut conn = e.pool.acquire().await.unwrap();
     aq_role_settings::attempts::record(&mut conn, attempt, &ran_with)

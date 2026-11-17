@@ -19,6 +19,7 @@ mod playbook_rolling_records_migration;
 mod presence_rolling_records_migration;
 mod rate_limit_removal_migration;
 mod result_origin_migration;
+mod roles_and_profiles_migration;
 mod routing_policies_migration;
 mod row_retention;
 mod schema26_27;

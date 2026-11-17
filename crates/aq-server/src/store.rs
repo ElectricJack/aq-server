@@ -547,6 +547,12 @@ impl Store {
             .map(|cache| cache.stats())
     }
 
+    /// Empties the verified-facts cache, as a restart of the server does.
+    #[cfg(feature = "test-support")]
+    pub fn forget_verified_profiled_facts(&self) {
+        *self.verified_profiled_facts.lock().unwrap() = Default::default();
+    }
+
     /// `SELECT 1`: true when the database answers within `limit`.
     pub async fn ping(&self, limit: std::time::Duration) -> bool {
         matches!(
