@@ -10,6 +10,7 @@ use aq_profiles::roles::{DocumentLimits, Kind, Problem, SelectionDefaults, Snaps
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod attempts;
 pub mod http;
 mod store;
 pub mod tasks;

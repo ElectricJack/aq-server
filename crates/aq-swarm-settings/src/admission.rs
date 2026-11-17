@@ -113,13 +113,26 @@ pub async fn manual_cell(
 }
 
 async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::Error> {
-    let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,catalog_digest}' AS catalog, COALESCE(d.decision#>>'{inputs,intelligence_override}', d.decision#>>'{inputs,project,intelligence_profile}') AS profile, s.selection->'choice' AS choice FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
+    let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,catalog_digest}' AS catalog, COALESCE(d.decision#>>'{inputs,intelligence_override}', d.decision#>>'{inputs,project,intelligence_profile}') AS profile, s.selection->'choice' AS choice, jsonb_typeof(d.decision#>'{inputs,launches}')='array' AS launched FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
     let mut catalogs = BTreeMap::new();
     for row in rows {
         let digest: Option<String> = row.get("catalog");
         let profile: Option<String> = row.get("profile");
         let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
+        // A launch from a role snapshot (spec 0014): the level's id is the
+        // intelligence class, and the choice names the provider.
+        let launched: Option<bool> = row.get("launched");
+        if let (Some(true), Some(class), Some(provider)) =
+            (launched, profile.as_deref(), text(&choice, "provider"))
+        {
+            let cell = Cell {
+                provider: provider.into(),
+                intelligence_class: class.into(),
+            };
+            out.push((cell, false));
+            continue;
+        }
         let key = digest.clone().unwrap_or_default();
         if !catalogs.contains_key(&key) {
             catalogs.insert(key.clone(), catalog_bytes(conn, digest.as_deref()).await?);

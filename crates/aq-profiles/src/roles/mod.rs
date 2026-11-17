@@ -16,9 +16,9 @@ mod startup;
 mod tests;
 mod validate;
 
-pub use defaults::default_documents;
+pub use defaults::{default_documents, platform_text};
 pub use markdown::{ParseError, parse_execution, parse_intelligence, parse_role};
-pub use permissions::effective_permissions;
+pub use permissions::{effective_permissions, requested_permissions};
 pub use selection::{Launch, ResolveError, SelectionDefaults, SelectionOverrides};
 pub use startup::{StartupError, StartupInput, StartupPart, StartupText, assemble_startup};
 pub use validate::{

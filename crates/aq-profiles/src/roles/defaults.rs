@@ -29,3 +29,18 @@ pub fn default_documents() -> Vec<SourceDocument> {
         Execution "execution": ["sandbox"],
     ]
 }
+
+/// The platform text of an environment (spec 0014 §6.1): what is true of
+/// every task that runs in it, and nothing about any project. Owned by the
+/// server and shipped as Markdown under `defaults/platform`, one file named
+/// for the environment id; an environment without its own file gets
+/// `default.md`. The text is delivered trimmed.
+pub fn platform_text(environment: &str) -> &'static str {
+    match environment {
+        "aq-ms1-docker-local-claude" => {
+            include_str!("../../defaults/platform/aq-ms1-docker-local-claude.md")
+        }
+        _ => include_str!("../../defaults/platform/default.md"),
+    }
+    .trim()
+}

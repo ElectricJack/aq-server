@@ -1139,7 +1139,8 @@ fn startup<'a>(role: &'a Role) -> StartupInput<'a> {
         project_notes: Some("Project notes."),
         repository_notes: Some("Repository notes."),
         task: "Task é.",
-        reporting: "Report.",
+        task_thread: None,
+        reporting: Some("Report."),
     }
 }
 #[test]
@@ -1236,7 +1237,8 @@ fn startup_text_over_the_limit_is_refused_not_trimmed() {
         (
             StartupPart::Reporting,
             StartupInput {
-                reporting: "\n",
+                task_thread: None,
+                reporting: Some("\n"),
                 ..input
             },
         ),

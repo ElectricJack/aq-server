@@ -16,6 +16,7 @@ pub enum StartupPart {
     ProjectNotes,
     RepositoryNotes,
     Task,
+    TaskThread,
     Reporting,
 }
 impl StartupPart {
@@ -27,6 +28,7 @@ impl StartupPart {
             Self::ProjectNotes => "project notes",
             Self::RepositoryNotes => "repository notes",
             Self::Task => "task",
+            Self::TaskThread => "task thread",
             Self::Reporting => "reporting contract",
         }
     }
@@ -41,8 +43,12 @@ pub struct StartupInput<'a> {
     pub repository_notes: Option<&'a str>,
     /// The task: title, body, acceptance criteria and its context.
     pub task: &'a str,
-    /// The result-reporting contract.
-    pub reporting: &'a str,
+    /// The task's own thread (comments, questions and mail), when it has
+    /// one: part of the task's context, delivered right after it.
+    pub task_thread: Option<&'a str>,
+    /// The result-reporting contract of the harness adapter; `None` for an
+    /// adapter that has none.
+    pub reporting: Option<&'a str>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupText {
@@ -75,7 +81,7 @@ pub fn assemble_startup(
         (StartupPart::Platform, input.platform),
         (StartupPart::Role, input.role.role_md.as_str()),
         (StartupPart::Task, input.task),
-        (StartupPart::Reporting, input.reporting),
+        (StartupPart::Reporting, input.reporting.unwrap_or("none")),
     ];
     if let Some((part, _)) = required.iter().find(|(_, text)| text.trim().is_empty()) {
         return Err(StartupError::Empty(*part));
@@ -91,7 +97,8 @@ pub fn assemble_startup(
             optional(input.repository_notes),
         ),
         (StartupPart::Task, Some(input.task.to_string())),
-        (StartupPart::Reporting, Some(input.reporting.to_string())),
+        (StartupPart::TaskThread, optional(input.task_thread)),
+        (StartupPart::Reporting, input.reporting.map(String::from)),
     ]
     .into_iter()
     .filter_map(|(part, text)| text.map(|text| (part, text)))

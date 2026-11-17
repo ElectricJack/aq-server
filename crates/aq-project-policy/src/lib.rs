@@ -149,26 +149,27 @@ pub struct BindingObservation {
 #[serde(deny_unknown_fields)]
 pub struct EligibilityRequest {
     pub expected_project_revision: u64,
-    pub expected_catalog_revision: u64,
     pub node_id: Uuid,
     pub environment: String,
-    pub agent_profile: String,
+    /// The role, intelligence profile and execution profile of the launch
+    /// (spec 0014), by document id, in the role snapshot `snapshot_digest`.
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
-    /// A routed task's class profile in place of the automatic router (spec 0011 §4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intelligence_override: Option<String>,
+    pub snapshot_digest: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrozenProjectBinding {
     pub project: ProjectRecord,
-    pub catalog_activation_revision: u64,
+    /// The role snapshot the launch was resolved from. An offer stays on it:
+    /// a later save of a document does not change what this binding names.
+    pub snapshot_digest: String,
     pub worker_membership_digest: String,
     pub binding_observation: BindingObservation,
     pub node_id: Uuid,
     pub environment: String,
-    pub agent_profile: String,
+    pub role: String,
     pub intelligence_profile: String,
     pub execution_profile: String,
 }
@@ -349,8 +350,6 @@ pub fn local_reasons(
     record: &ProjectRecord,
     request: &EligibilityRequest,
     config: &ProjectConfig,
-    active_catalog: Option<&str>,
-    catalog_revision: u64,
     node_live: bool,
 ) -> Vec<String> {
     let b = &record.binding;
@@ -364,60 +363,36 @@ pub fn local_reasons(
     if record.revision != request.expected_project_revision {
         reasons.push("project_revision_changed".into());
     }
-    if catalog_revision != request.expected_catalog_revision
-        || active_catalog != Some(b.catalog_digest.as_str())
-    {
-        reasons.push("catalog_activation_changed".into());
-    }
     if request.node_id.is_nil() || !node_live || !b.eligible_node(config, request.node_id) {
         reasons.push("node_not_eligible".into());
     }
     if !b.allowed_environments.contains(&request.environment) {
         reasons.push("environment_denied".into());
     }
-    for (allowed, selected, kind) in [
-        (
-            &b.allowed_agent_profiles,
-            &request.agent_profile,
-            "agent_profile_denied",
-        ),
-        (
-            &b.allowed_intelligence_profiles,
-            &request.intelligence_profile,
-            "intelligence_profile_denied",
-        ),
-        (
-            &b.allowed_execution_profiles,
-            &request.execution_profile,
-            "execution_profile_denied",
-        ),
+    for value in [
+        &request.role,
+        &request.intelligence_profile,
+        &request.execution_profile,
     ] {
-        if !allowed.contains(selected) {
-            reasons.push(kind.into());
+        if label(value).is_err() {
+            reasons.push("launch_reference_invalid".into());
         }
+    }
+    if !hex(&request.snapshot_digest) {
+        reasons.push("snapshot_digest_invalid".into());
     }
     reasons
 }
-#[allow(clippy::too_many_arguments)]
 pub fn decide(
     record: &ProjectRecord,
     request: &EligibilityRequest,
     config: &ProjectConfig,
     observation: &BindingObservation,
-    active_catalog: Option<&str>,
-    catalog_revision: u64,
     node_live: bool,
     now_ms: u64,
 ) -> Eligibility {
     let b = &record.binding;
-    let mut reasons = local_reasons(
-        record,
-        request,
-        config,
-        active_catalog,
-        catalog_revision,
-        node_live,
-    );
+    let mut reasons = local_reasons(record, request, config, node_live);
     if observation.repository_id != b.repository_id
         || observation.graph_workspace_id != b.graph_workspace_id
         || observation.repository_adapter_reference != b.repository_adapter_reference
@@ -449,13 +424,13 @@ pub fn decide(
         reasons,
         frozen_binding: eligible.then(|| FrozenProjectBinding {
             project: record.clone(),
-            catalog_activation_revision: catalog_revision,
+            snapshot_digest: request.snapshot_digest.clone(),
             worker_membership_digest: aq_profiles::digest(config)
                 .expect("bounded membership serializes"),
             binding_observation: observation.clone(),
             node_id: request.node_id,
             environment: request.environment.clone(),
-            agent_profile: request.agent_profile.clone(),
+            role: request.role.clone(),
             intelligence_profile: request.intelligence_profile.clone(),
             execution_profile: request.execution_profile.clone(),
         }),
@@ -521,13 +496,12 @@ pub(crate) mod tests {
     fn request() -> EligibilityRequest {
         EligibilityRequest {
             expected_project_revision: 1,
-            expected_catalog_revision: 2,
             node_id: Uuid::from_u128(4),
             environment: "confined-worktree".into(),
-            agent_profile: "implementer@1".into(),
-            intelligence_profile: "engineering@1".into(),
-            execution_profile: "confined-development@1".into(),
-            intelligence_override: None,
+            role: "developer".into(),
+            intelligence_profile: "standard-medium".into(),
+            execution_profile: "sandbox".into(),
+            snapshot_digest: "c".repeat(64),
         }
     }
     fn observation() -> BindingObservation {
@@ -549,33 +523,12 @@ pub(crate) mod tests {
         let config = ProjectConfig::default();
         let request = request();
         let observation = observation();
-        let decision = decide(
-            &record,
-            &request,
-            &config,
-            &observation,
-            Some(&"a".repeat(64)),
-            2,
-            true,
-            2000,
-        );
+        let decision = decide(&record, &request, &config, &observation, true, 2000);
         assert!(decision.eligible);
         let frozen = decision.frozen_binding.unwrap();
         record.revision = 2;
         record.binding.ceilings.context_bytes = 4096;
-        assert!(
-            !decide(
-                &record,
-                &request,
-                &config,
-                &observation,
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(!decide(&record, &request, &config, &observation, true, 2000).eligible);
         assert_eq!(frozen.project.revision, 1);
         assert_eq!(frozen.project.binding.ceilings.context_bytes, 8192);
     }
@@ -596,8 +549,6 @@ pub(crate) mod tests {
                     &request(),
                     &ProjectConfig::default(),
                     &observation,
-                    Some(&"a".repeat(64)),
-                    2,
                     true,
                     2000
                 )
@@ -611,8 +562,6 @@ pub(crate) mod tests {
                     &request(),
                     &ProjectConfig::default(),
                     &observation,
-                    Some(&"a".repeat(64)),
-                    2,
                     true,
                     2000
                 )
@@ -627,8 +576,6 @@ pub(crate) mod tests {
                 &request(),
                 &ProjectConfig::default(),
                 &o,
-                Some(&"a".repeat(64)),
-                2,
                 true,
                 2000
             )
@@ -641,8 +588,6 @@ pub(crate) mod tests {
                 &request(),
                 &ProjectConfig::default(),
                 &o,
-                Some(&"a".repeat(64)),
-                2,
                 true,
                 31000
             )
@@ -660,62 +605,18 @@ pub(crate) mod tests {
             .worker_groups
             .insert("engineering".into(), vec![Uuid::from_u128(4)]);
         assert!(record.binding.validate(&config).is_ok());
-        assert!(
-            decide(
-                &record,
-                &request(),
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(decide(&record, &request(), &config, &observation(), true, 2000).eligible);
         let mut r = request();
         r.environment = "host-unconfined".into();
-        assert!(
-            !decide(
-                &record,
-                &r,
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        // A launch names its role, level and execution profile by id; the
+        // binding holds no list of them (spec 0014 §5.4).
         let mut r = request();
-        r.agent_profile = "unlisted@1".into();
-        assert!(
-            !decide(
-                &record,
-                &r,
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                2,
-                true,
-                2000
-            )
-            .eligible
-        );
-        assert!(
-            !decide(
-                &record,
-                &request(),
-                &config,
-                &observation(),
-                Some(&"a".repeat(64)),
-                3,
-                true,
-                2000
-            )
-            .eligible
-        );
+        r.role = "not a label".into();
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        let mut r = request();
+        r.snapshot_digest = "short".into();
+        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
     }
     #[test]
     fn enrolled_flag_makes_every_node_eligible_and_validates_without_lists() {

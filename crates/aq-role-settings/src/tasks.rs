@@ -121,6 +121,69 @@ pub fn role_hold(snapshot: Option<&Snapshot>, role: &str) -> Option<RoleHold> {
     })
 }
 
+/// Why a task gets no offer although its role can run: the level it would
+/// run on is not a document of the active snapshot. A level's id is the
+/// router's class (spec 0014 §5.2), so this names the missing level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelHold {
+    pub level: String,
+    /// The task was routed to this level; otherwise it is the project's default.
+    pub routed: bool,
+}
+impl LevelHold {
+    pub const CODE: &'static str = "level_missing";
+    pub fn message(&self) -> String {
+        let level = &self.level;
+        if self.routed {
+            format!(
+                "AQ does not offer this task: it was routed to `{level}`, and no intelligence profile `{level}` exists. Add that intelligence profile in Settings or route the task again."
+            )
+        } else {
+            format!(
+                "AQ does not offer this task: the project's default intelligence profile `{level}` does not exist. Add it in Settings or change the project's default."
+            )
+        }
+    }
+    pub fn shown(&self) -> Value {
+        json!({"code": Self::CODE, "level": self.level, "message": self.message()})
+    }
+}
+/// The level a task runs on: the class it was routed to, otherwise the
+/// project's default intelligence profile; and its hold when the active
+/// snapshot has no such document.
+pub fn level_hold(
+    snapshot: Option<&Snapshot>,
+    routed_class: Option<&str>,
+    default_intelligence: &str,
+) -> Option<LevelHold> {
+    let level = routed_class.unwrap_or(default_intelligence);
+    let exists = snapshot.is_some_and(|snapshot| snapshot.intelligence(level).is_some());
+    (!exists).then(|| LevelHold {
+        level: level.into(),
+        routed: routed_class.is_some(),
+    })
+}
+
+/// An agent may not hand out more than it holds: the operations of the role
+/// a task is filed with that the filing attempt's own role does not list.
+/// Empty when `named` is within `filer`.
+pub fn operations_beyond(filer: &[String], named: &[String]) -> Vec<String> {
+    let mut lacking: Vec<String> = (named.iter())
+        .filter(|operation| !filer.contains(operation))
+        .cloned()
+        .collect();
+    lacking.sort();
+    lacking.dedup();
+    lacking
+}
+/// The refusal for [`operations_beyond`], naming the operations.
+pub fn beyond_message(filer: &str, named: &str, lacking: &[String]) -> String {
+    format!(
+        "Role `{named}` is not within your own role `{filer}`: it may use {}, which you may not. An agent can file a task only for a role whose operations it holds itself.",
+        lacking.join(", ")
+    )
+}
+
 /// A project binding's `default_role`, `default_intelligence` and
 /// `role_notes` against the active snapshot: both defaults exist, every note
 /// is for an existing role, and each note is within `max_note_bytes` (the

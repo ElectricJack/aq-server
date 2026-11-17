@@ -7,6 +7,32 @@ fn holds(list: &[Permission], p: &Permission) -> bool {
     list.iter()
         .any(|q| q.operation == p.operation && q.scope_reference == p.scope_reference)
 }
+/// What the role asks for before any ceiling: each operation it lists, once,
+/// in the role's order, with the scope [`effective_permissions`] gives it.
+pub fn requested_permissions(
+    role: &Role,
+    project_id: Uuid,
+    repository_id: Uuid,
+) -> Vec<Permission> {
+    let mut out: Vec<Permission> = Vec::new();
+    for operation in &role.operations {
+        let scope_reference = if operation.starts_with("source.") {
+            format!("repository:{repository_id}")
+        } else if operation.starts_with("wait.") {
+            "attempt:self".to_string()
+        } else {
+            format!("project:{project_id}")
+        };
+        let permission = Permission {
+            operation: operation.clone(),
+            scope_reference,
+        };
+        if !holds(&out, &permission) {
+            out.push(permission);
+        }
+    }
+    out
+}
 /// Each operation the role lists, scoped to the task's project
 /// (`project:<id>`), for `source.*` to the project's repository
 /// (`repository:<id>`), or for `wait.*` to the attempt itself
@@ -20,22 +46,8 @@ pub fn effective_permissions(
     ceilings: &[Permission],
     caller: &[Permission],
 ) -> Vec<Permission> {
-    let mut out = Vec::new();
-    for operation in &role.operations {
-        let scope_reference = if operation.starts_with("source.") {
-            format!("repository:{repository_id}")
-        } else if operation.starts_with("wait.") {
-            "attempt:self".to_string()
-        } else {
-            format!("project:{project_id}")
-        };
-        let permission = Permission {
-            operation: operation.clone(),
-            scope_reference,
-        };
-        if holds(ceilings, &permission) && holds(caller, &permission) && !holds(&out, &permission) {
-            out.push(permission);
-        }
-    }
-    out
+    requested_permissions(role, project_id, repository_id)
+        .into_iter()
+        .filter(|permission| holds(ceilings, permission) && holds(caller, permission))
+        .collect()
 }
