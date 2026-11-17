@@ -57,48 +57,19 @@ async fn spec(
     {
         return Err(conflict("Manual worker-group placement is not configured"));
     }
-    if let Some(selected) = selected {
-        let choice = intelligence::resolve(s, selected).await?;
-        return Ok(
-            json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"reasoning_configuration_reference":choice["reasoning_configuration_reference"],"options":choice["options"],"harness":choice["harness"],"intelligence_profile":selected,"profile_name":choice["name"],"catalog_digest":choice["catalog_digest"],"intelligence_class":choice["profile_id"]}),
-        );
-    }
-    let artifact: Vec<u8> =
-        sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-            .bind(
-                b["catalog_digest"]
-                    .as_str()
-                    .ok_or_else(|| bad("Project catalog is unavailable"))?,
-            )
-            .fetch_one(&s.pool)
-            .await?;
-    let cat: Value =
-        serde_json::from_slice(&artifact).map_err(|_| bad("Project catalog is invalid"))?;
-    let allowed = b["allowed_intelligence_profiles"]
-        .as_array()
-        .ok_or_else(|| bad("Project models are unavailable"))?;
-    let profiles = cat["catalog"]["intelligence"]
-        .as_array()
-        .ok_or_else(|| bad("Project catalog is invalid"))?;
-    let model = allowed
-        .iter()
-        .filter_map(Value::as_str)
-        .find_map(|id| {
-            profiles
-                .iter()
-                .find(|p| format!("{}@{}", p["id"].as_str().unwrap_or(""), p["version"]) == id)
-                .and_then(|p| {
-                    p["candidates"]
-                        .as_array()
-                        .and_then(|cs| cs.iter().find(|c| c["provider"] == "anthropic"))
-                        .map(|c| (p, c))
-                })
-        })
-        .ok_or_else(|| {
-            conflict("No installed interactive provider is configured for this project")
-        })?;
+    // A launch pins its level and candidate: the level's id is the admission
+    // class, and the snapshot digest says which documents it was read from.
+    let choice = match selected {
+        Some(selected) => intelligence::resolve(s, selected).await?,
+        None => {
+            let level = b["default_intelligence"]
+                .as_str()
+                .unwrap_or(aq_project_policy::DEFAULT_INTELLIGENCE);
+            intelligence::first_of(s, level).await?
+        }
+    };
     Ok(
-        json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":model.1["provider"],"model":model.1["model"],"reasoning_configuration_reference":model.1["reasoning_configuration_reference"],"catalog_digest":b["catalog_digest"],"intelligence_class":model.0["id"],"intelligence_profile":{"profile_id":model.0["id"],"profile_version":model.0["version"],"candidate_id":model.1["id"]}}),
+        json!({"project_name":b["name"],"repository_id":b["repository_id"],"source":source,"provider":choice["provider"],"model":choice["model"],"reasoning":choice["reasoning"],"harness":choice["harness"],"intelligence_profile":{"profile_id":choice["profile_id"],"candidate_id":choice["candidate_id"]},"profile_name":choice["name"],"snapshot_digest":choice["snapshot_digest"],"intelligence_class":choice["profile_id"]}),
     )
 }
 async fn list(
@@ -136,7 +107,7 @@ async fn list(
             projects.push(json!({"id":id,"name":b["name"],"repository_id":b["repository_id"]}));
         }
     }
-    let profiles = intelligence::choices(&s.pool, &s.choices).await?;
+    let profiles = intelligence::choices(&s.pool).await?;
     Ok(Json(
         json!({"launch_profiles":profiles,"sessions":rows,"workers":workers,"slots":slots,"projects":projects,"server_time_ms":now()}),
     ))

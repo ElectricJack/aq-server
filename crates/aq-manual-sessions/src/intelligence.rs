@@ -1,74 +1,75 @@
-//! Resolve owner choices from the current saved catalog, never browser launch settings.
+//! The owner's choices come from the level documents of the active role
+//! snapshot (spec 0014 §5.2), never from browser launch settings.
 use super::*;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
+    /// The level's id.
     pub profile_id: String,
-    pub profile_version: u32,
+    /// The candidate's derived id: `provider:model:reasoning`.
     pub candidate_id: String,
 }
-pub async fn choices(
-    pool: &PgPool,
-    choices: &[aq_profile_settings::ModelChoice],
-) -> Result<Vec<Value>> {
-    let bytes: Option<(String,Vec<u8>)> = sqlx::query_as("SELECT a.digest,a.artifact FROM profile_catalog_registry r JOIN profile_catalog_artifacts a ON a.digest=r.active_digest WHERE r.singleton")
-        .fetch_optional(pool).await?;
-    let Some((catalog_digest, bytes)) = bytes else {
+/// The harness a logged-in session runs a provider's models on.
+fn login_harness(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("codex"),
+        "anthropic" => Some("claude"),
+        _ => None,
+    }
+}
+/// One entry per level and candidate that a logged-in harness can run, in
+/// level and candidate order, each with the reasoning its document states and
+/// the digest of the snapshot it was read from.
+pub async fn choices(pool: &PgPool) -> Result<Vec<Value>> {
+    let active = aq_role_settings::active_snapshot(pool)
+        .await
+        .map_err(|error| match error {
+            aq_role_settings::Error::Database(error) => Error::from(error),
+            _ => bad("The stored roles and profiles are invalid"),
+        })?;
+    let Some(active) = active else {
         return Ok(Vec::new());
     };
-    let artifact: Value =
-        serde_json::from_slice(&bytes).map_err(|_| bad("Profile catalog is invalid"))?;
+    let snapshot = &active.snapshot;
     let mut out = Vec::new();
-    for profile in artifact["catalog"]["intelligence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        if profile["automatic_routing"] == true {
-            continue;
-        }
-        for c in profile["candidates"].as_array().into_iter().flatten() {
-            let harness = match c["provider"].as_str() {
-                Some("openai") => "codex",
-                Some("anthropic") => "claude",
-                _ => continue,
+    for level in snapshot.intelligence_profiles() {
+        for candidate in &level.candidates {
+            let Some(harness) = login_harness(&candidate.provider) else {
+                continue;
             };
-            if !c["harnesses"]
-                .as_array()
-                .is_some_and(|hs| hs.iter().any(|h| h == harness))
-            {
+            if !candidate.harnesses.iter().any(|h| h == harness) {
                 continue;
             }
-            let named = |key: &str| c[key].as_str().unwrap_or_default();
-            let names = (
-                named("provider"),
-                named("model"),
-                named("reasoning_configuration_reference"),
-            );
-            let Some(m) = aq_profile_settings::choice_for(choices, names, harness) else {
-                continue;
+            let name = if level.name.trim().is_empty() {
+                &level.id
+            } else {
+                &level.name
             };
-            out.push(json!({"catalog_digest":catalog_digest,"profile_id":profile["id"],"profile_version":profile["version"],"candidate_id":c["id"],"name":profile["name"].as_str().unwrap_or(profile["id"].as_str().unwrap_or("Profile")),"provider":m.provider,"model":m.model,"reasoning":m.reasoning,"reasoning_configuration_reference":m.reasoning_configuration_reference,"options":m.options,"harness":harness}));
+            out.push(json!({"snapshot_digest":snapshot.digest(),"profile_id":level.id,"candidate_id":candidate.derived_id(),"name":name,"provider":candidate.provider,"model":candidate.model,"reasoning":candidate.reasoning,"harness":harness}));
         }
     }
     Ok(out)
 }
 pub(super) async fn resolve(s: &Service, selected: &Selection) -> Result<Value> {
-    if selected.profile_id.len() > 96
-        || selected.candidate_id.len() > 512
-        || selected.profile_version == 0
-    {
+    if selected.profile_id.len() > 96 || selected.candidate_id.len() > 512 {
         return Err(bad("Invalid intelligence profile choice"));
     }
-    choices(&s.pool, &s.choices)
+    choices(&s.pool)
         .await?
         .into_iter()
         .find(|c| {
-            c["profile_id"] == selected.profile_id
-                && c["profile_version"] == selected.profile_version
-                && c["candidate_id"] == selected.candidate_id
+            c["profile_id"] == selected.profile_id && c["candidate_id"] == selected.candidate_id
         })
         .ok_or_else(|| {
             conflict("This intelligence profile changed or is unavailable; select it again")
         })
+}
+/// The first choice of the level `id`: what a launch without a selection
+/// runs, on the project's default level.
+pub(super) async fn first_of(s: &Service, id: &str) -> Result<Value> {
+    let found = choices(&s.pool).await?;
+    found
+        .into_iter()
+        .find(|c| c["profile_id"] == id)
+        .ok_or_else(|| conflict("No installed interactive provider is configured for this project"))
 }

@@ -1453,7 +1453,7 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:76fc936670d82bc3febf286bb28667c06740261834731d3df60a3903667f0b16",
+          "params_digest": "sha256:933b1ef15d3d8b2b7109ae2271d2ea40c4977ddb4ab57d9b5c14ddeb1d018bcb",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -1463,10 +1463,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "expected_catalog_revision": {
-                "description": "The Intelligence catalog revision as last read",
-                "type": "string"
               },
               "expected_revision": {
                 "description": "The settings revision as last read",
@@ -1500,7 +1496,6 @@
             "required": [
               "operation_id",
               "expected_revision",
-              "expected_catalog_revision",
               "overrides"
             ],
             "type": "object"
@@ -5120,27 +5115,25 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:f15a7f14a66085f2aa4261dbaefc88373db03d53d19b2239587f95a6d686ad4a",
+          "params_digest": "sha256:60858c3e502a763fc6a806a20f16217fdfb311e114a59a846c9f4acac1b39327",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
               "intelligence_profile": {
                 "additionalProperties": false,
+                "description": "A level and one of its candidates",
                 "properties": {
                   "candidate_id": {
+                    "description": "provider:model:reasoning, as the list shows it",
                     "type": "string"
                   },
                   "profile_id": {
+                    "description": "The level document's id",
                     "type": "string"
-                  },
-                  "profile_version": {
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
                   "profile_id",
-                  "profile_version",
                   "candidate_id"
                 ],
                 "type": "object"
@@ -5550,7 +5543,7 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:afb777c7bd5e58435fb203c44ed1c90170cd05b025b9c1bf961ae0eb8b168343",
+          "params_digest": "sha256:171f13d488d6990896187b64603e9acd2667477398496a2775369c5018b91486",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
@@ -5568,21 +5561,19 @@
               },
               "intelligence_profile": {
                 "additionalProperties": false,
+                "description": "A level and one of its candidates",
                 "properties": {
                   "candidate_id": {
+                    "description": "provider:model:reasoning, as the list shows it",
                     "type": "string"
                   },
                   "profile_id": {
+                    "description": "The level document's id",
                     "type": "string"
-                  },
-                  "profile_version": {
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
                   "profile_id",
-                  "profile_version",
                   "candidate_id"
                 ],
                 "type": "object"

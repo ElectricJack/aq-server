@@ -132,8 +132,7 @@ async fn poll(
             {
                 continue;
             }
-            let cell =
-                aq_swarm_settings::admission::manual_cell(&mut tx, &x.spec, x.project_id).await?;
+            let cell = aq_swarm_settings::admission::pinned_cell(&x.spec);
             if let Some(reason) =
                 aq_swarm_settings::admission::check(&mut tx, cell.as_ref()).await?
             {

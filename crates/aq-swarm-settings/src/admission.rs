@@ -40,125 +40,54 @@ pub async fn available(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key)?.as_str()
 }
-/// Resolve the selected profile identity from its pinned catalog. Profile IDs
-/// remain stable across revisions. The automatic router is its own class;
-/// neither its model choice nor capacity changes the task's routing class.
-pub fn classify(catalog: &Value, reference: Option<&str>, choice: &Value) -> Option<Cell> {
-    let provider = text(choice, "provider")?;
-    let profiles = catalog.get("catalog")?.get("intelligence")?.as_array()?;
-    let profile = profiles.iter().find(|p| {
-        reference.is_some_and(|r| r == format!("{}@{}", text(p, "id").unwrap_or(""), p["version"]))
-    })?;
-    let matches = profile["candidates"].as_array()?.iter().any(|c| {
-        text(c, "provider") == Some(provider)
-            && text(c, "model") == text(choice, "model")
-            && choice
-                .get("reasoning_configuration_reference")
-                .is_none_or(|r| c.get("reasoning_configuration_reference") == Some(r))
-            && choice
-                .get("harness")
-                .is_none_or(|h| c["harnesses"].as_array().is_some_and(|hs| hs.contains(h)))
-    });
-    matches.then(|| Cell {
-        provider: provider.into(),
-        intelligence_class: text(profile, "id").unwrap().into(),
+/// The class of a stored choice that pins its own level: a manual session's
+/// spec (`intelligence_class`) or a supervisor's saved profile (`profile_id`).
+/// A level's id is the class (spec 0014 §5.2), so nothing is looked up.
+pub fn pinned_cell(choice: &Value) -> Option<Cell> {
+    let class = text(choice, "intelligence_class").or_else(|| text(choice, "profile_id"))?;
+    Some(Cell {
+        provider: text(choice, "provider")?.into(),
+        intelligence_class: class.into(),
     })
-}
-async fn catalog_bytes(
-    conn: &mut PgConnection,
-    digest: Option<&str>,
-) -> Result<Option<Value>, sqlx::Error> {
-    let bytes:Option<Vec<u8>> = match digest {
-        Some(d) => sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1").bind(d).fetch_optional(&mut *conn).await?,
-        None => sqlx::query_scalar("SELECT a.artifact FROM profile_catalog_registry r JOIN profile_catalog_artifacts a ON a.digest=r.active_digest WHERE r.singleton").fetch_optional(&mut *conn).await?,
-    };
-    Ok(bytes.and_then(|b| serde_json::from_slice(&b).ok()))
-}
-pub async fn resolve(
-    conn: &mut PgConnection,
-    digest: Option<&str>,
-    reference: Option<&str>,
-    choice: &Value,
-) -> Result<Option<Cell>, sqlx::Error> {
-    Ok(catalog_bytes(conn, digest)
-        .await?
-        .and_then(|c| classify(&c, reference, choice)))
-}
-/// Manual specs pin their resolved class/catalog when created. Historical specs
-/// are resolved conservatively from their project catalog and saved selection.
-pub async fn manual_cell(
-    conn: &mut PgConnection,
-    spec: &Value,
-    project: Uuid,
-) -> Result<Option<Cell>, sqlx::Error> {
-    if let (Some(provider), Some(class)) =
-        (text(spec, "provider"), text(spec, "intelligence_class"))
-    {
-        return Ok(Some(Cell {
-            provider: provider.into(),
-            intelligence_class: class.into(),
-        }));
-    }
-    let digest: Option<String> = sqlx::query_scalar(
-        "SELECT binding->>'catalog_digest' FROM project_execution_bindings WHERE project_id=$1",
-    )
-    .bind(project)
-    .fetch_optional(&mut *conn)
-    .await?
-    .flatten();
-    let selected = &spec["intelligence_profile"];
-    let reference =
-        text(selected, "profile_id").map(|id| format!("{}@{}", id, selected["profile_version"]));
-    resolve(conn, digest.as_deref(), reference.as_deref(), spec).await
 }
 
 async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::Error> {
-    let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,catalog_digest}' AS catalog, COALESCE(d.decision#>>'{inputs,intelligence_override}', d.decision#>>'{inputs,project,intelligence_profile}') AS profile, s.selection->'choice' AS choice, jsonb_typeof(d.decision#>'{inputs,launches}')='array' AS launched FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
+    let rows=sqlx::query("SELECT COALESCE(d.decision#>>'{inputs,intelligence_override}', d.decision#>>'{inputs,project,intelligence_profile}') AS profile, s.selection->'choice' AS choice, jsonb_typeof(d.decision#>'{inputs,launches}')='array' AS launched FROM execution_attempts a LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
-    let mut catalogs = BTreeMap::new();
     for row in rows {
-        let digest: Option<String> = row.get("catalog");
         let profile: Option<String> = row.get("profile");
         let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
-        // A launch from a role snapshot (spec 0014): the level's id is the
-        // intelligence class, and the choice names the provider.
+        // A launch from a role snapshot names its level by id, and the choice
+        // names the provider. An attempt recorded before roles and profiles
+        // has no launches; it is counted, unclassified, and nothing of its
+        // old catalog is read.
         let launched: Option<bool> = row.get("launched");
-        if let (Some(true), Some(class), Some(provider)) =
-            (launched, profile.as_deref(), text(&choice, "provider"))
-        {
-            let cell = Cell {
+        let provider = text(&choice, "provider");
+        let cell = match (launched, profile, provider) {
+            (Some(true), Some(class), Some(provider)) => Cell {
                 provider: provider.into(),
-                intelligence_class: class.into(),
-            };
-            out.push((cell, false));
-            continue;
-        }
-        let key = digest.clone().unwrap_or_default();
-        if !catalogs.contains_key(&key) {
-            catalogs.insert(key.clone(), catalog_bytes(conn, digest.as_deref()).await?);
-        }
-        let cell = catalogs[&key]
-            .as_ref()
-            .and_then(|c| classify(c, profile.as_deref(), &choice));
-        out.push((
-            cell.unwrap_or_else(|| Cell {
-                provider: text(&choice, "provider").unwrap_or("unknown").into(),
+                intelligence_class: class,
+            },
+            _ => Cell {
+                provider: provider.unwrap_or("unknown").into(),
                 intelligence_class: "__unclassified".into(),
-            }),
-            false,
-        ));
+            },
+        };
+        out.push((cell, false));
     }
-    let manual:Vec<(Uuid,Value,String,bool)>=sqlx::query_as("SELECT project_id,spec,status,desired_running FROM manual_agent_sessions WHERE stopped_at_ms IS NULL").fetch_all(&mut *conn).await?;
-    for (project, spec, status, desired) in manual {
+    let manual: Vec<(Value, String, bool)> = sqlx::query_as(
+        "SELECT spec,status,desired_running FROM manual_agent_sessions WHERE stopped_at_ms IS NULL",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    for (spec, status, desired) in manual {
         if status == "pending" && !desired {
             continue;
         }
-        let cell = manual_cell(conn, &spec, project)
-            .await?
-            .unwrap_or_else(|| Cell {
-                provider: text(&spec, "provider").unwrap_or("unknown").into(),
-                intelligence_class: "__unclassified".into(),
-            });
+        let cell = pinned_cell(&spec).unwrap_or_else(|| Cell {
+            provider: text(&spec, "provider").unwrap_or("unknown").into(),
+            intelligence_class: "__unclassified".into(),
+        });
         out.push((cell, status == "pending"));
     }
     // Central supervisor generations reserve before dispatch and retain the
@@ -267,7 +196,7 @@ pub async fn check(
         settings.limits.cell_limits.iter().any(|c| {
             c.provider == cell.provider && c.intelligence_class == cell.intelligence_class
         });
-    // Legacy complete matrices still refuse catalog drift. Sparse independent
+    // A complete matrix still refuses a class it does not name. Sparse independent
     // controls leave every other class unlimited.
     if limit.is_none() && settings.normal.is_some() && !explicit_cell {
         return Ok(Some(UNCLASSIFIED));

@@ -9,22 +9,16 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct Service {
     pool: PgPool,
     owner: Auth,
-    choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
 }
 impl Service {
-    pub fn new(pool: PgPool, owner: Auth, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
-        Self {
-            pool,
-            owner,
-            choices: Arc::new(choices),
-        }
+    pub fn new(pool: PgPool, owner: Auth) -> Self {
+        Self { pool, owner }
     }
     pub fn routes<S: Clone + Send + Sync + 'static>(&self) -> Router<S> {
         Router::new()
@@ -54,7 +48,7 @@ async fn list(State(s): State<Service>, headers: HeaderMap) -> Result<Json<Value
     (s.owner)(headers).await?;
     let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',c.conversation_id,'actor_id',c.actor_id,'project_id',i.project_id,'label',COALESCE(p.label,'Global supervisor'),'enabled',c.enabled,'revision',c.revision,'profile',c.profile,'phase',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'unavailable' WHEN NOT c.enabled AND r.phase NOT IN ('working','stopping','uncertain') THEN 'stopped' ELSE r.phase END,'stage',CASE WHEN r.observed_at_ms IS NULL OR r.observed_at_ms<$1 THEN 'Supervisor service is unavailable' ELSE r.stage END,'observed_at_ms',r.observed_at_ms,'generation',r.generation,'session_id',r.session_id,'last_error',r.last_error) FROM supervisor_controls c JOIN supervisor_conversation_ids i USING(conversation_id) LEFT JOIN project_supervisor_conversations p USING(conversation_id) LEFT JOIN supervisor_service_reports r USING(conversation_id) ORDER BY i.project_id IS NOT NULL,p.label,c.conversation_id")
         .bind(chrono::Utc::now().timestamp_millis()-15000).fetch_all(&s.pool).await?;
-    let profiles = aq_manual_sessions::intelligence::choices(&s.pool, &s.choices)
+    let profiles = aq_manual_sessions::intelligence::choices(&s.pool)
         .await?
         .into_iter()
         .filter(|p| {
@@ -121,14 +115,13 @@ async fn control(
         ));
     }
     let profile = if let Some(selected) = &v.intelligence_profile {
-        aq_manual_sessions::intelligence::choices(&s.pool, &s.choices)
+        aq_manual_sessions::intelligence::choices(&s.pool)
             .await?
             .into_iter()
             .find(|p| {
                 p["harness"] == "codex"
                     && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
                     && p["profile_id"] == selected.profile_id
-                    && p["profile_version"] == selected.profile_version
                     && p["candidate_id"] == selected.candidate_id
             })
             .ok_or_else(|| {

@@ -1,5 +1,5 @@
 use crate::*;
-use aq_profiles::ValidatedCatalog;
+use aq_profiles::roles::Snapshot as RoleSnapshot;
 use sqlx::{PgConnection, PgPool, Row};
 
 /// The same singleton lock must cover the scheduler's occupancy check and reservation.
@@ -31,61 +31,46 @@ async fn settings(conn: &mut PgConnection, locked: bool) -> Result<Settings> {
         reduced: decode("reduced")?,
     })
 }
-/// Named routing profiles are the authoritative classes; model names never define tiers.
-pub async fn catalog(conn: &mut PgConnection) -> Result<Catalog> {
-    let row =
-        sqlx::query("SELECT revision,active_digest FROM profile_catalog_registry WHERE singleton")
-            .fetch_one(&mut *conn)
-            .await?;
+/// The classes are the level documents of the active role snapshot (spec 0014
+/// §5.2): one cell per provider a level's candidates name. Model names never
+/// define a class.
+pub async fn levels(conn: &mut PgConnection) -> Result<Vec<LevelCell>> {
+    let bytes: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT s.snapshot FROM role_settings r JOIN role_snapshots s ON s.digest=r.active_digest WHERE r.singleton",
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(bytes) = bytes else {
+        return Ok(Vec::new());
+    };
+    let snapshot = RoleSnapshot::from_stored_bytes(&bytes).map_err(|_| Error::Internal)?;
     let mut cells = std::collections::BTreeMap::new();
-    if let Some(digest) = row.get::<Option<String>, _>("active_digest") {
-        let bytes: Vec<u8> =
-            sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts WHERE digest=$1")
-                .bind(&digest)
-                .fetch_one(&mut *conn)
-                .await?;
-        let catalog = ValidatedCatalog::from_artifact(&bytes).map_err(|_| Error::Internal)?;
-        if catalog.digest() != digest {
-            return Err(Error::Internal);
-        }
-        for profile in &catalog.artifact().catalog.intelligence {
-            for candidate in &profile.candidates {
-                // This is the established non-runnable named-row placeholder.
-                if candidate.provider == "configuration-required" {
-                    continue;
-                }
-                cells
-                    .entry((candidate.provider.clone(), profile.id.clone()))
-                    .or_insert_with(|| CatalogCell {
-                        provider: candidate.provider.clone(),
-                        intelligence_class: profile.id.clone(),
-                        display_name: if profile.automatic_routing == Some(true) {
-                            "Automatic routing".into()
-                        } else {
-                            profile
-                                .name
-                                .clone()
-                                .filter(|n| !n.trim().is_empty())
-                                .unwrap_or_else(|| profile.id.clone())
-                        },
-                    });
-            }
+    for level in snapshot.intelligence_profiles() {
+        for candidate in &level.candidates {
+            cells
+                .entry((candidate.provider.clone(), level.id.clone()))
+                .or_insert_with(|| LevelCell {
+                    provider: candidate.provider.clone(),
+                    intelligence_class: level.id.clone(),
+                    display_name: if level.name.trim().is_empty() {
+                        level.id.clone()
+                    } else {
+                        level.name.clone()
+                    },
+                });
         }
     }
-    Ok(Catalog {
-        revision: row.get::<i64, _>("revision").to_string(),
-        cells: cells.into_values().collect(),
-    })
+    Ok(cells.into_values().collect())
 }
 async fn snapshot(
     conn: &mut PgConnection,
     settings: Settings,
-    catalog: Catalog,
+    levels: Vec<LevelCell>,
 ) -> Result<Snapshot> {
     let counts = crate::admission::counts(conn).await?;
     let mut unclassified = std::collections::BTreeMap::<String, (u64, u64)>::new();
     for count in &counts {
-        if !catalog.cells.iter().any(|c| {
+        if !levels.iter().any(|c| {
             c.provider == count.provider && c.intelligence_class == count.intelligence_class
         }) {
             let totals = unclassified.entry(count.provider.clone()).or_default();
@@ -93,8 +78,7 @@ async fn snapshot(
             totals.1 += u64::from(count.waiting);
         }
     }
-    let cells = catalog
-        .cells
+    let cells = levels
         .into_iter()
         .map(|c| Cell {
             normal_limit: cell_limit(
@@ -124,12 +108,11 @@ async fn snapshot(
                     })
                     .map_or(0, |n| u64::from(n.waiting)),
             ),
-            catalog: c,
+            level: c,
         })
         .collect();
     Ok(Snapshot {
         settings,
-        catalog_revision: catalog.revision,
         cells,
         unclassified: unclassified
             .into_iter()
@@ -147,15 +130,15 @@ pub async fn read(pool: &PgPool) -> Result<Snapshot> {
         .execute(&mut *tx)
         .await?;
     let settings = settings(&mut tx, false).await?;
-    let catalog = catalog(&mut tx).await?;
-    let snapshot = snapshot(&mut tx, settings, catalog).await?;
+    let levels = levels(&mut tx).await?;
+    let snapshot = snapshot(&mut tx, settings, levels).await?;
     tx.commit().await?;
     Ok(snapshot)
 }
 pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Result<Snapshot> {
     let mut tx = pool.begin().await?;
-    // Block catalog publication until validation and the complete matrix commit together.
-    sqlx::query("SELECT singleton FROM profile_catalog_registry WHERE singleton FOR SHARE")
+    // Block a level save until validation and the complete matrix commit together.
+    sqlx::query("SELECT singleton FROM role_settings WHERE singleton FOR SHARE")
         .execute(&mut *tx)
         .await?;
     let mut settings = lock(&mut tx).await?;
@@ -163,17 +146,13 @@ pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Res
     if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
         return Ok(receipt);
     }
-    let catalog = catalog(&mut tx).await?;
-    if settings.revision != request.expected_revision
-        || catalog.revision != request.expected_catalog_revision
-    {
-        return Err(conflict(
-            "Swarm settings or routing catalog changed; reload before saving",
-        ));
+    let levels = levels(&mut tx).await?;
+    if settings.revision != request.expected_revision {
+        return Err(conflict("Swarm settings changed; reload before saving"));
     }
-    validate(&request.normal, &catalog)?;
+    validate(&request.normal, &levels)?;
     if let Some(reduced) = &request.reduced {
-        validate(reduced, &catalog)?;
+        validate(reduced, &levels)?;
         if reduced.iter().any(|c| {
             Some(c.limit) > cell_limit(Some(&request.normal), &c.provider, &c.intelligence_class)
         }) {
@@ -188,7 +167,7 @@ pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Res
     settings.normal = Some(request.normal);
     settings.reduced = request.reduced;
     persist(&mut tx, &mut settings).await?;
-    let snapshot = snapshot(&mut tx, settings, catalog).await?;
+    let snapshot = snapshot(&mut tx, settings, levels).await?;
     record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
     tx.commit().await?;
     Ok(snapshot)
@@ -200,7 +179,7 @@ pub async fn set_limits(
     request: LimitsRequest,
 ) -> Result<Snapshot> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT singleton FROM profile_catalog_registry WHERE singleton FOR SHARE")
+    sqlx::query("SELECT singleton FROM role_settings WHERE singleton FOR SHARE")
         .execute(&mut *tx)
         .await?;
     let mut settings = lock(&mut tx).await?;
@@ -208,23 +187,15 @@ pub async fn set_limits(
     if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
         return Ok(receipt);
     }
-    let catalog = catalog(&mut tx).await?;
-    if settings.revision != request.expected_revision
-        || catalog.revision != request.expected_catalog_revision
-    {
-        return Err(conflict(
-            "Swarm settings or routing catalog changed; reload before saving",
-        ));
+    let levels = levels(&mut tx).await?;
+    if settings.revision != request.expected_revision {
+        return Err(conflict("Swarm settings changed; reload before saving"));
     }
     if request.provider.is_none() && request.cell.is_none() {
         return Err(invalid("Select a provider or intelligence class limit"));
     }
     if let Some(provider) = request.provider {
-        if !catalog
-            .cells
-            .iter()
-            .any(|c| c.provider == provider.provider)
-        {
+        if !levels.iter().any(|c| c.provider == provider.provider) {
             return Err(invalid("Select a supported provider"));
         }
         settings
@@ -238,8 +209,7 @@ pub async fn set_limits(
             .sort_by(|a, b| a.provider.cmp(&b.provider));
     }
     if let Some(cell) = request.cell {
-        if !catalog
-            .cells
+        if !levels
             .iter()
             .any(|c| c.provider == cell.provider && c.intelligence_class == cell.intelligence_class)
         {
@@ -256,14 +226,14 @@ pub async fn set_limits(
         });
     }
     persist(&mut tx, &mut settings).await?;
-    let snapshot = snapshot(&mut tx, settings, catalog).await?;
+    let snapshot = snapshot(&mut tx, settings, levels).await?;
     record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
     tx.commit().await?;
     Ok(snapshot)
 }
 pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) -> Result<Snapshot> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT singleton FROM profile_catalog_registry WHERE singleton FOR SHARE")
+    sqlx::query("SELECT singleton FROM role_settings WHERE singleton FOR SHARE")
         .execute(&mut *tx)
         .await?;
     let mut settings = lock(&mut tx).await?;
@@ -276,17 +246,17 @@ pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) ->
             "Swarm settings changed; reload before switching modes",
         ));
     }
-    let catalog = catalog(&mut tx).await?;
+    let levels = levels(&mut tx).await?;
     if request.active_mode == Mode::Reduced {
         let reduced = settings
             .reduced
             .as_deref()
             .ok_or_else(|| invalid("Configure Reduced usage before enabling it"))?;
-        validate(reduced, &catalog)?;
+        validate(reduced, &levels)?;
     }
     settings.active_mode = request.active_mode;
     persist(&mut tx, &mut settings).await?;
-    let snapshot = snapshot(&mut tx, settings, catalog).await?;
+    let snapshot = snapshot(&mut tx, settings, levels).await?;
     record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
     tx.commit().await?;
     Ok(snapshot)

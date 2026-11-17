@@ -44,7 +44,6 @@ pub(super) fn service(state: &AppState) -> Service {
         state.store.manual_runtime.clone(),
     )
     .login_materials(logins::delivery(state.clone()))
-    .intelligence_choices(crate::profile_catalog::settings::choices(state))
     .browser_origin(
         config.server.public_origin.clone(),
         matches!(config.auth, crate::config::AuthConfig::Dev { .. }),
@@ -52,12 +51,7 @@ pub(super) fn service(state: &AppState) -> Service {
 }
 
 pub(super) fn supervisor_controls(state: &AppState) -> axum::Router<AppState> {
-    aq_supervisor_control::Service::new(
-        state.store.pool.clone(),
-        service(state).owner,
-        crate::profile_catalog::settings::choices(state),
-    )
-    .routes()
+    aq_supervisor_control::Service::new(state.store.pool.clone(), service(state).owner).routes()
 }
 
 pub(super) fn supervisor_nests(state: &AppState) -> axum::Router<AppState> {

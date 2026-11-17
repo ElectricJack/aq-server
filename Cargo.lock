@@ -402,7 +402,8 @@ version = "0.1.0"
 dependencies = [
  "aq-human-http",
  "aq-machine-control",
- "aq-profile-settings",
+ "aq-project-policy",
+ "aq-role-settings",
  "aq-swarm-settings",
  "axum",
  "chrono",
@@ -958,7 +959,6 @@ version = "0.1.0"
 dependencies = [
  "aq-central-authority",
  "aq-manual-sessions",
- "aq-profile-settings",
  "async-trait",
  "axum",
  "chrono",

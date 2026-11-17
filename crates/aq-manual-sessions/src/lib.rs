@@ -79,7 +79,6 @@ pub struct Service {
     runtime: Runtime,
     host_mode: bool,
     origin: Option<(String, bool)>,
-    choices: Arc<Vec<aq_profile_settings::ModelChoice>>,
     login_materials: Option<logins::Materials>,
 }
 impl Service {
@@ -98,16 +97,11 @@ impl Service {
             runtime,
             host_mode: false,
             origin: None,
-            choices: Arc::new(Vec::new()),
             login_materials: None,
         }
     }
     pub fn login_materials(mut self, material: logins::Materials) -> Self {
         self.login_materials = Some(material);
-        self
-    }
-    pub fn intelligence_choices(mut self, choices: Vec<aq_profile_settings::ModelChoice>) -> Self {
-        self.choices = Arc::new(choices);
         self
     }
     pub fn browser_origin(mut self, origin: String, development: bool) -> Self {

@@ -975,7 +975,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Turn a supervisor on or off and choose the profile it runs on",
             "/api/supervisors/{id}/control",
             &[("id", "conversation_id")],
-            r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["conversation_id","operation_id","expected_revision","enabled"],"properties":{"conversation_id":{"type":"string","format":"uuid","description":"The supervisor's conversation, as supervisor.list shows it"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","candidate_id"],"description":"A level and one of its candidates","properties":{"profile_id":{"type":"string","description":"The level document's id"},"candidate_id":{"type":"string","description":"provider:model:reasoning, as the list shows it"}}}}}"#,
         ),
         owner_post(
             "intelligence.set",
@@ -999,7 +999,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Start a session by hand on a worker for a project",
             "/api/manual-agents/workers/{node}/projects/{project}",
             &[("node", "node_id"), ("project", "project_id")],
-            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Becomes the session's ID; repeat it to retry safely"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","profile_version","candidate_id"],"properties":{"profile_id":{"type":"string"},"profile_version":{"type":"integer","minimum":0},"candidate_id":{"type":"string"}}}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["node_id","project_id","operation_id"],"properties":{"node_id":{"type":"string","format":"uuid"},"project_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Becomes the session's ID; repeat it to retry safely"},"intelligence_profile":{"type":"object","additionalProperties":false,"required":["profile_id","candidate_id"],"description":"A level and one of its candidates","properties":{"profile_id":{"type":"string","description":"The level document's id"},"candidate_id":{"type":"string","description":"provider:model:reasoning, as the list shows it"}}}}}"#,
         ),
         owner_post(
             "session.manual.stop",
@@ -1193,7 +1193,7 @@ pub fn catalog() -> Vec<CommandSpec> {
             "Choose the Intelligence profile internal work runs on, by default and per purpose",
             "/api/settings/internal-work",
             &[],
-            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","expected_catalog_revision","overrides"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^[0-9]{1,18}$","description":"The settings revision as last read"},"expected_catalog_revision":{"type":"string","description":"The Intelligence catalog revision as last read"},"default_profile_id":{"type":["string","null"],"maxLength":128},"overrides":{"type":"object","description":"Purpose to profile ID","propertyNames":{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]},"additionalProperties":{"type":"string","minLength":1,"maxLength":128}}}}"#,
+            r#"{"type":"object","additionalProperties":false,"required":["operation_id","expected_revision","overrides"],"properties":{"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"expected_revision":{"type":"string","pattern":"^[0-9]{1,18}$","description":"The settings revision as last read"},"default_profile_id":{"type":["string","null"],"maxLength":128},"overrides":{"type":"object","description":"Purpose to profile ID","propertyNames":{"enum":["routing_classification","playbook_compilation","playbook_call","decision_revision","result_processing"]},"additionalProperties":{"type":"string","minLength":1,"maxLength":128}}}}"#,
         ),
         read(
             "internal.settings.operation.show",
