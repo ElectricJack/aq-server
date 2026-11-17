@@ -32,10 +32,6 @@ ARG AQ_SOURCE_REVISION=unknown
 # Cargo profile: release images use `release` (ThinLTO). CI-only images pass
 # --build-arg CARGO_PROFILE=ci-image (no LTO, low optimization; Cargo.toml).
 ARG CARGO_PROFILE=release
-# Epic flags compiled into this image: a comma-separated list of aq-server
-# cargo features, for example --build-arg AQ_FEATURES=any-model. Empty builds
-# none. Flags are compile time only and are removed when their epic is confirmed.
-ARG AQ_FEATURES=""
 ENV AQ_SOURCE_REVISION=${AQ_SOURCE_REVISION}
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
@@ -54,7 +50,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/build/target \
     case "$CARGO_PROFILE" in dev|test|bench) echo "unsupported CARGO_PROFILE=$CARGO_PROFILE" >&2; exit 1;; esac \
     && find crates vendor protocol -type f -exec touch {} + \
-    && AQ_IMAGE_STATE_FORMAT="${AQ_STATE_FORMAT}" cargo build --locked --profile "$CARGO_PROFILE" -p aq-server --bin aq-server --features "$AQ_FEATURES" \
+    && AQ_IMAGE_STATE_FORMAT="${AQ_STATE_FORMAT}" cargo build --locked --profile "$CARGO_PROFILE" -p aq-server --bin aq-server \
     && mkdir -p /out \
     && cp "target/$CARGO_PROFILE/aq-server" /out/
 
