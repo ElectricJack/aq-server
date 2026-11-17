@@ -12,6 +12,7 @@ mod internal_work_settings;
 mod lifecycle_artifacts;
 mod profile_catalog;
 mod profile_inspection;
+mod profile_swarm;
 mod profiled_artifact_phases;
 mod profiled_artifacts;
 mod profiled_authority;

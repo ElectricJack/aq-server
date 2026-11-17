@@ -367,6 +367,43 @@ async fn a_running_routed_attempt_occupies_the_cell_of_its_level() {
     assert_eq!(unrouted, None, "a task on another level still is");
 }
 
+/// An attempt recorded before roles and profiles has no launches in its decision. It still
+/// holds capacity: it is counted, unclassified, and nothing of an old catalog is read.
+#[tokio::test]
+async fn an_attempt_recorded_before_roles_is_counted_unclassified() {
+    use aq_swarm_settings::admission::counts;
+    let mut c = setup().await;
+    on_the_router(&mut c).await;
+    routing(&c, true).await;
+    let pool = c.env.env.pool.clone();
+    route(&c, "standard-high", &[]);
+    assert_eq!(offered_on(&c).await, LEVEL);
+    let mut tx = pool.begin().await.unwrap();
+    let running = |all: Vec<aq_swarm_settings::admission::Count>| -> Vec<(String, u32)> {
+        (all.into_iter().filter(|n| n.running > 0))
+            .map(|n| (n.intelligence_class, n.running))
+            .collect()
+    };
+    assert_eq!(
+        running(counts(&mut tx).await.unwrap()),
+        [("standard-high".to_owned(), 1)]
+    );
+    // The decision as an attempt from before roles recorded it. A decision
+    // is sealed, so the guard is off for this rolled-back transaction only.
+    sqlx::raw_sql(
+        "ALTER TABLE intelligence_decisions DISABLE TRIGGER USER;
+         UPDATE intelligence_decisions SET decision = decision #- '{inputs,launches}'",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        running(counts(&mut tx).await.unwrap()),
+        [("__unclassified".to_owned(), 1)]
+    );
+    tx.rollback().await.unwrap();
+}
+
 /// Review finding 3: a routed first attempt this node cannot serve (its route allows only a
 /// harness the node lacks) is skipped for the poll; the project's next ready task is offered
 /// instead of the poll failing.

@@ -1,4 +1,4 @@
-use super::profile_catalog::{call, setup};
+use super::profile_swarm::{call, setup};
 use aq_internal_work::{Purpose, settings};
 use axum::{Router, http::StatusCode};
 use serde_json::{Value, json};

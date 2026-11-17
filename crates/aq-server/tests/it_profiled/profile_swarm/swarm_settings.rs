@@ -2,19 +2,37 @@ use super::*;
 const SWARM: &str = "/api/settings/swarm";
 const MODE: &str = "/api/settings/swarm/mode";
 
+/// The shipped levels are active: one cell per level, on their one provider.
 async fn installed() -> (TestDb, Router, sqlx::PgPool, Value) {
     let (db, app, pool) = setup().await;
-    let seed = seed();
-    let mut catalog = seed.artifact().catalog.clone();
-    catalog.intelligence[0].candidates[0].provider = "anthropic".into();
-    catalog.intelligence[0].candidates[0].model = "test-swarm-model".into();
-    let catalog = validate(catalog, seed.artifact().instructions.clone()).unwrap();
-    let (status, body) = call(&app, ACTIVATE, Some(activation(&catalog, 0)), true).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
     let (status, snapshot) = call(&app, SWARM, None, false).await;
     assert_eq!(status, StatusCode::OK, "{snapshot}");
     assert!(!snapshot["cells"].as_array().unwrap().is_empty());
     (db, app, pool, snapshot)
+}
+/// Save a level document as the owner would in Settings.
+async fn save_level(pool: &sqlx::PgPool, id: &str, name: &str, rows: &[(&str, &str, &str)]) {
+    let actor: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let rows: String = (rows.iter())
+        .map(|(provider, model, harness)| {
+            format!("| {provider} | {model} | default | {harness} |\n")
+        })
+        .collect();
+    let markdown = format!(
+        "---\nid: {id}\nname: {name}\ndescription: A test level.\n---\n\
+         ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
+    );
+    crate::common::roles::save(
+        pool,
+        actor,
+        aq_profiles::roles::Kind::Intelligence,
+        id,
+        &markdown,
+    )
+    .await;
 }
 fn matrix(snapshot: &Value, limit: u32) -> Value {
     Value::Array(snapshot["cells"].as_array().unwrap().iter().map(|c| json!({
@@ -23,7 +41,7 @@ fn matrix(snapshot: &Value, limit: u32) -> Value {
 }
 fn save_request(snapshot: &Value) -> Value {
     json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
-        "expected_catalog_revision":snapshot["catalog_revision"],"normal":matrix(snapshot,2),"reduced":matrix(snapshot,0)})
+        "normal":matrix(snapshot,2),"reduced":matrix(snapshot,0)})
 }
 
 #[tokio::test]
@@ -145,11 +163,12 @@ async fn swarm_rejects_incoherent_matrices_without_partial_writes() {
         );
         assert_eq!(call(&app, SWARM, None, false).await.1, initial);
     }
-    let mut stale = valid.clone();
-    stale["expected_catalog_revision"] = json!("0");
+    // The old catalog fence is gone, and an unknown field is refused.
+    let mut fenced = valid.clone();
+    fenced["expected_catalog_revision"] = json!("0");
     assert_eq!(
-        call(&app, SWARM, Some(stale), true).await.0,
-        StatusCode::CONFLICT
+        call(&app, SWARM, Some(fenced), true).await.0,
+        StatusCode::BAD_REQUEST
     );
     assert_eq!(
         call(&app, SWARM, Some(valid), false).await.0,
@@ -215,45 +234,39 @@ async fn swarm_failed_receipt_rolls_back_matrix_and_mode() {
 }
 
 #[tokio::test]
-async fn swarm_catalog_drift_requires_explicit_new_capacity_and_preserves_saved_profiles() {
+async fn a_changed_level_requires_explicit_new_capacity_and_preserves_saved_profiles() {
     let (_db, app, pool, initial) = installed().await;
     let (status, saved) = call(&app, SWARM, Some(save_request(&initial)), true).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    let bytes: Vec<u8> = sqlx::query_scalar("SELECT artifact FROM profile_catalog_artifacts a JOIN profile_catalog_registry r ON r.active_digest=a.digest WHERE r.singleton").fetch_one(&pool).await.unwrap();
-    let current = ValidatedCatalog::from_artifact(&bytes).unwrap();
-    let mut catalog = current.artifact().catalog.clone();
-    let previous = aq_profiles::key(&catalog.intelligence[0].id, catalog.intelligence[0].version);
-    catalog.intelligence[0].version += 1;
-    let updated = aq_profiles::key(&catalog.intelligence[0].id, catalog.intelligence[0].version);
-    for agent in &mut catalog.agents {
-        if agent.intelligence == previous {
-            agent.intelligence = updated.clone();
-            agent.version += 1;
-        }
-    }
-    let mut candidate = catalog.intelligence[0].candidates[0].clone();
-    candidate.id = "new-provider".into();
-    candidate.provider = "openai".into();
-    catalog.intelligence[0].candidates.push(candidate);
-    let changed = validate(catalog, current.artifact().instructions.clone()).unwrap();
-    let (status, body) = call(&app, ACTIVATE, Some(activation(&changed, 1)), true).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    // A level gains a candidate on another provider.
+    save_level(
+        &pool,
+        "standard-high",
+        "Standard, high",
+        &[
+            ("anthropic", "claude-sonnet-5-5", "claude"),
+            ("google", "gemini-test", "gemini"),
+        ],
+    )
+    .await;
     let (status, drift) = call(&app, SWARM, None, false).await;
     assert_eq!(status, StatusCode::OK, "{drift}");
-    assert_eq!(drift["catalog_revision"], "2");
     assert_eq!(drift["normal"], saved["normal"]);
     assert!(
         drift["cells"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c["provider"] == "openai" && c["effective_limit"].is_null())
+            .any(|c| c["provider"] == "google"
+                && c["intelligence_class"] == "standard-high"
+                && c["effective_limit"].is_null())
     );
+    // A matrix read before the level changed no longer names every cell.
     let mut stale = save_request(&initial);
     stale["expected_revision"] = saved["revision"].clone();
     assert_eq!(
         call(&app, SWARM, Some(stale), true).await.0,
-        StatusCode::CONFLICT
+        StatusCode::BAD_REQUEST
     );
     let mode = json!({"operation_id":Uuid::new_v4(),"expected_revision":saved["revision"],"active_mode":"reduced"});
     assert_eq!(
@@ -287,27 +300,48 @@ async fn swarm_waiting_counts_keep_unclassified_work_visible() {
 }
 
 #[tokio::test]
-async fn swarm_catalog_omits_placeholders_and_keeps_automatic_routing_identity() {
-    let (_db, app, _pool) = setup().await;
-    let seed = seed();
-    let (status, body) = call(&app, ACTIVATE, Some(activation(&seed, 0)), true).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(call(&app, SWARM, None, false).await.1["cells"], json!([]));
-    let mut catalog = seed.artifact().catalog.clone();
-    let mut router = catalog.intelligence[0].clone();
-    router.id = "router".into();
-    router.name = Some("Internal router".into());
-    router.automatic_routing = Some(true);
-    router.candidates[0].provider = "anthropic".into();
-    router.candidates[0].model = "test-automatic".into();
-    catalog.intelligence.push(router);
-    let catalog = validate(catalog, seed.artifact().instructions.clone()).unwrap();
-    let (status, body) = call(&app, ACTIVATE, Some(activation(&catalog, 1)), true).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+async fn swarm_cells_are_the_providers_of_each_level_document() {
+    let (_db, app, pool, initial) = installed().await;
+    // The shipped levels: nine documents, each on one provider.
+    let cells = initial["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 9, "{initial}");
+    assert!(cells.iter().all(|c| c["provider"] == "anthropic"));
+    assert!(initial.get("catalog_revision").is_none());
+    let named = |snapshot: &Value, class: &str| -> Vec<(String, String)> {
+        (snapshot["cells"].as_array().unwrap().iter())
+            .filter(|c| c["intelligence_class"] == class)
+            .map(|c| {
+                let text = |key: &str| c[key].as_str().unwrap().to_owned();
+                (text("provider"), text("display_name"))
+            })
+            .collect()
+    };
+    assert_eq!(
+        named(&initial, "standard-high"),
+        [("anthropic".to_owned(), "Standard, high".to_owned())]
+    );
+    // A new level document is a new class: one cell per provider it names,
+    // shown under the document's name.
+    save_level(
+        &pool,
+        "night-shift",
+        "Night shift",
+        &[
+            ("anthropic", "claude-sonnet-5-5", "claude"),
+            ("google", "gemini-test", "gemini"),
+            ("google", "gemini-other", "gemini"),
+        ],
+    )
+    .await;
     let snapshot = call(&app, SWARM, None, false).await.1;
-    assert_eq!(snapshot["cells"].as_array().unwrap().len(), 1);
-    assert_eq!(snapshot["cells"][0]["intelligence_class"], "router");
-    assert_eq!(snapshot["cells"][0]["display_name"], "Automatic routing");
+    assert_eq!(snapshot["cells"].as_array().unwrap().len(), 11);
+    assert_eq!(
+        named(&snapshot, "night-shift"),
+        [
+            ("anthropic".to_owned(), "Night shift".to_owned()),
+            ("google".to_owned(), "Night shift".to_owned())
+        ]
+    );
     let mut request = save_request(&snapshot);
     request["reduced"] = Value::Null;
     let (status, saved) = call(&app, SWARM, Some(request), true).await;
@@ -316,8 +350,7 @@ async fn swarm_catalog_omits_placeholders_and_keeps_automatic_routing_identity()
 }
 
 fn limits_request(snapshot: &Value) -> Value {
-    json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"],
-        "expected_catalog_revision":snapshot["catalog_revision"]})
+    json!({"operation_id":Uuid::new_v4(),"expected_revision":snapshot["revision"]})
 }
 
 #[tokio::test]
@@ -395,7 +428,7 @@ async fn individual_limits_are_atomic_and_revision_checked() {
     );
     assert_eq!(call(&app, SWARM, None, false).await.1, initial);
     let mut stale = request.clone();
-    stale["expected_catalog_revision"] = json!("stale");
+    stale["expected_revision"] = json!("7");
     assert_eq!(
         call(&app, path, Some(stale), true).await.0,
         StatusCode::CONFLICT
