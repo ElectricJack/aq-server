@@ -365,6 +365,7 @@ pub async fn setup() -> Case {
                 max_bundle_bytes: 1_048_576,
                 bulk_concurrency: 1,
                 incomplete_ttl_secs: 60,
+                git_deadline_ms: 30_000,
             },
         )
         .unwrap(),

@@ -15,6 +15,7 @@ pub(super) fn service(h: &Harness) -> DeliveryService {
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
     };
     DeliveryService::new(h.pool.clone(), &config.git_socket)
 }

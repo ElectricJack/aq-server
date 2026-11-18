@@ -65,6 +65,7 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
             max_staging_bytes: max_bundle + 1_048_576 + 4096,
             bulk_concurrency: 1,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
