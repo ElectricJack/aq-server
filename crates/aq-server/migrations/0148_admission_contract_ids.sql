@@ -6,6 +6,11 @@
 -- document. Rows recorded under an earlier digest of the same id stay
 -- readable, and no stored row is touched. The phase-terminal contract pins
 -- are unchanged. Everything else in both bodies is the text of 0041 and 0043.
+--
+-- The two `NOT BETWEEN 1 AND 120000` checks in the ungranted-closure owner are
+-- handshake timing, carried over unchanged: the window in which a worker must
+-- accept its preparation, and the validity of that one delivery. They bound
+-- neither the execution lease nor how long an attempt runs.
 SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION profiled_result_origin_valid(attempt UUID,owner_node UUID,origin_kind TEXT,execution_digest TEXT,stopped_ack_digest TEXT) RETURNS BOOLEAN LANGUAGE SQL STABLE AS $$
  SELECT EXISTS(

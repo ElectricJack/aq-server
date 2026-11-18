@@ -77,7 +77,7 @@ PROFILED_REVISION = _REV
 INTELLIGENCE_REVISION = _REV + 1
 DEFINITION_VERSION = str(_REV)
 LONG_CONTRACT = {"id": "aq.admission.preparation-registry-refresh-v1-contract.interactive-long-v1", "version": "1",
-                 "digest": "ff94a1ee6f91e6ccacaef136654fb49ddbdf713f2f7f6f8d6eff547783554b78"}
+                 "digest": "4c4ab2ae711614db55b4b8077ce9ff5ad0200aa62d9d7bd298231da632d851bf"}
 TERMINAL_CONTRACT = {"id": "aq.phase-terminal.registry-refresh-v1.contract", "version": "1",
                      "digest": "f9af55c49127a8cb93f03ef5bbb28313d13f94a221affa3e26d91d45bffd6c2d"}
 NEGOTIATION_FEATURES = ["accepted_preparation_v2", "fresh_initial_confirmation_v2", "independent_execution_delivery_v2",

@@ -1007,7 +1007,7 @@ pub fn long_schema() -> Value {
 }
 fn build_long_contract_artifact() -> Result<ArtifactRef> {
     let manifest = serde_json::json!({"schema_version":3,"publication":"aq-admission/0.1.11",
-        "scope":"explicit-interactive-one-hour","schema_digest":Digest::of(&bytes(&long_schema())?),
+        "scope":"explicit-interactive-lease","schema_digest":Digest::of(&bytes(&long_schema())?),
         "required_features":required_features()});
     Ok(ArtifactRef { id:Text::new(format!("{}.interactive-long-v1",$contract_id)).map_err(|_| Invalid("long phase contract id"))?,
         version:Text::new("1").map_err(|_| Invalid("long phase contract version"))?,digest:hash("aq.phase.contract.v2",&manifest)? })
