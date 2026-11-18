@@ -324,3 +324,66 @@ fn playbook_authoring_section_is_optional_strict_and_bounded() {
     let none = format!("{VALID}\n[playbook_authoring]\nkeep_finished_runs = 0\n");
     assert!(load(vault_with(&none).path()).is_err());
 }
+
+#[cfg(feature = "delivery_playbook")]
+#[test]
+fn delivery_github_section_is_optional_strict_and_validated() {
+    let cfg = load(vault_with(VALID).path()).unwrap();
+    assert!(cfg.delivery.is_none());
+    // Absent section: the adapter is unavailable, not a panic.
+    let err = aq_delivery::github::GitHubApp::from_config(None)
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), "github_unconfigured");
+    let empty = format!("{VALID}\n[delivery]\n");
+    assert!(
+        load(vault_with(&empty).path())
+            .unwrap()
+            .delivery
+            .unwrap()
+            .github
+            .is_none()
+    );
+
+    let section = r#"
+[delivery.github]
+app_id = 12345
+private_key_file = "/vault/github-app.pem"
+installations = [{ owner = "acme", installation_id = 678 }, { owner = "other-org", installation_id = 9 }]
+"#;
+    let github = load(vault_with(&format!("{VALID}\n{section}")).path())
+        .unwrap()
+        .delivery
+        .unwrap()
+        .github
+        .unwrap();
+    assert_eq!(github.app_id, 12345);
+    assert_eq!(github.private_key_file, Path::new("/vault/github-app.pem"));
+    assert_eq!(github.api_base, "https://api.github.com");
+    assert_eq!(github.installations.len(), 2);
+    assert_eq!(
+        (
+            github.installations[0].owner.as_str(),
+            github.installations[0].installation_id
+        ),
+        ("acme", 678)
+    );
+    let base = format!("{VALID}\n{section}api_base = \"https://ghe.example/api/v3\"\n");
+    let github = load(vault_with(&base).path())
+        .unwrap()
+        .delivery
+        .unwrap()
+        .github
+        .unwrap();
+    assert_eq!(github.api_base, "https://ghe.example/api/v3");
+
+    let unknown = format!("{VALID}\n{section}token = \"x\"\n");
+    assert!(load(vault_with(&unknown).path()).is_err());
+    let relative = section.replace("/vault/github-app.pem", "github-app.pem");
+    let err = load(vault_with(&format!("{VALID}\n{relative}")).path())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("delivery.github"), "{err}");
+    let duplicate = section.replace("other-org", "ACME");
+    assert!(load(vault_with(&format!("{VALID}\n{duplicate}")).path()).is_err());
+}

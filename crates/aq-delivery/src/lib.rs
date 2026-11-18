@@ -1,6 +1,8 @@
 //! Central delivery primitives. Deliberately not mounted on a worker HTTP router.
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
+#[cfg(feature = "delivery_playbook")]
+pub mod github;
 mod policy;
 mod protocol;
 mod reconcile;
