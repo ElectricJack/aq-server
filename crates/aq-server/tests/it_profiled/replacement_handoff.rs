@@ -50,6 +50,7 @@ async fn handed(reason: Option<&str>) -> Handed {
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
@@ -551,6 +552,7 @@ async fn quiet_successor(
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
     };
     let delivery = aq_server::delivery::DeliveryService::new(pool, &config.git_socket);
     (env, delivery, socket, git)

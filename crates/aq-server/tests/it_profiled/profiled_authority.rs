@@ -306,6 +306,7 @@ async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuse
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 1,
+            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
