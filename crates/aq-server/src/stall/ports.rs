@@ -187,8 +187,7 @@ impl Ports for DbPorts {
         let pool = &self.state.store.pool;
         let row = sqlx::query(&format!("SELECT \
             (SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1 AND {PROGRESS_SQL}) AS progress, \
-            GREATEST((SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1), \
-                     (SELECT (extract(epoch FROM n.last_seen_at)*1000)::bigint FROM nodes n JOIN execution_attempts a ON a.node_id=n.id WHERE a.attempt_id=$1)) AS observed, \
+            (SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1) AS observed, \
             (SELECT record->'body'->'kind' FROM observation_events WHERE attempt_id=$1 AND record->'body'->'kind'->>'kind'<>'usage' ORDER BY recorded_at_ms DESC,sequence DESC LIMIT 1) AS latest, \
             (SELECT max(recorded_at_ms) FROM observation_events s WHERE s.attempt_id=$1 AND s.record->'body'->'kind'->>'kind'='tool_started' AND NOT EXISTS(SELECT 1 FROM observation_events r WHERE r.attempt_id=$1 AND r.record->'body'->'kind'->>'kind'='tool_result' AND r.record->'body'->'kind'->>'call_id'=s.record->'body'->'kind'->>'call_id')) AS open_tool, \
             NOT a.holds_task AS released, \
