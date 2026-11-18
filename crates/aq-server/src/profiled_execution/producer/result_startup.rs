@@ -3,22 +3,16 @@
 //! module creates no client, credential, local channel or execution authority.
 use super::refused;
 use crate::{AppState, error::AppError, profiled_execution::definitions::Definition};
-use aq_admission::{ArtifactRef, Digest, Text};
+use aq_admission::{ArtifactRef, DOCKER_LOCAL_PROFILES, Digest, Text};
 use serde::Deserialize;
 
 pub(super) const STARTUP_ID: &str = "aq.agent-result-startup";
 const STARTUP_DIGEST: &str = "667d48a537baa35335fb3da1e589846e9d294a2bc24a8df58cf682181b15229a";
 const CONTRACT_DIGEST: &str = "4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9";
 const ADAPTER_ID: &str = "aq.codex-result-local-adapter";
-/// MS1: Claude Code in a docker-local sandbox, driven from the node. It runs
-/// the long (schema 3) phase without terminal input.
-const CLAUDE_ADAPTER_ID: &str = "aq.claude-result-local-adapter";
-const CLAUDE_PROFILE: &str = "claude-2.1.318-docker-local-result-local-v1";
-/// aq-worker `docker_local_recipe_artifact()` (`aq-worker ms1-definitions`).
-const CLAUDE_RECIPE_DIGEST: &str =
-    "b30030fb9192268da6079f59d650bcbad5dae3b2e34bf28af2b9e96e9fad8765";
+/// Docker-local executors (long phase, no terminal input): `DOCKER_LOCAL_PROFILES`.
 fn result_adapter(id: &str) -> bool {
-    id == ADAPTER_ID || id == CLAUDE_ADAPTER_ID
+    id == ADAPTER_ID || DOCKER_LOCAL_PROFILES.iter().any(|p| p.adapter == id)
 }
 const PROFILE: &str = "codex-0.166-trusted-node-named-readonly-result-local-v1";
 const INTERACTIVE_PROFILE: &str = "codex-0.166-chatgpt-interactive-result-local-v1";
@@ -79,18 +73,20 @@ pub(super) fn from_definitions(
                     INTERACTIVE_RECIPE_DIGEST,
                 )?
         }
-        CLAUDE_PROFILE => {
-            adapter.id.as_str() == CLAUDE_ADAPTER_ID
-                && opt.recipe
-                    == public_reference(
-                        "aq.claude-docker-local-result-local-recipe",
-                        CLAUDE_RECIPE_DIGEST,
-                    )?
-        }
-        _ => false,
+        profile => DOCKER_LOCAL_PROFILES.iter().any(|p| {
+            p.profile == profile
+                && p.adapter == adapter.id.as_str()
+                && p.recipe_id == opt.recipe.id.as_str()
+                && opt.recipe.version.as_str() == "1"
+                && p.recipe_digest
+                    .is_none_or(|d| d == opt.recipe.digest.as_str())
+        }),
     };
-    let claude = opt.profile == CLAUDE_PROFILE;
-    if claude != (adapter.id.as_str() == CLAUDE_ADAPTER_ID) {
+    // A docker-local adapter identity carries only its own profile.
+    let sandbox = DOCKER_LOCAL_PROFILES
+        .iter()
+        .find(|p| p.adapter == adapter.id.as_str());
+    if sandbox.is_some_and(|p| p.profile != opt.profile) {
         return Err(refused());
     }
     if opt.schema_version != 1
@@ -113,7 +109,7 @@ pub(super) fn from_definitions(
         artifact,
         text: instruction.body().to_owned(),
         interactive: opt.profile == INTERACTIVE_PROFILE,
-        long_phase: opt.profile == INTERACTIVE_PROFILE || claude,
+        long_phase: opt.profile == INTERACTIVE_PROFILE || sandbox.is_some(),
     }))
 }
 pub(super) fn interactive_runtime(
@@ -131,7 +127,10 @@ pub(super) fn interactive_runtime(
         }
         let pin: RuntimePin = serde_json::from_str(definition.body()).map_err(|_| refused())?;
         if pin.runtime == *runtime
-            && (pin.profile == INTERACTIVE_PROFILE || pin.profile == CLAUDE_PROFILE)
+            && (pin.profile == INTERACTIVE_PROFILE
+                || DOCKER_LOCAL_PROFILES
+                    .iter()
+                    .any(|p| p.profile == pin.profile))
         {
             return Ok(from_definitions(definition.artifact(), definitions)?
                 .is_some_and(|value| value.long_phase));
@@ -171,7 +170,8 @@ impl ReportingInstruction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aq_admission::ArtifactKind;
+    use aq_admission::{ArtifactKind, DockerLocalProfile};
+    const CLAUDE: &DockerLocalProfile = &DOCKER_LOCAL_PROFILES[0];
     use serde_json::{Value, json};
     const TEXT: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -224,16 +224,16 @@ mod tests {
     #[test]
     fn claude_docker_local_profile_runs_the_long_phase_without_terminal_input() {
         let mut value = body();
-        value["profile"] = json!(CLAUDE_PROFILE);
+        value["profile"] = json!(CLAUDE.profile);
         value["recipe"] = json!(
             public_reference(
                 "aq.claude-docker-local-result-local-recipe",
-                CLAUDE_RECIPE_DIGEST
+                CLAUDE.recipe_digest.unwrap()
             )
             .unwrap()
         );
         let bytes = serde_json::to_string(&value).unwrap();
-        let mut adapter = reference(CLAUDE_ADAPTER_ID);
+        let mut adapter = reference(CLAUDE.adapter);
         adapter.digest = Digest::of(bytes.as_bytes());
         let (_, mut defs) = definitions(body());
         defs[0] =
@@ -245,7 +245,7 @@ mod tests {
         let mut wrong = value.clone();
         wrong["recipe"] = json!(reference("aq.claude-docker-local-result-local-recipe"));
         let wrong_bytes = serde_json::to_string(&wrong).unwrap();
-        let mut wrong_adapter = reference(CLAUDE_ADAPTER_ID);
+        let mut wrong_adapter = reference(CLAUDE.adapter);
         wrong_adapter.digest = Digest::of(wrong_bytes.as_bytes());
         let mut wrong_defs = defs.clone();
         wrong_defs[0] =

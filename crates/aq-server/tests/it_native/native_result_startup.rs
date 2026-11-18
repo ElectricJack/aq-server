@@ -21,16 +21,31 @@ fn reporting() -> ArtifactRef {
     reference("aq.agent-result-startup", STARTUP.as_bytes())
 }
 async fn enable(case: &mut common::native_offer::Case, include_startup: bool) {
+    let recipe = reference("aq.codex-result-local-recipe", b"fixture recipe");
+    let profile = "codex-0.166-trusted-node-named-readonly-result-local-v1";
+    enable_as(
+        case,
+        include_startup,
+        (profile, "aq.codex-result-local-adapter", recipe),
+    )
+    .await;
+}
+/// `enable` for another result-local `(profile, adapter id, recipe)`.
+async fn enable_as(
+    case: &mut common::native_offer::Case,
+    include_startup: bool,
+    (profile, adapter_id, recipe): (&str, &str, ArtifactRef),
+) {
     let mut config = (*case.env.env.state.config).clone();
     let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
     // Data-only test definition; no installation/runtime success is asserted.
-    let body=json!({"schema_version":1,"profile":"codex-0.166-trusted-node-named-readonly-result-local-v1",
+    let body=json!({"schema_version":1,"profile":profile,
         "runtime":profiled.qualified_runtimes[0].runtime,"environment":case.env.input.node.harnesses[0].environment,
         "client_manifest":reference("aq.agent-result-client-installation",b"fixture"),"client_executable":reference("client",b"fixture"),
         "contract":{"id":"aq.agent-result-local","version":"1","digest":"4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9"},
-        "recipe":reference("aq.codex-result-local-recipe",b"fixture recipe"),
+        "recipe":recipe,
         "permission_digest":Digest::of(b"fixture whole permission metadata"),"reserved_client_bytes":67108864}).to_string();
-    let adapter = reference("aq.codex-result-local-adapter", body.as_bytes());
+    let adapter = reference(adapter_id, body.as_bytes());
     profiled
         .definition_bodies
         .push(Definition::new(adapter.clone(), ArtifactKind::Definition, body).unwrap());
@@ -206,4 +221,46 @@ async fn ordinary_plain_profile_keeps_original_instruction_and_artifact_path() {
         .unwrap(),
         0
     );
+}
+
+/// aq-worker W1: the docker-local Codex adapter and profile are admitted like the
+/// Claude one, and publish the reporting instruction once.
+#[tokio::test]
+async fn docker_local_codex_adapter_publishes_the_reporting_instruction_once() {
+    let mut case = common::native_offer::setup().await;
+    let recipe = reference(
+        "aq.codex-docker-local-result-local-recipe",
+        b"fixture recipe",
+    );
+    let selected = (
+        "codex-0.166-docker-local-result-local-v1",
+        "aq.codex-docker-result-local-adapter",
+        recipe,
+    );
+    enable_as(&mut case, true, selected).await;
+    let offered = published(&case).await;
+    let reference = reporting();
+    let manifest = &offered.offered.offer.manifest;
+    assert_eq!(
+        manifest.modules.iter().filter(|r| **r == reference).count(),
+        1
+    );
+}
+/// The docker-local Codex profile under another adapter identity (here the
+/// interactive Codex one) is refused: no offer is published.
+#[tokio::test]
+async fn docker_local_codex_profile_under_another_adapter_publishes_no_offer() {
+    let mut case = common::native_offer::setup().await;
+    let recipe = reference(
+        "aq.codex-docker-local-result-local-recipe",
+        b"fixture recipe",
+    );
+    let selected = (
+        "codex-0.166-docker-local-result-local-v1",
+        "aq.codex-result-local-adapter",
+        recipe,
+    );
+    enable_as(&mut case, true, selected).await;
+    let (status, body) = common::native_offer::poll(&case).await;
+    assert_eq!(status, 409, "{body}");
 }
