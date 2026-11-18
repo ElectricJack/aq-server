@@ -173,9 +173,37 @@ async fn observe_source(
     if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
         evidence.insert("handoff", handoff);
     }
+    // Spec 0016 §4: a named ref follows the head central aq-git last synced
+    // from the remote and retained, synced now when older than Settings allow.
+    #[cfg(feature = "delivery_playbook")]
+    let synced = match (&selection, &fixed) {
+        (SourceSelection::NamedRef { reference }, None) => {
+            let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
+            let (id, g) = (binding.repository_id, binding.repository_binding_generation);
+            let scope =
+                aq_delivery::main_sync::Scope::new(binding.project_id, id, g, reference.as_str());
+            let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
+            let (pool, socket) = (&state.store.pool, &runtime.config.git_socket);
+            let synced = aq_delivery::main_sync::current(pool, socket, &scope, clock).await;
+            let synced = synced.map_err(|_| refused())?;
+            observed = clock(); // this read of a record `current` found fresh
+            if observed >= project.binding_observation.expires_at_ms {
+                return Err(refused());
+            }
+            retention_handle = synced.retention_handle;
+            let value = serde_json::to_value(&synced).map_err(|_| AppError::Internal)?;
+            evidence.insert("main_sync", value);
+            Some(ObjectId {
+                format: ObjectFormat::Sha1,
+                hex: synced.head,
+            })
+        }
+        _ => None,
+    };
     // D1: a named ref that AQ itself publishes follows the recorded source
     // head (the publication receipt is the evidence) and hydrates from the
     // candidate's central retention handle. Without one, a fresh observation.
+    #[cfg(not(feature = "delivery_playbook"))]
     let head = match (&selection, &fixed) {
         (SourceSelection::NamedRef { reference }, None) => {
             crate::profiled_execution::settlement::publication::current_head(
@@ -192,6 +220,11 @@ async fn observe_source(
     };
     let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
+        #[cfg(feature = "delivery_playbook")]
+        SourceSelection::NamedRef { .. } if synced.is_some() => {
+            synced.clone().ok_or_else(|| refused())?
+        }
+        #[cfg(not(feature = "delivery_playbook"))]
         SourceSelection::NamedRef { .. } if head.is_some() => {
             let head = head.as_ref().ok_or_else(|| refused())?;
             retention_handle = head.retention_handle;
@@ -308,6 +341,27 @@ async fn observe_source(
         bytes,
     })
 }
+/// Spec 0016 §4: the loop syncing each enabled project's followed named ref.
+#[cfg(feature = "delivery_playbook")]
+pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<bool>) {
+    let (Some(runtime), Some(config)) = (&state.source_retention, &state.config.profiled_execution)
+    else {
+        return;
+    };
+    let projects = config
+        .projects
+        .iter()
+        .filter(|p| p.enabled)
+        .filter_map(|p| match &p.source {
+            SourceSelection::NamedRef { reference } => {
+                Some((p.project_id, reference.as_str().to_owned()))
+            }
+            SourceSelection::Immutable { .. } => None,
+        });
+    let (pool, socket) = (state.store.pool.clone(), runtime.config.git_socket.clone());
+    let clock = state.clock.clone();
+    aq_delivery::main_sync::run(pool, socket, projects.collect(), move || clock(), stop).await
+}
 /// Resolve the actual configured repository's logical identity, never a path or
 /// guessed UUID alias. The export owner subsequently verifies the exact name.
 pub(crate) async fn repository_identity(
@@ -316,146 +370,37 @@ pub(crate) async fn repository_identity(
     generation: u64,
 ) -> Result<String, AppError> {
     let value = read(state, repository, generation, "repo.show", json!({})).await?;
-    let identity = value["identity"].as_str().ok_or_else(|| refused())?;
-    if value["repository_id"] != repository.to_string()
-        || value["binding_generation"] != generation
-        || value["mode"] != "central"
-        || value["object_format"] != "sha1"
-        || identity.trim().is_empty()
-        || identity.len() > 512
-        || identity.chars().any(char::is_control)
-    {
-        return Err(refused());
-    }
-    Ok(identity.to_owned())
+    aq_delivery::source_checks::repository_identity(&value, repository, generation)
+        .ok_or_else(|| refused())
 }
-fn hex40(s: &str) -> bool {
-    s.len() == 40
-        && s.bytes().any(|b| b != b'0')
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
+use aq_delivery::source_checks::hex40;
 fn resolve_ref(
-    value: &Value,
+    v: &Value,
     reference: &str,
     generation: u64,
     now: u64,
 ) -> Result<ObjectId, AppError> {
-    let completed = value["completed_at_ms"].as_u64().ok_or_else(|| refused())?;
-    let started = value["started_at_ms"].as_u64().ok_or_else(|| refused())?;
-    if started == 0
-        || completed < started
-        || completed > now
-        || now - completed > 30000
-        || value["binding_generation"] != generation
-        || value["observation_id"]
-            .as_str()
-            .and_then(|s| Uuid::parse_str(s).ok())
-            .is_none_or(|id| id.is_nil())
-        || value["covered_refs"]
-            .as_array()
-            .is_none_or(|a| a.len() > 128 || !a.contains(&json!(reference)))
-        || value.get("last_refresh_error").is_none_or(|v| !v.is_null())
-    {
-        return Err(refused());
-    }
-    let hex = value["refs"][reference].as_str().ok_or_else(|| refused())?;
-    if !hex40(hex) {
-        return Err(refused());
-    }
+    let hex = aq_delivery::source_checks::resolve_ref(v, reference, generation, now);
     Ok(ObjectId {
         format: ObjectFormat::Sha1,
-        hex: hex.into(),
+        hex: hex.ok_or_else(|| refused())?,
     })
 }
 fn verify_retention(
-    value: &Value,
+    v: &Value,
     handle: Uuid,
     repository: Uuid,
     generation: u64,
     object: &ObjectId,
 ) -> Result<(), AppError> {
-    let refs = value["refs"].as_array().ok_or_else(|| refused())?;
-    let mut names = std::collections::BTreeSet::new();
-    if refs.iter().any(|r| {
-        r["name"]
-            .as_str()
-            .is_none_or(|name| name.is_empty() || name.len() > 4096 || !names.insert(name))
-            || !hex40(r["oid"].as_str().unwrap_or(""))
-    }) {
-        return Err(refused());
-    }
-    if value["version"] != 1
-        || value["id"] != handle.to_string()
-        || value["repository_id"] != repository.to_string()
-        || value["binding_generation"] != generation
-        || value["generation"].as_u64().is_none_or(|g| g == 0)
-        || value["state"] != "active"
-        || refs.len() > 256
-        || !refs.iter().any(|r| r["oid"] == object.hex)
-        || value.get("release_operation").is_none_or(|v| !v.is_null())
-        || value.get("release_reason").is_none_or(|v| !v.is_null())
-    {
-        return Err(refused());
-    }
-    Ok(())
+    aq_delivery::source_checks::retention_holds(v, handle, repository, generation, &object.hex)
+        .then_some(())
+        .ok_or_else(|| refused())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn reference_observation_requires_original_complete_fresh_exact_generation() {
-        let reference = "refs/heads/main";
-        let valid = json!({"observation_id":Uuid::new_v4(),"binding_generation":2,"started_at_ms":1000,"completed_at_ms":1100,"covered_refs":[reference],"refs":{reference:"a".repeat(40)},"last_refresh_error":null});
-        assert!(resolve_ref(&valid, reference, 2, 1200).is_ok());
-        for (field, bad) in [
-            ("observation_id", json!(Uuid::nil())),
-            ("binding_generation", json!(3)),
-            ("started_at_ms", json!(1200)),
-            ("completed_at_ms", json!(1300)),
-            ("covered_refs", json!([])),
-            ("last_refresh_error", json!({"code":"offline"})),
-        ] {
-            let mut value = valid.clone();
-            value[field] = bad;
-            assert!(resolve_ref(&value, reference, 2, 1200).is_err(), "{field}");
-        }
-        assert!(resolve_ref(&valid, reference, 2, 31_101).is_err());
-    }
-    #[test]
-    fn retention_is_exact_active_complete_and_never_inferred_from_missing_fields() {
-        let handle = Uuid::new_v4();
-        let repository = Uuid::new_v4();
-        let object = ObjectId {
-            format: ObjectFormat::Sha1,
-            hex: "a".repeat(40),
-        };
-        let valid = json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":2,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/test","oid":object.hex}],"release_operation":null,"release_reason":null});
-        assert!(verify_retention(&valid, handle, repository, 2, &object).is_ok());
-        for (field, bad) in [
-            ("state", json!("released")),
-            ("id", json!(Uuid::new_v4())),
-            ("repository_id", json!(Uuid::new_v4())),
-            ("binding_generation", json!(3)),
-            ("generation", json!(0)),
-            ("refs", json!([])),
-            ("release_operation", json!(Uuid::new_v4())),
-        ] {
-            let mut value = valid.clone();
-            value[field] = bad;
-            assert!(
-                verify_retention(&value, handle, repository, 2, &object).is_err(),
-                "{field}"
-            );
-        }
-        let mut incomplete = valid.clone();
-        incomplete
-            .as_object_mut()
-            .unwrap()
-            .remove("release_operation");
-        assert!(verify_retention(&incomplete, handle, repository, 2, &object).is_err());
-    }
     #[test]
     fn named_ref_follows_publication_head_only_for_its_exact_commit_and_handle() {
         let (project, repository, handle) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());

@@ -25,14 +25,17 @@ use uuid::Uuid;
 mod assess;
 #[cfg(feature = "delivery_playbook")]
 mod delivery_commands;
+#[cfg(feature = "delivery_playbook")]
+mod delivery_decisions;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
-pub use assess::{AssessReply, AssessRequest};
 #[cfg(feature = "delivery_playbook")]
 pub use delivery_commands::{DeliveryOps, ServerDelivery};
+#[cfg(feature = "delivery_playbook")]
+pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
 pub use integration::*;
 pub use requests::*;
@@ -135,6 +138,12 @@ impl Service {
             "context.read" => self.context_read(owner, id, revision, intent).await,
             "work.ensure" => self.work_ensure(owner, id, revision, intent).await,
             "work.change" => self.work_change(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "work.hold" => self.work_hold(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "supervisor.notify" => self.supervisor_notify(owner, id, revision, intent).await,
             "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
             "judgment.assess" => self.judgment_assess(owner, id, revision, intent).await,

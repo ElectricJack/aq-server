@@ -237,6 +237,7 @@ dependencies = [
 name = "aq-delivery"
 version = "0.1.0"
 dependencies = [
+ "aq-role-settings",
  "aq-worker-protocol",
  "async-trait",
  "axum",
@@ -254,6 +255,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
  "unicode-normalization",
  "uuid",
 ]
@@ -509,6 +511,7 @@ dependencies = [
 name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
+ "aq-internal-work",
  "aq-machine-control",
  "aq-playbook-host",
  "aq-playbooks-compiler",

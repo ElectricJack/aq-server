@@ -7,10 +7,11 @@ description = "Playbook fixed host contracts, typed grant scope and the HTTP err
 
 [features]
 # Epic 0 (spec 0016): host catalog 2.3.0 (profile 10), off by default.
-delivery_playbook = ["dep:aq-machine-control", "dep:async-trait", "aq-playbook-host/delivery_playbook"]
+delivery_playbook = ["dep:aq-machine-control", "aq-playbook-host/delivery_playbook"]
 
 [dependencies]
-async-trait = { workspace = true, optional = true }
+async-trait.workspace = true
+aq-internal-work = { path = "../aq-internal-work" }
 aq-machine-control = { path = "../aq-machine-control", version = "=0.1.0", optional = true }
 aq-routing = { path = "../aq-routing" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.3" }

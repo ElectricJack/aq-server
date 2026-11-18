@@ -508,6 +508,11 @@ async fn run_with_listeners_and_dashboard(
     let wakes_task = tokio::spawn(agent_access::wakes::run(state.clone(), rx.clone()));
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
+    #[cfg(feature = "delivery_playbook")]
+    tokio::spawn(profiled_execution::source::follow_main(
+        state.clone(),
+        rx.clone(),
+    ));
     let stall_task = tokio::spawn(stall::runtime::run(state.clone(), rx.clone()));
     let internal_work_task = tokio::spawn(state.internal_work.clone().serve(rx.clone()));
     if let Err(error) = routing::ensure_source(&state.store.pool).await {

@@ -151,9 +151,17 @@ pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
     "pull_request.merge",
     "pull_request.close",
 ];
+/// The delivery commands a Host10 namespace serves so far (Epic 0 S8).
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_DELIVERY_COMMANDS: [&str; 4] = [
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+];
 /// The commands a Host10 namespace serves (see [`HOST10_CAPABILITIES`]).
 #[cfg(feature = "delivery_playbook")]
-pub const HOST10_COMMANDS: [&str; 22] = [
+pub const HOST10_COMMANDS: [&str; 26] = [
     "context.read",
     "work.ensure",
     "work.change",
@@ -170,6 +178,10 @@ pub const HOST10_COMMANDS: [&str; 22] = [
     "work.route",
     "work.unroutable",
     "judgment.assess",
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
     "main.sync",
     "branch.publish",
     "pull_request.open",

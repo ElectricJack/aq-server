@@ -7,6 +7,8 @@ use super::{
     owner::*,
 };
 use crate::{AppState, profiled_execution::results};
+#[cfg(feature = "delivery_playbook")]
+use aq_playbook_domain::delivery_decisions::Settled;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -160,7 +162,7 @@ pub async fn settle_after_record(
         Verdict::Hold(_) | Verdict::Complete if conflict_held => held(VERSION_CONFLICT),
         Verdict::Hold(reason) => held(reason),
         Verdict::Complete => {
-            prepare_locked(state, &mut tx, &r, evidence, time).await?;
+            prepare_locked(state, &mut tx, &r, evidence, time, "Default policy").await?;
             return dispatch(state, tx, report_id).await.map(Some);
         }
     };
@@ -475,13 +477,14 @@ async fn prepare_locked(
     r: &results::RecordedResult,
     evidence: Value,
     time: i64,
+    accepted_by: &str,
 ) -> Result<()> {
     let rt = state.agent_access.as_deref().ok_or_else(unavailable)?;
     let task = &r.spec.task;
     crate::agent_access::settlement_service_identity(rt, task.workspace_id)?;
     let op = Uuid::new_v4();
     let payload = bytes(
-        &json!({"idempotency_key":format!("aq-auto-settlement-v1:{op}"),"reason":format!("Default policy accepted retained result {}",r.report.report_id),"operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"completed"}}]}),
+        &json!({"idempotency_key":format!("aq-auto-settlement-v1:{op}"),"reason":format!("{accepted_by} accepted retained result {}",r.report.report_id),"operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"completed"}}]}),
     )?;
     if payload.len() > 8192 {
         return Err(unavailable());
@@ -554,6 +557,130 @@ async fn dispatch(
     let s = status(&row)?;
     tx.commit().await.map_err(db)?;
     Ok(s)
+}
+
+/// Epic 0 (spec 0016 section 6.2): the locked prelude of a playbook's
+/// decision on `report_id`, as `settle_after_record`'s, with the existing
+/// settlement row and whether the fences hold. A playbook decides only on the
+/// attempt's current report head, while the attempt still holds the task,
+/// after its proven stop, and when it was neither revoked nor cancelled.
+#[cfg(feature = "delivery_playbook")]
+async fn playbook_locked<'a>(
+    state: &'a AppState,
+    report_id: Uuid,
+) -> Result<(
+    Transaction<'a, Postgres>,
+    results::RecordedResult,
+    Option<AutoSettlement>,
+    bool,
+)> {
+    use crate::execution::authority::{self, hot::HotState};
+    let mut tx = begin(state).await?;
+    let r = results::load_locked(state, &mut tx, report_id).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+        .bind(format!("aq-auto-settlement:{report_id}"))
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    let existing = lock_row(&mut tx, report_id)
+        .await?
+        .map(|row| status(&row))
+        .transpose()?;
+    let v = authority::load_locked(
+        state,
+        &mut tx,
+        &r.report.binding.session,
+        authority::Policy::IdentityOnly,
+    )
+    .await?;
+    let hot = sqlx::query_scalar::<_, Value>(
+        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(r.report.binding.attempt_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    let hot: HotState =
+        serde_json::from_value(hot).map_err(|_| crate::error::AppError::Internal)?;
+    let fenced = r.is_current_report_head
+        && v.holds_task
+        && v.stopped
+        && hot.stop.known_stopped()
+        && !v.revoked
+        && v.cancellation_id.is_none();
+    Ok((tx, r, existing, fenced))
+}
+
+/// Catalog 2.3.0 `work.complete`: completes the task with `report_id` through
+/// `prepare_locked` / `dispatch` behind [`playbook_locked`]'s fences; the
+/// claim is released only on a validated Graph receipt. Idempotent per
+/// report: a confirmed result is `Completed` again, a dispatched one replays
+/// the same payload, and a Graph version conflict is never dispatched again.
+#[cfg(feature = "delivery_playbook")]
+pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<Settled> {
+    let settled = |s: &AutoSettlement| match s.disposition {
+        AutoDisposition::Confirmed => Settled::Completed,
+        AutoDisposition::Prepared | AutoDisposition::Possible => Settled::Pending,
+        AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
+    };
+    let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    match existing {
+        Some(s)
+            if matches!(
+                s.disposition,
+                AutoDisposition::Prepared | AutoDisposition::Possible
+            ) && s.dispatch_count < MAX_DISPATCH as u32 =>
+        {
+            return Ok(settled(&dispatch(state, tx, report_id).await?));
+        }
+        Some(s)
+            if s.disposition != AutoDisposition::Held
+                || s.reason.as_deref() == Some(VERSION_CONFLICT) =>
+        {
+            tx.commit().await.map_err(db)?;
+            return Ok(settled(&s));
+        }
+        _ if !fenced => {
+            tx.commit().await.map_err(db)?;
+            return Ok(Settled::Stale);
+        }
+        _ => {}
+    }
+    let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
+    prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;
+    Ok(settled(&dispatch(state, tx, report_id).await?))
+}
+
+/// Catalog 2.3.0 `work.return`: refuses `report_id` for rework with the
+/// playbook's `reason` code behind [`playbook_locked`]'s fences, then records
+/// the replacement facts ([`record_replacement_facts`]) so that the
+/// replacement owner admits a new attempt. Idempotent per report: a result
+/// already refused is `Returned` again (and its facts are recorded again); a
+/// completed or completing one is `Stale`.
+#[cfg(feature = "delivery_playbook")]
+pub async fn return_by_playbook(
+    state: &AppState,
+    report_id: Uuid,
+    reason: &str,
+) -> Result<Settled> {
+    let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let held = existing
+        .as_ref()
+        .is_none_or(|s| s.disposition == AutoDisposition::Held);
+    let reworked = existing.is_some_and(|s| s.disposition == AutoDisposition::ReworkRequired);
+    if !reworked && (!held || !fenced) {
+        tx.commit().await.map_err(db)?;
+        return Ok(Settled::Stale);
+    }
+    if !reworked {
+        let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.return", "reason": reason, "report": r.receipt_artifact});
+        sqlx::query("INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,reason,evidence,created_at_ms,updated_at_ms) VALUES($1,$2,$3,'rework_required',$4,$5,$6,$6) ON CONFLICT(report_id) DO UPDATE SET disposition=EXCLUDED.disposition,reason=EXCLUDED.reason,evidence=EXCLUDED.evidence,updated_at_ms=EXCLUDED.updated_at_ms")
+            .bind(report_id).bind(r.report.binding.attempt_id).bind(ACTOR).bind(reason).bind(evidence).bind(now(state)?)
+            .execute(&mut *tx).await.map_err(db)?;
+    }
+    tx.commit().await.map_err(db)?;
+    Box::pin(replacement_facts_after_rework(state, report_id)).await;
+    Ok(Settled::Returned)
 }
 
 #[cfg(test)]
