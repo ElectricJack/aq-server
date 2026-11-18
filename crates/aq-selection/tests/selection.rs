@@ -829,6 +829,34 @@ fn container_only_backend_admits_only_permitted_container_confinement() {
         admit_confinement(None, &always, &sandboxed),
         Ok(ConfinementMode::Container)
     );
+    // The docker-local Codex adapter is a node sandbox adapter on the same
+    // terms; the interactive Codex adapter is not.
+    let mut codex = sandboxed.clone();
+    codex.adapter.id = aq_session_protocol::Text::new(NODE_SANDBOX_CODEX_ADAPTER).unwrap();
+    assert_eq!(
+        admit_confinement(None, &always, &codex),
+        Ok(ConfinementMode::Container)
+    );
+    codex
+        .capabilities
+        .retain(|c| c.id.as_str() != "aq.harness.container-confinement");
+    assert_eq!(
+        admit_confinement(None, &always, &codex),
+        Err((
+            CandidateState::Unsupported,
+            "container_confinement_not_advertised"
+        ))
+    );
+    let mut interactive = sandboxed.clone();
+    interactive.adapter.id =
+        aq_session_protocol::Text::new("aq.codex-result-local-adapter").unwrap();
+    assert_eq!(
+        admit_confinement(None, &always, &interactive),
+        Err((
+            CandidateState::Unsupported,
+            "container_required_adapter_unqualified"
+        ))
+    );
     for contradictory in [
         ExecutionConfinement {
             permit_container: true,
@@ -1000,6 +1028,35 @@ fn route_harness_and_provider_allowlists_deny_other_candidates_with_typed_codes(
     });
     let out = select(&catalog, &input).unwrap();
     assert_eq!(out.resolved.unwrap().choice.provider, "fixture-a");
+}
+/// A node advertising both sandbox harnesses is selected for Codex when the
+/// route allows only codex, and for Claude when it allows only claude.
+#[test]
+fn node_advertising_both_sandbox_harnesses_is_selected_for_either() {
+    let (catalog, mut input) = two_harnesses();
+    let catalog = change_confinement(&catalog, Confinement::Container, &mut input);
+    for harness in &mut input.node.harnesses {
+        harness.adapter.id = aq_session_protocol::Text::new(match harness.harness.as_str() {
+            "codex" => NODE_SANDBOX_CODEX_ADAPTER,
+            _ => NODE_SANDBOX_ADAPTER,
+        })
+        .unwrap();
+        harness.capabilities = vec![aq_session_protocol::Capability {
+            id: aq_session_protocol::Text::new("aq.harness.container-confinement").unwrap(),
+            version: 1,
+        }];
+    }
+    for harness in ["codex", "claude"] {
+        input.route = route(|r| r.harnesses = vec![harness.into()]);
+        let chosen = select(&catalog, &input).unwrap().resolved.unwrap().choice;
+        assert_eq!(chosen.harness, harness);
+    }
+    // Without the sandbox adapter identity the Codex harness is refused.
+    input.node.harnesses[0].adapter.id =
+        aq_session_protocol::Text::new("aq.codex-result-local-adapter").unwrap();
+    input.route = route(|r| r.harnesses = vec!["codex".into()]);
+    let out = select(&catalog, &input).unwrap();
+    assert!(out.resolved.is_none(), "{out:?}");
 }
 #[test]
 fn preferred_harness_is_tried_first_and_profile_order_is_kept_otherwise() {

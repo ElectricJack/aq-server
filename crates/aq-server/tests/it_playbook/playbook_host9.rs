@@ -1620,8 +1620,9 @@ mod delivery {
             host_adapters::DeliverySettlement,
             host_adapters::HostResult,
             review_domain::{
-                CatalogProfile, HOST9_CAPABILITIES, HOST10_CAPABILITIES, HOST10_DELIVERY_COMMANDS,
-                HOST10_FINGERPRINT, HOST10_VERSION,
+                CatalogProfile, HOST9_CAPABILITIES, HOST10_CAPABILITIES,
+                HOST10_DELIVERY_CAPABILITIES, HOST10_DELIVERY_COMMANDS, HOST10_FINGERPRINT,
+                HOST10_VERSION,
             },
             service::*,
         },
@@ -1688,7 +1689,11 @@ mod delivery {
             assert_eq!(contract.capabilities, BTreeSet::from([name.to_string()]));
         }
         let delivery = GrantScope {
-            capabilities: HOST10_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
+            capabilities: HOST10_CAPABILITIES
+                .iter()
+                .chain(HOST10_DELIVERY_CAPABILITIES.iter())
+                .map(|c| c.to_string())
+                .collect(),
             ..scope.clone()
         };
         assert!(host10.validate_scope(&delivery).is_ok());
@@ -1850,7 +1855,11 @@ mod delivery {
             workspace_id: l.workspace_id,
             project_id: l.project_id,
             recipients: vec![],
-            capabilities: BTreeSet::from(HOST10_CAPABILITIES.map(String::from)),
+            capabilities: HOST10_CAPABILITIES
+                .iter()
+                .chain(HOST10_DELIVERY_CAPABILITIES.iter())
+                .map(|c| c.to_string())
+                .collect(),
         };
         let grant = Uuid::new_v4();
         // The longest grant `Service::grant` admits (24 h): the tests move the clock by hours.

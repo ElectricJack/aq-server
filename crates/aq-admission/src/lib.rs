@@ -529,7 +529,9 @@ pub mod preparation_v2;
 pub mod scoped_presence;
 
 mod delivery_clock_interactive;
+mod docker_local;
 pub mod never_started;
 pub mod node_slots;
 pub mod preparation_refresh_v1;
 mod preparation_shared;
+pub use docker_local::*;

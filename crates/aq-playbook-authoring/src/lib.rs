@@ -11,6 +11,8 @@ pub mod builtin;
 pub mod complete;
 pub mod config;
 pub mod deploy;
+#[cfg(feature = "delivery_playbook")]
+pub mod document;
 pub mod http;
 pub mod request;
 pub mod runs;
@@ -25,6 +27,8 @@ pub use complete::{
 };
 pub use config::Config;
 pub use deploy::{Deployer, Server};
+#[cfg(feature = "delivery_playbook")]
+pub use document::{author_document, author_saved, catch_up};
 pub use request::{INSTRUCTIONS, OUTCOME_SCHEMA, PreviousPlaybook, workspace_files};
 pub use runs::{
     ActiveRun, Ended, Finished, GRACE_MS, Run, active, finish, in_flight, prune, requested,

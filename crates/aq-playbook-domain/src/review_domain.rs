@@ -136,16 +136,32 @@ pub const HOST10_FINGERPRINT: &str =
 /// `pull_request` commands) are served, and their capabilities admitted, by
 /// the tasks that implement them.
 #[cfg(feature = "delivery_playbook")]
+pub const HOST10_CAPABILITIES: [&str; 16] = HOST9_CAPABILITIES;
+/// The capabilities of the ten delivery commands of catalog 2.3.0. A Host10
+/// grant may name them, so that the built-in `delivery` source (spec 0016 §8)
+/// can hold a grant for the playbook its document is authored into; whether a
+/// command is served is the business of the task that implements it.
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+    "main.sync",
+    "branch.publish",
+    "pull_request.open",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.close",
+];
+/// The delivery commands a Host10 namespace serves so far (Epic 0 S8).
+#[cfg(feature = "delivery_playbook")]
 pub const HOST10_DELIVERY_COMMANDS: [&str; 4] = [
     "work.complete",
     "work.return",
     "work.hold",
     "supervisor.notify",
 ];
-/// What a Host10 namespace admits in a grant: the sixteen capabilities of
-/// Host9 and [`HOST10_DELIVERY_COMMANDS`].
-#[cfg(feature = "delivery_playbook")]
-pub const HOST10_CAPABILITIES: [&str; 20] = concat4(HOST9_CAPABILITIES, HOST10_DELIVERY_COMMANDS);
 /// The commands a Host10 namespace serves (see [`HOST10_CAPABILITIES`]).
 #[cfg(feature = "delivery_playbook")]
 pub const HOST10_COMMANDS: [&str; 20] = concat4(HOST9_COMMANDS, HOST10_DELIVERY_COMMANDS);
@@ -452,7 +468,7 @@ impl CatalogProfile {
             }
             #[cfg(feature = "delivery_playbook")]
             if self.is_delivery() {
-                allowed.extend(HOST10_DELIVERY_COMMANDS.iter().map(|c| c.to_string()));
+                allowed.extend(HOST10_DELIVERY_CAPABILITIES.iter().map(|c| c.to_string()));
             }
             if scope.workspace_id.is_nil()
                 || scope.project_id.is_nil()
