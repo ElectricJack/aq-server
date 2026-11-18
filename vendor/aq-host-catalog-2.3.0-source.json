@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source_repository": "aq-playbooks",
+  "source_revision": "1196671",
+  "publication_profile": "exact AQ host catalog 2.3.0 data bundle (contracts/aq-host-2.3.0 of the vendored vendor/aq-playbooks-1196671; supersedes 2.2.0; adds the delivery commands, aq.work.result_ready and aq.delivery.completed, and changes work.read); the same files as vendor/aq-playbooks-1196671/contracts/aq-host-2.3.0; Epic 0 (spec 0016), compiled in only with the cargo feature delivery_playbook",
+  "catalog_version": "2.3.0",
+  "catalog_fingerprint": "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a",
+  "vendor_root": "vendor/aq-host-catalog-2.3.0",
+  "files": [
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "bytes": 4859,
+      "sha256": "d9cd30ffaaf7fd4dd07464a4e625e9f946b3c6b0cba3b88407ce9391a8579888"
+    },
+    {
+      "path": "fixtures.json",
+      "mode": "100644",
+      "bytes": 105965,
+      "sha256": "df6c1da722b3bd5b43fe915dc059ec43becacc3007c8caefeaf141b0462346de"
+    },
+    {
+      "path": "manifest.json",
+      "mode": "100644",
+      "bytes": 1109,
+      "sha256": "a80531dea1257817c117d9968a8734ade1b447d421dfdff55885c96783f82f44"
+    },
+    {
+      "path": "notes.json",
+      "mode": "100644",
+      "bytes": 38916,
+      "sha256": "b8d07eea47a2e026110f596c270de1a4d2cc4f2e88ec34ef31ffad82223b7d25"
+    },
+    {
+      "path": "registry.json",
+      "mode": "100644",
+      "bytes": 315802,
+      "sha256": "c49ee6d5de252cec3ccf3d42ba622e739da8c8b9cd2984c5ec70a4df70bbab17"
+    }
+  ]
+}

@@ -171,31 +171,6 @@ fn destination(id: &str) -> Option<(&str, ObjectId)> {
         .then_some(())
         .and_then(|_| Some((target, oid(old)?)))
 }
-fn handle(id: &str, prefix: &str) -> Option<Uuid> {
-    Uuid::parse_str(id.strip_prefix(prefix)?).ok()
-}
-/// A bounded typed reason from the port; anything else maps to `fallback`.
-fn token(reason: &str, fallback: &str) -> String {
-    if (1..=64).contains(&reason.len())
-        && reason
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
-        reason.into()
-    } else {
-        fallback.into()
-    }
-}
-fn same_subject(a: &Value, id: &str, revision: i64) -> bool {
-    a["id"].as_str() == Some(id) && a["revision"].as_i64() == Some(revision)
-}
-fn merged(base: &Value, extra: Value) -> Value {
-    let mut out = base.as_object().cloned().unwrap_or_default();
-    if let Value::Object(extra) = extra {
-        out.extend(extra);
-    }
-    Value::Object(out)
-}
 
 /// What a receipt row records, besides the intent identity.
 struct Receipt<'a> {

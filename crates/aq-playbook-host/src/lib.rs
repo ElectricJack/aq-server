@@ -815,11 +815,27 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "operation.get",
         "operation.cancel",
     ];
-    if registry.commands.len() > COMMANDS.len()
+    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands, only
+    // with the cargo feature `delivery_playbook`.
+    const DELIVERY: [&str; 10] = [
+        "work.complete",
+        "work.return",
+        "work.hold",
+        "supervisor.notify",
+        "main.sync",
+        "branch.publish",
+        "pull_request.open",
+        "pull_request.await_checks",
+        "pull_request.merge",
+        "pull_request.close",
+    ];
+    let delivery = cfg!(feature = "delivery_playbook");
+    let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
+    if registry.commands.len() > COMMANDS.len() + if delivery { DELIVERY.len() } else { 0 }
         || registry.events.len() > 16
         || !bounded_json(registry, 262_144)
         || registry.commands.iter().any(|(name, c)| {
-            !COMMANDS.contains(&name.as_str())
+            !admitted(name)
                 || name != &c.name
                 || !matches!(
                     c.recovery,

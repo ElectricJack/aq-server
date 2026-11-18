@@ -69,6 +69,9 @@ pub struct Service {
     pub(super) host: Option<Arc<super::host_adapters::HostPorts>>,
     /// R1 (Host9): the routing commands serve any project on the router.
     pub installation_routing: bool,
+    /// Epic 0: what the server records of results (`aq.work.result_ready`, `work.read`).
+    #[cfg(feature = "delivery_playbook")]
+    pub(super) delivery: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
 }
 #[derive(Clone, Debug)]
 pub enum MessageResult {
@@ -274,7 +277,20 @@ impl Service {
             reviews,
             host: None,
             installation_routing: false,
+            #[cfg(feature = "delivery_playbook")]
+            delivery: Arc::new(aq_playbook_domain::delivery_store::PgDelivery(
+                state.store.pool.clone(),
+            )),
         })
+    }
+    /// Replaces the delivery port of a freshly built host service (tests).
+    #[cfg(feature = "delivery_playbook")]
+    pub fn with_delivery(
+        mut self,
+        port: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
+    ) -> Self {
+        self.delivery = port;
+        self
     }
     pub(super) fn now(&self) -> Result<i64> {
         let at = (self.clock)().timestamp_millis();

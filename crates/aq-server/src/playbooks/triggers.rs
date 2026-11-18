@@ -195,7 +195,7 @@ impl Service {
     /// `installation_routing`, else the namespace's.
     pub async fn collect_route_needed(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_playbook_domain::host9;
-        if self.profile != super::review_domain::CatalogProfile::Host9 || self.host.is_none() {
+        if !self.profile.has_routing() || self.host.is_none() {
             return Ok(0);
         }
         let now = self.now()?;
@@ -277,6 +277,66 @@ impl Service {
                 .bind(&artifact)
                 .execute(&mut *tx)
                 .await?;
+            count += 1;
+        }
+        tx.commit().await?;
+        Ok(count)
+    }
+    /// Epic 0 (spec 0016 section 6.1): `aq.work.result_ready`, level-triggered
+    /// like `collect_route_needed`. One event for each task whose current
+    /// attempt has stopped and recorded a result that no playbook decision
+    /// settled, while a delivery artifact is active. It is repeated every
+    /// `decision_repeat_ms` (Settings), at once when main or the pull request
+    /// moves, and never while a run that read the task is unfinished.
+    #[cfg(feature = "delivery_playbook")]
+    pub async fn collect_result_ready(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
+        use aq_playbook_domain::delivery_store as store;
+        let (Some(host), true) = (self.host.as_deref(), self.profile.is_delivery()) else {
+            return Ok(0);
+        };
+        let (limits, _) = aq_role_settings::delivery_limits(&self.pool)
+            .await
+            .map_err(|_| Error::Unknown)?;
+        let repeat = limits.decision_repeat_ms as i64;
+        let bounds = (
+            repeat,
+            (limits.longest_check_wait_ms as i64).saturating_add(repeat),
+        );
+        let (now, ns_key) = (
+            self.now()?,
+            (self.namespace.namespace_id, self.namespace.generation),
+        );
+        let mut tx = self.tx().await?;
+        self.runtime(&self.namespace_locked(&mut tx).await?, owner)?;
+        let project = (!self.installation_routing).then_some(self.namespace.project_id);
+        let due = store::plan(
+            &mut tx,
+            ns_key,
+            &*self.delivery,
+            project,
+            limit,
+            now,
+            bounds,
+        )
+        .await?;
+        let contract = self.profile.registry().events["aq.work.result_ready"].clone();
+        let mut count = 0;
+        for d in due {
+            let Some(node) = host
+                .graph
+                .node(d.pending.workspace_id, d.pending.task_id)
+                .await?
+            else {
+                continue;
+            };
+            let (id, event) = d.event(
+                node["version"].as_i64().ok_or(Error::Unknown)?,
+                ns_key,
+                now,
+                &contract,
+            )?;
+            self.queue_occurrence(&mut tx, id, &event).await?;
+            store::sent(&mut tx, &d, now).await?;
             count += 1;
         }
         tx.commit().await?;
