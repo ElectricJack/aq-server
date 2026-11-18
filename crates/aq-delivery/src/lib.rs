@@ -1,6 +1,9 @@
-//! Central delivery primitives. Deliberately not mounted on a worker HTTP router.
+//! Central delivery primitives. Deliberately not mounted on a worker HTTP router;
+//! only `git_grant` (spec 0016 §5.2) serves the server's `/v1/git` route.
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
+#[cfg(feature = "delivery_playbook")]
+pub mod git_grant;
 #[cfg(feature = "delivery_playbook")]
 pub mod github;
 #[cfg(feature = "delivery_playbook")]

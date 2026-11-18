@@ -58,6 +58,12 @@ pub async fn setup_actual(
     selection::setup_actual(input).await
 }
 pub async fn setup() -> Case {
+    setup_source(None).await
+}
+/// [`setup`] with the project following `source` (default: the fixed commit
+/// `a…a`). Each project policy's `retention_handle` is the one the synthetic
+/// aq-git peer retains that commit under.
+pub async fn setup_source(source: Option<aq_admission::SourceSelection>) -> Case {
     let mut env = selection::selection_fixture().await;
     let pool = env.env.pool.clone();
     // This lane intentionally installs the frozen guard explicitly. Ordered
@@ -271,12 +277,12 @@ pub async fn setup() -> Case {
             project_id: env.lineage.project_id,
             enabled: true,
             priority: 0,
-            source: aq_admission::SourceSelection::Immutable {
+            source: source.unwrap_or(aq_admission::SourceSelection::Immutable {
                 object: aq_admission::ObjectId {
                     format: aq_admission::ObjectFormat::Sha1,
                     hex: "a".repeat(40),
                 },
-            },
+            }),
             retention_handle: handle,
             placement: None,
             agent_grants: None,

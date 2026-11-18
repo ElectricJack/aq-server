@@ -228,10 +228,78 @@ pub struct NativeOffer {
     pub schema_version: u32,
     pub offered: transport::OfferedLaunch,
     pub startup: Descriptor,
+    /// Spec 0016 §5.2 (feature `delivery_playbook`): how this attempt fetches
+    /// from and pushes to central aq-git. Absent when the server has no git
+    /// endpoint configured or the project follows no named ref.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitGrant>,
+}
+/// The git grant of one attempt (spec 0016 §5.2). The node clones and pushes
+/// through `endpoint` on the server's machine listener, sending its node
+/// credential and `token` in the `AQ-Git-Token` header. The server, not the
+/// node, tells aq-git the base, the task ref, its lease and the main ref.
+#[cfg(feature = "delivery_playbook")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitGrant {
+    /// `/v1/git/<repository_id>`, relative to the server's machine origin.
+    pub endpoint: String,
+    pub repository_id: Uuid,
+    /// The commit the attempt starts from; every pushed commit descends from it.
+    pub base: String,
+    /// `refs/heads/aq/<task-id>`, the only ref the attempt may push.
+    pub task_ref: String,
+    /// The task ref's head in central aq-git when the offer was made; absent
+    /// means the ref did not exist and a push creates it.
+    pub lease: Option<String>,
+    /// The followed default branch, advertised read-only.
+    pub main_ref: String,
+    /// Names the push receipt (`push.receipt {operation_id}`) of the attempt.
+    pub operation_id: Uuid,
+    /// Valid for this attempt, on this node, for this repository only. Added
+    /// when the offer is delivered; never stored with the offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+#[cfg(feature = "delivery_playbook")]
+impl GitGrant {
+    pub fn validate(&self) -> Result<()> {
+        let oid =
+            |v: &str| v.len() == 40 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        let branch = |v: &str| {
+            v.starts_with("refs/heads/")
+                && v.len() <= 1024
+                && !v.contains("..")
+                && !v
+                    .bytes()
+                    .any(|b| b <= b' ' || b == 127 || b"~^:?*[\\".contains(&b))
+        };
+        require(
+            !self.repository_id.is_nil()
+                && !self.operation_id.is_nil()
+                && self.endpoint == format!("/v1/git/{}", self.repository_id)
+                && oid(&self.base)
+                && self.lease.as_deref().is_none_or(oid)
+                && branch(&self.main_ref)
+                && branch(&self.task_ref)
+                && self.task_ref.starts_with("refs/heads/aq/")
+                && self.task_ref != self.main_ref
+                && self
+                    .token
+                    .as_ref()
+                    .is_none_or(|t| !t.is_empty() && t.len() <= 256),
+            "native offer git grant",
+        )
+    }
 }
 impl NativeOffer {
     pub fn validate(&self) -> Result<()> {
         require(self.schema_version == 1, "native offer delivery version")?;
+        #[cfg(feature = "delivery_playbook")]
+        if let Some(git) = &self.git {
+            git.validate()?;
+        }
         self.offered.validate()?;
         self.startup.validate_against(
             &self.offered.offer,

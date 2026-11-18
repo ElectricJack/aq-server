@@ -638,6 +638,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         manifest,
         required_capabilities: required_caps,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let git = super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?;
     let time = now(state)?;
     let deadline = [
         time.checked_add(30000).ok_or_else(|| refused())?,
@@ -664,6 +666,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             artifacts: set.descriptors(),
         },
         startup: startup.descriptor,
+        #[cfg(feature = "delivery_playbook")]
+        git,
     };
     native.validate().map_err(|_| refused())?;
     spec.validate_retained(&offer, &native.offered.artifacts, time)

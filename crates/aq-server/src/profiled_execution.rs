@@ -9,6 +9,8 @@ pub mod config;
 pub mod context_budget;
 pub mod context_projection;
 pub mod expiry;
+#[cfg(feature = "delivery_playbook")]
+pub mod git_grant;
 pub mod handoff;
 pub mod journal;
 pub mod login_refresh;

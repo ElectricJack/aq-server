@@ -27,6 +27,8 @@ async fn poll(
     let slot = super::super::api::slot_header(&headers, aq_admission::node_slots::SLOT_HEADER)?
         .unwrap_or(1);
     let reply = super::workflow::poll_slot(&state, &auth, &request, slot).await?;
+    #[cfg(feature = "delivery_playbook")]
+    let reply = super::super::git_grant::deliver(&state, auth.id(), reply)?;
     let value = ControlReply::Poll(reply);
     if serde_json::to_vec(&value)
         .map_err(|_| AppError::Internal)?
