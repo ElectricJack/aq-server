@@ -782,6 +782,7 @@ async fn settlement39_prepare_held_git_reply_fences_revoked_preparer_before_priv
                 max_bundle_bytes: 1048576,
                 bulk_concurrency: 1,
                 incomplete_ttl_secs: 60,
+                git_deadline_ms: 30_000,
             },
         )
         .unwrap(),

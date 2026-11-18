@@ -65,6 +65,10 @@ pub struct SourceRetentionConfig {
     pub bulk_concurrency: usize,
     #[serde(default = "default_ttl")]
     pub incomplete_ttl_secs: u64,
+    /// How long one aq-git import or base export may take. A full bundle of a large
+    /// repository needs minutes; aq-git itself allows at most 300 s.
+    #[serde(default = "default_git_deadline_ms")]
+    pub git_deadline_ms: u64,
 }
 pub const fn default_keep_per_task() -> usize {
     2
@@ -83,6 +87,9 @@ fn default_concurrency() -> usize {
 }
 fn default_ttl() -> u64 {
     86400
+}
+fn default_git_deadline_ms() -> u64 {
+    300_000
 }
 impl SourceRetentionConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -106,7 +113,8 @@ impl SourceRetentionConfig {
                 && self.max_bundle_bytes <= 1024 * 1024 * 1024
                 && self.max_staging_bytes > 0
                 && self.incomplete_ttl_secs > 0
-                && self.incomplete_ttl_secs <= 365 * 86400,
+                && self.incomplete_ttl_secs <= 365 * 86400
+                && (1_000..=300_000).contains(&self.git_deadline_ms),
             "invalid source retention limits"
         );
         for p in [&self.staging_root, &self.git_root, &self.git_socket] {
@@ -589,7 +597,7 @@ async fn hash_file(path: &Path) -> Result<String> {
 }
 async fn socket_import(rt: &Runtime, t: &Transfer) -> Result<Value> {
     let request_id = format!("source-import-{}", t.op);
-    let request = json!({"protocol_version":1,"request_id":request_id,"operation":"artifact.import","repository_id":t.manifest.source.repository_id,"operation_id":t.op,"expected_binding_generation":t.manifest.source.binding_generation,"params":{"artifact_handle":t.manifest.artifact_id},"deadline_ms":30000});
+    let request = json!({"protocol_version":1,"request_id":request_id,"operation":"artifact.import","repository_id":t.manifest.source.repository_id,"operation_id":t.op,"expected_binding_generation":t.manifest.source.binding_generation,"params":{"artifact_handle":t.manifest.artifact_id},"deadline_ms":rt.config.git_deadline_ms});
     let exchange = async {
         let mut socket = tokio::net::UnixStream::connect(&rt.config.git_socket).await?;
         let mut bytes = serde_json::to_vec(&request)?;
@@ -615,13 +623,16 @@ async fn socket_import(rt: &Runtime, t: &Transfer) -> Result<Value> {
         );
         Ok::<_, anyhow::Error>(v["result"].clone())
     };
-    tokio::time::timeout(Duration::from_secs(35), exchange)
-        .await
-        .map_err(|_| AppError::UpdatesUnavailable("import pending; retry same transfer".into()))?
-        .map_err(|e| {
-            tracing::warn!(error=%e,operation_id=%t.op,"import outcome remains pending");
-            AppError::UpdatesUnavailable("import pending; retry same transfer".into())
-        })
+    tokio::time::timeout(
+        Duration::from_millis(rt.config.git_deadline_ms + 5_000),
+        exchange,
+    )
+    .await
+    .map_err(|_| AppError::UpdatesUnavailable("import pending; retry same transfer".into()))?
+    .map_err(|e| {
+        tracing::warn!(error=%e,operation_id=%t.op,"import outcome remains pending");
+        AppError::UpdatesUnavailable("import pending; retry same transfer".into())
+    })
 }
 async fn finalize(
     State(s): State<AppState>,
@@ -801,7 +812,9 @@ async fn finalize(
         || receipt["manifest_digest"] != canonical_digest
         || receipt["source"] != serde_json::to_value(&m.source).map_err(internal)?
         || receipt["retention_state"] != "active"
-        || receipt["historical"] != false
+        // A retry of this same operation after a late completion gets the completed
+        // receipt marked historical; every identity field above still binds it.
+        || !receipt["historical"].is_boolean()
         || receipt["receiver_installation_id"]
             .as_str()
             .and_then(|v| Uuid::parse_str(v).ok())
@@ -926,7 +939,7 @@ async fn provision_base(
         sqlx::query("INSERT INTO source_bases(attempt_id,node_id,operation_id,retention_handle,reserved_bytes) VALUES($1,$2,$3,$4,$5)").bind(r.attempt_id).bind(node).bind(r.operation_id).bind(r.retention_handle).bind(reserved as i64).execute(&mut *tx).await.map_err(internal)?;
     }
     tx.commit().await.map_err(internal)?;
-    let request = json!({"protocol_version":1,"request_id":format!("base-export-{}",r.operation_id),"operation":"artifact.export","repository_id":b.repository_id,"operation_id":r.operation_id,"expected_binding_generation":b.binding_generation,"params":{"source":b.base,"base":b.base,"retention_handle":r.retention_handle,"confirmed_prerequisites":[]},"deadline_ms":30000});
+    let request = json!({"protocol_version":1,"request_id":format!("base-export-{}",r.operation_id),"operation":"artifact.export","repository_id":b.repository_id,"operation_id":r.operation_id,"expected_binding_generation":b.binding_generation,"params":{"source":b.base,"base":b.base,"retention_handle":r.retention_handle,"confirmed_prerequisites":[]},"deadline_ms":rt.config.git_deadline_ms});
     let _result = export_base(&rt, &request).await?;
     let dir = rt
         .config
@@ -1001,15 +1014,16 @@ async fn export_base(rt: &Runtime, request: &Value) -> Result<Value> {
         );
         Ok::<_, anyhow::Error>(v["result"].clone())
     };
-    tokio::time::timeout(Duration::from_secs(35), exchange)
-        .await
-        .map_err(|_| {
-            AppError::UpdatesUnavailable("base export pending; retry same operation".into())
-        })?
-        .map_err(|e| {
-            tracing::warn!(error=%e,"base export uncertain");
-            AppError::UpdatesUnavailable("base export pending; retry same operation".into())
-        })
+    tokio::time::timeout(
+        Duration::from_millis(rt.config.git_deadline_ms + 5_000),
+        exchange,
+    )
+    .await
+    .map_err(|_| AppError::UpdatesUnavailable("base export pending; retry same operation".into()))?
+    .map_err(|e| {
+        tracing::warn!(error=%e,"base export uncertain");
+        AppError::UpdatesUnavailable("base export pending; retry same operation".into())
+    })
 }
 async fn load_base(
     tx: &mut Transaction<'_, Postgres>,
@@ -1198,7 +1212,7 @@ pub async fn load_confirmed_locked(
         || acknowledgement["manifest_digest"] != receipt.manifest_digest
         || acknowledgement["source"] != serde_json::to_value(&receipt.source).map_err(internal)?
         || acknowledgement["retention_state"] != "active"
-        || acknowledgement["historical"] != false
+        || !acknowledgement["historical"].is_boolean()
         || acknowledgement["receiver_installation_id"]
             .as_str()
             .and_then(|v| Uuid::parse_str(v).ok())

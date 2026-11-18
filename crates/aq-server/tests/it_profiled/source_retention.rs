@@ -151,6 +151,7 @@ impl Harness {
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 1,
+            git_deadline_ms: 30_000,
         };
         let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
         let state = AppState {
@@ -390,6 +391,17 @@ struct CanonicalManifest {
 }
 #[tokio::test]
 async fn late_attempt_retains_only_verified_receipt_and_releases_transport_budget() {
+    late_attempt_retains(false).await;
+}
+
+/// An import that completed after an earlier call gave up is answered as historical
+/// on the retry of the same operation; it must still be recorded (gate 25b).
+#[tokio::test]
+async fn retry_after_a_late_import_completion_records_the_historical_receipt() {
+    late_attempt_retains(true).await;
+}
+
+async fn late_attempt_retains(historical: bool) {
     let h = Harness::new().await;
     assert_eq!(
         h.json("/v1/execution/sources/begin", h.begin_body(Uuid::new_v4()))
@@ -405,7 +417,7 @@ async fn late_attempt_retains_only_verified_receipt_and_releases_transport_budge
     let m: CanonicalManifest = serde_json::from_slice(&h.bytes).unwrap();
     let canonical = hash(&serde_json::to_vec(&m).unwrap());
     assert_ne!(canonical, h.manifest.manifest_digest);
-    let receipt = json!({"receiver_installation_id":Uuid::new_v4(),"repository_id":h.manifest.source.repository_id,"binding_generation":1,"transfer_id":h.manifest.artifact_id,"source":h.manifest.checkpoint,"retention_handle":h.manifest.artifact_id,"manifest_digest":canonical,"retention_state":"active","historical":false,"accepted_at":"2026-10-30T00:00:00Z"});
+    let receipt = json!({"receiver_installation_id":Uuid::new_v4(),"repository_id":h.manifest.source.repository_id,"binding_generation":1,"transfer_id":h.manifest.artifact_id,"source":h.manifest.checkpoint,"retention_handle":h.manifest.artifact_id,"manifest_digest":canonical,"retention_state":"active","historical":historical,"accepted_at":"2026-10-30T00:00:00Z"});
     let listener = tokio::net::UnixListener::bind(h.dir.path().join("git.sock")).unwrap();
     let task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -859,6 +871,7 @@ fn runtime_rejects_symlink_before_changing_target_permissions() {
         max_bundle_bytes: 1024,
         bulk_concurrency: 1,
         incomplete_ttl_secs: 1,
+        git_deadline_ms: 30_000,
     };
     assert!(Runtime::new(cfg).is_err());
     assert_eq!(
