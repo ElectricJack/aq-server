@@ -56,4 +56,4 @@ CREATE TABLE delivery_pull_requests (
     updated_at_ms BIGINT NOT NULL CHECK(updated_at_ms > 0)
 );
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='142' WHERE key='state_format_version';
+UPDATE meta SET value='143' WHERE key='state_format_version';
