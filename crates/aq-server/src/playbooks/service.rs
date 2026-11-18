@@ -111,6 +111,8 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }
@@ -196,6 +198,8 @@ impl Service {
             judgments,
             integration,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }
@@ -203,6 +207,17 @@ impl Service {
     pub fn with_routing(mut self, routing: Arc<dyn super::host_adapters::RoutingPort>) -> Self {
         if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
             ports.routing = routing;
+        }
+        self
+    }
+    /// Replaces the delivery port of a freshly built host service (tests).
+    #[cfg(feature = "delivery_playbook")]
+    pub fn with_delivery_ops(
+        mut self,
+        delivery_ops: Arc<dyn super::host_adapters::DeliveryOps>,
+    ) -> Self {
+        if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
+            ports.delivery_ops = delivery_ops;
         }
         self
     }
@@ -222,6 +237,8 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }
