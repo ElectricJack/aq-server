@@ -50,12 +50,20 @@ pub fn container_only(backend: Option<BackendKind>) -> bool {
     backend == Some(BackendKind::DockerLocal)
 }
 
-/// The one adapter whose harness always runs in a node-owned sandbox container
+/// The adapters whose harness always runs in a node-owned sandbox container
 /// (MS1: Claude Code driven in a docker-local sandbox by the node).
 pub const NODE_SANDBOX_ADAPTER: &str = "aq.claude-result-local-adapter";
+/// The docker-local Codex counterpart (aq-worker W1). The interactive Codex
+/// adapter `aq.codex-result-local-adapter` is not a sandbox adapter.
+pub const NODE_SANDBOX_CODEX_ADAPTER: &str = "aq.codex-docker-result-local-adapter";
+
+/// Whether `adapter` is a node sandbox adapter (Claude or Codex).
+pub fn is_node_sandbox_adapter(adapter: &str) -> bool {
+    adapter == NODE_SANDBOX_ADAPTER || adapter == NODE_SANDBOX_CODEX_ADAPTER
+}
 
 /// `require_container` (MS1) bypasses B1 placement facts, so it is admitted only
-/// for the node-sandbox adapter and only when the node's authenticated
+/// for a node-sandbox adapter and only when the node's authenticated
 /// capability snapshot advertises container confinement for that harness.
 fn require_container(
     profile: &aq_profiles::ExecutionConfinement,
@@ -67,7 +75,7 @@ fn require_container(
             "execution_confinement_contradictory",
         ));
     }
-    if harness.adapter.id.as_str() != NODE_SANDBOX_ADAPTER {
+    if !is_node_sandbox_adapter(harness.adapter.id.as_str()) {
         return Err((
             CandidateState::Unsupported,
             "container_required_adapter_unqualified",

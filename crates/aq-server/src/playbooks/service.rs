@@ -72,6 +72,9 @@ pub struct Service {
     /// Epic 0: what the server records of results (`aq.work.result_ready`, `work.read`).
     #[cfg(feature = "delivery_playbook")]
     pub(super) delivery: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
+    /// Epic 0: the server's settlement, for `work.complete` and `work.return`.
+    #[cfg(feature = "delivery_playbook")]
+    pub(super) settlement: Arc<dyn super::host_adapters::DeliverySettlement>,
 }
 #[derive(Clone, Debug)]
 pub enum MessageResult {
@@ -281,6 +284,8 @@ impl Service {
             delivery: Arc::new(aq_playbook_domain::delivery_store::PgDelivery(
                 state.store.pool.clone(),
             )),
+            #[cfg(feature = "delivery_playbook")]
+            settlement: Arc::new(super::host_adapters::ServerSettlement(state.clone())),
         })
     }
     /// Replaces the delivery port of a freshly built host service (tests).
@@ -290,6 +295,15 @@ impl Service {
         port: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
     ) -> Self {
         self.delivery = port;
+        self
+    }
+    /// Replaces the settlement port of a freshly built host service (tests).
+    #[cfg(feature = "delivery_playbook")]
+    pub fn with_settlement(
+        mut self,
+        port: Arc<dyn super::host_adapters::DeliverySettlement>,
+    ) -> Self {
+        self.settlement = port;
         self
     }
     pub(super) fn now(&self) -> Result<i64> {

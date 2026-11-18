@@ -9,7 +9,6 @@ use crate::{
     save, source_digest, store, stranded, task_for,
 };
 use aq_internal_work::{Outcome, Reason, store as internal};
-use aq_playbooks_compiler::docs;
 use aq_playbooks_model::Artifact;
 use aq_playbooks_simulation::cases::{Outcome as Authored, quote};
 use serde_json::{Value, json};
@@ -127,10 +126,11 @@ pub async fn submit_run<S: Server>(s: &S, id: i64) -> Result<()> {
             continue;
         }
         let previous = previous(pool, &run.source_id).await?;
+        let catalog = request::pinned_catalog(&now.record)?;
         let files = request::workspace_files(
             &now.record,
             &now.markdown,
-            &docs::catalog_registry(),
+            &catalog,
             &now.facts,
             &run.facts_digest,
             previous.as_ref(),
@@ -315,11 +315,12 @@ async fn saved<S: Server>(
     let previous: Option<Artifact> =
         (in_effect.as_ref()).and_then(|a| serde_json::from_value(a.artifact.clone()).ok());
     let case_files = serde_json::to_value(&cases).map_err(|_| Error::Corrupt)?;
+    let catalog = request::pinned_catalog(&now.record)?;
     let inputs = save::Inputs {
         grant_capabilities: now.record.capabilities.clone(),
         record: now.record,
         markdown: now.markdown,
-        catalog: docs::catalog_registry(),
+        catalog,
         facts: now.facts,
         facts_version: run.facts_digest.clone(),
         previous,
@@ -656,6 +657,12 @@ pub async fn serve<S: Server>(s: S, mut stop: tokio::sync::watch::Receiver<bool>
         }
         if let Err(e) = tick(&s).await {
             tracing::warn!(error = %e, "authoring runs not advanced");
+        }
+        // The delivery document is Settings' too: a missed save is caught up
+        // on a slower pass (spec 0016 §8).
+        #[cfg(feature = "delivery_playbook")]
+        if pass % 30 == 0 {
+            crate::catch_up(&s, &crate::builtin::delivery()).await;
         }
         tokio::select! {
             _ = stop.wait_for(|stop| *stop) => return,

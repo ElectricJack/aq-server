@@ -15,6 +15,8 @@ pub use automatic::{
     AutoDisposition, AutoSettlement, ReplacementFacts, record_replacement_facts,
     reworked_without_facts, settle_after_record,
 };
+#[cfg(feature = "delivery_playbook")]
+pub use automatic::{complete_by_playbook, return_by_playbook};
 
 /// The review requirement an offer must name for this validation policy body:
 /// D3's default completion policy is settled by the policy actor, every other

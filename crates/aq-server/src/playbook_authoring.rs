@@ -56,13 +56,10 @@ impl authoring::Host for AppState {
             SourceKind::Registered => {
                 authoring::stored_markdown(&self.store.pool, &source.id).await?
             }
-            // The routing document is a Settings value of the role store.
-            SourceKind::Builtin if source.id == authoring::builtin::ROUTING => {
-                let read = aq_role_settings::routing_document(&self.store.pool).await;
-                let (markdown, revision) = read.map_err(|e| Error::Host(e.to_string()))?;
-                Some((markdown, u64::try_from(revision).unwrap_or(0)))
-            }
-            SourceKind::Builtin => None,
+            SourceKind::Builtin => aq_role_settings::document_of(&self.store.pool, &source.id)
+                .await
+                .map_err(|e| Error::Host(e.to_string()))?
+                .map(|(markdown, revision)| (markdown, u64::try_from(revision).unwrap_or(0))),
         };
         stored.ok_or_else(|| Error::Host(format!("{} has no document yet", source.id)))
     }

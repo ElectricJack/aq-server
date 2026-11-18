@@ -148,8 +148,8 @@ impl PhasePolicy {
                 && manifest.harness.harness.as_str() == "codex"
                 && manifest.harness.cli_version.as_str() == "0.166.0"
                 && manifest.harness.adapter.id.as_str() == "aq.codex-result-local-adapter";
-            // MS1: Claude Code 2.1.318 driven in a docker-local sandbox; no
-            // terminal input, container confinement.
+            // Docker-local sandbox executors (MS1 Claude, W1 Codex): no
+            // terminal input, container confinement only.
             let declares = |id: &str| {
                 manifest
                     .harness
@@ -157,14 +157,16 @@ impl PhasePolicy {
                     .iter()
                     .any(|c| c.id.as_str() == id && c.version == 1)
             };
-            let claude = !manifest.terminal.input_enabled
-                && manifest.harness.harness.as_str() == "claude"
-                && manifest.harness.cli_version.as_str() == "2.1.318"
-                && manifest.harness.adapter.id.as_str() == "aq.claude-result-local-adapter"
-                && declares(aq_session_protocol::CONTAINER_CONFINEMENT_CAPABILITY)
-                && !declares(aq_session_protocol::NATIVE_CONFINEMENT_CAPABILITY);
-            require(codex || claude,
-                "long execution requires explicit interactive Codex or docker-local Claude manifest")?;
+            let sandboxed = crate::DOCKER_LOCAL_PROFILES.iter().any(|p| {
+                !manifest.terminal.input_enabled
+                    && manifest.harness.harness.as_str() == p.harness
+                    && manifest.harness.cli_version.as_str() == p.cli_version
+                    && manifest.harness.adapter.id.as_str() == p.adapter
+                    && declares(aq_session_protocol::CONTAINER_CONFINEMENT_CAPABILITY)
+                    && !declares(aq_session_protocol::NATIVE_CONFINEMENT_CAPABILITY)
+            });
+            require(codex || sandboxed,
+                "long execution requires explicit interactive Codex or docker-local Claude or Codex manifest")?;
         }
         Ok(())
     }

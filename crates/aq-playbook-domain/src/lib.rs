@@ -2,11 +2,15 @@
 pub mod artifacts;
 pub mod coding;
 #[cfg(feature = "delivery_playbook")]
+pub mod delivery_decisions;
+#[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
 #[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;
+pub mod host_requests;
 pub mod host_values;
+pub mod playbook_view;
 pub mod review_domain;
 use aq_playbook_host::{
     model::*,
