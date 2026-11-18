@@ -12,9 +12,8 @@ use super::{
 use crate::{
     AppState,
     delivery::{
-        CandidateRequest, CandidateState, ChecksState, CommitMetadata, DeliverRequest,
-        DeliveryError, DeliveryOutcome, DeliveryService, GitHubAdapter, GitHubError,
-        OperationContext, PublicationMode, PublicationPolicy, PullRequest, PullRequestSpec,
+        CandidateRequest, CandidateState, CommitMetadata, DeliverRequest, DeliveryError,
+        DeliveryOutcome, DeliveryService, OperationContext, PublicationMode, PublicationPolicy,
     },
     profiled_execution::results,
 };
@@ -108,22 +107,10 @@ pub async fn current_head<'e>(
     Ok(Some(head))
 }
 
-/// aq-git 0.2.0 cannot create a pull-request head branch and no GitHub
-/// credentials are configured (D0/D2): pull-request policies hold explicitly
-/// before any call, so no GitHub client is bound.
-struct NoGitHub;
-#[async_trait::async_trait]
-impl GitHubAdapter for NoGitHub {
-    async fn open_pull_request(
-        &self,
-        _: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-    async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-}
+// aq-git 0.2.0 cannot create a pull-request head branch and no GitHub
+// credentials are configured (D0/D2): pull-request policies hold explicitly
+// before any call, so no GitHub client is bound.
+use crate::delivery::UnconfiguredGitHub as NoGitHub;
 
 /// One in-process owner per report: a duplicate result POST never races a
 /// running publication into a second evidence write.
