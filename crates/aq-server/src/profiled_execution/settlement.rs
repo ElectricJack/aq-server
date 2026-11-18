@@ -8,21 +8,29 @@ pub mod eligibility;
 
 mod automatic;
 mod completion;
-mod default_policy;
+#[cfg(not(feature = "delivery_playbook"))]
+use aq_profiled_state::default_policy;
+mod facts;
 mod owner;
 pub mod publication;
+#[cfg(not(feature = "delivery_playbook"))]
+pub use automatic::settle_after_record;
 pub use automatic::{
     AutoDisposition, AutoSettlement, ReplacementFacts, record_replacement_facts,
-    reworked_without_facts, settle_after_record,
+    reworked_without_facts,
 };
 #[cfg(feature = "delivery_playbook")]
 pub use automatic::{complete_by_playbook, return_by_playbook};
+#[cfg(feature = "delivery_playbook")]
+pub use facts::record_facts;
 
 /// The review requirement an offer must name for this validation policy body:
 /// D3's default completion policy is settled by the policy actor, every other
 /// policy by the human owner. Naming the policy actor removes the human review
 /// fallback for default-policy tasks: a held or reworked result has no human
 /// approval path (MS1 review; a later follow-up, no code change now).
+/// Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`.
+#[cfg(not(feature = "delivery_playbook"))]
 pub(crate) fn review_requirement(policy_body: &str) -> aq_admission::outcome::ReviewRequirement {
     if default_policy::parse(policy_body).is_some() {
         aq_admission::outcome::ReviewRequirement::PolicyActor
@@ -32,3 +40,14 @@ pub(crate) fn review_requirement(policy_body: &str) -> aq_admission::outcome::Re
 }
 pub use completion::{CompletionReceipt, CompletionStatus};
 pub use owner::{EvaluateRequest, EvaluationDisposition, EvaluationReceipt, Service};
+
+#[cfg(all(test, not(feature = "delivery_playbook")))]
+#[test]
+fn default_policy_offers_name_the_policy_actor() {
+    use aq_admission::outcome::ReviewRequirement::{HumanOwner, PolicyActor};
+    let policy =
+        r#"{"schema_version":1,"kind":"aq.default-completion.v1","delivery":"not_required"}"#;
+    assert_eq!(review_requirement(policy), PolicyActor);
+    let other = r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
+    assert_eq!(review_requirement(other), HumanOwner);
+}
