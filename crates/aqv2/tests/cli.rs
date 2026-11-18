@@ -28,6 +28,7 @@ struct Seen {
     body: Value,
 }
 struct Server {
+    origin: String,
     client: Client,
     seen: mpsc::UnboundedReceiver<Seen>,
     task: tokio::task::JoinHandle<()>,
@@ -95,6 +96,7 @@ async fn server(responses: Vec<(StatusCode, Value)>) -> Server {
     )
     .unwrap();
     Server {
+        origin,
         client,
         seen: rx,
         task,
@@ -1061,4 +1063,81 @@ fn every_catalog_command_has_help_and_resolvable_flags() {
         })
         .sum();
     assert!(total - described <= 3, "{described} of {total} described");
+}
+
+#[tokio::test]
+async fn local_owner_uses_loopback_without_identity_headers() {
+    let mut srv = server(vec![(StatusCode::OK, json!({"items": []}))]).await;
+    let origin = srv.origin.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_aqv2"))
+            .env_remove("AQ_CHANNEL")
+            .args(["--local", "--origin", &origin, "--json", "projects", "list"])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"], json!({"items": []}));
+    let seen = srv.next().await;
+    assert_eq!(seen.method, "GET");
+    assert_eq!(seen.path, "/api/v1/projects");
+    for header in ["cf-access-jwt-assertion", "x-aq-dev-email", "authorization"] {
+        assert!(!seen.headers.contains_key(header), "{header}");
+    }
+}
+
+#[test]
+fn local_owner_refuses_remote_origins_and_other_auth_modes() {
+    let binary = env!("CARGO_BIN_EXE_aqv2");
+    for origin in ["http://example.test", "https://127.0.0.1:28080"] {
+        let output = std::process::Command::new(binary)
+            .env_remove("AQ_CHANNEL")
+            .args(["--local", "--origin", origin, "projects", "list"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{origin}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("configuration_error"),
+            "{origin}"
+        );
+    }
+
+    let output = std::process::Command::new(binary)
+        .env("AQ_CHANNEL", "unix:/tmp/unused-aq-test.sock")
+        .args([
+            "--local",
+            "--origin",
+            "http://127.0.0.1:28080",
+            "projects",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--local is only available on the host")
+    );
+
+    let output = std::process::Command::new(binary)
+        .env_remove("AQ_CHANNEL")
+        .args([
+            "--local",
+            "--origin",
+            "http://127.0.0.1:28080",
+            "--cf-access-token-file",
+            "/unused",
+            "projects",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
 }

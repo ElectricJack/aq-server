@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 aq-agent-result-local = { path = "../../vendor/aq-agent-result-local-0.1.0", version = "=0.1.0" }
-aq-human-http = { path = "../aq-human-http", version = "=0.1.0" }
+aq-human-http = { path = "../aq-human-http", version = "=0.1.0", features = ["loopback-development"] }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,6 +17,5 @@ nix = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
-aq-human-http = { path = "../aq-human-http", version = "=0.1.0", features = ["loopback-development"] }
 axum.workspace = true
 tempfile.workspace = true

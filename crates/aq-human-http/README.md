@@ -13,9 +13,10 @@ sizes and total/connect deadlines are finite; status errors never echo bodies.
 Transport errors do not prove non-delivery. Callers retain stable operation IDs
 and reconcile uncertain mutations explicitly; this helper never retries them.
 
-Optional `loopback-development` exposes `LoopbackDevelopmentEmail` for explicit
-HTTP loopback development only, matching the server's `x-aq-dev-email` semantics.
-It is absent from default production builds and never an authentication fallback.
+The `loopback-development` feature exposes `LoopbackDevelopment`, which uses the
+development server's configured identity, and `LoopbackDevelopmentEmail`, which
+sends `x-aq-dev-email`. Both require an HTTP loopback origin and explicit selection
+by the calling client.
 `localhost` development connections are pinned to loopback addresses, and no
 cookies or node credentials are used. Normal tests use disposable loopback fake
 HTTP servers and temporary synthetic credential files.
