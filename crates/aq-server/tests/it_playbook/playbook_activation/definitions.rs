@@ -8,15 +8,22 @@ use tower::ServiceExt;
 mod development_definition;
 
 async fn read(app: &Router, email: &str, query: &str) -> (u16, Value) {
+    get(
+        app,
+        email,
+        &format!("/api/playbooks/inspection/loaded-definitions{query}"),
+    )
+    .await
+}
+
+async fn get(app: &Router, email: &str, path: &str) -> (u16, Value) {
     let response = app
         .clone()
         .oneshot(
-            Request::get(format!(
-                "/api/playbooks/inspection/loaded-definitions{query}"
-            ))
-            .header("x-aq-dev-email", email)
-            .body(Body::empty())
-            .unwrap(),
+            Request::get(path)
+                .header("x-aq-dev-email", email)
+                .body(Body::empty())
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -131,6 +138,50 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
             .expect("startup metadata must not wait for the engine snapshot table");
     assert_eq!(status, 200);
     assert_eq!(unlocked_read["items"], page["items"]);
+    let graph_path =
+        |artifact: &str| format!("/api/playbooks/inspection/definitions/{artifact}/graph");
+    let (status, compiled) = get(&app, "owner@localhost", &graph_path(&later.digest)).await;
+    assert_eq!(status, 200, "{compiled}");
+    assert_eq!(compiled["api_version"], "playbooks-definition-graph-1");
+    assert_eq!(compiled["artifact"], later.digest);
+    assert_eq!(compiled["namespace"], page["namespace"]);
+    assert_eq!(
+        compiled["graph"],
+        serde_json::to_value(aq_server::playbooks::inspection::playbook_view::graph(
+            &later.content.playbook
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        get(
+            &app,
+            "owner@localhost",
+            &graph_path(&format!("sha256:{}", "0".repeat(64)))
+        )
+        .await
+        .1["graph"],
+        Value::Null
+    );
+    assert_eq!(
+        get(&app, "owner@localhost", &graph_path("bad-digest"))
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        get(
+            &app,
+            "owner@localhost",
+            &format!(
+                "{}?project_id={}",
+                graph_path(&later.digest),
+                Uuid::new_v4()
+            )
+        )
+        .await
+        .0,
+        404
+    );
     lock.rollback().await.unwrap();
     runtime.shutdown().await.unwrap();
 }
@@ -186,6 +237,19 @@ async fn loaded_definitions_refuse_foreign_scope_roles_unknown_query_and_absent_
         sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,$2,$3,'dev',$2,now())")
             .bind(Uuid::new_v4()).bind(email).bind(role).execute(&pool).await.unwrap();
         assert_eq!(read(&app, email, "").await.0, expected);
+        assert_eq!(
+            get(
+                &app,
+                email,
+                &format!(
+                    "/api/playbooks/inspection/definitions/{}/graph",
+                    artifact.digest
+                )
+            )
+            .await
+            .0,
+            expected
+        );
         assert!(!capability(&app, email).await);
     }
     assert_eq!(
