@@ -1405,808 +1405,6 @@ async fn remote_worker_checks_are_scoped_idempotent_and_return_results() {
 }
 
 #[tokio::test]
-async fn retained_transcript_real_sql_router_contract() {
-    let f = common::profiled::fixture().await;
-    let pool = f.db.pool().await;
-    let project = f.selection.lineage.project_id;
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,$5,'stopped','Ended',1,2,2)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).bind(json!({"provider":"anthropic","model":"fixture"})).execute(&pool).await.unwrap();
-    let admin = build_admin_router(f.state.clone());
-    let worker = build_worker_router(f.state.clone());
-    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
-    let read = format!("/api/manual-agents/{id}/transcript");
-    let (status, initial) = call(&admin, &read, None, None, false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(initial["session"]["archive"]["state"], "not_recorded");
-    assert_ne!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":1,"text":"x"})),
-            None,
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_ne!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":1,"text":"x","extra":true})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_ne!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":1,"text":"\u{0}"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let chunk = json!({"sequence":1,"text":"é hel"});
-    let (status, ack) = call(
-        &worker,
-        &upload,
-        Some(chunk.clone()),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{ack}");
-    assert_eq!(
-        ack,
-        json!({"accepted_through":1,"next_sequence":2,"archive_state":"finalizing"})
-    );
-    assert_eq!(
-        call(&worker, &upload, Some(chunk), Some(&f.credential), false)
-            .await
-            .1,
-        ack
-    );
-    let (status, gap) = call(
-        &worker,
-        &upload,
-        Some(json!({"sequence":3,"text":"bad"})),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(gap["next_sequence"], 2);
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":1,"text":"changed"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":2,"text":"lo world"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let final_body = json!({"final_sequence":2,"coverage":"partial","reason":"fixture"});
-    let (status, final_ack) = call(
-        &worker,
-        &upload,
-        Some(final_body.clone()),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(final_ack["archive_state"], "complete");
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(final_body),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .1,
-        final_ack
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"final_sequence":2,"coverage":"complete","reason":null})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":1,"text":"é hel"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .1,
-        ack,
-        "a late identical retry keeps its original acknowledgement"
-    );
-    let (_, page) = call(&admin, &format!("{read}?limit=1"), None, None, false).await;
-    assert_eq!(page["chunks"], json!([{"sequence":1,"text":"é hel"}]));
-    assert_eq!(page["has_more"], true);
-    let (_, matches) = call(&admin, &format!("{read}/search?q=HELLO"), None, None, false).await;
-    assert_eq!(matches["matches"][0]["offset"], 3);
-    assert_eq!(matches["matches"][0]["length"], 5);
-    assert_eq!(matches["matches"][0]["sequence"], 1);
-    let (_, history) = call(
-        &admin,
-        "/api/manual-agents/history?status=ended&limit=1",
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(history["sessions"][0]["id"], id.to_string());
-    assert_eq!(history["sessions"][0]["archive"]["coverage"], "partial");
-    // Schema guards survive direct SQL and archive paging extends beyond the fleet cap.
-    assert!(
-        sqlx::query(
-            "INSERT INTO manual_transcript_chunks(session_id,sequence,text,ack_state) VALUES($1,0,'invalid','recording')"
-        )
-        .bind(id)
-        .execute(&pool)
-        .await
-        .is_err()
-    );
-    assert!(
-        sqlx::query("UPDATE manual_transcript_archives SET bytes=67108865 WHERE session_id=$1")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .is_err()
-    );
-    let ids: Vec<Uuid> = (0..260).map(|_| Uuid::new_v4()).collect();
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) SELECT x,$2,$3,$4,'{}','stopped','Ended',1,1,1 FROM unnest($1::uuid[]) x").bind(&ids).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
-    let mut seen = std::collections::HashSet::new();
-    let mut cursor = None;
-    loop {
-        let path = match cursor {
-            Some(ref c) => format!("/api/manual-agents/history?limit=100&cursor={c}"),
-            None => "/api/manual-agents/history?limit=100".to_string(),
-        };
-        let (status, page) = call(&admin, &path, None, None, false).await;
-        assert_eq!(status, StatusCode::OK, "{page}");
-        for item in page["sessions"].as_array().unwrap() {
-            assert!(seen.insert(item["id"].as_str().unwrap().to_owned()));
-        }
-        cursor = page["next_cursor"].as_str().map(str::to_owned);
-        if cursor.is_none() {
-            break;
-        }
-    }
-    assert_eq!(seen.len(), 261);
-    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
-        .bind(f.node.node_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_ne!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":3,"text":"no"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        call(&admin, &read, None, None, false).await.0,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
-async fn retained_transcript_large_archive_survives_router_reconstruction() {
-    let f = common::profiled::fixture().await;
-    let pool = f.db.pool().await;
-    let project = f.selection.lineage.project_id;
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,'{}','stopped','Ended',1,2,2)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
-    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
-    let read = format!("/api/manual-agents/{id}/transcript");
-    let worker = build_worker_router(f.state.clone());
-    let mut expected = String::new();
-    let mut first = None;
-    for sequence in 1..=12 {
-        let text = format!(
-            "chunk {sequence}: {}\n",
-            "retained line with searchable text\n".repeat(300)
-        );
-        expected.push_str(&text);
-        let body = json!({"sequence": sequence, "text": text});
-        let (status, ack) = call(
-            &worker,
-            &upload,
-            Some(body.clone()),
-            Some(&f.credential),
-            false,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{ack}");
-        assert_eq!(ack["accepted_through"], sequence);
-        if sequence == 1 {
-            first = Some((body, ack));
-        }
-    }
-    assert!(expected.len() > 64 * 1024);
-    assert!(expected.lines().count() > 500);
-    let final_body = json!({"final_sequence":12,"coverage":"complete","reason":null});
-    let (status, final_ack) = call(
-        &worker,
-        &upload,
-        Some(final_body.clone()),
-        Some(&f.credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{final_ack}");
-    drop(worker);
-
-    // Fresh routers have no in-memory archive state; all receipts and reads use SQL.
-    let worker = build_worker_router(f.state.clone());
-    let admin = build_admin_router(f.state.clone());
-    let (body, ack) = first.unwrap();
-    assert_eq!(
-        call(&worker, &upload, Some(body), Some(&f.credential), false).await,
-        (StatusCode::OK, ack)
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(final_body),
-            Some(&f.credential),
-            false
-        )
-        .await,
-        (StatusCode::OK, final_ack)
-    );
-    let mut after = 0;
-    let mut recovered = String::new();
-    loop {
-        let (status, page) = call(
-            &admin,
-            &format!("{read}?limit=2&after={after}"),
-            None,
-            None,
-            false,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{page}");
-        assert_eq!(page["session"]["archive"]["state"], "complete");
-        assert_eq!(page["session"]["archive"]["bytes"], expected.len());
-        for chunk in page["chunks"].as_array().unwrap() {
-            recovered.push_str(chunk["text"].as_str().unwrap());
-        }
-        let next = page["next_after"].as_i64().unwrap();
-        assert!(next > after);
-        after = next;
-        if !page["has_more"].as_bool().unwrap() {
-            break;
-        }
-    }
-    assert_eq!(after, 12);
-    assert_eq!(recovered, expected);
-    let (status, matches) = call(
-        &admin,
-        &format!("{read}/search?q=chunk%2012"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{matches}");
-    assert_eq!(matches["matches"][0]["sequence"], 12);
-}
-
-/// Opt-in cross-check against the production worker recorder in a sibling checkout.
-/// Set AQ_RECORDING_WORKER_DIR and DATABASE_URL; requires the worker's Docker fixture image.
-#[tokio::test]
-#[ignore = "requires a worker checkout and Docker fixture image"]
-async fn retained_transcript_real_worker_docker_capture() {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let worker_dir = std::env::var_os("AQ_RECORDING_WORKER_DIR").expect("worker checkout path");
-    let f = common::profiled::fixture().await;
-    let pool = f.db.pool().await;
-    let project = f.selection.lineage.project_id;
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','running','Running',1,1)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let worker_app = build_worker_router(f.state.clone());
-    let server = tokio::spawn(async move {
-        axum::serve(listener, worker_app).await.unwrap();
-    });
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("fixture.json");
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&config)
-        .unwrap();
-    serde_json::to_writer(file, &json!({"origin":origin,"credential":f.credential,"session_id":id,"node_id":f.node.node_id})).unwrap();
-    let status = tokio::process::Command::new("timeout")
-        .args([
-            "900",
-            "cargo",
-            "test",
-            "-p",
-            "aq-worker",
-            "--locked",
-            "--all-features",
-            "--bin",
-            "aq-worker",
-            "manual::recording::tests::real_archive_docker_fixture",
-            "--",
-            "--ignored",
-            "--exact",
-        ])
-        .current_dir(worker_dir)
-        .env("AQ_RECORDING_FIXTURE", &config)
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("DATABASE_URL")
-        .kill_on_drop(true)
-        .status()
-        .await
-        .unwrap();
-    assert!(status.success(), "worker fixture failed: {status}");
-    server.abort();
-    let admin = build_admin_router(f.state.clone());
-    let read = format!("/api/manual-agents/{id}/transcript");
-    let mut after = 0;
-    let mut text = String::new();
-    loop {
-        let (status, page) =
-            call(&admin, &format!("{read}?after={after}"), None, None, false).await;
-        assert_eq!(status, StatusCode::OK, "{page}");
-        assert_eq!(page["session"]["archive"]["state"], "complete");
-        assert_eq!(page["session"]["archive"]["coverage"], "complete");
-        for chunk in page["chunks"].as_array().unwrap() {
-            text.push_str(chunk["text"].as_str().unwrap());
-        }
-        let next = page["next_after"].as_i64().unwrap();
-        assert!(next > after);
-        after = next;
-        if !page["has_more"].as_bool().unwrap() {
-            break;
-        }
-    }
-    assert!(text.len() > 64 * 1024);
-    assert!(text.lines().count() > 500);
-    assert!(text.contains("FIXTURE-BEGIN"));
-    assert!(text.contains("fixture-line-0700-"));
-    assert!(text.contains("FIXTURE-END"));
-    let (status, found) = call(
-        &admin,
-        &format!("{read}/search?q=fixture-line-0700"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{found}");
-    assert_eq!(found["matches"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-#[ignore = "requires a worker checkout"]
-async fn retained_transcript_real_worker_corrupt_recovery() {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let worker_dir = std::env::var_os("AQ_RECORDING_WORKER_DIR").expect("worker checkout path");
-    let f = common::profiled::fixture().await;
-    let pool = f.db.pool().await;
-    let project = f.selection.lineage.project_id;
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,'{}','running','Running',1,1)").bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let app = build_worker_router(f.state.clone());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("fixture.json");
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&config)
-        .unwrap();
-    serde_json::to_writer(file, &json!({"origin":origin,"credential":f.credential,"session_id":id,"node_id":f.node.node_id})).unwrap();
-    let status = tokio::process::Command::new("timeout")
-        .args([
-            "900",
-            "cargo",
-            "test",
-            "-p",
-            "aq-worker",
-            "--locked",
-            "--all-features",
-            "--bin",
-            "aq-worker",
-            "manual::recording::tests::real_archive_corrupt_recovery_fixture",
-            "--",
-            "--ignored",
-            "--exact",
-        ])
-        .current_dir(worker_dir)
-        .env("AQ_RECORDING_FIXTURE", &config)
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("DATABASE_URL")
-        .kill_on_drop(true)
-        .status()
-        .await
-        .unwrap();
-    assert!(status.success(), "worker fixture failed: {status}");
-    server.abort();
-    let admin = build_admin_router(f.state.clone());
-    let (status, page) = call(
-        &admin,
-        &format!("/api/manual-agents/{id}/transcript"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(page["session"]["archive"]["state"], "complete");
-    assert_eq!(page["session"]["archive"]["coverage"], "partial");
-    assert_eq!(
-        page["session"]["archive"]["reason"],
-        "Recording state was lost; retained output may be incomplete"
-    );
-    assert_eq!(
-        page["chunks"],
-        json!([
-            {"sequence":1,"text":"fixture retained 1\n"},
-            {"sequence":2,"text":"fixture retained 2\n"}
-        ])
-    );
-    assert_eq!(page["has_more"], false);
-}
-
-#[tokio::test]
-async fn retained_transcript_owner_fences_limits_and_unicode_offsets() {
-    let f = common::profiled::fixture().await;
-    let pool = f.db.pool().await;
-    let project = f.selection.lineage.project_id;
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')").bind(project).execute(&pool).await.unwrap();
-    let other_node = Uuid::new_v4();
-    let other_credential = aq_server::tokens::new_node_credential();
-    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'archive-other',$2,'0.1.0',1,now())")
-        .bind(other_node).bind(aq_server::tokens::verifier(&other_credential)).execute(&pool).await.unwrap();
-    let admin = build_admin_router(f.state.clone());
-    let worker = build_worker_router(f.state.clone());
-    // Prove the second credential authenticates as a different enrolled worker.
-    let (status, response) = call(
-        &worker,
-        "/v1/worker/manual-agents",
-        Some(json!({"max_slots":1,"repositories":[]})),
-        Some(&other_credential),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{response}");
-    let id = Uuid::new_v4();
-    let empty_id = Uuid::new_v4();
-    let full_id = Uuid::new_v4();
-    for session_id in [id, empty_id, full_id] {
-        sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,'{}','stopped','Ended',1,2,2)")
-            .bind(session_id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
-    }
-    let upload = format!("/v1/worker/manual-agents/{id}/transcript");
-    let read = format!("/api/manual-agents/{id}/transcript");
-    for payload in [
-        json!({"sequence":1,"text":"intrusion"}),
-        json!({"final_sequence":0,"coverage":"complete","reason":null}),
-    ] {
-        assert_eq!(
-            call(
-                &worker,
-                &upload,
-                Some(payload),
-                Some(&other_credential),
-                false
-            )
-            .await
-            .0,
-            StatusCode::FORBIDDEN
-        );
-    }
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM manual_transcript_archives WHERE session_id=$1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(count, 0);
-    for (sequence, text) in [(1, "İ"), (2, "I HEL"), (3, "LO")] {
-        let (status, response) = call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":sequence,"text":text})),
-            Some(&f.credential),
-            false,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{response}");
-    }
-    assert_eq!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"final_sequence":3,"coverage":"complete","reason":null})),
-            Some(&other_credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    let (status, hits) = call(
-        &admin,
-        &format!("{read}/search?q=i&limit=1"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{hits}");
-    assert_eq!(hits["matches"][0]["offset"], 0);
-    assert_eq!(hits["matches"][0]["length"], 2);
-    assert_eq!(hits["matches"][0]["sequence"], 1);
-    assert_eq!(hits["next_after"], 0);
-    assert_eq!(hits["has_more"], true);
-    let (_, second) = call(
-        &admin,
-        &format!("{read}/search?q=i&limit=1&after=0"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(second["matches"][0]["offset"], 2);
-    assert_eq!(second["matches"][0]["length"], 1);
-    assert_eq!(second["matches"][0]["sequence"], 2);
-    let (_, cross) = call(&admin, &format!("{read}/search?q=hello"), None, None, false).await;
-    assert_eq!(cross["matches"][0]["offset"], 4);
-    assert_eq!(cross["matches"][0]["length"], 5);
-    assert_eq!(cross["matches"][0]["sequence"], 2);
-    // More requests than search slots still complete while unrelated reads remain usable.
-    let search_path = format!("{read}/search?q=hello");
-    let (a, b, c, d, ordinary) = tokio::join!(
-        call(&admin, &search_path, None, None, false),
-        call(&admin, &search_path, None, None, false),
-        call(&admin, &search_path, None, None, false),
-        call(&admin, &search_path, None, None, false),
-        call(&admin, &read, None, None, false),
-    );
-    for (status, response) in [a, b, c, d] {
-        assert_eq!(status, StatusCode::OK, "{response}");
-        assert_eq!(response["matches"][0]["offset"], 4);
-    }
-    assert_eq!(ordinary.0, StatusCode::OK);
-    assert_eq!(
-        call(&admin, &format!("{read}?through=4"), None, None, false)
-            .await
-            .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &admin,
-            &format!("{read}/search?q=hello&through=4"),
-            None,
-            None,
-            false
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &admin,
-            &format!("/api/manual-agents/history?provider={}", "x".repeat(201)),
-            None,
-            None,
-            false
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &admin,
-            &format!("/api/manual-agents/history?model={}", "x".repeat(201)),
-            None,
-            None,
-            false
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    let empty_upload = format!("/v1/worker/manual-agents/{empty_id}/transcript");
-    let empty_read = format!("/api/manual-agents/{empty_id}/transcript");
-    assert_eq!(
-        call(
-            &worker,
-            &empty_upload,
-            Some(json!({"sequence":1,"text":""})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &empty_upload,
-            Some(json!({"final_sequence":0,"coverage":"complete","reason":null})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let (_, empty) = call(&admin, &empty_read, None, None, false).await;
-    assert_eq!(empty["session"]["archive"]["state"], "complete");
-    assert_eq!(empty["session"]["archive"]["bytes"], 0);
-    assert_eq!(empty["chunks"], json!([]));
-    assert_eq!(empty["through_sequence"], 0);
-    let (_, no_hits) = call(
-        &admin,
-        &format!("{empty_read}/search?q=x"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(no_hits["matches"], json!([]));
-    assert_eq!(no_hits["next_after"], Value::Null);
-    let full_upload = format!("/v1/worker/manual-agents/{full_id}/transcript");
-    assert_eq!(
-        call(
-            &worker,
-            &full_upload,
-            Some(json!({"sequence":1,"text":"x".repeat(32769)})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &full_upload,
-            Some(json!({"sequence":1,"text":"x".repeat(32768)})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    // Set the accounting field at the cap to test enforcement without allocating 64 MiB.
-    sqlx::query("UPDATE manual_transcript_archives SET bytes=67108864 WHERE session_id=$1")
-        .bind(full_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        call(
-            &worker,
-            &full_upload,
-            Some(json!({"sequence":2,"text":"x"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        call(
-            &worker,
-            &full_upload,
-            Some(json!({"final_sequence":1,"coverage":"partial","reason":"size limit"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    sqlx::query(
-        "UPDATE worker_settings SET removed=true,revision=revision+1 WHERE kind='node' AND id=$1",
-    )
-    .bind(f.node.node_id.to_string())
-    .execute(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        call(&admin, &read, None, None, false).await.0,
-        StatusCode::OK
-    );
-    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
-        .bind(f.node.node_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let (status, retained) = call(&admin, &read, None, None, false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(retained["chunks"].as_array().unwrap().len(), 3);
-    assert_eq!(
-        call(&admin, &format!("{read}/search?q=hello"), None, None, false)
-            .await
-            .1["matches"][0]["offset"],
-        4
-    );
-    assert_ne!(
-        call(
-            &worker,
-            &upload,
-            Some(json!({"sequence":4,"text":"no"})),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
 async fn worker_host_shell_is_scoped_separate_persistent_and_fenced() {
     let f = common::profiled::fixture().await;
     let pool = f.db.pool().await;
@@ -2786,13 +1984,97 @@ async fn native_conversation_is_independent_and_requires_the_original_worker() {
     assert_eq!(status, StatusCode::OK, "{history}");
     assert_eq!(history["sessions"][0]["id"], json!(id));
     assert_eq!(history["sessions"][0]["conversation_available"], true);
-    let (_, terminal) = call(
+    let (status, details) = call(
         &admin,
-        &format!("/api/manual-agents/{id}/transcript"),
+        &format!("/api/manual-agents/{id}"),
         None,
         None,
         false,
     )
     .await;
-    assert_eq!(terminal["session"]["archive"]["state"], "not_recorded");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(details["id"], json!(id));
+    assert_eq!(details["status"], "stopped");
+}
+
+#[tokio::test]
+async fn queued_conversation_is_bound_to_the_stopped_attempt_and_read_by_session() {
+    use common::native_started::{context, setup, stop_request};
+
+    let (f, started) = setup(true).await;
+    let auth = context(&f).await;
+    let attempt = started.binding.attempt_id;
+    let aq_session_protocol::SessionIdentity::Remote { session_id: id, .. } =
+        started.binding.session
+    else {
+        panic!("fixture needs a remote session");
+    };
+    let project = f.selection.lineage.project_id;
+    let read = format!("/api/v1/sessions/{id}/conversation");
+    let upload = format!("/v1/worker/attempts/{attempt}/conversation");
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let snapshot = json!({"messages":[
+        {"role":"user","text":"Show the result"},
+        {"role":"assistant","text":"Résumé\nSecond line"},
+    ],"partial":false});
+
+    let (status, empty) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(
+        empty,
+        json!({"session_id":id,"project_id":project,"conversation":null})
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+    );
+    aq_server::profiled_execution::started::record(&f.state, &auth, &started)
+        .await
+        .unwrap();
+    aq_server::profiled_execution::stopped::record(&f.state, &auth, &stop_request(&started))
+        .await
+        .unwrap();
+
+    let other = aq_server::tokens::new_node_credential();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'conversation-other',$2,'0.1.0',1,now())")
+        .bind(Uuid::new_v4()).bind(aq_server::tokens::verifier(&other)).execute(&f.db.pool().await).await.unwrap();
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&other),
+            false
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN,
+    );
+    for _ in 0..2 {
+        let (status, receipt) = call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&f.credential),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt, json!({"attempt_id":attempt,"session_id":id}));
+    }
+    let (status, saved) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        saved,
+        json!({"session_id":id,"project_id":project,"conversation":snapshot})
+    );
 }

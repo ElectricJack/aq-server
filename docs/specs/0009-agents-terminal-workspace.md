@@ -24,17 +24,9 @@ Knowledge; Settings and identity remain at the bottom.
 the compact header, automatic interactive input and existing provider/profile
 selection. No desktop keyboard toolbar, watch/edit selector or launch-task prompt.
 
-**(implementation decision)** Ship a complete vertical slice for the persistent
-Claude and Codex agents launched through the manual-agent service. Include native
-queue sessions in the agent/history lists using the existing inspection APIs and
-open their existing qualified terminals when available. Native sessions without a
-retained transcript must say so. Do not present a volatile tail as saved history.
-Extending durable capture into any native executor that lacks it is a separate,
-explicitly reported follow-up, not something this increment claims to deliver.
-
-There is no drag-and-drop layout designer, synchronized input, video-like replay,
-new orchestration engine, provider-specific conversation database importer, or
-resume/relaunch behavior in this increment. No API-key provider integration.
+History indexes manual and native sessions. Manual Claude Code and Codex
+sessions can have saved conversations. Native queue sessions retain their existing
+inspection and live terminal links.
 
 ## 2. Existing implementation and constraints
 
@@ -147,197 +139,45 @@ an automatic controller-takeover loop between devices or affect the other panes.
 
 ### 4.4 When an agent ends
 
-**(owner)** Keep the pane in place, freeze input, mark it Ended/Failed, and retain
-its observed output while switching to the saved transcript when available.
-Transient network loss is Disconnected, not Ended. The archive can still be
-finalizing after lifecycle stop; show that explicitly and refresh until settled.
-Do not remove the pane when its agent leaves the active roster. Provide History
-and Close actions. Never silently relaunch the process.
+Keep an ended or failed agent's pane in place with input disabled and the last
+observed live screen. Provide History and Close actions. A transient disconnect
+uses the terminal's reconnect path.
 
-## 5. Durable recording
+## 5. Saved conversations
 
-### 5.1 What is recorded
+The worker reads the provider's native session log after the manual sandbox has
+stopped. Extract bounded user and assistant text from the original sandbox's
+root session. Apply credential masking before persisting the snapshot. The
+worker can recover existing sessions while their native logs are available.
+It retries the same snapshot after an uncertain upload.
 
-**(owner)** Newly launched manual agents record output even when no dashboard is
-connected. Reading history must work after worker disconnect and server restart.
+The server binds uploads to the original enrolled node and stores the conversation
+independently of the running worker. Saved messages remain readable after a
+worker disconnect or server restart.
 
-**(implementation decision)** Retain a chronological plain-text terminal output
-transcript, not a promise of exact provider conversation JSON or pixel replay.
-ANSI control actions, OSC clipboard/link payloads and terminal-device commands must
-not execute in History. Full-screen redraws may produce repeated output, but new
-text must not disappear just because the provider repainted its screen.
-Label the view Terminal transcript. Do not infer prompts, roles or outcomes.
+## 6. History contract
 
-Capture is independent of tmux client attachment and terminal geometry. Use a
-tmux output pipe (or an equivalent proven producer) established before the provider
-starts; prevent the race where initial output is emitted before recording starts.
-Do not keep a second visible tmux attach client that resizes the owner's terminal.
-The recording pipeline must not make keyboard input depend on HTTP upload or SQL.
-
-Use a bounded private worker spool, an incremental UTF-8/control normalizer and
-the credential-shape protections already applied to terminal output. Handle split
-UTF-8, split CSI/OSC, CR/backspace and credential prefixes across reads. Server
-storage accepts only the sanitized text, never raw credential files or secret
-material. Raw output needed locally must stay private and must not be printed in
-logs, task messages or test evidence.
-
-### 5.2 Ordering, retry and finalization
-
-Worker emits immutable text chunks numbered from 1. Persist each chunk and its
-upload progress atomically; retry the exact same chunk after an uncertain reply.
-The server binds the upload to the original enrolled node and immutable session
-identity. Identical retries return the same acknowledgement. A different payload
-at an accepted sequence is a conflict. An out-of-order sequence is refused with
-the next expected sequence; never silently concatenate a gap.
-
-Use an ordered terminal finalization record after the final output has been
-drained. Stop and natural exit drain capture before losing access to the sandbox;
-if that is impossible, finalize with partial coverage and an intelligible reason.
-Upload retries must continue for ended sessions even after manual polling removes
-them from active jobs. The server must accept authorized late archive uploads for
-stopped sessions. A revoked/wrong node remains refused. Worker and server restarts
-resume from persisted identities and offsets; no duplicate text is created.
-
-**(implementation decision)** Protocol bounds: each chunk at most 32 KiB of UTF-8
-text; at most one upload per session in flight; at most 64 MiB of normalized output
-kept per session; worker raw spool at most 128 MiB per session. Bound line/chunk parser
-state independently. Both are rolling: when a new chunk would pass the limit, the
-oldest chunks are deleted first, so the newest output is always kept. When old
-output is deleted or capture is lost, set coverage `partial` with a reason and the
-first sequence still kept; never let a full archive block or kill the interactive
-agent. Deletion is never silent.
-
-### 5.3 Retention and preexisting sessions
-
-Archived sessions are a rolling set ([architecture 0006](../architecture/0006-records-are-rolling.md)). The server
-keeps the sessions that ended within the last 90 days **(proposed default)** and
-deletes older ones, with their chunks, on its ten-minute retention tick, a bounded
-batch per pass. This is separate from the seven-day sealed-attempt cleanup and the
-one-day manual roster filter. A read of a session whose oldest chunks were deleted
-starts at the first kept sequence. A deleted session is no longer listed. Closed
-transcripts are cold reads, not resident runtime screens. Apply the per-session
-limit and paginated reads to bound work.
-
-Existing sessions cannot acquire missing earlier history retroactively. If a safe
-capture upgrade can attach to an existing session without restarting it, mark the
-recording partial with its actual start time. Otherwise show Not recorded. Never
-restart a live owner session to obtain a full recording or claim a screen snapshot
-is a complete transcript. Metadata for old stopped manual sessions remains visible
-with the truthful coverage state.
-
-## 6. Shared server/worker/dashboard contract
-
-**(implementation decision)** Extend `aq-manual-sessions` in focused modules; keep
-the aq-server core ratchet at or below 108915. Migration 113 is the next available
-migration at the inspected base. Add archive metadata and immutable chunk storage
-with session/node/project ownership and indexed `(session_id, sequence)` access.
-Keep archive identity/metadata after worker removal; revocation prevents writes,
-not authorized owner access to already retained history.
-
-New routes (all times are integer UTC milliseconds):
-
-| Route | Auth and purpose |
+| Route | Access and response |
 | --- | --- |
-| `GET /api/manual-agents/history` | Owner; paginated archive metadata, including old sessions without output |
-| `GET /api/manual-agents/{id}/transcript` | Owner; bounded text chunks and archive status |
-| `GET /api/manual-agents/{id}/transcript/search` | Owner; literal search over retained output |
-| `POST /v1/worker/manual-agents/{id}/transcript` | Original enrolled node; append chunk or finalize |
-
-History query: optional `project_id`, `status` (`active` or `ended`), `provider`,
-`model`, `created_from_ms` (inclusive), `created_until_ms` (exclusive), `q` (metadata
-substring, at most 200 characters), `cursor`, and `limit` (default 50, maximum 100).
-Sort by descending `(created_at_ms,id)` using stable keyset pagination. It is
-separate from fleet polling and must not increase the active endpoint's 256 limit.
-Response: `{sessions:[HistorySession],next_cursor:null|string,server_time_ms}`.
-
-`HistorySession` is the existing `Session` wire shape plus
-`archive:{state,coverage,reason,first_sequence,last_sequence,bytes,updated_at_ms}`.
-`state` is `not_recorded|recording|finalizing|complete`; `coverage` is
-`unknown|complete|partial`. `reason` is nullable bounded plain text, not raw errors.
-`complete` coverage is asserted only for a successfully drained recording from
-provider startup. `not_recorded` has no invented chunks or timestamps.
-
-Transcript query: `after` (exclusive sequence, default 0), `limit` (default 32,
-maximum 64), and optional `through` high-water sequence to freeze a reader's
-snapshot. Response: `{session:HistorySession,chunks:[{sequence,text}],next_after,
-has_more,through_sequence,server_time_ms}`. Cap response text at 256 KiB even if
-the count limit allows more. Unknown session: 404; known unrecorded session: 200
-with empty chunks and `not_recorded`. Reads must not acquire terminal control.
-
-Search query: `q` (literal, case-insensitive, 1..200 characters), optional `after`
-(exclusive match byte offset; omit for the first page so offset zero is included),
-`limit` (default 50, maximum 100), optional `through`.
-Response: `{matches:[{offset,length,sequence,excerpt}],next_after,has_more,
-through_sequence,server_time_ms}`. Offsets/lengths are UTF-8 bytes into concatenated
-normalized text; excerpts are bounded plain text. Search must find a match crossing
-a chunk boundary. Escape SQL wildcard syntax; do not accept regex. Bound query
-work by the 64 MiB archive limit and server statement timeout. Pagination must
-advance even on repeated matches. The UI converts byte offsets deliberately.
-
-Upload body is either `{sequence,text}` or
-`{final_sequence,coverage:"complete"|"partial",reason:null|string}`. A finalization
-requires exactly the acknowledged high-water mark; it is idempotent. Response:
-`{accepted_through,next_sequence,archive_state}`. Enforce body limits, strict JSON
-fields, actual ownership, revoked enrollment checks and UTF-8 byte bounds. Include
-`next_sequence` in out-of-order conflicts. No credentials in payloads or URLs.
-
-Preserve existing endpoint shapes for old receivers, terminal relay and the live
-dashboard. Recording is additive: old workers keep running with Not recorded
-history. Capability/version negotiation or equivalent explicit unsupported handling
-must distinguish an old server from an empty archive. Do not retry 404 in a loop.
+| `GET /api/manual-agents/history` | Owner, paginated session metadata including whether a conversation is available |
+| `GET /api/manual-agents/{id}` | Owner, session metadata for a pinned terminal pane |
+| `GET /api/manual-agents/{id}/conversation` | Owner, saved conversation or an empty result, bound to session and project |
+| `POST /v1/worker/manual-agents/{id}/conversation` | Original enrolled node, immutable bounded conversation snapshot with replay acknowledgement |
 
 ## 7. History user interface
 
-**(owner)** Search/filter the list by project, agent/session, provider/model, dates
-and ended state. Reuse the global project scope. Filters supported only by native
-metadata must not be invented for manual records. Manual and native records are
-distinguished internally, not by making the owner choose a transport type first.
+Filter sessions by project, agent, provider, model, dates, or state. Open the
+selected conversation with user and agent labels and Find, Copy, and Download
+actions. Show a partial-recording label when the worker reports incomplete
+coverage. Show an empty state when a conversation is unavailable and provide
+the inspection link for native queue sessions.
 
-The selected session opens a substantial transcript pane, with one compact
-identity/status line and Find, Previous/Next match, Copy and Download controls.
-Keep session details on demand. Load bounded pages, preserve scroll position when
-prepending earlier content, and avoid rendering an entire 64 MiB session into the
-DOM. Search covers the whole retained session, not only the loaded page. Selecting
-a match fetches the necessary context and scrolls to/highlights that match.
-Display progress/error/cancel for a multi-page download; no partial export may be
-presented as complete. Copy explicitly copies the visible selection or loaded text;
-label its scope. Native sessions can use existing retained artifacts when present;
-otherwise show the honest unavailable state and existing inspection details.
+## 8. Implementation ownership
 
-While an ended archive is finalizing, retain visible output and show Saving final
-output. Partial/not-recorded banners are one compact line, with reason/details
-available. Do not reset reading position or jump to the bottom on background
-metadata refresh. Live terminal scrollback and archived transcript are separate
-views of the same session, not separate agents.
-
-## 8. Implementation task graph and file ownership
-
-All implementation agents must be **gpt-6.1-terra**. Each uses an isolated branch
-and worktree, reads its repository's AGENTS.md and this spec, and commits its work.
-Do not merge into main or deploy/restart the owner's live services during these
-tasks. Root owns integration, contract changes, review and final reporting.
-
-| ID | Task / owner | Files and deliverables | Dependencies |
-| --- | --- | --- | --- |
-| T1 | Server archive / Terra | `aq-manual-sessions` archive APIs/storage; migration 113; real-SQL/router tests in existing `it_server` and schema tests; exact wire fixture | This spec |
-| T2 | Worker recorder / Terra | `aq-worker/manual.rs`, new recording modules, `aq-node-service/link.rs`; private spool, capture-before-start, retry/finalize, restart/limit tests | This spec's wire contract; coordinate with T1 |
-| T3 | Terminal workspace / Terra | dashboard routes/destinations, AgentsTabs, new terminal workspace, source-qualified roster, focus/layout/ended pane behavior; update legacy graph links | This spec; existing APIs, no T1 dependency for live panes |
-| T4 | History reader / Terra | new dashboard history feature and API client/adapters, literal search/context/paging/export tests; no edits to T3-owned shell/routes/terminal files | This spec's wire contract; T1 integration fixture |
-| T5 | Integration / root | integrate T1..T4, reconcile contracts, add browser scenarios, review desktop/phone screenshots, publish reviewable branches and task outcomes | T1..T4 |
-
-T3 registers the lazy `/agents/history` route expected from T4; T4 exports its page
-from `src/features/agents/history/index.tsx`. T3 owns `AgentsTabs.tsx` and shared
-route changes. T4 owns only `features/agents/history/**` and
-`api/sessionHistory*`. Both extend the existing native/manual adapters rather than
-duplicating terminal transport. T1 publishes a fixture matching section 6 before
-making incompatible changes. T2 may add focused protocol tests without introducing
-a new integration executable. Additional work discovered is reported explicitly.
-
-Resource constraints: disk is tight on this host. Use a private Cargo target per
-worktree, never another worktree's cache, never delete another agent's artifacts,
-and coordinate Rust compilation with root. Every Cargo test/nextest uses timeout;
-iterate one existing binary/module, preserve incremental builds and line budgets.
-No model invocations are needed for automated tests. Label fixtures as fixtures.
+The server owns the History index and conversation storage. The worker owns
+native log selection, parsing, masking and upload. The dashboard owns the
+History reader and terminal workspace. The live terminal transport has its own
+connection and input lifecycle.
 
 ## 9. Required acceptance evidence
 
@@ -351,19 +191,12 @@ No model invocations are needed for automated tests. Label fixtures as fixtures.
 4. Connection loss freezes input without losing the last screen; reconnect uses
    the same agent. No uncertain input is replayed. Another device's controller
    conflict cannot cause an automatic takeover loop.
-5. Record a disposable no-inference shell session with the browser closed. Emit
-   more than the old 500-line/64 KiB limits. Stop it, disconnect the worker, restart
-   the test server and retrieve/search beginning, middle and final output.
-6. Retry chunks after a lost reply and restart the recording process: exactly one
-   copy of each chunk remains. Test conflicting retries, gaps, wrong/revoked node,
-   late final uploads, limits (past 64 MiB the newest output is kept and the oldest
-   deleted), partial capture, invalid UTF-8/control boundaries,
-   and credential patterns split across chunks. Test search crossing boundaries.
-7. History list reaches sessions older than one day and beyond 256 records;
-   paging has no duplicates/omissions. A known unrecorded old session is distinct
-   from unauthorized, missing, unavailable and genuinely empty output.
-8. Find locates unloaded matches and navigates to them. Export includes every
-   retained chunk in order or reports failure; reading does not claim control.
+5. End a manual session with native user and assistant messages and verify the
+   conversation remains available after worker disconnect and server restart.
+6. Verify exact retries, conflicting uploads, and wrong or revoked node access.
+7. Page older sessions and distinguish an empty conversation from a refused
+   read. Verify project scope on the list and selected conversation.
+8. Find and export native messages without acquiring terminal control.
 9. Inspect actual rendered desktop 1440 px and phone 390 px screenshots, plus
    320 px reflow and tablet transitions. Preserve compact chrome, readable text,
    touch controls, focus indication and visible exits. Review the existing Agents
@@ -377,5 +210,4 @@ No model invocations are needed for automated tests. Label fixtures as fixtures.
     require their own reviewed delivery; do not disrupt the owner's current agent.
 
 Record delivered scope, exact revisions/tests, desktop/phone images, served bundle
-identity, native-session retention limitations and any deferred differences. Do
-not call the entire history feature complete if only a volatile tail works.
+identity, native-session retention limitations and any deferred differences.
