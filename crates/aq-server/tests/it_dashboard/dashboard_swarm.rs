@@ -186,7 +186,7 @@ async fn swarm_groups_nodes_reports_load_and_lists_running_agents() {
 }
 
 #[tokio::test]
-async fn swarm_stopped_attempt_holding_its_task_is_listed_as_finishing_not_running() {
+async fn swarm_keeps_an_attempt_finishing_when_its_stop_is_unverified() {
     use aq_server::execution::authority::hot::{HotState, LaunchOwner};
     let now = common::profiled::NOW;
     let f = common::profiled::fixture().await;
@@ -233,6 +233,10 @@ async fn swarm_stopped_attempt_holding_its_task_is_listed_as_finishing_not_runni
     let (status, body) = read(&app, "/api/v1/swarm").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["server"]["running_agents"], 0, "{body}");
+    assert_eq!(
+        body["data"]["machines"][0]["nodes"][0]["slots"]["occupied"], 1,
+        "a stopped status without proof still holds the slot: {body}"
+    );
     let listed = listed_agents(&body);
     assert_eq!(listed.len(), 1, "{body}");
     assert_eq!(listed[0]["attempt_id"], json!(attempt));
