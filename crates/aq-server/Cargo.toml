@@ -96,6 +96,8 @@ uuid.workspace = true
 test-support = ["aq-notifications/test-support"]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]
+# Epic 0 (spec 0016) delivery by playbook; unfinished, off by default.
+delivery_playbook = []
 
 [dev-dependencies]
 futures-util = "0.3"

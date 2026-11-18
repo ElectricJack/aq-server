@@ -13,6 +13,8 @@ pub mod handoff;
 pub mod journal;
 pub mod login_refresh;
 pub mod lost;
+#[cfg(feature = "delivery_playbook")]
+pub mod main_sync;
 pub mod material;
 pub mod material_api;
 pub mod no_grant;

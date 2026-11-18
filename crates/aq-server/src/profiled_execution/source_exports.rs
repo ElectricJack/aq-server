@@ -252,6 +252,30 @@ pub async fn reserve(
     };
     let policy_handle = configured.retention_handle == request.source_retention_handle
         || head_handle == Some(request.source_retention_handle);
+    // Spec 0016 §4: a named-ref policy also accepts a handle `repo.retain_ref`
+    // returned for exactly this ref and commit, so moving the ref needs no
+    // config revision.
+    #[cfg(feature = "delivery_playbook")]
+    let policy_handle = policy_handle
+        || match &configured.source {
+            aq_admission::SourceSelection::NamedRef { reference } => {
+                let scope = super::main_sync::Scope {
+                    project_id: request.project_id,
+                    repository_id: request.repository_id,
+                    binding_generation: request.binding_generation,
+                    reference: reference.as_str(),
+                };
+                super::main_sync::handle_for(
+                    &mut *tx,
+                    scope,
+                    request.source_retention_handle,
+                    &request.base.hex,
+                )
+                .await
+                .map_err(|_| unavailable())?
+            }
+            aq_admission::SourceSelection::Immutable { .. } => false,
+        };
     if !configured.enabled || canonical(&configured)? != canonical(&installed)? {
         return Err(refused("source_export_policy_not_installed"));
     }

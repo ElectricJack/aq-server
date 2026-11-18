@@ -74,6 +74,11 @@ pub struct Config {
     /// Playbook authoring (spec 0013): `[playbook_authoring]`, all defaulted.
     #[serde(default)]
     pub playbook_authoring: aq_playbook_authoring::Config,
+    /// Spec 0016 §4: `[delivery_limits]`; absent, no bound project follows its
+    /// named ref through `repo.retain_ref`.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default)]
+    pub delivery_limits: Option<crate::profiled_execution::main_sync::Limits>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -324,6 +329,12 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|reason| ("result_media".into(), reason.into()))?;
     }
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(limits) = &c.delivery_limits {
+        limits
+            .validate()
+            .map_err(|reason| ("delivery_limits".into(), reason.into()))?;
+    }
     if let Some(settings) = &c.source_retention {
         settings
             .validate()
@@ -438,6 +449,8 @@ mod tests {
             provider_quota: vec![],
             internal_work: None,
             playbook_authoring: Default::default(),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_limits: None,
         }
     }
 

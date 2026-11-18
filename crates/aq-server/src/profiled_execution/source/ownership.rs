@@ -25,6 +25,10 @@ struct Evidence {
     /// D1: the server-owned source head AQ published to the named ref.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     publication_head: Option<Value>,
+    /// Spec 0016 §4: the `repo.retain_ref` sync this named-ref source follows.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    main_sync: Option<Value>,
     /// Spec 0007: the handoff whose saved commit this immutable source is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     handoff: Option<Value>,
@@ -65,6 +69,29 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
             if *object != a.resolved_object
                 || body.evidence.reference_observation.is_some()
                 || body.evidence.publication_head.is_some()
+            {
+                return Err(refused());
+            }
+            #[cfg(feature = "delivery_playbook")]
+            if body.evidence.main_sync.is_some() {
+                return Err(refused());
+            }
+        }
+        #[cfg(feature = "delivery_playbook")]
+        SourceSelection::NamedRef { reference } if body.evidence.main_sync.is_some() => {
+            let synced: crate::profiled_execution::main_sync::SyncedHead =
+                serde_json::from_value(body.evidence.main_sync.clone().unwrap_or_default())
+                    .map_err(|_| refused())?;
+            if body.evidence.reference_observation.is_some()
+                || body.evidence.publication_head.is_some()
+                || !synced.validate()
+                || synced.reference != reference.as_str()
+                || synced.head != a.resolved_object.hex
+                || synced.retention_handle != body.retention_handle
+                || synced.project_id != a.project_id
+                || synced.repository_id != a.repository_id
+                || synced.binding_generation != a.repository_binding_generation
+                || synced.synced_at_ms != a.observed_at_ms
             {
                 return Err(refused());
             }

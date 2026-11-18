@@ -28,16 +28,32 @@ async fn read(
     operation: &str,
     params: Value,
 ) -> Result<Value, AppError> {
+    exchange(state, repository, generation, operation, params, None, 5000).await
+}
+/// One aq-git request. A mutating operation names its idempotency
+/// `operation_id`; a reply that echoes one must echo exactly it.
+pub(crate) async fn exchange(
+    state: &AppState,
+    repository: Uuid,
+    generation: u64,
+    operation: &str,
+    params: Value,
+    operation_id: Option<Uuid>,
+    deadline_ms: u64,
+) -> Result<Value, AppError> {
     let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
     let id = format!("profiled-source-{}", Uuid::new_v4());
-    let request = json!({"protocol_version":1,"request_id":id,"operation":operation,"repository_id":repository,"expected_binding_generation":generation,"params":params,"deadline_ms":5000});
+    let mut request = json!({"protocol_version":1,"request_id":id,"operation":operation,"repository_id":repository,"expected_binding_generation":generation,"params":params,"deadline_ms":deadline_ms});
+    if let Some(operation_id) = operation_id {
+        request["operation_id"] = json!(operation_id);
+    }
     let exchange = async {
         let mut socket = tokio::net::UnixStream::connect(&runtime.config.git_socket)
             .await
             .map_err(|_| refused())?;
-        let mut request = serde_json::to_vec(&request).map_err(|_| AppError::Internal)?;
-        request.push(b'\n');
-        socket.write_all(&request).await.map_err(|_| refused())?;
+        let mut line = serde_json::to_vec(&request).map_err(|_| AppError::Internal)?;
+        line.push(b'\n');
+        socket.write_all(&line).await.map_err(|_| refused())?;
         let mut frame = Vec::new();
         BufReader::new(socket)
             .take((MAX_FRAME + 1) as u64)
@@ -52,12 +68,17 @@ async fn read(
             || value["request_id"] != id
             || value["ok"] != true
             || value.get("error").is_some()
+            || operation_id.is_some_and(|op| {
+                value
+                    .get("operation_id")
+                    .is_some_and(|echoed| *echoed != json!(op))
+            })
         {
             return Err(refused());
         }
         value.get("result").cloned().ok_or_else(|| refused())
     };
-    tokio::time::timeout(Duration::from_secs(5), exchange)
+    tokio::time::timeout(Duration::from_millis(deadline_ms), exchange)
         .await
         .map_err(|_| refused())?
 }
@@ -173,11 +194,32 @@ async fn observe_source(
     if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
         evidence.insert("handoff", handoff);
     }
+    // Spec 0016 §4: with `[delivery_limits]`, a named ref follows what aq-git
+    // last synced from the remote (`repo.retain_ref`), synced again inline
+    // when older than `main_freshness_ms`. The recorded publication head no
+    // longer outranks it.
+    #[cfg(feature = "delivery_playbook")]
+    let synced = match (&selection, &fixed, state.config.delivery_limits.as_ref()) {
+        (SourceSelection::NamedRef { reference }, None, Some(limits)) => {
+            let scope = super::main_sync::Scope {
+                project_id: binding.project_id,
+                repository_id: binding.repository_id,
+                binding_generation: binding.repository_binding_generation,
+                reference: reference.as_str(),
+            };
+            Some(super::main_sync::current(state, scope, limits).await?)
+        }
+        _ => None,
+    };
+    #[cfg(feature = "delivery_playbook")]
+    let follows_main = synced.is_some();
+    #[cfg(not(feature = "delivery_playbook"))]
+    let follows_main = false;
     // D1: a named ref that AQ itself publishes follows the recorded source
     // head (the publication receipt is the evidence) and hydrates from the
     // candidate's central retention handle. Without one, a fresh observation.
     let head = match (&selection, &fixed) {
-        (SourceSelection::NamedRef { reference }, None) => {
+        (SourceSelection::NamedRef { reference }, None) if !follows_main => {
             crate::profiled_execution::settlement::publication::current_head(
                 &state.store.pool,
                 binding.project_id,
@@ -192,6 +234,20 @@ async fn observe_source(
     };
     let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
+        #[cfg(feature = "delivery_playbook")]
+        SourceSelection::NamedRef { .. } if synced.is_some() => {
+            let synced = synced.as_ref().ok_or_else(|| refused())?;
+            retention_handle = synced.retention_handle;
+            observed = observed.min(synced.synced_at_ms);
+            evidence.insert(
+                "main_sync",
+                serde_json::to_value(synced).map_err(|_| AppError::Internal)?,
+            );
+            ObjectId {
+                format: ObjectFormat::Sha1,
+                hex: synced.head.clone(),
+            }
+        }
         SourceSelection::NamedRef { .. } if head.is_some() => {
             let head = head.as_ref().ok_or_else(|| refused())?;
             retention_handle = head.retention_handle;
@@ -329,7 +385,7 @@ pub(crate) async fn repository_identity(
     }
     Ok(identity.to_owned())
 }
-fn hex40(s: &str) -> bool {
+pub(crate) fn hex40(s: &str) -> bool {
     s.len() == 40
         && s.bytes().any(|b| b != b'0')
         && s.bytes()
@@ -517,6 +573,88 @@ mod tests {
         value["retention_handle"] = json!(other);
         value["candidate_operation_id"] = json!(other);
         assert!(validate_body(&body(value, handle), project, 2000).is_err());
+    }
+    #[cfg(feature = "delivery_playbook")]
+    #[test]
+    fn named_ref_follows_main_sync_only_for_its_exact_commit_handle_and_time() {
+        let (project, repository, handle) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let reference = "refs/heads/main";
+        let oid = "a".repeat(40);
+        let synced = json!({"schema_version":1,"project_id":project,"repository_id":repository,"binding_generation":2,
+            "reference":reference,"head":oid,"retention_handle":handle,"synced_at_ms":1000});
+        let admission = SourceAdmission {
+            schema_version: 1,
+            project_id: project,
+            project_revision: 1,
+            repository_id: repository,
+            repository_binding_generation: 2,
+            policy: ArtifactRef {
+                id: Text::new("aq.project-source-policy/test").unwrap(),
+                version: Text::new("1").unwrap(),
+                digest: Digest::of(b"policy"),
+            },
+            selection: SourceSelection::NamedRef {
+                reference: aq_admission::Label::new(reference).unwrap(),
+            },
+            resolved_object: ObjectId {
+                format: ObjectFormat::Sha1,
+                hex: oid.clone(),
+            },
+            observed_at_ms: 1000,
+            expires_at_ms: 31_000,
+        };
+        let body = |evidence: Value| {
+            let mut evidence = evidence;
+            evidence["commit_inspection"] = json!({"oid":{"algorithm":"sha1","hex":oid},"tree":{"algorithm":"sha1","hex":"c".repeat(40)}});
+            evidence["retention_inspection"] = json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":2,
+                "generation":1,"state":"active","refs":[{"name":"refs/aq-git/retained/x","oid":oid}],
+                "release_operation":null,"release_reason":null});
+            serde_json::to_vec(&json!({"schema_version":1,"admission":admission,"retention_handle":handle,"evidence":evidence}))
+                .unwrap()
+        };
+        assert!(validate_body(&body(json!({"main_sync":synced})), project, 2000).is_ok());
+        for (field, bad) in [
+            ("reference", json!("refs/heads/other")),
+            ("head", json!("d".repeat(40))),
+            ("retention_handle", json!(Uuid::new_v4())),
+            ("repository_id", json!(Uuid::new_v4())),
+            ("project_id", json!(Uuid::new_v4())),
+            ("binding_generation", json!(3)),
+            ("synced_at_ms", json!(999)),
+            ("schema_version", json!(2)),
+        ] {
+            let mut value = synced.clone();
+            value[field] = bad;
+            assert!(
+                validate_body(&body(json!({"main_sync":value})), project, 2000).is_err(),
+                "{field}"
+            );
+        }
+        // A sync is the only evidence of its observation.
+        let observation = json!({"observation_id":Uuid::new_v4(),"binding_generation":2,"started_at_ms":1000,
+            "completed_at_ms":1000,"covered_refs":[reference],"refs":{reference:oid},"last_refresh_error":null});
+        assert!(
+            validate_body(
+                &body(json!({"main_sync":synced,"reference_observation":observation})),
+                project,
+                2000
+            )
+            .is_err()
+        );
+    }
+    #[cfg(feature = "delivery_playbook")]
+    #[test]
+    fn delivery_limits_are_positive_and_fit_the_admission_window() {
+        let limits = |interval, freshness, deadline| super::super::main_sync::Limits {
+            main_sync_interval_ms: interval,
+            main_freshness_ms: freshness,
+            main_sync_deadline_ms: deadline,
+        };
+        assert!(limits(60_000, 30_000, 10_000).validate().is_ok());
+        assert!(limits(0, 30_000, 10_000).validate().is_err());
+        assert!(limits(60_000, 0, 10_000).validate().is_err());
+        assert!(limits(60_000, 30_000, 0).validate().is_err());
+        assert!(limits(60_000, 30_001, 10_000).validate().is_err());
     }
 }
 
