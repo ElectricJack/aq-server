@@ -1,7 +1,7 @@
 -- Epic 0, delivery by playbook (spec 0016 section 6.2): what the host records
 -- for the catalog 2.3.0 commands `work.return` and `supervisor.notify`.
--- Additive: two nullable columns and a new table; no row is touched, so an
--- older server keeps running on the migrated schema.
+-- Additive: two nullable columns, a new table and two wider checks; no row is
+-- changed, so an older server keeps running on the migrated schema.
 SET LOCAL lock_timeout = '5s';
 
 -- `work.return` passes on, for the task's next attempt, the fact value the
@@ -23,5 +23,12 @@ CREATE TABLE delivery_notifications (
     notified_at_ms BIGINT NOT NULL CHECK(notified_at_ms > 0),
     PRIMARY KEY(project_id, identity_digest)
 );
+
+-- The intent rows of the four decision commands and their final outcomes.
+-- The lists only grow, so an older server's rows stay valid.
+ALTER TABLE playbook_effects DROP CONSTRAINT playbook_effects_command_name_check;
+ALTER TABLE playbook_effects ADD CHECK(command_name IN ('message.send','decision.request','context.read','work.ensure','work.change','operation.cancel','findings.reconcile','judgment.request','check.request','candidate.prepare','candidate.publish','work.read','work.route','work.unroutable','judgment.assess','work.complete','work.return','work.hold','supervisor.notify'));
+ALTER TABLE playbook_effects DROP CONSTRAINT playbook_effects_status_check;
+ALTER TABLE playbook_effects ADD CHECK(status IN ('queued','refused','cancelled','accepted','pending','ensured','changed','conflict','observed','incomplete','expired','too_late','indeterminate','reconciled','prepared','published','routed','stale','recorded','completed','returned','held','sent','duplicate'));
 SET LOCAL lock_timeout TO DEFAULT;
 UPDATE meta SET value='144' WHERE key='state_format_version';

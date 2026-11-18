@@ -30,7 +30,6 @@ mod integration;
 mod messages;
 mod requests;
 mod routing;
-pub use assess::{AssessReply, AssessRequest};
 #[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
