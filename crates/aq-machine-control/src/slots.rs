@@ -220,6 +220,26 @@ pub async fn redelivery_allowed(conn: &mut PgConnection, node: Uuid) -> Result<b
         && crate::owner_availability(conn).await?.state != crate::Availability::Off)
 }
 
+/// The oldest offered attempt of `slot` after offer `after`, with its attempt
+/// and authority rows locked: the offer a poll of that slot redelivers.
+pub async fn offered_attempt(
+    conn: &mut PgConnection,
+    node: Uuid,
+    after: Option<Uuid>,
+    slot: u32,
+) -> Result<Option<Uuid>, Error> {
+    let query = "SELECT a.attempt_id FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) LEFT JOIN execution_attempt_slots s USING(attempt_id) WHERE a.node_id=$1 AND a.kind='profiled_v1' AND a.holds_task AND COALESCE(s.slot,1)=$3 AND h.state->>'status'='offered' AND ($2::UUID IS NULL OR a.offer_id>$2) ORDER BY a.offer_id LIMIT 1 FOR UPDATE OF a,h";
+    let query = if available(conn).await? {
+        query.to_owned()
+    } else {
+        query
+            .replace("LEFT JOIN execution_attempt_slots s USING(attempt_id)", "")
+            .replace("COALESCE(s.slot,1)", "1")
+    };
+    let attempt = sqlx::query_scalar(&query).bind(node).bind(after);
+    Ok(attempt.bind(slot as i32).fetch_optional(conn).await?)
+}
+
 /// Batched authoritative counts for slot-aware placement peers.
 pub async fn aware_counts(
     conn: &mut PgConnection,
