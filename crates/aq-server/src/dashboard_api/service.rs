@@ -296,6 +296,11 @@ pub(super) async fn bootstrap(
             "Task edits require an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.story_points",
+            graph_mutation,
+            "Editing task estimates requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.reprioritize",
             graph_mutation,
             "Task reprioritization requires an owner account and configured Graph mutation identity",

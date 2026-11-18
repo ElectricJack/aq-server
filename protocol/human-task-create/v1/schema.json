@@ -175,6 +175,11 @@
           "minimum": 1,
           "maximum": 300
         },
+        "story_points": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 1000
+        },
         "role": {
           "type": [
             "string",
