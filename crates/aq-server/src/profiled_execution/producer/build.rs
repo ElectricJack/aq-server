@@ -367,6 +367,18 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     })
     .await?;
     modules.push(policy_ref);
+    // The accounting catalog entry of the selection, when there is one: the
+    // worker derives its observation source identity from it.
+    let accounting = (state.config.intelligence.as_ref()).map(|r| &r.config.accounting);
+    if let Some(entry) =
+        accounting.and_then(|a| a.source(&selected.choice.provider, &selected.choice.harness))
+    {
+        let (module, bytes) =
+            aq_admission::observation_source::module(&entry.reference).map_err(|_| refused())?;
+        let (kind, owner) = (ArtifactKind::Definition, OwnerKind::Composition);
+        on_heap(|| set.retain(state, owner, kind, module.clone(), &bytes)).await?;
+        modules.push(module);
+    }
     let model = aq_profiles::ResolvedGraphModel {
         provider: selected.choice.provider.clone(),
         model: selected.choice.model.clone(),
