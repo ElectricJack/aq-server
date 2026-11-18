@@ -26,6 +26,7 @@
     {"path": "/api/human/result-media-uploads/{operation}/finalize", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media-uploads", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media/{artifact}/content", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
+    {"path": "/api/human/work/tasks", "class": "owner_admin", "note": "Dashboard task list for the current Owner. Checks project bindings and Graph workspace access for each bounded page."},
     {"path": "/api/intelligence/observations", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/intelligence/register", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/me", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
