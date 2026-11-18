@@ -39,6 +39,23 @@ pub fn catalog_v2_2() -> Registry {
     serde_json::from_str(REGISTRY_2_2_JSON).expect("published AQ host registry 2.2.0")
 }
 
+/// Host catalog 2.3.0 (Epic 0, delivery by playbook): 2.2.0 plus the delivery
+/// event `aq.work.result_ready`, its commands (`work.complete`, `work.return`,
+/// `work.hold`, `main.sync`, `branch.publish`, `pull_request.*`,
+/// `supervisor.notify`), the completion event `aq.delivery.completed`, and
+/// `work.read` extended with the facts of a task's result. Every other 2.2.0
+/// contract is byte-identical.
+#[cfg(feature = "delivery_playbook")]
+pub const VERSION_2_3: &str = "2.3.0";
+#[cfg(feature = "delivery_playbook")]
+pub const REGISTRY_2_3_JSON: &str = include_str!("../../../contracts/aq-host-2.3.0/registry.json");
+#[cfg(feature = "delivery_playbook")]
+pub const MANIFEST_2_3_JSON: &str = include_str!("../../../contracts/aq-host-2.3.0/manifest.json");
+#[cfg(feature = "delivery_playbook")]
+pub fn catalog_v2_3() -> Registry {
+    serde_json::from_str(REGISTRY_2_3_JSON).expect("published AQ host registry 2.3.0")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

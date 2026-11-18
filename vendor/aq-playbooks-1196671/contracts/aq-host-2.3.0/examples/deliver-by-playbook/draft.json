@@ -1,0 +1,665 @@
+{
+  "purpose": "Deliver a task's result: publish its branch, open a pull request, wait for checks, merge and complete; send it back or hold it when the checks fail",
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "project": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "result": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          }
+        },
+        "required": [
+          "task",
+          "project",
+          "result",
+          "version"
+        ]
+      },
+      "outcomes": {
+        "delivered": {
+          "type": "null"
+        },
+        "returned": {
+          "type": "null"
+        },
+        "held": {
+          "type": "null"
+        },
+        "ended": {
+          "type": "null"
+        },
+        "failed": {
+          "type": "null"
+        }
+      },
+      "start": "read"
+    }
+  },
+  "triggers": [
+    {
+      "id": "result-ready",
+      "event": "aq.work.result_ready",
+      "entry": "main",
+      "input": {
+        "op": "object",
+        "fields": {
+          "task": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "task_id"
+            ]
+          },
+          "project": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "project_id"
+            ]
+          },
+          "result": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "result_id"
+            ]
+          },
+          "version": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "version"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "steps": {
+    "read": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.read",
+        "bind": "facts_of",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "object",
+              "fields": {
+                "id": {
+                  "op": "ref",
+                  "root": "input",
+                  "path": [
+                    "task"
+                  ]
+                },
+                "revision": {
+                  "op": "ref",
+                  "root": "input",
+                  "path": [
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "edges": {
+        "observed": "publish",
+        "refused": "ended"
+      },
+      "on_error": "failed"
+    },
+    "publish": {
+      "op": {
+        "kind": "invoke",
+        "command": "branch.publish",
+        "bind": "pub_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "accepted": "await_publish",
+        "published": "failed",
+        "conflict": "failed",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "await_publish": {
+      "op": {
+        "kind": "join",
+        "members": [
+          {
+            "op": "ref",
+            "root": "pub_op",
+            "path": []
+          }
+        ],
+        "member_keys": [
+          "p"
+        ],
+        "mode": "all",
+        "accepted_outcomes": [
+          "published"
+        ],
+        "deadline_ms": 300000,
+        "remaining": "track",
+        "bind": "pub"
+      },
+      "edges": {
+        "completed": "open",
+        "no_match": "failed",
+        "timeout": "failed"
+      },
+      "on_error": "failed"
+    },
+    "open": {
+      "op": {
+        "kind": "invoke",
+        "command": "pull_request.open",
+        "bind": "open_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "accepted": "await_open",
+        "opened": "failed",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "await_open": {
+      "op": {
+        "kind": "join",
+        "members": [
+          {
+            "op": "ref",
+            "root": "open_op",
+            "path": []
+          }
+        ],
+        "member_keys": [
+          "o"
+        ],
+        "mode": "all",
+        "accepted_outcomes": [
+          "opened"
+        ],
+        "deadline_ms": 120000,
+        "remaining": "track",
+        "bind": "opened"
+      },
+      "edges": {
+        "completed": "checks",
+        "no_match": "failed",
+        "timeout": "failed"
+      },
+      "on_error": "failed"
+    },
+    "checks": {
+      "op": {
+        "kind": "invoke",
+        "command": "pull_request.await_checks",
+        "bind": "checks_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "deadline_ms": {
+              "op": "literal",
+              "value": 1800000
+            }
+          }
+        }
+      },
+      "edges": {
+        "accepted": "await_checks",
+        "passed": "failed",
+        "failed": "failed",
+        "conflict": "failed",
+        "closed": "failed",
+        "timeout": "failed"
+      },
+      "on_error": "failed"
+    },
+    "await_checks": {
+      "op": {
+        "kind": "join",
+        "members": [
+          {
+            "op": "ref",
+            "root": "checks_op",
+            "path": []
+          }
+        ],
+        "member_keys": [
+          "k"
+        ],
+        "mode": "all",
+        "accepted_outcomes": [
+          "passed",
+          "failed"
+        ],
+        "deadline_ms": 1860000,
+        "remaining": "track",
+        "bind": "verdict"
+      },
+      "edges": {
+        "completed": "passed",
+        "no_match": "park",
+        "timeout": "park"
+      },
+      "on_error": "failed"
+    },
+    "passed": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "eq",
+          "left": {
+            "op": "ref",
+            "root": "verdict",
+            "path": [
+              "k",
+              "outcome"
+            ]
+          },
+          "right": {
+            "op": "literal",
+            "value": "passed"
+          }
+        }
+      },
+      "edges": {
+        "true": "merge",
+        "false": "may_return",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "merge": {
+      "op": {
+        "kind": "invoke",
+        "command": "pull_request.merge",
+        "bind": "merge_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "method": {
+              "op": "literal",
+              "value": "squash"
+            },
+            "expected_head_sha": {
+              "op": "ref",
+              "root": "pub",
+              "path": [
+                "p",
+                "output",
+                "head"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "accepted": "await_merge",
+        "merged": "failed",
+        "conflict": "failed",
+        "not_mergeable": "failed",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "await_merge": {
+      "op": {
+        "kind": "join",
+        "members": [
+          {
+            "op": "ref",
+            "root": "merge_op",
+            "path": []
+          }
+        ],
+        "member_keys": [
+          "m"
+        ],
+        "mode": "all",
+        "accepted_outcomes": [
+          "merged"
+        ],
+        "deadline_ms": 300000,
+        "remaining": "track",
+        "bind": "merged"
+      },
+      "edges": {
+        "completed": "complete",
+        "no_match": "park",
+        "timeout": "park"
+      },
+      "on_error": "failed"
+    },
+    "complete": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.complete",
+        "bind": "done_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "result_id": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "result"
+              ]
+            }
+          }
+        }
+      },
+      "edges": {
+        "completed": "delivered",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "may_return": {
+      "op": {
+        "kind": "decide",
+        "predicate": {
+          "op": "lt",
+          "left": {
+            "op": "ref",
+            "root": "facts_of",
+            "path": [
+              "facts",
+              "returns"
+            ]
+          },
+          "right": {
+            "op": "ref",
+            "root": "definitions",
+            "path": [
+              "max_returns"
+            ]
+          }
+        }
+      },
+      "edges": {
+        "true": "send_back",
+        "false": "hold",
+        "unknown": "failed"
+      },
+      "on_error": null
+    },
+    "send_back": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.return",
+        "bind": "return_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "result_id": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "result"
+              ]
+            },
+            "reason": {
+              "op": "literal",
+              "value": "checks_failed"
+            },
+            "update_from_main": {
+              "op": "literal",
+              "value": true
+            }
+          }
+        }
+      },
+      "edges": {
+        "returned": "returned",
+        "refused": "failed"
+      },
+      "on_error": "failed"
+    },
+    "hold": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.hold",
+        "bind": "hold_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "result_id": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "result"
+              ]
+            },
+            "reason": {
+              "op": "literal",
+              "value": "returns_exhausted"
+            }
+          }
+        }
+      },
+      "edges": {
+        "held": "notify"
+      },
+      "on_error": "failed"
+    },
+    "notify": {
+      "op": {
+        "kind": "invoke",
+        "command": "supervisor.notify",
+        "bind": "notify_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "project": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "project"
+              ]
+            },
+            "identity": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "result"
+              ]
+            },
+            "text": {
+              "op": "literal",
+              "value": "A task's checks keep failing and it has been sent back the most times the document allows. It is held for you."
+            }
+          }
+        }
+      },
+      "edges": {
+        "sent": "held",
+        "duplicate": "held"
+      },
+      "on_error": "failed"
+    },
+    "park": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.hold",
+        "bind": "park_op",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "task"
+              ]
+            },
+            "result_id": {
+              "op": "ref",
+              "root": "input",
+              "path": [
+                "result"
+              ]
+            },
+            "reason": {
+              "op": "literal",
+              "value": "policy"
+            }
+          }
+        }
+      },
+      "edges": {
+        "held": "held"
+      },
+      "on_error": "failed"
+    },
+    "delivered": {
+      "op": {
+        "kind": "return",
+        "outcome": "delivered",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "returned": {
+      "op": {
+        "kind": "return",
+        "outcome": "returned",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "held": {
+      "op": {
+        "kind": "return",
+        "outcome": "held",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "ended": {
+      "op": {
+        "kind": "return",
+        "outcome": "ended",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    }
+  }
+}

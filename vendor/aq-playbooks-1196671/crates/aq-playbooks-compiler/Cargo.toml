@@ -2,6 +2,10 @@
 name = "aq-playbooks-compiler"
 version = "0.2.0"
 edition.workspace = true
+[features]
+# Epic 0 (delivery by playbook): unfinished code, compiled only when asked for.
+delivery_playbook = []
+
 [dependencies]
 aq-playbooks-model.workspace = true
 serde.workspace = true

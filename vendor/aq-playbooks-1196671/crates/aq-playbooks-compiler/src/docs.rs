@@ -37,8 +37,30 @@ pub fn catalog_registry() -> Registry {
 
 /// The notes on one contract: `kind` is `"commands"` or `"events"`.
 pub fn notes(kind: &str, name: &str) -> Option<Value> {
-    let all: Value = serde_json::from_str(CATALOG_NOTES).ok()?;
+    notes_in(CATALOG_NOTES, kind, name)
+}
+fn notes_in(all: &str, kind: &str, name: &str) -> Option<Value> {
+    let all: Value = serde_json::from_str(all).ok()?;
     all.get(kind)?.get(name).cloned()
+}
+
+/// Catalog 2.3.0 (Epic 0, delivery by playbook), not yet the pinned catalog.
+#[cfg(feature = "delivery_playbook")]
+pub const CATALOG_2_3_REGISTRY: &str =
+    include_str!("../../../contracts/aq-host-2.3.0/registry.json");
+/// What the host says about each contract of catalog 2.3.0.
+#[cfg(feature = "delivery_playbook")]
+pub const CATALOG_2_3_NOTES: &str = include_str!("../../../contracts/aq-host-2.3.0/notes.json");
+
+/// [`catalog`] for catalog 2.3.0 and its notes.
+#[cfg(feature = "delivery_playbook")]
+pub fn catalog_2_3(
+    commands: &BTreeSet<String>,
+    events: &BTreeSet<String>,
+) -> Result<String, String> {
+    let registry = serde_json::from_str(CATALOG_2_3_REGISTRY)
+        .map_err(|e| format!("catalog 2.3.0 does not parse: {e}"))?;
+    render(&registry, CATALOG_2_3_NOTES, commands, events)
 }
 
 /// `CATALOG.md` for a source that may use `commands` and `events`: every
@@ -47,7 +69,16 @@ pub fn notes(kind: &str, name: &str) -> Option<Value> {
 /// host says about each input field, outcome and event. Refuses a name the
 /// pinned catalog lacks, and notes that do not cover a contract exactly.
 pub fn catalog(commands: &BTreeSet<String>, events: &BTreeSet<String>) -> Result<String, String> {
-    let (kept, _) = retain_registry(&catalog_registry(), commands, events)?;
+    render(&catalog_registry(), CATALOG_NOTES, commands, events)
+}
+
+fn render(
+    registry: &Registry,
+    all_notes: &str,
+    commands: &BTreeSet<String>,
+    events: &BTreeSet<String>,
+) -> Result<String, String> {
+    let (kept, _) = retain_registry(registry, commands, events)?;
     let mut out = String::from(
         "# Catalog\n\nThe commands and events this playbook may use, and what the host says about \
          each. `aq-playbooks commands describe <name>` and `aq-playbooks events describe <name>` \
@@ -59,13 +90,13 @@ pub fn catalog(commands: &BTreeSet<String>, events: &BTreeSet<String>) -> Result
         out.push_str("\n## Commands\n");
     }
     for contract in kept.commands.values() {
-        out.push_str(&command(contract)?);
+        out.push_str(&command(contract, all_notes)?);
     }
     if !kept.events.is_empty() {
         out.push_str("\n## Events\n");
     }
     for contract in kept.events.values() {
-        out.push_str(&event(contract)?);
+        out.push_str(&event(contract, all_notes)?);
     }
     Ok(out)
 }
@@ -160,8 +191,9 @@ fn paragraphs(notes: &Value) -> String {
         .map(|p| format!("\n{p}\n"))
         .collect()
 }
-fn command(c: &CommandContract) -> Result<String, String> {
-    let notes = notes("commands", &c.name).ok_or(format!("no notes on command {}", c.name))?;
+fn command(c: &CommandContract, all_notes: &str) -> Result<String, String> {
+    let notes = notes_in(all_notes, "commands", &c.name)
+        .ok_or(format!("no notes on command {}", c.name))?;
     let what = format!("command {}", c.name);
     covered(&what, &notes, "input", &properties(&c.input))?;
     covered(
@@ -211,8 +243,9 @@ fn command(c: &CommandContract) -> Result<String, String> {
     out.push_str(&paragraphs(&notes));
     Ok(out)
 }
-fn event(e: &EventContract) -> Result<String, String> {
-    let notes = notes("events", &e.name).ok_or(format!("no notes on event {}", e.name))?;
+fn event(e: &EventContract, all_notes: &str) -> Result<String, String> {
+    let notes =
+        notes_in(all_notes, "events", &e.name).ok_or(format!("no notes on event {}", e.name))?;
     covered(
         &format!("event {}", e.name),
         &notes,
