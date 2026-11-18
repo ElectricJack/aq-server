@@ -93,7 +93,16 @@ pub async fn load(conn: &mut sqlx::PgConnection, q: Query<'_>) -> sqlx::Result<H
         .await
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     let query = if modern {
-        SQL.replace("SELECT e.attempt_id,", "SELECT x.slot, e.attempt_id,").replace("LEFT JOIN profiled_authority_hot h", "LEFT JOIN execution_attempt_slots x ON x.attempt_id=e.attempt_id LEFT JOIN profiled_authority_hot h")
+        // A stopped attempt can still hold its task while the slot takes new work.
+        SQL.replace("SELECT e.attempt_id,", "SELECT x.slot, e.attempt_id,")
+            .replace(
+                "LEFT JOIN profiled_authority_hot h",
+                "LEFT JOIN execution_attempt_slots x ON x.attempt_id=e.attempt_id LEFT JOIN profiled_authority_hot h",
+            )
+            .replace(
+                "WHERE e.holds_task",
+                "WHERE e.holds_task AND native_attempt_holds_compute(e.attempt_id,e.node_id)",
+            )
     } else {
         SQL.replace(
             "SELECT e.attempt_id,",

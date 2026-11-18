@@ -30,6 +30,25 @@ async fn verified_stopped_frees_node_compute_without_releasing_task_or_requiring
         .await
         .unwrap();
     assert!(valid);
+    let mut conn = pool.acquire().await.unwrap();
+    let slots = aq_machine_control::slots::view(&mut conn, auth.id()).await.unwrap();
+    let agents = aq_swarm::agents::load(
+        &mut conn,
+        aq_swarm::agents::Query {
+            nodes: &[auth.id()],
+            project: None,
+            runtime: None,
+            summaries: false,
+            now_ms: crate::common::profiled::NOW,
+            limit: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(slots.occupied, 0);
+    assert!(agents.agents.is_empty(), "the released slot has no agent");
+    assert!(!agents.cut);
+    drop(conn);
     // A direct incarnation write cannot bypass the typed Rust validator just
     // by pointing at a plausible stopped projection or actual existing rows.
     assert!(sqlx::query("UPDATE execution_nodes SET state=jsonb_set(jsonb_set(state,'{identity}', $2),'{native,request,identity}',$2) WHERE node_id=$1")
