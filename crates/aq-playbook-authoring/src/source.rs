@@ -86,6 +86,15 @@ pub fn source_digest(markdown: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(markdown.as_bytes()))
 }
 
+/// The compiler binds the full normalized source including its generated header.
+/// Keep this representation in sync with `aq_playbooks_compiler::draft::source_text`.
+pub fn artifact_source_digest(header: &aq_playbooks_model::SourceHeader, markdown: &str) -> String {
+    let header =
+        serde_json::to_string(header).expect("source header contains only strings and sets");
+    let compiled_source = format!("---aq-playbook\n{header}\n---\n{markdown}");
+    source_digest(&aq_playbooks_compiler::normalize_source(&compiled_source))
+}
+
 /// `sha256:<hex>` of everything the record says except its revision: a run
 /// authored under one record is stale under another (a newer server widening
 /// the built-in record, or a registered source given fewer commands).

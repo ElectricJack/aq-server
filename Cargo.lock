@@ -509,6 +509,7 @@ dependencies = [
  "aq-session-protocol",
  "axum",
  "hex",
+ "schemars",
  "serde",
  "serde_json",
  "sqlx",

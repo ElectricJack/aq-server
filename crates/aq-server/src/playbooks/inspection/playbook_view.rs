@@ -11,25 +11,25 @@ use crate::{
         service::Service,
     },
 };
-use aq_playbook_host::{
-    model::{Artifact, Operation, Playbook},
-    runner,
+pub use aq_playbook_domain::playbook_graph::{Edge, Graph, StepNode, StepTimeline, graph};
+use aq_playbook_domain::playbook_graph::{
+    StepFact, graph_for_storage, ordered, registered_graph, step_facts, validate_artifact_id,
 };
+use aq_playbook_host::{model::Artifact, runner};
 use axum::{
     Extension, Json,
     extract::{Path, Query},
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::Row;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::Duration,
 };
 use uuid::Uuid;
 
-const GRAPH_BYTES: usize = 65536;
 const ACTIVATION_PAGES: usize = 4;
 /// Per-page budget for reading current activations. 500 ms was too tight on
 /// loaded CI runners once the 2.1.0 catalog landed: the read timed out and the
@@ -68,39 +68,16 @@ pub struct WaitingView {
     pub decision_state: Option<String>,
     pub related_task_ids: Vec<Uuid>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Edge {
-    pub label: String,
-    pub to: String,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct StepNode {
-    pub id: String,
-    /// invoke, decide, wait, for_each, call, join or return.
-    pub kind: String,
-    /// Command (invoke) or event (wait) contract name, or `dependency/entry`
-    /// (call). Never inputs, expressions or values.
-    pub target: Option<String>,
-    /// Labelled successors in label order.
-    pub edges: Vec<Edge>,
-    pub on_error: Option<String>,
-}
-/// Stored public graph of one artifact.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Graph {
-    pub entries: BTreeMap<String, String>,
-    pub steps: BTreeMap<String, StepNode>,
-}
-
 #[derive(Serialize)]
 pub(super) struct DefinitionGraph {
     api_version: &'static str,
     namespace: NamespaceView,
     artifact: String,
     graph: Option<Graph>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description_markdown: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    step_facts: BTreeMap<String, Vec<StepFact>>,
 }
 
 /// Reads the same public projection as run inspection, keyed by the immutable
@@ -118,125 +95,44 @@ pub(super) async fn definition_graph(
     {
         return Err(Error::Forbidden);
     }
-    if !artifact.strip_prefix("sha256:").is_some_and(|digest| {
-        digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }) {
-        return Err(Error::Invalid);
-    }
+    validate_artifact_id(&artifact)?;
     service.authorize_inspection(actor.id).await?;
-    let graph = service.stored_graph(&artifact).await?;
+    let mut tx = service.tx().await?;
+    let namespace = &service.namespace;
+    let registered = registered_graph(
+        &mut *tx,
+        namespace.namespace_id,
+        namespace.generation,
+        &artifact,
+    )
+    .await?;
+    let (description_markdown, authored) = if registered.is_some() {
+        aq_playbook_authoring::runs::inspection_source(&mut *tx, &artifact).await?
+    } else {
+        (None, None)
+    };
+    tx.commit().await?;
+    let graph = registered.flatten();
+    let step_facts = graph
+        .as_ref()
+        .zip(authored.as_ref())
+        .map(|(_, artifact)| step_facts(&artifact.content.playbook))
+        .unwrap_or_default();
     service.authorize_inspection(actor.id).await?;
     bounded(DefinitionGraph {
         api_version: "playbooks-definition-graph-1",
         namespace: (&service.namespace).into(),
         artifact,
         graph,
-    })
-}
-/// X32: steps reachable from the run's entry in breadth-first order from
-/// `start` (successors by edge label, then `on_error`).
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
-pub struct StepTimeline {
-    pub entry: String,
-    pub start: String,
-    pub steps: Vec<StepNode>,
-}
-pub fn graph(playbook: &Playbook) -> Graph {
-    let steps = playbook
-        .steps
-        .iter()
-        .map(|(id, step)| {
-            let mut extra = Vec::new();
-            let (kind, target) = match &step.op {
-                Operation::Invoke { command, .. } => ("invoke", Some(command.name.clone())),
-                Operation::Decide { .. } => ("decide", None),
-                Operation::Wait { event, .. } => ("wait", event.as_ref().map(|e| e.name.clone())),
-                Operation::ForEach { body, next, .. } => {
-                    extra.push(("body", body.clone()));
-                    extra.push(("next", next.clone()));
-                    ("for_each", None)
-                }
-                Operation::Call {
-                    dependency, entry, ..
-                } => ("call", Some(format!("{dependency}/{entry}"))),
-                Operation::Join { .. } => ("join", None),
-                Operation::Return { .. } => ("return", None),
-            };
-            let mut edges = step
-                .edges
-                .iter()
-                .map(|(label, to)| Edge {
-                    label: label.clone(),
-                    to: to.clone(),
-                })
-                .collect::<Vec<_>>();
-            for (label, to) in extra {
-                if !step.edges.contains_key(label) {
-                    edges.push(Edge {
-                        label: label.into(),
-                        to,
-                    });
-                }
-            }
-            edges.sort_by(|a, b| a.label.cmp(&b.label));
-            (
-                id.clone(),
-                StepNode {
-                    id: id.clone(),
-                    kind: kind.into(),
-                    target,
-                    edges,
-                    on_error: step.on_error.clone(),
-                },
-            )
-        })
-        .collect();
-    Graph {
-        entries: playbook
-            .entries
-            .iter()
-            .map(|(name, entry)| (name.clone(), entry.start.clone()))
-            .collect(),
-        steps,
-    }
-}
-pub fn ordered(graph: &Graph, entry: &str) -> Option<StepTimeline> {
-    let start = graph.entries.get(entry)?;
-    let mut seen = BTreeSet::new();
-    let mut queue = VecDeque::from([start.clone()]);
-    let mut steps = Vec::new();
-    while let Some(id) = queue.pop_front() {
-        if !seen.insert(id.clone()) {
-            continue;
-        }
-        let Some(node) = graph.steps.get(&id) else {
-            continue;
-        };
-        queue.extend(
-            node.edges
-                .iter()
-                .map(|e| &e.to)
-                .chain(node.on_error.iter())
-                .filter(|next| !seen.contains(*next))
-                .cloned(),
-        );
-        steps.push(node.clone());
-    }
-    Some(StepTimeline {
-        entry: entry.into(),
-        start: start.clone(),
-        steps,
+        description_markdown,
+        step_facts,
     })
 }
 impl Service {
     /// Idempotent: the first install of an artifact in this namespace
     /// generation fixes its per-name version.
     pub(crate) async fn register_definition(&self, artifact: &Artifact) -> Result<()> {
-        let graph = serde_json::to_value(graph(&artifact.content.playbook))?;
-        let graph = (serde_json::to_vec(&graph)?.len() <= GRAPH_BYTES).then_some(graph);
+        let graph = graph_for_storage(&artifact.content.playbook)?;
         let mut tx = self.tx().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!(
@@ -270,21 +166,6 @@ impl Service {
             .into_iter()
             .map(|row| (row.get("artifact"), (row.get("name"), row.get("version"))))
             .collect())
-    }
-    async fn stored_graph(&self, artifact: &str) -> Result<Option<Graph>> {
-        let mut tx = self.tx().await?;
-        let graph: Option<Option<serde_json::Value>> = sqlx::query_scalar("SELECT graph FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND artifact=$3")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(artifact)
-            .fetch_optional(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        graph
-            .flatten()
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|_| Error::Unknown)
     }
     /// Binding and activation revision of runs admitted through a retained
     /// admission. Binding is null for admissions prepared before it was kept.
@@ -430,10 +311,19 @@ impl Driver {
         Ok(())
     }
     pub(super) async fn step_timeline(&self, run: &RunView) -> Result<Option<StepTimeline>> {
-        Ok(self
-            .service
-            .stored_graph(&run.artifact)
-            .await?
+        let service = &self.service;
+        let mut tx = service.tx().await?;
+        let namespace = &service.namespace;
+        let graph = registered_graph(
+            &mut *tx,
+            namespace.namespace_id,
+            namespace.generation,
+            &run.artifact,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(graph
+            .flatten()
             .and_then(|graph| ordered(&graph, &run.entry)))
     }
 }

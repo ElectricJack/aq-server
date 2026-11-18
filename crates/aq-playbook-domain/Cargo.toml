@@ -12,6 +12,7 @@ aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-5b86e0f/crates/aq-pl
 aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version = "=0.1.0" }
 axum.workspace = true
 hex.workspace = true
+schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
