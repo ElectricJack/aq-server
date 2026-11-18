@@ -1996,3 +1996,85 @@ async fn native_conversation_is_independent_and_requires_the_original_worker() {
     assert_eq!(details["id"], json!(id));
     assert_eq!(details["status"], "stopped");
 }
+
+#[tokio::test]
+async fn queued_conversation_is_bound_to_the_stopped_attempt_and_read_by_session() {
+    use common::native_started::{context, setup, stop_request};
+
+    let (f, started) = setup(true).await;
+    let auth = context(&f).await;
+    let attempt = started.binding.attempt_id;
+    let aq_session_protocol::SessionIdentity::Remote { session_id: id, .. } =
+        started.binding.session
+    else {
+        panic!("fixture needs a remote session");
+    };
+    let project = f.selection.lineage.project_id;
+    let read = format!("/api/v1/sessions/{id}/conversation");
+    let upload = format!("/v1/worker/attempts/{attempt}/conversation");
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let snapshot = json!({"messages":[
+        {"role":"user","text":"Show the result"},
+        {"role":"assistant","text":"Résumé\nSecond line"},
+    ],"partial":false});
+
+    let (status, empty) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(
+        empty,
+        json!({"session_id":id,"project_id":project,"conversation":null})
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+    );
+    aq_server::profiled_execution::started::record(&f.state, &auth, &started)
+        .await
+        .unwrap();
+    aq_server::profiled_execution::stopped::record(&f.state, &auth, &stop_request(&started))
+        .await
+        .unwrap();
+
+    let other = aq_server::tokens::new_node_credential();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'conversation-other',$2,'0.1.0',1,now())")
+        .bind(Uuid::new_v4()).bind(aq_server::tokens::verifier(&other)).execute(&f.db.pool().await).await.unwrap();
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&other),
+            false
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN,
+    );
+    for _ in 0..2 {
+        let (status, receipt) = call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&f.credential),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt, json!({"attempt_id":attempt,"session_id":id}));
+    }
+    let (status, saved) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        saved,
+        json!({"session_id":id,"project_id":project,"conversation":snapshot})
+    );
+}

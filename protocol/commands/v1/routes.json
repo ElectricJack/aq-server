@@ -179,6 +179,8 @@
     {"path": "/api/manual-agents/{id}", "class": "owner_admin", "note": "Owner-only manual session metadata."},
     {"path": "/api/manual-agents/{id}/conversation", "class": "owner_admin", "note": "Owner-only saved provider conversation."},
     {"path": "/v1/worker/manual-agents/{id}/conversation", "class": "node", "note": "Original enrolled node saves a native provider conversation."},
+    {"path": "/api/v1/sessions/{id}/conversation", "class": "owner_admin", "note": "Owner-only saved queued provider conversation."},
+    {"path": "/v1/worker/attempts/{id}/conversation", "class": "node", "note": "Original enrolled node saves a stopped attempt's provider conversation."},
     {"path": "/api/worker-diagnostics", "class": "owner_admin", "note": "Owner-only queued worker sandbox diagnostics (aq-manual-sessions diagnostics.rs); owner guard."},
     {"path": "/api/worker-diagnostics/{node}", "class": "owner_admin", "note": "Owner-only queued worker sandbox diagnostics (aq-manual-sessions diagnostics.rs); owner guard."},
     {"path": "/v1/worker/diagnostics", "class": "node", "note": "Node poll for queued sandbox diagnostics under the node credential (aq-manual-sessions diagnostics.rs); node guard."},
