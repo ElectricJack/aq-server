@@ -252,6 +252,24 @@ pub async fn reserve(
     };
     let policy_handle = configured.retention_handle == request.source_retention_handle
         || head_handle == Some(request.source_retention_handle);
+    // Spec 0016 §4: a handle `repo.retain_ref` returned for this exact head.
+    #[cfg(feature = "delivery_playbook")]
+    let policy_handle = policy_handle
+        || match &configured.source {
+            aq_admission::SourceSelection::NamedRef { reference } => {
+                let (id, g) = (request.repository_id, request.binding_generation);
+                let scope = aq_delivery::main_sync::Scope::new(
+                    request.project_id,
+                    id,
+                    g,
+                    reference.as_str(),
+                );
+                let (handle, head) = (request.source_retention_handle, &request.base.hex);
+                let accepted = aq_delivery::main_sync::accepts(&mut *tx, &scope, handle, head);
+                accepted.await.map_err(|_| unavailable())?
+            }
+            aq_admission::SourceSelection::Immutable { .. } => false,
+        };
     if !configured.enabled || canonical(&configured)? != canonical(&installed)? {
         return Err(refused("source_export_policy_not_installed"));
     }

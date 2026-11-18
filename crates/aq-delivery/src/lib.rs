@@ -3,9 +3,12 @@
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
 #[cfg(feature = "delivery_playbook")]
 pub mod github;
+#[cfg(feature = "delivery_playbook")]
+pub mod main_sync;
 mod policy;
 mod protocol;
 mod reconcile;
+pub mod source_checks;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,
 };
