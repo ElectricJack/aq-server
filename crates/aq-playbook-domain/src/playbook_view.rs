@@ -160,9 +160,122 @@ pub fn ordered(graph: &Graph, entry: &str) -> Option<StepTimeline> {
         steps,
     })
 }
+/// The catalog fields needed to compare a run pin to the active version.
+pub struct ActivationPin<'a> {
+    pub binding: &'a str,
+    pub artifact: &'a str,
+    pub revision: &'a str,
+}
+
+pub fn definition_view<'a>(
+    artifact: &str,
+    binding: Option<&str>,
+    name: &str,
+    version: i64,
+    activations: Option<impl Iterator<Item = ActivationPin<'a>>>,
+    registry: &BTreeMap<String, (String, i64)>,
+) -> DefinitionView {
+    let known = activations.is_some();
+    let active = activations
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            registry
+                .get(a.artifact)
+                .filter(|(n, _)| n == name)
+                .map(|(_, v)| (a, *v))
+        })
+        .max_by(|(a, av), (b, bv)| {
+            let own = |x: &ActivationPin<'_>| binding == Some(x.binding);
+            (own(a), a.artifact == artifact, *av, b.binding).cmp(&(
+                own(b),
+                b.artifact == artifact,
+                *bv,
+                a.binding,
+            ))
+        })
+        .map(|(a, v)| ActiveDefinitionView {
+            binding: a.binding.into(),
+            artifact: a.artifact.into(),
+            version: v.to_string(),
+            activation_revision: a.revision.into(),
+        });
+    DefinitionView {
+        name: name.into(),
+        version: version.to_string(),
+        pinned_is_active: known.then(|| active.as_ref().is_some_and(|a| a.artifact == artifact)),
+        active,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn definition_view_compares_the_run_pin_with_current_deployments() {
+        let registry = BTreeMap::from([
+            ("a1".into(), ("recovery".into(), 1)),
+            ("a2".into(), ("recovery".into(), 2)),
+            ("x".into(), ("other".into(), 7)),
+        ]);
+        let active = || ActivationPin {
+            binding: "main",
+            artifact: "a2",
+            revision: "3",
+        };
+        let other = ActivationPin {
+            binding: "other",
+            artifact: "x",
+            revision: "3",
+        };
+        let superseded = definition_view(
+            "a1",
+            None,
+            "recovery",
+            1,
+            Some([active(), other].into_iter()),
+            &registry,
+        );
+        assert_eq!(superseded.version, "1");
+        assert_eq!(superseded.pinned_is_active, Some(false));
+        let deployed = superseded.active.unwrap();
+        assert_eq!(
+            (deployed.artifact.as_str(), deployed.version.as_str()),
+            ("a2", "2")
+        );
+        let current = definition_view(
+            "a2",
+            None,
+            "recovery",
+            2,
+            Some(std::iter::once(active())),
+            &registry,
+        );
+        assert_eq!(current.pinned_is_active, Some(true));
+        let retired = definition_view(
+            "a1",
+            None,
+            "recovery",
+            1,
+            Some(std::iter::empty()),
+            &registry,
+        );
+        assert_eq!(
+            (retired.pinned_is_active, retired.active),
+            (Some(false), None)
+        );
+        let unknown = definition_view(
+            "a1",
+            None,
+            "recovery",
+            1,
+            None::<std::iter::Empty<ActivationPin<'_>>>,
+            &registry,
+        );
+        assert_eq!((unknown.pinned_is_active, unknown.active), (None, None));
+    }
+
     fn node(id: &str, kind: &str, edges: &[(&str, &str)], on_error: Option<&str>) -> StepNode {
         StepNode {
             id: id.into(),
