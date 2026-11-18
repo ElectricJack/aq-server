@@ -60,6 +60,10 @@ pub struct Config {
     pub agent_access: Option<crate::agent_access::AgentAccessConfig>,
     #[serde(default)]
     pub source_retention: Option<crate::source_retention::SourceRetentionConfig>,
+    /// Spec 0016 §5.2: aq-git's git smart-HTTP socket and transfer limits.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, deserialize_with = "aq_git_transfer::deserialize")]
+    pub git_http: Option<std::sync::Arc<aq_git_transfer::Loaded>>,
     /// D2 repository onboarding: GitHub API base and vault-held Git credential profiles.
     #[serde(default)]
     pub onboarding: Option<crate::repository_onboarding::OnboardingConfig>,
@@ -329,6 +333,14 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|e| ("source_retention".into(), e.to_string()))?;
     }
+    // A git grant's token is derived from the delegated-permit credential key.
+    #[cfg(feature = "delivery_playbook")]
+    if c.git_http.is_some() && c.delegated_permits.is_none() {
+        return invalid(
+            "git_http",
+            "requires [delegated_permits] (the grant token key)".into(),
+        );
+    }
     if let Some(settings) = &c.agent_access {
         if !settings.graph_token_file.is_absolute() {
             return invalid(
@@ -430,6 +442,8 @@ mod tests {
             updates: None,
             agent_access: None,
             source_retention: None,
+            #[cfg(feature = "delivery_playbook")]
+            git_http: None,
             result_media: None,
             onboarding: None,
             terminals: None,

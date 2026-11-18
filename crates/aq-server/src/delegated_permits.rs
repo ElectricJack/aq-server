@@ -1,7 +1,6 @@
 //! Delegated credential primitives. These do not establish node or grant currency:
 //! effect owners must load current authority under their transaction locks.
-mod model;
-pub use model::{CredentialKey, PermitRecord};
+pub use aq_permit_credentials::{CredentialKey, PermitRecord};
 pub mod config;
 pub mod handoff;
 pub mod receipts;

@@ -1,0 +1,21 @@
+[package]
+name = "aq-permit-credentials"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Delegated runner permit credentials: the server-private key, derived credentials and the persisted permit record"
+
+[dependencies]
+aq-admission-sandbox = { package = "aq-admission", path = "../../vendor/aq-admission-0.3.3", version = "=0.3.3" }
+base64.workspace = true
+hmac = "=0.12.1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle = "=2.6.1"
+uuid.workspace = true
+zeroize = "1"
+
+[features]
+# Spec 0016 (Epic 0): the git grant token MAC.
+delivery_playbook = []

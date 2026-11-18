@@ -666,6 +666,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         startup: startup.descriptor,
     };
     native.validate().map_err(|_| refused())?;
+    // Spec 0016 §5.2: fetch and push through central aq-git for this attempt.
+    #[cfg(feature = "delivery_playbook")]
+    let git = crate::git_transfer::offer_grant(
+        state,
+        attempt_id,
+        task.task_id,
+        &source,
+        project.publication.as_ref().map(|p| p.target.as_str()),
+    )
+    .await?;
     spec.validate_retained(&offer, &native.offered.artifacts, time)
         .map_err(|_| refused())?;
     let source_binding = aq_worker_protocol::SourceBinding {
@@ -715,6 +725,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             time,
         )?,
         native_offer: native.clone(),
+        #[cfg(feature = "delivery_playbook")]
+        git,
     }
     .value()?;
     Ok(Built {

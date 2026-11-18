@@ -263,6 +263,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-git-transfer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aq-admission 0.1.13",
+ "axum",
+ "base64 0.22.1",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aq-history-caps"
 version = "0.1.0"
 dependencies = [
@@ -464,6 +487,21 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aq-permit-credentials"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.3.3",
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -783,6 +821,7 @@ dependencies = [
  "aq-dashboard-contract",
  "aq-delivery",
  "aq-environment-templates",
+ "aq-git-transfer",
  "aq-history-caps",
  "aq-human-cursor",
  "aq-human-http",
@@ -795,6 +834,7 @@ dependencies = [
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
+ "aq-permit-credentials",
  "aq-phase-terminal-protocol",
  "aq-playbook-authoring",
  "aq-playbook-domain",
@@ -834,7 +874,6 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
- "hmac 0.12.1",
  "http-body",
  "http-body-util",
  "jsonwebtoken",
@@ -849,7 +888,6 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "sqlx-postgres",
- "subtle",
  "tempfile",
  "thiserror",
  "tokio",

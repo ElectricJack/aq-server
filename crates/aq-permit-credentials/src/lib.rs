@@ -1,3 +1,6 @@
+//! Delegated runner permit credentials, moved out of aq-server's
+//! `delegated_permits` unchanged. They do not establish node or grant
+//! currency: effect owners load current authority under their own locks.
 use aq_admission_sandbox::sandbox::{
     ContractError, DelegatedPermit, PermitBinding, PermitContext, PermitCredential, PermitScope,
     RunnerOperation,
@@ -25,11 +28,7 @@ impl CredentialKey {
         Self(Zeroizing::new(bytes))
     }
 
-    pub(crate) fn incarnation_credential(
-        &self,
-        permit_id: Uuid,
-        boot: Uuid,
-    ) -> Result<PermitCredential> {
+    pub fn incarnation_credential(&self, permit_id: Uuid, boot: Uuid) -> Result<PermitCredential> {
         if permit_id.is_nil() || boot.is_nil() {
             return Err(ContractError::InvalidShape);
         }
@@ -42,6 +41,19 @@ impl CredentialKey {
         let token = Zeroizing::new(format!("aqp_{}", URL_SAFE_NO_PAD.encode(bytes.as_slice())));
         serde_json::from_value(serde_json::Value::String(token.to_string()))
             .map_err(|_| ContractError::InvalidShape)
+    }
+
+    /// Spec 0016 §5.2: the MAC of one attempt's git grant for one repository.
+    #[cfg(feature = "delivery_playbook")]
+    pub fn git_grant_mac(&self, attempt_id: Uuid, repository_id: Uuid) -> Option<[u8; 32]> {
+        if attempt_id.is_nil() || repository_id.is_nil() {
+            return None;
+        }
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_slice()).ok()?;
+        mac.update(b"aq.git-grant/v1\0");
+        mac.update(attempt_id.as_bytes());
+        mac.update(repository_id.as_bytes());
+        Some(mac.finalize().into_bytes().into())
     }
 
     pub fn credential(&self, permit_id: Uuid) -> Result<PermitCredential> {
@@ -104,7 +116,7 @@ impl PermitRecord {
         }
     }
 
-    pub(crate) fn verifier(&self) -> [u8; 32] {
+    pub fn verifier(&self) -> [u8; 32] {
         self.verifier
     }
 
@@ -152,7 +164,7 @@ impl PermitRecord {
             .validate_for(current, operation, now_ms)
     }
 
-    pub(crate) fn rebind(&mut self, key: &CredentialKey, boot: Uuid) -> Result<()> {
+    pub fn rebind(&mut self, key: &CredentialKey, boot: Uuid) -> Result<()> {
         let credential = key.incarnation_credential(self.permit_id, boot)?;
         self.binding.node.boot_id = boot;
         self.credential_boot = Some(boot);

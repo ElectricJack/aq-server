@@ -103,6 +103,10 @@ pub struct StoredOffer {
     pub schema_version: u32,
     pub read_provenance: ReadProvenance,
     pub native_offer: NativeOffer,
+    /// Spec 0016 §5.2: the attempt's git grant, without its token.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<aq_git_transfer::StoredGrant>,
 }
 impl StoredOffer {
     // jsonb::text adds whitespace. Twice compact bytes plus a fixed allowance is

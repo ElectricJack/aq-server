@@ -121,6 +121,11 @@ services:
     # Same image as server: A3b's verified v0.2.0 binary and pinned Git runtime.
     image: *server-image
     user: '10001:10001'
+    # Spec 0016 §5.2: e.g. /run/aq-git/git-http.sock, the git smart-HTTP socket.
+    # It shares /run/aq-git with the JSON socket, so the server reaches it too.
+    # Empty (the default) for an aq-git without that endpoint.
+    environment:
+      AQ_GIT_HTTP_SOCKET: ${AQ_GIT_HTTP_SOCKET:-}
     entrypoint: [/bin/sh, /dev-git-supervisor.sh]
     volumes:
       - ./scripts/dev-git-supervisor.sh:/dev-git-supervisor.sh:ro

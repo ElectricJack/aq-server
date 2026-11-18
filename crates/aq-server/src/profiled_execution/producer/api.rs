@@ -27,7 +27,19 @@ async fn poll(
     let slot = super::super::api::slot_header(&headers, aq_admission::node_slots::SLOT_HEADER)?
         .unwrap_or(1);
     let reply = super::workflow::poll_slot(&state, &auth, &request, slot).await?;
+    // Spec 0016 §5.2: each offer's git grant, beside the frozen control reply.
+    #[cfg(feature = "delivery_playbook")]
+    let grants = crate::git_transfer::page_grants(&state, &reply.offers).await?;
     let value = ControlReply::Poll(reply);
+    #[cfg(feature = "delivery_playbook")]
+    let value = {
+        let mut value = serde_json::to_value(&value).map_err(|_| AppError::Internal)?;
+        if !grants.is_empty() {
+            value[aq_admission::git_grant::POLL_REPLY_FIELD] =
+                serde_json::to_value(&grants).map_err(|_| AppError::Internal)?;
+        }
+        value
+    };
     if serde_json::to_vec(&value)
         .map_err(|_| AppError::Internal)?
         .len()

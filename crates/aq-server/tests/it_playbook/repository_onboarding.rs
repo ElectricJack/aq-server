@@ -222,6 +222,11 @@ async fn onboard_github_repo_creates_binding_and_retained_base() {
         assert_eq!(p["allowed_refs"], json!(["refs/heads/trunk"]));
         assert_eq!(p["allowed_targets"], json!(["refs/heads/trunk"]));
         assert!(p.get("credential_profile").is_none());
+        // Spec 0016 §5.2: task branches may be created under `refs/heads/aq/`.
+        #[cfg(feature = "delivery_playbook")]
+        assert_eq!(p["allowed_target_prefixes"], json!(["refs/heads/aq/"]));
+        #[cfg(not(feature = "delivery_playbook"))]
+        assert!(p.get("allowed_target_prefixes").is_none());
         assert_eq!(f.syncs[0]["refs"], json!(["refs/heads/trunk"]));
     }
     let (status, project) = call(&o.app, &path(), None, "owner@localhost").await;

@@ -11,6 +11,8 @@ pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
 pub mod execution_permits;
+#[cfg(feature = "delivery_playbook")]
+pub mod git_transfer;
 pub mod hibernation;
 pub mod identity;
 pub mod intelligence;
@@ -380,6 +382,9 @@ fn build_worker_router_inner(
         Some(policy) => profiled_execution::closure::api::routes(state.clone(), policy),
         None => Router::new(),
     };
+    // Spec 0016 §5.2: `/v1/git/<repository>/…` to aq-git's git socket.
+    #[cfg(feature = "delivery_playbook")]
+    let closure = closure.merge(git_transfer::routes(&state));
     let router = Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))

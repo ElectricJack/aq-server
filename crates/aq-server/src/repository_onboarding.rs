@@ -557,6 +557,12 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
                 if let Some(name) = &r.credential_profile {
                     params["credential_profile"] = json!(name);
                 }
+                // Spec 0016 §5.2: each task pushes its own `refs/heads/aq/<task-id>`.
+                #[cfg(feature = "delivery_playbook")]
+                {
+                    params["allowed_target_prefixes"] =
+                        json!([aq_admission::git_grant::TASK_REF_PREFIX]);
+                }
                 match aq_git(
                     state,
                     step_operation(op, "repo.register"),

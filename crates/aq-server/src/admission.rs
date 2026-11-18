@@ -71,6 +71,10 @@ pub enum Class {
     TerminalRead,
     /// `/api/v1/commands`: the command surface; per-attempt budgets apply inside.
     AgentCommand,
+    /// Spec 0016 §5.2 `/v1/git/…`: the proxy owns its slots and its
+    /// configured transfer deadline (`[git_http]`), not the Bulk deadline.
+    #[cfg(feature = "delivery_playbook")]
+    GitTransfer,
 }
 pub(crate) fn execution_cancel_path(path: &str) -> bool {
     path.strip_prefix("/api/execution/attempts/")
@@ -83,6 +87,10 @@ pub(crate) fn agent_revoke_path(path: &str) -> bool {
         .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 pub fn classify(path: &str) -> Class {
+    #[cfg(feature = "delivery_playbook")]
+    if path.starts_with("/v1/git/") {
+        return Class::GitTransfer;
+    }
     if path == "/v1/worker/manual-agents" {
         return Class::Control;
     }
@@ -268,6 +276,8 @@ pub async fn gate(
 ) -> Response {
     let path = request.uri().path().to_owned();
     let (slots, timeout) = match classify(&path) {
+        #[cfg(feature = "delivery_playbook")]
+        Class::GitTransfer => return next.run(request).await,
         Class::Control => (&admission.control, Duration::from_secs(5)),
         Class::Renewal => (&admission.renewal, Duration::from_secs(8)),
         Class::MaterialPresence => (&admission.material_presence, Duration::from_secs(4)),
@@ -301,6 +311,12 @@ pub async fn gate(
 #[cfg(test)]
 mod output_poll_tests {
     use super::*;
+    #[cfg(feature = "delivery_playbook")]
+    #[test]
+    fn git_transfers_are_not_bulk() {
+        assert_eq!(classify("/v1/git/x/git-receive-pack"), Class::GitTransfer);
+        assert_eq!(classify("/v1/execution/sources/x"), Class::Bulk);
+    }
     #[test]
     fn explicit_output_poll_shares_only_the_terminal_poll_admission_lane() {
         assert!(matches!(

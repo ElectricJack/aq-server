@@ -15,8 +15,6 @@ aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-routing = { path = "../aq-routing" }
 aq-internal-work = { path = "../aq-internal-work" }
 aq-playbook-authoring = { path = "../aq-playbook-authoring" }
-hmac = "=0.12.1"
-subtle = "=2.6.1"
 http-body = "=1.1.0"
 aq-central-authority = { path = "../aq-central-authority", version = "=0.1.0" }
 aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
@@ -91,9 +89,17 @@ tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+aq-git-transfer = { path = "../aq-git-transfer" }
+aq-permit-credentials = { path = "../aq-permit-credentials" }
 
 [features]
 test-support = ["aq-notifications/test-support"]
+# Spec 0016 (Epic 0) delivery by playbook: unfinished, off by default.
+delivery_playbook = [
+    "aq-admission/delivery_playbook",
+    "aq-git-transfer/delivery_playbook",
+    "aq-permit-credentials/delivery_playbook",
+]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]
 
@@ -104,6 +110,7 @@ tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
 aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-5b86e0f/crates/aq-playbooks-compiler", version = "=0.2.0" }
 aq-server = { path = ".", features = ["test-support"] }
+aq-git-transfer = { path = "../aq-git-transfer", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true
 tempfile.workspace = true

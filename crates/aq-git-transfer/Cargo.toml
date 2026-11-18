@@ -1,0 +1,33 @@
+[package]
+name = "aq-git-transfer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Spec 0016 §5.2: attempt git grants and the /v1/git proxy to aq-git's git smart-HTTP socket"
+
+[dependencies]
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+subtle = "=2.6.1"
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+hyper = { version = "1", default-features = false, features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"], optional = true }
+http-body-util = { workspace = true, optional = true }
+
+[features]
+# Spec 0016 (Epic 0): unfinished; the crate is empty without it.
+delivery_playbook = ["aq-admission/delivery_playbook", "dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+# A stand-in for aq-git's git socket over `git http-backend`, for tests.
+test-support = ["delivery_playbook"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true

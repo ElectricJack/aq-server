@@ -57,5 +57,13 @@ max_age = 2592000 # seconds (30 days)
 staging_root = "/var/lib/aq/source-staging"
 git_root = "/var/lib/aq/git"
 git_socket = "/run/aq-git/central.sock"
+# Spec 0016 §5.2, servers built with feature `delivery_playbook` only: aq-git's
+# git smart-HTTP socket (set AQ_GIT_HTTP_SOCKET for the aq-git service) and the
+# /v1/git transfer limits. Needs [delegated_permits] (the grant token key).
+# [git_http]
+# socket = "/run/aq-git/git-http.sock"
+# transfer_timeout_ms = 600000
+# max_push_bytes = 1073741824
+# concurrency = 2
 [updates]
 spool_dir = "/updater"

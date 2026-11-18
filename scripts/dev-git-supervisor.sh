@@ -12,10 +12,17 @@ shutdown() {
     exit 0
 }
 trap shutdown TERM INT
+# Spec 0016 §5.2: aq-git also serves git smart HTTP on a second socket, beside
+# the JSON one, when AQ_GIT_HTTP_SOCKET names it (an aq-git with that endpoint).
+if [ -n "${AQ_GIT_HTTP_SOCKET:-}" ]; then
+    set -- --git-http-socket "$AQ_GIT_HTTP_SOCKET"
+else
+    set --
+fi
 while :; do
     # Keep the guard and its engine in a separate process group. If the guard
     # itself dies, no orphaned engine may keep serving during a restart loop.
-    setsid aq-git --state-dir /var/lib/aq/git --git-executable /opt/aq-git-runtime/bin/git --listen /run/aq-git/central.sock serve &
+    setsid aq-git --state-dir /var/lib/aq/git --git-executable /opt/aq-git-runtime/bin/git --listen /run/aq-git/central.sock "$@" serve &
     child=$!
     printf '%s\n' "$child" > /run/aq-git/child.pid
     wait "$child" || true

@@ -142,6 +142,8 @@ pub async fn publish(
         schema_version: 1,
         read_provenance: stored.read_provenance,
         native_offer: native.clone(),
+        #[cfg(feature = "delivery_playbook")]
+        git: stored.git,
     }
     .value()?;
     let session_id = match binding.session {

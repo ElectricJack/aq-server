@@ -533,3 +533,7 @@ pub mod never_started;
 pub mod node_slots;
 pub mod preparation_refresh_v1;
 mod preparation_shared;
+
+// Spec 0016 §5.2 (Epic 0, unfinished): an attempt's central aq-git grant.
+#[cfg(feature = "delivery_playbook")]
+pub mod git_grant;
