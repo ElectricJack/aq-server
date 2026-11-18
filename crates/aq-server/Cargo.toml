@@ -94,7 +94,7 @@ uuid.workspace = true
 
 [features]
 # Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
-delivery_playbook = ["aq-delivery/delivery_playbook", "aq-role-settings/delivery_playbook"]
+delivery_playbook = ["aq-delivery/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook"]
 test-support = ["aq-notifications/test-support"]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]

@@ -131,6 +131,10 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
+        #[cfg(feature = "delivery_playbook")]
+        if name == "work.read" && self.profile.is_delivery() {
+            return self.read_delivery(tx, input).await;
+        }
         let id = text(&input["subject"], "id")?;
         let asked = input["subject"]["revision"]
             .as_i64()
@@ -207,6 +211,39 @@ impl Service {
             .execute(&mut **tx)
             .await?;
         Ok(result("routed", host9::routed_output(id, version, &route)))
+    }
+
+    /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
+    /// those of its latest result, for a task of any bound project.
+    #[cfg(feature = "delivery_playbook")]
+    async fn read_delivery(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        input: &Value,
+    ) -> Result<HostResult> {
+        use aq_playbook_domain::delivery_store as store;
+        let (ports, id) = (self.ports()?, text(&input["subject"], "id")?);
+        let asked = input["subject"]["revision"]
+            .as_i64()
+            .ok_or(Error::Invalid)?;
+        let refused = |reason| Ok(result("refused", host9::refusal(id, asked, reason)));
+        let Ok(task) = Uuid::parse_str(id) else {
+            return refused("unknown_task");
+        };
+        let own = (self.namespace.workspace_id, self.namespace.project_id);
+        let fallback = ports.routing.located(task).await?.unwrap_or(own);
+        let (latest, at, bound) = store::locate(&*self.delivery, task, fallback).await?;
+        let Some(node) = ports.graph.node(at.0, task).await?.filter(|_| bound) else {
+            return refused(if bound {
+                "unknown_task"
+            } else {
+                "not_on_router"
+            });
+        };
+        let (charged, ended) = ports.routing.attempts(task).await?;
+        let facts = (self.namespace_work(tx, task).await?, charged, ended);
+        let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
+        Ok(result("observed", output))
     }
 
     /// The artifact the engine has active on the routing binding (what the

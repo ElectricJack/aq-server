@@ -8,7 +8,11 @@
 //! `pending` row commits first, then the effect runs with a stable idempotency
 //! key, then the final row and its outbox event commit together. Reconcile
 //! only reads a retained final row and never performs an effect.
-use super::{domain::*, review_domain::CatalogProfile, service::*};
+use super::{domain::*, service::*};
+pub use aq_playbook_domain::{
+    host_values::*,
+    review_domain::{HOST5_COMMANDS, HOST7_COMMANDS},
+};
 use aq_playbook_host::{
     model::{ContractRef, EventEnvelope, canonical_bytes},
     runner::Intent,
@@ -86,40 +90,9 @@ impl WorkGraph for GatewayGraph {
     }
 }
 
-/// A catalog outcome and its schema-validated output.
-#[derive(Clone, Debug, PartialEq)]
-pub struct HostResult {
-    pub outcome: String,
-    pub output: Value,
-}
-
 #[path = "findings.rs"]
 mod findings;
 
-pub const HOST5_COMMANDS: [&str; 5] = [
-    "context.read",
-    "work.ensure",
-    "work.change",
-    "operation.cancel",
-    "findings.reconcile",
-];
-/// Catalog 2.0.0 adds asynchronous judgments/checks and operation.get. D11
-/// registers every catalog command: exactly the registry's twelve.
-pub const HOST7_COMMANDS: [&str; 12] = [
-    "context.read",
-    "work.ensure",
-    "work.change",
-    "operation.cancel",
-    "judgment.request",
-    "check.request",
-    "operation.get",
-    "candidate.prepare",
-    "candidate.publish",
-    "findings.reconcile",
-    "message.send",
-    "decision.request",
-];
-const WORK_REF: &str = "aq.playbook.work/";
 const ATTEMPT_REF: &str = "aq.execution.attempt/";
 const PENDING: &str = "pending";
 
@@ -127,22 +100,6 @@ enum Stage {
     Retained(HostResult),
     Pending(Value),
     Fresh,
-}
-
-fn subject(id: impl ToString, revision: i64) -> Value {
-    json!({"id": id.to_string(), "revision": revision.max(0)})
-}
-fn text<'a>(input: &'a Value, field: &str) -> Result<&'a str> {
-    input[field].as_str().ok_or(Error::Invalid)
-}
-fn work_output(task: Uuid, revision: i64) -> Value {
-    json!({"reference": format!("{WORK_REF}{task}"), "subject": subject(task, revision)})
-}
-fn node_version(node: &Value) -> Result<i64> {
-    node["version"]
-        .as_i64()
-        .filter(|v| *v >= 1)
-        .ok_or(Error::Unknown)
 }
 
 impl Service {
@@ -213,7 +170,7 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile == CatalogProfile::Host9 {
+        let commands: &[&str] = if self.profile.has_routing() {
             self.profile.commands()
         } else if self.profile.is_host2() {
             &HOST7_COMMANDS
