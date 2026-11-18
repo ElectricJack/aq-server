@@ -1,0 +1,571 @@
+{
+  "about": "What the host says about each contract of catalog 2.3.0, for an authoring agent. Rendered into CATALOG.md for the commands and events a source may use (aq_playbooks_compiler::docs::catalog). An empty string means the catalog does not say. Kept beside registry.json so that the registry, and every fingerprint, stays unchanged. 2.3.0 adds the delivery event, the delivery commands and their completion event, and extends `work.read`; every other note is the one of 2.2.0.",
+  "commands": {
+    "candidate.prepare": {
+      "purpose": "Prepares an integration candidate from a base and source revisions, and returns the immutable source object it prepared.",
+      "input": {
+        "base": "The revision the candidate is prepared on.",
+        "sources": "The revisions to integrate, at most 100."
+      },
+      "outcomes": {
+        "prepared": "The candidate is prepared. `source` is the object to pass to `check.request`.",
+        "conflict": "The sources do not apply to the base.",
+        "refused": "The host would not prepare it."
+      },
+      "notes": []
+    },
+    "candidate.publish": {
+      "purpose": "Publishes a prepared candidate to a destination, with the evidence for it.",
+      "input": {
+        "candidate": "The candidate to publish.",
+        "destination": "Where to publish it, at the revision expected there.",
+        "evidence": "The evidence the publication rests on, at most 100."
+      },
+      "outcomes": {
+        "published": "It is published.",
+        "conflict": "The destination moved.",
+        "refused": "The host would not publish it."
+      },
+      "notes": [
+        "Publication is reconciled by the host's receipt, not replayed by identity."
+      ]
+    },
+    "check.request": {
+      "purpose": "Runs a registered check on an immutable source object. It answers later, on `aq.check.receipted`.",
+      "input": {
+        "subject": "The work the check is for.",
+        "check": "The registered check and its validator; it must be one the work requires.",
+        "source": "The immutable source object to check, as `candidate.prepare` returned it."
+      },
+      "outcomes": {
+        "accepted": "The check is queued; the edge binds `{handle}`. Join the handle to read the answer.",
+        "passed": "The check ran and passed.",
+        "failed": "The check ran and failed.",
+        "infrastructure_failure": "The check could not run to an end (cancelled, timed out or unknown).",
+        "refused": "The host would not run it; `reason` says why."
+      },
+      "notes": [
+        "It can be cancelled with `operation.cancel`."
+      ]
+    },
+    "context.read": {
+      "purpose": "Reads one page of one view of a subject's context.",
+      "input": {
+        "subject": "What to read about.",
+        "view": "Which view.",
+        "snapshot": "",
+        "page": ""
+      },
+      "outcomes": {
+        "observed": "",
+        "incomplete": "",
+        "expired": "",
+        "refused": ""
+      },
+      "notes": [
+        "The output carries no facts of its own beyond the fields shown."
+      ]
+    },
+    "decision.request": {
+      "purpose": "Asks people to decide. It answers later, on `aq.decision.completed`.",
+      "input": {
+        "subject": "What the decision is about, at an exact revision.",
+        "question": "The question, in words the people asked will read.",
+        "choices": "The choices, at most 100.",
+        "responders": "Who may answer, at most 100.",
+        "expires_at_ms": "When the request expires."
+      },
+      "outcomes": {
+        "accepted": "The request is open; the edge binds `{handle}`. Join the handle to read the answer.",
+        "approved": "It was approved.",
+        "rejected": "It was rejected.",
+        "expired": "Nobody answered in time.",
+        "cancelled": "The request was cancelled.",
+        "refused": "The host would not ask."
+      },
+      "notes": [
+        "The host checks who answers; nothing in the request can answer it."
+      ]
+    },
+    "findings.reconcile": {
+      "purpose": "Records the findings of an observation against the ones already known.",
+      "input": {
+        "evaluation": "",
+        "findings": "The findings, at most 100.",
+        "observation": "",
+        "partition": "",
+        "reminder_ms": ""
+      },
+      "outcomes": {
+        "reconciled": "They are recorded.",
+        "conflict": "",
+        "refused": ""
+      },
+      "notes": []
+    },
+    "judgment.assess": {
+      "purpose": "Asks a model several labelled questions about a subject at once. It answers later, on `aq.judgment.assessed`.",
+      "input": {
+        "subject": "The subject being judged. Use the `subject` a read returned.",
+        "question": "What to judge, in the document's own words, with its definitions.",
+        "context": "`items`: at most 16 `{label, text}` the model sees, such as a task's title and description.",
+        "fields": "Today the host has no adapter for this command, and what it does with no fields is not decided: include at least one field. One entry per labelled question: `{id, description, choices}`, at most 16, with up to 64 choices of at most 128 bytes. Include a choice such as `unknown` when the document says what to do if it cannot be told.",
+        "flags": "Yes/no questions: `{id, description}`, at most 32. The model says which hold.",
+        "rationale_max_bytes": "How long the model's explanation may be, 0 to 4096.",
+        "budget": "`deadline_ms` (1000 to 600000), how long the host may take; `max_output_tokens`. 120000 ms and 2048 tokens are plenty for a classification. The host must refuse a budget above its caps with `budget_exceeded`."
+      },
+      "outcomes": {
+        "accepted": "The question is queued; the edge binds `{handle}`. Join the handle under a key, accepting only `assessed`.",
+        "assessed": "`labels` has exactly one label per field, in field order (`labels.0` answers `fields[0]`), each one of that field's choices; `flags` lists the flags that hold, each once; `rationale`; `reference` identifies the judgment. Read these only on the join's `completed` edge.",
+        "failed": "No usable answer: `indeterminate`, `provider_error`, `provider_unavailable` or `deadline_exceeded`. Take the fallback the document gives.",
+        "refused": "The request was not run. The host must refuse it with `invalid_request` (over 65536 bytes, duplicate field ids, a field without choices) or `budget_exceeded`. It can come at once, on the invoke's own `refused` edge, or through the join. Take the fallback the document gives."
+      },
+      "notes": [
+        "The host must give every accepted judgment exactly one final answer, at the latest `failed` with `deadline_exceeded` when the host's own deadline passes. The join's deadline only decides when the run stops waiting.",
+        "Write a fallback that reads nothing of the answer on every way the judgment can fail: the join's `no_match`, `timeout` and `on_error`, and the invoke's own outcome edges besides `accepted`.",
+        "When a yes to a flag would make the work cost more, anchor it in the flag's description and the question, for example: \"Most tasks do not need this. Answer yes only if you can name what is unusually hard.\"",
+        "Never invoke `operation.get` on its handle: read the answer through the join."
+      ]
+    },
+    "judgment.request": {
+      "purpose": "Asks a model one question with a single choice as the answer. It answers later, on `aq.judgment.completed`.",
+      "input": {
+        "subject": "The subject being judged.",
+        "question": "What to judge.",
+        "context": "`text`, at most 32768 bytes, and up to 32 immutable artifacts.",
+        "output": "`choices`, at most 64, and `rationale_max_bytes`.",
+        "budget": "`deadline_ms` (1000 to 600000), token and cost bounds."
+      },
+      "outcomes": {
+        "accepted": "The question is queued; the edge binds `{handle}`. Join the handle accepting only `assessed`.",
+        "assessed": "`choice` is one of the requested choices, with `rationale` and `provenance`.",
+        "failed": "`provider_error`, `provider_unavailable` or `indeterminate`.",
+        "refused": "`budget_exceeded`, `deadline_exceeded`, `invalid_output`, `invalid_request`, `no_permitted_profile` or `stale_subject`."
+      },
+      "notes": [
+        "It cannot be cancelled. A judgment never stands in for a person's decision or for a check that ran."
+      ]
+    },
+    "message.send": {
+      "purpose": "Sends one message to a person.",
+      "input": {
+        "identity": "What the message is. Today the host derives the message from it: a second send with the same identity and the same body is answered `queued` again and sends nothing new; with a different body it is refused. So one identity is sent at most once, whatever the runs do. Use a value that names what the document says may be sent only once, such as a task's `reference` from `work.read` (one per task version). Today the host refuses an identity that is blank, longer than 512 bytes, or holds control characters.",
+        "recipient": "Who gets it. Take it from the facts, never from words of the document. Today the host delivers only to the namespace owner (`user:<id>`) and refuses any other recipient.",
+        "visibility": "Who may see it. Today the host accepts only `project`.",
+        "body": "The text, exactly as sent. A playbook cannot build text: use the document's own words, and ask when the document gives none. Today the host refuses an empty body, more than 1600 UTF-16 code units, or control characters other than newline and tab."
+      },
+      "outcomes": {
+        "queued": "The message is queued for delivery. Whether it was delivered or read is not reported.",
+        "refused": "Nothing was sent. Today the host refuses a recipient or visibility it does not serve, a body out of bounds, or an identity already used with a different body."
+      },
+      "notes": []
+    },
+    "operation.cancel": {
+      "purpose": "Asks the host to cancel an operation a playbook started.",
+      "input": {
+        "handle": "The operation's handle, from the `accepted` edge."
+      },
+      "outcomes": {
+        "accepted": "The cancellation was admitted; the operation may still finish.",
+        "cancelled": "The operation is cancelled.",
+        "too_late": "The operation had already finished.",
+        "indeterminate": "The host cannot tell.",
+        "refused": "The host would not cancel it."
+      },
+      "notes": []
+    },
+    "operation.get": {
+      "purpose": "Reads the state of an operation a playbook started.",
+      "input": {
+        "handle": "The operation's handle, from the `accepted` edge."
+      },
+      "outcomes": {
+        "running": "It has not finished.",
+        "completed": "It finished; `outcome` and `output` are its answer.",
+        "failed": "",
+        "cancelled": "It was cancelled.",
+        "indeterminate": "The host cannot tell.",
+        "refused": ""
+      },
+      "notes": [
+        "It is the reconciliation command of the asynchronous commands, which the tool adds by itself. A playbook reads an answer through a join, not through this command; it does not carry `judgment.assess` answers."
+      ]
+    },
+    "work.change": {
+      "purpose": "Changes one property of a piece of work.",
+      "input": {
+        "subject": "The work, at the revision the playbook expects.",
+        "variant": "Which property: `dependencies`, `execution_constraints`, `hold`, `priority`, `release_hold` or `requirements`.",
+        "value": "",
+        "hold_id": ""
+      },
+      "outcomes": {
+        "changed": "It is changed. Today the host then sends `aq.work.changed` with outcome `changed`.",
+        "conflict": "The work moved on from the revision given.",
+        "refused": "The host would not change it."
+      },
+      "notes": []
+    },
+    "work.ensure": {
+      "purpose": "Makes sure a piece of work exists, by a logical key. It may also answer later, on `aq.operation.updated`, with the result of work the playbook owns.",
+      "input": {
+        "subject": "",
+        "kind": "The kind of work.",
+        "lifetime": "`independent` (the work lives on its own) or `owned` (the playbook waits for its result).",
+        "logical_key": "",
+        "context": "",
+        "visibility": ""
+      },
+      "outcomes": {
+        "accepted": "Owned work was admitted; the edge binds `{handle}`. Join the handle to read its result.",
+        "ensured": "Independent work was admitted. Today the host returns `ensured` from `work.ensure`, and then sends `aq.work.changed` with outcome `ensured`, both when the call created the task and when the task already existed (same logical key). `ensured` means the task exists now, not that it was created; the host does not say which. A document that starts on a task being created cannot be told apart from one that starts on a task being ensured again: ask the owner whether that difference matters.",
+        "completed": "The result of owned work, with its `disposition`.",
+        "refused": "The host would not admit it."
+      },
+      "notes": []
+    },
+    "work.read": {
+      "purpose": "Reads the facts of a task as it is now, with those of its latest result: whether it changed anything, its branch and pull request, and how many times delivery has sent it back.",
+      "input": {
+        "subject": "The task's `{id, revision}`. Today the host reads the task as it is now, whatever revision is given."
+      },
+      "outcomes": {
+        "observed": "`subject` carries the task's current revision: pass this subject on, not the trigger's, so that a later write to a changed task is refused as stale. `reference` is `<id>@<revision>` of the task as read (one value per task version). `facts` holds what a document can test (below).",
+        "refused": "The host refuses with `unknown_task` (there is no such task) or `not_on_router` (the task's project is not routed automatically). End the run: nothing is wrong with the playbook."
+      },
+      "notes": [
+        "Today the host answers only for a task in a project on the automatic router. If the document expects to read tasks of any project, ask the owner.",
+        "`facts`, all always present: `kind` (the kind whoever filed the task gave, such as `bugfix`, or `\"\"`; a claim, not a classification); `title` (at most 512 bytes); `description` (at most 8192 bytes); `origin` (`owner`, `agent`, `supervisor`, `playbook` or `unknown`: who filed it); `level_hint` (the level whoever filed it asked for, or `\"\"`); `charged_failures` (earlier attempts that failed for a real reason and were charged to the task: escalate on this, and only this); `ended_attempts` (earlier attempts that ended for any reason, outages included: never escalate on it); `route` (`none`, `router` or `owner`: who set the current route).",
+        "The facts of the task's latest result, always present, and empty when the task has no result yet: `outcome` (the outcome the agent reported for the result, at most 64 bytes, or `\"\"`; the catalog does not list its values, so compare it only with a value the document names, and ask the owner what a value means when the document does not say); `changed` (boolean: the result differs from `base`; `false` when there is no result); `branch` (the result's branch in the central git, `aq/<task-id>`, or `\"\"`); `head` (the commit the branch points at, or `\"\"`); `base` (the commit of main the result was made on, or `\"\"`); `main_head` (the commit main points at now, or `\"\"`; it differs from `base` when main moved after the result was made); `returns` (integer 0..1000: how many times delivery has sent the task back to its agent with `work.return`); `pull_request` (`null` until `pull_request.open` has opened one, otherwise `{number, url, state, mergeable, checks}`: `state` is `open`, `closed` or `merged`; `mergeable` is `mergeable`, `conflicting` or `unknown`, and `unknown` means the forge has not decided yet; `checks` is `{state, failed}` where `state` is `none` (the pull request has no checks), `pending`, `passed` or `failed`, and `failed` lists at most 64 names of the checks that failed, each at most 256 bytes).",
+        "A fact is what the host knew when it answered. Do not stand it in for a later state: `pull_request.checks` read here is not the outcome of `pull_request.await_checks`, and `main_head` can move after the read. To act on a pull request, use the delivery commands, not these facts.",
+        "To send a task back only while it has been sent back fewer than N times, test `returns` with `lt` against the document's N. `returns` counts only `work.return`; `charged_failures` and `ended_attempts` count attempts, not deliveries.",
+        "`facts` does not hold: who owns or is assigned the task, its priority or urgency, its status (open, finished, cancelled), when it was created or last changed, its project, labels or tags, or provider load. A document that tests any of these cannot be followed with this command: ask the owner. Never stand another field in for it."
+      ]
+    },
+    "work.route": {
+      "purpose": "Writes who may take a task, at which level.",
+      "input": {
+        "subject": "The task, at the revision the playbook decided on: the `subject` from `work.read`.",
+        "level": "One of `definitions.levels` (a parent `simple`, `standard`, `complex` or `deep` and an effort `low`, `medium`, `high` or `max`, such as `standard-high`). If the document names a level the facts do not offer, ask; never round it.",
+        "harnesses": "The harnesses that may take the task, at most 8; empty means any.",
+        "providers": "The providers that may serve it, at most 8; empty means any.",
+        "prefer": "Harnesses to try first, in order; empty means no preference.",
+        "hold": "`true` only for a sentence that tells some work to wait for a particular agent rather than go elsewhere. Otherwise `false`.",
+        "reasons": "Why, at most 16 `{code, detail?}`: every choice that set, raised, lowered or relaxed the level and every limit on who may take the task. `detail` is a fixed sentence of at most 256 bytes, best the document's own. A playbook cannot build text: write one reason per situation and select them with `lookup` or `filter`.",
+        "classification": "The judgment the route rests on, `{reference, fields, labels, flags, rationale}` copied from an `assessed` answer, or `null`."
+      },
+      "outcomes": {
+        "routed": "The route is written, with the lists as the host kept them. End.",
+        "stale": "The task changed after the read; nothing was written. End: the host asks again for the new version.",
+        "refused": "Nothing was written; end. `not_offered`: nothing at that level (or in a non-empty list) is offered, and the host raises the task itself; never try a route the document does not give. `owner_route`, `not_on_router`, `unknown_task`: end."
+      },
+      "notes": [
+        "Today the host intersects `harnesses`, `providers` and `prefer` with what Settings offers at the level and drops the rest, so write the lists the document implies without filtering them yourself. Never decide from `definitions.offers` that nothing can take a task: write the route and let the host refuse it.",
+        "If the owner chose the route (`facts.route` is `owner`), end without writing one.",
+        "These sentences need no step; today the host does them: holding a task until something can take it, raising a task nothing could ever take, when a route is needed, never choosing by priority or load, which model a harness runs, which failures count (`charged_failures`), and recording the decision on the task.",
+        "The worked example `escalate-on-judgment` reads, judges, looks the route up, writes it, and has a fallback route on every way the judgment fails."
+      ]
+    },
+    "work.unroutable": {
+      "purpose": "Says that the document allows nobody to take a task.",
+      "input": {
+        "subject": "The task: the `subject` from `work.read`.",
+        "reasons": "Why, with the same codes as `work.route`; usually `policy` with the document's sentence. At least one."
+      },
+      "outcomes": {
+        "recorded": "The task is left unrouted and raised for the owner. End.",
+        "stale": "The task changed after the read. End: the host asks again.",
+        "refused": "`no_reasons`, `owner_route`, `not_on_router` or `unknown_task`. End."
+      },
+      "notes": [
+        "Use it only where the document itself allows nobody for a task. For a task Settings cannot serve, write the route and let `work.route` refuse it."
+      ]
+    },
+    "work.complete": {
+      "purpose": "Accepts the task's result and completes the task. Call it only after the result has been published (here: merged); nothing else completes a delivered task.",
+      "input": {
+        "task": "The task's id: the event's `task_id`.",
+        "result_id": "The result being accepted: the event's `result_id`. The host refuses a result that is not the task's latest."
+      },
+      "outcomes": {
+        "completed": "The task is completed with that result. End the run.",
+        "refused": "Nothing changed. `stale_result`: the task has a newer result than `result_id`; end, the newer result has its own run. `unknown_result`: the task has no such result; end. `unknown_task`: there is no such task; end."
+      },
+      "notes": [
+        "A repeat of the same call returns the first answer. It does not merge or publish anything: do those first, with `pull_request.merge`."
+      ]
+    },
+    "work.return": {
+      "purpose": "Sends the task back to its agent with a reason, so that the agent makes a new result. It counts toward the `returns` fact.",
+      "input": {
+        "task": "The task's id.",
+        "result_id": "The result being sent back: the event's `result_id`. The host refuses a result that is not the task's latest.",
+        "reason": "Why, one of `checks_failed`, `checks_timed_out`, `merge_conflict`, `not_mergeable`, `policy`, `publish_conflict`, `pull_request_closed` or `returns_exhausted`. A code, never a sentence: a playbook cannot build text.",
+        "detail": "Optional, at most 1024 bytes: a value of a fact that tells the agent more, such as the name of a failed check from `pull_request.checks.failed`. Leave it out when the document gives no such value.",
+        "update_from_main": "`true` when the agent must base its next result on the current `main`; `false` to send the task back as it is."
+      },
+      "outcomes": {
+        "returned": "The task is back with its agent, and `returns` is one higher. End the run.",
+        "refused": "Nothing changed. `stale_result`: the task has a newer result; `unknown_result`: no such result; `unknown_task`: no such task. End in each case."
+      },
+      "notes": [
+        "Decide whether to send a task back or hold it from the `returns` fact, with `lt` against the document's number. Send it back while `returns` is below that number; otherwise use `work.hold`, and tell the supervisor with `supervisor.notify`."
+      ]
+    },
+    "work.hold": {
+      "purpose": "Holds the task's result: the task is neither completed nor sent back. Use it when the document says to stop and leave the task for a person.",
+      "input": {
+        "task": "The task's id.",
+        "result_id": "The result being held: the event's `result_id`.",
+        "reason": "Why, one of the same codes as `work.return`'s `reason`, such as `returns_exhausted` when the document's limit on returns is reached. A code, never a sentence."
+      },
+      "outcomes": {
+        "held": "The task is held. End the run, or tell the supervisor with `supervisor.notify` first."
+      },
+      "notes": [
+        "Holding does not tell anyone. When the document says to tell the supervisor, call `supervisor.notify` after it."
+      ]
+    },
+    "supervisor.notify": {
+      "purpose": "Tells the project's supervisor something, once per identity.",
+      "input": {
+        "project": "The project's id: the event's `project_id`.",
+        "identity": "The key that makes the call once-only, at most 4096 bytes: use an id of the thing it is about, such as the event's `result_id`. A second call with the same identity in the project sends nothing.",
+        "text": "What to tell, at most 2048 bytes. A playbook cannot build text: write the document's own sentence, or a fact value such as the failed checks."
+      },
+      "outcomes": {
+        "sent": "The supervisor has been told. Go on.",
+        "duplicate": "The supervisor was already told with this identity; nothing was sent. Go on."
+      },
+      "notes": [
+        "Both outcomes mean the supervisor knows. Neither is a failure."
+      ]
+    },
+    "main.sync": {
+      "purpose": "Syncs the project's `main` from the forge into the central git, and returns the commit it now points at. It answers later, on `aq.delivery.completed`.",
+      "input": {
+        "project": "The project's id: the event's `project_id`."
+      },
+      "outcomes": {
+        "accepted": "The sync is queued; the edge binds `{handle}`. Join the handle under a key, accepting only `synced`.",
+        "synced": "`head` is the commit main points at, as a commit id of at most 128 bytes. Read it only on the join's `completed` edge.",
+        "refused": "Nothing changed. `unknown_project`: there is no such project; `unreachable`: the forge did not answer. Take the fallback the document gives, or end."
+      },
+      "notes": [
+        "The answer is a single completion on `aq.delivery.completed`. Do not wait on that event or start a playbook on it."
+      ]
+    },
+    "branch.publish": {
+      "purpose": "Publishes the task's result branch, `aq/<task-id>`, from the central git to the forge. It answers later, on `aq.delivery.completed`.",
+      "input": {
+        "task": "The task's id: the event's `task_id`."
+      },
+      "outcomes": {
+        "accepted": "The publication is queued; the edge binds `{handle}`. Join the handle under a key, accepting only `published`, or `published` and `conflict` when the document says what to do with a conflict.",
+        "published": "The branch is on the forge. `head` is the commit it points at (a commit id of at most 128 bytes): pass it to `pull_request.merge` as `expected_head_sha`.",
+        "conflict": "The branch could not be published as it is: the forge's branch of that name has commits the result does not have. Nothing was published. The document says what follows: usually `work.return` with `update_from_main` true and reason `publish_conflict`.",
+        "refused": "Nothing was published. `no_branch`: the task has no result branch; `unknown_task`: no such task; `unreachable`: the forge did not answer."
+      },
+      "notes": []
+    },
+    "pull_request.open": {
+      "purpose": "Opens a pull request on the forge for the task's published branch against main, or finds the one already open. It answers later, on `aq.delivery.completed`.",
+      "input": {
+        "task": "The task's id: the event's `task_id`."
+      },
+      "outcomes": {
+        "accepted": "The request is queued; the edge binds `{handle}`. Join the handle under a key, accepting only `opened`.",
+        "opened": "A pull request is open. `number` (1 or more) and `url` (at most 2048 bytes) identify it. Both stay readable in the `pull_request` fact of `work.read`.",
+        "refused": "No pull request was opened. `not_published`: the branch is not on the forge (call `branch.publish` first); `unknown_task`: no such task; `unreachable`: the forge did not answer."
+      },
+      "notes": []
+    },
+    "pull_request.await_checks": {
+      "purpose": "Waits until the task's pull request has final checks, is closed, or turns out to conflict with main, or until the deadline. It answers later, on `aq.delivery.completed`, with exactly one final completion.",
+      "input": {
+        "task": "The task's id: the event's `task_id`.",
+        "required": "Optional, at most 64 names of at most 256 bytes: the checks that must pass. When it is left out, all of the pull request's checks must pass.",
+        "deadline_ms": "How long to wait, 1000 to 604800000 ms. Set it from the document's own limit. Set the join's own `deadline_ms` above it, or the join gives up first and takes its `timeout` edge."
+      },
+      "outcomes": {
+        "accepted": "The wait is started; the edge binds `{handle}`. Join the handle under a key. Accept `passed` and `failed` to go on in the one case and send the task back in the other; the other outcomes then arrive on the join's `no_match` edge.",
+        "passed": "Every required check passed (and the pull request is open).",
+        "failed": "At least one required check failed. `names` lists at most 64 of them, each at most 256 bytes. Read it only on the join's `completed` edge, and only when the join accepts `failed` alone.",
+        "conflict": "The pull request conflicts with main. Send the task back with `update_from_main` true, or hold it, as the document says.",
+        "closed": "The pull request was closed without being merged while the command waited. Hold the task, or as the document says.",
+        "timeout": "The deadline passed with checks still pending. Hold the task, or as the document says."
+      },
+      "notes": [
+        "Exactly one completion is sent for each call, whichever of the five outcomes it is: a playbook does not need its own timer, but the join's own `deadline_ms` must be above `deadline_ms` here, or the join gives up first.",
+        "The `timeout` outcome is the command's own deadline; the join's `timeout` edge is the join's."
+      ]
+    },
+    "pull_request.merge": {
+      "purpose": "Merges the task's pull request, and deletes the task's branch on the forge and in the central git. It answers later, on `aq.delivery.completed`.",
+      "input": {
+        "task": "The task's id: the event's `task_id`.",
+        "method": "How to merge: `merge`, `squash` or `rebase`. Take it from the document; never choose.",
+        "expected_head_sha": "The commit the pull request's branch must point at, at most 128 bytes: the `head` of the `published` outcome of `branch.publish`, or of the `head` fact. If the branch has moved the host refuses with `head_changed` instead of merging something nobody checked."
+      },
+      "outcomes": {
+        "accepted": "The merge is queued; the edge binds `{handle}`. Join the handle under a key, accepting `merged`.",
+        "merged": "The pull request is merged and the branch is deleted on the forge and in the central git. Complete the task with `work.complete`.",
+        "conflict": "The merge conflicts with main. Nothing was merged. The document says what follows: usually `work.return` with `update_from_main` true and reason `merge_conflict`.",
+        "not_mergeable": "The forge will not merge it (for example a required review is missing or a rule blocks it) although it does not conflict. Nothing was merged. Hold the task, as the document says.",
+        "refused": "Nothing was merged. `head_changed`: the branch is not at `expected_head_sha`; `no_pull_request`: the task has no open pull request; `unknown_task`: no such task; `unreachable`: the forge did not answer."
+      },
+      "notes": [
+        "Merge only after `pull_request.await_checks` has said `passed`, unless the document says otherwise.",
+        "`work.complete` is a separate call: merging does not complete the task."
+      ]
+    },
+    "pull_request.close": {
+      "purpose": "Closes the task's pull request without merging it. It answers later, on `aq.delivery.completed`.",
+      "input": {
+        "task": "The task's id: the event's `task_id`."
+      },
+      "outcomes": {
+        "accepted": "The close is queued; the edge binds `{handle}`. Join the handle under a key, accepting `closed`.",
+        "closed": "The pull request is closed. Go on."
+      },
+      "notes": [
+        "Closing a pull request does not send the task back or hold it: call `work.return` or `work.hold` as the document says."
+      ]
+    }
+  },
+  "events": {
+    "aq.artifact.recorded": {
+      "purpose": "An artifact was recorded.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner.",
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "notes": []
+    },
+    "aq.check.completed": {
+      "purpose": "A check finished (catalog 1.0.0's meaning; not the completion of `check.request`).",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner.",
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "notes": []
+    },
+    "aq.check.receipted": {
+      "purpose": "The answer to `check.request`.",
+      "sent": "Only as the answer to a `check.request` a playbook made. Join the handle; do not start a playbook on it.",
+      "payload": {
+        "outcome": "The check's outcome.",
+        "output": "That outcome's output."
+      },
+      "notes": []
+    },
+    "aq.decision.completed": {
+      "purpose": "The answer to `decision.request`.",
+      "sent": "Only as the answer to a `decision.request` a playbook made. Join the handle; do not start a playbook on it.",
+      "payload": {
+        "outcome": "The decision.",
+        "output": "Its output."
+      },
+      "notes": []
+    },
+    "aq.integration.changed": {
+      "purpose": "An integration candidate changed.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner.",
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "notes": []
+    },
+    "aq.judgment.assessed": {
+      "purpose": "The answer to `judgment.assess`.",
+      "sent": "Only as the answer to a `judgment.assess` a playbook made. Join the handle, which types the answer per outcome; do not wait on this event or start a playbook on it.",
+      "payload": {
+        "outcome": "`assessed`, `failed` or `refused`.",
+        "output": "That outcome's output."
+      },
+      "notes": []
+    },
+    "aq.judgment.completed": {
+      "purpose": "The answer to `judgment.request`.",
+      "sent": "Only as the answer to a `judgment.request` a playbook made. Join the handle; do not start a playbook on it.",
+      "payload": {
+        "outcome": "`assessed`, `failed` or `refused`.",
+        "output": "That outcome's output."
+      },
+      "notes": []
+    },
+    "aq.operation.updated": {
+      "purpose": "The result of owned work from `work.ensure`.",
+      "sent": "Only as the answer to a `work.ensure` a playbook made. Join the handle; do not start a playbook on it.",
+      "payload": {
+        "outcome": "`completed` or `refused`.",
+        "output": "The work's result, with its `disposition`."
+      },
+      "notes": []
+    },
+    "aq.signal.reported": {
+      "purpose": "A signal was reported.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner.",
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "notes": []
+    },
+    "aq.work.changed": {
+      "purpose": "A piece of work was ensured or changed.",
+      "sent": "Today the host sends it only as the effect of `work.ensure` (outcome `ensured`) or `work.change` (outcome `changed`) called by a playbook in the same namespace, any playbook. Never when a person creates, edits, finishes or cancels a task. `completed` and `cancelled` are in its schema, but today the host does not send them.",
+      "payload": {
+        "outcome": "What the call did: `ensured` (the task exists now, whether or not the call created it) or `changed`.",
+        "reference": "The work's reference.",
+        "subject": "The work's `{id, revision}`."
+      },
+      "notes": [
+        "Its correlation field `operation` is the identity of the call that caused it."
+      ]
+    },
+    "aq.work.route_needed": {
+      "purpose": "A task needs a route.",
+      "sent": "Today the host sends it on its own: for a ready task in a project on the automatic router that has no route; at once when the task changes to a new version, or is retried or reopened; again for the same version at most every two minutes while it stays unrouted, but not while a run started for that version is unfinished. After `not_offered` it is not sent again until the task, the active playbook or Settings changes; after `work.unroutable`, until the task or the active playbook changes.",
+      "payload": {
+        "subject": "The task's `{id, revision}`. Start the run with it as input."
+      },
+      "notes": [
+        "A trigger has no guard, so every emission starts a run."
+      ]
+    },
+    "aq.work.result_ready": {
+      "purpose": "A task has a result that has not been settled: not completed, not sent back and not held.",
+      "sent": "Today the host sends it on its own, level-triggered as `aq.work.route_needed` is: while a task has a result that no run has settled with `work.complete`, `work.return` or `work.hold`. A worker's result is pushed to the central git before it is sent. How often it is repeated is the host's: a run that ends without settling the result is followed by another run.",
+      "payload": {
+        "task_id": "The task's id. Pass it as `task` to the delivery commands and as `subject.id` to `work.read`.",
+        "project_id": "The task's project id. Pass it as `project` to `main.sync` and `supervisor.notify`.",
+        "attempt_id": "The id of the attempt that made the result.",
+        "result_id": "The id of the result. Pass it to `work.complete`, `work.return` and `work.hold`: the host refuses a result that is not the task's latest.",
+        "version": "The version of the task the event was made for. Pass it as `subject.revision` to `work.read`, which reads the task as it is now whatever revision it is given."
+      },
+      "notes": [
+        "A trigger has no guard, so every emission starts a run.",
+        "Settle the result on every way through the run, or end deliberately: an unsettled result starts another run."
+      ]
+    },
+    "aq.delivery.completed": {
+      "purpose": "The answer to a delivery command that answers later: `main.sync`, `branch.publish`, `pull_request.open`, `pull_request.await_checks`, `pull_request.merge` or `pull_request.close`.",
+      "sent": "Only as the completion of an operation a playbook started with one of those commands, once per operation. Join the handle, which types the answer per outcome; do not wait on this event or start a playbook on it.",
+      "payload": {
+        "outcome": "The outcome of the command that was called: one of its business outcomes, never `accepted`.",
+        "output": "That outcome's output."
+      },
+      "notes": [
+        "It carries no task or revision: the join correlates it by the operation."
+      ]
+    }
+  }
+}

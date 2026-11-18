@@ -1,0 +1,33 @@
+{
+  "id": "deliver-by-playbook",
+  "binding": "aq.deliver-by-playbook",
+  "scope": "project",
+  "purpose": "Deliver a task's result through a pull request, or send it back",
+  "commands": [
+    "branch.publish",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.open",
+    "supervisor.notify",
+    "work.complete",
+    "work.hold",
+    "work.read",
+    "work.return"
+  ],
+  "events": [
+    "aq.work.result_ready"
+  ],
+  "capabilities": [
+    "branch.publish",
+    "operation.get",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.open",
+    "supervisor.notify",
+    "work.complete",
+    "work.hold",
+    "work.read",
+    "work.return"
+  ],
+  "facts_version": "settings-1"
+}

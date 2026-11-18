@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "5b86e0f7d37606f3cab80717d98db0453da56a50",
-  "publication_profile": "exact standalone Git source archive; engine 0.2.0 (live state only, authoring tools); model, compiler, runner, postgres, simulation and CLI all 0.2.0; no registry publication",
-  "archive_format": "git archive --format=tar 5b86e0f Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "8b870ffdc2e9ed3befb7163b937a66d349db81f892a0c34247ebb3ef43ded648",
-  "vendor_root": "vendor/aq-playbooks-5b86e0f",
+  "source_revision": "11966712e33c23f0325caff793125c17f88c3d0f",
+  "publication_profile": "exact standalone Git source archive; engine 0.2.0 with host catalog 2.3.0 (live state only, authoring tools); model, compiler, runner, postgres, simulation and CLI all 0.2.0; no registry publication",
+  "archive_format": "git archive --format=tar 1196671 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "05190cd57d8f66e60401f2c5b690e4f60b6b85c82220358c9884ea90c76cb47c",
+  "vendor_root": "vendor/aq-playbooks-1196671",
   "files": [
     {
       "path": "Cargo.lock",
@@ -98,6 +98,66 @@
       "sha256": "f98e9d008524aa271664c5f5a0bd93abc2de23b732d50986be24a582f708b0a5"
     },
     {
+      "path": "contracts/aq-host-2.3.0/README.md",
+      "mode": "100644",
+      "bytes": 4859,
+      "sha256": "d9cd30ffaaf7fd4dd07464a4e625e9f946b3c6b0cba3b88407ce9391a8579888"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/catalog.json",
+      "mode": "100644",
+      "bytes": 89145,
+      "sha256": "c6ebbbfbe2db484cb3c72ede07ba342ab57e4049da7091cb4ba9104491f122c7"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/draft.json",
+      "mode": "100644",
+      "bytes": 14156,
+      "sha256": "e7385ca9d016d3a9a234139f0dcdda50f360ffddaacdd1951ca1db7a568211db"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/facts.json",
+      "mode": "100644",
+      "bytes": 23,
+      "sha256": "5c2eae7cc642756fa2c0be67ea37d71962bb8d58b35de8901f4e8be0a7d6e036"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/record.json",
+      "mode": "100644",
+      "bytes": 729,
+      "sha256": "2f34cb8fa86f2ca59b2a42a2ffe2252f8f1dd7c98bbd9a735ba1a046ac95564d"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/examples/deliver-by-playbook/source.md",
+      "mode": "100644",
+      "bytes": 614,
+      "sha256": "76590330434ef0396c2749a3eb374a1bfae7993a75e4193432a7dd18ac9f0aa3"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/fixtures.json",
+      "mode": "100644",
+      "bytes": 105965,
+      "sha256": "df6c1da722b3bd5b43fe915dc059ec43becacc3007c8caefeaf141b0462346de"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/manifest.json",
+      "mode": "100644",
+      "bytes": 1109,
+      "sha256": "a80531dea1257817c117d9968a8734ade1b447d421dfdff55885c96783f82f44"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/notes.json",
+      "mode": "100644",
+      "bytes": 38916,
+      "sha256": "b8d07eea47a2e026110f596c270de1a4d2cc4f2e88ec34ef31ffad82223b7d25"
+    },
+    {
+      "path": "contracts/aq-host-2.3.0/registry.json",
+      "mode": "100644",
+      "bytes": 315802,
+      "sha256": "c49ee6d5de252cec3ccf3d42ba622e739da8c8b9cd2984c5ec70a4df70bbab17"
+    },
+    {
       "path": "contracts/aq-host/README.md",
       "mode": "100644",
       "bytes": 1808,
@@ -124,8 +184,8 @@
     {
       "path": "crates/aq-playbooks-cli/Cargo.toml",
       "mode": "100644",
-      "bytes": 482,
-      "sha256": "418547c0bddfcbba2c2f38d6aa8076a66f678e33d0df2b991a978b473bb3c513"
+      "bytes": 626,
+      "sha256": "d92bbec45f6ad90c35159b0c44b4223af21861edd722a875a47537c1f95cdb25"
     },
     {
       "path": "crates/aq-playbooks-cli/examples/measure.rs",
@@ -142,8 +202,8 @@
     {
       "path": "crates/aq-playbooks-cli/src/catalog.rs",
       "mode": "100644",
-      "bytes": 3185,
-      "sha256": "d751cfea21f71c10cd1346f3cfe35e465fc4256e4351ea56e3c4769ecb283bb2"
+      "bytes": 4113,
+      "sha256": "039a4f378f072d915af6465e81e54c5e02d4b8cecb1c9e61359dd56fe5a9b2c8"
     },
     {
       "path": "crates/aq-playbooks-cli/src/configuration.rs",
@@ -198,6 +258,12 @@
       "mode": "100644",
       "bytes": 80046,
       "sha256": "09d93cc3765376a891681975f9d338f4a57ee232fdb233ec0e48a1e6623f5e9c"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/catalog_v2_3_contract.rs",
+      "mode": "100644",
+      "bytes": 36922,
+      "sha256": "088052ba4ff2500053f084c5f21f547cccbb52d3d960185944b803bf7036e7c7"
     },
     {
       "path": "crates/aq-playbooks-cli/tests/catalog_v2_contract.rs",
@@ -256,8 +322,8 @@
     {
       "path": "crates/aq-playbooks-compiler/Cargo.toml",
       "mode": "100644",
-      "bytes": 213,
-      "sha256": "ad54d8c076f2428f4981eda831fb285f154355e5a087a350901caa6b0d0bd9b1"
+      "bytes": 328,
+      "sha256": "a18b136b01a5709d280cce6592b7b35df48f0b1271f23bf6a1fe7b7d1335fc63"
     },
     {
       "path": "crates/aq-playbooks-compiler/LANGUAGE.md",
@@ -562,8 +628,8 @@
     {
       "path": "crates/aq-playbooks-compiler/src/docs.rs",
       "mode": "100644",
-      "bytes": 12722,
-      "sha256": "5910835eba984ae74c3e6906689f7de68e238d165bd1d0f34c24987ba8cf18b9"
+      "bytes": 13943,
+      "sha256": "4ab67cbdb92b656c48deca575beb86931254e64aa1d2abe99c5141002a514ca7"
     },
     {
       "path": "crates/aq-playbooks-compiler/src/draft.rs",
@@ -1054,14 +1120,14 @@
     {
       "path": "docs/aq-host-integration.md",
       "mode": "100644",
-      "bytes": 29123,
-      "sha256": "a98d331f67e2ac8080d5ee62ea8684124049e8dcbd55d1646c54e05cc048d197"
+      "bytes": 29885,
+      "sha256": "9084a31a6627a5f0564dd4da5d93a7be38fc4cebb8d762b81d660032f718706f"
     },
     {
       "path": "docs/implementation/0003-live-state-only.md",
       "mode": "100644",
-      "bytes": 55454,
-      "sha256": "20e7253e199906384813630e664e91a09482a5c852b6295a91db5552e5ebaa0a"
+      "bytes": 114210,
+      "sha256": "620f93c6c7b6dae3e31018d71918464238d3fa4fa9da1218430b7acefc1f2360"
     },
     {
       "path": "docs/implementation/0004-playbook-authoring.md",

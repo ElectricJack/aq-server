@@ -458,3 +458,16 @@ These are host semantics, not schema.
 the `judgment.assess` outputs. A host reconciles a `judgment.assess` intent
 from its own record of the operation. A playbook reads the answer through the
 join, never through `operation.get`.
+
+## AQ host catalog 2.3.0 (delivery by playbook, Epic 0)
+
+The [2.3.0 bundle](../contracts/aq-host-2.3.0/README.md) is published beside
+the earlier ones and replaces none of them. It is compiled in only with the
+cargo feature `delivery_playbook` (`catalog_v2_3`). It adds the event
+`aq.work.result_ready`, the delivery commands (`work.complete`, `work.return`,
+`work.hold`, `supervisor.notify`, `main.sync`, `branch.publish`,
+`pull_request.open`, `pull_request.await_checks`, `pull_request.merge`,
+`pull_request.close`) and their completion event `aq.delivery.completed`, and
+extends `work.read` (now 2.3.0) with the facts of the task's latest result.
+Every other 2.2.0 contract is byte-identical. The host adapter for these
+contracts is not part of this change.

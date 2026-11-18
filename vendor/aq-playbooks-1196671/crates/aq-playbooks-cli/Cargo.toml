@@ -21,3 +21,5 @@ zeroize = "1"
 
 [features]
 postgres-tests = []
+# Epic 0 (delivery by playbook): unfinished code, compiled only when asked for.
+delivery_playbook = ["aq-playbooks-compiler/delivery_playbook"]
