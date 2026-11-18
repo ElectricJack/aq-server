@@ -496,6 +496,28 @@ pub fn control_record(record: &wire::ObservationRecord) -> Option<bool> {
             wire::ObservationKind::Gap { .. }
         ))
 }
+/// Why an enrolled source (its binding and session key, and whether its
+/// catalog entry lists the record's parser) does not admit `record`. Control
+/// records are admitted by kind, whatever the catalog lists.
+pub fn refusal(
+    record: &wire::ObservationRecord,
+    binding: &wire::Binding,
+    session_key: &wire::Text,
+    parser_listed: bool,
+) -> Option<RefusalReason> {
+    if *binding != record.body.binding {
+        Some(RefusalReason::Binding)
+    } else if *session_key != record.body.provenance.native_session_key {
+        Some(RefusalReason::Provenance)
+    } else {
+        match control_record(record) {
+            Some(true) => None,
+            Some(false) => Some(RefusalReason::ControlShape),
+            None if parser_listed => None,
+            None => Some(RefusalReason::Parser),
+        }
+    }
+}
 /// Record-cursor prefixes of the store-fence control records: why a source
 /// stopped. Other control records say it in their gap reason.
 pub const FENCED_BY_RESTART: &str = "boot-fence:";

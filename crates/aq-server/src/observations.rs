@@ -49,62 +49,10 @@ fn integer(v: u64) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::Invalid)
 }
 
-/// Constructed by the daemon's trusted catalog (`catalog::owner_source`), never
-/// deserialized as a worker request. Account/namespace policy is owner data.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerSource {
-    pub binding: Binding,
-    pub source_id: Uuid,
-    pub generation: u64,
-    pub native_session_key: Text,
-    pub account_claim: Text,
-    pub policy: Policy,
-    /// How this source's usage is costed, from the selected credential kind.
-    /// Absent on sources registered before H2; the digest of those is unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub billing: Option<EstimateBasis>,
-}
-impl OwnerSource {
-    fn validate(&self) -> Result<()> {
-        self.binding.validate().map_err(|_| Error::Invalid)?;
-        self.native_session_key
-            .validate()
-            .map_err(|_| Error::Invalid)?;
-        self.account_claim.validate().map_err(|_| Error::Invalid)?;
-        self.policy.validate().map_err(|_| Error::Invalid)?;
-        if self.source_id.is_nil()
-            || self.generation == 0
-            || integer(self.generation).is_err()
-            || serde_json::to_vec(self).map_err(|_| Error::Invalid)?.len() > 32768
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
-    fn digest(&self) -> Result<Digest> {
-        Ok(Digest::of(
-            serde_json::to_vec(self)
-                .map_err(|_| Error::Invalid)?
-                .as_slice(),
-        ))
-    }
-    /// Why this enrolled source does not admit `event`. The store's control
-    /// records are admitted by kind, whatever parsers the catalog entry lists.
-    fn refusal(&self, event: &ObservationRecord) -> Option<RefusalReason> {
-        let p = &event.body.provenance;
-        if self.binding != event.body.binding {
-            Some(RefusalReason::Binding)
-        } else if self.native_session_key != p.native_session_key {
-            Some(RefusalReason::Provenance)
-        } else {
-            match aq_observation_admission::control_record(event) {
-                Some(true) => None,
-                Some(false) => Some(RefusalReason::ControlShape),
-                None if self.policy.parsers.iter().any(|x| x.parser == p.parser) => None,
-                None => Some(RefusalReason::Parser),
-            }
-        }
+pub use aq_accounting::source::OwnerSource;
+impl From<aq_accounting::Error> for Error {
+    fn from(_: aq_accounting::Error) -> Self {
+        Self::Invalid
     }
 }
 fn node_of(binding: &Binding) -> Result<Uuid> {
@@ -452,7 +400,13 @@ async fn ingest_subject(
         let reason = if unbound.contains(&event.body.binding.attempt_id) {
             Some(RefusalReason::Binding)
         } else {
-            source.refusal(event)
+            let listed = (source.policy.parsers.iter()).any(|x| x.parser == p.parser);
+            aq_observation_admission::refusal(
+                event,
+                &source.binding,
+                &source.native_session_key,
+                listed,
+            )
         };
         if let Some(reason) = reason {
             refused.insert(source_key, (reason, true));
