@@ -22,7 +22,9 @@ facts exclude runtime input and output values, expression bodies, and captured
 definitions. These fields are optional for definitions with no retained authoring
 data or where a projection exceeds its size bound.
 
-`step_inspection` optionally maps steps to a contextual `summary` and `uses`.
+`step_inspection` optionally maps steps to a contextual `summary`, `uses`, and
+`branches`. A branch includes the graph's exact `label`, `to` step, and `error`
+flag with a readable `reason`. Runtime error edges use `label: "On error"`.
 Each use names its `producer` and `consumer` step IDs, compiled field `paths`,
 and optional `purpose`. The same use appears on both steps. These uses describe
 data flow when the consumer runs. The projection uses the verified

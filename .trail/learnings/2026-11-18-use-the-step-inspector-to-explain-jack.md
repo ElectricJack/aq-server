@@ -15,7 +15,7 @@ touches:
 ---
 
 ## Decided
-Opening a node should answer what the selected step does in this playbook and why it is useful. Lead with plain prose derived from the exact compiled artifact. Keep field paths, command names, and bindings under Details so the explanation can be read without expanding technical data. Leave outgoing paths in the graph because it already shows them beside the selected step.
+Opening a node should answer what the selected step does in this playbook and why it is useful. Lead with plain prose derived from the exact compiled artifact. Keep branch conditions, field paths, command names, and bindings under Details so the explanation can be read without expanding them. The graph already shows where each path goes, while an optional explanation can add why it is taken. Keep the selected playbook's rendered Markdown below the workflow.
 
 ## Tried and ruled out
 The earlier inspector listed next steps and their conditions. The owner could already see next steps on the graph and said the duplicate list missed the original request. A summary that only named a command type or recited input keys also left the purpose unclear.
