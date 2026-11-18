@@ -747,6 +747,13 @@ impl Driver {
             "announcing results",
             self.service.collect_result_ready(&self.runtime, 8).await,
         );
+        #[cfg(feature = "delivery_playbook")]
+        partial.defer(
+            "running delivery operations",
+            self.service
+                .collect_delivery_operations(&self.runtime, 4)
+                .await,
+        );
         partial.defer(
             "expiring judgments",
             self.service.expire_assessments(&self.runtime, 2).await,
