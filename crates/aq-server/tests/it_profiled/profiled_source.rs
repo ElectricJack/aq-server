@@ -1,6 +1,6 @@
 //! Fixed public Git reader with a synthetic Unix peer; no retained source grant.
 use crate::common;
-use aq_admission::{Digest, Label, SourceSelection};
+use aq_admission::{Label, SourceSelection};
 use aq_server::{
     profiled_execution::{
         config::{ProfiledConfig, ProjectPolicy},
@@ -11,15 +11,17 @@ use aq_server::{
 };
 use serde_json::{Value, json};
 use sqlx::Row;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
+// With `delivery_playbook` a named ref never reads `repo.observation` or the
+// configured handle (spec 0016 §4); the test below covers that path.
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_retention() {
+    use aq_admission::Digest;
     use common::profiled::{NOW, fixture, insert};
+    use std::sync::atomic::AtomicBool;
     let mut f = fixture().await;
     insert(&f).await;
     let row = sqlx::query(

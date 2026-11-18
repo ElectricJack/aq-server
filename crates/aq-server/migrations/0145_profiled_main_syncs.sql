@@ -19,4 +19,4 @@ CREATE TABLE profiled_main_syncs (
 CREATE INDEX profiled_main_syncs_latest ON profiled_main_syncs
     (project_id, repository_id, binding_generation, reference, synced_at_ms DESC);
 
-UPDATE meta SET value='143' WHERE key='state_format_version';
+UPDATE meta SET value='145' WHERE key='state_format_version';
