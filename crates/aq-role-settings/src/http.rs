@@ -9,6 +9,8 @@
 //! | `/profiles/limits` | this store's limits | replace | |
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
+//! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
+//! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
 //!
 //! Revisions travel as decimal strings, as in the other Settings routes.
 use crate::{Change, Document, Error, Mutation, Result, invalid, store};
@@ -43,7 +45,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
     let one = read.clone().merge(write.clone()).merge(remove);
     let value = read.clone().merge(write);
     // Literal paths: the server's route inventory test reads them from here.
-    Router::new()
+    let router = Router::new()
         .route("/api/settings/roles", read.clone())
         .route("/api/settings/roles/{id}", one.clone())
         .route("/api/settings/intelligence-profiles", read.clone())
@@ -52,9 +54,13 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/execution-profiles/{id}", one)
         .route("/api/settings/selection-defaults", value.clone())
         .route("/api/settings/profiles/limits", value.clone())
-        .route("/api/settings/routing-document", value)
-        .route("/api/settings/profiles/snapshot", read)
-        .layer(DefaultBodyLimit::max(BODY_BYTES))
+        .route("/api/settings/routing-document", value.clone())
+        .route("/api/settings/profiles/snapshot", read);
+    #[cfg(feature = "delivery_playbook")]
+    let router = router
+        .route("/api/settings/delivery-document", value.clone())
+        .route("/api/settings/delivery-limits", value);
+    router.layer(DefaultBodyLimit::max(BODY_BYTES))
 }
 
 enum Target {
@@ -64,6 +70,10 @@ enum Target {
     Limits,
     Snapshot,
     RoutingDocument,
+    #[cfg(feature = "delivery_playbook")]
+    DeliveryDocument,
+    #[cfg(feature = "delivery_playbook")]
+    DeliveryLimits,
 }
 fn target(path: &str) -> Result<Target> {
     let missing = || Error::NotFound("No such settings route".into());
@@ -78,6 +88,10 @@ fn target(path: &str) -> Result<Target> {
     match (first, id) {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
         ("routing-document", None) => Ok(Target::RoutingDocument),
+        #[cfg(feature = "delivery_playbook")]
+        ("delivery-document", None) => Ok(Target::DeliveryDocument),
+        #[cfg(feature = "delivery_playbook")]
+        ("delivery-limits", None) => Ok(Target::DeliveryLimits),
         ("profiles", Some("limits")) => Ok(Target::Limits),
         ("profiles", Some("snapshot")) => Ok(Target::Snapshot),
         _ => {
@@ -161,6 +175,16 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
             let (markdown, revision) = store::routing_document(pool).await?;
             Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
         }
+        #[cfg(feature = "delivery_playbook")]
+        Target::DeliveryDocument => {
+            let (markdown, revision) = store::delivery_document(pool).await?;
+            Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
+        }
+        #[cfg(feature = "delivery_playbook")]
+        Target::DeliveryLimits => {
+            let (limits, revision) = store::delivery_limits(pool).await?;
+            Ok(json!({"limits": limits, "revision": revision.to_string()}))
+        }
     }
 }
 
@@ -207,6 +231,14 @@ pub async fn write(
             Change::Save { kind, id, markdown }
         }
         (Target::RoutingDocument, Some(markdown), None, None) => Change::RoutingDocument(markdown),
+        #[cfg(feature = "delivery_playbook")]
+        (Target::DeliveryDocument, Some(markdown), None, None) => {
+            Change::DeliveryDocument(markdown)
+        }
+        #[cfg(feature = "delivery_playbook")]
+        (Target::DeliveryLimits, None, None, Some(limits)) => {
+            Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
+        }
         (Target::SelectionDefaults, None, Some(defaults), None) => {
             Change::SelectionDefaults(serde_json::from_value(defaults).map_err(|_| bad())?)
         }

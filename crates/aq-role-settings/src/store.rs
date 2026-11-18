@@ -37,18 +37,19 @@ enum Lock {
     Update,
 }
 async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> {
-    let sql = match lock {
-        Lock::None => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton"
-        }
-        Lock::Share => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton FOR SHARE"
-        }
-        Lock::Update => {
-            "SELECT revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision FROM role_settings WHERE singleton FOR UPDATE"
-        }
+    const COLUMNS: &str = "revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision";
+    #[cfg(feature = "delivery_playbook")]
+    const DELIVERY: &str =
+        ",delivery_markdown,delivery_revision,delivery_limits,delivery_limits_revision";
+    #[cfg(not(feature = "delivery_playbook"))]
+    const DELIVERY: &str = "";
+    let suffix = match lock {
+        Lock::None => "",
+        Lock::Share => " FOR SHARE",
+        Lock::Update => " FOR UPDATE",
     };
-    let row = sqlx::query(sql).fetch_one(conn).await?;
+    let sql = format!("SELECT {COLUMNS}{DELIVERY} FROM role_settings WHERE singleton{suffix}");
+    let row = sqlx::query(&sql).fetch_one(conn).await?;
     // NULL: never saved, so the defaults of this build apply.
     fn stored<T: serde::de::DeserializeOwned + Default>(
         value: Option<serde_json::Value>,
@@ -69,6 +70,16 @@ async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> 
             .get::<Option<String>, _>("routing_markdown")
             .unwrap_or_default(),
         routing_revision: row.get("routing_revision"),
+        #[cfg(feature = "delivery_playbook")]
+        delivery_markdown: row
+            .get::<Option<String>, _>("delivery_markdown")
+            .unwrap_or_default(),
+        #[cfg(feature = "delivery_playbook")]
+        delivery_revision: row.get("delivery_revision"),
+        #[cfg(feature = "delivery_playbook")]
+        delivery_limits: stored(row.get("delivery_limits"))?,
+        #[cfg(feature = "delivery_playbook")]
+        delivery_limits_revision: row.get("delivery_limits_revision"),
     })
 }
 async fn documents(conn: &mut PgConnection, kind: Option<Kind>) -> Result<Vec<Document>> {
@@ -320,6 +331,10 @@ pub async fn apply_referenced(
             current
         }
         Change::RoutingDocument(_) => state.routing_revision,
+        #[cfg(feature = "delivery_playbook")]
+        Change::DeliveryDocument(_) => state.delivery_revision,
+        #[cfg(feature = "delivery_playbook")]
+        Change::DeliveryLimits(_) => state.delivery_limits_revision,
     };
     if current != mutation.expected_revision {
         return Err(conflict(
@@ -339,6 +354,26 @@ pub async fn apply_referenced(
     }
     // The routing document is not part of a snapshot: saving it compiles
     // and activates nothing.
+    #[cfg(feature = "delivery_playbook")]
+    let delivery = match &mutation.change {
+        Change::DeliveryDocument(markdown) => {
+            let limit = state.limits.documents.max_document_bytes;
+            if markdown.len() > limit {
+                return Err(invalid(&format!(
+                    "The delivery document is {} bytes, over the limit of {limit} bytes",
+                    markdown.len()
+                )));
+            }
+            true
+        }
+        Change::DeliveryLimits(limits) => {
+            limits.validate().map_err(|message| invalid(&message))?;
+            true
+        }
+        _ => false,
+    };
+    #[cfg(not(feature = "delivery_playbook"))]
+    let delivery = false;
     let snapshot = if let Change::RoutingDocument(markdown) = &mutation.change {
         let limit = state.limits.documents.max_document_bytes;
         if markdown.len() > limit {
@@ -347,6 +382,10 @@ pub async fn apply_referenced(
                 markdown.len()
             )));
         }
+        None
+    } else if delivery {
+        // Like the routing document, the delivery settings compile and
+        // activate nothing.
         None
     } else {
         match compile(&set, &state.selection_defaults, &state.limits) {
@@ -401,6 +440,26 @@ pub async fn apply_referenced(
             )
             .bind(revision)
             .bind(markdown)
+            .execute(&mut *tx)
+            .await?;
+        }
+        #[cfg(feature = "delivery_playbook")]
+        Change::DeliveryDocument(markdown) => {
+            sqlx::query(
+                "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton",
+            )
+            .bind(revision)
+            .bind(markdown)
+            .execute(&mut *tx)
+            .await?;
+        }
+        #[cfg(feature = "delivery_playbook")]
+        Change::DeliveryLimits(limits) => {
+            sqlx::query(
+                "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",
+            )
+            .bind(revision)
+            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
             .execute(&mut *tx)
             .await?;
         }
@@ -520,6 +579,56 @@ pub async fn save_routing_document(
 pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.routing_markdown, settings.routing_revision))
+}
+/// Replace the delivery document (spec 0016 §8). `expected_revision` is its
+/// revision as last read, 0 before the first save.
+#[cfg(feature = "delivery_playbook")]
+pub async fn save_delivery_document(
+    pool: &PgPool,
+    actor: Uuid,
+    markdown: &str,
+    expected_revision: i64,
+    operation_id: Uuid,
+    now_ms: i64,
+) -> Result<Receipt> {
+    let mutation = Mutation {
+        change: Change::DeliveryDocument(markdown.into()),
+        expected_revision,
+        operation_id,
+    };
+    apply(pool, actor, &mutation, now_ms).await
+}
+/// The delivery document and its revision; empty at revision 0 until saved,
+/// which means no delivery policy.
+#[cfg(feature = "delivery_playbook")]
+pub async fn delivery_document(pool: &PgPool) -> Result<(String, i64)> {
+    let settings = settings(pool).await?;
+    Ok((settings.delivery_markdown, settings.delivery_revision))
+}
+/// Replace the delivery limits. They are validated
+/// ([`delivery::DeliveryLimits::validate`]) before anything is stored.
+#[cfg(feature = "delivery_playbook")]
+pub async fn save_delivery_limits(
+    pool: &PgPool,
+    actor: Uuid,
+    limits: &delivery::DeliveryLimits,
+    expected_revision: i64,
+    operation_id: Uuid,
+    now_ms: i64,
+) -> Result<Receipt> {
+    let mutation = Mutation {
+        change: Change::DeliveryLimits(*limits),
+        expected_revision,
+        operation_id,
+    };
+    apply(pool, actor, &mutation, now_ms).await
+}
+/// The delivery limits and their revision; the defaults at revision 0 until
+/// saved.
+#[cfg(feature = "delivery_playbook")]
+pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits, i64)> {
+    let settings = settings(pool).await?;
+    Ok((settings.delivery_limits, settings.delivery_limits_revision))
 }
 pub async fn save_limits(
     pool: &PgPool,
