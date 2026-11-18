@@ -2,8 +2,8 @@
 //! X8-X13): task-state counts, edge projection, readiness with its blockers
 //! and hold reasons, and a change summary for each task history entry.
 //!
-//! Everything here is a pure function over Graph or AQ authority JSON. The
-//! aq-server handlers own authorization, Graph I/O and AQ's own SQL.
+//! The all-project task list joins Graph's page to AQ's current owner and project bindings.
+pub mod task_list;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
