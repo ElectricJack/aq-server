@@ -155,7 +155,7 @@ impl Service {
     /// running after its deadline (and the reconcile grace) fails
     /// `deadline_exceeded`. Returns how many were failed.
     pub async fn expire_assessments(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
-        if self.profile != CatalogProfile::Host9 || self.host.is_none() {
+        if !self.profile.has_routing() || self.host.is_none() {
             return Ok(0);
         }
         let mut tx = self.tx().await?;

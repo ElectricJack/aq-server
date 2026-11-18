@@ -33,6 +33,13 @@ pub enum CatalogProfile {
     /// and fingerprint-pinned beside the untouched Host8 pin: Host8 plus
     /// `work.read`, `work.route`, `work.unroutable` and `judgment.assess`.
     Host9,
+    /// AQ host catalog 2.3.0 (Epic 0, spec 0016 section 6; supersedes 2.2.0),
+    /// vendored and fingerprint-pinned beside the untouched Host9 pin: Host9's
+    /// contracts, `work.read` with the facts of the task's latest result, the
+    /// event `aq.work.result_ready` and the delivery commands. Compiled in only
+    /// with the cargo feature `delivery_playbook`.
+    #[cfg(feature = "delivery_playbook")]
+    Host10,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
 pub const HOST9_FINGERPRINT: &str =
@@ -89,6 +96,42 @@ fn host9_registry() -> Registry {
                     .as_deref(),
                 Some(HOST9_FINGERPRINT),
                 "vendored AQ host catalog 2.2.0 fingerprint"
+            );
+            registry
+        })
+        .clone()
+}
+/// AQ host catalog 2.3.0.
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_VERSION: &str = "2.3.0";
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_FINGERPRINT: &str =
+    "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a";
+/// What a Host10 namespace admits in a grant: the sixteen capabilities of
+/// Host9. The ten delivery commands of the catalog (`work.complete`,
+/// `work.return`, ...) are served, and their capabilities admitted, by the
+/// tasks that implement them; this profile serves `work.read` 2.3.0 and the
+/// event `aq.work.result_ready`.
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_CAPABILITIES: [&str; 16] = HOST9_CAPABILITIES;
+/// The commands a Host10 namespace serves (see [`HOST10_CAPABILITIES`]).
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_COMMANDS: [&str; 16] = HOST9_COMMANDS;
+#[cfg(feature = "delivery_playbook")]
+fn host10_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.3.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.3.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST10_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST10_FINGERPRINT),
+                "vendored AQ host catalog 2.3.0 fingerprint"
             );
             registry
         })
@@ -192,13 +235,32 @@ impl CatalogProfile {
             Self::Host7 => 7,
             Self::Host8 => 8,
             Self::Host9 => 9,
+            #[cfg(feature = "delivery_playbook")]
+            Self::Host10 => 10,
         }
+    }
+    /// Catalog 2.3.0 (Epic 0): always false without the feature
+    /// `delivery_playbook`.
+    pub fn is_delivery(self) -> bool {
+        #[cfg(feature = "delivery_playbook")]
+        {
+            self == Self::Host10
+        }
+        #[cfg(not(feature = "delivery_playbook"))]
+        {
+            false
+        }
+    }
+    /// Catalog 2.2.0 and later: `work.read`, `work.route`, `work.unroutable`,
+    /// `judgment.assess` and the event `aq.work.route_needed`.
+    pub fn has_routing(self) -> bool {
+        self == Self::Host9 || self.is_delivery()
     }
     /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0, Host9 =
     /// 2.2.0): the asynchronous judgment/check, integration and
     /// operation.get adapters.
     pub fn is_host2(self) -> bool {
-        matches!(self, Self::Host7 | Self::Host8 | Self::Host9)
+        matches!(self, Self::Host7 | Self::Host8 | Self::Host9) || self.is_delivery()
     }
     /// Any vendored host catalog profile (1.0.0 and later) or Monitoring6:
     /// the profiles the host adapters serve.
@@ -208,13 +270,17 @@ impl CatalogProfile {
     /// Catalog 2.1.0 and later: `candidate.prepare` outputs the prepared
     /// source that `check.request` must name.
     pub fn has_prepared_source(self) -> bool {
-        matches!(self, Self::Host8 | Self::Host9)
+        matches!(self, Self::Host8 | Self::Host9) || self.is_delivery()
     }
     /// D8 findings: Monitoring6 and every catalog 2.x profile.
     pub fn has_findings(self) -> bool {
         self.is_host2() || self == Self::Monitoring6
     }
     pub fn from_number(number: i16) -> Option<Self> {
+        #[cfg(feature = "delivery_playbook")]
+        let delivery = [Self::Host10];
+        #[cfg(not(feature = "delivery_playbook"))]
+        let delivery: [Self; 0] = [];
         [
             Self::Mail1,
             Self::HumanReview2,
@@ -227,6 +293,7 @@ impl CatalogProfile {
             Self::Host9,
         ]
         .into_iter()
+        .chain(delivery)
         .find(|p| p.number() == number)
     }
     /// The `[playbooks] profile` value that configures this profile.
@@ -241,6 +308,8 @@ impl CatalogProfile {
             Self::Host7 => "host_v7",
             Self::Host8 => "host_v8",
             Self::Host9 => "host_v9",
+            #[cfg(feature = "delivery_playbook")]
+            Self::Host10 => "host_v10",
         }
     }
     /// Why a configured namespace cannot open over the stored row
@@ -269,6 +338,8 @@ impl CatalogProfile {
     pub fn commands(self) -> &'static [&'static str] {
         match self {
             Self::Host9 => &HOST9_COMMANDS,
+            #[cfg(feature = "delivery_playbook")]
+            Self::Host10 => &HOST10_COMMANDS,
             _ => &[],
         }
     }
@@ -295,6 +366,10 @@ impl CatalogProfile {
         if self == Self::Host9 {
             return host9_registry();
         }
+        #[cfg(feature = "delivery_playbook")]
+        if self == Self::Host10 {
+            return host10_registry();
+        }
         let mut registry = crate::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
             let event = graph_operation_event();
@@ -319,7 +394,7 @@ impl CatalogProfile {
             return scope.validate();
         }
         if self.is_host() {
-            let mut allowed: BTreeSet<String> = if self == Self::Host9 {
+            let mut allowed: BTreeSet<String> = if self.has_routing() {
                 HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect()
             } else if self.is_host2() {
                 HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()

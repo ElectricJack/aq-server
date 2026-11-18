@@ -742,6 +742,11 @@ impl Driver {
             "asking for routes",
             self.service.collect_route_needed(&self.runtime, 8).await,
         );
+        #[cfg(feature = "delivery_playbook")]
+        partial.defer(
+            "announcing results",
+            self.service.collect_result_ready(&self.runtime, 8).await,
+        );
         partial.defer(
             "expiring judgments",
             self.service.expire_assessments(&self.runtime, 2).await,

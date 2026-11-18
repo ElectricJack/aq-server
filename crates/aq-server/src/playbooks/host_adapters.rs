@@ -8,7 +8,7 @@
 //! `pending` row commits first, then the effect runs with a stable idempotency
 //! key, then the final row and its outbox event commit together. Reconcile
 //! only reads a retained final row and never performs an effect.
-use super::{domain::*, review_domain::CatalogProfile, service::*};
+use super::{domain::*, service::*};
 use aq_playbook_host::{
     model::{ContractRef, EventEnvelope, canonical_bytes},
     runner::Intent,
@@ -213,7 +213,7 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile == CatalogProfile::Host9 {
+        let commands: &[&str] = if self.profile.has_routing() {
             self.profile.commands()
         } else if self.profile.is_host2() {
             &HOST7_COMMANDS

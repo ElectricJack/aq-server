@@ -1,0 +1,395 @@
+//! Host catalog 2.3.0 (Epic 0, spec 0016 sections 6.1 and 6.2), the server's
+//! side in PostgreSQL: which results wait for a playbook's decision, the facts
+//! of a task's latest result, and the emission state of
+//! `aq.work.result_ready`. The rules are in [`crate::host10`]; this module
+//! only reads and writes rows. Compiled in only with the cargo feature
+//! `delivery_playbook`.
+//!
+//! Nothing here decides anything about a result. `delivery_decisions`,
+//! `delivery_main_heads` and `delivery_pull_requests` are written by the
+//! commands and the main sync that report into them; this module only reads
+//! them.
+use crate::{
+    Result,
+    host9::WorkFacts,
+    host10::{
+        self, DELIVERY_BINDING, PullRequestFacts, ResultEmission, ResultFacts, ResultReady,
+        branch_of, facts_digest, result_ready_due,
+    },
+    stable_id,
+};
+use aq_playbook_host::model::{EventContract, EventEnvelope};
+use serde_json::Value;
+use sqlx::{PgConnection, PgPool, Row};
+use uuid::Uuid;
+
+/// A task whose current attempt has stopped and recorded a result, and whose
+/// claim is still held: the result nothing has settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pending {
+    pub task_id: Uuid,
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub attempt_id: Uuid,
+    pub result_id: Uuid,
+}
+
+/// The latest result of a task, as the server recorded it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Latest {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub attempt_id: Uuid,
+    pub result_id: Uuid,
+    /// The outcome the agent reported (`success`, `failed`, ...).
+    pub outcome: String,
+    /// The retained source differs from the lineage's base.
+    pub changed: bool,
+    /// The commit the result's source was retained at, or `""`.
+    pub head: String,
+    /// The commit the lineage started from, or `""`.
+    pub base: String,
+}
+
+/// What the host reads of the server's execution records. A port, so that
+/// the emission and `work.read` can be tested without recording a result.
+#[async_trait::async_trait]
+pub trait DeliveryPort: Send + Sync {
+    /// Results waiting for a decision, at most `limit`, the longest
+    /// unannounced first. `project` limits them to one project. Results with a
+    /// decision on them are not returned.
+    async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
+    /// The latest result of `task`, if it has one.
+    async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Whether the server runs tasks of `project` (it has an execution binding).
+    async fn bound(&self, project: Uuid) -> Result<bool>;
+}
+
+/// Production port: the server's own database.
+pub struct PgDelivery(pub PgPool);
+
+#[async_trait::async_trait]
+impl DeliveryPort for PgDelivery {
+    async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>> {
+        let rows = sqlx::query(
+            "SELECT a.task_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
+             (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,a.attempt_id,h.report_id \
+             FROM execution_attempts a \
+             JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id \
+             JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
+             JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
+             LEFT JOIN delivery_tasks t ON t.task_id=a.task_id \
+             WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
+             AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
+             AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             ORDER BY GREATEST(COALESCE(t.emitted_at_ms,0),COALESCE(t.checked_at_ms,0)),h.report_id \
+             LIMIT $2",
+        )
+        .bind(project)
+        .bind(i64::from(limit))
+        .fetch_all(&self.0)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| Pending {
+                task_id: r.get("task_id"),
+                workspace_id: r.get("workspace_id"),
+                project_id: r.get("project_id"),
+                attempt_id: r.get("attempt_id"),
+                result_id: r.get("report_id"),
+            })
+            .collect())
+    }
+
+    async fn latest(&self, task: Uuid) -> Result<Option<Latest>> {
+        let mut conn = self.0.acquire().await?;
+        let row = sqlx::query(
+            "SELECT r.report_id,r.attempt_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
+             (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,\
+             convert_from(r.report_bytes,'UTF8')::jsonb AS report \
+             FROM execution_attempts a \
+             JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
+             JOIN profiled_result_reports r ON r.report_id=h.report_id \
+             JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
+             WHERE a.task_id=$1 \
+             ORDER BY (convert_from(r.receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::bigint DESC,r.report_id DESC \
+             LIMIT 1",
+        )
+        .bind(task)
+        .fetch_optional(&mut *conn)
+        .await?;
+        let Some(row) = row else { return Ok(None) };
+        let (attempt, report): (Uuid, serde_json::Value) =
+            (row.get("attempt_id"), row.get("report"));
+        // The source the report pins and the owner retained, as evaluation reads it.
+        let source = sqlx::query(
+            "SELECT manifest->'checkpoint'->>'hex' AS head,manifest->'source'->'base'->>'hex' AS base \
+             FROM source_transfers WHERE attempt_id=$1 AND state='retained' \
+             AND import_operation_id::text IN (SELECT jsonb_array_elements_text($2::jsonb->'source_receipt_ids')) \
+             ORDER BY transfer_id LIMIT 1",
+        )
+        .bind(attempt)
+        .bind(&report)
+        .fetch_optional(&mut *conn)
+        .await?;
+        let (head, start): (String, String) = match &source {
+            Some(s) => (
+                s.get::<Option<String>, _>("head").unwrap_or_default(),
+                s.get::<Option<String>, _>("base").unwrap_or_default(),
+            ),
+            None => Default::default(),
+        };
+        // The lineage's original base; past the handoff bound it is unknown,
+        // and a result with a source then counts as changed.
+        let base = match start.is_empty() {
+            true => None,
+            false => aq_machine_control::lineage_base(&mut conn, task, &start)
+                .await
+                .map_err(|_| crate::Error::Unknown)?,
+        };
+        Ok(Some(Latest {
+            workspace_id: row.get("workspace_id"),
+            project_id: row.get("project_id"),
+            attempt_id: attempt,
+            result_id: row.get("report_id"),
+            outcome: report["outcome"].as_str().unwrap_or("").to_owned(),
+            changed: !head.is_empty() && base.as_deref() != Some(head.as_str()),
+            head,
+            base: base.unwrap_or_default(),
+        }))
+    }
+
+    async fn bound(&self, project: Uuid) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE project_id=$1)",
+        )
+        .bind(project)
+        .fetch_one(&self.0)
+        .await?)
+    }
+}
+
+/// The facts of a task's latest result for `work.read`. `latest` is `None`
+/// when the task has no result: its result facts are then empty, while the
+/// host-counted `returns`, the commit main points at and a pull request it
+/// may have are still told.
+pub async fn result_facts(
+    db: &mut PgConnection,
+    task: Uuid,
+    project: Uuid,
+    latest: Option<&Latest>,
+) -> Result<ResultFacts> {
+    let returns: Option<i32> =
+        sqlx::query_scalar("SELECT returns FROM delivery_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_optional(&mut *db)
+            .await?;
+    let main_head: Option<String> =
+        sqlx::query_scalar("SELECT head FROM delivery_main_heads WHERE project_id=$1")
+            .bind(project)
+            .fetch_optional(&mut *db)
+            .await?;
+    let pull_request = sqlx::query("SELECT number,url,state,mergeable,checks_state,checks_failed FROM delivery_pull_requests WHERE task_id=$1")
+        .bind(task)
+        .fetch_optional(&mut *db)
+        .await?
+        .map(|r| PullRequestFacts {
+            number: u64::try_from(r.get::<i64, _>("number")).unwrap_or(0),
+            url: r.get("url"),
+            state: r.get("state"),
+            mergeable: r.get("mergeable"),
+            checks_state: r.get("checks_state"),
+            checks_failed: serde_json::from_value(r.get("checks_failed")).unwrap_or_default(),
+        });
+    let mut facts = ResultFacts {
+        returns: u32::try_from(returns.unwrap_or(0)).unwrap_or(0),
+        main_head: main_head.unwrap_or_default(),
+        pull_request,
+        ..Default::default()
+    };
+    if let Some(latest) = latest {
+        facts.outcome = latest.outcome.clone();
+        facts.changed = latest.changed;
+        facts.branch = branch_of(task);
+        facts.head = latest.head.clone();
+        facts.base = latest.base.clone();
+    }
+    Ok(facts)
+}
+
+/// Where `task` is and whether the server runs it: its latest result, its
+/// workspace and project (those of the result, else `fallback`) and whether
+/// the project is bound.
+pub async fn locate(
+    port: &dyn DeliveryPort,
+    task: Uuid,
+    fallback: (Uuid, Uuid),
+) -> Result<(Option<Latest>, (Uuid, Uuid), bool)> {
+    let latest = port.latest(task).await?;
+    let at = latest
+        .as_ref()
+        .map_or(fallback, |l| (l.workspace_id, l.project_id));
+    Ok((latest, at, port.bound(at.1).await?))
+}
+
+/// The `observed` output of `work.read` under catalog 2.3.0 for the graph
+/// node `node` at `at` (`task_facts`: whether a playbook of this namespace
+/// filed it, its charged failures and its ended attempts).
+pub async fn observed(
+    db: &mut PgConnection,
+    task: Uuid,
+    at: (Uuid, Uuid),
+    latest: Option<&Latest>,
+    node: &Value,
+    task_facts: (bool, u32, u32),
+) -> Result<Value> {
+    let version = node["version"]
+        .as_i64()
+        .filter(|v| *v >= 1)
+        .ok_or(crate::Error::Unknown)?;
+    let work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
+    let facts = result_facts(db, task, at.1, latest).await?;
+    Ok(host10::read_output(task, version, &work, &facts))
+}
+
+/// The results to announce now: none unless an artifact is active on the
+/// delivery binding of the namespace, else the pending results of `project`
+/// (all projects when `None`) that are due ([`due`]).
+pub async fn plan(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    port: &dyn DeliveryPort,
+    project: Option<Uuid>,
+    limit: u32,
+    now_ms: i64,
+    (repeat_ms, run_bound_ms): (i64, i64),
+) -> Result<Vec<Due>> {
+    if !active(db, namespace).await? {
+        return Ok(vec![]);
+    }
+    let pending = port.pending(project, limit).await?;
+    due(db, namespace, pending, now_ms, repeat_ms, run_bound_ms).await
+}
+
+/// Whether an artifact is active on the delivery binding of the namespace:
+/// the event is sent only then.
+async fn active(db: &mut PgConnection, namespace: (Uuid, i64)) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM playbook_engine_bindings WHERE namespace_id=$1 AND generation=$2 AND binding=$3)",
+    )
+    .bind(namespace.0)
+    .bind(namespace.1)
+    .bind(DELIVERY_BINDING)
+    .fetch_one(db)
+    .await?)
+}
+
+/// A pending result that is due an `aq.work.result_ready`, with the digest of
+/// the facts it is sent under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Due {
+    pub pending: Pending,
+    pub facts: String,
+}
+impl Due {
+    /// The ids the event carries, for the task at `version`.
+    pub fn ready(&self, version: i64) -> ResultReady {
+        ResultReady {
+            task_id: self.pending.task_id,
+            project_id: self.pending.project_id,
+            attempt_id: self.pending.attempt_id,
+            result_id: self.pending.result_id,
+            version,
+        }
+    }
+    /// The `aq.work.result_ready` event for the task at `version`, with its id.
+    pub fn event(
+        &self,
+        version: i64,
+        namespace: (Uuid, i64),
+        now_ms: i64,
+        contract: &EventContract,
+    ) -> Result<(Uuid, EventEnvelope)> {
+        let key = format!(
+            "{}/{}/{now_ms}",
+            self.pending.task_id, self.pending.result_id
+        );
+        let id = stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)?;
+        let event = host10::result_ready_event(id, &self.ready(version), now_ms, contract);
+        Ok((id, event.map_err(|_| crate::Error::Invalid)?))
+    }
+}
+
+/// The pending results to send now ([`result_ready_due`]); the others are
+/// marked as looked at, so that they go behind those not looked at yet.
+/// `run_bound_ms` is how long a run that read the task still holds back a
+/// repeat, whether or not its end is on record.
+async fn due(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    pending: Vec<Pending>,
+    now_ms: i64,
+    repeat_ms: i64,
+    run_bound_ms: i64,
+) -> Result<Vec<Due>> {
+    let results: Vec<Uuid> = pending.iter().map(|p| p.result_id).collect();
+    let decided: Vec<Uuid> =
+        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1)")
+            .bind(&results)
+            .fetch_all(&mut *db)
+            .await?;
+    let mut out = vec![];
+    for p in pending
+        .into_iter()
+        .filter(|p| !decided.contains(&p.result_id))
+    {
+        let row = sqlx::query("SELECT emitted_result_id,emitted_at_ms,emitted_facts FROM delivery_tasks WHERE task_id=$1 FOR UPDATE")
+            .bind(p.task_id)
+            .fetch_optional(&mut *db)
+            .await?;
+        let mut emission = ResultEmission::default();
+        if let Some(row) = &row {
+            emission.emitted_result = row.get("emitted_result_id");
+            emission.emitted_at_ms = row.get("emitted_at_ms");
+            emission.emitted_facts = row.get("emitted_facts");
+        }
+        if emission.emitted_result == Some(p.result_id) {
+            emission.run_unfinished = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
+                 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
+                 AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
+            )
+            .bind(namespace.0)
+            .bind(namespace.1)
+            .bind(p.task_id.to_string())
+            .bind(emission.emitted_at_ms)
+            .bind(now_ms - run_bound_ms)
+            .fetch_one(&mut *db)
+            .await?;
+        }
+        let moving = result_facts(db, p.task_id, p.project_id, None).await?;
+        let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());
+        if result_ready_due(&emission, p.result_id, &facts, now_ms, repeat_ms) {
+            out.push(Due { pending: p, facts });
+        } else {
+            sqlx::query("UPDATE delivery_tasks SET checked_at_ms=$2 WHERE task_id=$1")
+                .bind(p.task_id)
+                .bind(now_ms)
+                .execute(&mut *db)
+                .await?;
+        }
+    }
+    Ok(out)
+}
+
+/// Records that `aq.work.result_ready` was sent for `due` at `now_ms`.
+pub async fn sent(db: &mut PgConnection, due: &Due, now_ms: i64) -> Result<()> {
+    sqlx::query("INSERT INTO delivery_tasks(task_id,emitted_result_id,emitted_at_ms,emitted_facts) VALUES($1,$2,$3,$4) ON CONFLICT(task_id) DO UPDATE SET emitted_result_id=$2,emitted_at_ms=$3,emitted_facts=$4,checked_at_ms=0")
+        .bind(due.pending.task_id)
+        .bind(due.pending.result_id)
+        .bind(now_ms)
+        .bind(&due.facts)
+        .execute(db)
+        .await?;
+    Ok(())
+}
