@@ -46,87 +46,7 @@ fn internal<E: std::fmt::Display>(e: E) -> AppError {
 fn digest(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceRetentionConfig {
-    #[serde(default = "default_keep_per_task")]
-    pub keep_per_task: usize,
-    /// Seconds after settlement before even the newest handles may be released.
-    #[serde(default = "default_max_age")]
-    pub max_age: u64,
-    pub staging_root: PathBuf,
-    pub git_root: PathBuf,
-    pub git_socket: PathBuf,
-    #[serde(default = "default_quota")]
-    pub max_staging_bytes: u64,
-    #[serde(default = "default_bundle")]
-    pub max_bundle_bytes: u64,
-    #[serde(default = "default_concurrency")]
-    pub bulk_concurrency: usize,
-    #[serde(default = "default_ttl")]
-    pub incomplete_ttl_secs: u64,
-    /// How long one aq-git import or base export may take. A full bundle of a large
-    /// repository needs minutes; aq-git itself allows at most 300 s.
-    #[serde(default = "default_git_deadline_ms")]
-    pub git_deadline_ms: u64,
-}
-pub const fn default_keep_per_task() -> usize {
-    2
-}
-pub const fn default_max_age() -> u64 {
-    30 * 86400
-}
-fn default_quota() -> u64 {
-    4 * 1024 * 1024 * 1024
-}
-fn default_bundle() -> u64 {
-    1024 * 1024 * 1024
-}
-fn default_concurrency() -> usize {
-    2
-}
-fn default_ttl() -> u64 {
-    86400
-}
-fn default_git_deadline_ms() -> u64 {
-    300_000
-}
-impl SourceRetentionConfig {
-    pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.staging_root.is_absolute()
-                && self.git_root.is_absolute()
-                && self.git_socket.is_absolute(),
-            "source retention paths must be absolute"
-        );
-        anyhow::ensure!(
-            self.max_age > 0
-                && self.max_age <= i64::MAX as u64 / 1000
-                && self.bulk_concurrency > 0
-                && self.bulk_concurrency <= 64
-                && self.max_staging_bytes <= i64::MAX as u64
-                && self.staging_root != Path::new("/")
-                && self.git_root != Path::new("/")
-                && !self.git_root.starts_with(&self.staging_root)
-                && !self.staging_root.starts_with(&self.git_root)
-                && self.max_bundle_bytes > 0
-                && self.max_bundle_bytes <= 1024 * 1024 * 1024
-                && self.max_staging_bytes > 0
-                && self.incomplete_ttl_secs > 0
-                && self.incomplete_ttl_secs <= 365 * 86400
-                && (1_000..=300_000).contains(&self.git_deadline_ms),
-            "invalid source retention limits"
-        );
-        for p in [&self.staging_root, &self.git_root, &self.git_socket] {
-            anyhow::ensure!(
-                !p.components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir)),
-                "source retention paths must not contain parent traversal"
-            );
-        }
-        Ok(())
-    }
-}
+pub use aq_row_retention::source_config::SourceRetentionConfig;
 pub struct Runtime {
     pub config: SourceRetentionConfig,
     bulk: Semaphore,
@@ -167,6 +87,9 @@ impl Runtime {
         self.config.staging_root.join(id.to_string())
     }
     /// Bulk transport admission shared with lifecycle artifact retention.
+    fn git_wait(&self) -> Duration {
+        Duration::from_millis(self.config.git_deadline_ms + 5_000)
+    }
     pub(crate) fn bulk(&self) -> &Semaphore {
         &self.bulk
     }
@@ -623,16 +546,13 @@ async fn socket_import(rt: &Runtime, t: &Transfer) -> Result<Value> {
         );
         Ok::<_, anyhow::Error>(v["result"].clone())
     };
-    tokio::time::timeout(
-        Duration::from_millis(rt.config.git_deadline_ms + 5_000),
-        exchange,
-    )
-    .await
-    .map_err(|_| AppError::UpdatesUnavailable("import pending; retry same transfer".into()))?
-    .map_err(|e| {
-        tracing::warn!(error=%e,operation_id=%t.op,"import outcome remains pending");
-        AppError::UpdatesUnavailable("import pending; retry same transfer".into())
-    })
+    tokio::time::timeout(rt.git_wait(), exchange)
+        .await
+        .map_err(|_| AppError::UpdatesUnavailable("import pending; retry same transfer".into()))?
+        .map_err(|e| {
+            tracing::warn!(error=%e,operation_id=%t.op,"import outcome remains pending");
+            AppError::UpdatesUnavailable("import pending; retry same transfer".into())
+        })
 }
 async fn finalize(
     State(s): State<AppState>,
@@ -812,8 +732,7 @@ async fn finalize(
         || receipt["manifest_digest"] != canonical_digest
         || receipt["source"] != serde_json::to_value(&m.source).map_err(internal)?
         || receipt["retention_state"] != "active"
-        // A retry of this same operation after a late completion gets the completed
-        // receipt marked historical; every identity field above still binds it.
+        // A retry after a late completion is answered historical; the fields above bind it.
         || !receipt["historical"].is_boolean()
         || receipt["receiver_installation_id"]
             .as_str()
@@ -1014,16 +933,15 @@ async fn export_base(rt: &Runtime, request: &Value) -> Result<Value> {
         );
         Ok::<_, anyhow::Error>(v["result"].clone())
     };
-    tokio::time::timeout(
-        Duration::from_millis(rt.config.git_deadline_ms + 5_000),
-        exchange,
-    )
-    .await
-    .map_err(|_| AppError::UpdatesUnavailable("base export pending; retry same operation".into()))?
-    .map_err(|e| {
-        tracing::warn!(error=%e,"base export uncertain");
-        AppError::UpdatesUnavailable("base export pending; retry same operation".into())
-    })
+    tokio::time::timeout(rt.git_wait(), exchange)
+        .await
+        .map_err(|_| {
+            AppError::UpdatesUnavailable("base export pending; retry same operation".into())
+        })?
+        .map_err(|e| {
+            tracing::warn!(error=%e,"base export uncertain");
+            AppError::UpdatesUnavailable("base export pending; retry same operation".into())
+        })
 }
 async fn load_base(
     tx: &mut Transaction<'_, Postgres>,
