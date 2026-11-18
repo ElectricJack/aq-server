@@ -2703,3 +2703,96 @@ async fn node_slot_default_setting_is_revisioned_idempotent_and_does_not_resize_
         2
     );
 }
+
+#[tokio::test]
+async fn native_conversation_is_independent_and_requires_the_original_worker() {
+    let f = common::profiled::fixture().await;
+    let pool = f.db.pool().await;
+    let id = Uuid::new_v4();
+    let project = f.selection.lineage.project_id;
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{}',1,'{}')")
+        .bind(project).execute(&pool).await.unwrap();
+    let other = Uuid::new_v4();
+    let other_credential = aq_server::tokens::new_node_credential();
+    sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'conversation-other',$2,'0.1.0',1,now())")
+        .bind(other).bind(aq_server::tokens::verifier(&other_credential)).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO manual_agent_sessions(id,actor_id,node_id,project_id,spec,status,stage,created_at_ms,updated_at_ms,stopped_at_ms) VALUES($1,$2,$3,$4,'{}','stopped','Ended',1,2,2)")
+        .bind(id).bind(f.actor).bind(f.node.node_id).bind(project).execute(&pool).await.unwrap();
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let read = format!("/api/manual-agents/{id}/conversation");
+    let upload = format!("/v1/worker/manual-agents/{id}/conversation");
+    let snapshot = json!({"messages":[
+        {"role":"user","text":"Show the result"},
+        {"role":"assistant","text":"Résumé\nSecond line"},
+    ],"partial":false});
+
+    let (status, empty) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        empty,
+        json!({"session_id":id,"project_id":project,"conversation":null})
+    );
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&other_credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    for _ in 0..2 {
+        let (status, receipt) = call(
+            &worker,
+            &upload,
+            Some(snapshot.clone()),
+            Some(&f.credential),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt, json!({"session_id":id}));
+    }
+    assert_eq!(
+        call(
+            &worker,
+            &upload,
+            Some(json!({"messages":[{"role":"assistant","text":"Changed"}],"partial":false})),
+            Some(&f.credential),
+            false
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, saved) = call(&admin, &read, None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        saved,
+        json!({"session_id":id,"project_id":project,"conversation":snapshot})
+    );
+    let (status, history) = call(
+        &admin,
+        "/api/manual-agents/history?limit=1",
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history["sessions"][0]["id"], json!(id));
+    assert_eq!(history["sessions"][0]["conversation_available"], true);
+    let (_, terminal) = call(
+        &admin,
+        &format!("/api/manual-agents/{id}/transcript"),
+        None,
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(terminal["session"]["archive"]["state"], "not_recorded");
+}
