@@ -206,7 +206,15 @@ pub(crate) async fn auto_env_source(
     let writes = Arc::new(AtomicUsize::new(0));
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let (wc, bc) = (writes.clone(), bodies.clone());
+    // The human work read's Context of the task (spec 0016 section 7's task read).
+    let read = graph.clone();
     let app = Router::new().route(
+        "/v1/workspaces/{workspace}/nodes/{id}/context",
+        axum::routing::get(move || {
+            std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(read.clone())))
+        }),
+    );
+    let app = app.route(
         "/v1/workspaces/{workspace}/mutations",
         post(move |Json(body): Json<Value>| {
             let (g, wc, bc) = (graph.clone(), wc.clone(), bc.clone());
@@ -1423,8 +1431,8 @@ mod playbook {
         assert_eq!(send_back(&env, "policy").await, Settled::Stale);
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
         assert!(env.holds_task().await);
-        let row = settlement_row(&env.f, env.report.report_id).await;
-        assert_ne!(row.0, "rework_required");
+        // Recording decided nothing and a stale decision writes no row.
+        assert_eq!(settlement_rows(&env.f, env.report.report_id).await, 0);
     }
 
     #[tokio::test]
@@ -1525,6 +1533,67 @@ mod playbook {
         // The playbook decides it.
         assert_eq!(complete(&env).await, Settled::Completed);
         assert!(!env.holds_task().await);
+    }
+
+    /// The reasons of the task's work read (`GET .../tasks/{task}/work`),
+    /// checked against the human-graph-1 schema.
+    async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let lineage = &env.f.selection.lineage;
+        let app =
+            aq_server::agent_access::human::routes(&env.f.state).with_state(env.f.state.clone());
+        let uri = format!(
+            "/api/human/projects/{}/tasks/{}/work",
+            lineage.project_id, lineage.task_id
+        );
+        let request = axum::http::Request::get(uri)
+            .header("x-aq-dev-email", "owner@localhost")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res = app.oneshot(request).await.unwrap();
+        let status = res.status();
+        let body: Value =
+            serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(status, 200, "{body}");
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/human-graph/v1/schema.json"
+        ))
+        .unwrap();
+        assert!(
+            aq_agent_api::check(&schema, &schema, &body),
+            "schema: {body}"
+        );
+        assert_eq!(body["data"]["readiness"]["state"], "held", "{body}");
+        body["data"]["readiness"]["reasons"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// Spec 0016 section 7 and acceptance 6: with no delivery playbook active
+    /// the result waits, and the task read says "result ready, no delivery
+    /// policy"; a decided result is no longer listed as waiting.
+    #[tokio::test]
+    async fn the_task_read_says_a_result_waits_without_a_delivery_policy() {
+        let env = auto_env("required", axum::http::StatusCode::OK).await;
+        let reasons = work_reasons(&env).await;
+        let waiting = (reasons.iter())
+            .find(|r| r["code"] == "result_ready_no_delivery_policy")
+            .unwrap_or_else(|| panic!("{reasons:?}"));
+        assert_eq!(waiting["result_id"], json!(env.report.report_id));
+        assert_eq!(waiting["attempt_id"], json!(env.report.binding.attempt_id));
+        let message = waiting["message"].as_str().unwrap();
+        assert!(message.starts_with("Result ready, no delivery policy"));
+        // A playbook's decision ends the wait (here it sends the result back).
+        assert_eq!(send_back(&env, "checks_failed").await, Settled::Returned);
+        let reasons = work_reasons(&env).await;
+        assert!(
+            reasons
+                .iter()
+                .all(|r| r["code"] != "result_ready_no_delivery_policy"),
+            "{reasons:?}"
+        );
     }
 
     /// The conclusion-text heuristics are gone: a failed report whose agent

@@ -16,4 +16,4 @@ CREATE TABLE delivery_result_facts (
 );
 CREATE INDEX delivery_result_facts_task ON delivery_result_facts(task_id);
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='146' WHERE key='state_format_version';
+UPDATE meta SET value='147' WHERE key='state_format_version';

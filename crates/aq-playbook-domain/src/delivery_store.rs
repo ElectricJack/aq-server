@@ -285,13 +285,13 @@ pub async fn plan(
 }
 
 /// The latest result of `attempt` with no playbook decision on it and no
-/// `work.complete` settling it (the task read says it waits).
+/// `work.complete` or `work.return` settling it (the task read says it waits).
 pub async fn undecided(db: &mut PgConnection, attempt: Uuid) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "SELECT h.report_id FROM profiled_result_heads h WHERE h.attempt_id=$1 \
          AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
-         AND a.disposition IN ('prepared','possible','confirmed'))",
+         AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",
     )
     .bind(attempt)
     .fetch_optional(db)
