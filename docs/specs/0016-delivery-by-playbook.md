@@ -87,23 +87,31 @@ example `refs/heads/aq/`) may be created and replaced under a lease
 
 ## 5. Push and fetch through central aq-git (E0.2–E0.4)
 
-### 5.1 aq-git: a git endpoint (E0.2)
+### 5.1 aq-git: a git endpoint (E0.2), revised 2026-11-18
 
-aq-git serves git's smart HTTP protocol (`upload-pack`, `receive-pack`) for
-central repositories, on its existing socket. Each request carries an attempt
-grant, issued by the server (§5.2), that names the repository, the base commit,
-and the single ref the attempt may write.
+aq-git serves git smart-HTTP (`upload-pack`, `receive-pack`) on a second Unix socket that only aq-server
+reaches. aq-server authenticates the worker with its node credential, one for all projects, and adds the
+attempt's grant in request headers. The headers name the repository, the base commit, the task ref
+`refs/heads/aq/<task-id>` with its lease, the main ref, the size limit and the operation id.
 
-- Fetch: only `main`'s retained head and the attempt's own task branch are
-  advertised.
-- Push: only the granted ref is accepted, and only under the lease the grant
-  names, which is the branch's previous head or absent. In quarantine, a push
-  runs the checks import runs today (`artifact/mod.rs:843-904`): `fsck --full
-  --strict`, every new commit descends from the granted base, the feature
-  profile, and the quota. Only then is the ref updated. The quota and the
-  maximum push size are Settings.
-- A push that is accepted pins a retention handle on the new head and returns a
-  receipt: `{repository, ref, old, new, base, handle, digest}`.
+**Pushes land in a per-task staging repository, never in the project pool.**
+- **Staging:** `repositories/<id>/staging/<task-id>.git` borrows objects from the project pool through
+  alternates. Reads across tasks are accepted, because task refs are feature branches and `main` changes
+  only through a GitHub PR.
+- **What may be pushed:** only the grant's task ref, under its lease. Deletes and push certificates are
+  refused.
+- **The commit point is the existing `artifact.import` path.** When a push completes, aq-git imports the
+  new commits into the pool: quarantine, strict fsck, descent from the base, feature profile, quota,
+  retention handle, receipt.
+- **Success is reported only after the import receipt is durable.** A failed import leaves the pool
+  unchanged. A retried push with the same operation id replays the receipt.
+- **Fetch** sees `main`, served from the retained synced head, and the task's own ref.
+- **Cleanup:** staging repositories are removed with the task ref (`ref.delete`) or after a Settings TTL.
+
+The first design ran `receive-pack` straight into the pool with a pre-receive hook (G2, merged behind the
+flag). It failed two adversarial reviews: git moves the ref before aq-git records a receipt, objects of a
+rejected push stay in the pool, and cleanup can delete objects other refs need. Its hook, journal and
+rollback are removed (G2c).
 
 ### 5.2 Server (E0.3)
 
