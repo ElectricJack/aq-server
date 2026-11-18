@@ -12,10 +12,14 @@
 //! it again with the same operation id, which aq-git and GitHub both treat as
 //! the same operation. Time is a parameter (`now_ms`), never read here.
 mod git;
+mod host;
 
 pub use git::{
     GitFailure, GitPort, RefDeletion, RefPublication, RetainedRef, SocketGit, TASK_BRANCH_PREFIX,
     object_id,
+};
+pub use host::{
+    Accepting, due_operations, frozen_request, onboarded_target, pull_request_text, run_step,
 };
 
 use crate::github::GitHubApiError;
