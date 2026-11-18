@@ -47,6 +47,7 @@ const CAPABILITIES: &[&str] = &[
     "notifications.read",
     "human.graph.read",
     "human.overview.tasks.read",
+    "human.work.tasks.read",
     "tasks.read",
     "tasks.comments.read",
     "tasks.comments.write",

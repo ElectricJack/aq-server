@@ -1229,6 +1229,123 @@ mod accounting {
             .unwrap()
     }
 
+    /// The worker's half of the launch contract, computed without the server's
+    /// derivation: the delivered module gives back the catalog entry, and the
+    /// source ID is SHA-256 of the sorted-key JSON
+    /// `["aq.observation-source/v1", attempt, 1, entry]`, first 16 bytes,
+    /// version 8, RFC 4122 variant; the session key is `aq.attempt/<attempt>/1`.
+    fn worker_identity(modules: &[ArtifactRef], attempt: Uuid) -> (Uuid, Text) {
+        let entry = aq_admission::observation_source::entry(modules)
+            .unwrap()
+            .expect("the launch delivers the catalog entry");
+        let mut value = json!(["aq.observation-source/v1", attempt, 1, entry]);
+        value.sort_all_objects();
+        let digest = Digest::of(&serde_json::to_vec(&value).unwrap());
+        let mut id = [0u8; 16];
+        for (i, b) in id.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&digest.as_str()[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        id[6] = (id[6] & 0x0f) | 0x80;
+        id[8] = (id[8] & 0x3f) | 0x80;
+        (
+            Uuid::from_bytes(id),
+            text(&format!("aq.attempt/{attempt}/1")),
+        )
+    }
+    fn observed(source: &OwnerSource, sequence: u64, kind: ObservationKind) -> ObservationRecord {
+        let mut body = event(source, sequence, 0).body;
+        body.kind = kind;
+        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn delivered_entry_identity_is_enrolled_and_its_events_are_stall_progress() {
+        use aq_server::stall::{
+            engine::{Ports, Target},
+            evidence::Explanation,
+            policy::ExecutionPolicy,
+            ports::DbPorts,
+        };
+        let (mut f, unregistered) = seeded(Some(true)).await;
+        let attempt = f.profiled.offer.binding.attempt_id;
+        let target = Target {
+            attempt_id: attempt,
+            session_id: Uuid::new_v4(),
+            task_id: f.profiled.offer.manifest.bindings.task_id,
+            project_id: f.profiled.offer.manifest.bindings.project_id,
+            workspace_id: f.profiled.offer.manifest.bindings.graph_id,
+            generation: 1,
+        };
+        let policy = ExecutionPolicy::v1();
+        let evidence = |f: &Fixture| {
+            let ports = DbPorts {
+                state: f.state.clone(),
+            };
+            let (target, policy) = (target.clone(), policy.clone());
+            async move { ports.evidence(&target, &policy, NOW).await.unwrap() }
+        };
+        // No catalog source: nothing is delivered, the batch is refused as
+        // before and the ladder has no evidence.
+        assert!(f.state.config.intelligence.is_none());
+        let turn = ObservationKind::TurnBoundary { in_turn: true };
+        let refused = packet(&f, vec![observed(&unregistered, 1, turn.clone())]);
+        assert_eq!(send(&f, &refused).await, StatusCode::FORBIDDEN);
+        assert_eq!(counts(&f).await, (0, 0));
+        let before = evidence(&f).await;
+        assert_eq!(before.last_progress_ms, None);
+        assert_eq!(
+            before.explanation,
+            Some(Explanation::ObservationsUnavailable)
+        );
+        // With a catalog source the launch delivers its entry, and the identity
+        // the worker derives from it is the one the batch route enrolls.
+        install(
+            &mut f,
+            aq_selection::CredentialKind::SubscriptionLogin,
+            vec![],
+        );
+        let registry = f.state.config.intelligence.clone().unwrap();
+        let choice = &f.selection.choice;
+        let entry = (registry.config.accounting)
+            .source(&choice.provider, &choice.harness)
+            .unwrap()
+            .reference
+            .clone();
+        let (module, _) = aq_admission::observation_source::module(&entry).unwrap();
+        let (source_id, session_key) = worker_identity(&[module], attempt);
+        let mut worker = catalog::source_for_attempt(&f.state, attempt)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                worker.source_id,
+                &worker.native_session_key,
+                worker.generation
+            ),
+            (source_id, &session_key, 1)
+        );
+        worker.source_id = source_id;
+        worker.native_session_key = session_key;
+        let tool = ObservationKind::ToolStarted {
+            call_id: text("call-1"),
+            tool_name: text("Bash"),
+        };
+        let accepted = packet(
+            &f,
+            vec![observed(&worker, 1, turn), observed(&worker, 2, tool)],
+        );
+        assert_eq!(send(&f, &accepted).await, StatusCode::OK);
+        assert_eq!(counts(&f).await, (2, 2));
+        let after = evidence(&f).await;
+        assert!(after.last_progress_ms.is_some() && after.observed_through_ms.is_some());
+        assert_ne!(
+            after.explanation,
+            Some(Explanation::ObservationsUnavailable)
+        );
+        drop(f);
+    }
+
     #[tokio::test]
     async fn attempt_usage_feeds_ledger_and_budget() {
         let (mut f, _) = seeded(Some(true)).await;
