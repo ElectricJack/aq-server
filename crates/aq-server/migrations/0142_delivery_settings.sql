@@ -8,4 +8,4 @@ ALTER TABLE role_settings
     ADD COLUMN delivery_limits JSONB,
     ADD COLUMN delivery_limits_revision BIGINT NOT NULL DEFAULT 0;
 
-UPDATE meta SET value='141' WHERE key='state_format_version';
+UPDATE meta SET value='142' WHERE key='state_format_version';
