@@ -268,6 +268,12 @@ class Fixture:
         for name in ["vault", "secrets", "spool/requests", "spool/status"]:
             (self.temp / name).mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "vault.example/config.toml", self.temp / "vault/config.toml")
+        if "recovery_build" in self.record:
+            # The recovery bulk fixture holds one general database connection for
+            # each bulk permit, so the bulk class must fit in the general pool
+            # (the defaults admit 16 bulk transfers on 10 connections).
+            with open(self.temp / "vault/config.toml", "a") as config:
+                config.write("\n[workers.limits]\nbulk_transfers = 2\n")
         (self.temp / "vault").chmod(0o755)
         (self.temp / "secrets/postgres_password").write_text(secrets.token_hex(24))
         (self.temp / "secrets/tunnel_token").write_text("unused-disposable-fixture")
