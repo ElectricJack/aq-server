@@ -5,3 +5,13 @@ Human Owner/namespace-bound run, effect, receipt and admission discovery. Genera
 Playbooks view additions (G11, additive within `playbooks-inspection-1`): each run carries `definition` (definition `name`, AQ per-name install ordinal `version`, `pinned_is_active` and the `active` activation; null when unregistered, `pinned_is_active` null when the current catalog could not be read) and `waiting` (the pending human `decision_id`, its state and related task ids). Run detail adds `steps`, the pinned definition's step graph ordered breadth-first from the run's entry. The runs list accepts `since_ms` (inclusive) and `until_ms` (exclusive) on `admitted_at_ms`; a ranged page scans at most 8 engine pages and may return fewer items with a `next_cursor` that resumes the scan. Versions are recorded by `playbook_definitions` at install time; artifacts installed before migration 72 are registered on the next owner start. Each run also carries `binding` and `activation_revision` (decimal string): the binding and activation revision of the AQ admission that started it. Both are null for child runs, event-started runs, and admissions made before migration 90. `definition` prefers the activation of the run's own binding.
 
 See [API-05 implementation boundary](../../../docs/implementation/API-05-playbooks-inspection.md). The profile reuses the frozen engine public inspector and does not modify any component archive or execution protocol.
+
+The optional `playbooks.definition-graph.read@1` capability serves
+`GET /api/playbooks/inspection/definitions/{artifact}/graph?project_id=<optional UUID>`.
+The response has `api_version: "playbooks-definition-graph-1"`, the inspection
+`namespace`, the exact artifact digest, and a `graph` with entry-to-start and
+ID-to-step maps. Steps use the same public shape as run detail. The read
+requires the mounted namespace owner and works independently of run history
+and deployments. It serves the install-time projection, bounded at 64 KiB.
+When there is no stored projection, `graph` is null. The response excludes
+workflow inputs, values and expressions.

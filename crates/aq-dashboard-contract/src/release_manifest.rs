@@ -85,6 +85,7 @@ const CAPABILITIES: &[&str] = &[
     "results.media.read",
     "results.media.upload",
     "playbooks.inspect",
+    "playbooks.definition-graph.read",
     "playbooks.loaded-definitions.read",
     "playbooks.catalog.read",
     "playbooks.runs.start",

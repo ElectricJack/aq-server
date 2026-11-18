@@ -468,6 +468,10 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         .route("/api/playbooks/inspection/runs/{id}", get(detail))
         .route("/api/playbooks/inspection/admissions", get(admissions))
         .route(
+            "/api/playbooks/inspection/definitions/{artifact}/graph",
+            get(playbook_view::definition_graph),
+        )
+        .route(
             "/api/playbooks/inspection/catalog/definitions",
             get(catalog::definitions),
         )

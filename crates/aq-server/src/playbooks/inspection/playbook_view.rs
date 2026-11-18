@@ -2,16 +2,25 @@
 //! playbooks-inspection-1: definition name and version, pinned-versus-active
 //! comparison, the ordered public step graph and the pending human decision.
 //! Read-only: no activation, install or decision authority.
-use super::{RunView, catalog};
-use crate::playbooks::{
-    domain::{Error, Result},
-    driver::Driver,
-    service::Service,
+use super::{NamespaceView, RunView, bounded, catalog};
+use crate::{
+    authz::RequireOwner,
+    playbooks::{
+        domain::{Error, Result},
+        driver::Driver,
+        service::Service,
+    },
 };
 use aq_playbook_host::{model::Artifact, runner};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query},
+};
+use serde::Serialize;
 use sqlx::Row;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::Arc,
     time::Duration,
 };
 use uuid::Uuid;
@@ -24,6 +33,49 @@ const ACTIVATION_PAGES: usize = 4;
 const ACTIVATION_PAGE_BUDGET: Duration = Duration::from_secs(2);
 
 pub use aq_playbook_domain::playbook_view::*;
+
+#[derive(Serialize)]
+pub(super) struct DefinitionGraph {
+    api_version: &'static str,
+    namespace: NamespaceView,
+    artifact: String,
+    graph: Option<Graph>,
+}
+
+/// Reads the same public projection as run inspection, keyed by the immutable
+/// artifact so it also works before a run exists and for historical run pins.
+pub(super) async fn definition_graph(
+    RequireOwner(actor): RequireOwner,
+    Extension(driver): Extension<Arc<Driver>>,
+    Path(artifact): Path<String>,
+    Query(query): Query<super::definitions::DefinitionsQuery>,
+) -> Result<Json<DefinitionGraph>> {
+    let service = &driver.service;
+    if query
+        .project_id
+        .is_some_and(|id| id != service.namespace.project_id)
+    {
+        return Err(Error::Forbidden);
+    }
+    if !artifact.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(Error::Invalid);
+    }
+    service.authorize_inspection(actor.id).await?;
+    let graph = service.stored_graph(&artifact).await?;
+    service.authorize_inspection(actor.id).await?;
+    bounded(DefinitionGraph {
+        api_version: "playbooks-definition-graph-1",
+        namespace: (&service.namespace).into(),
+        artifact,
+        graph,
+    })
+}
+
 impl Service {
     /// Idempotent: the first install of an artifact in this namespace
     /// generation fixes its per-name version.
@@ -216,9 +268,23 @@ impl Driver {
                 .pending_intents
                 .iter()
                 .find_map(|intent| waiting.get(intent).cloned());
-            run.definition = registry
-                .get(&run.artifact)
-                .map(|(name, version)| definition(run, name, *version, &activations, &registry));
+            run.definition = registry.get(&run.artifact).map(|(name, version)| {
+                let pins = activations.as_ref().map(|items| {
+                    items.iter().map(|item| ActivationPin {
+                        binding: &item.binding,
+                        artifact: &item.artifact,
+                        revision: &item.revision,
+                    })
+                });
+                definition_view(
+                    &run.artifact,
+                    run.binding.as_deref(),
+                    name,
+                    *version,
+                    pins,
+                    &registry,
+                )
+            });
         }
         Ok(())
     }
@@ -228,119 +294,5 @@ impl Driver {
             .stored_graph(&run.artifact)
             .await?
             .and_then(|graph| ordered(&graph, &run.entry)))
-    }
-}
-fn definition(
-    run: &RunView,
-    name: &str,
-    version: i64,
-    activations: &Option<Vec<catalog::Activation>>,
-    registry: &BTreeMap<String, (String, i64)>,
-) -> DefinitionView {
-    let candidates = activations.iter().flatten().filter_map(|a| {
-        registry
-            .get(&a.artifact)
-            .filter(|(n, _)| n == name)
-            .map(|(_, v)| (a, *v))
-    });
-    let active = candidates
-        .max_by(|(a, av), (b, bv)| {
-            let own = |x: &catalog::Activation| run.binding.as_ref() == Some(&x.binding);
-            (own(a), a.artifact == run.artifact, *av, &b.binding).cmp(&(
-                own(b),
-                b.artifact == run.artifact,
-                *bv,
-                &a.binding,
-            ))
-        })
-        .map(|(a, v)| ActiveDefinitionView {
-            binding: a.binding.clone(),
-            artifact: a.artifact.clone(),
-            version: v.to_string(),
-            activation_revision: a.revision.clone(),
-        });
-    DefinitionView {
-        name: name.into(),
-        version: version.to_string(),
-        pinned_is_active: activations
-            .as_ref()
-            .map(|_| active.as_ref().is_some_and(|a| a.artifact == run.artifact)),
-        active,
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn run_view(artifact: &str) -> RunView {
-        RunView {
-            id: "r".into(),
-            artifact: artifact.into(),
-            entry: "main".into(),
-            step: "s".into(),
-            status: "waiting".into(),
-            outcome: None,
-            reason: None,
-            root: "r".into(),
-            parent: None,
-            children: vec![],
-            dependencies: BTreeMap::new(),
-            pending_kind: None,
-            admitted_at_ms: 1,
-            definition: None,
-            waiting: None,
-            binding: None,
-            activation_revision: None,
-            pending_intents: vec![],
-        }
-    }
-    fn activation(binding: &str, artifact: &str) -> catalog::Activation {
-        catalog::Activation {
-            binding: binding.into(),
-            artifact: artifact.into(),
-            revision: "3".into(),
-            controls: catalog::Controls {
-                calls_enabled: true,
-                event_starts_enabled: true,
-                execution_enabled: true,
-            },
-            artifact_execution_denied: false,
-        }
-    }
-    #[test]
-    fn definition_view_compares_the_pinned_artifact_with_the_current_activation() {
-        let registry = BTreeMap::from([
-            ("a1".to_string(), ("recovery".to_string(), 1)),
-            ("a2".to_string(), ("recovery".to_string(), 2)),
-            ("x".to_string(), ("other".to_string(), 7)),
-        ]);
-        let superseded = definition(
-            &run_view("a1"),
-            "recovery",
-            1,
-            &Some(vec![activation("main", "a2"), activation("o", "x")]),
-            &registry,
-        );
-        assert_eq!(superseded.version, "1");
-        assert_eq!(superseded.pinned_is_active, Some(false));
-        let active = superseded.active.unwrap();
-        assert_eq!(
-            (active.artifact.as_str(), active.version.as_str()),
-            ("a2", "2")
-        );
-        let current = definition(
-            &run_view("a2"),
-            "recovery",
-            2,
-            &Some(vec![activation("main", "a2")]),
-            &registry,
-        );
-        assert_eq!(current.pinned_is_active, Some(true));
-        let retired = definition(&run_view("a1"), "recovery", 1, &Some(vec![]), &registry);
-        assert_eq!(
-            (retired.pinned_is_active, retired.active),
-            (Some(false), None)
-        );
-        let unknown = definition(&run_view("a1"), "recovery", 1, &None, &registry);
-        assert_eq!((unknown.pinned_is_active, unknown.active), (None, None));
     }
 }
