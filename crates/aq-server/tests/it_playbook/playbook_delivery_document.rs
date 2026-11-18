@@ -222,7 +222,9 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     assert_eq!(authoring::in_flight(&pool).await.unwrap().len(), 1);
     // The document is the Settings value; nothing else needs saving.
     let (read, revision) = aq_role_settings::delivery_document(&pool).await.unwrap();
-    assert_eq!((read.as_str(), revision), (DOCUMENT, 1));
+    // A document's revision is the store revision of its save (as for routing).
+    let saved_revision: i64 = saved["revision"].as_str().unwrap().parse().unwrap();
+    assert_eq!((read.as_str(), revision), (DOCUMENT, saved_revision));
 
     // (3) The artifact the agent saves is put into effect on `aq.delivery`
     // under the source's grant: the server's deployer installs and activates it.
