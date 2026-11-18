@@ -1,7 +1,8 @@
 //! Playbooks view values (G11 X30-X33): definition name and version, the
 //! pinned-versus-active comparison, the ordered public step graph and the
 //! pending human decision. Pure; the reads are in aq-server.
-use aq_playbook_host::model::{Operation, Playbook};
+use crate::{Error, Namespace, Result};
+use aq_playbook_host::model::{CallMode, Expr, IterationFailure, JoinMode, Operation, Playbook};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -64,6 +65,188 @@ pub struct StepNode {
 pub struct Graph {
     pub entries: BTreeMap<String, String>,
     pub steps: BTreeMap<String, StepNode>,
+}
+
+pub fn graph_for_storage(playbook: &Playbook) -> Result<Option<serde_json::Value>> {
+    let graph = serde_json::to_value(graph(playbook))?;
+    Ok((serde_json::to_vec(&graph)?.len() <= 65536).then_some(graph))
+}
+
+pub fn validate_artifact_id(artifact: &str) -> Result<()> {
+    if artifact.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        Ok(())
+    } else {
+        Err(Error::Invalid)
+    }
+}
+
+/// The outer option distinguishes a foreign or unknown artifact from an
+/// installed artifact whose graph exceeded the storage budget.
+pub async fn registered_graph<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    namespace: &Namespace,
+    artifact: &str,
+) -> Result<Option<Option<Graph>>> {
+    let graph: Option<Option<serde_json::Value>> = sqlx::query_scalar("SELECT graph FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND artifact=$3")
+        .bind(namespace.namespace_id)
+        .bind(namespace.generation)
+        .bind(artifact)
+        .fetch_optional(db)
+        .await?;
+    graph
+        .map(|graph| graph.map(serde_json::from_value).transpose())
+        .transpose()
+        .map_err(|_| Error::Unknown)
+}
+
+#[derive(Serialize)]
+pub struct StepFact {
+    label: &'static str,
+    value: String,
+}
+
+fn duration(ms: u64) -> String {
+    let (scale, unit) = [(3_600_000, "h"), (60_000, "min"), (1_000, "s")]
+        .into_iter()
+        .find(|(scale, _)| ms >= *scale && ms.is_multiple_of(*scale))
+        .unwrap_or((1, "ms"));
+    format!("{} {unit}", ms / scale)
+}
+
+/// Static facts for the inspector. Project names, modes and bounds only.
+/// Expressions, literal values, captured definitions and run data stay private.
+pub fn step_facts(playbook: &Playbook) -> BTreeMap<String, Vec<StepFact>> {
+    let facts = playbook
+        .steps
+        .iter()
+        .map(|(id, step)| {
+            let mut facts = Vec::new();
+            let mut add = |label, value: String| facts.push(StepFact { label, value });
+            match &step.op {
+                Operation::Invoke {
+                    input, bind, retry, ..
+                } => {
+                    if let Expr::Object { fields } = input {
+                        add(
+                            "Input fields",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", "),
+                        );
+                    }
+                    add("Stores result as", bind.clone());
+                    if let Some(retry) = retry {
+                        add("Maximum attempts", retry.max_attempts.to_string());
+                    }
+                }
+                Operation::Decide { predicate } => {
+                    let operands = match predicate {
+                        Expr::Eq { left, right } | Expr::Lt { left, right } => {
+                            vec![&**left, &**right]
+                        }
+                        Expr::Exists { value } | Expr::Not { value } => vec![&**value],
+                        expr => vec![expr],
+                    };
+                    for operand in operands {
+                        if let Expr::Ref { root, path } = operand {
+                            add(
+                                "Checks",
+                                std::iter::once(root)
+                                    .chain(path)
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join("."),
+                            );
+                        }
+                    }
+                }
+                Operation::Wait {
+                    correlation,
+                    deadline_ms,
+                    bind,
+                    ..
+                } => {
+                    if !correlation.is_empty() {
+                        add(
+                            "Matches event fields",
+                            correlation.keys().cloned().collect::<Vec<_>>().join(", "),
+                        );
+                    }
+                    add("Deadline", duration(*deadline_ms));
+                    add("Stores result as", bind.clone());
+                }
+                Operation::ForEach {
+                    max_items,
+                    concurrency,
+                    on_failure,
+                    ..
+                } => {
+                    add("Maximum items", max_items.to_string());
+                    add("Parallel iterations", concurrency.to_string());
+                    add(
+                        "On iteration failure",
+                        match on_failure {
+                            IterationFailure::Stop => "Stop",
+                            IterationFailure::Continue => "Continue",
+                        }
+                        .into(),
+                    );
+                }
+                Operation::Call { mode, bind, .. } => {
+                    add(
+                        "Execution",
+                        match mode {
+                            CallMode::Wait => "Wait for the child playbook to finish",
+                            CallMode::OwnedAsync => "Start a child run owned by this run",
+                            CallMode::Independent => "Start a separate run",
+                        }
+                        .into(),
+                    );
+                    add("Stores result as", bind.clone());
+                }
+                Operation::Join {
+                    mode,
+                    deadline_ms,
+                    accepted_outcomes,
+                    bind,
+                    ..
+                } => {
+                    add(
+                        "Waits for",
+                        match mode {
+                            JoinMode::All => "All members to finish",
+                            JoinMode::AnyCompletion => "Any member to finish",
+                            JoinMode::AnyAccepted => "Any member with an accepted outcome",
+                        }
+                        .into(),
+                    );
+                    if !accepted_outcomes.is_empty() {
+                        add(
+                            "Accepted outcomes",
+                            accepted_outcomes
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        );
+                    }
+                    add("Deadline", duration(*deadline_ms));
+                    add("Stores result as", bind.clone());
+                }
+                Operation::Return { outcome, .. } => add("Outcome", outcome.clone()),
+            }
+            (id.clone(), facts)
+        })
+        .filter(|(_, facts)| !facts.is_empty())
+        .collect();
+    if serde_json::to_vec(&facts).is_ok_and(|encoded| encoded.len() <= 32768) {
+        facts
+    } else {
+        BTreeMap::new()
+    }
 }
 /// X32: steps reachable from the run's entry in breadth-first order from
 /// `start` (successors by edge label, then `on_error`).

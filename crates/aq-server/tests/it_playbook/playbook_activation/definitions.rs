@@ -117,8 +117,11 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
         assert!(!page.to_string().contains(private), "leaked {private}");
     }
     // A real later install does not make startup configuration a current catalog.
+    let markdown = "# Task handoff\n\nPerform the **mailbox** workflow.";
     let mut later = original.content.clone();
     later.playbook.purpose = "Later installation, not loaded startup configuration".into();
+    later.source.digest =
+        aq_playbook_authoring::source::artifact_source_digest(&later.source.header, markdown);
     let later = Artifact::seal(later).unwrap();
     runtime.driver.install(later.clone()).await.unwrap();
     let (_, after) = read(&app, "owner@localhost", "").await;
@@ -140,11 +143,29 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
     assert_eq!(unlocked_read["items"], page["items"]);
     let graph_path =
         |artifact: &str| format!("/api/playbooks/inspection/definitions/{artifact}/graph");
+    let unknown = format!("sha256:{}", "0".repeat(64));
+    sqlx::query("INSERT INTO playbook_sources(id,kind,binding,scope,purpose,judgment_purpose,commands,events,capabilities,facts,markdown,revision,updated_at_ms) VALUES('test-handoff','registered','test-handoff','project','Task handoff','routing_classification','[]','[]','[]','[]','Draft, never compiled',2,1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for pin in [&later.digest, &unknown] {
+        sqlx::query("INSERT INTO playbook_authoring_runs(source_id,source_revision,source_digest,facts_digest,record_digest,status,artifact_digest,artifact,markdown,created_at_ms) VALUES('test-handoff',1,$1,$1,$1,'saved',$2,$3,$4,1)")
+            .bind(aq_playbook_authoring::source::source_digest(markdown))
+            .bind(pin)
+            .bind(serde_json::to_value(&later).unwrap())
+            .bind(markdown)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     let (status, compiled) = get(&app, "owner@localhost", &graph_path(&later.digest)).await;
     assert_eq!(status, 200, "{compiled}");
     assert_eq!(compiled["api_version"], "playbooks-definition-graph-1");
     assert_eq!(compiled["artifact"], later.digest);
     assert_eq!(compiled["namespace"], page["namespace"]);
+    assert_eq!(compiled["description_markdown"], markdown);
+    assert!(compiled["step_facts"].is_object());
+    assert!(!compiled.to_string().contains("Draft, never compiled"));
     assert_eq!(
         compiled["graph"],
         serde_json::to_value(aq_server::playbooks::inspection::playbook_view::graph(
@@ -152,16 +173,9 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
         ))
         .unwrap()
     );
-    assert_eq!(
-        get(
-            &app,
-            "owner@localhost",
-            &graph_path(&format!("sha256:{}", "0".repeat(64)))
-        )
-        .await
-        .1["graph"],
-        Value::Null
-    );
+    let (_, unknown) = get(&app, "owner@localhost", &graph_path(&unknown)).await;
+    assert_eq!(unknown["graph"], Value::Null);
+    assert!(unknown.get("description_markdown").is_none());
     assert_eq!(
         get(&app, "owner@localhost", &graph_path("bad-digest"))
             .await
