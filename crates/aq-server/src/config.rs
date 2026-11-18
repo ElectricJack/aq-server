@@ -74,6 +74,10 @@ pub struct Config {
     /// Playbook authoring (spec 0013): `[playbook_authoring]`, all defaulted.
     #[serde(default)]
     pub playbook_authoring: aq_playbook_authoring::Config,
+    /// Epic 0 (spec 0016) `[delivery]`; without `[delivery.github]` the adapter is unavailable.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, deserialize_with = "aq_delivery::github::deserialize")]
+    pub delivery: Option<aq_delivery::github::DeliveryConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,6 +442,8 @@ mod tests {
             provider_quota: vec![],
             internal_work: None,
             playbook_authoring: Default::default(),
+            #[cfg(feature = "delivery_playbook")]
+            delivery: None,
         }
     }
 
