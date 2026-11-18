@@ -1619,7 +1619,7 @@ mod delivery {
             host_adapters::HostResult,
             review_domain::{
                 CatalogProfile, DELIVERY_COMMANDS, HOST9_CAPABILITIES, HOST10_CAPABILITIES,
-                HOST10_FINGERPRINT, HOST10_VERSION,
+                HOST10_DELIVERY_CAPABILITIES, HOST10_FINGERPRINT, HOST10_VERSION,
             },
             service::*,
         },
@@ -1632,6 +1632,15 @@ mod delivery {
         sync::{Arc, Mutex, atomic::Ordering},
     };
     use uuid::Uuid;
+
+    /// Everything a Host10 grant may name.
+    fn host10_capabilities() -> BTreeSet<String> {
+        HOST10_CAPABILITIES
+            .iter()
+            .chain(&HOST10_DELIVERY_CAPABILITIES)
+            .map(|c| c.to_string())
+            .collect()
+    }
 
     #[test]
     fn host10_is_the_pinned_catalog_and_adds_the_event_and_the_result_facts() {
@@ -1681,7 +1690,7 @@ mod delivery {
         assert_eq!(served[16..], DELIVERY_COMMANDS);
         // Their capabilities are admitted in a Host10 grant and not in a Host9 one.
         let delivery = GrantScope {
-            capabilities: HOST10_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
+            capabilities: host10_capabilities(),
             ..scope.clone()
         };
         assert!(host10.validate_scope(&delivery).is_ok());
@@ -1812,7 +1821,7 @@ mod delivery {
             workspace_id: l.workspace_id,
             project_id: l.project_id,
             recipients: vec![],
-            capabilities: BTreeSet::from(HOST10_CAPABILITIES.map(String::from)),
+            capabilities: host10_capabilities(),
         };
         let grant = Uuid::new_v4();
         // The longest grant `Service::grant` admits (24 h): the tests move the clock by hours.
@@ -2333,10 +2342,8 @@ mod delivery {
                 log: Mutex::default(),
                 checks: Mutex::new((ChecksState::Pending, vec![])),
             });
-            h.service = h
-                .service
-                .clone()
-                .with_delivery_ops(Arc::new(Ops(fake.clone())));
+            // By value: the port of a shared (cloned) service is not replaced.
+            h.service = h.service.with_delivery_ops(Arc::new(Ops(fake.clone())));
             (h, fake)
         }
         impl D {

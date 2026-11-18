@@ -1,0 +1,147 @@
+{
+  "purpose": "Read the task whose result is ready, and end",
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "project": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "result": {
+            "type": "string",
+            "max_length": 4096
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          }
+        },
+        "required": [
+          "task",
+          "project",
+          "result",
+          "version"
+        ]
+      },
+      "outcomes": {
+        "delivered": {
+          "type": "null"
+        },
+        "failed": {
+          "type": "null"
+        }
+      },
+      "start": "read"
+    }
+  },
+  "triggers": [
+    {
+      "id": "result-ready",
+      "event": "aq.work.result_ready",
+      "entry": "main",
+      "input": {
+        "op": "object",
+        "fields": {
+          "task": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "task_id"
+            ]
+          },
+          "project": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "project_id"
+            ]
+          },
+          "result": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "result_id"
+            ]
+          },
+          "version": {
+            "op": "ref",
+            "root": "event",
+            "path": [
+              "version"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "steps": {
+    "read": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.read",
+        "bind": "facts_of",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "subject": {
+              "op": "object",
+              "fields": {
+                "id": {
+                  "op": "ref",
+                  "root": "input",
+                  "path": [
+                    "task"
+                  ]
+                },
+                "revision": {
+                  "op": "ref",
+                  "root": "input",
+                  "path": [
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "edges": {
+        "observed": "delivered",
+        "refused": "delivered"
+      },
+      "on_error": "failed"
+    },
+    "delivered": {
+      "op": {
+        "kind": "return",
+        "outcome": "delivered",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "literal",
+          "value": null
+        }
+      },
+      "edges": {},
+      "on_error": null
+    }
+  }
+}

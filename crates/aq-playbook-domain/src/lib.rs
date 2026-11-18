@@ -1,5 +1,6 @@
 //! Fixed host contracts and typed grant scope. No generic SQL/endpoint/command proxy.
 pub mod artifacts;
+pub mod catalog_view;
 pub mod coding;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
@@ -22,6 +23,40 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+/// One playbook namespace generation and what it is scoped to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Namespace {
+    pub namespace_id: Uuid,
+    pub generation: i64,
+    pub name: String,
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub owner_user_id: Uuid,
+}
+impl Namespace {
+    pub fn validate(&self) -> Result<()> {
+        if [
+            self.namespace_id,
+            self.workspace_id,
+            self.project_id,
+            self.owner_user_id,
+        ]
+        .iter()
+        .any(Uuid::is_nil)
+            || self.generation <= 0
+            || self.name.is_empty()
+            || self.name.len() > 128
+            || self.name.contains('\0')
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+    pub fn engine_namespace(&self) -> String {
+        format!("aq/{}/{}", self.namespace_id, self.generation)
+    }
+}
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("playbook_invalid_request")]

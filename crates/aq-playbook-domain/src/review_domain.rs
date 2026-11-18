@@ -130,29 +130,20 @@ pub const HOST10_VERSION: &str = "2.3.0";
 #[cfg(feature = "delivery_playbook")]
 pub const HOST10_FINGERPRINT: &str =
     "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a";
-/// What a Host10 namespace admits in a grant: the sixteen capabilities of
-/// Host9 and the six asynchronous delivery commands of catalog 2.3.0
-/// (`main.sync`, `branch.publish`, `pull_request.*`). The other commands of
-/// the catalog (`work.complete`, `work.return`, ...) are served, and their
-/// capabilities admitted, by the tasks that implement them.
+/// What a Host10 namespace admits in a grant besides the delivery
+/// capabilities below: the sixteen capabilities of Host9.
 #[cfg(feature = "delivery_playbook")]
-pub const HOST10_CAPABILITIES: [&str; 22] = [
-    "context.read",
-    "work.ensure",
-    "work.change",
-    "operation.cancel",
-    "operation.get",
-    "judgment.request.v2",
-    "check.request.v2",
-    "candidate.prepare",
-    "candidate.publish",
-    "findings.reconcile",
-    "message.send",
-    "decision.request",
-    "work.read",
-    "work.route",
-    "work.unroutable",
-    "judgment.assess",
+pub const HOST10_CAPABILITIES: [&str; 16] = HOST9_CAPABILITIES;
+/// The capabilities of the ten delivery commands of catalog 2.3.0. A Host10
+/// grant may name them, so that the built-in `delivery` source (spec 0016 §8)
+/// can hold a grant for the playbook its document is authored into; whether a
+/// command is served is the business of the task that implements it.
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
     "main.sync",
     "branch.publish",
     "pull_request.open",
@@ -301,15 +292,6 @@ fn host5_registry() -> Registry {
             registry
         })
         .clone()
-}
-/// What a catalog 2.3.0 grant may name (only reached with the feature
-/// `delivery_playbook`; `is_delivery` is false without it).
-fn delivery_capabilities() -> BTreeSet<String> {
-    #[cfg(feature = "delivery_playbook")]
-    let all = HOST10_CAPABILITIES.iter();
-    #[cfg(not(feature = "delivery_playbook"))]
-    let all = HOST9_CAPABILITIES.iter();
-    all.map(|c| c.to_string()).collect()
 }
 impl CatalogProfile {
     pub fn number(self) -> i16 {
@@ -482,9 +464,7 @@ impl CatalogProfile {
             return scope.validate();
         }
         if self.is_host() {
-            let mut allowed: BTreeSet<String> = if self.is_delivery() {
-                delivery_capabilities()
-            } else if self.has_routing() {
+            let mut allowed: BTreeSet<String> = if self.has_routing() {
                 HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect()
             } else if self.is_host2() {
                 HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
@@ -493,6 +473,10 @@ impl CatalogProfile {
             };
             if self == Self::Monitoring6 {
                 allowed.insert("findings.reconcile".into());
+            }
+            #[cfg(feature = "delivery_playbook")]
+            if self.is_delivery() {
+                allowed.extend(HOST10_DELIVERY_CAPABILITIES.iter().map(|c| c.to_string()));
             }
             if scope.workspace_id.is_nil()
                 || scope.project_id.is_nil()

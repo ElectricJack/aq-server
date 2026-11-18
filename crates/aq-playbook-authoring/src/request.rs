@@ -54,6 +54,28 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
     }
 }
 
+/// The catalog a source is authored against, whole: catalog 2.3.0 for the
+/// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
+/// every other.
+pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
+    #[cfg(feature = "delivery_playbook")]
+    if record.id == crate::builtin::DELIVERY {
+        return serde_json::from_str(docs::CATALOG_2_3_REGISTRY)
+            .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()));
+    }
+    let _ = record;
+    Ok(docs::catalog_registry())
+}
+
+/// `CATALOG.md` of the catalog `record` is authored against.
+fn catalog_notes(record: &SourceRecord) -> Result<String> {
+    #[cfg(feature = "delivery_playbook")]
+    if record.id == crate::builtin::DELIVERY {
+        return docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid);
+    }
+    docs::catalog(&record.commands, &record.events).map_err(Error::Invalid)
+}
+
 /// `catalog` kept to what the record allows (and what those commands need).
 pub fn catalog_for(record: &SourceRecord, catalog: &Registry) -> Result<Registry> {
     draft::retain_registry(catalog, &record.commands, &record.events)
@@ -105,10 +127,7 @@ pub fn workspace_files(
     put(draft::FACTS_FILE, pretty(facts)?);
     put("GUIDE.md", docs::GUIDE.to_owned());
     put("LANGUAGE.md", docs::LANGUAGE.to_owned());
-    put(
-        "CATALOG.md",
-        docs::catalog(&record.commands, &record.events).map_err(Error::Invalid)?,
-    );
+    put("CATALOG.md", catalog_notes(record)?);
     for (path, text) in docs::example_files() {
         put(&format!("examples/{path}"), text.to_owned());
     }
