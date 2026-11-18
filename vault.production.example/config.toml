@@ -128,3 +128,34 @@ spool_dir = "/updater"
 # entry like the Claude one in docs/implementation/MS1-evidence/intelligence.toml:
 # kind = "subscription-login", provider = "openai", delivery_mode =
 # "server_material_v1", and docker-local among its allowed backends.
+#
+# Observation sources (the accounting catalog). One entry per (provider,
+# harness) the installation runs. Without an entry the server enrolls no
+# observation source for that harness's sessions: their batches are refused,
+# `observation_events` stays empty and stall detection cannot tell a working
+# session from a stuck one (the server warns at startup and on each offer).
+# `reference` and `layout.policy` are the owner's names for this policy; the
+# worker derives the session's source identity from `reference`, which the
+# launch delivers. `parsers[].parser` and `category_claim` must equal the
+# parser reference the worker's observation engine stamps on its events, digest
+# included: the digests below are aq-worker cfa36431
+# (crates/aq-observation-engine) and change when its parser sources change.
+# No `complete_accounting_evidence`: usage from these parsers is recorded as
+# incomplete. Transcript formats: Claude session JSONL
+# (`claude-jsonl-v1-reference-9a9b8e8`), Codex rollout JSONL
+# (`codex-rollout-jsonl-67f0994`). This table is not part of the registry
+# digest: changing it needs a restart, not a higher `revision`.
+#
+# [[intelligence.accounting.sources]]
+# provider = "anthropic"
+# harness = "claude"
+# reference = { id = "aq.accounting.source/anthropic-claude", version = "1", digest = "5c0e1545dddee8d9735a0b1fbe3fc626ce451c551677b8472c3ffa43c6130e9a" }
+# layout = { policy = { id = "aq.accounting.layout/anthropic-claude", version = "1", digest = "21b3da45a7965ffd140b8349eddbc9930b3b7210e528ce69ff6cd0e0f08341c5" }, input_includes_cache_read = false, input_includes_cache_write = false, output_includes_reasoning = true }
+# parsers = [{ parser = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "3b4c8920ee0fa58d587a3431d0dcef31f49d3490f063775febd5642054b92251" }, category_claim = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "3b4c8920ee0fa58d587a3431d0dcef31f49d3490f063775febd5642054b92251" }, priority = 1 }]
+#
+# [[intelligence.accounting.sources]]
+# provider = "openai"
+# harness = "codex"
+# reference = { id = "aq.accounting.source/openai-codex", version = "1", digest = "cc53012efa6d7e3261f1340fe802957071478a3a53752c9bd5ad51ddeb3afa66" }
+# layout = { policy = { id = "aq.accounting.layout/openai-codex", version = "1", digest = "aaf8d0c5919f5b6a6dc4f0af60a2c381b493943256b0b17180de9a782fd7f819" }, input_includes_cache_read = true, input_includes_cache_write = false, output_includes_reasoning = true }
+# parsers = [{ parser = { id = "codex-rollout-67f0994", version = "0.0.1-engine", digest = "048a19804f680b53ed5a14bc33f65984b4842da457c3bf42e1c443ccd9e5cad9" }, category_claim = { id = "codex-rollout-67f0994", version = "0.0.1-engine", digest = "048a19804f680b53ed5a14bc33f65984b4842da457c3bf42e1c443ccd9e5cad9" }, priority = 1 }]
