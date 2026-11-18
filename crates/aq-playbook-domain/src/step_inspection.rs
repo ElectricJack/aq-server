@@ -18,8 +18,6 @@ pub(super) struct StepInspection {
     summary: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     uses: Vec<FieldUse>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    branches: Vec<Branch>,
 }
 
 #[derive(Clone, Serialize)]
@@ -28,31 +26,6 @@ struct FieldUse {
     consumer: String,
     paths: Vec<String>,
     purpose: &'static str,
-}
-
-#[derive(Serialize)]
-struct Branch {
-    label: String,
-    to: String,
-    error: bool,
-    reason: &'static str,
-}
-
-impl StepInspection {
-    fn outcome(&mut self, graph: &Graph, id: &str, label: &str, reason: &'static str) {
-        if let Some(edge) = graph.steps[id]
-            .edges
-            .iter()
-            .find(|edge| edge.label == label)
-        {
-            self.branches.push(Branch {
-                label: edge.label.clone(),
-                to: edge.to.clone(),
-                error: false,
-                reason,
-            });
-        }
-    }
 }
 
 /// Only use copy reviewed for a command whose full pinned contract matches
@@ -205,9 +178,8 @@ fn decision_field<'a>(
     sources: &BTreeMap<&str, Source<'a>>,
     id: &str,
     predicate: &Expr,
-    graph: &Graph,
-    inspection: &mut StepInspection,
-) -> Option<Field<'a>> {
+    skips_on_match: bool,
+) -> Option<(Field<'a>, String)> {
     let Expr::Eq { left, right } = predicate else {
         return None;
     };
@@ -218,42 +190,25 @@ fn decision_field<'a>(
         _ => return None,
     };
     let path = &field.path;
-    let (summary, yes, no) = match (field.name, value.as_str()) {
-        ("route", Some("owner")) => (
-            format!(
-                "Checks whether an owner already set the task's route by comparing {path} with owner."
-            ),
-            "An owner already set the task's route.",
-            "The task has no route or its route was set by the router.",
+    let summary = match (field.name, value.as_str()) {
+        ("route", Some("owner")) => {
+            let mut description = format!(
+                "Checks whether an owner has already chosen the route for this task. It compares {path}, which came from the task lookup, with owner."
+            );
+            if skips_on_match {
+                description.push_str(" This keeps a manually chosen route in place.");
+            }
+            description
+        }
+        ("route", Some("router")) => format!(
+            "Checks whether the automatic router chose the current route by comparing {path} with router."
         ),
-        ("route", Some("router")) => (
-            format!(
-                "Checks whether the router already set the task's route by comparing {path} with router."
-            ),
-            "The router already set the task's route.",
-            "The task has no route or its route was set by an owner.",
-        ),
-        ("route", Some("none")) => (
-            format!("Checks whether the task has no route by comparing {path} with none."),
-            "The task has no route.",
-            "An owner or the router already set the task's route.",
-        ),
-        _ => (
-            format!("Checks whether {path} matches the configured value."),
-            "The values match.",
-            "The values differ.",
-        ),
+        ("route", Some("none")) => {
+            format!("Checks whether the task has no route by comparing {path} with none.")
+        }
+        _ => format!("Checks whether {path} matches the configured value."),
     };
-    inspection.summary = Some(summary);
-    inspection.outcome(graph, id, "true", yes);
-    inspection.outcome(graph, id, "false", no);
-    inspection.outcome(
-        graph,
-        id,
-        "unknown",
-        "The condition could not be evaluated.",
-    );
-    Some(field)
+    Some((field, summary))
 }
 
 fn field<'a>(expr: &'a Expr, key: &str) -> Option<&'a Expr> {
@@ -277,6 +232,37 @@ fn assessment_fields<'a>(
         .iter()
         .filter_map(|item| public_field(sources, id, field(item, "text")?))
         .collect()
+}
+
+fn assessment_summary(input: &Expr, uses: &[Field<'_>]) -> String {
+    let task_details = uses.first().is_some_and(|first| {
+        uses.iter().all(|field| field.producer == first.producer)
+            && uses.iter().map(|field| field.name).collect::<BTreeSet<_>>()
+                == BTreeSet::from(["title", "description", "kind"])
+    });
+    let question = match field(input, "fields") {
+        Some(Expr::Literal { value }) => {
+            let labels: BTreeSet<_> = value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["id"].as_str())
+                .collect();
+            if labels.contains("kind") && labels.contains("risk") {
+                "Asks an agent to classify the kind of work and assess its risk."
+            } else {
+                "Asks an agent to make the assessment configured for this step."
+            }
+        }
+        _ => "Asks an agent to evaluate the supplied context.",
+    };
+    if task_details {
+        format!(
+            "{question} The agent uses the task's title, description, and declared kind from the earlier task lookup."
+        )
+    } else {
+        question.into()
+    }
 }
 
 fn record_uses<'a>(
@@ -319,79 +305,43 @@ pub(super) fn project(
     let sources = sources(artifact, graph);
     let mut inspection = BTreeMap::<String, StepInspection>::new();
     for (id, step) in &artifact.playbook.steps {
-        let mut detail = StepInspection::default();
-        let mut usages = Vec::new();
-        let mut purpose = "Decision input";
-        match (reviewed_command(artifact, &step.op), &step.op) {
+        let summary = match (reviewed_command(artifact, &step.op), &step.op) {
             (Some(READ), Operation::Invoke { .. }) => {
-                detail.summary = Some(
-                    "Uses the task ID in subject to read the task's current details and revision."
-                        .into(),
-                );
-                detail.outcome(
-                    graph,
-                    id,
-                    "observed",
-                    "The host found the task and returned its details.",
-                );
-                detail.outcome(
-                    graph,
-                    id,
-                    "refused",
-                    "The task is unknown or its project does not use automatic routing.",
-                );
-                if let Some(to) = &graph.steps[id].on_error {
-                    detail.branches.push(Branch {
-                        label: "On error".into(),
-                        to: to.clone(),
-                        error: true,
-                        reason: "The step could not proceed, for example because its input was invalid or the runtime rejected the command.",
-                    });
-                }
+                "Looks up the task for this run and reads its current title, description, declared kind, and who set any existing route.".into()
             }
             (Some(ASSESS), Operation::Invoke { input, .. }) => {
-                usages = assessment_fields(&sources, id, input);
-                purpose = "Assessment context";
-                let names: BTreeSet<_> = usages.iter().map(|field| field.name).collect();
-                detail.summary = Some(
-                    if names == BTreeSet::from(["title", "description", "kind"]) {
-                        "Requests a model assessment using the task's title, description, and kind."
-                    } else {
-                        "Requests a model assessment using the context supplied to this step."
-                    }
-                    .into(),
-                );
-                detail.outcome(
-                    graph,
-                    id,
-                    "accepted",
-                    "The host queued the assessment and returned a handle.",
-                );
-                detail.outcome(
-                    graph,
-                    id,
-                    "assessed",
-                    "A completed assessment was available.",
-                );
-                detail.outcome(graph, id, "failed", "The host could not get a usable assessment, for example because the provider was unavailable or the deadline passed.");
-                detail.outcome(graph, id, "refused", "The request did not run, for example because it exceeded the host's budget cap.");
+                let usages = assessment_fields(&sources, id, input);
+                let summary = assessment_summary(input, &usages);
+                record_uses(&mut inspection, id, usages, "Assessment context");
+                summary
             }
             (_, Operation::Decide { predicate }) => {
-                if let Some(field) = decision_field(&sources, id, predicate, graph, &mut detail) {
-                    if field.name == "route" {
-                        purpose = "Route check";
-                    }
-                    usages.push(field);
-                }
+                let skips_on_match = step.edges.get("true")
+                    .and_then(|target| artifact.playbook.steps.get(target))
+                    .is_some_and(|target| matches!(&target.op, Operation::Return { outcome, .. } if outcome == "skipped"));
+                let Some((field, summary)) = decision_field(&sources, id, predicate, skips_on_match) else { continue };
+                let purpose = if field.name == "route" { "Route check" } else { "Decision input" };
+                record_uses(&mut inspection, id, [field], purpose);
+                summary
             }
-            _ => {}
+            _ => continue,
+        };
+        inspection.entry(id.clone()).or_default().summary = Some(summary);
+    }
+    for (id, detail) in &mut inspection {
+        let used_by_assessment = detail.uses.iter().any(|usage| {
+            usage.producer == *id
+                && usage.purpose == "Assessment context"
+                && ["title", "description", "kind"].into_iter().all(|field| {
+                    usage.paths.iter().any(|path| {
+                        path.rsplit_once(".facts.")
+                            .is_some_and(|(_, name)| name == field)
+                    })
+                })
+        });
+        if used_by_assessment && let Some(summary) = &mut detail.summary {
+            summary.push_str("\n\nIf the workflow requests an assessment, the agent uses those details to understand the work.");
         }
-        if detail.summary.is_some() || !detail.branches.is_empty() {
-            let stored = inspection.entry(id.clone()).or_default();
-            stored.summary = detail.summary;
-            stored.branches = detail.branches;
-        }
-        record_uses(&mut inspection, id, usages, purpose);
     }
     if serde_json::to_vec(&inspection).is_ok_and(|encoded| encoded.len() <= MAX_INSPECTION_BYTES) {
         inspection
@@ -431,35 +381,21 @@ mod tests {
             "label": {"op": "literal", "value": "PRIVATE_CONTEXT_LABEL"},
             "text": {"op": "ref", "root": "task", "path": ["facts", "kind"]}
         }}));
+        context["fields"]["value"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "kind"}));
         context["question"]["value"] = json!("PRIVATE_PROMPT");
 
         let result = details(raw);
         let view = &result["step_inspection"];
         assert_eq!(
             view["owned"]["summary"],
-            "Checks whether an owner already set the task's route by comparing task.facts.route with owner."
+            "Checks whether an owner has already chosen the route for this task. It compares task.facts.route, which came from the task lookup, with owner. This keeps a manually chosen route in place."
         );
-        assert!(view["owned"]["branches"].as_array().unwrap().iter().any(|edge| edge == &json!({"label":"false","to":"triage","error":false,"reason":"The task has no route or its route was set by the router."})));
-        assert!(
-            view["read"]["branches"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|edge| edge["label"] == "refused"
-                    && edge["to"] == "skipped"
-                    && edge["reason"]
-                        .as_str()
-                        .unwrap()
-                        .contains("automatic routing"))
-        );
-        assert!(
-            view["read"]["branches"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|edge| edge["label"] == "On error"
-                    && edge["to"] == "failed"
-                    && edge["error"] == true)
+        assert_eq!(
+            view["read"]["summary"],
+            "Looks up the task for this run and reads its current title, description, declared kind, and who set any existing route.\n\nIf the workflow requests an assessment, the agent uses those details to understand the work."
         );
         let use_in_ask = json!({"producer":"read","consumer":"ask","paths":["task.facts.title","task.facts.description","task.facts.kind"],"purpose":"Assessment context"});
         assert_eq!(view["ask"]["uses"][0], use_in_ask);
@@ -471,7 +407,7 @@ mod tests {
         );
         assert_eq!(
             view["ask"]["summary"],
-            "Requests a model assessment using the task's title, description, and kind."
+            "Asks an agent to classify the kind of work and assess its risk. The agent uses the task's title, description, and declared kind from the earlier task lookup."
         );
         assert!(!result.to_string().contains("PRIVATE_"));
     }
@@ -484,7 +420,7 @@ mod tests {
         let changed = details(raw.clone());
         assert_eq!(
             changed["step_inspection"]["owned"]["summary"],
-            "Checks whether the router already set the task's route by comparing task.facts.route with router."
+            "Checks whether the automatic router chose the current route by comparing task.facts.route with router."
         );
         raw["content"]["playbook"]["steps"]["owned"]["op"]["predicate"]["right"]["value"] =
             json!("PRIVATE_COMPARISON");
