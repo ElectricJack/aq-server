@@ -13,6 +13,7 @@ struct Scope {
 pub(super) fn routes() -> Router<Service> {
     Router::new()
         .route("/api/manual-agents", get(list))
+        .route("/api/manual-agents/{id}", get(detail))
         .route(
             "/api/manual-agents/workers/{node}/projects/{project}",
             post(start),
@@ -25,6 +26,15 @@ pub(super) fn routes() -> Router<Service> {
         .merge(terminal::routes())
         .layer(DefaultBodyLimit::max(16384))
 }
+async fn detail(
+    State(s): State<Service>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Session>> {
+    (s.owner)(headers).await?;
+    Ok(Json(session(&s, id).await?))
+}
+
 async fn binding(s: &Service, id: Uuid) -> Result<Value> {
     let b: Option<Value> =
         sqlx::query_scalar("SELECT binding FROM project_execution_bindings WHERE project_id=$1")
