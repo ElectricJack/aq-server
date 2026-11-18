@@ -4,6 +4,7 @@
 use super::*;
 use crate::intelligence::config::LoadedRegistry;
 use aq_accounting::pricing::RateCardBook;
+use aq_admission::observation_source;
 
 /// The configured rate-card book; empty when no registry is configured.
 pub fn rate_book(state: &AppState) -> RateCardBook {
@@ -19,27 +20,6 @@ fn scoped(tag: &str, provider: &str, account: &str) -> Result<Digest> {
     Ok(Digest::of(
         &serde_json::to_vec(&json!([tag, provider, account])).map_err(|_| Error::Invalid)?,
     ))
-}
-
-/// Deterministic per (attempt, generation, catalog entry) so registration is idempotent.
-fn source_id(attempt: Uuid, generation: u64, entry: &ArtifactRef) -> Result<Uuid> {
-    let bytes = serde_json::to_vec(&json!([
-        "aq.observation-source/v1",
-        attempt,
-        generation,
-        entry
-    ]))
-    .map_err(|_| Error::Invalid)?;
-    let digest = Digest::of(&bytes);
-    let hex = digest.as_str().rsplit(':').next().unwrap_or_default();
-    let mut id = [0u8; 16];
-    for (i, b) in id.iter_mut().enumerate() {
-        *b = u8::from_str_radix(hex.get(i * 2..i * 2 + 2).ok_or(Error::Invalid)?, 16)
-            .map_err(|_| Error::Invalid)?;
-    }
-    id[6] = (id[6] & 0x0f) | 0x80; // version 8 (custom, name-derived)
-    id[8] = (id[8] & 0x3f) | 0x80; // RFC 4122 variant
-    Ok(Uuid::from_bytes(id))
 }
 
 /// Pure derivation at `generation`. `None` when the catalog does not cover the
@@ -73,9 +53,12 @@ pub fn owner_source(
     let text = |s: &str| Text::new(s).map_err(|_| Error::Invalid);
     let attempt = binding.attempt_id;
     let source = OwnerSource {
-        source_id: source_id(attempt, generation, &entry.reference)?,
+        // Shared with the worker, which derives both from the delivered entry.
+        source_id: observation_source::source_id(attempt, generation, &entry.reference)
+            .map_err(|_| Error::Invalid)?,
         generation,
-        native_session_key: text(&format!("aq.attempt/{attempt}/{generation}"))?,
+        native_session_key: observation_source::session_key(attempt, generation)
+            .map_err(|_| Error::Invalid)?,
         account_claim: text(&choice.account_reference)?,
         policy: Policy {
             reference: entry.reference.clone(),
