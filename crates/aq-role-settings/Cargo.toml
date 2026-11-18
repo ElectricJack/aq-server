@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# Epic 0 (spec 0016): the delivery document and delivery limits.
+delivery_playbook = []
+
 [dependencies]
 aq-profiles = { path = "../aq-profiles" }
 axum.workspace = true
