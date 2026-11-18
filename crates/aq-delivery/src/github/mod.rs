@@ -4,6 +4,7 @@
 //! playbook decides what to do. No token is ever logged or put in an error.
 mod auth;
 mod client;
+mod pulls;
 
 pub use auth::{AppCredentials, AppJwtClaims, InstallationToken};
 pub use client::{Auth, GitHubClient};
