@@ -54,6 +54,9 @@ impl DeliveryPort for Port {
     async fn bound(&self, _: Uuid) -> DomainResult<bool> {
         Ok(true)
     }
+    async fn has_result(&self, task: Uuid, result: Uuid) -> DomainResult<bool> {
+        Ok(task == self.0.task_id && result == self.0.result_id)
+    }
 }
 
 /// `PUT` of the owner's delivery document, as the Settings page sends it.

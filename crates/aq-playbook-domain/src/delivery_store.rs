@@ -63,6 +63,8 @@ pub trait DeliveryPort: Send + Sync {
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
     /// Whether the server runs tasks of `project` (it has an execution binding).
     async fn bound(&self, project: Uuid) -> Result<bool>;
+    /// Whether `result` is a result of `task`, its latest or an earlier one.
+    async fn has_result(&self, task: Uuid, result: Uuid) -> Result<bool>;
 }
 
 /// Production port: the server's own database.
@@ -164,6 +166,17 @@ impl DeliveryPort for PgDelivery {
             "SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE project_id=$1)",
         )
         .bind(project)
+        .fetch_one(&self.0)
+        .await?)
+    }
+
+    async fn has_result(&self, task: Uuid, result: Uuid) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM profiled_result_reports r \
+             JOIN execution_attempts a ON a.attempt_id=r.attempt_id WHERE r.report_id=$2 AND a.task_id=$1)",
+        )
+        .bind(task)
+        .bind(result)
         .fetch_one(&self.0)
         .await?)
     }

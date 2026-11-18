@@ -130,11 +130,11 @@ pub const HOST10_VERSION: &str = "2.3.0";
 #[cfg(feature = "delivery_playbook")]
 pub const HOST10_FINGERPRINT: &str =
     "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a";
-/// What a Host10 namespace admits in a grant: the sixteen capabilities of
-/// Host9. The ten delivery commands of the catalog (`work.complete`,
-/// `work.return`, ...) are served, and their capabilities admitted, by the
-/// tasks that implement them; this profile serves `work.read` 2.3.0 and the
-/// event `aq.work.result_ready`.
+/// The delivery commands of catalog 2.3.0 a Host10 namespace serves so far,
+/// beside `work.read` 2.3.0 and the event `aq.work.result_ready`. Each is its
+/// own capability. The other six (`main.sync`, `branch.publish`, the
+/// `pull_request` commands) are served, and their capabilities admitted, by
+/// the tasks that implement them.
 #[cfg(feature = "delivery_playbook")]
 pub const HOST10_CAPABILITIES: [&str; 16] = HOST9_CAPABILITIES;
 /// The capabilities of the ten delivery commands of catalog 2.3.0. A Host10
@@ -154,9 +154,31 @@ pub const HOST10_DELIVERY_CAPABILITIES: [&str; 10] = [
     "pull_request.merge",
     "pull_request.close",
 ];
+/// The delivery commands a Host10 namespace serves so far (Epic 0 S8).
+#[cfg(feature = "delivery_playbook")]
+pub const HOST10_DELIVERY_COMMANDS: [&str; 4] = [
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+];
 /// The commands a Host10 namespace serves (see [`HOST10_CAPABILITIES`]).
 #[cfg(feature = "delivery_playbook")]
-pub const HOST10_COMMANDS: [&str; 16] = HOST9_COMMANDS;
+pub const HOST10_COMMANDS: [&str; 20] = concat4(HOST9_COMMANDS, HOST10_DELIVERY_COMMANDS);
+#[cfg(feature = "delivery_playbook")]
+const fn concat4(base: [&'static str; 16], more: [&'static str; 4]) -> [&'static str; 20] {
+    let mut out = [""; 20];
+    let mut i = 0;
+    while i < 16 {
+        out[i] = base[i];
+        i += 1;
+    }
+    while i < 20 {
+        out[i] = more[i - 16];
+        i += 1;
+    }
+    out
+}
 #[cfg(feature = "delivery_playbook")]
 fn host10_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();

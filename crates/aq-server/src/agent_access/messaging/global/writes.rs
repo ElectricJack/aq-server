@@ -352,24 +352,40 @@ pub(crate) async fn system_message(
     }
     let mut tx = pool.begin().await.map_err(db)?;
     sqlx::query("SELECT set_config('statement_timeout','1000ms',true),set_config('lock_timeout','500ms',true)").execute(&mut *tx).await.map_err(db)?;
+    let message = system_message_in(&mut tx, project, body, at_ms).await?;
+    tx.commit().await.map_err(db)?;
+    Ok(message)
+}
+/// [`system_message`] in the caller's transaction, which commits it (with
+/// whatever else it records, such as the once-only row of a playbook's
+/// `supervisor.notify`) or drops it unsent.
+pub(crate) async fn system_message_in(
+    tx: &mut Transaction<'_, Postgres>,
+    project: Option<Uuid>,
+    body: &str,
+    at_ms: u64,
+) -> Result<Uuid> {
+    if body.trim().is_empty() || body.len() > 16384 || body.contains('\0') || at_ms == 0 {
+        return Err(invalid());
+    }
     let scoped: Option<Uuid> = match project {
         Some(p) => sqlx::query_scalar(
             "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
         )
         .bind(p)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await
         .map_err(db)?,
         None => None,
     };
-    let conversation = definition(&mut tx, scoped, true).await?.id;
+    let conversation = definition(tx, scoped, true).await?.id;
     let sender = json!({"kind":"system","component":"internal_work"});
     let sender_key = sender_key(&sender).map_err(|_| unavailable())?;
     let (operation, message) = (Uuid::new_v4(), Uuid::new_v4());
     let payload = digest(&json!({"kind":"internal_work_supervisor_notice","conversation_id":conversation,"operation_id":operation,"body":body}))
         .map_err(|_| unavailable())?;
     let reserved = i64::try_from(body.len() + 4096).map_err(|_| invalid())?;
-    if !aq_supervisor_control::charge(&mut tx, conversation, reserved, MAX_OPERATIONS, MAX_BYTES)
+    if !aq_supervisor_control::charge(tx, conversation, reserved, MAX_OPERATIONS, MAX_BYTES)
         .await
         .map_err(db)?
     {
@@ -384,14 +400,13 @@ pub(crate) async fn system_message(
         mailbox_key: key(conversation)?,
         body,
     };
-    let cursor = append(&mut tx, mail, &sender, &payload, at_ms)
+    let cursor = append(tx, mail, &sender, &payload, at_ms)
         .await
         .map_err(|_| unavailable())?;
     let response = json!({"contract":"internal-work-supervisor-notice-1","operation_id":operation,"message_id":message,"thread_id":conversation,"cursor":cursor.to_string(),"disposition":"queued"});
-    receipt(&mut tx, &sender_key, operation, &payload, &response)
+    receipt(tx, &sender_key, operation, &payload, &response)
         .await
         .map_err(|_| unavailable())?;
-    tx.commit().await.map_err(db)?;
     Ok(message)
 }
 pub(super) async fn lookup(

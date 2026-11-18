@@ -509,6 +509,7 @@ dependencies = [
 name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
+ "aq-internal-work",
  "aq-machine-control",
  "aq-playbook-host",
  "aq-playbooks-compiler",
@@ -517,6 +518,7 @@ dependencies = [
  "async-trait",
  "axum",
  "hex",
+ "schemars",
  "serde",
  "serde_json",
  "sqlx",
