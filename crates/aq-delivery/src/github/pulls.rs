@@ -362,6 +362,11 @@ impl GitHubAdapter for GitHubApp {
         created.pull()
     }
 
+    async fn pull_request(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest> {
+        let s = Session::new(self, repo).await?;
+        s.pull(pr).await?.pull()
+    }
+
     async fn checks(
         &self,
         repo: &GitHubRepository,

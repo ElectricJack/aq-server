@@ -26,7 +26,7 @@ pub mod definitions;
 pub mod playbook_view;
 
 pub const VERSION: &str = "playbooks-inspection-1";
-const MAX_BYTES: usize = 262144;
+const MAX_BYTES: usize = catalog::MAX_BYTES;
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PageQuery {

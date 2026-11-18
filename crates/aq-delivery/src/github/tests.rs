@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const APP_ID: u64 = 4242;
 
+mod commands;
 mod pulls;
 
 /// (private PKCS#1 PEM, public SPKI PEM), generated once per test process.
