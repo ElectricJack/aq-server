@@ -23,8 +23,10 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
         ),
         ("native_incarnation_guard", "", "plpgsql", "v", "trigger"),
     ] {
-        let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname=$2 AND p.provolatile::TEXT=$3 AND p.prorettype=to_regtype($4) AND p.prokind='f' AND NOT p.proretset AND NOT p.proisstrict AND p.proparallel='u'")
-            .bind(format!("{name}({signature})")).bind(language).bind(volatility).bind(result)
+        let config = (supported >= 141 && name == "profiled_compute_stopped_valid")
+            .then_some(vec!["join_collapse_limit=1"]);
+        let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NOT DISTINCT FROM $5::text[] AND l.lanname=$2 AND p.provolatile::TEXT=$3 AND p.prorettype=to_regtype($4) AND p.prokind='f' AND NOT p.proretset AND NOT p.proisstrict AND p.proparallel='u'")
+            .bind(format!("{name}({signature})")).bind(language).bind(volatility).bind(result).bind(config)
             .fetch_optional(&mut **tx).await?;
         // Format 102 admits lost-attempt releases past the incarnation guard (D2 ruling C).
         let body = match (supported >= 102, name) {
