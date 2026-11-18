@@ -190,6 +190,7 @@ impl Ports for DbPorts {
             (SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1) AS observed, \
             (SELECT record->'body'->'kind' FROM observation_events WHERE attempt_id=$1 AND record->'body'->'kind'->>'kind'<>'usage' ORDER BY recorded_at_ms DESC,sequence DESC LIMIT 1) AS latest, \
             (SELECT max(recorded_at_ms) FROM observation_events s WHERE s.attempt_id=$1 AND s.record->'body'->'kind'->>'kind'='tool_started' AND NOT EXISTS(SELECT 1 FROM observation_events r WHERE r.attempt_id=$1 AND r.record->'body'->'kind'->>'kind'='tool_result' AND r.record->'body'->'kind'->>'call_id'=s.record->'body'->'kind'->>'call_id')) AS open_tool, \
+            EXISTS(SELECT 1 FROM observation_source_refusals x JOIN observation_sources xs USING(node_id,source_id,generation) WHERE xs.attempt_id=$1) AS refused, \
             NOT a.holds_task AS released, \
             EXISTS(SELECT 1 FROM profiled_cancellations c WHERE c.attempt_id=$1) AS cancelled, \
             COALESCE(h.state#>>'{{stop,kind}}' IN ('stopped','not_started'),FALSE) AS stopped \
@@ -204,7 +205,14 @@ impl Ports for DbPorts {
         let mut tx = pool.begin().await.map_err(db)?;
         let input = input_state(&mut tx, target.attempt_id).await?;
         tx.rollback().await.map_err(db)?;
-        let explanation = if observed.is_none_or(|t| now.saturating_sub(t) > policy.grace_ms) {
+        // A gap, incomplete or fence record is neither progress nor proof of
+        // being stuck: while it is the newest record, or the server refused
+        // the attempt's source, what the agent does is unknown.
+        let blind =
+            row.get::<bool, _>("refused") || latest.as_ref().is_some_and(|k| k["kind"] == "gap");
+        let explanation = if blind
+            || observed.is_none_or(|t| now.saturating_sub(t) > policy.grace_ms)
+        {
             Some(Explanation::ObservationsUnavailable)
         } else if input == InputState::HumanControlled {
             Some(Explanation::HumanControl)

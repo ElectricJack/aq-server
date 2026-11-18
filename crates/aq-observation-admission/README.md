@@ -3,13 +3,15 @@
 Portable observation-store prepare/activate/boot ownership contract and pure
 transition reducer. It depends on the exact published CON03 protocol and small
 serialization crates. No database, filesystem, HTTP, provider client or executor.
-CON03 packet and ACK bytes remain unchanged.
+CON03 packet and ACK bytes remain unchanged; the batch route's `BatchReply` is
+the receipt plus an optional `refused_sources` list.
 
 Requests, replies and statuses are at most 16 KiB. Version1 requires exact IDs,
-owner revision checks and at most64 boot transitions. Hashes use the same compact
+owner revision checks; boot transitions are not limited. Hashes use the same compact
 UTF-8, recursively key-sorted typed JSON encoding as CON03. The durable adapter
-owns node authentication/revocation, current incarnation, permanent receipt
-lookup, no boot reuse, atomic owner+receipt persistence and retention quotas.
+owns node authentication/revocation, current incarnation, receipt lookup, no
+boot reuse within its retained receipts, atomic owner+receipt persistence and
+rolling receipt retention.
 
 An immutable receipt is paired with a fresh current owner snapshot. Replaying a
 prepare receipt after activation cannot permit store creation, including when
@@ -29,7 +31,7 @@ stores require an explicit future recovery protocol, not a new prepare call.
 `apply` consumes central owner inputs; it is not a verifier for worker-supplied
 owner state or receipts. It returns an immutable receipt and current owner to be
 committed atomically. `Access::new_boot_previously_owned` is an indexed check of
-permanent initial/boot receipts; exact old receipt replays do not roll state back.
+the retained initial/boot receipts; exact old receipt replays do not roll state back.
 No transport result grants execution, source registration, fresh-zero cumulative
 baselines, native parser qualification, or complete accounting.
 

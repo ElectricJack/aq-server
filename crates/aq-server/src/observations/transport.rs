@@ -2,6 +2,9 @@
 //! execution registration; no legacy/native execution grant is manufactured.
 use super::*;
 use aq_observation_admission::{self as contract, Access, Owner, Receipt, Reply, Request, Status};
+/// Transport receipts kept per node (one per boot advance). Retention, not a
+/// limit: nothing is refused when it is reached. To become a Settings value.
+const RETAINED_RECEIPTS: i64 = 64;
 fn digest<T: Serialize>(body: &T) -> Result<Digest> {
     Ok(Digest::of(
         &serde_json::to_vec(body).map_err(|_| Error::Invalid)?,
@@ -128,6 +131,15 @@ async fn mutate_subject(
             .await?;
         }
         sqlx::query("INSERT INTO observation_transport_receipts(node_id,operation_id,owner_revision,request,receipt,claimed_boot_id) VALUES($1,$2,$3,$4,$5,$6)").bind(authenticated_node).bind(request.operation_id).bind(owner.revision as i64).bind(value(request)?).bind(value(&changed.reply.receipt)?).bind(claimed_boot).execute(&mut *tx).await?;
+        // Rolling retention instead of a cap: the newest receipts replay a lost
+        // reply and refuse the reuse of a recent boot; older ones are deleted.
+        sqlx::query(
+            "DELETE FROM observation_transport_receipts WHERE node_id=$1 AND owner_revision<=$2",
+        )
+        .bind(authenticated_node)
+        .bind(owner.revision as i64 - RETAINED_RECEIPTS)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(changed.reply)

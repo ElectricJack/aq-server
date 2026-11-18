@@ -10,6 +10,7 @@ use aq_accounting::{
     reconcile::{self, Context, Decision, Fact, Policy, UnresolvedReason},
     wire::*,
 };
+use aq_observation_admission::{BatchReply, RefusalReason, RefusedSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -88,13 +89,22 @@ impl OwnerSource {
                 .as_slice(),
         ))
     }
-    fn matches(&self, event: &ObservationRecord) -> bool {
+    /// Why this enrolled source does not admit `event`. The store's control
+    /// records are admitted by kind, whatever parsers the catalog entry lists.
+    fn refusal(&self, event: &ObservationRecord) -> Option<RefusalReason> {
         let p = &event.body.provenance;
-        self.binding == event.body.binding
-            && self.source_id == p.source_id
-            && self.generation == p.source_generation
-            && self.native_session_key == p.native_session_key
-            && self.policy.parsers.iter().any(|x| x.parser == p.parser)
+        if self.binding != event.body.binding {
+            Some(RefusalReason::Binding)
+        } else if self.native_session_key != p.native_session_key {
+            Some(RefusalReason::Provenance)
+        } else {
+            match aq_observation_admission::control_record(event) {
+                Some(true) => None,
+                Some(false) => Some(RefusalReason::ControlShape),
+                None if self.policy.parsers.iter().any(|x| x.parser == p.parser) => None,
+                None => Some(RefusalReason::Parser),
+            }
+        }
     }
 }
 fn node_of(binding: &Binding) -> Result<Uuid> {
@@ -290,20 +300,33 @@ pub async fn ingest(
     authenticated_node: Uuid,
     packet: &Packet,
 ) -> Result<Receipt> {
+    Ok(ingest_reply(state, authenticated_node, packet)
+        .await?
+        .receipt)
+}
+/// [`ingest`] with the sources the batch's reply lists as refused.
+pub async fn ingest_reply(
+    state: &AppState,
+    authenticated_node: Uuid,
+    packet: &Packet,
+) -> Result<BatchReply> {
     ingest_subject(state, NodeSubject::Trusted(authenticated_node), packet).await
 }
 pub async fn ingest_authenticated(
     state: &AppState,
     context: &crate::worker_api::AuthenticatedNode,
     packet: &Packet,
-) -> Result<Receipt> {
+) -> Result<BatchReply> {
     ingest_subject(state, NodeSubject::Authenticated(context), packet).await
 }
+/// One source's refused record never refuses the batch: the source is refused
+/// (durably, and listed in the reply), its records are dropped, and the node
+/// sequence still advances past the batch so the other sources' events land.
 async fn ingest_subject(
     state: &AppState,
     subject: NodeSubject<'_>,
     packet: &Packet,
-) -> Result<Receipt> {
+) -> Result<BatchReply> {
     let authenticated_node = subject.id();
     packet.validate().map_err(|_| Error::Invalid)?;
     let Message::Batch(batch) = &packet.body.message else {
@@ -330,42 +353,52 @@ async fn ingest_subject(
             true
         }
     };
+    // Attempts whose records may not be observed; their sources are refused.
+    let mut unbound = BTreeSet::new();
     for binding in sessions.values() {
-        if retention_enabled
+        let closed = retention_enabled
             && sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(SELECT 1 FROM retention_closed_attempts WHERE attempt_id=$1)",
             )
             .bind(binding.attempt_id)
             .fetch_one(&mut *tx)
-            .await?
-        {
-            return Err(Error::Refused);
+            .await?;
+        let bound = !closed
+            && match authority::load_locked(
+                state,
+                &mut tx,
+                &binding.session,
+                AuthorityPolicy::TerminalHistorical,
+            )
+            .await
+            {
+                Ok(view) => verify_binding(&view, binding).is_ok(),
+                Err(authority::AuthorityError::Database(error)) => return Err(error.into()),
+                Err(_) => false,
+            };
+        if !bound {
+            unbound.insert(binding.attempt_id);
         }
-        let view = authority::load_locked(
-            state,
-            &mut tx,
-            &binding.session,
-            AuthorityPolicy::TerminalHistorical,
-        )
-        .await?;
-        verify_binding(&view, binding)?;
     }
     let row=sqlx::query("SELECT through_sequence,retained_bytes,event_count FROM observation_nodes WHERE node_id=$1 FOR UPDATE").bind(authenticated_node).fetch_optional(&mut *tx).await?.ok_or(Error::Refused)?;
     transport::require_active_locked(&mut tx, authenticated_node, None).await?;
-    let old: Option<Value> = sqlx::query_scalar(
-        "SELECT receipt FROM observation_packets WHERE node_id=$1 AND message_id=$2",
+    let old: Option<(Value, Option<Value>)> = sqlx::query_as(
+        "SELECT receipt,refused FROM observation_packets WHERE node_id=$1 AND message_id=$2",
     )
     .bind(authenticated_node)
     .bind(packet.body.message_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some(old) = old {
+    if let Some((old, refused)) = old {
         let receipt: Receipt = parse(old)?;
         receipt
             .validate_against(packet)
             .map_err(|_| Error::Conflict)?;
         tx.commit().await?;
-        return Ok(receipt);
+        return Ok(BatchReply {
+            receipt,
+            refused_sources: refused.map(parse).transpose()?.unwrap_or_default(),
+        });
     }
     if integer(batch.first_sequence)?
         != row
@@ -377,12 +410,20 @@ async fn ingest_subject(
     }
     let mut sources = BTreeMap::new();
     let mut keys = BTreeSet::new();
+    // Refused sources of this batch; `true` when the source is enrolled and
+    // the refusal is new, so it is recorded against the source.
+    let mut refused: BTreeMap<(Uuid, u64), (RefusalReason, bool)> = BTreeMap::new();
     for event in &batch.events {
         let p = &event.body.provenance;
         let source_key = (p.source_id, p.source_generation);
+        if refused.contains_key(&source_key) {
+            continue;
+        }
         if let std::collections::btree_map::Entry::Vacant(entry) = sources.entry(source_key) {
             let source_row = sqlx::query(
-                "SELECT s.authority,s.authority_digest,r.node_id IS NOT NULL AS revoked \
+                "SELECT s.authority,s.authority_digest,r.node_id IS NOT NULL AS revoked,\
+                 EXISTS(SELECT 1 FROM observation_source_refusals x WHERE x.node_id=s.node_id \
+                 AND x.source_id=s.source_id AND x.generation=s.generation) AS refused \
                  FROM observation_sources s \
                  LEFT JOIN observation_source_revocations r USING(node_id,source_id,generation) \
                  WHERE s.node_id=$1 AND s.source_id=$2 AND s.generation=$3",
@@ -391,8 +432,15 @@ async fn ingest_subject(
             .bind(p.source_id)
             .bind(integer(p.source_generation)?)
             .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(Error::Refused)?;
+            .await?;
+            let Some(source_row) = source_row else {
+                refused.insert(source_key, (RefusalReason::UnknownSource, false));
+                continue;
+            };
+            if source_row.get("refused") {
+                refused.insert(source_key, (RefusalReason::Refused, false));
+                continue;
+            }
             let source: OwnerSource = parse(source_row.get("authority"))?;
             source.validate()?;
             if source.digest()?.as_str() != source_row.get::<String, _>("authority_digest") {
@@ -401,9 +449,25 @@ async fn ingest_subject(
             entry.insert((source, source_row.get::<bool, _>("revoked")));
         }
         let (source, _) = &sources[&source_key];
-        if !source.matches(event) {
-            return Err(Error::Refused);
+        let reason = if unbound.contains(&event.body.binding.attempt_id) {
+            Some(RefusalReason::Binding)
+        } else {
+            source.refusal(event)
+        };
+        if let Some(reason) = reason {
+            refused.insert(source_key, (reason, true));
         }
+    }
+    // A source refused at its second record loses its first one too.
+    let events: Vec<&ObservationRecord> = (batch.events.iter())
+        .filter(|e| {
+            let p = &e.body.provenance;
+            !refused.contains_key(&(p.source_id, p.source_generation))
+        })
+        .collect();
+    for event in events.iter().copied() {
+        let p = &event.body.provenance;
+        let (source, _) = &sources[&(p.source_id, p.source_generation)];
         if event.body.kind.is_usage() {
             keys.insert(
                 reconcile::key(event, &source.policy)
@@ -413,11 +477,7 @@ async fn ingest_subject(
             );
         }
     }
-    let current_attempts: BTreeSet<_> = batch
-        .events
-        .iter()
-        .map(|e| e.body.binding.attempt_id)
-        .collect();
+    let current_attempts: BTreeSet<_> = events.iter().map(|e| e.body.binding.attempt_id).collect();
     let mut affected_attempts = current_attempts.clone();
     let mut updated_attempts = current_attempts.clone();
     for key in &keys {
@@ -437,11 +497,7 @@ async fn ingest_subject(
             affected_attempts.insert(owner);
         }
     }
-    let lineages: BTreeSet<_> = batch
-        .events
-        .iter()
-        .map(|e| e.body.binding.lineage_id)
-        .collect();
+    let lineages: BTreeSet<_> = events.iter().map(|e| e.body.binding.lineage_id).collect();
     let mut projections = BTreeMap::new();
     for lineage in lineages {
         sqlx::query("INSERT INTO observation_projections(lineage_id,projection) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(lineage).bind(value(&Projection::default())?).execute(&mut *tx).await?;
@@ -472,7 +528,7 @@ async fn ingest_subject(
     }
     let book = catalog::rate_book(state);
     let mut retained = 0i64;
-    for event in &batch.events {
+    for event in events.iter().copied() {
         let (source, revoked) = &sources[&(
             event.body.provenance.source_id,
             event.body.provenance.source_generation,
@@ -619,6 +675,36 @@ async fn ingest_subject(
     receipt
         .validate_against(packet)
         .map_err(|_| Error::Invalid)?;
+    let refused_sources: Vec<RefusedSource> = (refused.iter())
+        .map(|(&(source_id, generation), &(reason, _))| RefusedSource {
+            source_id,
+            generation,
+            reason,
+        })
+        .collect();
+    let refused_value = (!refused_sources.is_empty())
+        .then(|| value(&refused_sources))
+        .transpose()?;
+    for (&(source_id, generation), &(reason, record)) in &refused {
+        if !record {
+            continue;
+        }
+        let sequence = (batch.events.iter())
+            .find(|e| e.body.provenance.source_id == source_id)
+            .map_or(batch.first_sequence, |e| e.body.sequence);
+        sqlx::query("INSERT INTO observation_source_refusals(node_id,source_id,generation,reason,message_id,sequence,refused_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)")
+            .bind(authenticated_node).bind(source_id).bind(integer(generation)?)
+            .bind(value(&reason)?.as_str().ok_or(Error::Invalid)?)
+            .bind(packet.body.message_id).bind(integer(sequence)?).bind(recorded_at)
+            .execute(&mut *tx).await?;
+    }
+    retained = retained
+        .checked_add(
+            refused_value
+                .as_ref()
+                .map_or(0, |v| v.to_string().len() as i64),
+        )
+        .ok_or(Error::Capacity)?;
     retained = retained
         .checked_add(
             serde_json::to_vec(&receipt)
@@ -631,7 +717,7 @@ async fn ingest_subject(
         .get::<i64, _>("retained_bytes")
         .checked_add(retained)
         .is_none_or(|n| n > 134217728)
-        || row.get::<i64, _>("event_count") + batch.events.len() as i64 > 65536
+        || row.get::<i64, _>("event_count") + events.len() as i64 > 65536
     {
         return Err(Error::Capacity);
     }
@@ -646,13 +732,16 @@ async fn ingest_subject(
         projection.validate().map_err(|_| Error::Invalid)?;
         sqlx::query("UPDATE observation_attempt_projections SET revision=revision+1,projection=$2,last_recorded_at_ms=GREATEST(last_recorded_at_ms,$3) WHERE attempt_id=$1").bind(attempt).bind(value(&projection)?).bind(recorded_at).execute(&mut *tx).await?;
     }
-    sqlx::query("INSERT INTO observation_packets(node_id,message_id,body_digest,receipt) VALUES($1,$2,$3,$4)").bind(authenticated_node).bind(packet.body.message_id).bind(packet.body_digest.as_str()).bind(value(&receipt)?).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO observation_packets(node_id,message_id,body_digest,receipt,refused) VALUES($1,$2,$3,$4,$5)").bind(authenticated_node).bind(packet.body.message_id).bind(packet.body_digest.as_str()).bind(value(&receipt)?).bind(refused_value).execute(&mut *tx).await?;
     if retention_enabled {
         sqlx::query("INSERT INTO observation_packet_retention(node_id,message_id,first_sequence,last_sequence,attempt_ids,recorded_at_ms,charged_bytes) VALUES($1,$2,$3,$4,$5,$6,$7)")
         .bind(authenticated_node).bind(packet.body.message_id).bind(integer(batch.first_sequence)?).bind(integer(batch.last_sequence)?)
-        .bind(sessions.keys().copied().collect::<Vec<_>>()).bind(recorded_at).bind(retained).execute(&mut *tx).await?;
+        .bind(current_attempts.iter().copied().collect::<Vec<_>>()).bind(recorded_at).bind(retained).execute(&mut *tx).await?;
     }
-    sqlx::query("UPDATE observation_nodes SET through_sequence=$2,retained_bytes=retained_bytes+$3,event_count=event_count+$4 WHERE node_id=$1").bind(authenticated_node).bind(integer(batch.last_sequence)?).bind(retained).bind(batch.events.len() as i64).execute(&mut *tx).await?;
+    sqlx::query("UPDATE observation_nodes SET through_sequence=$2,retained_bytes=retained_bytes+$3,event_count=event_count+$4 WHERE node_id=$1").bind(authenticated_node).bind(integer(batch.last_sequence)?).bind(retained).bind(events.len() as i64).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(receipt)
+    Ok(BatchReply {
+        receipt,
+        refused_sources,
+    })
 }

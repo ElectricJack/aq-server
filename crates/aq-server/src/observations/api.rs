@@ -152,7 +152,13 @@ async fn batch(
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiJson(packet): ApiJson<Packet>,
-) -> std::result::Result<([(header::HeaderName, &'static str); 1], Json<Receipt>), AppError> {
+) -> std::result::Result<
+    (
+        [(header::HeaderName, &'static str); 1],
+        Json<aq_observation_admission::BatchReply>,
+    ),
+    AppError,
+> {
     let node = crate::delegated_permits::runtime::authenticate_runner(
         &state,
         &headers,
@@ -175,7 +181,8 @@ async fn batch(
     }
     // Production attempt path: enroll each attempt's trusted catalog source
     // (idempotent) before ingest. Uncovered or refused attempts are left to
-    // ingest, which refuses events without an admitted source.
+    // ingest, which refuses each source without an admitted enrollment and
+    // lists it in the reply.
     let attempts: std::collections::BTreeSet<Uuid> = batch
         .events
         .iter()

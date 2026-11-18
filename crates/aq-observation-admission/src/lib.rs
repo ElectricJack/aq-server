@@ -8,7 +8,6 @@ use wire::{ContractError, Digest, Validate, ensure};
 
 pub const VERSION: u32 = 1;
 pub const MAX_BYTES: usize = 16384;
-pub const MAX_BOOT_TRANSITIONS: u32 = 64;
 // The concrete spool may impose a smaller configured bound.
 pub const MAX_PENDING_DISTANCE: u64 = 65536;
 fn valid_id(id: Uuid) -> Result<(), ContractError> {
@@ -72,10 +71,7 @@ impl Validate for Request {
                 next_sequence,
             } => {
                 marker.validate()?;
-                ensure(
-                    (2..=65).contains(expected_revision),
-                    "boot expected revision",
-                )?;
+                ensure(*expected_revision >= 2, "boot expected revision")?;
                 ensure(marker.node_id == self.node_id, "marker node")?;
                 valid_id(*expected_boot_id)?;
                 valid_id(*new_boot_id)?;
@@ -146,21 +142,18 @@ pub struct Owner {
     pub phase: Phase,
     pub current_boot_id: Uuid,
     pub revision: u64,
-    pub boot_transitions: u32,
+    /// Counts every boot advance. A node may restart without limit.
+    pub boot_transitions: u64,
 }
 impl Validate for Owner {
     fn validate(&self) -> Result<(), ContractError> {
         self.marker.validate()?;
         valid_id(self.current_boot_id)?;
-        ensure(
-            self.boot_transitions <= MAX_BOOT_TRANSITIONS,
-            "boot history exhausted",
-        )?;
         let expected = match self.phase {
-            Phase::Prepared => 1,
-            Phase::Active => 2 + self.boot_transitions as u64,
+            Phase::Prepared => Some(1),
+            Phase::Active => self.boot_transitions.checked_add(2),
         };
-        ensure(self.revision == expected, "owner revision")?;
+        ensure(Some(self.revision) == expected, "owner revision")?;
         if self.boot_transitions == 0 {
             ensure(
                 self.current_boot_id == self.marker.initial_boot_id,
@@ -398,8 +391,7 @@ pub fn apply(
                     && old.revision == *expected_revision
                     && !access.new_boot_previously_owned
                     && *new_boot_id != old.marker.initial_boot_id
-                    && *new_boot_id == access.boot_id
-                    && old.boot_transitions < MAX_BOOT_TRANSITIONS,
+                    && *new_boot_id == access.boot_id,
                 "boot owner fence",
             )?;
             ensure(
@@ -485,8 +477,83 @@ pub fn decode_status(bytes: &[u8]) -> Result<Status, ContractError> {
     status.validate()?;
     Ok(status)
 }
+/// Parser IDs of the node store's own control records (transcript loss, source
+/// change, source fence). The server admits a record under one of them by its
+/// kind, whatever the source's catalog lists, and only in the control shape.
+pub const CONTROL_PARSERS: [&str; 3] = [
+    "row-spool-loss-monitor",
+    "row-file-source-monitor",
+    "row-store-source-fence",
+];
+/// `Some(true)` for a well-formed control record, `Some(false)` for a record
+/// that claims a control parser without the control shape (a gap, which can
+/// carry no fact), `None` for an ordinary record.
+pub fn control_record(record: &wire::ObservationRecord) -> Option<bool> {
+    CONTROL_PARSERS
+        .contains(&record.body.provenance.parser.id.as_str())
+        .then_some(matches!(
+            record.body.kind,
+            wire::ObservationKind::Gap { .. }
+        ))
+}
+/// Record-cursor prefixes of the store-fence control records: why a source
+/// stopped. Other control records say it in their gap reason.
+pub const FENCED_BY_RESTART: &str = "boot-fence:";
+pub const INCOMPLETE_UNREADABLE: &str = "incomplete:unreadable:";
+
+/// Why the server refused every record of one source in a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalReason {
+    /// The node has no such enrolled source.
+    UnknownSource,
+    /// The record's attempt binding is not the enrolled one, or the attempt
+    /// may no longer be observed.
+    Binding,
+    /// The record's session key is not the enrolled one.
+    Provenance,
+    /// The parser is not in the source's catalog entry.
+    Parser,
+    /// A control parser on a record that is not a gap.
+    ControlShape,
+    /// An earlier batch already refused this source.
+    Refused,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RefusedSource {
+    pub source_id: Uuid,
+    pub generation: u64,
+    pub reason: RefusalReason,
+}
+/// The batch route's reply: the unchanged CON03 receipt, plus the sources
+/// whose records in this batch were refused. The receipt still covers the
+/// whole batch, so one refused source never holds back the node sequence; the
+/// worker stops collecting each listed source. Without refusals the bytes are
+/// exactly the receipt's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BatchReply {
+    #[serde(flatten)]
+    pub receipt: wire::Receipt,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_sources: Vec<RefusedSource>,
+}
+impl BatchReply {
+    pub fn validate_against(&self, packet: &wire::Packet) -> Result<(), ContractError> {
+        self.receipt.validate_against(packet)?;
+        ensure(
+            self.refused_sources.len() <= wire::MAX_EVENTS,
+            "refused source count",
+        )?;
+        for refused in &self.refused_sources {
+            valid_id(refused.source_id)?;
+            ensure(refused.generation > 0, "refused source generation")?;
+        }
+        Ok(())
+    }
+}
 /// Separate schema roots mirror the mutation request/reply and read-only status.
 /// Semantic cross-field constraints remain enforced by the Rust validators.
 pub fn schemas() -> serde_json::Value {
-    serde_json::json!({"request":schemars::schema_for!(Request),"reply":schemars::schema_for!(Reply),"status":schemars::schema_for!(Status)})
+    serde_json::json!({"request":schemars::schema_for!(Request),"reply":schemars::schema_for!(Reply),"status":schemars::schema_for!(Status),"batch_reply":schemars::schema_for!(BatchReply)})
 }

@@ -400,9 +400,9 @@ def build():
                     # the stall ladder has no progress evidence.
                     "accounting": {"sources": [
                         _accounting_source("anthropic", "claude", "claude-v1-9a9b8e8",
-                                           "3b4c8920ee0fa58d587a3431d0dcef31f49d3490f063775febd5642054b92251", False),
+                                           "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7", False),
                         _accounting_source("openai", "codex", "codex-rollout-67f0994",
-                                           "048a19804f680b53ed5a14bc33f65984b4842da457c3bf42e1c443ccd9e5cad9", True)]}}
+                                           "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22", True)]}}
     state_dir = NODE / "state"
     docker = dict(worker["docker_local"])
     host_config = {
