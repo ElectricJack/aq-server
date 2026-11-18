@@ -1614,11 +1614,14 @@ mod delivery {
         playbooks::{
             domain::{
                 GrantScope, Result,
+                delivery_decisions::Settled,
                 delivery_store::{DeliveryPort, Latest, Pending},
             },
+            host_adapters::DeliverySettlement,
             host_adapters::HostResult,
             review_domain::{
-                CatalogProfile, HOST9_CAPABILITIES, HOST10_FINGERPRINT, HOST10_VERSION,
+                CatalogProfile, HOST9_CAPABILITIES, HOST10_CAPABILITIES, HOST10_DELIVERY_COMMANDS,
+                HOST10_FINGERPRINT, HOST10_VERSION,
             },
             service::*,
         },
@@ -1674,7 +1677,23 @@ mod delivery {
             capabilities: HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
         };
         assert!(host10.validate_scope(&scope).is_ok());
-        assert_eq!(host10.commands(), CatalogProfile::Host9.commands());
+        // Host10 serves Host9's commands and the delivery commands implemented so far, each its own capability.
+        let served: BTreeSet<&str> = host10.commands().iter().copied().collect();
+        let mut expected: BTreeSet<&str> =
+            CatalogProfile::Host9.commands().iter().copied().collect();
+        expected.extend(HOST10_DELIVERY_COMMANDS);
+        assert_eq!(served, expected);
+        for name in HOST10_DELIVERY_COMMANDS {
+            let contract = &registry.commands[name];
+            assert_eq!(contract.capabilities, BTreeSet::from([name.to_string()]));
+        }
+        let delivery = GrantScope {
+            capabilities: HOST10_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
+            ..scope.clone()
+        };
+        assert!(host10.validate_scope(&delivery).is_ok());
+        // Host9 does not admit them.
+        assert!(CatalogProfile::Host9.validate_scope(&delivery).is_err());
         // A Host9 namespace is not reused.
         assert!(host10.namespace_refusal(1, Some((9, 1))).is_some());
         // The pin lists the vendored files byte for byte.
@@ -1704,6 +1723,8 @@ mod delivery {
         pending: Mutex<Vec<Pending>>,
         latest: Mutex<BTreeMap<Uuid, Latest>>,
         bound: Mutex<BTreeSet<Uuid>>,
+        /// Every (task, result) recorded, the latest and earlier ones.
+        known: Mutex<BTreeSet<(Uuid, Uuid)>>,
     }
     #[async_trait::async_trait]
     impl DeliveryPort for Port {
@@ -1723,6 +1744,36 @@ mod delivery {
         async fn bound(&self, project: Uuid) -> Result<bool> {
             Ok(self.bound.lock().unwrap().contains(&project))
         }
+        async fn has_result(&self, task: Uuid, result: Uuid) -> Result<bool> {
+            Ok(self.known.lock().unwrap().contains(&(task, result)))
+        }
+    }
+
+    /// The server's settlement as `work.complete` and `work.return` call it:
+    /// answers what the test sets, and counts the calls.
+    pub(super) struct Settle {
+        pub answer: Mutex<Settled>,
+        /// (`complete` or the return reason, result) per call.
+        pub calls: Mutex<Vec<(String, Uuid)>>,
+    }
+    impl Default for Settle {
+        fn default() -> Self {
+            Self {
+                answer: Mutex::new(Settled::Completed),
+                calls: Mutex::default(),
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl DeliverySettlement for Settle {
+        async fn complete(&self, result: Uuid) -> Result<Settled> {
+            self.calls.lock().unwrap().push(("complete".into(), result));
+            Ok(*self.answer.lock().unwrap())
+        }
+        async fn send_back(&self, result: Uuid, reason: &str) -> Result<Settled> {
+            self.calls.lock().unwrap().push((reason.into(), result));
+            Ok(*self.answer.lock().unwrap())
+        }
     }
 
     struct D {
@@ -1734,6 +1785,7 @@ mod delivery {
         graph: Arc<FakeGraph>,
         routing: Arc<FakeRouting>,
         port: Arc<Port>,
+        settle: Arc<Settle>,
         other_project: Uuid,
     }
     async fn delivery(installation_routing: bool) -> D {
@@ -1764,6 +1816,7 @@ mod delivery {
             writes: Mutex::default(),
         });
         let port = Arc::new(Port::default());
+        let settle = Arc::new(Settle::default());
         port.bound
             .lock()
             .unwrap()
@@ -1788,7 +1841,8 @@ mod delivery {
         .await
         .unwrap()
         .with_routing(routing.clone())
-        .with_delivery(port.clone());
+        .with_delivery(port.clone())
+        .with_settlement(settle.clone());
         service.installation_routing = installation_routing;
         service.initialize(f.actor).await.unwrap();
         let now = (f.state.clock)().timestamp_millis();
@@ -1796,7 +1850,7 @@ mod delivery {
             workspace_id: l.workspace_id,
             project_id: l.project_id,
             recipients: vec![],
-            capabilities: BTreeSet::from(HOST9_CAPABILITIES.map(String::from)),
+            capabilities: BTreeSet::from(HOST10_CAPABILITIES.map(String::from)),
         };
         let grant = Uuid::new_v4();
         // The longest grant `Service::grant` admits (24 h): the tests move the clock by hours.
@@ -1814,6 +1868,7 @@ mod delivery {
             graph,
             routing,
             port,
+            settle,
             other_project,
         }
     }
@@ -1834,8 +1889,21 @@ mod delivery {
                 .await
         }
         async fn run(&self, id: &str, name: &str, input: Value) -> HostResult {
+            let intent = self.intent(id, name, input);
+            let result = self.try_run(&intent).await.unwrap();
+            // Every answer is one the catalog declares.
+            (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
+            result
+        }
+        /// Dispatches `intent` (a replay when it was dispatched before).
+        async fn try_run(&self, intent: &Intent) -> Result<HostResult> {
+            (self.service)
+                .host_dispatch(&self.runtime, self.grant, 1, intent)
+                .await
+        }
+        fn intent(&self, id: &str, name: &str, input: Value) -> Intent {
             let registry = CatalogProfile::Host10.registry();
-            let intent = Intent {
+            Intent {
                 id: id.into(),
                 run: "synthetic-run".into(),
                 step: name.replace('.', "-"),
@@ -1856,12 +1924,7 @@ mod delivery {
                 late_results: vec![],
                 completion_event: None,
                 dispatch_sequence: None,
-            };
-            let result = (self.service).host_dispatch(&self.runtime, self.grant, 1, &intent);
-            let result = result.await.unwrap();
-            // Every answer is one the catalog declares.
-            (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
-            result
+            }
         }
         /// An artifact is active on the delivery binding.
         async fn activated(&self) {
@@ -1906,6 +1969,7 @@ mod delivery {
             };
             self.port.pending.lock().unwrap().push(pending);
             self.port.latest.lock().unwrap().insert(task, latest);
+            (self.port.known.lock().unwrap()).insert((task, pending.result_id));
             (task, pending)
         }
         async fn asked(&self) -> usize {
@@ -1944,6 +2008,9 @@ mod delivery {
                 .unwrap();
         }
     }
+
+    // `work.complete`, `work.return`, `work.hold` and `supervisor.notify`.
+    mod decisions;
 
     #[tokio::test]
     async fn a_stopped_result_is_announced_once_and_again_after_the_decision_repeat_setting() {
