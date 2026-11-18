@@ -7,30 +7,17 @@
 use super::*;
 use crate::{
     delivery::{
-        CandidateRequest, CandidateState, ChecksState, CommitMetadata, DeliverRequest,
-        DeliveryError, DeliveryOutcome, DeliveryService, GitHubAdapter, GitHubError,
-        ObservationRequest, OperationContext, PullRequest, PullRequestSpec, ReconcileRequest,
+        CandidateRequest, CandidateState, CommitMetadata, DeliverRequest, DeliveryError,
+        DeliveryOutcome, DeliveryService, ObservationRequest, OperationContext, ReconcileRequest,
         Resolution, RetryAdvice,
     },
     error::AppError,
     playbooks::config::IntegrationSettings,
 };
 
-/// aq-git 0.2.0 cannot open pull requests and D1 refuses pull-request mode
-/// before any GitHub call, so production delivery binds no GitHub client.
-struct NoGitHub;
-#[async_trait::async_trait]
-impl GitHubAdapter for NoGitHub {
-    async fn open_pull_request(
-        &self,
-        _: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-    async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
-        Err(GitHubError("not configured".into()))
-    }
-}
+// aq-git 0.2.0 cannot open pull requests and D1 refuses pull-request mode
+// before any GitHub call, so production delivery binds no GitHub client.
+use crate::delivery::UnconfiguredGitHub as NoGitHub;
 
 pub struct DeliveryIntegration {
     state: crate::AppState,

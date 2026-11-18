@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const APP_ID: u64 = 4242;
 
+mod pulls;
+
 /// (private PKCS#1 PEM, public SPKI PEM), generated once per test process.
 fn keys() -> &'static (String, String) {
     static KEYS: OnceLock<(String, String)> = OnceLock::new();
@@ -44,6 +46,7 @@ fn verify(jwt: &str, validate_exp: bool) -> AppJwtClaims {
 struct Seen {
     method: String,
     path: String,
+    query: Option<String>,
     headers: AxHeaders,
     body: Value,
 }
@@ -77,6 +80,7 @@ async fn handle(State(mock): State<Mock>, request: Request) -> Response {
     mock.seen.lock().unwrap().push(Seen {
         method: parts.method.to_string(),
         path: parts.uri.path().to_string(),
+        query: parts.uri.query().map(str::to_string),
         headers: parts.headers,
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     });
