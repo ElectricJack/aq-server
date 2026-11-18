@@ -1799,9 +1799,9 @@ mod delivery {
             capabilities: BTreeSet::from(HOST9_CAPABILITIES.map(String::from)),
         };
         let grant = Uuid::new_v4();
-        let grant_expires = now + 100_000_000;
+        // The longest grant `Service::grant` admits (24 h): the tests move the clock by hours.
         service
-            .grant(f.actor, grant, scope.clone(), grant_expires)
+            .grant(f.actor, grant, scope.clone(), now + 86_400_000)
             .await
             .unwrap();
         let runtime = service.adopt_runtime(Uuid::new_v4(), 0).await.unwrap();
@@ -1912,7 +1912,7 @@ mod delivery {
             (self.service.collect_result_ready(&self.runtime, 8).await).unwrap()
         }
         async fn events(&self) -> Vec<Value> {
-            let page = self.service.outbox(&self.runtime, 0, 32).await.unwrap();
+            let page = self.service.outbox(&self.runtime, 0, 16).await.unwrap();
             page.into_iter()
                 .filter(|e| e.2.contract.name == "aq.work.result_ready")
                 .map(|e| e.2.payload)

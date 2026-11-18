@@ -310,9 +310,11 @@ impl Due {
         now_ms: i64,
         contract: &EventContract,
     ) -> Result<(Uuid, EventEnvelope)> {
+        // The facts are in the key: a send repeated at once because they moved
+        // may fall in the millisecond of the send before it.
         let key = format!(
-            "{}/{}/{now_ms}",
-            self.pending.task_id, self.pending.result_id
+            "{}/{}/{now_ms}/{}",
+            self.pending.task_id, self.pending.result_id, self.facts
         );
         let id = stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)?;
         let event = host10::result_ready_event(id, &self.ready(version), now_ms, contract);

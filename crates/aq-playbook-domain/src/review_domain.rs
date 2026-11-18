@@ -63,6 +63,29 @@ pub const HOST9_CAPABILITIES: [&str; 16] = [
     "work.unroutable",
     "judgment.assess",
 ];
+pub const HOST5_COMMANDS: [&str; 5] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+    "findings.reconcile",
+];
+/// Catalog 2.0.0 adds asynchronous judgments/checks and operation.get. D11
+/// registers every catalog command: exactly the registry's twelve.
+pub const HOST7_COMMANDS: [&str; 12] = [
+    "context.read",
+    "work.ensure",
+    "work.change",
+    "operation.cancel",
+    "judgment.request",
+    "check.request",
+    "operation.get",
+    "candidate.prepare",
+    "candidate.publish",
+    "findings.reconcile",
+    "message.send",
+    "decision.request",
+];
 /// The commands a Host9 namespace serves: the catalog's sixteen.
 pub const HOST9_COMMANDS: [&str; 16] = [
     "context.read",

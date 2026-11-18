@@ -6,6 +6,7 @@ pub mod delivery_store;
 #[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;
+pub mod host_values;
 pub mod review_domain;
 use aq_playbook_host::{
     model::*,
