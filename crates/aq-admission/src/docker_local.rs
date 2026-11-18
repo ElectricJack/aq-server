@@ -26,14 +26,14 @@ pub const DOCKER_LOCAL_PROFILES: [DockerLocalProfile; 2] = [
         recipe_id: "aq.claude-docker-local-result-local-recipe",
         recipe_digest: Some("b30030fb9192268da6079f59d650bcbad5dae3b2e34bf28af2b9e96e9fad8765"),
     },
-    // aq-worker W1. The recipe digest is not pinned yet: the worker's recipe
-    // body was not available when this was written.
+    // aq-worker W1: `aq_codex_mapper::docker_local::recipe_artifact()`
+    // (`codex_recipe` in `aq-worker ms1-definitions`).
     DockerLocalProfile {
         harness: "codex",
         cli_version: "0.166.0",
         adapter: "aq.codex-docker-result-local-adapter",
         profile: "codex-0.166-docker-local-result-local-v1",
         recipe_id: "aq.codex-docker-local-result-local-recipe",
-        recipe_digest: None,
+        recipe_digest: Some("64d136db5bfcb9a9c35f5930d0c37dc3647c04f293f7f95e6ea395e4bfd9b150"),
     },
 ];

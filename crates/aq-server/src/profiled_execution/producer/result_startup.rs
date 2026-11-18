@@ -170,8 +170,7 @@ impl ReportingInstruction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aq_admission::{ArtifactKind, DockerLocalProfile};
-    const CLAUDE: &DockerLocalProfile = &DOCKER_LOCAL_PROFILES[0];
+    use aq_admission::ArtifactKind;
     use serde_json::{Value, json};
     const TEXT: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -222,40 +221,41 @@ mod tests {
         );
     }
     #[test]
-    fn claude_docker_local_profile_runs_the_long_phase_without_terminal_input() {
-        let mut value = body();
-        value["profile"] = json!(CLAUDE.profile);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.claude-docker-local-result-local-recipe",
-                CLAUDE.recipe_digest.unwrap()
-            )
-            .unwrap()
-        );
-        let bytes = serde_json::to_string(&value).unwrap();
-        let mut adapter = reference(CLAUDE.adapter);
-        adapter.digest = Digest::of(bytes.as_bytes());
-        let (_, mut defs) = definitions(body());
-        defs[0] =
-            Definition::new(adapter.clone(), ArtifactKind::Definition, bytes.clone()).unwrap();
-        let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
-        assert!(!reporting.interactive && reporting.long_phase);
-        assert!(interactive_runtime(&reference("runtime-code"), &defs).unwrap());
-        // Another recipe body under the Claude profile is refused.
-        let mut wrong = value.clone();
-        wrong["recipe"] = json!(reference("aq.claude-docker-local-result-local-recipe"));
-        let wrong_bytes = serde_json::to_string(&wrong).unwrap();
-        let mut wrong_adapter = reference(CLAUDE.adapter);
-        wrong_adapter.digest = Digest::of(wrong_bytes.as_bytes());
-        let mut wrong_defs = defs.clone();
-        wrong_defs[0] =
-            Definition::new(wrong_adapter.clone(), ArtifactKind::Definition, wrong_bytes).unwrap();
-        assert!(from_definitions(&wrong_adapter, &wrong_defs).is_err());
-        // The Claude profile under the Codex adapter identity is refused.
-        let mut codex = reference(ADAPTER_ID);
-        codex.digest = Digest::of(bytes.as_bytes());
-        defs[0] = Definition::new(codex.clone(), ArtifactKind::Definition, bytes).unwrap();
-        assert!(from_definitions(&codex, &defs).is_err());
+    fn docker_local_profiles_run_the_long_phase_with_their_pinned_recipe_only() {
+        for sandbox in &DOCKER_LOCAL_PROFILES {
+            let (_, startup) = definitions(body());
+            let select = |adapter: &str, recipe: ArtifactRef| {
+                let mut value = body();
+                value["profile"] = json!(sandbox.profile);
+                value["recipe"] = json!(recipe);
+                let bytes = serde_json::to_string(&value).unwrap();
+                let mut adapter = reference(adapter);
+                adapter.digest = Digest::of(bytes.as_bytes());
+                let mut defs = startup.clone();
+                defs[0] =
+                    Definition::new(adapter.clone(), ArtifactKind::Definition, bytes).unwrap();
+                (adapter, defs)
+            };
+            let pin = public_reference(sandbox.recipe_id, sandbox.recipe_digest.unwrap()).unwrap();
+            let (adapter, defs) = select(sandbox.adapter, pin.clone());
+            let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
+            assert!(!reporting.interactive && reporting.long_phase);
+            assert!(interactive_runtime(&reference("runtime-code"), &defs).unwrap());
+            // Another recipe body under the same profile is refused.
+            let (adapter, defs) = select(sandbox.adapter, reference(sandbox.recipe_id));
+            assert!(
+                from_definitions(&adapter, &defs).is_err(),
+                "{}",
+                sandbox.harness
+            );
+            // A docker-local profile under the Codex result adapter identity is refused.
+            let (adapter, defs) = select(ADAPTER_ID, pin);
+            assert!(
+                from_definitions(&adapter, &defs).is_err(),
+                "{}",
+                sandbox.harness
+            );
+        }
     }
     #[test]
     fn interactive_profile_requires_its_exact_public_recipe_and_keeps_counted_startup() {
