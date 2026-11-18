@@ -179,7 +179,7 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     }
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
-    assert_eq!(CatalogProfile::from_number(10), None);
+    assert_eq!(CatalogProfile::from_number(11), None);
 }
 
 // ------------------------------------------------------------------------
@@ -1594,5 +1594,1090 @@ mod adapters {
         assert_eq!(h.routing.writes.lock().unwrap().len(), 1);
         assert_eq!(h.graph.stored(task).unwrap().n, 1);
         assert!(h.raised(task).await.is_empty());
+    }
+}
+
+// ------------------------------------------------------------------------
+// Epic 0 (spec 0016 section 6): host catalog 2.3.0 (profile 10), the event
+// `aq.work.result_ready` and the result facts of `work.read`.
+#[cfg(feature = "delivery_playbook")]
+mod delivery {
+    use super::adapters::{FakeGraph, FakeRouting};
+    use crate::common;
+    use aq_playbook_host::{
+        model::digest,
+        runner::{Intent, IntentStatus},
+    };
+    use aq_role_settings::delivery::DeliveryLimits;
+    use aq_routing::classify::Options;
+    use aq_server::{
+        playbooks::{
+            domain::{
+                GrantScope, Result,
+                delivery_decisions::Settled,
+                delivery_store::{DeliveryPort, Latest, Pending},
+            },
+            host_adapters::DeliverySettlement,
+            host_adapters::HostResult,
+            review_domain::{
+                CatalogProfile, DELIVERY_COMMANDS, HOST9_CAPABILITIES, HOST10_CAPABILITIES,
+                HOST10_DELIVERY_CAPABILITIES, HOST10_DELIVERY_COMMANDS, HOST10_FINGERPRINT,
+                HOST10_VERSION,
+            },
+            service::*,
+        },
+        protected_storage::{KeyFile, Keyring, ProtectionConfig},
+    };
+    use serde_json::{Value, json};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        os::unix::fs::PermissionsExt,
+        sync::{Arc, Mutex, atomic::Ordering},
+    };
+    use uuid::Uuid;
+
+    /// Everything a Host10 grant may name.
+    fn host10_capabilities() -> BTreeSet<String> {
+        HOST10_CAPABILITIES
+            .iter()
+            .chain(&HOST10_DELIVERY_CAPABILITIES)
+            .map(|c| c.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn host10_is_the_pinned_catalog_and_adds_the_event_and_the_result_facts() {
+        let registry = CatalogProfile::Host10.registry();
+        let manifest: Value = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.3.0/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(manifest["version"], HOST10_VERSION);
+        assert_eq!(manifest["fingerprint"], HOST10_FINGERPRINT);
+        assert_eq!(
+            manifest["supersedes"]["fingerprint"],
+            super::HOST9_FINGERPRINT
+        );
+        assert_eq!(
+            digest(&(HOST10_VERSION, &registry)).unwrap(),
+            HOST10_FINGERPRINT
+        );
+        let host10 = CatalogProfile::Host10;
+        assert_eq!((host10.number(), host10.config_name()), (10, "host_v10"));
+        assert_eq!(CatalogProfile::from_number(10), Some(host10));
+        assert!(host10.is_host2() && host10.has_routing() && host10.is_delivery());
+        assert!(!CatalogProfile::Host9.is_delivery());
+        assert!(registry.events.contains_key("aq.work.result_ready"));
+        assert_eq!(registry.commands["work.read"].version, "2.3.0");
+        // Only work.read changed from 2.2.0; the routing contracts are Host9's.
+        let host9 = CatalogProfile::Host9.registry();
+        for (name, contract) in &host9.commands {
+            if name != "work.read" {
+                assert_eq!(registry.commands.get(name), Some(contract), "{name}");
+            }
+        }
+        for (name, contract) in &host9.events {
+            assert_eq!(registry.events.get(name), Some(contract), "{name}");
+        }
+        // The Host9 grant scope is admitted, and the served commands are Host9's
+        // names and the six asynchronous delivery commands.
+        let scope = GrantScope {
+            workspace_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            recipients: vec![],
+            capabilities: HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
+        };
+        assert!(host10.validate_scope(&scope).is_ok());
+        // Host10 serves Host9's commands and the delivery commands implemented so far.
+        let served: BTreeSet<&str> = host10.commands().iter().copied().collect();
+        let mut expected: BTreeSet<&str> =
+            CatalogProfile::Host9.commands().iter().copied().collect();
+        expected.extend(HOST10_DELIVERY_COMMANDS);
+        expected.extend(DELIVERY_COMMANDS);
+        assert_eq!(served, expected);
+        for name in HOST10_DELIVERY_COMMANDS {
+            let contract = &registry.commands[name];
+            assert_eq!(contract.capabilities, BTreeSet::from([name.to_string()]));
+        }
+        for name in DELIVERY_COMMANDS {
+            let contract = &registry.commands[name];
+            assert!(contract.asynchronous.is_some(), "{name}");
+            assert!(contract.capabilities.contains(name), "{name}");
+        }
+        // Their capabilities are admitted in a Host10 grant and not in a Host9 one.
+        let delivery = GrantScope {
+            capabilities: host10_capabilities(),
+            ..scope.clone()
+        };
+        assert!(host10.validate_scope(&delivery).is_ok());
+        assert!(CatalogProfile::Host9.validate_scope(&delivery).is_err());
+        // A Host9 namespace is not reused.
+        assert!(host10.namespace_refusal(1, Some((9, 1))).is_some());
+        // The pin lists the vendored files byte for byte.
+        let pin: Value = serde_json::from_str(include_str!(
+            "../../../../vendor/aq-host-catalog-2.3.0-source.json"
+        ))
+        .unwrap();
+        assert_eq!(pin["catalog_fingerprint"], HOST10_FINGERPRINT);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../vendor/aq-host-catalog-2.3.0");
+        let files = pin["files"].as_array().unwrap();
+        assert_eq!(files.len(), std::fs::read_dir(&root).unwrap().count());
+        for file in files {
+            let bytes = std::fs::read(root.join(file["path"].as_str().unwrap())).unwrap();
+            assert_eq!(file["bytes"], bytes.len());
+            assert_eq!(
+                file["sha256"].as_str().unwrap(),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
+            );
+        }
+    }
+
+    /// What the server records of results: pending results, the latest result
+    /// of a task and which projects it runs.
+    #[derive(Default)]
+    struct Port {
+        pending: Mutex<Vec<Pending>>,
+        latest: Mutex<BTreeMap<Uuid, Latest>>,
+        bound: Mutex<BTreeSet<Uuid>>,
+        /// Every (task, result) recorded, the latest and earlier ones.
+        known: Mutex<BTreeSet<(Uuid, Uuid)>>,
+    }
+    #[async_trait::async_trait]
+    impl DeliveryPort for Port {
+        async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>> {
+            let all = self.pending.lock().unwrap();
+            let of = |p: &&Pending| project.is_none_or(|id| id == p.project_id);
+            Ok(all
+                .iter()
+                .filter(of)
+                .take(limit as usize)
+                .copied()
+                .collect())
+        }
+        async fn latest(&self, task: Uuid) -> Result<Option<Latest>> {
+            Ok(self.latest.lock().unwrap().get(&task).cloned())
+        }
+        async fn bound(&self, project: Uuid) -> Result<bool> {
+            Ok(self.bound.lock().unwrap().contains(&project))
+        }
+        async fn has_result(&self, task: Uuid, result: Uuid) -> Result<bool> {
+            Ok(self.known.lock().unwrap().contains(&(task, result)))
+        }
+    }
+
+    /// The server's settlement as `work.complete` and `work.return` call it:
+    /// answers what the test sets, and counts the calls.
+    pub(super) struct Settle {
+        pub answer: Mutex<Settled>,
+        /// (`complete` or the return reason, result) per call.
+        pub calls: Mutex<Vec<(String, Uuid)>>,
+    }
+    impl Default for Settle {
+        fn default() -> Self {
+            Self {
+                answer: Mutex::new(Settled::Completed),
+                calls: Mutex::default(),
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl DeliverySettlement for Settle {
+        async fn complete(&self, result: Uuid) -> Result<Settled> {
+            self.calls.lock().unwrap().push(("complete".into(), result));
+            Ok(*self.answer.lock().unwrap())
+        }
+        async fn send_back(&self, result: Uuid, reason: &str) -> Result<Settled> {
+            self.calls.lock().unwrap().push((reason.into(), result));
+            Ok(*self.answer.lock().unwrap())
+        }
+    }
+
+    struct D {
+        f: common::profiled::Fixture,
+        service: Service,
+        runtime: RuntimeOwner,
+        grant: Uuid,
+        scope: GrantScope,
+        graph: Arc<FakeGraph>,
+        routing: Arc<FakeRouting>,
+        port: Arc<Port>,
+        settle: Arc<Settle>,
+        other_project: Uuid,
+    }
+    async fn delivery(installation_routing: bool) -> D {
+        let f = common::profiled::fixture().await;
+        common::profiled::insert(&f).await;
+        let l = f.selection.lineage.clone();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("key");
+        std::fs::write(&path, [9_u8; 32]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let keys = Keyring::load(&ProtectionConfig {
+            active_key_id: "test".into(),
+            keys: vec![KeyFile {
+                id: "test".into(),
+                file: path,
+            }],
+        })
+        .unwrap();
+        let graph = Arc::new(FakeGraph::default());
+        let other_project = Uuid::new_v4();
+        let routing = Arc::new(FakeRouting {
+            graph: graph.clone(),
+            located: Mutex::default(),
+            // Nothing is on the automatic router: delivery does not depend on it.
+            on_router: Mutex::default(),
+            attempts: Mutex::new((1, 2)),
+            options: Mutex::new(Options::default()),
+            writes: Mutex::default(),
+        });
+        let port = Arc::new(Port::default());
+        let settle = Arc::new(Settle::default());
+        port.bound
+            .lock()
+            .unwrap()
+            .extend([l.project_id, other_project]);
+        let mut service = Service::new_host2(
+            &f.state,
+            Namespace {
+                namespace_id: Uuid::new_v4(),
+                generation: 1,
+                name: format!("host10-{}", Uuid::new_v4()),
+                workspace_id: l.workspace_id,
+                project_id: l.project_id,
+                owner_user_id: f.actor,
+            },
+            Arc::new(keys),
+            CatalogProfile::Host10,
+            graph.clone(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .with_routing(routing.clone())
+        .with_delivery(port.clone())
+        .with_settlement(settle.clone());
+        service.installation_routing = installation_routing;
+        service.initialize(f.actor).await.unwrap();
+        let now = (f.state.clock)().timestamp_millis();
+        let scope = GrantScope {
+            workspace_id: l.workspace_id,
+            project_id: l.project_id,
+            recipients: vec![],
+            capabilities: host10_capabilities(),
+        };
+        let grant = Uuid::new_v4();
+        // The longest grant `Service::grant` admits (24 h): the tests move the clock by hours.
+        service
+            .grant(f.actor, grant, scope.clone(), now + 86_400_000)
+            .await
+            .unwrap();
+        let runtime = service.adopt_runtime(Uuid::new_v4(), 0).await.unwrap();
+        D {
+            f,
+            service,
+            runtime,
+            grant,
+            scope,
+            graph,
+            routing,
+            port,
+            settle,
+            other_project,
+        }
+    }
+
+    impl D {
+        async fn pool(&self) -> sqlx::PgPool {
+            self.f.db.pool().await
+        }
+        fn clock(&self) -> i64 {
+            (self.f.state.clock)().timestamp_millis()
+        }
+        fn later(&self, ms: i64) {
+            self.f.time.fetch_add(ms, Ordering::SeqCst);
+        }
+        async fn read(&self, task: Uuid) -> HostResult {
+            let input = json!({"subject": {"id": task.to_string(), "revision": 1}});
+            self.run(&format!("read-{}", Uuid::new_v4()), "work.read", input)
+                .await
+        }
+        async fn run(&self, id: &str, name: &str, input: Value) -> HostResult {
+            let intent = self.intent(id, name, input);
+            let result = self.try_run(&intent).await.unwrap();
+            // Every answer is one the catalog declares.
+            (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
+            result
+        }
+        /// Dispatches `intent` (a replay when it was dispatched before).
+        async fn try_run(&self, intent: &Intent) -> Result<HostResult> {
+            (self.service)
+                .host_dispatch(&self.runtime, self.grant, 1, intent)
+                .await
+        }
+        fn intent(&self, id: &str, name: &str, input: Value) -> Intent {
+            let registry = CatalogProfile::Host10.registry();
+            Intent {
+                id: id.into(),
+                run: "synthetic-run".into(),
+                step: name.replace('.', "-"),
+                invocation: 1,
+                deadline_at_ms: self.clock() + 5000,
+                command: registry.commands[name].clone(),
+                input_digest: digest(&input).unwrap(),
+                input,
+                authority: CatalogProfile::Host10
+                    .authority(self.grant, 1, &self.scope)
+                    .unwrap(),
+                status: IntentStatus::Dispatched,
+                cancel_requested: false,
+                cancel_dispatched: false,
+                handle: None,
+                result: None,
+                reason: None,
+                late_results: vec![],
+                completion_event: None,
+                dispatch_sequence: None,
+            }
+        }
+        /// An artifact is active on the delivery binding.
+        async fn activated(&self) {
+            sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,1,'aq.delivery','sha256:delivery-1',1)")
+                .bind(self.service.namespace.namespace_id)
+                .execute(&self.pool().await)
+                .await
+                .unwrap();
+        }
+        async fn limits(&self, limits: DeliveryLimits) {
+            let now = self.clock();
+            let saved = aq_role_settings::save_delivery_limits(
+                &self.pool().await,
+                self.f.actor,
+                &limits,
+                0,
+                Uuid::new_v4(),
+                now,
+            )
+            .await;
+            saved.unwrap();
+        }
+        /// A task whose current attempt stopped with a recorded result of `project`.
+        fn stopped(&self, project: Uuid, outcome: &str) -> (Uuid, Pending) {
+            let task = self.graph.task("Stopped with a result", json!({}));
+            let pending = Pending {
+                task_id: task,
+                workspace_id: self.scope.workspace_id,
+                project_id: project,
+                attempt_id: Uuid::new_v4(),
+                result_id: Uuid::new_v4(),
+            };
+            let latest = Latest {
+                workspace_id: pending.workspace_id,
+                project_id: project,
+                attempt_id: pending.attempt_id,
+                result_id: pending.result_id,
+                outcome: outcome.into(),
+                changed: true,
+                head: "a".repeat(40),
+                base: "b".repeat(40),
+            };
+            self.port.pending.lock().unwrap().push(pending);
+            self.port.latest.lock().unwrap().insert(task, latest);
+            (self.port.known.lock().unwrap()).insert((task, pending.result_id));
+            (task, pending)
+        }
+        async fn asked(&self) -> usize {
+            (self.service.collect_result_ready(&self.runtime, 8).await).unwrap()
+        }
+        async fn events(&self) -> Vec<Value> {
+            let page = self.service.outbox(&self.runtime, 0, 16).await.unwrap();
+            page.into_iter()
+                .filter(|e| e.2.contract.name == "aq.work.result_ready")
+                .map(|e| e.2.payload)
+                .collect()
+        }
+        /// main moved to `head` in `project`.
+        async fn main_moved(&self, project: Uuid, head: &str) {
+            let sql = "INSERT INTO delivery_main_heads(project_id,head,observed_at_ms) VALUES($1,$2,$3) ON CONFLICT(project_id) DO UPDATE SET head=$2,observed_at_ms=$3";
+            let query = sqlx::query(sql).bind(project).bind(head).bind(self.clock());
+            query.execute(&self.pool().await).await.unwrap();
+        }
+        /// The task's pull request, as the pull_request commands record it.
+        async fn pull_request(&self, task: Uuid, checks: &str, failed: Value) {
+            let sql = "INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,updated_at_ms) VALUES($1,7,'https://example.test/pr/7','open','mergeable',$2,$3,$4) ON CONFLICT(task_id) DO UPDATE SET checks_state=$2,checks_failed=$3,updated_at_ms=$4";
+            let query = sqlx::query(sql).bind(task).bind(checks).bind(failed);
+            query
+                .bind(self.clock())
+                .execute(&self.pool().await)
+                .await
+                .unwrap();
+        }
+        async fn decided(&self, task: Uuid, result: Uuid, decision: &str) {
+            let sql = "INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,$3,NULL,$4)";
+            let query = sqlx::query(sql).bind(result).bind(task).bind(decision);
+            query
+                .bind(self.clock())
+                .execute(&self.pool().await)
+                .await
+                .unwrap();
+        }
+    }
+
+    // `work.complete`, `work.return`, `work.hold` and `supervisor.notify`.
+    mod decisions;
+
+    #[tokio::test]
+    async fn a_stopped_result_is_announced_once_and_again_after_the_decision_repeat_setting() {
+        let h = delivery(false).await;
+        // The repeat is Settings' (`decision_repeat_ms`), not a constant.
+        h.limits(DeliveryLimits {
+            decision_repeat_ms: 30_000,
+            ..Default::default()
+        })
+        .await;
+        let (task, pending) = h.stopped(h.scope.project_id, "success");
+        // No artifact is active on the delivery binding: nothing is sent.
+        assert_eq!((h.asked().await, h.events().await.len()), (0, 0));
+        h.activated().await;
+        assert_eq!(h.asked().await, 1);
+        let events = h.events().await;
+        assert_eq!(
+            events,
+            [
+                json!({"task_id": task.to_string(), "project_id": pending.project_id.to_string(),
+                "attempt_id": pending.attempt_id.to_string(), "result_id": pending.result_id.to_string(),
+                "version": 3})
+            ]
+        );
+        // Level-triggered: not again until the setting has passed.
+        assert_eq!(h.asked().await, 0);
+        h.later(29_999);
+        assert_eq!(h.asked().await, 0);
+        h.later(1);
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.events().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_result_with_a_decision_is_not_announced_and_a_new_result_is_at_once() {
+        let h = delivery(false).await;
+        h.activated().await;
+        let (task, pending) = h.stopped(h.scope.project_id, "success");
+        assert_eq!(h.asked().await, 1);
+        // A playbook decided on the result (complete, return or hold): never again.
+        h.decided(task, pending.result_id, "held").await;
+        h.later(10_000_000);
+        assert_eq!(h.asked().await, 0);
+        // The task is sent back and its next attempt stops with another result.
+        let next = Pending {
+            result_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+            ..pending
+        };
+        *h.port.pending.lock().unwrap() = vec![pending, next];
+        assert_eq!(h.asked().await, 1);
+        let events = h.events().await;
+        assert_eq!(events[1]["result_id"], next.result_id.to_string());
+        assert_eq!(h.asked().await, 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_announced_while_a_run_that_read_the_task_is_unfinished() {
+        let h = delivery(false).await;
+        h.activated().await;
+        let (task, _) = h.stopped(h.scope.project_id, "success");
+        assert_eq!(h.asked().await, 1);
+        // The run the event started reads the task and has not finished.
+        assert_eq!(h.read(task).await.outcome, "observed");
+        // Neither the repeat interval nor main moving announces it again...
+        h.later(120_000);
+        h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 0);
+        // ...until the run is old enough (the longest check wait and the repeat, Settings) to be given up.
+        h.later(3_700_000);
+        assert_eq!(h.asked().await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_change_of_main_or_of_the_pull_request_announces_again_at_once() {
+        let h = delivery(false).await;
+        h.activated().await;
+        let (task, _) = h.stopped(h.scope.project_id, "success");
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.asked().await, 0);
+        // Main moves.
+        h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.asked().await, 0);
+        // A pull request appears, and its checks finish.
+        h.pull_request(task, "pending", json!([])).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.asked().await, 0);
+        h.pull_request(task, "failed", json!(["unit"])).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.events().await.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn only_the_namespaces_project_is_announced_unless_installation_routing_is_on() {
+        for installation in [false, true] {
+            let h = delivery(installation).await;
+            h.activated().await;
+            h.stopped(h.scope.project_id, "success");
+            h.stopped(h.other_project, "success");
+            let announced = h.asked().await;
+            assert_eq!(announced, if installation { 2 } else { 1 });
+        }
+    }
+
+    #[tokio::test]
+    async fn work_read_gives_the_result_facts_for_a_routed_and_a_non_routed_project() {
+        let h = delivery(false).await;
+        let own = h.scope.project_id;
+        // The router serves the namespace's project only; the other is not on it.
+        h.routing.on_router.lock().unwrap().insert(own);
+        let (task, _) = h.stopped(own, "success");
+        let (elsewhere, _) = h.stopped(h.other_project, "failed");
+        h.main_moved(own, &"c".repeat(40)).await;
+        h.main_moved(h.other_project, &"d".repeat(40)).await;
+        let sql = "INSERT INTO delivery_tasks(task_id,returns) VALUES($1,2)";
+        sqlx::query(sql)
+            .bind(task)
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        for (task, outcome, base_main) in [(task, "success", 'c'), (elsewhere, "failed", 'd')] {
+            let read = h.read(task).await;
+            assert_eq!(read.outcome, "observed", "{}", read.output);
+            let facts = &read.output["facts"];
+            assert_eq!(facts["outcome"], outcome);
+            assert_eq!(facts["changed"], true);
+            assert_eq!(facts["branch"], format!("aq/{task}"));
+            assert_eq!(facts["head"], "a".repeat(40));
+            assert_eq!(facts["base"], "b".repeat(40));
+            assert_eq!(facts["main_head"], base_main.to_string().repeat(40));
+            assert_eq!(facts["pull_request"], Value::Null);
+            // The facts of 2.2.0 are still there.
+            assert_eq!(facts["title"], "Stopped with a result");
+            assert_eq!(
+                (&facts["charged_failures"], &facts["ended_attempts"]),
+                (&json!(1), &json!(2))
+            );
+        }
+        assert_eq!(h.read(task).await.output["facts"]["returns"], 2);
+        assert_eq!(h.read(elsewhere).await.output["facts"]["returns"], 0);
+        // A pull request, once one is known.
+        h.pull_request(task, "failed", json!(["unit", "lint"]))
+            .await;
+        let read = h.read(task).await;
+        assert_eq!(
+            read.output["facts"]["pull_request"],
+            json!({"number": 7, "url": "https://example.test/pr/7", "state": "open",
+                "mergeable": "mergeable", "checks": {"state": "failed", "failed": ["unit", "lint"]}})
+        );
+    }
+
+    #[tokio::test]
+    async fn work_read_of_a_task_without_a_result_has_empty_result_facts_and_refuses_what_it_cannot_serve()
+     {
+        let h = delivery(false).await;
+        let task = h.graph.task("Not run yet", json!({}));
+        let facts = h.read(task).await.output["facts"].clone();
+        assert_eq!(
+            (
+                &facts["outcome"],
+                &facts["changed"],
+                &facts["branch"],
+                &facts["head"],
+                &facts["base"]
+            ),
+            (
+                &json!(""),
+                &json!(false),
+                &json!(""),
+                &json!(""),
+                &json!("")
+            )
+        );
+        assert_eq!(
+            (&facts["returns"], &facts["pull_request"]),
+            (&json!(0), &Value::Null)
+        );
+        // A task of a project the server does not run, one that does not exist, an id that is no id.
+        let stranger = h.graph.task("Elsewhere", json!({}));
+        h.routing
+            .located
+            .lock()
+            .unwrap()
+            .insert(stranger, (Uuid::new_v4(), Uuid::new_v4()));
+        let refused = h.read(stranger).await;
+        assert_eq!(
+            (refused.outcome.as_str(), &refused.output["reason"]),
+            ("refused", &json!("not_on_router"))
+        );
+        let missing = h.read(Uuid::new_v4()).await;
+        assert_eq!(missing.output["reason"], "unknown_task");
+        let odd = h
+            .run(
+                "odd",
+                "work.read",
+                json!({"subject": {"id": "not-a-task", "revision": 1}}),
+            )
+            .await;
+        assert_eq!(
+            (odd.outcome.as_str(), &odd.output["reason"]),
+            ("refused", &json!("unknown_task"))
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // The asynchronous delivery commands: main.sync, branch.publish and
+    // pull_request.*. A fake forge and central git stand behind the port; the
+    // adapters over GitHub and aq-git are tested in `aq-delivery`.
+    mod commands {
+        use super::*;
+        use aq_delivery::{
+            Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod, MergeOutcome,
+            Mergeability, PullRequest, PullRequestState,
+            commands::{
+                Delivery, DeliveryTarget, GitFailure, GitPort, GitTarget, RefDeletion,
+                RefPublication, RetainedRef,
+            },
+            github::GitHubResult,
+        };
+        use aq_server::playbooks::host_adapters::DeliveryOps;
+
+        fn oid(c: char) -> String {
+            c.to_string().repeat(40)
+        }
+
+        /// Both the central git and the forge, scripted.
+        struct Fake {
+            log: Mutex<Vec<String>>,
+            checks: Mutex<(ChecksState, Vec<String>)>,
+        }
+        #[async_trait::async_trait]
+        impl GitPort for Fake {
+            async fn retain_ref(
+                &self,
+                _: Uuid,
+                _: &GitTarget,
+                reference: &str,
+            ) -> std::result::Result<RetainedRef, GitFailure> {
+                self.log.lock().unwrap().push(format!("retain {reference}"));
+                Ok(RetainedRef {
+                    head: oid('9'),
+                    retention_handle: Uuid::new_v4(),
+                })
+            }
+            async fn publish_ref(
+                &self,
+                _: Uuid,
+                _: &GitTarget,
+                reference: &str,
+                expected_old: Option<&str>,
+            ) -> std::result::Result<RefPublication, GitFailure> {
+                let lease = expected_old.unwrap_or("absent");
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("publish {reference} lease {lease}"));
+                Ok(RefPublication::Published { head: oid('a') })
+            }
+            async fn delete_ref(
+                &self,
+                _: Uuid,
+                _: &GitTarget,
+                reference: &str,
+            ) -> std::result::Result<RefDeletion, GitFailure> {
+                self.log.lock().unwrap().push(format!("delete {reference}"));
+                Ok(RefDeletion::Deleted)
+            }
+        }
+        fn pull(state: PullRequestState) -> PullRequest {
+            PullRequest {
+                number: 7,
+                url: "https://example.test/pr/7".into(),
+                head_sha: oid('a'),
+                state,
+            }
+        }
+        #[async_trait::async_trait]
+        impl GitHubAdapter for Fake {
+            async fn open_or_find(
+                &self,
+                _: &GitHubRepository,
+                _: &str,
+                _: &str,
+                title: &str,
+                _: &str,
+            ) -> GitHubResult<PullRequest> {
+                self.log.lock().unwrap().push(format!("open {title}"));
+                Ok(pull(PullRequestState::Open))
+            }
+            async fn pull_request(
+                &self,
+                _: &GitHubRepository,
+                _: u64,
+            ) -> GitHubResult<PullRequest> {
+                Ok(pull(PullRequestState::Open))
+            }
+            async fn checks(
+                &self,
+                _: &GitHubRepository,
+                _: u64,
+                _: Option<&[String]>,
+            ) -> GitHubResult<Checks> {
+                let (state, failed) = self.checks.lock().unwrap().clone();
+                Ok(Checks {
+                    state,
+                    failed,
+                    required: vec![],
+                    head_sha: oid('a'),
+                })
+            }
+            async fn mergeability(
+                &self,
+                _: &GitHubRepository,
+                _: u64,
+            ) -> GitHubResult<Mergeability> {
+                Ok(Mergeability::Clean)
+            }
+            async fn merge(
+                &self,
+                _: &GitHubRepository,
+                _: u64,
+                method: MergeMethod,
+                expected_head_sha: &str,
+            ) -> GitHubResult<MergeOutcome> {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("merge {} {expected_head_sha}", method.as_str()));
+                Ok(MergeOutcome::Merged { sha: oid('d') })
+            }
+            async fn close(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
+                self.log.lock().unwrap().push("close".into());
+                Ok(pull(PullRequestState::Closed))
+            }
+            async fn delete_branch(
+                &self,
+                _: &GitHubRepository,
+                _: &str,
+            ) -> GitHubResult<aq_delivery::BranchDeletion> {
+                Ok(aq_delivery::BranchDeletion::Deleted)
+            }
+        }
+        struct Ops(Arc<Fake>);
+        #[async_trait::async_trait]
+        impl DeliveryOps for Ops {
+            async fn target(&self, _: Uuid) -> Result<Option<DeliveryTarget>> {
+                Ok(Some(DeliveryTarget {
+                    git: GitTarget {
+                        repository_id: Uuid::from_u128(1),
+                        binding_generation: 1,
+                    },
+                    github: GitHubRepository {
+                        owner: "Acme".into(),
+                        name: "widgets".into(),
+                    },
+                    default_branch: "main".into(),
+                }))
+            }
+            async fn commands(&self) -> Option<Delivery> {
+                Some(Delivery::new(self.0.clone(), self.0.clone()))
+            }
+            async fn pull_request_text(&self, _: Uuid, _: Uuid) -> Result<(String, String)> {
+                Ok(("Task title".into(), "The report".into()))
+            }
+        }
+
+        async fn harness() -> (D, Arc<Fake>) {
+            let mut h = delivery(false).await;
+            let fake = Arc::new(Fake {
+                log: Mutex::default(),
+                checks: Mutex::new((ChecksState::Pending, vec![])),
+            });
+            // By value: the port of a shared (cloned) service is not replaced.
+            h.service = h.service.with_delivery_ops(Arc::new(Ops(fake.clone())));
+            (h, fake)
+        }
+        impl D {
+            /// A command that answers `accepted {handle}`: its handle.
+            async fn accepted(&self, name: &str, input: Value) -> String {
+                let result = self
+                    .run(&format!("{name}-{}", Uuid::new_v4()), name, input)
+                    .await;
+                assert_eq!(result.outcome, "accepted", "{name}: {}", result.output);
+                result.output["handle"].as_str().unwrap().to_owned()
+            }
+            async fn pass(&self) -> usize {
+                (self
+                    .service
+                    .collect_delivery_operations(&self.runtime, 4)
+                    .await)
+                    .unwrap()
+            }
+            /// Every `aq.delivery.completed` sent so far: (operation, payload).
+            async fn completions(&self) -> Vec<(String, Value)> {
+                let page = self.service.outbox(&self.runtime, 0, 16).await.unwrap();
+                page.into_iter()
+                    .filter(|e| e.2.contract.name == "aq.delivery.completed")
+                    .map(|e| {
+                        // The event names no subject or revision.
+                        assert_eq!((&e.2.subject, &e.2.revision), (&None, &None));
+                        (e.2.correlation["operation"].clone(), e.2.payload)
+                    })
+                    .collect()
+            }
+        }
+
+        #[tokio::test]
+        async fn main_sync_completes_once_with_the_head_and_main_moves_in_the_facts() {
+            let (h, fake) = harness().await;
+            let (task, _) = h.stopped(h.scope.project_id, "success");
+            let handle = h
+                .accepted(
+                    "main.sync",
+                    json!({"project": h.scope.project_id.to_string()}),
+                )
+                .await;
+            assert!(
+                h.completions().await.is_empty(),
+                "nothing is done at dispatch"
+            );
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(
+                h.completions().await,
+                [(
+                    handle,
+                    json!({"outcome": "synced", "output": {"head": oid('9')}})
+                )]
+            );
+            assert_eq!(*fake.log.lock().unwrap(), ["retain refs/heads/main"]);
+            assert_eq!(h.read(task).await.output["facts"]["main_head"], oid('9'));
+            // A completed operation is not run or completed again.
+            assert_eq!(h.pass().await, 0);
+            assert_eq!(h.completions().await.len(), 1);
+            // An unknown project is refused at once.
+            let refused = h
+                .run(
+                    "sync-unknown",
+                    "main.sync",
+                    json!({"project": "not-a-project"}),
+                )
+                .await;
+            assert_eq!(
+                (refused.outcome.as_str(), &refused.output["reason"]),
+                ("refused", &json!("unknown_project"))
+            );
+        }
+
+        #[tokio::test]
+        async fn a_result_is_published_opened_checked_merged_and_its_branch_deleted() {
+            let (h, fake) = harness().await;
+            let (task, _) = h.stopped(h.scope.project_id, "success");
+            let task_id = json!({"task": task.to_string()});
+            let branch = format!("refs/heads/aq/{task}");
+
+            let publish = h.accepted("branch.publish", task_id.clone()).await;
+            let open = h.accepted("pull_request.open", task_id.clone()).await;
+            assert_eq!(h.pass().await, 2);
+            let done = h.completions().await;
+            assert_eq!(
+                done[0],
+                (
+                    publish,
+                    json!({"outcome": "published", "output": {"head": oid('a')}})
+                )
+            );
+            assert_eq!(
+                done[1],
+                (
+                    open,
+                    json!({"outcome": "opened", "output": {"number": 7, "url": "https://example.test/pr/7"}})
+                )
+            );
+            // The first publication leases on an absent branch.
+            assert_eq!(
+                fake.log.lock().unwrap()[..2],
+                [
+                    format!("publish {branch} lease absent"),
+                    "open Task title".to_string()
+                ]
+            );
+            let facts = h.read(task).await.output["facts"].clone();
+            assert_eq!(facts["pull_request"]["state"], "open");
+            assert_eq!(facts["pull_request"]["number"], 7);
+
+            // Checks are pending: the wait runs, and is not completed.
+            let wait = h
+                .accepted(
+                    "pull_request.await_checks",
+                    json!({"task": task.to_string(), "deadline_ms": 600_000}),
+                )
+                .await;
+            assert_eq!(h.pass().await, 0);
+            assert_eq!(h.completions().await.len(), 2);
+            assert_eq!(
+                h.read(task).await.output["facts"]["pull_request"]["checks"]["state"],
+                "pending"
+            );
+            // They pass: exactly one completion, however many passes follow.
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.pass().await, 0);
+            let done = h.completions().await;
+            assert_eq!(done.len(), 3);
+            assert_eq!(done[2], (wait, json!({"outcome": "passed", "output": {}})));
+
+            let merge = h
+                .accepted(
+                    "pull_request.merge",
+                    json!({"task": task.to_string(), "method": "merge", "expected_head_sha": oid('a')}),
+                )
+                .await;
+            assert_eq!(h.pass().await, 1);
+            let done = h.completions().await;
+            assert_eq!(done[3], (merge, json!({"outcome": "merged", "output": {}})));
+            let log = fake.log.lock().unwrap().clone();
+            assert_eq!(
+                log[log.len() - 2..],
+                [
+                    format!("merge merge {}", oid('a')),
+                    format!("delete {branch}")
+                ]
+            );
+            assert_eq!(
+                h.read(task).await.output["facts"]["pull_request"]["state"],
+                "merged"
+            );
+        }
+
+        #[tokio::test]
+        async fn failed_checks_and_the_deadline_each_complete_the_wait_once() {
+            let (h, fake) = harness().await;
+            // The wait is bounded by Settings, not by what the playbook asked for.
+            h.limits(DeliveryLimits {
+                longest_check_wait_ms: 60_000,
+                ..Default::default()
+            })
+            .await;
+            let (failing, _) = h.stopped(h.scope.project_id, "success");
+            let (slow, _) = h.stopped(h.scope.project_id, "success");
+            for task in [failing, slow] {
+                h.pull_request(task, "pending", json!([])).await;
+            }
+            let wait = |task: Uuid| json!({"task": task.to_string(), "deadline_ms": 604_800_000});
+            let failed = h.accepted("pull_request.await_checks", wait(failing)).await;
+            *fake.checks.lock().unwrap() = (ChecksState::Failed, vec!["unit".into()]);
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(
+                h.completions().await,
+                [(
+                    failed,
+                    json!({"outcome": "failed", "output": {"names": ["unit"]}})
+                )]
+            );
+            let timed_out = h.accepted("pull_request.await_checks", wait(slow)).await;
+            *fake.checks.lock().unwrap() = (ChecksState::Pending, vec![]);
+            h.later(59_999);
+            assert_eq!(h.pass().await, 0);
+            h.later(1);
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.pass().await, 0);
+            let done = h.completions().await;
+            assert_eq!(done.len(), 2);
+            assert_eq!(
+                done[1],
+                (timed_out, json!({"outcome": "timeout", "output": {}}))
+            );
+        }
+
+        #[tokio::test]
+        async fn close_closes_and_deletes_the_branch_and_unknown_tasks_are_answered_by_the_catalog()
+        {
+            let (h, fake) = harness().await;
+            let (task, _) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "pending", json!([])).await;
+            let close = h
+                .accepted("pull_request.close", json!({"task": task.to_string()}))
+                .await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(
+                h.completions().await,
+                [(close, json!({"outcome": "closed", "output": {}}))]
+            );
+            assert_eq!(
+                fake.log.lock().unwrap().clone(),
+                ["close".to_string(), format!("delete refs/heads/aq/{task}")]
+            );
+            // A task the host does not know: refused where the catalog has a
+            // refusal, `closed` where it has none.
+            let unknown = json!({"task": Uuid::new_v4().to_string()});
+            for (name, reason) in [
+                ("branch.publish", "unknown_task"),
+                ("pull_request.open", "unknown_task"),
+            ] {
+                let r = h
+                    .run(&format!("{name}-unknown"), name, unknown.clone())
+                    .await;
+                assert_eq!(
+                    (r.outcome.as_str(), &r.output["reason"]),
+                    ("refused", &json!(reason))
+                );
+            }
+            let merge = json!({"task": Uuid::new_v4().to_string(), "method": "merge", "expected_head_sha": oid('a')});
+            let r = h.run("merge-unknown", "pull_request.merge", merge).await;
+            assert_eq!(r.output["reason"], "unknown_task");
+            let before = h.completions().await.len();
+            h.accepted("pull_request.close", unknown.clone()).await;
+            h.accepted(
+                "pull_request.await_checks",
+                json!({"task": Uuid::new_v4().to_string(), "deadline_ms": 5000}),
+            )
+            .await;
+            assert_eq!(h.pass().await, 2);
+            let done = h.completions().await;
+            assert_eq!(done.len(), before + 2);
+            assert!(done[before..].iter().all(|d| d.1["outcome"] == "closed"));
+            // A merge with no open pull request, and a publication of a task
+            // that has no result branch, are refused.
+            let (unpublished, _) = h.stopped(h.scope.project_id, "success");
+            let merge = json!({"task": unpublished.to_string(), "method": "squash", "expected_head_sha": oid('a')});
+            let r = h.run("merge-none", "pull_request.merge", merge).await;
+            assert_eq!(r.output["reason"], "no_pull_request");
+            h.port
+                .latest
+                .lock()
+                .unwrap()
+                .get_mut(&unpublished)
+                .unwrap()
+                .head
+                .clear();
+            let r = h
+                .run(
+                    "publish-none",
+                    "branch.publish",
+                    json!({"task": unpublished.to_string()}),
+                )
+                .await;
+            assert_eq!(
+                (r.outcome.as_str(), &r.output["reason"]),
+                ("refused", &json!("no_branch"))
+            );
+            // operation.get reports a running delivery operation, and only that.
+            let (running, _) = h.stopped(h.scope.project_id, "success");
+            let handle = h
+                .accepted("branch.publish", json!({"task": running.to_string()}))
+                .await;
+            let get = h
+                .run("get-delivery", "operation.get", json!({"handle": handle}))
+                .await;
+            assert_eq!(get.outcome, "running");
+        }
     }
 }

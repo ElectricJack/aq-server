@@ -301,12 +301,17 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         }
     }
     // D3: the default completion policy is settled by the policy actor.
+    #[cfg(not(feature = "delivery_playbook"))]
     let review = configuration
         .definition_bodies
         .iter()
         .find(|d| d.artifact() == &validation)
         .map(|d| crate::profiled_execution::settlement::review_requirement(d.body()))
         .ok_or_else(|| refused())?;
+    // Spec 0016 sections 7 and 11.2: nothing is chosen at offer time. The
+    // delivery playbook is the policy actor; it asks a person with `decision.request`.
+    #[cfg(feature = "delivery_playbook")]
+    let review = aq_admission::outcome::ReviewRequirement::PolicyActor;
     // Check every required actual body before writing any retained artifact.
     let definitions = unique
         .iter()

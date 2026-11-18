@@ -1,13 +1,15 @@
-//! Pure default completion policy. Every fact is server-owned evidence; the
-//! worker's report outcome or conclusion is never sufficient on its own.
+//! Pure default completion policy (moved out of the aq-server lib). Every
+//! fact is server-owned evidence; the worker's report outcome or conclusion
+//! is never sufficient on its own. Epic 0 (spec 0016 section 7): compiled
+//! out with the cargo feature `delivery_playbook`.
 use serde::{Deserialize, Serialize};
 
-pub(super) const KIND: &str = "aq.default-completion.v1";
-pub(super) const MAX_BODY: usize = 4096;
+pub const KIND: &str = "aq.default-completion.v1";
+pub const MAX_BODY: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Delivery {
+pub enum Delivery {
     Required,
     NotRequired,
 }
@@ -19,7 +21,7 @@ struct Body {
     delivery: Delivery,
 }
 /// The retained policy body, or None when this policy does not apply.
-pub(super) fn parse(body: &str) -> Option<Delivery> {
+pub fn parse(body: &str) -> Option<Delivery> {
     if body.len() > MAX_BODY {
         return None;
     }
@@ -27,34 +29,17 @@ pub(super) fn parse(body: &str) -> Option<Delivery> {
     (b.schema_version == 1 && b.kind == KIND).then_some(b.delivery)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum CheckVerdict {
-    Passed,
-    Failed,
-    /// No server-owned evidence bound to this exact source and validator.
-    Missing,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum DeliveryState {
-    Missing,
-    Published,
-    Unpublished,
-    Indeterminate,
-    /// The retained source is the admitted base: the attempt changed no file
-    /// and there is nothing to deliver (owner decision 2026-11-13).
-    NoChange,
-}
+/// Facts the gate reads, gathered by the server.
+pub use crate::result_facts::{CheckVerdict, DeliveryState};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Acceptance {
+pub enum Acceptance {
     Accepted,
     /// Superseded, cancelled, revoked or not reported as a success.
     Refused,
     /// The stop proof has not been recorded yet.
     NotStopped,
 }
-pub(super) struct Gate<'a> {
+pub struct Gate<'a> {
     pub acceptance: Acceptance,
     pub source_retained: bool,
     /// The retained source is unchanged, yet the worker's report claims changes.
@@ -68,14 +53,14 @@ pub(super) struct Gate<'a> {
     pub delivery_state: DeliveryState,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Verdict {
+pub enum Verdict {
     Complete,
     Rework(&'static str),
     Hold(&'static str),
 }
 /// Ordered gate: acceptance, retained source, required checks, delivery.
 /// Source precedes checks because check evidence binds the retained source.
-pub(super) fn evaluate(g: &Gate<'_>) -> Verdict {
+pub fn evaluate(g: &Gate<'_>) -> Verdict {
     match g.acceptance {
         Acceptance::Refused if g.agent_blocked => return Verdict::Rework("agent_blocked"),
         Acceptance::Refused => return Verdict::Rework("not_accepted"),
@@ -188,22 +173,6 @@ mod tests {
         assert_eq!(evaluate(&g), Verdict::Rework("required_check_failed"));
         g.acceptance = Acceptance::Refused;
         assert_eq!(evaluate(&g), Verdict::Rework("not_accepted"));
-    }
-    #[test]
-    fn default_policy_offers_name_the_policy_actor() {
-        use aq_admission::outcome::ReviewRequirement;
-        assert_eq!(
-            super::super::review_requirement(
-                r#"{"schema_version":1,"kind":"aq.default-completion.v1","delivery":"not_required"}"#
-            ),
-            ReviewRequirement::PolicyActor
-        );
-        assert_eq!(
-            super::super::review_requirement(
-                r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#
-            ),
-            ReviewRequirement::HumanOwner
-        );
     }
     #[test]
     fn default_policy_body_is_exact() {

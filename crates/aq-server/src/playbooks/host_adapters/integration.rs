@@ -38,6 +38,7 @@ pub struct EvidencePolicy {
     pub judgment_choices: Vec<String>,
 }
 impl EvidencePolicy {
+    #[cfg(not(feature = "delivery_playbook"))]
     fn names_nothing(&self) -> bool {
         self.checks.is_empty() && !self.review && self.judgment_choices.is_empty()
     }
@@ -170,31 +171,6 @@ fn destination(id: &str) -> Option<(&str, ObjectId)> {
     (target.len() > "refs/heads/".len() && target.starts_with("refs/heads/"))
         .then_some(())
         .and_then(|_| Some((target, oid(old)?)))
-}
-fn handle(id: &str, prefix: &str) -> Option<Uuid> {
-    Uuid::parse_str(id.strip_prefix(prefix)?).ok()
-}
-/// A bounded typed reason from the port; anything else maps to `fallback`.
-fn token(reason: &str, fallback: &str) -> String {
-    if (1..=64).contains(&reason.len())
-        && reason
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
-        reason.into()
-    } else {
-        fallback.into()
-    }
-}
-fn same_subject(a: &Value, id: &str, revision: i64) -> bool {
-    a["id"].as_str() == Some(id) && a["revision"].as_i64() == Some(revision)
-}
-fn merged(base: &Value, extra: Value) -> Value {
-    let mut out = base.as_object().cloned().unwrap_or_default();
-    if let Value::Object(extra) = extra {
-        out.extend(extra);
-    }
-    Value::Object(out)
 }
 
 /// What a receipt row records, besides the intent identity.
@@ -640,9 +616,16 @@ impl Service {
         };
         let workspace = self.namespace.workspace_id;
         let project = self.namespace.project_id;
+        #[cfg(not(feature = "delivery_playbook"))]
         let binding = match port.binding(workspace, project).await? {
             Some(b) if !b.evidence.names_nothing() => b,
             _ => return refuse(tx, None, "policy_unavailable").await,
+        };
+        // Spec 0016 section 7: no TOML evidence policy is required (the given
+        // evidence is still verified); a missing binding is refused as before.
+        #[cfg(feature = "delivery_playbook")]
+        let Some(binding) = port.binding(workspace, project).await? else {
+            return refuse(tx, None, "policy_unavailable").await;
         };
         let Some(candidate) = sqlx::query("SELECT state,repository_id,binding_generation,detail FROM playbook_integration_receipts WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND command_name='candidate.prepare'")
             .bind(candidate_op)

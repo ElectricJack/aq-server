@@ -290,6 +290,30 @@ async fn d4_host_catalog_recovery_classes_are_admitted() {
     )
     .await;
     assert!(owner.is_ok());
+    // Host catalog 2.3.0 (twenty-six commands, Epic 0) is admitted whole, with
+    // the feature `delivery_playbook` only.
+    #[cfg(feature = "delivery_playbook")]
+    {
+        let registry: Registry = serde_json::from_str(include_str!(
+            "../../../vendor/aq-host-catalog-2.3.0/registry.json"
+        ))
+        .unwrap();
+        assert_eq!(registry.commands.len(), 26);
+        let owner = Owner::start_registered(
+            "host-2-3-0".into(),
+            aq_playbook_host::Limits::default(),
+            registry,
+            || Ok(MemoryStorage::default()),
+            move |_| {
+                Ok(Peer {
+                    counts: Counts::default(),
+                    mode: HostMode::Dispatch,
+                })
+            },
+        )
+        .await;
+        assert!(owner.is_ok());
+    }
     for refused in [Recovery::Unsafe, Recovery::NaturallyIdempotent] {
         let mut c = contract();
         c.recovery = refused;

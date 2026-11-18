@@ -26,7 +26,7 @@ pub mod definitions;
 pub mod playbook_view;
 
 pub const VERSION: &str = "playbooks-inspection-1";
-const MAX_BYTES: usize = 262144;
+const MAX_BYTES: usize = catalog::MAX_BYTES;
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PageQuery {
@@ -467,6 +467,10 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         .route("/api/playbooks/inspection/runs", get(runs))
         .route("/api/playbooks/inspection/runs/{id}", get(detail))
         .route("/api/playbooks/inspection/admissions", get(admissions))
+        .route(
+            "/api/playbooks/inspection/definitions/{artifact}/graph",
+            get(playbook_view::definition_graph),
+        )
         .route(
             "/api/playbooks/inspection/catalog/definitions",
             get(catalog::definitions),

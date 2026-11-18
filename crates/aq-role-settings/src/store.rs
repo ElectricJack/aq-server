@@ -580,6 +580,16 @@ pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.routing_markdown, settings.routing_revision))
 }
+/// The Settings document a built-in playbook source is authored from, with its
+/// revision; `None` for a source that has none.
+pub async fn document_of(pool: &PgPool, source: &str) -> Result<Option<(String, i64)>> {
+    match source {
+        "routing" => routing_document(pool).await.map(Some),
+        #[cfg(feature = "delivery_playbook")]
+        "delivery" => delivery_document(pool).await.map(Some),
+        _ => Ok(None),
+    }
+}
 /// Replace the delivery document (spec 0016 §8). `expected_revision` is its
 /// revision as last read, 0 before the first save.
 #[cfg(feature = "delivery_playbook")]

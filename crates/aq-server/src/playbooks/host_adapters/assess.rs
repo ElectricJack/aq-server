@@ -8,30 +8,6 @@
 use super::*;
 use aq_playbook_domain::host9;
 
-/// One structured judgment for the provider. No secret crosses this boundary.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AssessRequest {
-    pub operation: Uuid,
-    /// The internal work purpose of the source the playbook was authored for.
-    pub purpose: aq_internal_work::Purpose,
-    pub instructions: String,
-    pub input: String,
-    /// JSON Schema of the answer.
-    pub schema: Value,
-    pub deadline_ms: u64,
-    pub max_output_bytes: u64,
-}
-
-/// The provider's answer (an object of the request's schema) and its usage.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AssessReply {
-    pub answer: Value,
-    pub provider: String,
-    pub model: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-}
-
 fn ended(outcome: &str, reference: &str, subject: &Value, reason: &str) -> HostResult {
     HostResult {
         outcome: outcome.into(),
@@ -155,7 +131,7 @@ impl Service {
     /// running after its deadline (and the reconcile grace) fails
     /// `deadline_exceeded`. Returns how many were failed.
     pub async fn expire_assessments(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
-        if self.profile != CatalogProfile::Host9 || self.host.is_none() {
+        if !self.profile.has_routing() || self.host.is_none() {
             return Ok(0);
         }
         let mut tx = self.tx().await?;

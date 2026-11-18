@@ -80,6 +80,22 @@ impl GitHubClient {
         auth: Auth<'_>,
         body: Option<&serde_json::Value>,
     ) -> GitHubResult<T> {
+        self.send_query(method, path, &[], auth, body).await
+    }
+
+    /// [`send`](Self::send) with query parameters, percent-encoded here.
+    pub async fn send_query<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        auth: Auth<'_>,
+        body: Option<&serde_json::Value>,
+    ) -> GitHubResult<T> {
+        let mut url = self.url(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
         let secret = match auth {
             Auth::App(jwt) => jwt,
             Auth::Installation(token) => token.secret(),
@@ -89,7 +105,7 @@ impl GitHubClient {
         authorization.set_sensitive(true);
         let mut request = self
             .http
-            .request(method, self.url(path)?)
+            .request(method, url)
             .header(AUTHORIZATION, authorization);
         if let Some(body) = body {
             request = request.json(body);

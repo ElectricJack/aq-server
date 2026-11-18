@@ -514,6 +514,11 @@ pub(super) async fn bootstrap(
             "Playbook inspection requires the mounted runtime namespace owner",
         ),
         capability(
+            "playbooks.definition-graph.read",
+            playbooks,
+            "Compiled graphs require the mounted runtime namespace owner",
+        ),
+        capability(
             "playbooks.loaded-definitions.read",
             playbooks && mounted.playbook_loaded_definitions,
             "Loaded definitions require the configured runtime namespace owner",

@@ -8,7 +8,11 @@
 //! `pending` row commits first, then the effect runs with a stable idempotency
 //! key, then the final row and its outbox event commit together. Reconcile
 //! only reads a retained final row and never performs an effect.
-use super::{domain::*, review_domain::CatalogProfile, service::*};
+use super::{domain::*, service::*};
+pub use aq_playbook_domain::{
+    host_values::*,
+    review_domain::{HOST5_COMMANDS, HOST7_COMMANDS},
+};
 use aq_playbook_host::{
     model::{ContractRef, EventEnvelope, canonical_bytes},
     runner::Intent,
@@ -19,12 +23,19 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod assess;
+#[cfg(feature = "delivery_playbook")]
+mod delivery_commands;
+#[cfg(feature = "delivery_playbook")]
+mod delivery_decisions;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
-pub use assess::{AssessReply, AssessRequest};
+#[cfg(feature = "delivery_playbook")]
+pub use delivery_commands::{DeliveryOps, ServerDelivery};
+#[cfg(feature = "delivery_playbook")]
+pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
 pub use integration::*;
 pub use requests::*;
@@ -42,6 +53,10 @@ pub struct HostPorts {
     pub integration: Option<Arc<dyn Integration>>,
     /// Host9 routing commands: routes, bindings and attempt history.
     pub routing: Arc<dyn RoutingPort>,
+    /// Catalog 2.3.0 delivery commands (Epic 0): where a project's work is
+    /// delivered, and the commands over the forge and central aq-git.
+    #[cfg(feature = "delivery_playbook")]
+    pub delivery_ops: Arc<dyn DeliveryOps>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -86,40 +101,9 @@ impl WorkGraph for GatewayGraph {
     }
 }
 
-/// A catalog outcome and its schema-validated output.
-#[derive(Clone, Debug, PartialEq)]
-pub struct HostResult {
-    pub outcome: String,
-    pub output: Value,
-}
-
 #[path = "findings.rs"]
 mod findings;
 
-pub const HOST5_COMMANDS: [&str; 5] = [
-    "context.read",
-    "work.ensure",
-    "work.change",
-    "operation.cancel",
-    "findings.reconcile",
-];
-/// Catalog 2.0.0 adds asynchronous judgments/checks and operation.get. D11
-/// registers every catalog command: exactly the registry's twelve.
-pub const HOST7_COMMANDS: [&str; 12] = [
-    "context.read",
-    "work.ensure",
-    "work.change",
-    "operation.cancel",
-    "judgment.request",
-    "check.request",
-    "operation.get",
-    "candidate.prepare",
-    "candidate.publish",
-    "findings.reconcile",
-    "message.send",
-    "decision.request",
-];
-const WORK_REF: &str = "aq.playbook.work/";
 const ATTEMPT_REF: &str = "aq.execution.attempt/";
 const PENDING: &str = "pending";
 
@@ -127,22 +111,6 @@ enum Stage {
     Retained(HostResult),
     Pending(Value),
     Fresh,
-}
-
-fn subject(id: impl ToString, revision: i64) -> Value {
-    json!({"id": id.to_string(), "revision": revision.max(0)})
-}
-fn text<'a>(input: &'a Value, field: &str) -> Result<&'a str> {
-    input[field].as_str().ok_or(Error::Invalid)
-}
-fn work_output(task: Uuid, revision: i64) -> Value {
-    json!({"reference": format!("{WORK_REF}{task}"), "subject": subject(task, revision)})
-}
-fn node_version(node: &Value) -> Result<i64> {
-    node["version"]
-        .as_i64()
-        .filter(|v| *v >= 1)
-        .ok_or(Error::Unknown)
 }
 
 impl Service {
@@ -170,6 +138,12 @@ impl Service {
             "context.read" => self.context_read(owner, id, revision, intent).await,
             "work.ensure" => self.work_ensure(owner, id, revision, intent).await,
             "work.change" => self.work_change(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "work.hold" => self.work_hold(owner, id, revision, intent).await,
+            #[cfg(feature = "delivery_playbook")]
+            "supervisor.notify" => self.supervisor_notify(owner, id, revision, intent).await,
             "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
             "judgment.assess" => self.judgment_assess(owner, id, revision, intent).await,
@@ -181,6 +155,12 @@ impl Service {
             "decision.request" => {
                 self.host_decision_request(owner, id, revision, intent)
                     .await
+            }
+            #[cfg(feature = "delivery_playbook")]
+            name if self.profile.is_delivery()
+                && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
+            {
+                self.delivery_command(owner, id, revision, intent).await
             }
             _ => Err(Error::Invalid),
         }
@@ -213,7 +193,7 @@ impl Service {
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
         self.ports()?;
-        let commands: &[&str] = if self.profile == CatalogProfile::Host9 {
+        let commands: &[&str] = if self.profile.has_routing() {
             self.profile.commands()
         } else if self.profile.is_host2() {
             &HOST7_COMMANDS
@@ -397,6 +377,22 @@ impl Service {
         let registry = self.profile.registry();
         let c = registry.events.get(contract).ok_or(Error::Invalid)?;
         let at = self.now()?;
+        // `aq.delivery.completed` names no subject or revision: the join
+        // correlates it by the operation.
+        #[cfg(feature = "delivery_playbook")]
+        let (subject_id, revision) = if subject.is_null() {
+            (None, None)
+        } else {
+            (
+                Some(text(subject, "id")?.to_string()),
+                Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+            )
+        };
+        #[cfg(not(feature = "delivery_playbook"))]
+        let (subject_id, revision) = (
+            Some(text(subject, "id")?.to_string()),
+            Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+        );
         let event = EventEnvelope {
             producer: "aq.host.bridge@1".into(),
             event_id: event_id.to_string(),
@@ -406,8 +402,8 @@ impl Service {
             },
             scope: "project".into(),
             correlation: BTreeMap::from([("operation".into(), operation.to_string())]),
-            subject: Some(text(subject, "id")?.to_string()),
-            revision: Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+            subject: subject_id,
+            revision,
             causation: Some(causation.to_string()),
             occurred_at_ms: Some(at),
             observed_at_ms: Some(at),

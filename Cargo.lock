@@ -237,6 +237,7 @@ dependencies = [
 name = "aq-delivery"
 version = "0.1.0"
 dependencies = [
+ "aq-role-settings",
  "aq-worker-protocol",
  "async-trait",
  "axum",
@@ -254,6 +255,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
  "unicode-normalization",
  "uuid",
 ]
@@ -328,6 +330,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "toml",
  "tracing",
  "uuid",
  "zeroize",
@@ -508,12 +511,16 @@ dependencies = [
 name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
+ "aq-internal-work",
+ "aq-machine-control",
  "aq-playbook-host",
  "aq-playbooks-compiler",
  "aq-routing",
  "aq-session-protocol",
+ "async-trait",
  "axum",
  "hex",
+ "schemars",
  "serde",
  "serde_json",
  "sqlx",

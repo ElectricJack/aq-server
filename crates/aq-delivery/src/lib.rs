@@ -2,18 +2,30 @@
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
 #[cfg(feature = "delivery_playbook")]
+pub mod commands;
+#[cfg(feature = "delivery_playbook")]
 pub mod github;
+#[cfg(feature = "delivery_playbook")]
+pub mod main_sync;
 mod policy;
 mod protocol;
 mod reconcile;
+pub mod source_checks;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,
 };
+#[cfg(feature = "delivery_playbook")]
 pub use policy::{
-    ChecksState, ClearFenceRequest, DeliverRequest, DeliveryOutcome, GitHubAdapter, GitHubError,
-    PublicationMode, PublicationPolicy, PublicationRefusal, PullRequest, PullRequestSpec,
-    RecoveryBlocked, RefusalReason, WaitForChecks,
+    BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, MergeRefusal,
+    Mergeability, PullRequest, PullRequestState,
 };
+pub use policy::{
+    ChecksState, ClearFenceRequest, DeliverRequest, DeliveryOutcome, GitHubAdapter,
+    PublicationMode, PublicationPolicy, PublicationRefusal, RecoveryBlocked, RefusalReason,
+    UnconfiguredGitHub, WaitForChecks,
+};
+#[cfg(not(feature = "delivery_playbook"))]
+pub use policy::{GitHubError, PullRequest, PullRequestSpec};
 pub use protocol::{
     CandidateResult, CandidateState, CommitMetadata, ConflictPath, GitError, OperationResult,
     OperationStatus, PublishResult, Receipt, ReconcileResult, Resolution, RetainedSource,

@@ -1,11 +1,17 @@
 //! D1b: policy-driven delivery, typed refusals and §10.3 reconciliation.
 use super::delivery::{candidate, context, peer, ready, response_peer, retain, service};
 use super::*;
+#[cfg(feature = "delivery_playbook")]
 use aq_server::delivery::{
-    ChecksState, DeliverRequest, DeliveryError, DeliveryOutcome, DeliveryService, GitHubAdapter,
-    GitHubError, ObservationRequest, PublicationMode, PublicationPolicy, PullRequest,
-    PullRequestSpec, ReconcileRequest, RefusalReason, Resolution, ResolveDisposition,
-    ResolveRequest,
+    BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, Mergeability, PullRequest,
+    github::{GitHubApiError, GitHubResult},
+};
+#[cfg(not(feature = "delivery_playbook"))]
+use aq_server::delivery::{ChecksState, GitHubError, PullRequest, PullRequestSpec};
+use aq_server::delivery::{
+    DeliverRequest, DeliveryError, DeliveryOutcome, DeliveryService, GitHubAdapter,
+    ObservationRequest, PublicationMode, PublicationPolicy, ReconcileRequest, RefusalReason,
+    Resolution, ResolveDisposition, ResolveRequest,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -13,6 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct FakeGitHub {
     calls: AtomicUsize,
 }
+#[cfg(not(feature = "delivery_playbook"))]
 #[async_trait::async_trait]
 impl GitHubAdapter for FakeGitHub {
     async fn open_pull_request(
@@ -25,6 +32,56 @@ impl GitHubAdapter for FakeGitHub {
     async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ChecksState::Pending)
+    }
+}
+#[cfg(feature = "delivery_playbook")]
+impl FakeGitHub {
+    fn call<T>(&self) -> GitHubResult<T> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(GitHubApiError::Unconfigured)
+    }
+}
+#[cfg(feature = "delivery_playbook")]
+#[async_trait::async_trait]
+impl GitHubAdapter for FakeGitHub {
+    async fn open_or_find(
+        &self,
+        _: &GitHubRepository,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> GitHubResult<PullRequest> {
+        self.call()
+    }
+    async fn pull_request(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
+        self.call()
+    }
+    async fn checks(
+        &self,
+        _: &GitHubRepository,
+        _: u64,
+        _: Option<&[String]>,
+    ) -> GitHubResult<Checks> {
+        self.call()
+    }
+    async fn mergeability(&self, _: &GitHubRepository, _: u64) -> GitHubResult<Mergeability> {
+        self.call()
+    }
+    async fn merge(
+        &self,
+        _: &GitHubRepository,
+        _: u64,
+        _: MergeMethod,
+        _: &str,
+    ) -> GitHubResult<MergeOutcome> {
+        self.call()
+    }
+    async fn close(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
+        self.call()
+    }
+    async fn delete_branch(&self, _: &GitHubRepository, _: &str) -> GitHubResult<BranchDeletion> {
+        self.call()
     }
 }
 fn policy(mode: PublicationMode, target: &str) -> PublicationPolicy {

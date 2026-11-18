@@ -1,0 +1,53 @@
+{
+  "commands_added": [
+    "branch.publish",
+    "main.sync",
+    "pull_request.await_checks",
+    "pull_request.close",
+    "pull_request.merge",
+    "pull_request.open",
+    "supervisor.notify",
+    "work.complete",
+    "work.hold",
+    "work.return"
+  ],
+  "commands_changed": [
+    "work.read"
+  ],
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "events_added": [
+    "aq.delivery.completed",
+    "aq.work.result_ready"
+  ],
+  "fingerprint": "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a",
+  "supersedes": {
+    "fingerprint": "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a",
+    "version": "2.2.0"
+  },
+  "version": "2.3.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

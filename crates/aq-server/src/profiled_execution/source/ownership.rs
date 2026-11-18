@@ -28,6 +28,10 @@ struct Evidence {
     /// Spec 0007: the handoff whose saved commit this immutable source is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     handoff: Option<Value>,
+    /// Spec 0016 §4: the synced, retained head of the followed named ref.
+    #[cfg(feature = "delivery_playbook")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    main_sync: Option<Value>,
     commit_inspection: Value,
     retention_inspection: Value,
 }
@@ -60,12 +64,36 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
     {
         return Err(refused());
     }
+    #[cfg(feature = "delivery_playbook")]
+    if body.evidence.main_sync.is_some() && !matches!(a.selection, SourceSelection::NamedRef { .. })
+    {
+        return Err(refused());
+    }
     match &a.selection {
         SourceSelection::Immutable { object } => {
             if *object != a.resolved_object
                 || body.evidence.reference_observation.is_some()
                 || body.evidence.publication_head.is_some()
             {
+                return Err(refused());
+            }
+        }
+        #[cfg(feature = "delivery_playbook")]
+        SourceSelection::NamedRef { reference } if body.evidence.main_sync.is_some() => {
+            let (e, id, g) = (
+                &body.evidence,
+                a.repository_id,
+                a.repository_binding_generation,
+            );
+            let scope = aq_delivery::main_sync::Scope::new(a.project_id, id, g, reference.as_str());
+            let (hex, handle, at) = (
+                &a.resolved_object.hex,
+                body.retention_handle,
+                a.observed_at_ms,
+            );
+            let proves =
+                aq_delivery::main_sync::proves(e.main_sync.as_ref(), &scope, hex, handle, at);
+            if e.reference_observation.is_some() || e.publication_head.is_some() || !proves {
                 return Err(refused());
             }
         }

@@ -1,12 +1,16 @@
 //! D3 automatic settlement: a policy actor evaluates each recorded result under
 //! the retained default completion policy. The AQ row is evidence, never task
 //! state; aq-graph owns completion and only its validated receipt confirms it.
-use super::{
-    completion,
-    default_policy::{self as policy, Acceptance, CheckVerdict, Delivery, DeliveryState, Verdict},
-    owner::*,
-};
+//! With `delivery_playbook` (spec 0016 section 7) the verdict half is compiled
+//! out: only a playbook's `work.complete` or `work.return` settles a result.
+#[cfg(not(feature = "delivery_playbook"))]
+use super::facts;
+use super::{completion, owner::*};
 use crate::{AppState, profiled_execution::results};
+#[cfg(feature = "delivery_playbook")]
+use aq_playbook_domain::delivery_decisions::Settled;
+#[cfg(not(feature = "delivery_playbook"))]
+use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -62,7 +66,7 @@ fn status(row: &sqlx::postgres::PgRow) -> Result<AutoSettlement> {
         evidence: row.get("evidence"),
     })
 }
-async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>> {
+pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>> {
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     sqlx::query("SELECT set_config('lock_timeout','500ms',true),set_config('statement_timeout','2000ms',true),set_config('aq.settlement_owner',$1,true)")
         .bind(OWNER)
@@ -84,10 +88,12 @@ async fn lock_row(
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.
+#[cfg(not(feature = "delivery_playbook"))]
 fn outcome_acceptable(outcome: aq_admission::transport::ProcessOutcome) -> bool {
     matches!(outcome, aq_admission::transport::ProcessOutcome::Success)
 }
 /// The retained default-completion policy, or None (no rows are written).
+#[cfg(not(feature = "delivery_playbook"))]
 fn applicable(state: &AppState, r: &results::RecordedResult) -> Option<Delivery> {
     if r.outcome.review != aq_admission::outcome::ReviewRequirement::PolicyActor {
         return None;
@@ -102,6 +108,7 @@ fn applicable(state: &AppState, r: &results::RecordedResult) -> Option<Delivery>
 
 /// Runs after a result is durably recorded (new or duplicate POST) and on
 /// explicit replay. Idempotent per report; a confirmed or rework row is final.
+#[cfg(not(feature = "delivery_playbook"))]
 pub async fn settle_after_record(
     state: &AppState,
     report_id: Uuid,
@@ -160,7 +167,7 @@ pub async fn settle_after_record(
         Verdict::Hold(_) | Verdict::Complete if conflict_held => held(VERSION_CONFLICT),
         Verdict::Hold(reason) => held(reason),
         Verdict::Complete => {
-            prepare_locked(state, &mut tx, &r, evidence, time).await?;
+            prepare_locked(state, &mut tx, &r, evidence, time, "Default policy").await?;
             return dispatch(state, tx, report_id).await.map(Some);
         }
     };
@@ -347,20 +354,17 @@ pub async fn reworked_without_facts(
     .map_err(db)
 }
 
-/// Gathers only server-owned facts under the report/attempt locks.
+/// Judges the server-owned facts ([`facts::gather_locked`]) under the
+/// report/attempt locks with the default policy's gate.
+#[cfg(not(feature = "delivery_playbook"))]
 async fn evaluate_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     r: &results::RecordedResult,
     delivery: Delivery,
 ) -> Result<(Verdict, Value)> {
-    let v = crate::execution::authority::load_locked(
-        state,
-        tx,
-        &r.report.binding.session,
-        crate::execution::authority::Policy::IdentityOnly,
-    )
-    .await?;
+    let g = facts::gather_locked(state, tx, r).await?;
+    let v = &g.view;
     let acceptance = if !r.is_current_report_head
         || !outcome_acceptable(r.report.outcome)
         || v.revoked
@@ -373,71 +377,7 @@ async fn evaluate_locked(
     } else {
         Acceptance::Accepted
     };
-    // The exact retained source is the central receipt pinned by this report.
-    let (mut source, mut lineage_unknown) = (None, false);
-    for op in &r.report.source_receipt_ids {
-        match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
-            Ok(confirmed) => {
-                // Review C-1: judged against the lineage's original base, never a handoff
-                // successor's own starting commit (its predecessor's saved edits).
-                let m = &confirmed.manifest;
-                let task = r.spec.task.task_id;
-                let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
-                // the gate holds only a report that would otherwise succeed.
-                let base = base.await?;
-                lineage_unknown = base.is_none();
-                let changed = base.is_none_or(|base| m.checkpoint.hex != base);
-                source = Some((*op, m.checkpoint.hex.clone(), changed));
-                break;
-            }
-            Err(crate::error::AppError::Conflict(_)) => {}
-            Err(e) => return Err(e),
-        }
-    }
-    let attempt = r.report.binding.attempt_id;
-    let mut checks = Vec::with_capacity(r.outcome.required_checks.len());
-    let mut check_evidence = Vec::with_capacity(r.outcome.required_checks.len());
-    for check in &r.outcome.required_checks {
-        let verdict = match &source {
-            None => CheckVerdict::Missing,
-            Some((op, checkpoint, _)) => {
-                let found: Option<String> = sqlx::query_scalar("SELECT verdict FROM profiled_check_evidence WHERE attempt_id=$1 AND check_id=$2 AND source_operation_id=$3 AND checkpoint=$4 AND validator_digest=$5")
-                    .bind(attempt).bind(check.id.as_str()).bind(op).bind(checkpoint).bind(check.validator.digest.as_str())
-                    .fetch_optional(&mut **tx).await.map_err(db)?;
-                match found.as_deref() {
-                    Some("passed") => CheckVerdict::Passed,
-                    Some("failed") => CheckVerdict::Failed,
-                    Some(_) => return Err(crate::error::AppError::Internal),
-                    None => CheckVerdict::Missing,
-                }
-            }
-        };
-        checks.push(verdict);
-        check_evidence.push(json!({"id":check.id.as_str(),"validator_digest":check.validator.digest.as_str(),"verdict":verdict}));
-    }
-    let delivery_state = match &source {
-        None => DeliveryState::Missing,
-        // An unchanged source has nothing to publish (owner decision 2026-11-13).
-        Some((_, _, false)) => DeliveryState::NoChange,
-        Some((op, _, true)) => {
-            let found: Option<String> = sqlx::query_scalar(
-                "SELECT state FROM profiled_delivery_evidence WHERE attempt_id=$1 AND source_operation_id=$2",
-            )
-            .bind(attempt)
-            .bind(op)
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(db)?;
-            match found.as_deref() {
-                None => DeliveryState::Missing,
-                Some("published") => DeliveryState::Published,
-                Some("unpublished") => DeliveryState::Unpublished,
-                Some("indeterminate") => DeliveryState::Indeterminate,
-                Some(_) => return Err(crate::error::AppError::Internal),
-            }
-        }
-    };
+    let (source, lineage_unknown) = (&g.source, g.lineage_unknown);
     let unchanged = matches!(source, Some((_, _, false)));
     let conclusion = r.report.conclusion.as_str();
     let claimed = aq_profiled_state::claim::claims_changes(conclusion);
@@ -453,18 +393,18 @@ async fn evaluate_locked(
         claimed_changes_missing: unchanged && claimed,
         agent_blocked,
         lineage_unknown,
-        checks: &checks,
+        checks: &g.checks,
         delivery,
-        delivery_state,
+        delivery_state: g.delivery_state,
     });
     let evidence = json!({
         "policy_actor": ACTOR,
         "policy": r.outcome.validation_policy,
         "report": r.receipt_artifact,
-        "accepted": {"current_report_head": r.is_current_report_head, "stopped": v.stopped, "cancelled": v.cancellation_id.is_some(), "revoked": v.revoked, "holds_task": v.holds_task},
-        "source": source.as_ref().map(|(op, checkpoint, changed)| json!({"operation_id": op, "checkpoint": checkpoint, "changed": changed})),
-        "checks": check_evidence,
-        "delivery": {"policy": delivery, "state": delivery_state},
+        "accepted": g.accepted(r),
+        "source": g.source_evidence(),
+        "checks": g.check_evidence,
+        "delivery": {"policy": delivery, "state": g.delivery_state},
     });
     Ok((verdict, evidence))
 }
@@ -475,13 +415,14 @@ async fn prepare_locked(
     r: &results::RecordedResult,
     evidence: Value,
     time: i64,
+    accepted_by: &str,
 ) -> Result<()> {
     let rt = state.agent_access.as_deref().ok_or_else(unavailable)?;
     let task = &r.spec.task;
     crate::agent_access::settlement_service_identity(rt, task.workspace_id)?;
     let op = Uuid::new_v4();
     let payload = bytes(
-        &json!({"idempotency_key":format!("aq-auto-settlement-v1:{op}"),"reason":format!("Default policy accepted retained result {}",r.report.report_id),"operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"completed"}}]}),
+        &json!({"idempotency_key":format!("aq-auto-settlement-v1:{op}"),"reason":format!("{accepted_by} accepted retained result {}",r.report.report_id),"operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"completed"}}]}),
     )?;
     if payload.len() > 8192 {
         return Err(unavailable());
@@ -556,7 +497,131 @@ async fn dispatch(
     Ok(s)
 }
 
-#[cfg(test)]
+/// Epic 0 (spec 0016 section 6.2): the locked prelude of a playbook's
+/// decision on `report_id`, as `settle_after_record`'s, with the existing
+/// settlement row and whether the fences hold. A playbook decides only on the
+/// attempt's current report head, while the attempt still holds the task,
+/// after its proven stop, and when it was neither revoked nor cancelled.
+#[cfg(feature = "delivery_playbook")]
+async fn playbook_locked<'a>(
+    state: &'a AppState,
+    report_id: Uuid,
+) -> Result<(
+    Transaction<'a, Postgres>,
+    results::RecordedResult,
+    Option<AutoSettlement>,
+    bool,
+)> {
+    use crate::execution::authority::{self, hot::HotState};
+    let mut tx = begin(state).await?;
+    let r = results::load_locked(state, &mut tx, report_id).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+        .bind(format!("aq-auto-settlement:{report_id}"))
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    let existing = lock_row(&mut tx, report_id)
+        .await?
+        .map(|row| status(&row))
+        .transpose()?;
+    let v = authority::load_locked(
+        state,
+        &mut tx,
+        &r.report.binding.session,
+        authority::Policy::IdentityOnly,
+    )
+    .await?;
+    let hot = sqlx::query_scalar::<_, Value>(
+        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(r.report.binding.attempt_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?;
+    let hot: HotState =
+        serde_json::from_value(hot).map_err(|_| crate::error::AppError::Internal)?;
+    let fenced = r.is_current_report_head
+        && v.holds_task
+        && v.stopped
+        && hot.stop.known_stopped()
+        && !v.revoked
+        && v.cancellation_id.is_none();
+    Ok((tx, r, existing, fenced))
+}
+
+/// Catalog 2.3.0 `work.complete`: completes the task with `report_id` through
+/// `prepare_locked` / `dispatch` behind [`playbook_locked`]'s fences; the
+/// claim is released only on a validated Graph receipt. Idempotent per
+/// report: a confirmed result is `Completed` again, a dispatched one replays
+/// the same payload, and a Graph version conflict is never dispatched again.
+#[cfg(feature = "delivery_playbook")]
+pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<Settled> {
+    let settled = |s: &AutoSettlement| match s.disposition {
+        AutoDisposition::Confirmed => Settled::Completed,
+        AutoDisposition::Prepared | AutoDisposition::Possible => Settled::Pending,
+        AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
+    };
+    let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    match existing {
+        Some(s)
+            if matches!(
+                s.disposition,
+                AutoDisposition::Prepared | AutoDisposition::Possible
+            ) && s.dispatch_count < MAX_DISPATCH as u32 =>
+        {
+            return Ok(settled(&dispatch(state, tx, report_id).await?));
+        }
+        Some(s)
+            if s.disposition != AutoDisposition::Held
+                || s.reason.as_deref() == Some(VERSION_CONFLICT) =>
+        {
+            tx.commit().await.map_err(db)?;
+            return Ok(settled(&s));
+        }
+        _ if !fenced => {
+            tx.commit().await.map_err(db)?;
+            return Ok(Settled::Stale);
+        }
+        _ => {}
+    }
+    let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
+    prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;
+    Ok(settled(&dispatch(state, tx, report_id).await?))
+}
+
+/// Catalog 2.3.0 `work.return`: refuses `report_id` for rework with the
+/// playbook's `reason` code behind [`playbook_locked`]'s fences, then records
+/// the replacement facts ([`record_replacement_facts`]) so that the
+/// replacement owner admits a new attempt. Idempotent per report: a result
+/// already refused is `Returned` again (and its facts are recorded again); a
+/// completed or completing one is `Stale`.
+#[cfg(feature = "delivery_playbook")]
+pub async fn return_by_playbook(
+    state: &AppState,
+    report_id: Uuid,
+    reason: &str,
+) -> Result<Settled> {
+    let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let held = existing
+        .as_ref()
+        .is_none_or(|s| s.disposition == AutoDisposition::Held);
+    let reworked = existing.is_some_and(|s| s.disposition == AutoDisposition::ReworkRequired);
+    if !reworked && (!held || !fenced) {
+        tx.commit().await.map_err(db)?;
+        return Ok(Settled::Stale);
+    }
+    if !reworked {
+        let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.return", "reason": reason, "report": r.receipt_artifact});
+        sqlx::query("INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,reason,evidence,created_at_ms,updated_at_ms) VALUES($1,$2,$3,'rework_required',$4,$5,$6,$6) ON CONFLICT(report_id) DO UPDATE SET disposition=EXCLUDED.disposition,reason=EXCLUDED.reason,evidence=EXCLUDED.evidence,updated_at_ms=EXCLUDED.updated_at_ms")
+            .bind(report_id).bind(r.report.binding.attempt_id).bind(ACTOR).bind(reason).bind(evidence).bind(now(state)?)
+            .execute(&mut *tx).await.map_err(db)?;
+    }
+    tx.commit().await.map_err(db)?;
+    Box::pin(replacement_facts_after_rework(state, report_id)).await;
+    Ok(Settled::Returned)
+}
+
+#[cfg(all(test, not(feature = "delivery_playbook")))]
 mod outcome_tests {
     use aq_admission::transport::ProcessOutcome;
     #[test]
