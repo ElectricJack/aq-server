@@ -60,7 +60,12 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     assert_eq!(list["data"]["items"].as_array().unwrap().len(), 1);
     fixture_response("sessions", &list);
     let row = &list["data"]["items"][0];
+    // No observation source was enrolled for this attempt: unknown, with the
+    // reason, and no invented times.
     assert_eq!(row["observation"]["state"], "unknown");
+    assert_eq!(row["observation"]["reason"], "no_observation_source");
+    assert!(row["observation"].get("last_observation_at").is_none());
+    assert!(row["observation"].get("last_progress_at").is_none());
     // QA RA-16: an unknown observation made now is not already stale.
     assert!(
         row["observation"]["fresh_until"].as_str() > row["observation"]["observed_at"].as_str()
@@ -72,6 +77,26 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     assert_eq!(detail["data"]["id"], id);
     fixture_response("session", &detail);
     assert_eq!(row["last_output_at"], detail["data"]["last_activity_at"]);
+    // The list and the detail show the ledger's state: progress recorded now
+    // is `working`, with both times and no reason.
+    sqlx::query("INSERT INTO observation_attempt_projections(attempt_id,projection,last_observed_at_ms,last_progress_at_ms) VALUES($1,'{}',$2,$2)")
+        .bind(f.profiled.offer.binding.attempt_id)
+        .bind(NOW as i64)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    let at = "1970-01-01T00:16:40.000Z";
+    let working = json!({"state": "working", "last_observation_at": at, "last_progress_at": at});
+    let (_, list) = read(&app, "/api/v1/sessions?limit=1", "owner@localhost").await;
+    let (_, detail) = read(&app, &format!("/api/v1/sessions/{id}"), "owner@localhost").await;
+    for mut observation in [
+        list["data"]["items"][0]["observation"].clone(),
+        detail["data"]["observation"].clone(),
+    ] {
+        let shown = observation.as_object_mut().unwrap();
+        assert!(shown.remove("observed_at").is_some() && shown.remove("fresh_until").is_some());
+        assert_eq!(observation, working);
+    }
     // No launch binding: inspect only, no session message slot.
     assert_eq!(detail["data"]["permissions"], json!(["session.inspect"]));
     assert_eq!(
@@ -333,7 +358,8 @@ async fn session_lifecycle_reports_are_historical_acl_scoped_and_never_live_obse
     let (status, after) = read(&app, &path, "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{after}");
     assert_eq!(after["data"]["execution_authority"], "finished");
-    assert_eq!(after["data"]["observation"]["state"], "unknown");
+    // The process is over: `ended`, from the same status every end path stores.
+    assert_eq!(after["data"]["observation"]["state"], "ended");
     assert!(after["data"]["terminal"].is_null());
     for (key, ms) in [
         ("started_at", start.recorded_at_ms),

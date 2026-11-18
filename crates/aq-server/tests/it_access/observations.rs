@@ -490,7 +490,7 @@ async fn quota_and_database_failure_roll_back_all_accounting_effects() {
     let p = packet(&f, vec![event(&s, 1, 10)]);
     assert!(matches!(
         observations::ingest(&f.state, f.node.node_id, &p).await,
-        Err(observations::Error::Capacity)
+        Err(observations::Error::Limit(_))
     ));
     assert_eq!(counts(&f).await, (0, 0));
     sqlx::query("UPDATE observation_nodes SET retained_bytes=1000 WHERE node_id=$1")
@@ -1725,4 +1725,225 @@ async fn retention_closes_late_packet_window_without_resetting_sequence() {
     }
     assert_eq!(counts(&f).await, (1, 1));
     assert_eq!(projection(&f, &s).await.known_subtotals[0], 10);
+}
+
+mod state_limits_and_release {
+    use super::*;
+    use aq_role_settings::observation::ObservationLimits;
+    use aq_server::stall::{
+        freshness::{self, State},
+        policy::ExecutionPolicy,
+    };
+    use std::sync::atomic::Ordering;
+
+    fn session(source: &OwnerSource) -> Uuid {
+        match source.binding.session {
+            SessionIdentity::Remote { session_id, .. } => session_id,
+            _ => unreachable!(),
+        }
+    }
+    fn progress(source: &OwnerSource, sequence: u64) -> ObservationRecord {
+        let mut body = event(source, sequence, 0).body;
+        body.kind = ObservationKind::TurnBoundary { in_turn: true };
+        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
+    }
+    async fn send(f: &Fixture, events: Vec<ObservationRecord>) -> observations::Result<Packet> {
+        let packet = packet(f, events);
+        observations::ingest(&f.state, f.node.node_id, &packet)
+            .await
+            .map(|_| packet)
+    }
+    /// Saves the Settings value as the owner does; the next use reads it.
+    async fn save(f: &Fixture, change: impl FnOnce(&mut ObservationLimits)) {
+        let pool = f.db.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let (mut limits, expected_revision) = aq_role_settings::observation_limits(&mut conn)
+            .await
+            .unwrap();
+        change(&mut limits);
+        let mutation = aq_role_settings::Mutation {
+            change: aq_role_settings::Change::ObservationLimits(limits),
+            expected_revision,
+            operation_id: Uuid::new_v4(),
+        };
+        aq_role_settings::apply(&pool, f.actor, &mutation, NOW as i64)
+            .await
+            .unwrap();
+    }
+    async fn one(f: &Fixture, id: Uuid, now: u64) -> (freshness::Facts, Decided) {
+        let facts = observations::freshness(&f.db.pool().await, &[id])
+            .await
+            .unwrap()[&id];
+        (facts, freshness::state(&facts, &ExecutionPolicy::v1(), now))
+    }
+    type Decided = (State, Option<&'static str>);
+    async fn states(f: &Fixture, sessions: &[Uuid], now: u64) -> Vec<Decided> {
+        // One call, one query, however many sessions the page has.
+        let facts = observations::freshness(&f.db.pool().await, sessions)
+            .await
+            .unwrap();
+        assert_eq!(facts.len(), sessions.len());
+        sessions
+            .iter()
+            .map(|id| freshness::state(&facts[id], &ExecutionPolicy::v1(), now))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn each_observation_state_is_produced_by_the_matching_ledger_contents() {
+        let policy = ExecutionPolicy::v1();
+        let (mut f, s) = seeded(Some(true)).await;
+        let id = session(&s);
+        assert_eq!(
+            one(&f, id, NOW).await.1,
+            (State::Unknown, Some("no_observation_source"))
+        );
+        observations::register_source(&f.state, &s).await.unwrap();
+        assert_eq!(one(&f, id, NOW).await.1, (State::Awaiting, None));
+        // Usage is an observation, not progress.
+        send(&f, vec![event(&s, 1, 10)]).await.unwrap();
+        let (facts, state) = one(&f, id, NOW).await;
+        assert_eq!(
+            (facts.last_observation_ms, facts.last_progress_ms),
+            (Some(NOW), None)
+        );
+        assert_eq!(
+            state,
+            (State::Quiet, Some("no_progress_within_evidence_window"))
+        );
+        f.time.store((NOW + 1000) as i64, Ordering::SeqCst);
+        send(&f, vec![progress(&s, 2)]).await.unwrap();
+        let (facts, state) = one(&f, id, NOW + 1000).await;
+        assert_eq!(
+            (facts.last_observation_ms, facts.last_progress_ms),
+            (Some(NOW + 1000), Some(NOW + 1000))
+        );
+        assert_eq!(state, (State::Working, None));
+        // Later usage keeps the session observed; the progress ages out of
+        // the ladder's evidence window.
+        let later = NOW + 1000 + policy.evidence_window_ms + 1;
+        f.time.store(later as i64, Ordering::SeqCst);
+        send(&f, vec![event(&s, 3, 20)]).await.unwrap();
+        let (facts, state) = one(&f, id, later).await;
+        assert_eq!(
+            (facts.last_observation_ms, facts.last_progress_ms),
+            (Some(later), Some(NOW + 1000))
+        );
+        assert_eq!(
+            state,
+            (State::Quiet, Some("no_progress_within_evidence_window"))
+        );
+        // Nothing for longer than the ladder's grace: the evidence is stale.
+        assert_eq!(
+            one(&f, id, later + policy.grace_ms + 1).await.1,
+            (State::Stale, Some("no_observation_within_grace"))
+        );
+        // The attempt ends; its successor is enrolled and has sent nothing.
+        f.time.store(NOW as i64, Ordering::SeqCst);
+        let next = successor(&mut f, &s).await;
+        assert_eq!(
+            states(&f, &[id, session(&next)], NOW).await,
+            [(State::Ended, None), (State::Awaiting, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cap_read_from_settings_refuses_at_its_value_and_admits_once_raised() {
+        let (f, s) = setup().await;
+        save(&f, |limits| limits.max_events_per_node = 1).await;
+        send(&f, vec![event(&s, 1, 10)]).await.unwrap();
+        let Err(observations::Error::Limit(refusal)) = send(&f, vec![event(&s, 2, 20)]).await
+        else {
+            panic!("the second event passes the limit of 1")
+        };
+        for part in ["1 events in use", "limit of 1", "max_events_per_node"] {
+            assert!(refusal.contains(part), "{refusal}");
+        }
+        assert_eq!(counts(&f).await, (1, 1));
+        // No restart: the next batch reads the raised value.
+        save(&f, |limits| limits.max_events_per_node = 2).await;
+        send(&f, vec![event(&s, 2, 20)]).await.unwrap();
+        assert_eq!(counts(&f).await, (2, 2));
+        // The byte limit is refused the same way, by name.
+        save(&f, |limits| {
+            limits.max_events_per_node = 10;
+            limits.max_retained_bytes_per_node = 1;
+        })
+        .await;
+        let Err(observations::Error::Limit(refusal)) = send(&f, vec![event(&s, 3, 30)]).await
+        else {
+            panic!("the node is over its byte limit")
+        };
+        assert!(refusal.contains("max_retained_bytes_per_node"), "{refusal}");
+    }
+
+    #[tokio::test]
+    async fn a_source_is_released_at_attempt_end_and_drains_for_the_grace_only() {
+        let (mut f, s) = setup().await;
+        let pool = f.db.pool().await;
+        save(&f, |limits| {
+            limits.max_sources_per_node = 1;
+            limits.final_drain_grace_ms = 1000;
+        })
+        .await;
+        let first = send(&f, vec![event(&s, 1, 10)]).await.unwrap();
+        // The node has enrolled as many sources in its life as the former
+        // fixed cap allowed, and its one live source fills today's limit.
+        sqlx::query("UPDATE observation_nodes SET source_count=256 WHERE node_id=$1")
+            .bind(f.node.node_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(observations::release_ended(&f.state).await.unwrap(), 0);
+        // The attempt ends. Its successor enrolls on the same node: the ended
+        // attempt's source is released first and no longer counts.
+        let next = successor(&mut f, &s).await;
+        let released: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+            "SELECT source_id,released_at_ms,accept_until_ms FROM observation_source_releases",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(released, [(s.source_id, NOW as i64, NOW as i64 + 1000)]);
+        // Idempotent: a later sweep, with another grace, changes nothing.
+        save(&f, |limits| limits.final_drain_grace_ms = 60_000).await;
+        f.time.store((NOW + 500) as i64, Ordering::SeqCst);
+        assert_eq!(observations::release_ended(&f.state).await.unwrap(), 0);
+        // The live source fills the limit of 1: a further one is refused by name.
+        let mut extra = next.clone();
+        (extra.source_id, extra.generation) = (Uuid::new_v4(), 2);
+        let Err(observations::Error::Limit(refusal)) =
+            observations::register_source(&f.state, &extra).await
+        else {
+            panic!("the live source fills the limit")
+        };
+        assert!(refusal.contains("max_sources_per_node"), "{refusal}");
+        // The final drain of the ended attempt, inside the grace: accepted
+        // and accounted as usual.
+        f.time.store((NOW + 1000) as i64, Ordering::SeqCst);
+        send(&f, vec![event(&s, 2, 20)]).await.unwrap();
+        assert_eq!(counts(&f).await, (2, 2));
+        // After the grace a new batch from the released source is refused; an
+        // exact replay of an accepted one still returns its receipt.
+        f.time.store((NOW + 1001) as i64, Ordering::SeqCst);
+        assert!(matches!(
+            send(&f, vec![event(&s, 3, 30)]).await,
+            Err(observations::Error::Refused)
+        ));
+        assert_eq!(counts(&f).await, (2, 2));
+        observations::ingest(&f.state, f.node.node_id, &first)
+            .await
+            .unwrap();
+        // The node's sequence is not stalled for the live attempt.
+        send(&f, vec![event(&next, 3, 5)]).await.unwrap();
+        assert_eq!(counts(&f).await, (3, 3));
+        // The released source's events stay readable.
+        let kept: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM observation_events WHERE attempt_id=$1")
+                .bind(s.binding.attempt_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kept, 2);
+    }
 }

@@ -1,6 +1,7 @@
 //! DEP6 row retention. Each statement deletes at most `BATCH` rows; dependent
 //! facts/receipts are removed before their parents. See docs/operations/row-retention.md
 //! for the age, authority and idempotency predicates for every table.
+pub mod observation_sources;
 pub mod source_config;
 use sqlx::{PgPool, Row};
 use std::{collections::BTreeMap, time::Duration};
