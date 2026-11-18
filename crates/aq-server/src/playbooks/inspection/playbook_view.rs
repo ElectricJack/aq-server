@@ -2,21 +2,29 @@
 //! playbooks-inspection-1: definition name and version, pinned-versus-active
 //! comparison, the ordered public step graph and the pending human decision.
 //! Read-only: no activation, install or decision authority.
-use super::{RunView, catalog};
-use crate::playbooks::{
-    domain::{Error, Result},
-    driver::Driver,
-    service::Service,
+use super::{NamespaceView, RunView, bounded, catalog};
+use crate::{
+    authz::RequireOwner,
+    playbooks::{
+        domain::{Error, Result},
+        driver::Driver,
+        service::Service,
+    },
 };
 use aq_playbook_host::{
     model::{Artifact, Operation, Playbook},
     runner,
+};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::Arc,
     time::Duration,
 };
 use uuid::Uuid;
@@ -85,6 +93,48 @@ pub struct StepNode {
 pub struct Graph {
     pub entries: BTreeMap<String, String>,
     pub steps: BTreeMap<String, StepNode>,
+}
+
+#[derive(Serialize)]
+pub(super) struct DefinitionGraph {
+    api_version: &'static str,
+    namespace: NamespaceView,
+    artifact: String,
+    graph: Option<Graph>,
+}
+
+/// Reads the same public projection as run inspection, keyed by the immutable
+/// artifact so it also works before a run exists and for historical run pins.
+pub(super) async fn definition_graph(
+    RequireOwner(actor): RequireOwner,
+    Extension(driver): Extension<Arc<Driver>>,
+    Path(artifact): Path<String>,
+    Query(query): Query<super::definitions::DefinitionsQuery>,
+) -> Result<Json<DefinitionGraph>> {
+    let service = &driver.service;
+    if query
+        .project_id
+        .is_some_and(|id| id != service.namespace.project_id)
+    {
+        return Err(Error::Forbidden);
+    }
+    if !artifact.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(Error::Invalid);
+    }
+    service.authorize_inspection(actor.id).await?;
+    let graph = service.stored_graph(&artifact).await?;
+    service.authorize_inspection(actor.id).await?;
+    bounded(DefinitionGraph {
+        api_version: "playbooks-definition-graph-1",
+        namespace: (&service.namespace).into(),
+        artifact,
+        graph,
+    })
 }
 /// X32: steps reachable from the run's entry in breadth-first order from
 /// `start` (successors by edge label, then `on_error`).
