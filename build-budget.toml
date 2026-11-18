@@ -1,9 +1,10 @@
-# Ratcheted build budgets, checked by scripts/build-budget.py in the CI lint job.
+# Build budgets, checked by scripts/build-budget.py in the CI lint job.
 # See AGENTS.md "Build health" for why they exist and how to change them.
 #
-# Lowering a number is always fine (`python3 scripts/build-budget.py --update`
-# does it for you). Raising one needs an explicit edit here, a reason in the
-# commit message, and the owner's review: it makes every build slower.
+# The check compares this tree with origin/main: the test binaries and each
+# ratcheted crate may not grow. The numbers below are ceilings; a pull request
+# does not edit them to keep a gain. Raising one needs an explicit edit here, a
+# reason in the commit message, and the owner's review: it makes every build slower.
 
 [test_binaries]
 # Integration test targets (tests/*.rs, tests/*/main.rs, [[test]]) across the
