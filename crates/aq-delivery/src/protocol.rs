@@ -388,6 +388,14 @@ pub(super) fn decode<T: WireResult>(
     })
 }
 pub(super) async fn exchange(path: &Path, request: &[u8]) -> Result<Vec<u8>> {
+    exchange_within(path, request, Duration::from_secs(35)).await
+}
+/// [`exchange`] with the caller's wait, for operations that reach a remote.
+pub(super) async fn exchange_within(
+    path: &Path,
+    request: &[u8],
+    wait: Duration,
+) -> Result<Vec<u8>> {
     if request.len() > MAX_REQUEST {
         return Err(DeliveryError::InvalidInput("request exceeds 1 MiB"));
     }
@@ -402,7 +410,7 @@ pub(super) async fn exchange(path: &Path, request: &[u8]) -> Result<Vec<u8>> {
         }
         Ok(raw)
     };
-    tokio::time::timeout(Duration::from_secs(35), call)
+    tokio::time::timeout(wait, call)
         .await
         .map_err(|_| DeliveryError::Transport)?
 }
