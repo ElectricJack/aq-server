@@ -91,7 +91,10 @@ jobs:
           POSTGRES_PASSWORD: test
         ports:
           - 5432:5432
+        # The data directory is memory, as scripts/test-db has it: every test
+        # creates and drops its own database, and nothing here outlives the job.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U postgres"
           --health-interval 2s
           --health-timeout 5s
