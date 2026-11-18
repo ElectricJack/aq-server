@@ -24,6 +24,12 @@ Ordinary errors use existing AQ `{error,message}` semantics: invalid bounds 400,
 
 Integration requires mounting `agent_access::human::routes(&state)` inside AQ's protected human router, then publishing `human.graph.read`, `tasks.read`, `knowledge.read` v1 only for eligible Owner access with an installed Graph Runtime. Bootstrap wiring and the actual UI adapter must land together; this module alone does not enable those capabilities.
 
+## All-project Work list
+
+`GET /api/human/work/tasks` requires an Owner and the `human.work.tasks.read` capability. It accepts `limit` (default 50, maximum 64), `q`, `state`, and an opaque `cursor`. The `human-work-task-list-1` response has `items` (task ID, workspace ID, title, lifecycle state, update time), `projects` (project ID, workspace ID, name for the items' current bindings), `unavailable_projects`, and `next_cursor`.
+
+AQ sends one bounded request to Graph's `POST /v1/task-list` for each page. Graph checks the credential in each requested workspace and orders authorized task summaries by most recent update and task ID. Search and state are applied before pagination. AQ checks the current Owner and project bindings again before returning the page. Cursors expire after 15 minutes and changing the filters, project bindings, or Graph authorization restarts the list. Refresh returns the latest ordering as tasks change. Roll out the Graph endpoint and its indexes before enabling this view through AQ.
+
 ## Work view projections (G11 X8-X13)
 
 These additions serve the dashboard Work view. Counts are decimal strings.
