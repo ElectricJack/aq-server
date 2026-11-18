@@ -39,10 +39,8 @@ pub(super) struct DefinitionGraph {
     namespace: NamespaceView,
     artifact: String,
     graph: Option<Graph>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description_markdown: Option<String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    step_facts: BTreeMap<String, Vec<StepFact>>,
+    #[serde(flatten)]
+    details: DefinitionDetails,
 }
 
 /// Reads the same public projection as run inspection, keyed by the immutable
@@ -71,19 +69,14 @@ pub(super) async fn definition_graph(
     };
     tx.commit().await?;
     let graph = registered.flatten();
-    let step_facts = graph
-        .as_ref()
-        .zip(authored.as_ref())
-        .map(|(_, artifact)| step_facts(&artifact.content.playbook))
-        .unwrap_or_default();
+    let details = DefinitionDetails::new(graph.as_ref(), authored.as_ref(), description_markdown);
     service.authorize_inspection(actor.id).await?;
     bounded(DefinitionGraph {
         api_version: "playbooks-definition-graph-1",
         namespace: (&service.namespace).into(),
         artifact,
         graph,
-        description_markdown,
-        step_facts,
+        details,
     })
 }
 

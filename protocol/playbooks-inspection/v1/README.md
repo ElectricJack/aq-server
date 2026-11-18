@@ -21,3 +21,13 @@ compiled behavior with names, modes, deadlines and outcomes. The graph and
 facts exclude runtime input and output values, expression bodies, and captured
 definitions. These fields are optional for definitions with no retained authoring
 data or where a projection exceeds its size bound.
+
+`step_inspection` optionally maps steps to a `summary`, `uses`, and `branches`.
+Each use names its `producer` and `consumer` step IDs, compiled field `paths`,
+and optional `purpose`. The same use appears on both steps. These uses describe
+data flow when the consumer runs. Each branch explanation has the graph's exact
+`label` and `to` step, an `error` flag, and a display `reason`. The runtime error
+edge uses `label: "On error"` and `error: true`. The projection uses the verified
+retained artifact and reviewed command contracts. It omits facts it cannot
+establish and is bounded at 24 KiB when JSON encoded. Clients can still use
+the graph and step facts when this field is absent.

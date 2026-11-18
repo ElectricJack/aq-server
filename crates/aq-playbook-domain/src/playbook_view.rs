@@ -1,8 +1,10 @@
 //! Playbooks view values (G11 X30-X33): definition name and version, the
 //! pinned-versus-active comparison, the ordered public step graph and the
 //! pending human decision. Pure; the reads are in aq-server.
-use crate::{Error, Namespace, Result};
-use aq_playbook_host::model::{CallMode, Expr, IterationFailure, JoinMode, Operation, Playbook};
+use crate::{Error, Namespace, Result, step_inspection};
+use aq_playbook_host::model::{
+    Artifact, CallMode, Expr, IterationFailure, JoinMode, Operation, Playbook,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -108,6 +110,39 @@ pub async fn registered_graph<'e>(
 pub struct StepFact {
     label: &'static str,
     value: String,
+}
+
+/// Response-only presentation. Kept out of the stored graph and activation
+/// identity, with the rich projection tied to the verified retained artifact.
+#[derive(Default, Serialize)]
+pub struct DefinitionDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description_markdown: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    step_facts: BTreeMap<String, Vec<StepFact>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    step_inspection: BTreeMap<String, step_inspection::StepInspection>,
+}
+
+impl DefinitionDetails {
+    pub fn new(
+        registered: Option<&Graph>,
+        authored: Option<&Artifact>,
+        description_markdown: Option<String>,
+    ) -> Self {
+        let mut details = Self {
+            description_markdown,
+            ..Self::default()
+        };
+        if let Some((registered, artifact)) = registered.zip(authored) {
+            let playbook = &artifact.content.playbook;
+            details.step_facts = step_facts(playbook);
+            if registered == &graph(playbook) {
+                details.step_inspection = step_inspection::project(&artifact.content, registered);
+            }
+        }
+        details
+    }
 }
 
 fn duration(ms: u64) -> String {

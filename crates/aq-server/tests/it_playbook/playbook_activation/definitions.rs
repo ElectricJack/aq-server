@@ -165,6 +165,7 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
     assert_eq!(compiled["namespace"], page["namespace"]);
     assert_eq!(compiled["description_markdown"], markdown);
     assert!(compiled["step_facts"].is_object());
+    assert!(compiled.get("step_inspection").is_none());
     assert!(!compiled.to_string().contains("Draft, never compiled"));
     assert_eq!(
         compiled["graph"],
@@ -176,6 +177,7 @@ async fn actual_startup_definitions_are_redacted_historical_and_do_not_read_engi
     let (_, unknown) = get(&app, "owner@localhost", &graph_path(&unknown)).await;
     assert_eq!(unknown["graph"], Value::Null);
     assert!(unknown.get("description_markdown").is_none());
+    assert!(unknown.get("step_inspection").is_none());
     assert_eq!(
         get(&app, "owner@localhost", &graph_path("bad-digest"))
             .await
