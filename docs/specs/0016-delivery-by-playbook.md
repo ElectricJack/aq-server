@@ -87,31 +87,32 @@ example `refs/heads/aq/`) may be created and replaced under a lease
 
 ## 5. Push and fetch through central aq-git (E0.2–E0.4)
 
-### 5.1 aq-git: a git endpoint (E0.2), revised 2026-11-18
+### 5.1 aq-git: a plain git server for the project repository (E0.2), revised 2026-11-18
 
-aq-git serves git smart-HTTP (`upload-pack`, `receive-pack`) on a second Unix socket that only aq-server
-reaches. aq-server authenticates the worker with its node credential, one for all projects, and adds the
-attempt's grant in request headers. The headers name the repository, the base commit, the task ref
-`refs/heads/aq/<task-id>` with its lease, the main ref, the size limit and the operation id.
+Owner: "a central aq-git with a per-project repository - tasks will always be on branches. Worker node pulls
+from git repo on server using some local credential for the central repo, and then when it's done it pushes
+back to the server repo, on the server aq-git then pushes to origin."
 
-**Pushes land in a per-task staging repository, never in the project pool.**
-- **Staging:** `repositories/<id>/staging/<task-id>.git` borrows objects from the project pool through
-  alternates. Reads across tasks are accepted, because task refs are feature branches and `main` changes
-  only through a GitHub PR.
-- **What may be pushed:** only the grant's task ref, under its lease. Deletes and push certificates are
-  refused.
-- **The commit point is the existing `artifact.import` path.** When a push completes, aq-git imports the
-  new commits into the pool: quarantine, strict fsck, descent from the base, feature profile, quota,
-  retention handle, receipt.
-- **Success is reported only after the import receipt is durable.** A failed import leaves the pool
-  unchanged. A retried push with the same operation id replays the receipt.
-- **Fetch** sees `main`, served from the retained synced head, and the task's own ref.
-- **Cleanup:** staging repositories are removed with the task ref (`ref.delete`) or after a Settings TTL.
+- **The repository:** central aq-git hosts one ordinary bare repository per project. It holds a real
+  `refs/heads/main`, kept current from origin by `repo.sync` and `repo.retain_ref`, and the task branches
+  `refs/heads/aq/<task-id>`.
+- **Access:** a worker node fetches and pushes over git smart-HTTP through aq-server. The node uses its own
+  credential, one per node for all projects, and aq-server adds the attempt's grant: the task ref, the base
+  and the size limit.
+- **Pushes use git's own safety:** quarantine, `receive.fsckObjects`, `receive.maxInputSize`. A minimal
+  check allows updates only to the grant's `refs/heads/aq/<task-id>`: never `main`, nothing outside `aq/`,
+  no deletes. A lease-checked non-fast-forward is allowed, for a returned task that merged `main`.
+- **The branch ref is the record of a result.** A result report names the ref and the commit, and aq-server
+  confirms the ref is at that commit. There is no separate push receipt or retention handle: the ref keeps
+  its commits.
+- **aq-git pushes task branches to origin** (`branch.publish`), deletes them after merge (`ref.delete`),
+  and runs `git gc`.
+- **What happens to branches is policy,** decided by the delivery playbook and a server-side agent, not by
+  code: PRs, renames, dev, staging and release branches, cleanup of abandoned branches.
 
-The first design ran `receive-pack` straight into the pool with a pre-receive hook (G2, merged behind the
-flag). It failed two adversarial reviews: git moves the ref before aq-git records a receipt, objects of a
-rejected push stay in the pool, and cleanup can delete objects other refs need. Its hook, journal and
-rollback are removed (G2c).
+The first design (G2, behind the flag) kept AQ receipts and retention for pushes alongside git's own refs.
+It failed two adversarial reviews because the two could disagree. Its journal, receipts and rollback are
+removed (G2d).
 
 ### 5.2 Server (E0.3)
 
