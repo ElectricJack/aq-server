@@ -438,6 +438,56 @@ mod tests {
         assert!(on(2, std::slice::from_ref(&negative), 1_000).is_empty());
         assert_eq!(on(2, std::slice::from_ref(&negative), 2_000).len(), 1);
     }
+    /// The `vault.production.example/config.toml` shape: a Claude and a Codex
+    /// docker-local qualification side by side, each found by its own exact
+    /// qualification reference.
+    #[test]
+    fn claude_and_codex_qualified_harnesses_register_side_by_side() {
+        let artifact = |id: &str| {
+            format!(
+                "{{ id = \"{id}\", version = \"1\", digest = \"{}\" }}",
+                "ab".repeat(32)
+            )
+        };
+        let harness = |name: &str, version: &str, adapter: &str, qualification: &str| {
+            format!(
+                "[[qualified_harnesses]]\nharness = \"{name}\"\ncli_version = \"{version}\"\n\
+                 capabilities = [{{ id = \"aq.harness.container-confinement\", version = 1 }}]\n\
+                 adapter = {}\nenvironment = {}\nqualification = {}\n\
+                 [qualified_harnesses.limits]\ncontext_bytes = 8192\nmax_output_tokens = 128\n\
+                 wall_time_ms = 60000\nmemory_bytes = 268435456\ncpu_millis = 60000\nprocess_limit = 8\n",
+                artifact(adapter),
+                artifact("environment"),
+                artifact(qualification)
+            )
+        };
+        let text = format!(
+            "revision = 2\n{}{}",
+            harness(
+                "claude",
+                "2.1.318",
+                "aq.claude-result-local-adapter",
+                "claude-q"
+            ),
+            harness(
+                "codex",
+                "0.166.0",
+                "aq.codex-docker-result-local-adapter",
+                "codex-q"
+            ),
+        );
+        let config: IntelligenceConfig = toml::from_str(&text).unwrap();
+        config.validate().unwrap();
+        let found = |qualification: &str| {
+            config
+                .qualified_harnesses
+                .iter()
+                .find(|h| h.qualification.id.as_str() == qualification)
+                .map(|h| h.harness.clone())
+        };
+        assert_eq!(found("claude-q").as_deref(), Some("claude"));
+        assert_eq!(found("codex-q").as_deref(), Some("codex"));
+    }
     #[test]
     fn widened_lists_name_each_overridden_credential_and_admits_needs_enrollment() {
         let (listed, other) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));

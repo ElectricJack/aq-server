@@ -427,7 +427,8 @@ fn accepted_phase_requires_explicit_new_worker_duration_bound() {
 }
 
 /// MS1 review: the long (schema 3) phase admits interactive Codex and the
-/// docker-local Claude manifest only when it declares container confinement.
+/// docker-local Claude or Codex manifest only when it declares container
+/// confinement.
 mod long_phase_manifest {
     use aq_admission::preparation_v2::PhasePolicy;
     use aq_session_protocol::{Capability, LaunchManifest, Text};
@@ -494,5 +495,66 @@ mod long_phase_manifest {
         let mut other = with(&[container]);
         other.harness.cli_version = Text::new("2.1.319").unwrap();
         assert!(long().validate_for_manifest(&other).is_err(), "other CLI");
+    }
+
+    fn codex_sandbox(capabilities: &[&str]) -> LaunchManifest {
+        let mut m = claude(capabilities);
+        m.harness.harness = Text::new("codex").unwrap();
+        m.harness.cli_version = Text::new("0.166.0").unwrap();
+        m.harness.adapter.id = Text::new("aq.codex-docker-result-local-adapter").unwrap();
+        m
+    }
+
+    #[test]
+    fn long_phase_docker_local_codex_manifest_requires_exact_adapter_and_container_confinement() {
+        let container = "aq.harness.container-confinement";
+        let native = "aq.harness.confined-worktree";
+        let base = ["aq.harness.startup-context", "aq.harness.stop"];
+        let with = |extra: &[&str]| codex_sandbox(&[&base[..], extra].concat());
+        assert!(long().validate_for_manifest(&with(&[container])).is_ok());
+        assert!(long().validate_for_manifest(&with(&[])).is_err(), "none");
+        assert!(
+            long().validate_for_manifest(&with(&[native])).is_err(),
+            "native"
+        );
+        assert!(
+            long()
+                .validate_for_manifest(&with(&[container, native]))
+                .is_err(),
+            "both"
+        );
+        let mut input = with(&[container]);
+        input.terminal.input_enabled = true;
+        assert!(
+            long().validate_for_manifest(&input).is_err(),
+            "terminal input"
+        );
+        let mut other = with(&[container]);
+        other.harness.cli_version = Text::new("0.167.0").unwrap();
+        assert!(long().validate_for_manifest(&other).is_err(), "other CLI");
+        // The adapter identity is exact: neither the interactive Codex adapter
+        // nor the Claude adapter admits a container-confined Codex manifest,
+        // and the Codex docker adapter does not admit Claude.
+        for adapter in [
+            "aq.codex-result-local-adapter",
+            "aq.claude-result-local-adapter",
+            "aq.codex-docker-result-local-adapter-x",
+        ] {
+            let mut wrong = with(&[container]);
+            wrong.harness.adapter.id = Text::new(adapter).unwrap();
+            assert!(long().validate_for_manifest(&wrong).is_err(), "{adapter}");
+        }
+        let mut claude_harness = with(&[container]);
+        claude_harness.harness.harness = Text::new("claude").unwrap();
+        assert!(
+            long().validate_for_manifest(&claude_harness).is_err(),
+            "claude harness"
+        );
+        // The Claude path is unchanged.
+        assert!(
+            long()
+                .validate_for_manifest(&claude(&[&base[..], &[container]].concat()))
+                .is_ok()
+        );
     }
 }
