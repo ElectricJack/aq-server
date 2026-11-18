@@ -17,39 +17,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 const SOURCE: &str = "bd1246e8e972ee1627e94598945f398812c89044106b463151a696511412ca39";
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Namespace {
-    pub namespace_id: Uuid,
-    pub generation: i64,
-    pub name: String,
-    pub workspace_id: Uuid,
-    pub project_id: Uuid,
-    pub owner_user_id: Uuid,
-}
-impl Namespace {
-    fn validate(&self) -> Result<()> {
-        if [
-            self.namespace_id,
-            self.workspace_id,
-            self.project_id,
-            self.owner_user_id,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-            || self.generation <= 0
-            || self.name.is_empty()
-            || self.name.len() > 128
-            || self.name.contains('\0')
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
-    pub fn engine_namespace(&self) -> String {
-        format!("aq/{}/{}", self.namespace_id, self.generation)
-    }
-}
+pub use super::domain::Namespace;
 /// Process-local current-owner context, not a deserializable fresh HTTP permit.
 #[derive(Clone, Debug)]
 pub struct RuntimeOwner {
@@ -114,6 +82,8 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }
@@ -199,6 +169,8 @@ impl Service {
             judgments,
             integration,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }
@@ -206,6 +178,17 @@ impl Service {
     pub fn with_routing(mut self, routing: Arc<dyn super::host_adapters::RoutingPort>) -> Self {
         if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
             ports.routing = routing;
+        }
+        self
+    }
+    /// Replaces the delivery port of a freshly built host service (tests).
+    #[cfg(feature = "delivery_playbook")]
+    pub fn with_delivery_ops(
+        mut self,
+        delivery_ops: Arc<dyn super::host_adapters::DeliveryOps>,
+    ) -> Self {
+        if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
+            ports.delivery_ops = delivery_ops;
         }
         self
     }
@@ -225,6 +208,8 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
     }

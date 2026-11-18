@@ -87,23 +87,32 @@ example `refs/heads/aq/`) may be created and replaced under a lease
 
 ## 5. Push and fetch through central aq-git (E0.2–E0.4)
 
-### 5.1 aq-git: a git endpoint (E0.2)
+### 5.1 aq-git: a plain git server for the project repository (E0.2), revised 2026-11-18
 
-aq-git serves git's smart HTTP protocol (`upload-pack`, `receive-pack`) for
-central repositories, on its existing socket. Each request carries an attempt
-grant, issued by the server (§5.2), that names the repository, the base commit,
-and the single ref the attempt may write.
+Owner: "a central aq-git with a per-project repository - tasks will always be on branches. Worker node pulls
+from git repo on server using some local credential for the central repo, and then when it's done it pushes
+back to the server repo, on the server aq-git then pushes to origin."
 
-- Fetch: only `main`'s retained head and the attempt's own task branch are
-  advertised.
-- Push: only the granted ref is accepted, and only under the lease the grant
-  names, which is the branch's previous head or absent. In quarantine, a push
-  runs the checks import runs today (`artifact/mod.rs:843-904`): `fsck --full
-  --strict`, every new commit descends from the granted base, the feature
-  profile, and the quota. Only then is the ref updated. The quota and the
-  maximum push size are Settings.
-- A push that is accepted pins a retention handle on the new head and returns a
-  receipt: `{repository, ref, old, new, base, handle, digest}`.
+- **The repository:** central aq-git hosts one ordinary bare repository per project. It holds a real
+  `refs/heads/main`, kept current from origin by `repo.sync` and `repo.retain_ref`, and the task branches
+  `refs/heads/aq/<task-id>`.
+- **Access:** a worker node fetches and pushes over git smart-HTTP through aq-server. The node uses its own
+  credential, one per node for all projects, and aq-server adds the attempt's grant: the task ref, the base
+  and the size limit.
+- **Pushes use git's own safety:** quarantine, `receive.fsckObjects`, `receive.maxInputSize`. A minimal
+  check allows updates only to the grant's `refs/heads/aq/<task-id>`: never `main`, nothing outside `aq/`,
+  no deletes. A lease-checked non-fast-forward is allowed, for a returned task that merged `main`.
+- **The branch ref is the record of a result.** A result report names the ref and the commit, and aq-server
+  confirms the ref is at that commit. There is no separate push receipt or retention handle: the ref keeps
+  its commits.
+- **aq-git pushes task branches to origin** (`branch.publish`), deletes them after merge (`ref.delete`),
+  and runs `git gc`.
+- **What happens to branches is policy,** decided by the delivery playbook and a server-side agent, not by
+  code: PRs, renames, dev, staging and release branches, cleanup of abandoned branches.
+
+The first design (G2, behind the flag) kept AQ receipts and retention for pushes alongside git's own refs.
+It failed two adversarial reviews because the two could disagree. Its journal, receipts and rollback are
+removed (G2d).
 
 ### 5.2 Server (E0.3)
 

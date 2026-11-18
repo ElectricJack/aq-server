@@ -24,12 +24,16 @@ use uuid::Uuid;
 
 mod assess;
 #[cfg(feature = "delivery_playbook")]
+mod delivery_commands;
+#[cfg(feature = "delivery_playbook")]
 mod delivery_decisions;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
+#[cfg(feature = "delivery_playbook")]
+pub use delivery_commands::{DeliveryOps, ServerDelivery};
 #[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
@@ -49,6 +53,10 @@ pub struct HostPorts {
     pub integration: Option<Arc<dyn Integration>>,
     /// Host9 routing commands: routes, bindings and attempt history.
     pub routing: Arc<dyn RoutingPort>,
+    /// Catalog 2.3.0 delivery commands (Epic 0): where a project's work is
+    /// delivered, and the commands over the forge and central aq-git.
+    #[cfg(feature = "delivery_playbook")]
+    pub delivery_ops: Arc<dyn DeliveryOps>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -147,6 +155,12 @@ impl Service {
             "decision.request" => {
                 self.host_decision_request(owner, id, revision, intent)
                     .await
+            }
+            #[cfg(feature = "delivery_playbook")]
+            name if self.profile.is_delivery()
+                && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
+            {
+                self.delivery_command(owner, id, revision, intent).await
             }
             _ => Err(Error::Invalid),
         }
@@ -363,6 +377,22 @@ impl Service {
         let registry = self.profile.registry();
         let c = registry.events.get(contract).ok_or(Error::Invalid)?;
         let at = self.now()?;
+        // `aq.delivery.completed` names no subject or revision: the join
+        // correlates it by the operation.
+        #[cfg(feature = "delivery_playbook")]
+        let (subject_id, revision) = if subject.is_null() {
+            (None, None)
+        } else {
+            (
+                Some(text(subject, "id")?.to_string()),
+                Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+            )
+        };
+        #[cfg(not(feature = "delivery_playbook"))]
+        let (subject_id, revision) = (
+            Some(text(subject, "id")?.to_string()),
+            Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+        );
         let event = EventEnvelope {
             producer: "aq.host.bridge@1".into(),
             event_id: event_id.to_string(),
@@ -372,8 +402,8 @@ impl Service {
             },
             scope: "project".into(),
             correlation: BTreeMap::from([("operation".into(), operation.to_string())]),
-            subject: Some(text(subject, "id")?.to_string()),
-            revision: Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
+            subject: subject_id,
+            revision,
             causation: Some(causation.to_string()),
             occurred_at_ms: Some(at),
             observed_at_ms: Some(at),

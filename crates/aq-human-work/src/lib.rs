@@ -179,6 +179,26 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
     json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code})
 }
 
+/// Epic 0 (spec 0016 section 7): the task read's word on a stopped attempt
+/// that still holds its task with a recorded result no playbook decided:
+/// while no delivery playbook is active, the result waits and nothing else
+/// completes, publishes or reworks it. `delivery_policy` says whether a
+/// delivery playbook is active for the task's project.
+#[cfg(feature = "delivery_playbook")]
+pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Value {
+    let (code, message) = match delivery_policy {
+        false => (
+            "result_ready_no_delivery_policy",
+            "Result ready, no delivery policy: the attempt has stopped with a result, and no delivery playbook is active to decide it. AQ does not complete, publish or send back a result by itself, so the result waits.",
+        ),
+        true => (
+            "result_ready",
+            "Result ready: the attempt has stopped with a result, which waits for the delivery playbook's decision.",
+        ),
+    };
+    json!({"code": code, "attempt_id": attempt, "result_id": result, "message": message})
+}
+
 /// Work-view readiness. The state is the first match of: the task's own
 /// `draft`, `completed` or `canceled` state; `running` while the holding
 /// attempt executes; `held` when it has stopped but keeps the task claim, or
@@ -820,3 +840,21 @@ pub use execution::{Execution, TaskActivate, TaskComplete, TaskDelete, TaskReope
 
 mod downstream;
 pub use downstream::blocked_by;
+
+#[cfg(all(test, feature = "delivery_playbook"))]
+mod delivery_tests {
+    #[test]
+    fn a_waiting_result_names_the_missing_delivery_policy() {
+        let (a, r) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        let none = super::result_waiting(a, r, false);
+        assert_eq!(none["code"], "result_ready_no_delivery_policy");
+        assert_eq!(none["result_id"], r.to_string());
+        assert!(
+            none["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Result ready, no delivery policy")
+        );
+        assert_eq!(super::result_waiting(a, r, true)["code"], "result_ready");
+    }
+}

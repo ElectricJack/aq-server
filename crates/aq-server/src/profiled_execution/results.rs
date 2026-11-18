@@ -61,7 +61,8 @@ pub(crate) async fn compute_stop_locked(
 }
 /// Records the result, then lets the D3 default-policy actor settle it. A
 /// settlement failure never fails the durable record; it is replayed by the
-/// next (duplicate) record of the same report.
+/// next (duplicate) record of the same report. With `delivery_playbook` (spec
+/// 0016 section 7) only the result's facts are recorded: a playbook decides.
 pub async fn record(
     state: &AppState,
     node: &AuthenticatedNode,
@@ -77,6 +78,11 @@ pub async fn record(
         }
         recorded => recorded?,
     };
+    #[cfg(feature = "delivery_playbook")]
+    if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
+        tracing::warn!(report_id = %report.report_id, ?error, "result facts deferred");
+    }
+    #[cfg(not(feature = "delivery_playbook"))]
     match super::settlement::settle_after_record(state, report.report_id).await {
         // D1: an accepted result waiting only on required delivery is published
         // detached from this request, so a dropped client cannot cancel a

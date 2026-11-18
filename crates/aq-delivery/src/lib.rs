@@ -3,6 +3,8 @@
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
 #[cfg(feature = "delivery_playbook")]
+pub mod commands;
+#[cfg(feature = "delivery_playbook")]
 pub mod git_grant;
 #[cfg(feature = "delivery_playbook")]
 pub mod github;

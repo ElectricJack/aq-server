@@ -114,32 +114,36 @@ pub async fn assess_task_in(
     if lineage_quarantined(conn, task).await? {
         return Ok(Assessment::Blocked("stall_quarantined"));
     }
-    // D1: a successor reuses the predecessor's immutable export, so a result
-    // refused because its publication was definitively not applied (moved
-    // target, conflicted candidate) would recur. Such a lineage needs a new
-    // source admission (a new task attempt from the current source head).
-    // A store held at an earlier migration prefix has no automatic settlement
-    // table and so records no unpublished delivery (as for quarantines).
-    let format: String =
-        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(|_| AppError::Internal)?;
-    let unpublished: bool = if format.parse::<u32>().map_err(|_| AppError::Internal)?
-        >= AUTO_SETTLEMENT_FORMAT
+    // Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`.
+    #[cfg(not(feature = "delivery_playbook"))]
     {
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished')")
-            .bind(task)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(|_| AppError::Internal)?
-    } else {
-        false
-    };
-    if unpublished {
-        return Ok(Assessment::Blocked(
-            "replacement_after_unpublished_delivery_needs_new_source",
-        ));
+        // D1: a successor reuses the predecessor's immutable export, so a result
+        // refused because its publication was definitively not applied (moved
+        // target, conflicted candidate) would recur. Such a lineage needs a new
+        // source admission (a new task attempt from the current source head).
+        // A store held at an earlier migration prefix has no automatic settlement
+        // table and so records no unpublished delivery (as for quarantines).
+        let format: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(|_| AppError::Internal)?;
+        let unpublished: bool = if format.parse::<u32>().map_err(|_| AppError::Internal)?
+            >= AUTO_SETTLEMENT_FORMAT
+        {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished')")
+                .bind(task)
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(|_| AppError::Internal)?
+        } else {
+            false
+        };
+        if unpublished {
+            return Ok(Assessment::Blocked(
+                "replacement_after_unpublished_delivery_needs_new_source",
+            ));
+        }
     }
     let counts = super::no_grant::attempt_counts_locked(conn, task).await?;
     if let Some(decided) = precheck(&counts) {

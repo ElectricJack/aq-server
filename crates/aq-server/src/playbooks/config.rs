@@ -64,6 +64,10 @@ struct Configuration {
 struct IntegrationInput {
     commit_name: String,
     commit_email: String,
+    /// Check ids each needing a passing check receipt before publication.
+    /// Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`;
+    /// which checks are required is the delivery playbook's to say.
+    #[cfg(not(feature = "delivery_playbook"))]
     #[serde(default)]
     checks: Vec<String>,
     #[serde(default)]
@@ -87,11 +91,16 @@ impl IntegrationInput {
                     (1..=64).contains(&x.len()) && !x.contains('\0') && !v[..i].contains(x)
                 })
         };
+        // Epic 0 (spec 0016 section 7): no evidence policy is required.
+        #[cfg(feature = "delivery_playbook")]
+        let checks_named = true;
+        #[cfg(not(feature = "delivery_playbook"))]
+        let checks_named = names(&self.checks)
+            && !(self.checks.is_empty() && !self.review && self.judgment_choices.is_empty());
         if !identity(&self.commit_name)
             || !identity(&self.commit_email)
-            || !names(&self.checks)
+            || !checks_named
             || !names(&self.judgment_choices)
-            || (self.checks.is_empty() && !self.review && self.judgment_choices.is_empty())
         {
             return Err("invalid playbook integration policy");
         }
@@ -99,7 +108,10 @@ impl IntegrationInput {
             commit_name: self.commit_name,
             commit_email: self.commit_email,
             evidence: super::host_adapters::EvidencePolicy {
+                #[cfg(not(feature = "delivery_playbook"))]
                 checks: self.checks,
+                #[cfg(feature = "delivery_playbook")]
+                checks: Vec::new(),
                 review: self.review,
                 judgment_choices: self.judgment_choices,
             },

@@ -128,6 +128,8 @@ pub trait GitHubAdapter: Send + Sync {
         title: &str,
         body: &str,
     ) -> GitHubResult<PullRequest>;
+    /// One read of the PR: its state and head. Safe to poll.
+    async fn pull_request(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest>;
     /// Check runs and commit statuses on the PR head, against `required`
     /// when given, else against the base branch's protection and rulesets.
     async fn checks(
@@ -165,6 +167,9 @@ impl GitHubAdapter for UnconfiguredGitHub {
         _: &str,
         _: &str,
     ) -> GitHubResult<PullRequest> {
+        Err(GitHubApiError::Unconfigured)
+    }
+    async fn pull_request(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
         Err(GitHubApiError::Unconfigured)
     }
     async fn checks(

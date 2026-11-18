@@ -18,4 +18,4 @@ CREATE TABLE delivery_git_grants (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-UPDATE meta SET value='146' WHERE key='state_format_version';
+UPDATE meta SET value='148' WHERE key='state_format_version';

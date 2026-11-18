@@ -38,6 +38,7 @@ pub struct EvidencePolicy {
     pub judgment_choices: Vec<String>,
 }
 impl EvidencePolicy {
+    #[cfg(not(feature = "delivery_playbook"))]
     fn names_nothing(&self) -> bool {
         self.checks.is_empty() && !self.review && self.judgment_choices.is_empty()
     }
@@ -615,9 +616,16 @@ impl Service {
         };
         let workspace = self.namespace.workspace_id;
         let project = self.namespace.project_id;
+        #[cfg(not(feature = "delivery_playbook"))]
         let binding = match port.binding(workspace, project).await? {
             Some(b) if !b.evidence.names_nothing() => b,
             _ => return refuse(tx, None, "policy_unavailable").await,
+        };
+        // Spec 0016 section 7: no TOML evidence policy is required (the given
+        // evidence is still verified); a missing binding is refused as before.
+        #[cfg(feature = "delivery_playbook")]
+        let Some(binding) = port.binding(workspace, project).await? else {
+            return refuse(tx, None, "policy_unavailable").await;
         };
         let Some(candidate) = sqlx::query("SELECT state,repository_id,binding_generation,detail FROM playbook_integration_receipts WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND command_name='candidate.prepare'")
             .bind(candidate_op)

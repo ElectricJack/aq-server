@@ -54,6 +54,9 @@ impl GitHubAdapter for FakeGitHub {
     ) -> GitHubResult<PullRequest> {
         self.call()
     }
+    async fn pull_request(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
+        self.call()
+    }
     async fn checks(
         &self,
         _: &GitHubRepository,

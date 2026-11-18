@@ -5,6 +5,10 @@ edition.workspace = true
 publish = false
 description = "Work-view projections for AQ's owner Graph reads: readiness, hold reasons, state counts and history change summaries"
 
+[features]
+# Epic 0 (spec 0016): the hold reason of a result waiting for a playbook.
+delivery_playbook = []
+
 [dependencies]
 serde.workspace = true
 schemars = "1"
