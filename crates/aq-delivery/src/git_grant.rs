@@ -1,35 +1,43 @@
 //! Git grants (spec 0016 §5.2, feature `delivery_playbook`). An offer carries
 //! a grant, and the attempt's node fetches from and pushes to central aq-git
-//! through the server's `/v1/git/<repository>/…` route. This module builds
-//! the grant (the lease is the task ref's head in aq-git's own advertisement),
-//! records it with the attempt, mints and checks the attempt's token, and
-//! forwards one git smart-HTTP request to aq-git's git socket with the grant
-//! headers the server sets. Headers the client sends are never forwarded,
-//! except the few that describe the request body. It decides nothing: aq-git
-//! enforces what the grant says.
+//! through the server's `/v1/git/<repository>/…` route with its own node
+//! credential, naming the attempt in the `AQ-Attempt` header. This module
+//! builds the grant (the lease is the task ref's head from aq-git's
+//! `ref.show`), records it with the attempt, and forwards
+//! one git smart-HTTP request to aq-git's git socket with the grant headers
+//! the server sets. Client headers are never forwarded, except the few that
+//! describe the request body. The server itself refuses a push that updates
+//! any ref but the grant's task ref, from any old head but the lease, or that
+//! is larger than Settings `delivery-limits.max_push_bytes`. It decides nothing
+//! about the result.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 #[cfg(test)]
 mod tests;
 
-use crate::{DeliveryError, Result};
-use aq_admission::{SourceAdmission, SourceSelection, control::NativePollPage, startup::GitGrant};
-use aq_role_settings::delivery::DeliveryLimits;
-use bytes::Bytes;
-use http::{Request, Response, header};
+use crate::commands::{GitFailure, GitTarget, SocketGit, object_id, task_branch};
+use aq_admission::SourceAdmission;
+use bytes::{Bytes, BytesMut};
+use http::{Method, Request, Response, header};
+use http_body::{Body, Frame};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::time::Instant;
 use uuid::Uuid;
 
-/// The request header that carries the attempt's git token.
-pub const TOKEN_HEADER: &str = "aq-git-token";
-/// The routes' prefix on the server's machine listener.
-pub const ROUTE_PREFIX: &str = "/v1/git/";
-const TOKEN_PREFIX: &str = "aqg_";
-/// Client headers that describe the request body. Every other client header,
-/// `AQ-*` grant headers and credentials included, stays at the server.
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+/// Client headers that describe the request. Every other client header,
+/// `AQ-*` grant headers and the node credential included, stays here.
 const FORWARDED: [header::HeaderName; 6] = [
     header::ACCEPT,
     header::ACCEPT_ENCODING,
@@ -47,264 +55,184 @@ const RETURNED: [header::HeaderName; 5] = [
     header::EXPIRES,
 ];
 
-pub fn task_ref(task: Uuid) -> String {
-    format!("refs/heads/aq/{task}")
+/// The git grant of one attempt, served to its node by
+/// `GET /v1/git/grants/<attempt>` (the frozen offer types do not carry it).
+/// The node fetches and pushes at `endpoint` on the worker origin with its
+/// own node credential and `AQ-Attempt: <attempt>`. A present `lease` means
+/// the task branch exists: the attempt starts from it (the task was returned
+/// or handed off), else from `base`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitGrant {
+    /// `/v1/git/<repository_id>`; git appends `/info/refs` etc.
+    pub endpoint: String,
+    pub repository_id: Uuid,
+    /// The commit the task's first attempt starts from (40 hex digits).
+    pub base: String,
+    /// `refs/heads/aq/<task-id>`, the only ref the attempt may push.
+    pub task_ref: String,
+    /// The task ref's head in central aq-git when the offer was made; absent
+    /// when the branch did not exist. The push must name it as its old head.
+    pub lease: Option<String>,
+    /// The task was returned with `update_from_main`: merge the current
+    /// `refs/heads/main` into the branch before the agent starts.
+    pub update_from_main: bool,
 }
+
+/// The request header naming the attempt a `/v1/git` request is for.
+pub const ATTEMPT_HEADER: &str = "aq-attempt";
+
+/// The grant's endpoint on the worker API; git appends `/info/refs` etc.
 pub fn endpoint(repository: Uuid) -> String {
-    format!("{ROUTE_PREFIX}{repository}")
-}
-/// The one push operation of an attempt: it names the push receipt, and
-/// aq-git accepts at most one push under it.
-pub fn push_operation(attempt: Uuid) -> Uuid {
-    Uuid::new_v5(&attempt, b"aq.git-push/v1")
-}
-/// What the server's key authenticates for an attempt's token: the attempt,
-/// the node it was offered to and the repository it may reach.
-pub fn token_message(attempt: Uuid, node: Uuid, repository: Uuid) -> Vec<u8> {
-    [
-        b"aq.git-grant.token/v1\0".as_slice(),
-        attempt.as_bytes(),
-        node.as_bytes(),
-        repository.as_bytes(),
-    ]
-    .concat()
-}
-/// `aqg_<attempt><mac>`, hex: the token names its attempt, the MAC binds it.
-pub fn token(attempt: Uuid, mac: &[u8; 32]) -> String {
-    format!("{TOKEN_PREFIX}{}{}", attempt.simple(), hex::encode(mac))
-}
-/// The attempt a presented token names and its MAC; `None` for any other shape.
-pub fn parse_token(presented: &str) -> Option<(Uuid, [u8; 32])> {
-    let rest = presented.strip_prefix(TOKEN_PREFIX)?;
-    if rest.len() != 96 || !rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-        return None;
-    }
-    let attempt = Uuid::try_parse(&rest[..32]).ok()?;
-    let mac = hex::decode(&rest[32..]).ok()?.try_into().ok()?;
-    Some((attempt, mac))
-}
-/// Constant-time equality of two MACs.
-pub fn same(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    a.iter().zip(b).fold(0_u8, |d, (x, y)| d | (x ^ y)) == 0
+    format!("/v1/git/{repository}")
 }
 
 /// Why the `/v1/git` route refuses a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// No live grant of this token's attempt for this node and repository.
-    Forbidden,
-    /// The server's key, its database or aq-git is unavailable.
+    /// Not a git smart-HTTP route.
+    NotFound,
+    /// No live grant of this attempt for this node and repository, or a push
+    /// of another ref or a deletion.
+    Forbidden(&'static str),
+    /// A push whose old head is not the grant's lease.
+    StaleLease,
+    /// A push larger than Settings `max_push_bytes`.
+    TooLarge,
+    BadRequest(&'static str),
+    /// The database, Settings or aq-git is unavailable, or the transfer ran
+    /// past Settings `git_transfer_timeout_ms`.
     Unavailable,
 }
 
-/// The grant of a new offer whose source follows a named ref, advertised as
-/// main; `None` for a fixed commit, which follows no branch.
-pub async fn offer_for(
-    pool: &PgPool,
-    socket: &Path,
-    source: &SourceAdmission,
-    task: Uuid,
-    attempt: Uuid,
-) -> Result<Option<GitGrant>> {
-    let SourceSelection::NamedRef { reference } = &source.selection else {
-        return Ok(None);
-    };
-    let (repository, base) = (source.repository_id, &source.resolved_object.hex);
-    let grant = offer(
-        pool,
-        socket,
-        repository,
-        base,
-        reference.as_str(),
-        task,
-        attempt,
-    );
-    grant.await.map(Some)
-}
-
-/// Adds the token to each grant of `page`, delivered to `node`; offers are
-/// stored without it. `mac` is the server key's MAC of a [`token_message`].
-pub fn deliver(
-    page: &mut NativePollPage,
-    node: Uuid,
-    mac: impl Fn(&[u8]) -> Option<[u8; 32]>,
-) -> Option<()> {
-    for offer in &mut page.offers {
-        let attempt = offer.offered.offer.binding.attempt_id;
-        if let Some(grant) = &mut offer.git {
-            let message = token_message(attempt, node, grant.repository_id);
-            grant.token = Some(token(attempt, &mac(&message)?));
-        }
-    }
-    Some(())
-}
-
-/// One `/v1/git/<repository>/…` request of the authenticated `node`. Its
-/// token must name an attempt that still holds its task on that node and
-/// whose grant is for `repository`; the request is then forwarded under the
-/// grant recorded with the offer.
-pub async fn serve<B>(
-    pool: &PgPool,
-    socket: &Path,
-    node: Uuid,
-    repository: Uuid,
-    mac: impl Fn(&[u8]) -> Option<[u8; 32]>,
-    request: Request<B>,
-) -> std::result::Result<Response<Incoming>, Refusal>
-where
-    B: http_body::Body<Data = Bytes> + Send + 'static,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
-    let presented = (request.headers().get(TOKEN_HEADER))
-        .and_then(|v| v.to_str().ok())
-        .and_then(parse_token);
-    let (attempt, presented) = presented.ok_or(Refusal::Forbidden)?;
-    let expected = mac(&token_message(attempt, node, repository)).ok_or(Refusal::Unavailable)?;
-    if !same(&presented, &expected) {
-        return Err(Refusal::Forbidden);
-    }
-    let grant = live(pool, attempt, node, repository).await;
-    let grant = grant
-        .map_err(|_| Refusal::Unavailable)?
-        .ok_or(Refusal::Forbidden)?;
-    let limits = crate::main_sync::limits(pool).await;
-    match forward(
-        socket,
-        &grant,
-        &limits.map_err(|_| Refusal::Unavailable)?,
-        request,
-    )
-    .await
-    {
-        Ok(response) => Ok(response),
-        Err(DeliveryError::InvalidInput(_)) => Err(Refusal::Forbidden),
-        Err(_) => Err(Refusal::Unavailable),
-    }
-}
-
-/// The grant of a new attempt's offer: `task` on `repository` from `base`,
-/// following `main_ref`. The lease is the task ref's head as aq-git
-/// advertises it now, or absent when it advertises no such ref.
+/// The grant of a new attempt's offer: the task ref of `task` on the
+/// source's repository from the source's commit. The lease is the task ref's
+/// head in central aq-git now, or absent when it has none. `update_from_main`
+/// is the task's latest delivery decision's, when that sent it back.
 pub async fn offer(
     pool: &PgPool,
-    socket: &Path,
-    repository: Uuid,
-    base: &str,
-    main_ref: &str,
+    git: &SocketGit,
+    source: &SourceAdmission,
     task: Uuid,
-    attempt: Uuid,
-) -> Result<GitGrant> {
-    let limits = crate::main_sync::limits(pool).await?;
-    let mut grant = GitGrant {
+) -> Result<GitGrant, GitFailure> {
+    let repository = source.repository_id;
+    let target = GitTarget {
+        repository_id: repository,
+        binding_generation: source.repository_binding_generation,
+    };
+    let task_ref = task_branch(task);
+    let lease = git.show_ref(&target, &task_ref).await?;
+    let update_from_main: Option<bool> = sqlx::query_scalar(
+        "SELECT decision='returned' AND COALESCE(update_from_main,false) FROM delivery_decisions \
+         WHERE task_id=$1 ORDER BY decided_at_ms DESC LIMIT 1",
+    )
+    .bind(task)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| GitFailure::transport())?;
+    Ok(GitGrant {
         endpoint: endpoint(repository),
         repository_id: repository,
-        base: base.to_owned(),
-        task_ref: task_ref(task),
-        lease: None,
-        main_ref: main_ref.to_owned(),
-        operation_id: push_operation(attempt),
-        token: None,
-    };
-    grant
-        .validate()
-        .map_err(|_| DeliveryError::InvalidInput("invalid git grant"))?;
-    grant.lease = observe_lease(socket, &grant, &limits).await?;
-    Ok(grant)
+        base: source.resolved_object.hex.clone(),
+        task_ref,
+        lease,
+        update_from_main: update_from_main.unwrap_or(false),
+    })
 }
 
-/// Records `grant` for `attempt` on `node` in the offer's publication.
+/// Records `grant` for `attempt` in the offer's publication.
 pub async fn record_locked(
     tx: &mut Transaction<'_, Postgres>,
     attempt: Uuid,
-    node: Uuid,
     grant: &GitGrant,
-) -> Result<()> {
+) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO delivery_git_grants(attempt_id,node_id,repository_id,base,task_ref,lease,\
-         main_ref,operation_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        "INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref,lease,\
+         update_from_main) VALUES($1,$2,$3,$4,$5,$6)",
     )
     .bind(attempt)
-    .bind(node)
     .bind(grant.repository_id)
     .bind(&grant.base)
     .bind(&grant.task_ref)
     .bind(&grant.lease)
-    .bind(&grant.main_ref)
-    .bind(grant.operation_id)
+    .bind(grant.update_from_main)
     .execute(&mut **tx)
     .await?;
     Ok(())
 }
 
 /// The recorded grant of `attempt` while the attempt still holds its task on
-/// `node`, and only for `repository`. `None` refuses the request.
-pub async fn live(
-    pool: &PgPool,
-    attempt: Uuid,
-    node: Uuid,
-    repository: Uuid,
-) -> Result<Option<GitGrant>> {
+/// `node`. The `/v1/git/grants/<attempt>` route serves it.
+pub async fn live(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Option<GitGrant>> {
     let row = sqlx::query(
-        "SELECT g.base,g.task_ref,g.lease,g.main_ref,g.operation_id FROM delivery_git_grants g \
-         JOIN execution_attempts a USING(attempt_id) WHERE g.attempt_id=$1 AND g.node_id=$2 \
-         AND a.node_id=$2 AND g.repository_id=$3 AND a.holds_task",
+        "SELECT g.repository_id,g.base,g.task_ref,g.lease,g.update_from_main \
+         FROM delivery_git_grants g JOIN execution_attempts a USING(attempt_id) \
+         WHERE g.attempt_id=$1 AND a.node_id=$2 AND a.holds_task",
     )
     .bind(attempt)
     .bind(node)
-    .bind(repository)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|row| GitGrant {
-        endpoint: endpoint(repository),
-        repository_id: repository,
+        endpoint: endpoint(row.get("repository_id")),
+        repository_id: row.get("repository_id"),
         base: row.get("base"),
         task_ref: row.get("task_ref"),
         lease: row.get("lease"),
-        main_ref: row.get("main_ref"),
-        operation_id: row.get("operation_id"),
-        token: None,
+        update_from_main: row.get("update_from_main"),
     }))
 }
 
-/// The `AQ-*` headers aq-git trusts, all from the server.
-pub fn grant_headers(grant: &GitGrant, max_push_bytes: u64) -> Vec<(&'static str, String)> {
-    let mut headers = vec![
-        ("aq-repository", grant.repository_id.to_string()),
-        ("aq-base", grant.base.clone()),
-        ("aq-task-ref", grant.task_ref.clone()),
-        ("aq-main-ref", grant.main_ref.clone()),
-        ("aq-max-push-bytes", max_push_bytes.to_string()),
-        ("aq-operation", grant.operation_id.to_string()),
-    ];
-    if let Some(lease) = &grant.lease {
-        headers.push(("aq-task-ref-lease", lease.clone()));
-    }
-    headers
-}
-
-/// Forwards one client request for `/v1/git/<repository>/…` to aq-git's git
-/// socket under `grant`, streaming both bodies. The whole transfer, response
-/// body included, ends at Settings `git_transfer_timeout_ms`.
-pub async fn forward<B>(
+/// One `/v1/git/<repository>/<path>` request of the authenticated `node` for
+/// the attempt its `AQ-Attempt` header names, forwarded to aq-git's git
+/// socket under the attempt's recorded grant.
+pub async fn serve<B>(
+    pool: &PgPool,
     socket: &Path,
-    grant: &GitGrant,
-    limits: &DeliveryLimits,
+    node: Uuid,
+    (repository, path): (Uuid, &str),
     request: Request<B>,
-) -> Result<Response<Incoming>>
+) -> Result<Response<Incoming>, Refusal>
 where
-    B: http_body::Body<Data = Bytes> + Send + 'static,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BoxError>,
 {
+    let push = route(request.method(), path, request.uri().query())?;
+    let attempt = (request.headers().get(ATTEMPT_HEADER))
+        .and_then(|v| Uuid::try_parse(v.to_str().ok()?).ok())
+        .ok_or(Refusal::BadRequest(
+            "the AQ-Attempt header must name the attempt",
+        ))?;
+    let grant = live(pool, attempt, node)
+        .await
+        .map_err(|_| Refusal::Unavailable)?;
+    let grant = (grant.filter(|g| g.repository_id == repository))
+        .ok_or(Refusal::Forbidden("no live git grant for this request"))?;
+    let (limits, _) = aq_role_settings::delivery_limits(pool)
+        .await
+        .map_err(|_| Refusal::Unavailable)?;
+    let deadline = Instant::now() + Duration::from_millis(limits.git_transfer_timeout_ms);
     let (parts, body) = request.into_parts();
-    let rest = (parts
-        .uri
-        .path()
-        .strip_prefix(&endpoint(grant.repository_id)))
-    .filter(|rest| rest.starts_with('/'))
-    .ok_or(DeliveryError::InvalidInput(
-        "git route outside the granted repository",
-    ))?;
-    let mut uri = format!("/{}{rest}", grant.repository_id);
+    let declared = (parts.headers.get(header::CONTENT_LENGTH))
+        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
+    if declared.is_some_and(|n| n > limits.max_push_bytes) {
+        return Err(Refusal::TooLarge);
+    }
+    let mut body = Counted {
+        prefix: None,
+        inner: body,
+        left: limits.max_push_bytes,
+    };
+    if push {
+        if parts.headers.contains_key(header::CONTENT_ENCODING) {
+            return Err(Refusal::BadRequest(
+                "an encoded push body cannot be checked",
+            ));
+        }
+        let read = tokio::time::timeout_at(deadline, commands(&mut body, &grant)).await;
+        body.prefix = Some(read.map_err(|_| Refusal::Unavailable)??);
+    }
+    let mut uri = format!("/{repository}/{path}");
     if let Some(query) = parts.uri.query() {
         uri = format!("{uri}?{query}");
     }
@@ -314,15 +242,16 @@ where
             out = out.header(&name, value);
         }
     }
-    out = out.header(header::HOST, "aq-git");
-    for (name, value) in grant_headers(grant, limits.max_push_bytes) {
-        out = out.header(name, value);
-    }
+    out = (out.header(header::HOST, "aq-git"))
+        .header("aq-repository", repository.to_string())
+        .header("aq-base", &grant.base)
+        .header("aq-task-ref", &grant.task_ref)
+        .header("aq-max-push-bytes", limits.max_push_bytes.to_string())
+        .header("aq-operation", Uuid::new_v4().to_string());
     let request = out
         .body(body)
-        .map_err(|_| DeliveryError::InvalidInput("invalid git request"))?;
-    let limit = Duration::from_millis(limits.git_transfer_timeout_ms);
-    let mut response = exchange(socket, request, limit).await?;
+        .map_err(|_| Refusal::BadRequest("invalid git request"))?;
+    let mut response = exchange(socket, request, deadline).await?;
     let headers = std::mem::take(response.headers_mut());
     for name in RETURNED {
         for value in headers.get_all(&name) {
@@ -332,90 +261,129 @@ where
     Ok(response)
 }
 
-/// The task ref's head in aq-git's upload-pack advertisement under `grant`.
-pub async fn observe_lease(
-    socket: &Path,
-    grant: &GitGrant,
-    limits: &DeliveryLimits,
-) -> Result<Option<String>> {
-    use http_body_util::BodyExt;
-    let mut request = Request::get(format!(
-        "/{}/info/refs?service=git-upload-pack",
-        grant.repository_id
-    ))
-    .header(header::HOST, "aq-git");
-    for (name, value) in grant_headers(
-        &GitGrant {
-            lease: None,
-            ..grant.clone()
-        },
-        1,
-    ) {
-        request = request.header(name, value);
+/// Whether `method path?query` is a smart-HTTP route, and a push.
+fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
+    match (method.as_str(), path, query) {
+        ("GET", "info/refs", Some("service=git-upload-pack" | "service=git-receive-pack"))
+        | ("POST", "git-upload-pack", None) => Ok(false),
+        ("POST", "git-receive-pack", None) => Ok(true),
+        _ => Err(Refusal::NotFound),
     }
-    let request = request
-        .body(http_body_util::Empty::<Bytes>::new())
-        .map_err(|_| DeliveryError::InvalidInput("invalid git request"))?;
-    let limit = Duration::from_millis(limits.git_transfer_timeout_ms);
-    let response = exchange(socket, request, limit).await?;
-    if !response.status().is_success() {
-        return Err(DeliveryError::Protocol);
-    }
-    let body = tokio::time::timeout(limit, response.into_body().collect())
-        .await
-        .map_err(|_| DeliveryError::Transport)?
-        .map_err(|_| DeliveryError::Transport)?
-        .to_bytes();
-    advertised(&body, &grant.task_ref)
 }
 
-/// The OID advertised for `reference` in a smart-HTTP ref advertisement.
-fn advertised(mut body: &[u8], reference: &str) -> Result<Option<String>> {
-    let mut found = None;
-    while !body.is_empty() {
-        let length = body
-            .get(..4)
-            .and_then(|l| std::str::from_utf8(l).ok())
-            .and_then(|l| usize::from_str_radix(l, 16).ok())
-            .ok_or(DeliveryError::Protocol)?;
-        if length < 4 {
-            body = &body[4..];
-            continue;
-        }
-        let line = body.get(4..length).ok_or(DeliveryError::Protocol)?;
-        body = &body[length..];
-        let line = line.strip_suffix(b"\n").unwrap_or(line);
-        let line = line.split(|b| *b == 0).next().unwrap_or_default();
-        if let Some((oid, name)) = std::str::from_utf8(line)
-            .ok()
-            .and_then(|l| l.split_once(' '))
-            && name == reference
-        {
-            if oid.len() != 40 || !oid.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-                return Err(DeliveryError::Protocol);
+/// Reads a receive-pack request's command list (pkt-lines up to the first
+/// flush) and checks it against `grant`: no command (git's probe), or one
+/// update of the task ref from the lease to a commit. Returns the bytes read.
+async fn commands<B>(body: &mut B, grant: &GitGrant) -> Result<Bytes, Refusal>
+where
+    B: Body<Data = Bytes> + Unpin,
+{
+    let malformed = Refusal::BadRequest("malformed receive-pack commands");
+    let (mut read, mut at, mut seen) = (BytesMut::new(), 0, 0);
+    loop {
+        while let Some(length) = read.get(at..at + 4) {
+            let length = std::str::from_utf8(length).ok();
+            let length = length.and_then(|l| usize::from_str_radix(l, 16).ok());
+            match length.ok_or(malformed)? {
+                0 => return Ok(read.freeze()),
+                1..=4 => return Err(malformed),
+                length if read.len() < at + length => break,
+                length => {
+                    seen += 1;
+                    if seen > 1 {
+                        return Err(Refusal::Forbidden("a push may update only the task ref"));
+                    }
+                    check_command(&read[at + 4..at + length], grant)?;
+                    at += length;
+                }
             }
-            found = Some(oid.to_owned());
+        }
+        match body.frame().await {
+            Some(Ok(frame)) => read.extend_from_slice(&frame.into_data().unwrap_or_default()),
+            Some(Err(_)) => return Err(Refusal::TooLarge),
+            None => return Err(malformed),
         }
     }
-    Ok(found)
+}
+
+/// `<old> <new> <ref>[\0<capabilities>]\n`.
+fn check_command(line: &[u8], grant: &GitGrant) -> Result<(), Refusal> {
+    let malformed = Refusal::BadRequest("malformed receive-pack command");
+    let line = line.split(|b| *b == 0).next().unwrap_or_default();
+    let line = std::str::from_utf8(line).map_err(|_| malformed)?;
+    let fields: Vec<&str> = line.trim_end_matches('\n').split(' ').collect();
+    let [old, new, reference] = fields[..] else {
+        return Err(malformed);
+    };
+    if !object_id(old) || !object_id(new) {
+        return Err(malformed);
+    }
+    if reference != grant.task_ref {
+        return Err(Refusal::Forbidden("a push may update only the task ref"));
+    }
+    if new == ZERO_OID {
+        return Err(Refusal::Forbidden("deleting the task ref is not allowed"));
+    }
+    if old != grant.lease.as_deref().unwrap_or(ZERO_OID) {
+        return Err(Refusal::StaleLease);
+    }
+    Ok(())
+}
+
+/// The request body: the bytes [`commands`] already read, then the rest,
+/// failing once more than `left` bytes came in total.
+struct Counted<B> {
+    prefix: Option<Bytes>,
+    inner: B,
+    left: u64,
+}
+impl<B> Body for Counted<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        if let Some(prefix) = this.prefix.take() {
+            return Poll::Ready(Some(Ok(Frame::data(prefix))));
+        }
+        let polled = Pin::new(&mut this.inner).poll_frame(cx);
+        if let Poll::Ready(Some(Ok(frame))) = &polled
+            && let Some(data) = frame.data_ref()
+        {
+            let Some(left) = this.left.checked_sub(data.len() as u64) else {
+                return Poll::Ready(Some(Err("git request body exceeds max_push_bytes".into())));
+            };
+            this.left = left;
+        }
+        polled.map_err(Into::into)
+    }
+    fn is_end_stream(&self) -> bool {
+        self.prefix.is_none() && self.inner.is_end_stream()
+    }
 }
 
 async fn exchange<B>(
     socket: &Path,
     request: Request<B>,
-    limit: Duration,
-) -> Result<Response<Incoming>>
+    deadline: Instant,
+) -> Result<Response<Incoming>, Refusal>
 where
-    B: http_body::Body<Data = Bytes> + Send + 'static,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B: Body<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
 {
-    let deadline = tokio::time::Instant::now() + limit;
-    let stream = tokio::time::timeout_at(deadline, tokio::net::UnixStream::connect(socket))
-        .await
-        .map_err(|_| DeliveryError::Transport)??;
+    let stream = tokio::time::timeout_at(deadline, tokio::net::UnixStream::connect(socket)).await;
+    let stream = stream
+        .map_err(|_| Refusal::Unavailable)?
+        .map_err(|_| Refusal::Unavailable)?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
-        .map_err(|_| DeliveryError::Transport)?;
+        .map_err(|_| Refusal::Unavailable)?;
     // The connection carries the whole transfer, the response body included,
     // so the deadline ends it at whatever stage the transfer has reached.
     tokio::spawn(async move {
@@ -423,6 +391,6 @@ where
     });
     tokio::time::timeout_at(deadline, sender.send_request(request))
         .await
-        .map_err(|_| DeliveryError::Transport)?
-        .map_err(|_| DeliveryError::Transport)
+        .map_err(|_| Refusal::Unavailable)?
+        .map_err(|_| Refusal::Unavailable)
 }

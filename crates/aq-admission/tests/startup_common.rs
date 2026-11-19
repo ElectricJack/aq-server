@@ -103,8 +103,6 @@ pub fn fixture() -> (NativeOffer, Vec<u8>) {
         NativeOffer {
             schema_version: 1,
             startup,
-            #[cfg(feature = "delivery_playbook")]
-            git: None,
             offered: OfferedLaunch {
                 lifecycle_binding: lifecycle_binding(&offer).unwrap(),
                 offer,

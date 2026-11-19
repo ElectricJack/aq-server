@@ -54,7 +54,7 @@ pub struct GitFailure {
     pub transient: bool,
 }
 impl GitFailure {
-    fn transport() -> Self {
+    pub(crate) fn transport() -> Self {
         Self {
             code: "transport".into(),
             message: "aq-git did not answer".into(),
@@ -163,6 +163,28 @@ impl SocketGit {
                     transient: v["error"]["retry"] == "safe_same_operation",
                 })
             }
+            _ => Err(GitFailure::protocol()),
+        }
+    }
+}
+
+impl SocketGit {
+    /// `ref.show {ref}` (spec 0016 §5.1): the commit a branch of the central
+    /// repository is at, or `None` when the branch is absent. A read.
+    pub async fn show_ref(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<Option<String>, GitFailure> {
+        let params = json!({"ref": reference});
+        let result = self.call(Uuid::new_v4(), "ref.show", repo, params).await?;
+        let oid = &result["oid"];
+        if result["ref"] != reference || !(oid.is_null() || oid["algorithm"] == "sha1") {
+            return Err(GitFailure::protocol());
+        }
+        match oid["hex"].as_str() {
+            None if oid.is_null() => Ok(None),
+            Some(hex) if object_id(hex) => Ok(Some(hex.to_owned())),
             _ => Err(GitFailure::protocol()),
         }
     }

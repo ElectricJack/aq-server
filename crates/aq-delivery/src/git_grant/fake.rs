@@ -1,7 +1,8 @@
 //! A fake aq-git git-HTTP socket for tests. It refuses a request whose grant
 //! headers are missing or name another repository, records the headers of
 //! every request, and serves it with `git http-backend` from one bare
-//! repository. It enforces nothing else of the grant: aq-git does that.
+//! repository, `<dir>/git-http-repositories/<repository>`. It enforces nothing
+//! else of the grant: the server and aq-git do that.
 use bytes::Bytes;
 use http::{HeaderMap, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
@@ -118,7 +119,6 @@ async fn serve(
     if Some(header("aq-repository").as_str()) != first
         || header("aq-base").len() != 40
         || !header("aq-task-ref").starts_with("refs/heads/aq/")
-        || !header("aq-main-ref").starts_with("refs/heads/")
         || Uuid::try_parse(&header("aq-operation")).is_err()
         || header("aq-max-push-bytes").parse::<u64>().unwrap_or(0) == 0
     {

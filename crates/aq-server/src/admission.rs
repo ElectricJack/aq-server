@@ -24,8 +24,6 @@ pub struct Admission {
     material_inventory: Semaphore,
     general: Semaphore,
     bulk: Semaphore,
-    #[cfg(feature = "delivery_playbook")]
-    git_transfer: Semaphore,
     notification: Semaphore,
     observation: Semaphore,
     observation_read: Semaphore,
@@ -45,8 +43,6 @@ impl Default for Admission {
             material_inventory: Semaphore::new(limits.inventory_requests),
             general: Semaphore::new(limits.general_requests),
             bulk: Semaphore::new(limits.bulk_transfers),
-            #[cfg(feature = "delivery_playbook")]
-            git_transfer: Semaphore::new(limits.bulk_transfers),
             notification: Semaphore::new(4),
             observation: Semaphore::new(2),
             observation_read: Semaphore::new(2),
@@ -75,8 +71,8 @@ pub enum Class {
     TerminalRead,
     /// `/api/v1/commands`: the command surface; per-attempt budgets apply inside.
     AgentCommand,
-    /// `/v1/git/…` (spec 0016 §5.2): bulk-sized slots, but the transfer's
-    /// own deadline is Settings `git_transfer_timeout_ms`, not this gate's.
+    /// `/v1/git/…` (spec 0016 §5.2): the bulk slots, but the transfer's own
+    /// deadline is Settings `git_transfer_timeout_ms`, not this gate's.
     #[cfg(feature = "delivery_playbook")]
     GitTransfer,
 }
@@ -295,7 +291,7 @@ pub async fn gate(
         Class::TerminalRead => (&admission.terminal_read, Duration::from_secs(5)),
         Class::AgentCommand => (&admission.agent_command, Duration::from_secs(20)),
         #[cfg(feature = "delivery_playbook")]
-        Class::GitTransfer => (&admission.git_transfer, Duration::MAX),
+        Class::GitTransfer => (&admission.bulk, Duration::MAX),
     };
     let Ok(_permit) = slots.try_acquire() else {
         return busy(

@@ -58,12 +58,6 @@ pub async fn setup_actual(
     selection::setup_actual(input).await
 }
 pub async fn setup() -> Case {
-    setup_source(None).await
-}
-/// [`setup`] with the project following `source` (default: the fixed commit
-/// `a…a`). Each project policy's `retention_handle` is the one the synthetic
-/// aq-git peer retains that commit under.
-pub async fn setup_source(source: Option<aq_admission::SourceSelection>) -> Case {
     let mut env = selection::selection_fixture().await;
     let pool = env.env.pool.clone();
     // This lane intentionally installs the frozen guard explicitly. Ordered
@@ -277,12 +271,12 @@ pub async fn setup_source(source: Option<aq_admission::SourceSelection>) -> Case
             project_id: env.lineage.project_id,
             enabled: true,
             priority: 0,
-            source: source.unwrap_or(aq_admission::SourceSelection::Immutable {
+            source: aq_admission::SourceSelection::Immutable {
                 object: aq_admission::ObjectId {
                     format: aq_admission::ObjectFormat::Sha1,
                     hex: "a".repeat(40),
                 },
-            }),
+            },
             retention_handle: handle,
             placement: None,
             agent_grants: None,
@@ -351,6 +345,9 @@ pub async fn setup_source(source: Option<aq_admission::SourceSelection>) -> Case
             "artifact.export"=>{if export_mode.load(Ordering::SeqCst)==9 {export_clock.fetch_add(16000,Ordering::SeqCst);}let op=r["operation_id"].as_str().unwrap();retained.lock().unwrap().insert(op.to_owned(),(false,r["params"]["base"]["hex"].as_str().unwrap().to_owned()));let dir=root.join("artifacts").join(op);std::fs::create_dir_all(&dir).unwrap();let bundle=b"synthetic bytes, not a qualified Git bundle";let manifest=json!({"format_version":1,"repository_id":repository,"repository_identity":"synthetic-native-repository","binding_generation":1,"transfer_id":op,"object_format":"sha1","base":r["params"]["base"],"source":r["params"]["source"],"prerequisites":[],"bundle_size":bundle.len(),"bundle_sha256":Digest::of(bundle),"producer_installation_id":producer,"reference_only":false,"caller_correlation":r["params"]["caller_correlation"]});std::fs::write(dir.join("objects.bundle"),bundle).unwrap();std::fs::write(dir.join("manifest.json"),serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();json!({"artifact_handle":op,"retention_handle":op,"manifest":manifest})},
             // Spec 0007 S7: the predecessor's saved checkpoint becomes a ready candidate.
             "candidate.create"=>{let op=r["operation_id"].clone();retained.lock().unwrap().insert(op.as_str().unwrap().to_owned(),(true,HANDOFF_CANDIDATE.to_owned()));json!({"candidate_id":op,"state":"ready","candidate":{"algorithm":"sha1","hex":HANDOFF_CANDIDATE},"clean_prefix":{"algorithm":"sha1","hex":HANDOFF_CANDIDATE},"retention_handle":op,"conflict_step":null,"conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false})},
+            // Spec 0016 §5.1: a branch of the fake git-HTTP repository
+            // (`aq_delivery::git_grant::fake`) under this root, if it serves one.
+            "ref.show"=>{let bare=root.join("git-http-repositories").join(repository.to_string());let out=std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse","--verify","-q"]).arg(format!("{}^{{commit}}",r["params"]["ref"].as_str().unwrap())).output().unwrap();let hex=String::from_utf8(out.stdout).unwrap();let oid=out.status.success().then(||json!({"algorithm":"sha1","hex":hex.trim()}));json!({"ref":r["params"]["ref"],"oid":oid})},
             other=>panic!("unexpected private Git operation {other}"),
         };
         let mut response=json!({"protocol_version":1,"request_id":r["request_id"],"ok":true,"result":result});if let Some(op)=r.get("operation_id"){response["operation_id"]=op.clone();}let mut bytes=serde_json::to_vec(&response).unwrap();bytes.push(b'\n');if let Err(error)=reader.into_inner().write_all(&bytes).await {

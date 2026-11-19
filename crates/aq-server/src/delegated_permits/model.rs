@@ -44,16 +44,6 @@ impl CredentialKey {
             .map_err(|_| ContractError::InvalidShape)
     }
 
-    /// Spec 0016 §5.2: the MAC of an attempt's git token. The message is
-    /// domain-separated by `aq_delivery::git_grant::token_message`.
-    #[cfg(feature = "delivery_playbook")]
-    pub(crate) fn git_token_mac(&self, message: &[u8]) -> Result<[u8; 32]> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_slice())
-            .map_err(|_| ContractError::InvalidShape)?;
-        mac.update(message);
-        Ok(mac.finalize().into_bytes().into())
-    }
-
     pub fn credential(&self, permit_id: Uuid) -> Result<PermitCredential> {
         if permit_id.is_nil() {
             return Err(ContractError::InvalidShape);

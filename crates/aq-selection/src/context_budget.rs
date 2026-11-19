@@ -2,9 +2,9 @@
 //! model window and no measurement. The startup descriptor's token fields
 //! stay on the wire until the protocol step removes them; each is the byte
 //! count it stands beside.
-use aq_admission::{ArtifactRef, Digest, Text};
+use crate::ResolvedSelection;
 use aq_profiles::roles::StartupText;
-use aq_selection::ResolvedSelection;
+use aq_session_protocol::{ArtifactRef, Digest, Text};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,7 +104,7 @@ pub fn count(
     let proof = Proof {
         schema_version: 2,
         renderer: renderer.definition.clone(),
-        selection_digest: aq_selection::digest(selection).map_err(|_| Error::Input)?,
+        selection_digest: crate::digest(selection).map_err(|_| Error::Input)?,
         launch_digest: selection.choice.launch_digest.clone(),
         rendering: Rendering::Utf8DoubleNewlineV1,
         rendered_digest: Digest::of(&bytes),
