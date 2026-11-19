@@ -35,6 +35,9 @@ pub(crate) struct Create {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 300))]
     pub(in crate::agent_access::human) priority: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub(in crate::agent_access::human) story_points: Option<u16>,
     /// The role the task expects; it must exist. Absent: the project's
     /// default role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +71,8 @@ impl Create {
                 v.priority,
                 [&v.role, &v.intelligence_hint, &v.task_type],
             )
+            || v.story_points
+                .is_some_and(|n| !(1..=aq_human_work::MAX_STORY_POINTS).contains(&n))
             || v.revision().is_err()
             || v.title.trim().is_empty()
             || v.title.len() > 512
@@ -366,6 +371,9 @@ async fn create_on_node(
         &request.intelligence_hint,
         &request.task_type,
     );
+    if let Some(points) = request.story_points {
+        payload["operations"][0]["metadata"][aq_human_work::STORY_POINTS_KEY] = json!(points);
+    }
     if let Some(parent) = request.parent_id {
         payload["operations"].as_array_mut().ok_or_else(unavailable)?.push(json!({"op":"add_edge","id":Uuid::from_bytes(sha2::Sha256::digest([request.operation_id.as_bytes().as_slice(),b"feedback-parent"].concat())[..16].try_into().map_err(|_|unavailable())?),"source":parent,"target":request.operation_id,"edge_type":"parent-child","description":"Feedback draft parent","source_revision":null,"target_revision":null}));
     }

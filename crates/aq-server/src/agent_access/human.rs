@@ -486,6 +486,12 @@ fn node(raw: &Value, workspace: Uuid, kind: &str) -> Result<Value> {
             },
         );
     }
+    if kind == "task" {
+        output.insert(
+            "story_points".into(),
+            json!(aq_human_work::story_points(raw)),
+        );
+    }
     Ok(Value::Object(output))
 }
 async fn list(

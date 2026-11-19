@@ -306,6 +306,12 @@
               "maxLength": 128
             }
           },
+          "story_points": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Estimated effort on a task. Null when unestimated."
+          },
           "task_state": {
             "anyOf": [
               {
