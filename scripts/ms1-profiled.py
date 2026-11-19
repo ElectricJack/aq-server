@@ -401,7 +401,7 @@ def build():
                     # the stall ladder has no progress evidence.
                     "accounting": {"sources": [
                         _accounting_source("anthropic", "claude", "claude-v1-9a9b8e8",
-                                           "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7", False),
+                                           "9288a6738990e4f9c64681c523adb32dc0fb8178509be0506cfb78ce9a201c11", False),
                         _accounting_source("openai", "codex", "codex-rollout-67f0994",
                                            "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22", True)]}}
     state_dir = NODE / "state"

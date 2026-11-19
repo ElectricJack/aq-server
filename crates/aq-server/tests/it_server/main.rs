@@ -8,6 +8,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod admission_lanes;
 mod authz;
 mod cli;
 mod commands;

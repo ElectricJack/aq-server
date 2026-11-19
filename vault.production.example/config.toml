@@ -158,7 +158,7 @@ spool_dir = "/updater"
 # harness = "claude"
 # reference = { id = "aq.accounting.source/anthropic-claude", version = "1", digest = "5c0e1545dddee8d9735a0b1fbe3fc626ce451c551677b8472c3ffa43c6130e9a" }
 # layout = { policy = { id = "aq.accounting.layout/anthropic-claude", version = "1", digest = "21b3da45a7965ffd140b8349eddbc9930b3b7210e528ce69ff6cd0e0f08341c5" }, input_includes_cache_read = false, input_includes_cache_write = false, output_includes_reasoning = true }
-# parsers = [{ parser = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7" }, category_claim = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7" }, priority = 1 }]
+# parsers = [{ parser = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "9288a6738990e4f9c64681c523adb32dc0fb8178509be0506cfb78ce9a201c11" }, category_claim = { id = "claude-v1-9a9b8e8", version = "0.0.1-engine", digest = "9288a6738990e4f9c64681c523adb32dc0fb8178509be0506cfb78ce9a201c11" }, priority = 1 }]
 #
 # [[intelligence.accounting.sources]]
 # provider = "openai"

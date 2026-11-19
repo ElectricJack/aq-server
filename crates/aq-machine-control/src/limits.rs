@@ -28,6 +28,10 @@ pub struct LaunchLimits {
     pub renewal_requests: usize,
     pub presence_requests: usize,
     pub inventory_requests: usize,
+    /// Observation batches and transport reports from nodes, and observation
+    /// reads; each has its own lane.
+    pub observation_requests: usize,
+    pub observation_read_requests: usize,
     /// PostgreSQL connections: the general pool, the pool of worker control
     /// requests (poll, register, proposal, accept, started, stopped and the
     /// offer assembly a poll starts), and the renewal and presence pools.
@@ -50,6 +54,8 @@ impl LaunchLimits {
         renewal_requests: 32,
         presence_requests: 32,
         inventory_requests: 8,
+        observation_requests: 2,
+        observation_read_requests: 2,
         connections: 10,
         control_connections: 16,
         renewal_connections: 4,
@@ -70,6 +76,8 @@ impl LaunchLimits {
             self.renewal_requests,
             self.presence_requests,
             self.inventory_requests,
+            self.observation_requests,
+            self.observation_read_requests,
             self.connections,
             self.control_connections,
             self.renewal_connections,
