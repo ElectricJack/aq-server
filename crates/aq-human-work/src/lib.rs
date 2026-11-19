@@ -252,6 +252,20 @@ pub fn readiness_with(
     json!({"state":state,"blockers":blockers,"complete":complete,"reasons":reasons})
 }
 
+mod task_edit;
+pub use task_edit::{TaskEdit, TaskReprioritize};
+
+pub const STORY_POINTS_KEY: &str = "aq:story_points";
+pub const MAX_STORY_POINTS: u16 = 1000;
+
+/// The estimate stored on a Graph task. Legacy tasks may have no estimate.
+pub fn story_points(node: &Value) -> Option<u16> {
+    let points = node["metadata"][STORY_POINTS_KEY].as_u64()?;
+    u16::try_from(points)
+        .ok()
+        .filter(|n| (1..=MAX_STORY_POINTS).contains(n))
+}
+
 /// Revision fields a history diff names, in display order. `priority` is the
 /// `aq:priority` metadata key and `role` the `aq:role` key (spec 0014 §5.5);
 /// `metadata` stands for any other metadata key.

@@ -199,6 +199,9 @@
     {"path": "/api/worker-terminals/shells/{id}/terminal/connect", "class": "owner_admin", "note": "Owner-only worker host terminal sessions (aq-manual-sessions host.rs); owner guard, live stream also checks origin."},
     {"path": "/api/worker-terminals/shells/{id}/terminal/live", "class": "owner_admin", "note": "Owner-only worker host terminal sessions (aq-manual-sessions host.rs); owner guard, live stream also checks origin."},
     {"path": "/v1/worker/host-terminals", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."},
-    {"path": "/v1/worker/host-terminals/{id}/terminal-stream", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."}
+    {"path": "/v1/worker/host-terminals/{id}/terminal-stream", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."},
+    {"path": "/api/attempt-terminals/{id}/terminal/connect", "class": "owner_admin", "note": "Owner-only live terminal of a running queued attempt (aq-manual-sessions attempt.rs, spec 0009 section 10); owner guard, live stream also checks origin."},
+    {"path": "/api/attempt-terminals/{id}/terminal/live", "class": "owner_admin", "note": "Owner-only live terminal of a running queued attempt (aq-manual-sessions attempt.rs, spec 0009 section 10); owner guard, live stream also checks origin."},
+    {"path": "/v1/worker/attempt-terminals/{id}/terminal-stream", "class": "node", "note": "Stream for a queued attempt's live terminal under the node credential, only for the node that runs the attempt (aq-manual-sessions attempt.rs); node guard."}
   ]
 }

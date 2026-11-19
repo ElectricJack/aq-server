@@ -20,8 +20,8 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
-/// `$1` is the attempt. A human controller holds the attempt's pane.
-pub(crate) const HUMAN_CONTROL_SQL: &str = "EXISTS(SELECT 1 FROM terminal_sessions hc WHERE hc.attempt_id=$1 AND hc.controller_principal IS NOT NULL)";
+/// `$1` is the attempt. A human holds its pane: a finite-relay controller, or a fresh viewer of its live stream (0009 §10).
+pub(crate) const HUMAN_CONTROL_SQL: &str = "(EXISTS(SELECT 1 FROM terminal_sessions hc WHERE hc.attempt_id=$1 AND hc.controller_principal IS NOT NULL) OR EXISTS(SELECT 1 FROM attempt_terminal_viewers tv WHERE tv.attempt_id=$1 AND tv.seen_at_ms>(extract(epoch FROM clock_timestamp())*1000)::bigint-15000))";
 /// `$1` is the attempt. A terminal input is still in flight or its outcome is
 /// unknown, so the pane's input state cannot be trusted (0003 §5.1).
 pub(crate) const INPUT_UNKNOWN_SQL: &str = "EXISTS(SELECT 1 FROM terminal_sessions iu JOIN terminal_input_receipts ir ON ir.terminal_id=iu.terminal_id WHERE iu.attempt_id=$1 AND ir.disposition IN ('queued','received','injecting','delivery_unknown'))";

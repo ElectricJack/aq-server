@@ -45,7 +45,7 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "task.delete" => "Delete a task and its relationships; its history is kept",
         "task.dependency.add" => "Make one task block another",
         "task.dependency.remove" => "Remove a blocking dependency between two tasks",
-        "task.edit" => "Edit a task's title, body, acceptance criteria or labels",
+        "task.edit" => "Edit a task's title, body, acceptance criteria, labels or story points",
         "task.reopen" => {
             "Make a completed or canceled task schedulable again, if it never had an attempt"
         }
