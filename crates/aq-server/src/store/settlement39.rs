@@ -45,9 +45,9 @@ async fn validate_composed(
             .iter_mut()
             .find(|row| row["kind"] == "function" && row["name"] == "profiled_result_origin_valid")
             .ok_or_else(corrupt)?;
-        row["body"]["body"] = serde_json::Value::String(
-            super::compute41::function_body("profiled_result_origin_valid")?.into(),
-        );
+        let ids = super::compute41::contract_ids(supported, "profiled_result_origin_valid");
+        let old = || super::compute41::function_body("profiled_result_origin_valid");
+        row["body"]["body"] = ids.map_or_else(old, Ok)?.into();
     }
     // Format 50 widens both claim guards for replacement releases only.
     for (name, body) in super::replacement52::guard_overrides(supported)? {

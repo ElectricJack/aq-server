@@ -1,7 +1,9 @@
 //! Spec 0007 phase 1 (S9, owner answer Q1): a successor the predecessor's
 //! pinned selection policy would refuse is blocked before selection, so it is
 //! skipped instead of failing the poll. An actual mounted publication pins the
-//! policy; the failure owner facts are synthetic.
+//! policy; the failure owner facts are synthetic. The pinned policy's limits
+//! are the task's one retry budget (Settings › Selection defaults): the server
+//! has no limits of its own.
 use crate::common::native_offer::{fail_and_release, pin_policy, poll_offered, setup};
 use aq_admission::control::{ControlReply, decode_reply};
 use aq_server::profiled_execution::replacement::{self, Assessment};
@@ -32,16 +34,17 @@ async fn pinned_policy_budget_blocks_before_selection() {
             .unwrap();
     assert_eq!(revision, current as u64);
     let now = || (state.clock)().timestamp_millis() as u64;
-    // B4 (3 attempts) admits it; the pinned policy (1 attempt) does not.
-    assert!(matches!(
+    // The pinned policy (1 attempt) is the budget, with or without the revision fence.
+    let blocked = Assessment::Blocked("lineage_retry_budget_exhausted");
+    assert_eq!(
         replacement::assess_task(state, task, now()).await.unwrap(),
-        Assessment::Replace(_)
-    ));
+        blocked
+    );
     assert_eq!(
         replacement::assess_task_for_revision(state, task, now(), revision)
             .await
             .unwrap(),
-        Assessment::Blocked("replacement_policy_retry_budget_exhausted")
+        blocked
     );
     // An owner stop is not charged (Q1): the same lineage is replaceable.
     sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")

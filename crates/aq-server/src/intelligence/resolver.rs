@@ -60,9 +60,8 @@ async fn attempts(
     state: &AppState,
     lineage: &TaskLineage,
 ) -> Result<crate::profiled_execution::no_grant::AttemptCounts> {
-    crate::profiled_execution::no_grant::attempt_counts(&state.store.pool, lineage.task_id)
-        .await?
-        .check_retry_bound()
+    use crate::profiled_execution::no_grant;
+    no_grant::check_retry_bound(no_grant::attempt_counts(&state.store.pool, lineage.task_id).await?)
 }
 
 pub(crate) fn relevant(
@@ -224,6 +223,9 @@ async fn resolve_with_principal(
         }
         _ => None,
     };
+    let (pool, task) = (&state.store.pool, request.lineage.task_id);
+    let cost_baseline = aq_machine_control::holds::cost_baseline(pool, task).await;
+    let cost_baseline = cost_baseline.map_err(|_| AppError::Internal)?;
     let ledger = match aq_admission::transport::task_lineage_id(
         request.lineage.project_id,
         request.lineage.workspace_id,
@@ -290,7 +292,9 @@ async fn resolve_with_principal(
                 None if count.started == 0 => Some(0),
                 None => None,
             },
-            spent_microunits: ledger.as_ref().and_then(|l| l.spent_microunits),
+            // An owner override starts the cost budget again: only later spend counts.
+            spent_microunits: (ledger.as_ref().and_then(|l| l.spent_microunits))
+                .map(|spent| spent.saturating_sub(cost_baseline)),
             currency: ledger.as_ref().and_then(|l| l.currency.clone()),
             accounting: ledger
                 .as_ref()
@@ -652,12 +656,9 @@ async fn fence_snapshot(
     {
         return Err(conflict("relevant availability changed"));
     }
-    let mut counts = crate::profiled_execution::no_grant::attempt_counts_locked(
-        tx,
-        decision.inputs.project.lineage.task_id,
-    )
-    .await?
-    .check_retry_bound()?;
+    use crate::profiled_execution::no_grant;
+    let task = decision.inputs.project.lineage.task_id;
+    let mut counts = no_grant::check_retry_bound(no_grant::attempt_counts_locked(tx, task).await?)?;
     if owned_attempt {
         counts.started = counts
             .started

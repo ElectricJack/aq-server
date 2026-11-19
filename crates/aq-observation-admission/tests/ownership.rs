@@ -241,28 +241,50 @@ fn scope_markers_history_and_boot_quota_refuse() {
     let mut a = access();
     a.accepted_through = 1;
     assert!(apply(None, None, &prepare(&a), &a, Some(Uuid::new_v4())).is_err());
+}
+#[test]
+fn a_node_restarts_without_limit_and_a_stale_boot_is_still_refused() {
+    let mut a = access();
+    let (_, t) = allocation(&a);
+    let (_, active) = activate(&a, &t.reply.current_owner);
     let mut owner = active.reply.current_owner;
-    owner.boot_transitions = MAX_BOOT_TRANSITIONS;
-    owner.revision = 2 + u64::from(MAX_BOOT_TRANSITIONS);
-    owner.current_boot_id = Uuid::new_v4();
-    let a = Access {
-        node_id: owner.marker.node_id,
-        boot_id: Uuid::new_v4(),
-        accepted_through: 0,
-        max_pending_distance: 10,
-        new_boot_previously_owned: false,
+    let advance = |owner: &Owner, a: &Access| {
+        request(
+            a,
+            Operation::AdvanceBoot {
+                marker: owner.marker.clone(),
+                expected_boot_id: owner.current_boot_id,
+                expected_revision: owner.revision,
+                new_boot_id: a.boot_id,
+                next_sequence: 1,
+            },
+        )
     };
-    let r = request(
-        &a,
-        Operation::AdvanceBoot {
-            marker: owner.marker.clone(),
-            expected_boot_id: owner.current_boot_id,
-            expected_revision: owner.revision,
-            new_boot_id: a.boot_id,
-            next_sequence: 1,
-        },
-    );
-    assert!(apply(Some(&owner), None, &r, &a, None).is_err());
+    let mut stale = None;
+    for _ in 0..200 {
+        a.boot_id = Uuid::new_v4();
+        let r = advance(&owner, &a);
+        // The request and owner of the boot before this one.
+        stale = Some((r.clone(), owner.clone()));
+        owner = apply(Some(&owner), None, &r, &a, None)
+            .unwrap()
+            .reply
+            .current_owner;
+    }
+    assert_eq!((owner.boot_transitions, owner.revision), (200, 202));
+    // The superseded boot's request names an owner revision that has passed.
+    let (old_request, old_owner) = stale.unwrap();
+    assert!(apply(Some(&owner), None, &old_request, &a, None).is_err());
+    // A boot that is not the node's admitted boot cannot take the owner.
+    let mut other = advance(&owner, &a);
+    if let Operation::AdvanceBoot { new_boot_id, .. } = &mut other.operation {
+        *new_boot_id = old_owner.current_boot_id;
+    }
+    assert!(apply(Some(&owner), None, &other, &a, None).is_err());
+    // Nor can a boot the adapter remembers as a previous owner.
+    a.boot_id = Uuid::new_v4();
+    a.new_boot_previously_owned = true;
+    assert!(apply(Some(&owner), None, &advance(&owner, &a), &a, None).is_err());
 }
 #[test]
 fn strict_bounded_decoders_and_status_cannot_replace_create_receipt() {
@@ -380,4 +402,17 @@ fn published_schemas_examples_and_python_digest_vectors_match() {
         assert_eq!(reply.may_create(&r).unwrap(), i == 0);
     }
     decode_status(&serde_json::to_vec(&fixture["status"]).unwrap()).unwrap();
+}
+#[test]
+fn a_batch_reply_without_refusals_is_the_receipt_and_refusals_round_trip() {
+    let receipt = json!({"schema_version":1,"message_id":Uuid::from_u128(1),"body_digest":"0".repeat(64),"disposition":"observation_recorded","through_sequence":7});
+    let plain: BatchReply = serde_json::from_value(receipt.clone()).unwrap();
+    assert!(plain.refused_sources.is_empty());
+    assert_eq!(serde_json::to_value(&plain).unwrap(), receipt);
+    let mut refused = receipt;
+    refused["refused_sources"] =
+        json!([{"source_id":Uuid::from_u128(2),"generation":1,"reason":"parser"}]);
+    let reply: BatchReply = serde_json::from_value(refused.clone()).unwrap();
+    assert_eq!(reply.refused_sources[0].reason, RefusalReason::Parser);
+    assert_eq!(serde_json::to_value(&reply).unwrap(), refused);
 }
