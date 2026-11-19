@@ -148,15 +148,15 @@ end is the one aggregate check (it fails unless every job below succeeded):
 
 | Job | What it does | Measured |
 | --- | --- | --- |
-| `tests (build archive)` | `cargo nextest archive --workspace`, uploaded once | not yet measured |
-| `tests (shard i/6)` x 6 | the archive on its own runner and PostgreSQL (tmpfs), `--partition hash:i/6` | not yet measured |
-| `tests (feature-on runs)` | the `test-verifier` and `recovery-test-support` runs (own build) | not yet measured |
-| `tests (doctests)` | `cargo test --workspace --doc` | not yet measured |
+| `tests (build archive)` | `cargo nextest archive --workspace`, uploaded once | 5m39s |
+| `tests (shard i/6)` x 6 | the archive on its own runner and PostgreSQL (tmpfs), `--partition hash:i/6` | 2m37s to 3m46s |
+| `tests (feature-on runs)` | the `test-verifier` and `recovery-test-support` runs (own build) | 3m22s |
+| `tests (doctests)` | `cargo test --workspace --doc` | 3m21s |
 
 Before the split the single job took 17m51s. Measured locally on 24 cores
 (not CI): the workspace archive holds 2511 tests and is 1.0 GB, and the six
 hash shards list 405, 430, 453, 403, 419 and 401 tests (sum 2511, so the same
-set as the unsharded run). The CI times are not yet measured. Wall time of `tests` is the build
+set as the unsharded run). Measured in CI on 2026-11-19 (PR #192): `tests` takes 9m25s (build 5m39s plus the slowest shard, 3m46s), down from 17m51s. Wall time of `tests` is the build
 job plus the slowest shard (or the feature-on job, if it is longer). The shard
 count is `6` in two places in `ci.yml` (the matrix and `--partition hash:i/6`);
 change both together, and fill the table above from a CI run.
