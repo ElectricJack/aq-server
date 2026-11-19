@@ -2,11 +2,12 @@
 //! the saved commit, and owner/service handoffs are not charged to the lineage
 //! budgets. Synthetic SQL owners and a synthetic central aq-git peer; no
 //! provider and no real Git export.
+#[cfg(not(feature = "delivery_playbook"))]
+use crate::profiled_results::auto_settlement56::{auto_env_source, evidence_rows, head_of};
 use crate::{
     common::{self, profiled::NOW, source_exports::setup},
     profiled_results::auto_settlement56::{
-        AutoEnv, admitted, auto_env_source, auto_env_with, evidence_rows, git_peer, head_of,
-        ready_candidate, silent_git,
+        AutoEnv, admitted, auto_env_with, git_peer, ready_candidate, silent_git,
     },
 };
 use aq_admission::transport::ProcessOutcome;
@@ -49,6 +50,7 @@ async fn handed(reason: Option<&str>) -> Handed {
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
@@ -430,8 +432,10 @@ async fn owner_stop_handoffs_do_not_exhaust_the_retry_budget() {
     );
 }
 
-/// Review I1(c): only the first five exempt handoffs of a lineage are free;
-/// later owner stops are charged as normal attempts.
+/// Review I1(c): only the first exempt handoffs of a lineage are free, up to
+/// Settings › Selection defaults `max_uncharged_continuations`; later owner
+/// stops are charged as normal attempts against `max_attempts`. The fixture's
+/// attempts pin no policy, so the current Settings values apply.
 #[tokio::test]
 async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     use crate::replacement_release::{fail, granted_at};
@@ -439,7 +443,12 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     let mut f = common::profiled::fixture().await;
     let task = f.selection.lineage.task_id;
     let pool = f.db.pool().await;
-    for generation in 1..=8 {
+    let limits = aq_profiles::roles::SelectionDefaults::default();
+    let (cap, last) = (
+        u64::from(limits.max_uncharged_continuations),
+        u64::from(limits.max_uncharged_continuations + limits.max_attempts),
+    );
+    for generation in 1..=last {
         if generation > 1 {
             next_attempt(&mut f, generation);
         }
@@ -449,23 +458,24 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
             .bind(attempt).bind(f.node.node_id).execute(&pool).await.unwrap();
         let assessed = replacement::assess_task(&f.state, task, NOW).await.unwrap();
         let Assessment::Replace(r) = assessed else {
-            assert_eq!(generation, 8, "{assessed:?}");
+            assert_eq!(generation, last, "{assessed:?}");
             assert_eq!(
                 assessed,
                 Assessment::Blocked("lineage_retry_budget_exhausted")
             );
             return;
         };
-        let exempt = generation.min(5) as u32;
+        let exempt = generation.min(cap) as u32;
         assert_eq!(
             (r.attempts_started, r.exempt_attempts),
             (generation as u32, exempt)
         );
         replacement::release(&f.state, task, &r).await.unwrap();
     }
-    panic!("the eighth owner stop leaves three charged attempts");
+    panic!("the last owner stop leaves `max_attempts` charged attempts");
 }
 
+#[cfg(not(feature = "delivery_playbook"))]
 /// A Success report of a handoff successor that changed nothing itself: its
 /// retained checkpoint is its admitted base, the predecessor's saved commit
 /// (handoff candidate). The predecessor attempt, its handoff row and the
@@ -549,6 +559,7 @@ async fn quiet_successor(
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
     };
     let delivery = aq_server::delivery::DeliveryService::new(pool, &config.git_socket);
     (env, delivery, socket, git)
@@ -557,6 +568,7 @@ async fn quiet_successor(
 /// Review C-1: "no change" is judged against the lineage's original base. A
 /// successor that only verified its predecessor's saved edits is delivered:
 /// the candidate is built on the lineage base and published over it.
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_quiet_handoff_successor_publishes_the_predecessors_edits() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -592,6 +604,7 @@ async fn a_quiet_handoff_successor_publishes_the_predecessors_edits() {
 
 /// No edits anywhere in the lineage (the predecessor's saved commit is the
 /// lineage base): the successor settles `no_change` and nothing is sent.
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_lineage_without_edits_settles_no_change() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -610,6 +623,7 @@ async fn a_lineage_without_edits_settles_no_change() {
 
 /// Review R1-M4: two handoffs (C2 on C1 on B0) resolve to B0, so the quiet
 /// third attempt publishes over B0.
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_two_hop_handoff_chain_publishes_over_the_first_base() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -639,6 +653,7 @@ async fn a_two_hop_handoff_chain_publishes_over_the_first_base() {
 
 /// Review R1-M1: a lineage longer than the hop bound is held visibly, never
 /// settled against an intermediate commit.
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_lineage_past_the_hop_bound_is_held() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};

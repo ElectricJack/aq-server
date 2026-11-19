@@ -76,8 +76,25 @@ _REV = int(os.environ.get("AQ_MS1_REVISION") or (_REV_FILE.read_text().strip() i
 PROFILED_REVISION = _REV
 INTELLIGENCE_REVISION = _REV + 1
 DEFINITION_VERSION = str(_REV)
+
+
+def _accounting_source(provider, harness, parser_id, parser_digest, cache_read):
+    """One [[intelligence.accounting.sources]] entry. `reference` and the layout
+    policy are owner names (digest = SHA-256 of the id and version); the parser
+    reference must equal the one the worker's observation engine stamps on its
+    events (aq-worker crates/aq-observation-engine, cfa36431)."""
+    def named(kind):
+        name = f"aq.accounting.{kind}/{provider}-{harness}"
+        return {"id": name, "version": "1", "digest": sha(name + "/v1")}
+    parser = {"id": parser_id, "version": "0.0.1-engine", "digest": parser_digest}
+    return {"provider": provider, "harness": harness, "reference": named("source"),
+            "layout": {"policy": named("layout"), "input_includes_cache_read": cache_read,
+                       "input_includes_cache_write": False, "output_includes_reasoning": True},
+            "parsers": [{"parser": parser, "category_claim": parser, "priority": 1}]}
+
+
 LONG_CONTRACT = {"id": "aq.admission.preparation-registry-refresh-v1-contract.interactive-long-v1", "version": "1",
-                 "digest": "bd9abe1d9ef02970beb7946c007418de90a6066a146698ac0c075da1c1f2a28f"}
+                 "digest": "4c4ab2ae711614db55b4b8077ce9ff5ad0200aa62d9d7bd298231da632d851bf"}
 TERMINAL_CONTRACT = {"id": "aq.phase-terminal.registry-refresh-v1.contract", "version": "1",
                      "digest": "f9af55c49127a8cb93f03ef5bbb28313d13f94a221affa3e26d91d45bffd6c2d"}
 NEGOTIATION_FEATURES = ["accepted_preparation_v2", "fresh_initial_confirmation_v2", "independent_execution_delivery_v2",
@@ -242,9 +259,10 @@ def build():
     template = worker["docker_local"]["templates"][0]
     scope = (f"aq-ms1 desktop node {node_id} only; docker-local sandbox template {template['digest']} (unadmitted, "
              f"I4a claude-rust-1); owner Claude subscription login {CREDENTIAL}@1; ElectricJack/aq-scratch main")
-    aq_worker, host, client = (pin("aq-sandbox-driver", "aq.claude-docker-local-driver"),
-                               pin("aq-session-host", "aq.ms1-host/aq-session-host"),
-                               pin("aq-agent", "aq.ms1-host/aq-agent"))
+    # The sandbox driver is the worker's own executable (`aq-worker sandbox-harness`): it has
+    # no pin here or in native.json, so a worker and its driver cannot be out of step.
+    host, client = (pin("aq-session-host", "aq.ms1-host/aq-session-host"),
+                    pin("aq-agent", "aq.ms1-host/aq-agent"))
     tmux = tmux_pin()
     permissions = [{"operation": "task.read", "scope_reference": f"project:{PROJECT}"},
                    {"operation": "knowledge.read", "scope_reference": f"project:{PROJECT}"},
@@ -254,10 +272,10 @@ def build():
                                        "omissions": []}))
     b = Builder()
     policy = b.add(f"aq.ms1-project-policy:{PROJECT}", POLICY_BODY)
-    runtime = b.add("aq.ms1-runtime", {"schema_version": 1, "worker": aq_worker, "scope": scope}, DEFINITION_VERSION)
+    runtime = b.add("aq.ms1-runtime", {"schema_version": 1, "scope": scope}, DEFINITION_VERSION)
     environment = b.add(ENVIRONMENT, {
         "schema_version": 1, "scope": scope, "template": template,
-        "images": {"driver": aq_worker, "host": host, "tmux": tmux, "client": client},
+        "images": {"host": host, "tmux": tmux, "client": client},
         "premises": ["node programs pinned by SHA-256 on the WSL2 host (not a read-only image)",
                      "Claude runs in a docker-local sandbox created by the C2 fixed launch policy on the dedicated "
                      "rootless Podman daemon (single-UID mode, CapEff 0, no-new-privs)",
@@ -291,7 +309,7 @@ def build():
         DEFINITION_VERSION)
     harness_q = b.add("aq.ms1-harness-qualification", {
         "schema_version": 1, "runtime": runtime, "qualification": qualification, "adapter": adapter,
-        "environment": environment, "driver": aq_worker, "host": host, "tmux": tmux, "scope": scope,
+        "environment": environment, "host": host, "tmux": tmux, "scope": scope,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
         "max_output_tokens_basis": "AQ planning reservation only; not a Claude Code setting"}, DEFINITION_VERSION)
     # Stable body: a credential identity/version can never change its definition.
@@ -327,14 +345,14 @@ def build():
         "proposal_policy": phase_policy,
         "adapters": "registry_observation_continuity_current_project_principal_inventory_health_unissued_graph_retention_private_v1"})
     proof = b.add("aq.ms1-physical-proof-producer", {
-        "schema_version": 1, "worker": aq_worker, "helper": host, "tmux": tmux,
+        "schema_version": 1, "helper": host, "tmux": tmux,
         "scope": "retained session-host guardian/incarnation plus kernel ECHILD; the sandbox driver is the pane "
                  "program and stops its sandbox before it exits"})
     b.add("aq.phase-terminal-refresh-qualification/ms1", {
         "schema_version": 1, "contract": TERMINAL_CONTRACT, "runtime": runtime, "runtime_qualification": qualification,
         "proof_producer": proof})
     inventory_adapter = b.add("aq.ms1-scoped-presence-adapter", {
-        "schema_version": 1, "worker": aq_worker,
+        "schema_version": 1,
         "scope": "grant-bounded scoped material presence; public inventory lists provisionable profiles only"})
     inventory_evidence = b.add("aq.ms1-scoped-presence-evidence", {
         "schema_version": 1, "adapter": inventory_adapter, "runtime": runtime, "qualification": qualification,
@@ -378,13 +396,20 @@ def build():
                         "allow_enrolled_nodes": ENROLLED_NODES,
                         "secret_file": "/var/lib/aq/credentials/owner-claude-subscription",
                         "delivery_mode": "server_material_v1"}],
-                    "qualified_harnesses": [harness]}
+                    "qualified_harnesses": [harness],
+                    # Without a source the server refuses the sessions' observations and
+                    # the stall ladder has no progress evidence.
+                    "accounting": {"sources": [
+                        _accounting_source("anthropic", "claude", "claude-v1-9a9b8e8",
+                                           "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7", False),
+                        _accounting_source("openai", "codex", "codex-rollout-67f0994",
+                                           "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22", True)]}}
     state_dir = NODE / "state"
     docker = dict(worker["docker_local"])
     host_config = {
         "root": str(state_dir / "host"), "helper": {"path": host["path"], "artifact": host["artifact"]},
         "tmux": {"path": tmux["path"], "artifact": tmux["artifact"]},
-        "driver": {"path": aq_worker["path"], "artifact": aq_worker["artifact"]}, "renderer": renderer,
+        "renderer": renderer,
         "columns": 120, "rows": 40, "docker_local": docker, "template": template["digest"],
         "claude_executable": "/opt/aq/bin/claude", "max_workspace_bytes": 256 * 1024 * 1024}
     placeholder = {"schema_version": 1, "note": "unused by the Claude docker-local executor"}

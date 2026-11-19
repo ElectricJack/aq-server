@@ -265,11 +265,26 @@ impl IntelligenceConfig {
             .map(|c| format!("intelligence credential {} lists allowed_node_ids, but allow_enrolled_nodes is on (the default since spec 0007 Q3), so every enrolled node may use it; set allow_enrolled_nodes = false on the credential to keep only the listed nodes", c.credential.profile.id.as_str()))
             .collect()
     }
+    /// One line per qualified harness that no accounting source names. The
+    /// server enrolls no observation source for its sessions, so their batches
+    /// are refused and stall detection has no progress evidence.
+    pub fn unobserved_harnesses(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        (self.qualified_harnesses.iter())
+            .map(|h| h.harness.as_str())
+            .filter(|h| seen.insert(*h) && !self.accounting.sources.iter().any(|s| s.harness == *h))
+            .map(|h| format!("qualified harness {h} has no [[intelligence.accounting.sources]] entry: observations from its sessions are refused and stall detection cannot see their progress; add a source with harness = \"{h}\" and the provider of its credential"))
+            .collect()
+    }
     /// Call once at daemon startup, never while selecting. Missing files are a
     /// missing-credentials fact; unsafe objects and oversized input fail closed.
     pub fn load(&self) -> Result<LoadedRegistry, String> {
         self.validate()?;
-        for line in self.widened_lists() {
+        for line in self
+            .widened_lists()
+            .into_iter()
+            .chain(self.unobserved_harnesses())
+        {
             tracing::warn!("{line}");
         }
         let mut credentials = Vec::new();
@@ -487,6 +502,63 @@ mod tests {
         };
         assert_eq!(found("claude-q").as_deref(), Some("claude"));
         assert_eq!(found("codex-q").as_deref(), Some("codex"));
+    }
+    /// The example's accounting block is the text an operator pastes: it must
+    /// parse, validate, and cover the docker-local Claude and Codex harnesses.
+    #[test]
+    fn example_accounting_sources_validate_and_uncovered_harnesses_are_named() {
+        let example = include_str!("../../../vault.production.example/config.toml");
+        let block = &example[example
+            .find("# [[intelligence.accounting.sources]]")
+            .expect("example accounting block")..];
+        let text: String = (block.lines())
+            .map(|l| l.trim_start_matches('#').trim_start().to_owned() + "\n")
+            .collect();
+        #[derive(Deserialize)]
+        struct Root {
+            intelligence: Accounting,
+        }
+        #[derive(Deserialize)]
+        struct Accounting {
+            accounting: AccountingCatalog,
+        }
+        let accounting = toml::from_str::<Root>(&text)
+            .unwrap()
+            .intelligence
+            .accounting;
+        accounting.validate().unwrap();
+        for (provider, harness, parser) in [
+            ("anthropic", "claude", "claude-v1-9a9b8e8"),
+            ("openai", "codex", "codex-rollout-67f0994"),
+        ] {
+            let source = accounting.source(provider, harness).unwrap();
+            assert_eq!(source.parsers[0].parser.id.as_str(), parser);
+            // The worker's usage events name the parser as their category claim.
+            assert_eq!(source.parsers[0].parser, source.parsers[0].category_claim);
+        }
+        let harness = |name: &str| -> aq_selection::InstalledHarness {
+            let artifact =
+                serde_json::json!({"id": name, "version": "1", "digest": "a".repeat(64)});
+            serde_json::from_value(serde_json::json!({
+                "harness": name, "cli_version": "1", "adapter": artifact, "environment": artifact,
+                "qualification": artifact, "failure_classifier": null, "capabilities": [],
+                "limits": {"context_bytes": 1, "max_output_tokens": 1, "wall_time_ms": 1,
+                    "memory_bytes": 1, "cpu_millis": 1, "process_limit": 1}
+            }))
+            .unwrap()
+        };
+        let mut config = IntelligenceConfig {
+            revision: 1,
+            credentials: vec![],
+            qualified_harnesses: vec![harness("claude"), harness("gemini")],
+            accounting,
+            material_store: None,
+        };
+        let lines = config.unobserved_harnesses();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("qualified harness gemini has no"));
+        config.accounting = Default::default();
+        assert_eq!(config.unobserved_harnesses().len(), 2);
     }
     #[test]
     fn widened_lists_name_each_overridden_credential_and_admits_needs_enrollment() {

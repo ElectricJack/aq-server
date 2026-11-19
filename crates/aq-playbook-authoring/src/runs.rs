@@ -407,6 +407,40 @@ pub async fn run_for_artifact(pool: &PgPool, digest: &str) -> Result<Option<(Str
     Ok(Some((source, purpose)))
 }
 
+/// Retained authoring data for an exact installed artifact. The caller checks
+/// namespace authority and installation before looking up this global record.
+pub async fn inspection_source<'e>(
+    db: impl PgExecutor<'e>,
+    digest: &str,
+) -> std::result::Result<(Option<String>, Option<aq_playbooks_model::Artifact>), sqlx::Error> {
+    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT source_digest,
+                CASE WHEN octet_length(markdown) <= 131072 THEN markdown END,
+                CASE WHEN octet_length(artifact::text) <= 1048576 THEN artifact::text END
+         FROM playbook_authoring_runs WHERE artifact_digest=$1 AND status='saved'
+         ORDER BY markdown IS NULL, id DESC LIMIT 1",
+    )
+    .bind(digest)
+    .fetch_optional(db)
+    .await?;
+    let Some((source, markdown, artifact)) = row else {
+        return Ok((None, None));
+    };
+    let artifact = artifact
+        .and_then(|text| serde_json::from_str::<aq_playbooks_model::Artifact>(&text).ok())
+        .filter(|value| value.digest == digest && value.verify().is_ok());
+    let markdown = markdown.filter(|text| {
+        !text.trim().is_empty()
+            && source_digest(text) == source
+            && artifact.as_ref().is_some_and(|artifact| {
+                let binding = &artifact.content.source;
+                crate::source::artifact_source_digest(&binding.header, text) == binding.digest
+            })
+            && serde_json::to_vec(text).is_ok_and(|encoded| encoded.len() <= 131072)
+    });
+    Ok((markdown, artifact))
+}
+
 const RUN_COLUMNS: &str = "id,source_id,source_revision,source_digest,facts_digest,record_digest,
     internal_task_id,created_at_ms";
 

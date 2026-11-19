@@ -22,6 +22,7 @@ aq-central-authority = { path = "../aq-central-authority", version = "=0.1.0" }
 aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
 aq-command-registry = { path = "../aq-command-registry", version = "=0.1.0" }
 aq-intelligence-config = { path = "../aq-intelligence-config", version = "=0.1.0" }
+aq-login-store = { path = "../aq-login-store" }
 aq-profiled-state = { path = "../aq-profiled-state", version = "=0.1.0" }
 aq-task-thread = { path = "../aq-task-thread", version = "=0.1.0" }
 aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }
@@ -94,7 +95,7 @@ uuid.workspace = true
 
 [features]
 # Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
-delivery_playbook = ["aq-delivery/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook", "aq-playbook-authoring/delivery_playbook"]
+delivery_playbook = ["aq-delivery/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook", "aq-playbook-authoring/delivery_playbook", "aq-profiled-state/delivery_playbook", "aq-human-work/delivery_playbook"]
 test-support = ["aq-notifications/test-support"]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]

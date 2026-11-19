@@ -306,6 +306,12 @@
               "maxLength": 128
             }
           },
+          "story_points": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Estimated effort on a task. Null when unestimated."
+          },
           "task_state": {
             "anyOf": [
               {
@@ -1125,6 +1131,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanOfferRefusalReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanResultHoldReason"
                     }
                   ]
                 }
@@ -1836,6 +1845,37 @@
         "required": [
           "code",
           "role",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "HumanResultHoldReason": {
+        "type": "object",
+        "description": "Why a stopped attempt's recorded result still holds an active task (spec 0016 §7, servers built with delivery by playbook): no playbook has decided the result. `result_ready_no_delivery_policy`: no delivery playbook is active for the project, so the result waits; `result_ready`: one is active and has not decided yet.",
+        "properties": {
+          "code": {
+            "enum": [
+              "result_ready_no_delivery_policy",
+              "result_ready"
+            ]
+          },
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "result_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "code",
+          "attempt_id",
+          "result_id",
           "message"
         ],
         "additionalProperties": false

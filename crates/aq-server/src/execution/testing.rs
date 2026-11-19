@@ -69,9 +69,9 @@ fn snapshot(state: &AppState) -> Snapshot {
         now_ms: super::api::now(state),
         grant_ttl_ms: controls.grant_ttl_ms(),
         bulk_active: controls.bulk_active.load(Ordering::SeqCst),
-        bulk_limit: crate::admission::BULK_LIMIT,
-        control_limit: crate::admission::CONTROL_LIMIT,
-        general_limit: crate::admission::GENERAL_LIMIT,
+        bulk_limit: aq_machine_control::limits::current().bulk_transfers,
+        control_limit: aq_machine_control::limits::current().control_requests,
+        general_limit: aq_machine_control::limits::current().general_requests,
         bulk_blocked: *controls.bulk_blocked.borrow(),
     }
 }

@@ -36,12 +36,12 @@ struct JudgmentJob {
 }
 
 /// Completed outcome and output of one retained host operation.
-struct Operation {
-    command: String,
-    intent_id: String,
-    request: Value,
-    status: String,
-    output: Option<Value>,
+pub(super) struct Operation {
+    pub(super) command: String,
+    pub(super) intent_id: String,
+    pub(super) request: Value,
+    pub(super) status: String,
+    pub(super) output: Option<Value>,
 }
 
 impl Service {
@@ -52,6 +52,10 @@ impl Service {
             "check.request" => (json!("check"), "aq.check.receipted"),
             "work.ensure" => (json!("work"), "aq.operation.updated"),
             "decision.request" => (json!("decision"), "aq.decision.completed"),
+            #[cfg(feature = "delivery_playbook")]
+            name if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) => {
+                (json!("delivery"), "aq.delivery.completed")
+            }
             _ => return Err(Error::Invalid),
         })
     }
@@ -102,7 +106,11 @@ impl Service {
         Ok(accepted)
     }
 
-    async fn load_operation(&self, db: impl PgExecutor<'_>, id: Uuid) -> Result<Option<Operation>> {
+    pub(super) async fn load_operation(
+        &self,
+        db: impl PgExecutor<'_>,
+        id: Uuid,
+    ) -> Result<Option<Operation>> {
         let row = sqlx::query("SELECT command_name,intent_id,request,status,output FROM playbook_host_operations WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3")
             .bind(id)
             .bind(self.namespace.namespace_id)
@@ -973,6 +981,24 @@ impl Service {
         let Some(op) = self.load_operation(&self.pool, operation).await? else {
             return Ok(missing());
         };
+        // The contract of `operation.get` has no `completed` shape for the
+        // delivery outcomes (`synced`, `merged`, ...): a delivery operation is
+        // reported while it runs, and once it has completed its answer is the
+        // one `aq.delivery.completed` event, which the join already holds.
+        #[cfg(feature = "delivery_playbook")]
+        if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&op.command.as_str()) {
+            let result = HostResult {
+                outcome: if op.status == "running" {
+                    "running"
+                } else {
+                    "refused"
+                }
+                .into(),
+                output: json!({"reference": format!("delivery:{operation}"), "subject": op.request["subject"]}),
+            };
+            self.validated(intent, &result.outcome, &result.output)?;
+            return Ok(result);
+        }
         let completion = if op.status != "running" {
             Some(HostResult {
                 outcome: op.status.clone(),

@@ -176,6 +176,14 @@ pub fn db(e: sqlx::Error) -> AppError {
     tracing::warn!(error = %e, "database error");
     AppError::Internal
 }
+impl From<aq_login_store::Error> for AppError {
+    fn from(error: aq_login_store::Error) -> Self {
+        match error {
+            aq_login_store::Error::Db(e) => db(e),
+            aq_login_store::Error::Store => AppError::Internal,
+        }
+    }
+}
 impl From<aq_machine_control::Error> for AppError {
     fn from(error: aq_machine_control::Error) -> Self {
         if let aq_machine_control::Error::Db(e) = error {

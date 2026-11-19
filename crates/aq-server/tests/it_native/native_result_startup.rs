@@ -17,6 +17,15 @@ fn reference(id: &str, bytes: &[u8]) -> ArtifactRef {
         digest: Digest::of(bytes),
     }
 }
+/// The recipe the docker-local Codex profile pins (aq-admission `DOCKER_LOCAL_PROFILES`).
+fn pinned_codex_recipe() -> ArtifactRef {
+    let codex = &aq_admission::DOCKER_LOCAL_PROFILES[1];
+    ArtifactRef {
+        id: Text::new(codex.recipe_id).unwrap(),
+        version: Text::new("1").unwrap(),
+        digest: serde_json::from_value(json!(codex.recipe_digest.unwrap())).unwrap(),
+    }
+}
 fn reporting() -> ArtifactRef {
     reference("aq.agent-result-startup", STARTUP.as_bytes())
 }
@@ -228,10 +237,7 @@ async fn ordinary_plain_profile_keeps_original_instruction_and_artifact_path() {
 #[tokio::test]
 async fn docker_local_codex_adapter_publishes_the_reporting_instruction_once() {
     let mut case = common::native_offer::setup().await;
-    let recipe = reference(
-        "aq.codex-docker-local-result-local-recipe",
-        b"fixture recipe",
-    );
+    let recipe = pinned_codex_recipe();
     let selected = (
         "codex-0.166-docker-local-result-local-v1",
         "aq.codex-docker-result-local-adapter",
