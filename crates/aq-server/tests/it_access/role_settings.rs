@@ -1270,6 +1270,71 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
 }
 
 #[tokio::test]
+async fn the_observation_limits_are_defaulted_validated_and_fenced_over_http() {
+    const PATH: &str = "/api/settings/observation-limits";
+    let f = started().await;
+    // The defaults are the numbers that were constants before.
+    let defaults = json!({
+        "max_sources_per_node": 256, "max_events_per_node": 65536,
+        "max_retained_bytes_per_node": 134217728, "max_calls_per_summary": 65536,
+        "final_drain_grace_ms": 300000});
+    let (status, body) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
+    let (status, _) = f.call("GET", PATH, None, false, false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer does not read them");
+
+    let mut changed = defaults.clone();
+    changed["max_sources_per_node"] = json!(1024);
+    let put = json!({"limits": changed, "expected_revision": "0",
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(put.clone()), false, true).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let before = f.active().await;
+    let (status, saved) = f.call("PUT", PATH, Some(put.clone()), true, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(f.active().await.1, before.1, "nothing is compiled");
+    let (_, read) = f.call("GET", PATH, None, true, false).await;
+    assert_eq!(
+        read,
+        json!({"limits": changed, "revision": saved["revision"]})
+    );
+    // What a cap check reads on its own connection.
+    let mut conn = f.pool.acquire().await.unwrap();
+    let (limits, _) = settings::observation_limits(&mut conn).await.unwrap();
+    assert_eq!(limits.max_sources_per_node, 1024);
+    // The same operation again answers as the first time; a stale read is a
+    // conflict; an invalid or unknown value is refused. Nothing changes.
+    let (status, again) = f.call("PUT", PATH, Some(put), true, true).await;
+    assert_eq!((status, &again), (StatusCode::OK, &saved));
+    let stale = json!({"limits": defaults, "expected_revision": "0",
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.call("PUT", PATH, Some(stale), true, true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let mut cases = Vec::new();
+    for field in defaults.as_object().unwrap().keys() {
+        for bad in [json!(0), json!(u64::MAX), json!(-1)] {
+            let mut limits = defaults.clone();
+            limits[field] = bad;
+            cases.push(limits);
+        }
+        let mut missing = defaults.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        cases.push(missing);
+    }
+    let mut unknown = defaults.clone();
+    unknown["surprise"] = json!(1);
+    cases.push(unknown);
+    for limits in cases {
+        let put = json!({"limits": limits, "expected_revision": saved["revision"],
+            "operation_id": Uuid::new_v4()});
+        let (status, body) = f.call("PUT", PATH, Some(put), true, true).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{limits}: {body}");
+    }
+    assert_eq!(f.call("GET", PATH, None, true, false).await.1, read);
+}
+
+#[tokio::test]
 async fn model_suggestions_are_read_from_the_discovery_cache_and_never_fail() {
     const PATH: &str = "/api/settings/model-suggestions";
     // No cache configured: nothing is suggested.

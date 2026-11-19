@@ -85,21 +85,6 @@ pub fn owner_source(
     Ok(Some(source))
 }
 
-/// The attempt's newest unrevoked source, across nodes: (generation, digest).
-async fn current_source(state: &AppState, attempt: Uuid) -> Result<Option<(u64, String)>> {
-    let row: Option<(i64, String)> = sqlx::query_as(
-        "SELECT s.generation,s.authority_digest FROM observation_sources s \
-         WHERE s.attempt_id=$1 AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r \
-          WHERE r.node_id=s.node_id AND r.source_id=s.source_id AND r.generation=s.generation) \
-         ORDER BY s.generation DESC LIMIT 1",
-    )
-    .bind(attempt)
-    .fetch_optional(&state.store.observation_pool)
-    .await?;
-    row.map(|(g, d)| Ok((u64::try_from(g).map_err(|_| Error::Invalid)?, d)))
-        .transpose()
-}
-
 /// Loads the attempt's offer and resolved selection and derives the source the
 /// catalog currently owns for it. That is the enrolled generation while the
 /// derivation is unchanged; after a catalog or credential change, or a node
@@ -122,9 +107,11 @@ pub async fn source_for_attempt(state: &AppState, attempt: Uuid) -> Result<Optio
     let selection: aq_selection::ResolvedSelection = parse(row.get("selection"))?;
     let binding =
         aq_admission::transport::lifecycle_binding(&profiled.offer).map_err(|_| Error::Invalid)?;
-    let Some((generation, digest)) = current_source(state, attempt).await? else {
+    let pool = &state.store.observation_pool;
+    let Some((generation, digest)) = sources::current(pool, attempt).await? else {
         return owner_source(registry, binding, &selection, 1);
     };
+    let generation = u64::try_from(generation).map_err(|_| Error::Invalid)?;
     let Some(same) = owner_source(registry, binding.clone(), &selection, generation)? else {
         return Ok(None);
     };
