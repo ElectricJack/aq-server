@@ -1,20 +1,18 @@
 //! Ordered upgrade and destructive-drift qualification for the sole conversation identity.
-use super::{MIGRATIONS, StoreError, migrate_known};
-use crate::test_support::TestDb;
+use aq_server::store::StoreError;
+use aq_server::test_support::{TestDb, migrate_profile};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 // The exact state35 reader remains qualified after later state versions exist.
 async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
-    migrate_known(pool, &MIGRATIONS[..35], 35).await
+    migrate_profile(pool, 35).await
 }
 
 async fn database(version: u32) -> (TestDb, PgPool) {
     let db = TestDb::create().await;
     let pool = db.pool().await;
-    migrate_known(&pool, &MIGRATIONS[..version as usize], version)
-        .await
-        .unwrap();
+    migrate_profile(&pool, version).await.unwrap();
     (db, pool)
 }
 async fn rows(pool: &PgPool, table: &str) -> Value {
@@ -48,7 +46,7 @@ async fn fresh35_and_actual34_upgrade_preserve_mail_and_refuse_old_reader() {
     let meta = rows(&pool, "meta").await;
     assert_eq!(ledger.as_array().unwrap().len(), 35);
     assert!(matches!(
-        migrate_known(&pool, &MIGRATIONS[..34], 34).await,
+        migrate_profile(&pool, 34).await,
         Err(StoreError::IncompatibleState {
             found: 35,
             supported: 34

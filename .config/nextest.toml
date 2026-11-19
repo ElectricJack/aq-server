@@ -57,5 +57,5 @@ filter = """
 test-group = "selection-fixture"
 
 [[profile.default.overrides]]
-filter = "binary_id(aq-server) & test(/^store::/)"
+filter = "(binary_id(aq-server) & test(/^store::/)) | (binary_id(aq-server::it_schema) & test(/^schema3[456]_(human_graph|supervisor|media)::/))"
 test-group = "fresh-migrations"
