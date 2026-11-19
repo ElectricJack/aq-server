@@ -60,8 +60,9 @@ async fn attempts(
     state: &AppState,
     lineage: &TaskLineage,
 ) -> Result<crate::profiled_execution::no_grant::AttemptCounts> {
-    use crate::profiled_execution::no_grant;
-    no_grant::check_retry_bound(no_grant::attempt_counts(&state.store.pool, lineage.task_id).await?)
+    crate::profiled_execution::no_grant::attempt_counts(&state.store.pool, lineage.task_id)
+        .await?
+        .check_retry_bound()
 }
 
 pub(crate) fn relevant(
@@ -152,10 +153,6 @@ async fn resolve_with_principal(
     aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
         .await
         .map_err(db)?;
-    let time = now(state)?;
-    // A stored Codex login past the owner's age limit is a missing credential here.
-    aq_login_store::mask_stale(&mut membership, loaded, &mut credentials, None, time as i64)
-        .await?;
     drop(membership);
     let observations: Vec<Value> = sqlx::query_scalar(
         "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
@@ -169,6 +166,7 @@ async fn resolve_with_principal(
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
     let mut observations = relevant(observations, &credentials, node_id);
+    let time = now(state)?;
     let registry_revision = sqlx::query_scalar::<_, i64>(
         "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
     )
@@ -223,9 +221,6 @@ async fn resolve_with_principal(
         }
         _ => None,
     };
-    let (pool, task) = (&state.store.pool, request.lineage.task_id);
-    let cost_baseline = aq_machine_control::holds::cost_baseline(pool, task).await;
-    let cost_baseline = cost_baseline.map_err(|_| AppError::Internal)?;
     let ledger = match aq_admission::transport::task_lineage_id(
         request.lineage.project_id,
         request.lineage.workspace_id,
@@ -292,9 +287,7 @@ async fn resolve_with_principal(
                 None if count.started == 0 => Some(0),
                 None => None,
             },
-            // An owner override starts the cost budget again: only later spend counts.
-            spent_microunits: (ledger.as_ref().and_then(|l| l.spent_microunits))
-                .map(|spent| spent.saturating_sub(cost_baseline)),
+            spent_microunits: ledger.as_ref().and_then(|l| l.spent_microunits),
             currency: ledger.as_ref().and_then(|l| l.currency.clone()),
             accounting: ledger
                 .as_ref()
@@ -630,12 +623,13 @@ async fn fence_snapshot(
         return Err(conflict("installed capability snapshot changed"));
     }
     let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
-    let frozen = owned_attempt.then_some(decision.inputs.credentials.as_slice());
-    aq_swarm_settings::providers::mask(tx, &mut credentials, frozen)
-        .await
-        .map_err(db)?;
-    let decided = decision.inputs.now_ms as i64;
-    aq_login_store::mask_stale(tx, loaded(state)?, &mut credentials, frozen, decided).await?;
+    aq_swarm_settings::providers::mask(
+        tx,
+        &mut credentials,
+        owned_attempt.then_some(decision.inputs.credentials.as_slice()),
+    )
+    .await
+    .map_err(db)?;
     if digest(&credentials).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.credentials).map_err(|_| AppError::Internal)?
     {
@@ -656,9 +650,12 @@ async fn fence_snapshot(
     {
         return Err(conflict("relevant availability changed"));
     }
-    use crate::profiled_execution::no_grant;
-    let task = decision.inputs.project.lineage.task_id;
-    let mut counts = no_grant::check_retry_bound(no_grant::attempt_counts_locked(tx, task).await?)?;
+    let mut counts = crate::profiled_execution::no_grant::attempt_counts_locked(
+        tx,
+        decision.inputs.project.lineage.task_id,
+    )
+    .await?
+    .check_retry_bound()?;
     if owned_attempt {
         counts.started = counts
             .started

@@ -238,7 +238,6 @@ pub async fn setup(real: bool) -> Env {
         max_bundle_bytes: 1024 * 1024,
         bulk_concurrency: 1,
         incomplete_ttl_secs: 60,
-        git_deadline_ms: 30_000,
     })
     .unwrap();
     let now = Utc::now();

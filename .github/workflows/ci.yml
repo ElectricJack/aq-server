@@ -27,8 +27,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-          # build-budget.py compares this tree with origin/main.
-          fetch-depth: 0
       - name: Install the pinned Rust toolchain
         run: |
           toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
@@ -93,10 +91,7 @@ jobs:
           POSTGRES_PASSWORD: test
         ports:
           - 5432:5432
-        # The data directory is memory, as scripts/test-db has it: every test
-        # creates and drops its own database, and nothing here outlives the job.
         options: >-
-          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U postgres"
           --health-interval 2s
           --health-timeout 5s

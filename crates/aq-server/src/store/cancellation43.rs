@@ -5,10 +5,13 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("native cancellation43 guard drift".into())
 }
 pub(super) fn function_body(name: &str) -> Result<&'static str> {
-    let sql = include_str!("../../migrations/0043_native_cancellation.sql");
-    aq_profiled_state::sql_function_body(sql, name).ok_or_else(corrupt)
+    aq_profiled_state::sql_function_body(
+        include_str!("../../migrations/0043_native_cancellation.sql"),
+        name,
+    )
+    .ok_or_else(corrupt)
 }
-pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
+pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     for (name, signature, language, set) in [
         (
             "profiled_close_ungranted",
@@ -27,8 +30,7 @@ pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32)
     ] {
         let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure($1) AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname=$2 AND p.prokind='f' AND p.proretset=$3 AND NOT p.proisstrict AND p.proparallel='u'")
             .bind(format!("{name}({signature})")).bind(language).bind(set).fetch_optional(&mut **tx).await?;
-        let ids = super::compute41::contract_ids(supported, name);
-        if actual.as_deref() != Some(ids.map_or_else(|| function_body(name), Ok)?) {
+        if actual.as_deref() != Some(function_body(name)?) {
             return Err(corrupt());
         }
     }

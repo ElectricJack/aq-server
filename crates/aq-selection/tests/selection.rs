@@ -39,27 +39,6 @@ fn explicit_fallback_and_cooldown_do_not_implicitly_downgrade() {
     assert!(out.resolved.is_none());
     assert!(out.reason_codes.contains(&"no_permitted_fallback".into()));
 }
-/// What the server does to a Codex credential whose stored login is past the owner's
-/// age limit (`aq_login_store::mask_stale`): the candidate is missing its credential and
-/// the next one is chosen, when the level permits that fallback.
-#[test]
-fn a_credential_that_cannot_be_provisioned_falls_back_to_the_next_candidate() {
-    let (catalog, mut input) = fixture();
-    let first = select(&catalog, &input).unwrap().resolved.unwrap().choice;
-    assert_eq!(first.model, "model-a");
-    for credential in &mut input.credentials {
-        credential.provisionable &= credential.profile != first.credential_profile;
-    }
-    let out = select(&catalog, &input).unwrap();
-    assert_eq!(out.resolved.unwrap().choice.model, "model-b");
-    assert_eq!(out.traces[0].state, CandidateState::MissingCredentials);
-    let mut policy = policy();
-    policy
-        .fallback_on
-        .retain(|r| *r != aq_profiles::FallbackReason::MissingCredentials);
-    let narrowed = change_policy(&catalog, policy, &mut input);
-    assert!(select(&narrowed, &input).unwrap().resolved.is_none());
-}
 #[test]
 fn unknown_availability_can_only_allow_bounded_attempt_with_present_credentials() {
     let (catalog, mut input) = fixture();

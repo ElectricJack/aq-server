@@ -17,7 +17,7 @@ use crate::{
     project_bindings::{self, domain::ProjectRecord},
     store::User,
 };
-use aq_human_work::{buckets, count, task_list};
+use aq_human_work::{buckets, count};
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, Request, State},
@@ -89,7 +89,6 @@ pub fn routes(state: &AppState) -> Router<AppState> {
     let runtime = Arc::new(ReadRuntime::new(state));
     Router::new()
         .route("/api/human/overview/tasks", get(overview::read))
-        .route("/api/human/work/tasks", get(all_tasks))
         .route(
             "/api/human/projects/{project}/tasks",
             get(tasks).post(commands::create),
@@ -280,25 +279,55 @@ async fn access(state: &AppState, r: &ReadRuntime, actor: User, project: Uuid) -
         requested: stamp(state),
     })
 }
+/// Final current-role and binding fence, with one bounded project batch query.
 async fn fence_records(r: &ReadRuntime, actor: &User, records: &[ProjectRecord]) -> Result<()> {
-    task_list::fence_records(&r.pool, &work_owner(actor), records)
+    if records.len() > 8 {
+        return Err(invalid());
+    }
+    let mut tx = r.pool.begin().await.map_err(|_| unavailable())?;
+    sqlx::query("SET LOCAL statement_timeout='1500ms'")
+        .execute(&mut *tx)
         .await
-        .map_err(work_error)
-}
-fn work_owner(actor: &User) -> task_list::Owner<'_> {
-    task_list::Owner {
-        id: actor.id,
-        email: &actor.email,
-        issuer: actor.issuer.as_deref(),
-        subject: actor.subject.as_deref(),
+        .map_err(|_| unavailable())?;
+    sqlx::query("SET LOCAL lock_timeout='500ms'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| unavailable())?;
+    let user = sqlx::query("SELECT role,email,issuer,subject FROM users WHERE id=$1 FOR SHARE")
+        .bind(actor.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| unavailable())?
+        .ok_or_else(conflict)?;
+    if user.get::<String, _>("role") != "owner"
+        || user.get::<String, _>("email") != actor.email
+        || user.get::<Option<String>, _>("issuer") != actor.issuer
+        || user.get::<Option<String>, _>("subject") != actor.subject
+    {
+        return Err(conflict());
     }
-}
-fn work_error(error: task_list::Error) -> AppError {
-    match error {
-        task_list::Error::Invalid => invalid(),
-        task_list::Error::Changed => conflict(),
-        task_list::Error::Unavailable => unavailable(),
+    let ids: Vec<Uuid> = records
+        .iter()
+        .map(|record| record.binding.project_id)
+        .collect();
+    let rows=sqlx::query("SELECT project_id,revision,binding FROM project_execution_bindings WHERE project_id=ANY($1) ORDER BY project_id FOR SHARE").bind(&ids).fetch_all(&mut *tx).await.map_err(|_|unavailable())?;
+    if rows.len() != records.len() {
+        return Err(conflict());
     }
+    for latest in rows {
+        let expected = records
+            .iter()
+            .find(|record| record.binding.project_id == latest.get::<Uuid, _>("project_id"))
+            .ok_or_else(conflict)?;
+        if latest.get::<i64, _>("revision") as u64 != expected.revision
+            || latest.get::<Value, _>("binding")
+                != serde_json::to_value(&expected.binding).map_err(|_| unavailable())?
+        {
+            return Err(conflict());
+        }
+    }
+    tx.commit().await.map_err(|_| unavailable())?;
+    Ok(())
 }
 /// QA N-04: Graph attributes every AQ write to the one configured mutation
 /// identity. Show the AQ account whose operation created (operation ID = node
@@ -383,53 +412,40 @@ async fn finish(
 }
 impl Runtime {
     async fn human_get(&self, path: &str, query: &[(String, String)], max: usize) -> Result<Value> {
-        let request = self
+        let mut response = self
             .client
             .get(self.url.join(path).map_err(|_| invalid())?)
-            .query(query);
-        self.human_response(request, max).await
-    }
-    async fn human_response(&self, request: reqwest::RequestBuilder, max: usize) -> Result<Value> {
-        let bytes = aq_human_http::graph::read(request.bearer_auth(&self.token), max)
+            .bearer_auth(&self.token)
+            .header("X-AQ-Graph-API-Version", "1")
+            .query(query)
+            .send()
             .await
-            .map_err(|e| match e {
-                aq_human_http::Error::Status(404) => {
-                    AppError::NotFound("Graph record not found".into())
-                }
-                _ => unavailable(),
-            })?;
+            .map_err(|_| unavailable())?;
+        if response
+            .headers()
+            .get("X-AQ-Graph-API-Version")
+            .is_none_or(|h| h != "1")
+        {
+            return Err(unavailable());
+        }
+        match response.status().as_u16() {
+            200 => {}
+            404 => return Err(AppError::NotFound("Graph record not found".into())),
+            _ => return Err(unavailable()),
+        }
+        if response.content_length().is_some_and(|n| n > max as u64) {
+            return Err(unavailable());
+        }
+        let mut bytes = Vec::new();
+        while let Some(c) = response.chunk().await.map_err(|_| unavailable())? {
+            if bytes.len() + c.len() > max {
+                return Err(unavailable());
+            }
+            bytes.extend_from_slice(&c)
+        }
         // Same strict duplicate-key/depth parser as the existing scheduling reader.
         super::scheduling::parse::parse(&bytes).map_err(|_| unavailable())
     }
-}
-async fn all_tasks(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
-    q: std::result::Result<
-        Query<aq_human_work::task_list::Query>,
-        axum::extract::rejection::QueryRejection,
-    >,
-) -> Result<Json<aq_human_work::task_list::Reply>> {
-    let Query(q) = q.map_err(|_| invalid())?;
-    let graph = runtime(&s)?;
-    let url = graph.url.join("/v1/task-list").map_err(|_| unavailable())?;
-    task_list::read(
-        &r.pool,
-        &r.cursors.shared,
-        work_owner(&u),
-        q,
-        stamp(&s),
-        async |body| {
-            graph
-                .human_response(graph.client.post(url).json(&body), 524288)
-                .await
-                .map_err(|_| task_list::Error::Unavailable)
-        },
-    )
-    .await
-    .map(Json)
-    .map_err(work_error)
 }
 fn runtime(state: &AppState) -> Result<&Runtime> {
     state.agent_access.as_deref().ok_or_else(unavailable)
@@ -484,12 +500,6 @@ fn node(raw: &Value, workspace: Uuid, kind: &str) -> Result<Value> {
                         .to_string()
                 )
             },
-        );
-    }
-    if kind == "task" {
-        output.insert(
-            "story_points".into(),
-            json!(aq_human_work::story_points(raw)),
         );
     }
     Ok(Value::Object(output))

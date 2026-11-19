@@ -24,8 +24,6 @@ pub struct ActionRequest {
     kind: &'static str,
     subject: Subject,
     expected_versions: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
     payload: Value,
 }
 fn action(
@@ -45,7 +43,6 @@ fn action(
             revision: Some(revision.clone()),
         },
         expected_versions: BTreeMap::from([(entity.into(), revision)]),
-        reason: None,
         payload,
     }
 }
@@ -66,9 +63,7 @@ pub fn task(args: &CreateTask) -> ActionRequest {
 pub fn task_change(kind: &'static str, c: &TaskChange, revision: String) -> ActionRequest {
     let id = Uuid::new_v4();
     let payload = json!({"operation_id":id,"project_id":c.project,"expected_version":revision});
-    let mut request = action(kind, "task", c.id, revision, id, payload);
-    request.reason = c.reason.clone();
-    request
+    action(kind, "task", c.id, revision, id, payload)
 }
 /// `worker.revoke`: the subject carries no revision (revoking is idempotent).
 pub fn worker_revoke(machine: &str) -> ActionRequest {
@@ -82,7 +77,6 @@ pub fn worker_revoke(machine: &str) -> ActionRequest {
             revision: None,
         },
         expected_versions: BTreeMap::new(),
-        reason: None,
         payload: json!({"operation_id":operation_id,"machine":machine}),
     }
 }

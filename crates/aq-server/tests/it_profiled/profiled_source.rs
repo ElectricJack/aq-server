@@ -86,7 +86,6 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
             max_bundle_bytes: 65536,
             bulk_concurrency: 1,
             incomplete_ttl_secs: 60,
-            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));

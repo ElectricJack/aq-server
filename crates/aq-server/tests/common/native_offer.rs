@@ -365,7 +365,6 @@ pub async fn setup() -> Case {
                 max_bundle_bytes: 1_048_576,
                 bulk_concurrency: 1,
                 incomplete_ttl_secs: 60,
-                git_deadline_ms: 30_000,
             },
         )
         .unwrap(),
@@ -412,12 +411,15 @@ pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::roles::Sel
     c.env.snapshot = super::roles::active(pool).await;
 }
 /// The published attempt fails: synthetic stopped, retained and quiescent
-/// owner facts (written with guards bypassed in this disposable database).
-/// It keeps its task claim.
-pub async fn fail(c: &Case, attempt: Uuid) {
-    use aq_server::execution::{
-        authority::hot::HotState,
-        profiled::{Effects, Retention, Status, Stop},
+/// owner facts (written with guards bypassed in this disposable database),
+/// then B4's own release of its task claim.
+pub async fn fail_and_release(c: &Case, attempt: Uuid) {
+    use aq_server::{
+        execution::{
+            authority::hot::HotState,
+            profiled::{Effects, Retention, Status, Stop},
+        },
+        profiled_execution::replacement::{self, Assessment},
     };
     let pool = &c.env.env.pool;
     let mut tx = pool.begin().await.unwrap();
@@ -449,45 +451,14 @@ pub async fn fail(c: &Case, attempt: Uuid) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-}
-/// [`fail`], then B4's own release of the attempt's task claim. When a budget
-/// holds the task B4 releases nothing; the release is then synthetic too, so
-/// the node (whose synthetic stop frees no compute) can poll again.
-pub async fn fail_and_release(c: &Case, attempt: Uuid) {
-    use aq_server::profiled_execution::replacement::{self, Assessment};
-    fail(c, attempt).await;
-    let pool = &c.env.env.pool;
     let state = &c.env.env.state;
     let task = c.env.lineage.task_id;
     let now = (state.clock)().timestamp_millis() as u64;
     let assessed = replacement::assess_task(state, task, now).await.unwrap();
-    match assessed {
-        Assessment::Replace(r) => replacement::release(state, task, &r).await.unwrap(),
-        Assessment::Blocked(code) if aq_machine_control::holds::is_budget_hold(code) => {
-            let mut tx = pool.begin().await.unwrap();
-            sqlx::query("SET LOCAL session_replication_role=replica")
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            sqlx::query("INSERT INTO profiled_replacement_releases(attempt_id,task_id,reason,stop_receipt_digest,retained_source_receipt_digest,effect_reconciliation_receipt_digest,attempts_started,recorded_at_ms) VALUES($1,$2,'failed_attempt_replacement',$3,$4,$5,1,$6)")
-                .bind(attempt)
-                .bind(task)
-                .bind(art("synthetic-stop", "stop").digest.as_str())
-                .bind(art("synthetic-retained", "retained").digest.as_str())
-                .bind(art("synthetic-effects", "effects").digest.as_str())
-                .bind(now as i64)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            sqlx::query("UPDATE execution_attempts SET holds_task=FALSE WHERE attempt_id=$1")
-                .bind(attempt)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-        _ => panic!("the failed attempt is replaceable: {assessed:?}"),
-    }
+    let Assessment::Replace(r) = assessed else {
+        panic!("the failed attempt is replaceable: {assessed:?}");
+    };
+    replacement::release(state, task, &r).await.unwrap();
 }
 pub async fn post(
     state: &AppState,

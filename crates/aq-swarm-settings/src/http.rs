@@ -115,7 +115,6 @@ pub fn providers(credentials: &[aq_selection::AuthorizedCredential]) -> Vec<Prov
                 "disabled"
             }
             .into(),
-            attention: None,
         })
         .collect()
 }

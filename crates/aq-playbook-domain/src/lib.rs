@@ -13,7 +13,6 @@ pub mod host_requests;
 pub mod host_values;
 pub mod playbook_view;
 pub mod review_domain;
-mod step_inspection;
 use aq_playbook_host::{
     model::*,
     runner::{Authority, Intent},

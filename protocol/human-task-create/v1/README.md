@@ -10,8 +10,6 @@ execution attempt, worker assignment or launch is manufactured.
   title cap), nonblank and no controls; body 32768 UTF-8 bytes; acceptance 8192 UTF-8 bytes;
   body and acceptance cannot contain NUL;
   unique labels at most 16, each nonblank/no controls/at most 128 UTF-8 bytes.
-  Optional story points are an integer from 1 to 1000. The estimate is stored as
-  `aq:story_points` on the task.
   Optional priority is 1–300; role, intelligence_hint and task_type
   are nonblank/no controls/at most 128 UTF-8 bytes. They are stored under
   aq:priority, aq:role, aq:intelligence_hint and aq:task_type metadata.

@@ -1053,11 +1053,8 @@ async fn control_auth_and_operations_survive_full_general_pool_and_bulk_saturati
     use serde_json::{json, to_value};
     use std::time::Duration;
     let mut h = Harness::new().await;
-    // One general connection for each bulk permit ([workers.limits]): holding
-    // them all fills the general pool and the bulk class at the same moment.
-    let limit = aq_server::admission::BULK_LIMIT;
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(limit as u32)
+        .max_connections(2)
         .connect_with(h.db.options())
         .await
         .unwrap();
@@ -1080,7 +1077,7 @@ async fn control_auth_and_operations_survive_full_general_pool_and_bulk_saturati
     .await;
     assert_eq!(set.0, StatusCode::OK);
     let mut bulk = Vec::new();
-    for _ in 0..limit {
+    for _ in 0..2 {
         let app = admin.clone();
         bulk.push(tokio::spawn(async move {
             recovery_call(&app, "POST", "/api/execution/test-bulk", json!({}), None).await
@@ -1098,7 +1095,7 @@ async fn control_auth_and_operations_survive_full_general_pool_and_bulk_saturati
             )
             .await;
             assert_eq!(status, StatusCode::OK);
-            if value["bulk_active"] == limit {
+            if value["bulk_active"] == 2 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -1108,7 +1105,7 @@ async fn control_auth_and_operations_survive_full_general_pool_and_bulk_saturati
     .unwrap();
     assert!(
         pool.try_acquire().is_none(),
-        "every general connection must actually be held"
+        "both general connections must actually be held"
     );
     assert_eq!(
         recovery_call(&admin, "GET", "/readyz", json!({}), None)

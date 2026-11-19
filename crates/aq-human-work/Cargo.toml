@@ -10,12 +10,6 @@ description = "Work-view projections for AQ's owner Graph reads: readiness, hold
 delivery_playbook = []
 
 [dependencies]
-aq-human-cursor = { path = "../aq-human-cursor" }
-aq-project-policy = { path = "../aq-project-policy" }
-chrono.workspace = true
-sha2.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
 serde.workspace = true
 schemars = "1"
 serde_json.workspace = true

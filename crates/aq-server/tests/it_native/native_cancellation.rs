@@ -374,9 +374,7 @@ async fn native_cancel_owner_validation_attempt_replay_and_concurrency() {
         200
     );
     c.request.operation_id = Uuid::new_v4();
-    // One poll waits 750 ms for the replacement's assembly; a slower one is
-    // delivered by a later poll, which is not starvation.
-    let (status, page) = native_offer::poll_offered(&c).await;
+    let (status, page) = native_offer::poll(&c).await;
     assert_eq!(status, 200, "{page}");
     let offers = page["body"]["offers"].as_array().unwrap();
     assert_eq!(

@@ -133,7 +133,6 @@ pub enum Tasks {
     /// Cancel a task and stop any attempt holding it (`task.cancel`).
     Cancel(TaskChange),
     /// Release a task whose attempt has settled for a replacement attempt (`task.retry`).
-    /// On a task a budget holds this overrides the budget; give `--reason`.
     Retry(TaskChange),
 }
 #[derive(Args)]
@@ -144,10 +143,6 @@ pub struct TaskChange {
     /// The task version the change expects; the current one is read when omitted.
     #[arg(long, value_parser = revision)]
     pub revision: Option<String>,
-    /// Why (recorded with the action). A retry of a task a budget holds overrides the
-    /// budget, and this is the reason the task's history shows.
-    #[arg(long)]
-    pub reason: Option<String>,
 }
 fn revision(value: &str) -> Result<String, String> {
     let ok = !value.is_empty()

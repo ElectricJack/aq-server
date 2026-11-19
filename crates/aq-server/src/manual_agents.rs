@@ -1,5 +1,4 @@
 mod logins;
-mod session_login;
 use crate::{AppState, authz::RequireOwner, internal_work, worker_api::authenticate_context};
 use aq_manual_sessions::{Auth, Error, Service};
 use aq_supervisor_control::{admin, read};
@@ -8,7 +7,6 @@ use axum::{
     http::{HeaderMap, Request},
     response::IntoResponse,
 };
-pub(super) use session_login::routes as session_login_routes;
 use std::sync::Arc;
 pub(super) fn service(state: &AppState) -> Service {
     let user_state = state.clone();

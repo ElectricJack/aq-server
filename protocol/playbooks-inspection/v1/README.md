@@ -13,21 +13,5 @@ The response has `api_version: "playbooks-definition-graph-1"`, the inspection
 ID-to-step maps. Steps use the same public shape as run detail. The read
 requires the mounted namespace owner and works independently of run history
 and deployments. It serves the install-time projection, bounded at 64 KiB.
-When there is no stored projection, `graph` is null. An installed artifact can
-also include `description_markdown` from its matching retained authoring run
-(up to 128 KiB when JSON encoded) and `step_facts`, a map from step IDs to
-lists of `{label, value}` pairs (up to 32 KiB when JSON encoded). Facts describe
-compiled behavior with names, modes, deadlines and outcomes. The graph and
-facts exclude runtime input and output values, expression bodies, and captured
-definitions. These fields are optional for definitions with no retained authoring
-data or where a projection exceeds its size bound.
-
-`step_inspection` optionally maps steps to a contextual `summary`, `uses`, and
-`branches`. A branch includes the graph's exact `label`, `to` step, and `error`
-flag with a readable `reason`. Runtime error edges use `label: "On error"`.
-Each use names its `producer` and `consumer` step IDs, compiled field `paths`,
-and optional `purpose`. The same use appears on both steps. These uses describe
-data flow when the consumer runs. The projection uses the verified
-retained artifact and reviewed command contracts. It omits facts it cannot
-establish and is bounded at 24 KiB when JSON encoded. Clients can still use
-the graph and step facts when this field is absent.
+When there is no stored projection, `graph` is null. The response excludes
+workflow inputs, values and expressions.

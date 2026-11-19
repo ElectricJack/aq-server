@@ -91,10 +91,6 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|value| *value) => return,
             _ = ticks.tick() => {}
         }
-        // An ended attempt's observation source is released within one tick.
-        if let Err(error) = crate::observations::release_ended(&state).await {
-            tracing::warn!(?error, "observation source release incomplete");
-        }
         let now = (state.clock)().timestamp_millis().max(0) as u64;
         tokio::select! {
             biased;

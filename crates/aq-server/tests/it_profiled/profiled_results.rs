@@ -1279,7 +1279,6 @@ async fn review_env_for_outcome(
                 max_bundle_bytes: 1048576,
                 bulk_concurrency: 1,
                 incomplete_ttl_secs: 60,
-                git_deadline_ms: 30_000,
             },
         )
         .unwrap(),

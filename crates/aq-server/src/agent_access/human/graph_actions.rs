@@ -283,31 +283,86 @@ macro_rules! common {
     };
 }
 
-pub(super) use aq_human_work::{TaskEdit, TaskReprioritize};
-
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskEdit {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 512))]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 32768))]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 8192))]
+    pub acceptance_criteria: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 16))]
+    pub labels: Option<Vec<String>>,
+}
 impl GraphPayload for TaskEdit {
     common!("task.edit", "task", aq_agent_grants::op::TASK_EDIT);
     fn valid(&self) -> bool {
-        TaskEdit::valid(self)
+        (self.title.is_some()
+            || self.body.is_some()
+            || self.acceptance_criteria.is_some()
+            || self.labels.is_some())
+            && self
+                .title
+                .as_deref()
+                .is_none_or(|t| text(t, 1, 512) && !t.trim().is_empty())
+            && self.body.as_deref().is_none_or(|t| text(t, 0, 32768))
+            && self
+                .acceptance_criteria
+                .as_deref()
+                .is_none_or(|t| text(t, 0, 8192))
+            && labels(&self.labels)
     }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
-        Ok(update(
-            c,
-            self.patch(c.node).ok_or_else(ApiError::unavailable)?,
-        ))
+        let mut patch = serde_json::Map::new();
+        put(&mut patch, "title", self.title.as_ref());
+        put(&mut patch, "body", self.body.as_ref());
+        put(
+            &mut patch,
+            "acceptance_criteria",
+            self.acceptance_criteria.as_ref(),
+        );
+        put(&mut patch, "labels", self.labels.as_ref());
+        Ok(update(c, patch))
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskReprioritize {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// Stored as Graph metadata `aq:priority`; the scheduler sorts descending.
+    #[schemars(range(min = -1_000_000, max = 1_000_000))]
+    pub priority: i64,
+}
 impl GraphPayload for TaskReprioritize {
     common!("task.reprioritize", "task", aq_agent_grants::op::TASK_EDIT);
     fn valid(&self) -> bool {
-        TaskReprioritize::valid(self)
+        (-1_000_000..=1_000_000).contains(&self.priority)
     }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
-        Ok(update(
-            c,
-            self.patch(c.node).ok_or_else(ApiError::unavailable)?,
-        ))
+        // A Graph metadata patch replaces the object; keep every other key.
+        let mut metadata = c
+            .node
+            .get("metadata")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(ApiError::unavailable)?;
+        metadata.insert("aq:priority".into(), json!(self.priority));
+        let mut patch = serde_json::Map::new();
+        patch.insert("metadata".into(), Value::Object(metadata));
+        Ok(update(c, patch))
     }
 }
 

@@ -25,6 +25,7 @@ use std::{
 };
 use uuid::Uuid;
 
+const GRAPH_BYTES: usize = 65536;
 const ACTIVATION_PAGES: usize = 4;
 /// Per-page budget for reading current activations. 500 ms was too tight on
 /// loaded CI runners once the 2.1.0 catalog landed: the read timed out and the
@@ -39,8 +40,6 @@ pub(super) struct DefinitionGraph {
     namespace: NamespaceView,
     artifact: String,
     graph: Option<Graph>,
-    #[serde(flatten)]
-    details: DefinitionDetails,
 }
 
 /// Reads the same public projection as run inspection, keyed by the immutable
@@ -58,25 +57,22 @@ pub(super) async fn definition_graph(
     {
         return Err(Error::Forbidden);
     }
-    validate_artifact_id(&artifact)?;
+    if !artifact.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(Error::Invalid);
+    }
     service.authorize_inspection(actor.id).await?;
-    let mut tx = service.tx().await?;
-    let registered = registered_graph(&mut *tx, &service.namespace, &artifact).await?;
-    let (description_markdown, authored) = if registered.is_some() {
-        aq_playbook_authoring::runs::inspection_source(&mut *tx, &artifact).await?
-    } else {
-        (None, None)
-    };
-    tx.commit().await?;
-    let graph = registered.flatten();
-    let details = DefinitionDetails::new(graph.as_ref(), authored.as_ref(), description_markdown);
+    let graph = service.stored_graph(&artifact).await?;
     service.authorize_inspection(actor.id).await?;
     bounded(DefinitionGraph {
         api_version: "playbooks-definition-graph-1",
         namespace: (&service.namespace).into(),
         artifact,
         graph,
-        details,
     })
 }
 
@@ -84,7 +80,8 @@ impl Service {
     /// Idempotent: the first install of an artifact in this namespace
     /// generation fixes its per-name version.
     pub(crate) async fn register_definition(&self, artifact: &Artifact) -> Result<()> {
-        let graph = graph_for_storage(&artifact.content.playbook)?;
+        let graph = serde_json::to_value(graph(&artifact.content.playbook))?;
+        let graph = (serde_json::to_vec(&graph)?.len() <= GRAPH_BYTES).then_some(graph);
         let mut tx = self.tx().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!(
@@ -118,6 +115,21 @@ impl Service {
             .into_iter()
             .map(|row| (row.get("artifact"), (row.get("name"), row.get("version"))))
             .collect())
+    }
+    async fn stored_graph(&self, artifact: &str) -> Result<Option<Graph>> {
+        let mut tx = self.tx().await?;
+        let graph: Option<Option<serde_json::Value>> = sqlx::query_scalar("SELECT graph FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND artifact=$3")
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(artifact)
+            .fetch_optional(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        graph
+            .flatten()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| Error::Unknown)
     }
     /// Binding and activation revision of runs admitted through a retained
     /// admission. Binding is null for admissions prepared before it was kept.
@@ -277,12 +289,10 @@ impl Driver {
         Ok(())
     }
     pub(super) async fn step_timeline(&self, run: &RunView) -> Result<Option<StepTimeline>> {
-        let service = &self.service;
-        let mut tx = service.tx().await?;
-        let graph = registered_graph(&mut *tx, &service.namespace, &run.artifact).await?;
-        tx.commit().await?;
-        Ok(graph
-            .flatten()
+        Ok(self
+            .service
+            .stored_graph(&run.artifact)
+            .await?
             .and_then(|graph| ordered(&graph, &run.entry)))
     }
 }

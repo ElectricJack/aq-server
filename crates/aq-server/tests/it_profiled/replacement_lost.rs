@@ -380,18 +380,14 @@ async fn a_lost_release_is_refused_unless_proven_owned_and_held() {
     assert!(e.contains("lost_attempt_boot_unknown"), "{e}");
 }
 
-/// #117 review I1 and its re-review: crash releases of one lineage up to the retry budget
-/// (Settings › Selection defaults `max_attempts`; the fixture's attempts pin no policy, so the
-/// current Settings value applies). The earlier ones are retried; the last one exhausts the
-/// budget, so B4 holds the task: the release answers
+/// #117 review I1 and its re-review: three crash releases of one lineage. The first two are
+/// retried; the third exhausts the retry budget, so B4 holds the task: the release answers
 /// `held` with the reason, records it, and the node is free (not busy, not a 409).
 #[tokio::test]
 async fn a_budget_held_lost_attempt_holds_the_task_not_the_node() {
     let mut h = held(false).await;
     let auth = context(&h.f).await;
-    let max_attempts = aq_profiles::roles::SelectionDefaults::default().max_attempts;
-    for generation in 2..=u64::from(max_attempts) {
-        let offered = NOW - 9_000 + generation * 1_000;
+    for (generation, offered) in [(2, NOW - 6_000), (3, NOW - 3_000)] {
         let released = release(&h, torn_down()).await.unwrap();
         assert!(released.released, "{released:?}");
         successor(&mut h, generation, offered).await;

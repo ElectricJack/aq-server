@@ -8,6 +8,7 @@ use wire::{ContractError, Digest, Validate, ensure};
 
 pub const VERSION: u32 = 1;
 pub const MAX_BYTES: usize = 16384;
+pub const MAX_BOOT_TRANSITIONS: u32 = 64;
 // The concrete spool may impose a smaller configured bound.
 pub const MAX_PENDING_DISTANCE: u64 = 65536;
 fn valid_id(id: Uuid) -> Result<(), ContractError> {
@@ -71,7 +72,10 @@ impl Validate for Request {
                 next_sequence,
             } => {
                 marker.validate()?;
-                ensure(*expected_revision >= 2, "boot expected revision")?;
+                ensure(
+                    (2..=65).contains(expected_revision),
+                    "boot expected revision",
+                )?;
                 ensure(marker.node_id == self.node_id, "marker node")?;
                 valid_id(*expected_boot_id)?;
                 valid_id(*new_boot_id)?;
@@ -142,18 +146,21 @@ pub struct Owner {
     pub phase: Phase,
     pub current_boot_id: Uuid,
     pub revision: u64,
-    /// Counts every boot advance. A node may restart without limit.
-    pub boot_transitions: u64,
+    pub boot_transitions: u32,
 }
 impl Validate for Owner {
     fn validate(&self) -> Result<(), ContractError> {
         self.marker.validate()?;
         valid_id(self.current_boot_id)?;
+        ensure(
+            self.boot_transitions <= MAX_BOOT_TRANSITIONS,
+            "boot history exhausted",
+        )?;
         let expected = match self.phase {
-            Phase::Prepared => Some(1),
-            Phase::Active => self.boot_transitions.checked_add(2),
+            Phase::Prepared => 1,
+            Phase::Active => 2 + self.boot_transitions as u64,
         };
-        ensure(Some(self.revision) == expected, "owner revision")?;
+        ensure(self.revision == expected, "owner revision")?;
         if self.boot_transitions == 0 {
             ensure(
                 self.current_boot_id == self.marker.initial_boot_id,
@@ -391,7 +398,8 @@ pub fn apply(
                     && old.revision == *expected_revision
                     && !access.new_boot_previously_owned
                     && *new_boot_id != old.marker.initial_boot_id
-                    && *new_boot_id == access.boot_id,
+                    && *new_boot_id == access.boot_id
+                    && old.boot_transitions < MAX_BOOT_TRANSITIONS,
                 "boot owner fence",
             )?;
             ensure(
@@ -477,186 +485,8 @@ pub fn decode_status(bytes: &[u8]) -> Result<Status, ContractError> {
     status.validate()?;
     Ok(status)
 }
-/// Parser IDs of the node store's own control records (transcript loss, source
-/// change, source fence). The server admits a record under one of them by its
-/// kind, whatever the source's catalog lists, and only in the control shape.
-pub const CONTROL_PARSERS: [&str; 3] = [
-    "row-spool-loss-monitor",
-    "row-file-source-monitor",
-    "row-store-source-fence",
-];
-/// `Some(true)` for a well-formed control record, `Some(false)` for a record
-/// that claims a control parser without the control shape (a gap, which can
-/// carry no fact), `None` for an ordinary record.
-pub fn control_record(record: &wire::ObservationRecord) -> Option<bool> {
-    CONTROL_PARSERS
-        .contains(&record.body.provenance.parser.id.as_str())
-        .then_some(matches!(
-            record.body.kind,
-            wire::ObservationKind::Gap { .. }
-        ))
-}
-/// Why an enrolled source (its binding and session key, and whether its
-/// catalog entry lists the record's parser) does not admit `record`. Control
-/// records are admitted by kind, whatever the catalog lists.
-pub fn refusal(
-    record: &wire::ObservationRecord,
-    binding: &wire::Binding,
-    session_key: &wire::Text,
-    parser_listed: bool,
-) -> Option<RefusalReason> {
-    if *binding != record.body.binding {
-        Some(RefusalReason::Binding)
-    } else if *session_key != record.body.provenance.native_session_key {
-        Some(RefusalReason::Provenance)
-    } else {
-        match control_record(record) {
-            Some(true) => None,
-            Some(false) => Some(RefusalReason::ControlShape),
-            None if parser_listed => None,
-            None => Some(RefusalReason::Parser),
-        }
-    }
-}
-/// Record-cursor prefixes of the store-fence control records: why a source
-/// stopped. Other control records say it in their gap reason.
-pub const FENCED_BY_RESTART: &str = "boot-fence:";
-pub const INCOMPLETE_UNREADABLE: &str = "incomplete:unreadable:";
-
-/// Why the server refused every record of one source in a batch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RefusalReason {
-    /// The node has no such enrolled source.
-    UnknownSource,
-    /// The record's attempt binding is not the enrolled one, or the attempt
-    /// may no longer be observed.
-    Binding,
-    /// The record's session key is not the enrolled one.
-    Provenance,
-    /// The parser is not in the source's catalog entry.
-    Parser,
-    /// A control parser on a record that is not a gap.
-    ControlShape,
-    /// An earlier batch already refused this source.
-    Refused,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RefusedSource {
-    pub source_id: Uuid,
-    pub generation: u64,
-    pub reason: RefusalReason,
-}
-/// The refused sources of one batch while an adapter admits it. A refused
-/// source loses every record of the batch, also those before the refused one.
-#[derive(Default)]
-pub struct Refusals(std::collections::BTreeMap<(Uuid, u64), (RefusalReason, bool)>);
-impl Refusals {
-    fn key(record: &wire::ObservationRecord) -> (Uuid, u64) {
-        let p = &record.body.provenance;
-        (p.source_id, p.source_generation)
-    }
-    pub fn refused(&self, record: &wire::ObservationRecord) -> bool {
-        self.0.contains_key(&Self::key(record))
-    }
-    /// `enrolled`: the source exists and this refusal is new, so the adapter
-    /// records it against the source.
-    pub fn refuse(
-        &mut self,
-        record: &wire::ObservationRecord,
-        reason: RefusalReason,
-        enrolled: bool,
-    ) {
-        self.0.insert(Self::key(record), (reason, enrolled));
-    }
-    /// Refuses the record's source unless it is `bound` (its attempt may be
-    /// observed) and the enrolled source admits the record ([`refusal`]).
-    pub fn check(
-        &mut self,
-        record: &wire::ObservationRecord,
-        bound: bool,
-        binding: &wire::Binding,
-        session_key: &wire::Text,
-        parser_listed: bool,
-    ) {
-        let reason = if bound {
-            refusal(record, binding, session_key, parser_listed)
-        } else {
-            Some(RefusalReason::Binding)
-        };
-        if let Some(reason) = reason {
-            self.refuse(record, reason, true);
-        }
-    }
-    pub fn admitted<'a>(
-        &self,
-        batch: &'a wire::ObservationBatch,
-    ) -> Vec<&'a wire::ObservationRecord> {
-        batch.events.iter().filter(|e| !self.refused(e)).collect()
-    }
-    pub fn list(&self) -> Vec<RefusedSource> {
-        (self.0.iter())
-            .map(|(&(source_id, generation), &(reason, _))| RefusedSource {
-                source_id,
-                generation,
-                reason,
-            })
-            .collect()
-    }
-    /// The refusals to record against their source: source, generation, the
-    /// reason's wire name and the sequence of the source's first record.
-    pub fn recorded(&self, batch: &wire::ObservationBatch) -> Vec<(Uuid, u64, String, u64)> {
-        (self.0.iter())
-            .filter(|(_, (_, enrolled))| *enrolled)
-            .map(|(&key, (reason, _))| {
-                let first = batch.events.iter().find(|e| Self::key(e) == key);
-                let name = serde_json::to_value(reason).ok();
-                (
-                    key.0,
-                    key.1,
-                    name.and_then(|v| v.as_str().map(str::to_owned))
-                        .unwrap_or_default(),
-                    first.map_or(batch.first_sequence, |e| e.body.sequence),
-                )
-            })
-            .collect()
-    }
-}
-/// The batch route's reply: the unchanged CON03 receipt, plus the sources
-/// whose records in this batch were refused. The receipt still covers the
-/// whole batch, so one refused source never holds back the node sequence; the
-/// worker stops collecting each listed source. Without refusals the bytes are
-/// exactly the receipt's.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct BatchReply {
-    #[serde(flatten)]
-    pub receipt: wire::Receipt,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub refused_sources: Vec<RefusedSource>,
-}
-impl BatchReply {
-    pub fn new(receipt: wire::Receipt, refused_sources: Vec<RefusedSource>) -> Self {
-        Self {
-            receipt,
-            refused_sources,
-        }
-    }
-    pub fn validate_against(&self, packet: &wire::Packet) -> Result<(), ContractError> {
-        self.receipt.validate_against(packet)?;
-        ensure(
-            self.refused_sources.len() <= wire::MAX_EVENTS,
-            "refused source count",
-        )?;
-        for refused in &self.refused_sources {
-            valid_id(refused.source_id)?;
-            ensure(refused.generation > 0, "refused source generation")?;
-        }
-        Ok(())
-    }
-}
 /// Separate schema roots mirror the mutation request/reply and read-only status.
 /// Semantic cross-field constraints remain enforced by the Rust validators.
 pub fn schemas() -> serde_json::Value {
-    serde_json::json!({"request":schemars::schema_for!(Request),"reply":schemars::schema_for!(Reply),"status":schemars::schema_for!(Status),"batch_reply":schemars::schema_for!(BatchReply)})
+    serde_json::json!({"request":schemars::schema_for!(Request),"reply":schemars::schema_for!(Reply),"status":schemars::schema_for!(Status)})
 }

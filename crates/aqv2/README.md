@@ -277,8 +277,6 @@ worker revocation and supervisor message enqueue through the action union.
   the change expects. Without it the CLI first reads the task
   (`GET /api/human/projects/{P}/tasks/{ID}`) and sends the version it saw; the
   server compares it again, so a task that changed in between is a conflict.
-  `--reason TEXT` goes with the action. A retry of a task a budget holds
-  overrides the budget, and the task's history shows this reason.
 - `workers revoke MACHINE` sends `worker.revoke`. `MACHINE` is a machine key
   (the `id` of a machine in `run dashboard.swarm`; `workers list` shows node
   IDs, not keys), or the node ID of a legacy node that belongs to no service

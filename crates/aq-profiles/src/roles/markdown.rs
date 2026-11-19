@@ -371,7 +371,7 @@ fn candidates(section: &Section<'_>) -> Parsed<Vec<Candidate>> {
     }
     Ok(out)
 }
-const SELECTION_KEYS: [&str; 12] = [
+const SELECTION_KEYS: [&str; 10] = [
     "max_attempts",
     "fallback_on",
     "max_lineage_elapsed_ms",
@@ -382,8 +382,6 @@ const SELECTION_KEYS: [&str; 12] = [
     "require_hard_cost_enforcement",
     "max_cost_microunits",
     "currency",
-    "max_lineage_sandbox_ms",
-    "max_uncharged_continuations",
 ];
 /// The word that states "no cost limit" for the two cost keys.
 const NONE: &str = "none";
@@ -418,8 +416,6 @@ fn selection(section: &Section<'_>) -> Parsed<SelectionOverrides> {
         require_hard_cost_enforcement: fields.optional("require_hard_cost_enforcement", flag)?,
         max_cost_microunits: fields.optional("max_cost_microunits", cost)?,
         currency: fields.optional("currency", currency)?,
-        max_lineage_sandbox_ms: fields.optional("max_lineage_sandbox_ms", number)?,
-        max_uncharged_continuations: fields.optional("max_uncharged_continuations", attempts)?,
     })
 }
 /// Parse an intelligence profile document (spec 0014 §5.2).
@@ -596,11 +592,6 @@ impl Intelligence {
             s.currency
                 .as_ref()
                 .map(|c| c.as_deref().map_or(NONE.into(), scalar)),
-        );
-        item("max_lineage_sandbox_ms", number(&s.max_lineage_sandbox_ms));
-        item(
-            "max_uncharged_continuations",
-            s.max_uncharged_continuations.map(|n| n.to_string()),
         );
         out
     }

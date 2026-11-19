@@ -1826,41 +1826,10 @@
         "fresh_until": {
           "$ref": "#/$defs/Timestamp"
         },
-        "last_observation_at": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Timestamp"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "When the server last recorded an observation event of the attempt."
-        },
-        "last_progress_at": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Timestamp"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "When it last recorded one that counts as progress."
-        },
         "observed_at": {
-          "$ref": "#/$defs/Timestamp",
-          "description": "When the server decided the state, and until when to trust it."
-        },
-        "reason": {
-          "description": "Why, for the states that need saying: `no_observation_source`\n(unknown), `no_observation_within_grace` (stale) or\n`no_progress_within_evidence_window` (quiet).",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Timestamp"
         },
         "state": {
-          "description": "One of `unknown`, `awaiting`, `working`, `quiet`, `stale`, `ended`\n(`aq_stall_ladder::freshness::State`), decided from the attempt's\nobservation ledger with the stall ladder's own windows.",
           "type": "string"
         }
       },

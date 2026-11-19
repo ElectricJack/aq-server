@@ -6,7 +6,6 @@ publish = false
 description = "DEP6 row retention: bounded deletes of settled execution rows"
 
 [dependencies]
-aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
