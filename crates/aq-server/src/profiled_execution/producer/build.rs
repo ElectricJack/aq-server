@@ -38,6 +38,9 @@ pub struct Built {
     pub source: Observation,
     pub decision: Decision,
     pub deadline: u64,
+    /// Spec 0016 §5.2: recorded with the attempt and served by `/v1/git/grants`.
+    #[cfg(feature = "delivery_playbook")]
+    pub git: Option<aq_delivery::git_grant::GitGrant>,
 }
 fn scope(p: &aq_session_api::Permission) -> Result<wire::Scope, AppError> {
     Ok(wire::Scope {
@@ -655,6 +658,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         manifest,
         required_capabilities: required_caps,
     };
+    #[cfg(feature = "delivery_playbook")]
+    let git = super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?;
     let time = now(state)?;
     let deadline = [
         time.checked_add(30000).ok_or_else(|| refused())?,
@@ -746,6 +751,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         source,
         decision,
         deadline,
+        #[cfg(feature = "delivery_playbook")]
+        git,
     })
 }
 

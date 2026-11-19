@@ -114,18 +114,54 @@ The first design (G2, behind the flag) kept AQ receipts and retention for pushes
 It failed two adversarial reviews because the two could disagree. Its journal, receipts and rollback are
 removed (G2d).
 
-### 5.2 Server (E0.3)
+### 5.2 Server (E0.3), revised 2026-11-19
 
-- An offer carries a git grant: an endpoint path, a token valid for that attempt
-  only, the base commit, the task ref and its lease. The token expires with the
-  attempt's grant.
-- The server proxies `/v1/git/<repository>/…` to aq-git and authenticates the
-  token. Transfer calls are not counted under the 30 s Bulk deadline
-  (`admission.rs:274`); their limit is a Setting.
-- A result report names the push receipt instead of `source_receipt_ids`. "The
-  result's source is retained" now means "the receipt's handle is live".
+- **The grant.** Each offer made while the server serves git has a grant,
+  recorded with the attempt (`delivery_git_grants`). The frozen offer types
+  (aq-admission `startup.rs`, `control.rs`, whose source bytes are pinned)
+  do not carry it: the node reads it with `GET /v1/git/grants/<attempt-id>`
+  (node credential; 404 unless the attempt is that node's and holds its task).
+  It is `{endpoint, repository_id, base, task_ref, lease, update_from_main}`:
+  `endpoint` is `/v1/git/<repository_id>` on the worker origin; `base` is the
+  offered commit; `task_ref` is `refs/heads/aq/<task-id>`; `lease` is the task
+  ref's head in central aq-git when the offer was made (`ref.show`), or null
+  when the branch does not exist. A present lease means the task was returned
+  or handed off: the attempt starts from the lease, and with
+  `update_from_main: true` (the task's latest delivery decision returned it
+  so) merges the current `refs/heads/main` first (§3). There is no token.
+- **The route.** `GET <endpoint>/info/refs?service=git-upload-pack|git-receive-pack`,
+  `POST <endpoint>/git-upload-pack`, `POST <endpoint>/git-receive-pack`. Every
+  request sends `Authorization: Bearer <node credential>` (the node's own, one
+  for all projects) and `AQ-Attempt: <attempt-id>`. The server serves it only
+  while that attempt is the authenticated node's, holds its task and has a grant
+  for this repository. It forwards to aq-git's git
+  socket with only the body headers of the request and its own grant headers
+  (`AQ-Repository`, `AQ-Base`, `AQ-Task-Ref`, `AQ-Max-Push-Bytes`,
+  `AQ-Operation`); client `AQ-*` headers are dropped.
+- **The push check, in the server.** A receive-pack request may carry no
+  command (git's probe) or exactly one: `<lease or 40 zeros> <new> <task_ref>`
+  with `new` not zero. Any other ref, a deletion or a second command is 403; an
+  old head other than the lease is 409; a body over Settings
+  `delivery-limits.max_push_bytes` is 413 (or the transfer is cut off); an
+  encoded body or a malformed command list is 400. History is not checked: a
+  task branch that merged a newer `main` than `base` is accepted. aq-git then
+  applies its own checks (§5.1).
+- **Errors.** 400 no or malformed `AQ-Attempt`, bad request; 401 no or invalid
+  node credential; 403 no live grant for this node, attempt and repository, or
+  a push outside the grant; 404 not a git route, or no git endpoint
+  configured; 409 stale lease; 413 too large; 503 database, Settings or aq-git
+  unavailable, or the transfer passed Settings `git_transfer_timeout_ms`.
+  Other statuses are aq-git's own. The node runs
+  `git push --force-with-lease=<task_ref>:<lease>` (an empty lease when
+  absent), so git itself reports a moved branch as `stale info` before
+  sending; the node reports that as `push_conflict` and never forces.
+- Transfer calls are not counted under the 30 s Bulk deadline
+  (`admission.rs`); their limit is the Setting above.
+- A result report names the pushed ref and commit instead of
+  `source_receipt_ids` (task S6).
 - Onboarding registers `allowed_target_prefixes: ["refs/heads/aq/"]` beside the
-  default branch. Existing bindings are migrated.
+  default branch. Existing bindings are migrated with
+  `scripts/add-task-ref-prefix.py`.
 
 ### 5.3 Worker (E0.4)
 

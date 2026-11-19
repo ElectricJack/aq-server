@@ -217,6 +217,7 @@ async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
             max_bundle_bytes: 65536,
             bulk_concurrency: 1,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
