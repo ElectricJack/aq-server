@@ -4,11 +4,11 @@
 //! provider and no real Git export.
 #[cfg(not(feature = "delivery_playbook"))]
 use crate::profiled_results::auto_settlement56::{auto_env_source, evidence_rows, head_of};
+#[cfg(not(feature = "delivery_playbook"))]
+use crate::profiled_results::auto_settlement56::{git_peer, ready_candidate};
 use crate::{
     common::{self, profiled::NOW, source_exports::setup},
-    profiled_results::auto_settlement56::{
-        AutoEnv, admitted, auto_env_with, git_peer, ready_candidate, silent_git,
-    },
+    profiled_results::auto_settlement56::{AutoEnv, admitted, auto_env_with, silent_git},
 };
 use aq_admission::transport::ProcessOutcome;
 use aq_server::{
@@ -101,6 +101,10 @@ fn export_request(base: &str, handle: Uuid) -> source_exports::Request {
     .unwrap()
 }
 
+// The successor's base from the predecessor's bundle receipt: without
+// `delivery_playbook`. With it, the successor starts from the task branch
+// head, its grant's lease (spec 0016 §5.2).
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn handoff_successor_starts_from_saved_commit() {
     let h = handed(Some("owner_stop")).await;
@@ -238,6 +242,10 @@ async fn plain_failure_successor_keeps_predecessor_export() {
     );
 }
 
+// The successor's base from the predecessor's bundle receipt: without
+// `delivery_playbook`. With it, the successor starts from the task branch
+// head, its grant's lease (spec 0016 §5.2).
+#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn handoff_poll_retry_replays_candidate_and_single_comment() {
     let h = handed(Some("service_stop")).await;

@@ -70,6 +70,10 @@ pub enum Class {
     TerminalRead,
     /// `/api/v1/commands`: the command surface; per-attempt budgets apply inside.
     AgentCommand,
+    /// `/v1/git/…` (spec 0016 §5.2): the bulk slots, but the transfer's own
+    /// deadline is Settings `git_transfer_timeout_ms`, not this gate's.
+    #[cfg(feature = "delivery_playbook")]
+    GitTransfer,
 }
 pub(crate) fn execution_cancel_path(path: &str) -> bool {
     path.strip_prefix("/api/execution/attempts/")
@@ -93,6 +97,10 @@ pub fn classify(path: &str) -> Class {
 
     if path == "/api/v1/commands" || path.starts_with("/api/v1/commands/") {
         return Class::AgentCommand;
+    }
+    #[cfg(feature = "delivery_playbook")]
+    if path.starts_with("/v1/git/") {
+        return Class::GitTransfer;
     }
     if path == "/v1/worker/profiled/material-presence" {
         return Class::MaterialPresence;
@@ -282,6 +290,8 @@ pub async fn gate(
         Class::TerminalInteractive => (&admission.terminal_interactive, Duration::from_secs(5)),
         Class::TerminalRead => (&admission.terminal_read, Duration::from_secs(5)),
         Class::AgentCommand => (&admission.agent_command, Duration::from_secs(20)),
+        #[cfg(feature = "delivery_playbook")]
+        Class::GitTransfer => (&admission.bulk, Duration::MAX),
     };
     let Ok(_permit) = slots.try_acquire() else {
         return busy(
@@ -319,5 +329,11 @@ mod output_poll_tests {
             classify("/v1/terminal-relay/upload"),
             Class::TerminalOutput
         ));
+    }
+    #[cfg(feature = "delivery_playbook")]
+    #[test]
+    fn git_transfers_take_their_own_lane_outside_the_bulk_deadline() {
+        let path = "/v1/git/7d1f2ad4-0f0b-4c5e-9a46-2b1c1b7a9d11/git-receive-pack";
+        assert_eq!(classify(path), Class::GitTransfer);
     }
 }

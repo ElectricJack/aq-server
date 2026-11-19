@@ -284,6 +284,18 @@ pub async fn record_replacement_facts(
         return Ok(facts);
     }
     let mut changed = false;
+    // Spec 0016 §5.1: the task ref at the reported head is the retention.
+    #[cfg(feature = "delivery_playbook")]
+    if !matches!(hot.retention, Retention::Retained { .. })
+        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
+            .await
+            .map_err(db)?
+    {
+        let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
+        hot.retention = Retention::Retained { receipt: reference };
+        changed = true;
+    }
+    #[cfg(not(feature = "delivery_playbook"))]
     if !matches!(hot.retention, Retention::Retained { .. }) {
         for op in &r.report.source_receipt_ids {
             match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {

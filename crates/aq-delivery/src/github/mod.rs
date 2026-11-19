@@ -22,6 +22,10 @@ use std::time::Duration;
 pub struct DeliveryConfig {
     #[serde(default)]
     pub github: Option<GitHubAppConfig>,
+    /// aq-git's git smart-HTTP socket (`aq-git serve --git-http-socket`).
+    /// Absent: offers carry no git grant and `/v1/git` answers 404.
+    #[serde(default)]
+    pub git_http_socket: Option<PathBuf>,
 }
 impl DeliveryConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -36,6 +40,14 @@ pub fn deserialize<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<DeliveryConfig>, D::Error> {
     let config = Option::<DeliveryConfig>::deserialize(d)?;
+    let socket = config.as_ref().and_then(|c| c.git_http_socket.as_ref());
+    if socket.is_some_and(|p| {
+        !p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir)
+    }) {
+        return Err(serde::de::Error::custom(
+            "delivery.git_http_socket: must be an absolute path without `..`",
+        ));
+    }
     if let Some(Err(reason)) = config.as_ref().map(DeliveryConfig::validate) {
         return Err(serde::de::Error::custom(format!(
             "delivery.github: {reason}"
