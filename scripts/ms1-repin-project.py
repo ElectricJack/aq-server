@@ -16,6 +16,14 @@ and recreates the server container. The server is unavailable for about a minute
 
 Only a project already listed with an `immutable` source is changed. The previous config is
 kept in the vault as config.toml.bak-repin-<time>.
+
+--apply does not trust the --compose command. It records the server container's id and start time
+before the command runs and exits non-zero unless, within --wait-seconds, a different container
+(or a different start time) is running and the server's /healthz answers. "The server was not
+recreated; the new pin is written but not loaded" means the command ran without recreating it:
+the vault config holds the new pin, the old server still runs with the old one. The server has no
+read of a project's effective source commit, so the script cannot confirm the commit itself; it
+proves only that the server restarted and is healthy after the config was written.
 """
 import argparse
 import json
@@ -39,6 +47,36 @@ def docker(args, stdin=None, tries=3):
             return done
         time.sleep(2)
     return done
+
+
+def server_identity():
+    """(container id, start time) of the running server container, or None while it is absent or stopped."""
+    done = subprocess.run(
+        ["docker", "inspect", f"{STACK}-server-1", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}"],
+        capture_output=True, text=True, timeout=60)
+    fields = done.stdout.split()
+    if done.returncode != 0 or len(fields) != 3 or fields[2] != "true":
+        return None
+    return fields[0], fields[1]
+
+
+def server_healthy():
+    """The server's own /healthz probe (the image has no curl), run inside the container."""
+    done = subprocess.run(["docker", "exec", f"{STACK}-server-1", "aq-server", "healthcheck"],
+                          capture_output=True, text=True, timeout=60)
+    return done.returncode == 0
+
+
+def wait_for_recreated(before, wait_seconds, poll_seconds):
+    """True once a container other than `before` (different id or start time) is running and healthy."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        now = server_identity()
+        if now is not None and now != before and server_healthy():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll_seconds)
 
 
 def git_request(repository, operation, params=None, mutation=None):
@@ -85,8 +123,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("project")
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--compose", default="", help="command that recreates the server, e.g. a rollout's "
-                        "'compose.sh after up -d --no-deps --no-build --force-recreate --wait server'")
+    parser.add_argument("--compose", default="",
+                        help="shell command that recreates the server container, given as ONE quoted argument "
+                        "including its arguments, e.g. --compose 'compose.sh after up -d --no-deps --no-build "
+                        "--force-recreate --wait server'. A bare 'compose.sh' (no arguments) or a command "
+                        "without --force-recreate does nothing: after it runs the script requires a new "
+                        "server container that is healthy, and exits non-zero otherwise")
+    parser.add_argument("--wait-seconds", type=float, default=180.0,
+                        help="how long after --compose to wait for a new, healthy server container (default 180)")
+    parser.add_argument("--poll-seconds", type=float, default=2.0,
+                        help="seconds between checks while waiting (default 2)")
     args = parser.parse_args()
 
     text = docker(["exec", f"{STACK}-server-1", "cat", CONFIG]).stdout
@@ -130,6 +176,9 @@ def main():
         return 0
     if not args.compose:
         raise SystemExit("--apply needs --compose, the command that recreates the server container")
+    before = server_identity()
+    if before is None:
+        raise SystemExit("the server container is not running; nothing was changed")
     image = docker(["inspect", f"{STACK}-server-1", "--format", "{{.Config.Image}}"]).stdout.strip()
     write = subprocess.run(
         ["docker", "run", "--rm", "-i", "--user", "10001", "--entrypoint", "sh", "-v", f"{STACK}_dev_vault:/vault", image,
@@ -138,7 +187,18 @@ def main():
     if write.returncode != 0:
         raise SystemExit(f"config not written: {write.stderr[:300]}")
     print(f"config written (previous kept as config.toml.bak-repin-{tag}); recreating the server")
-    return subprocess.run(args.compose, shell=True).returncode
+    code = subprocess.run(args.compose, shell=True).returncode
+    if code != 0:
+        print(f"--compose command failed with exit code {code}; the new pin is written but may not be loaded",
+              file=sys.stderr)
+        return code
+    if not wait_for_recreated(before, args.wait_seconds, args.poll_seconds):
+        raise SystemExit(f"the server was not recreated; the new pin is written but not loaded "
+                         f"(no new healthy {STACK}-server-1 container within {args.wait_seconds:g}s after "
+                         f"--compose; the old server still runs with the old pin)")
+    print("the server was recreated and is healthy (its effective source commit is not readable, so the pin "
+          "itself is not confirmed)")
+    return 0
 
 
 if __name__ == "__main__":
