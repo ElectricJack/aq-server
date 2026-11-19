@@ -76,4 +76,4 @@ CREATE TABLE observation_source_refusals (
 );
 CREATE TRIGGER observation_source_refusal_immutable BEFORE UPDATE OR DELETE ON observation_source_refusals
  FOR EACH ROW EXECUTE FUNCTION refuse_observation_history_mutation();
-UPDATE meta SET value='148' WHERE key='state_format_version';
+UPDATE meta SET value='149' WHERE key='state_format_version';
