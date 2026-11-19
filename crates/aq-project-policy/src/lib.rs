@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
+#[cfg(feature = "project_environments")]
+pub mod environments;
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProjectConfig {
@@ -91,6 +93,11 @@ pub struct ProjectBinding {
     pub allow_enrolled_nodes: bool,
     pub allowed_worker_groups: Vec<String>,
     pub allowed_environments: Vec<String>,
+    /// Spec 0017 §5.2: where the project's tasks run unless their needs place
+    /// them elsewhere; one of `allowed_environments`. Absent on older records.
+    #[cfg(feature = "project_environments")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_environment: Option<String>,
     pub policy: Reference,
     pub context: Vec<Reference>,
     pub ceilings: ProjectCeilings,
@@ -229,6 +236,12 @@ impl ProjectBinding {
         require(
             !self.allowed_environments.is_empty(),
             "empty environment allowlist",
+        )?;
+        #[cfg(feature = "project_environments")]
+        require(
+            (self.default_environment.as_ref())
+                .is_none_or(|e| self.allowed_environments.contains(e)),
+            "default environment is not an allowed environment",
         )?;
         label(&self.default_role).map_err(|_| "default role")?;
         label(&self.default_intelligence).map_err(|_| "default intelligence profile")?;
@@ -421,6 +434,8 @@ pub(crate) mod tests {
             allow_enrolled_nodes: false,
             allowed_worker_groups: vec![],
             allowed_environments: vec!["confined-worktree".into()],
+            #[cfg(feature = "project_environments")]
+            default_environment: None,
             policy: Reference {
                 identity: "project-policy".into(),
                 revision: "1".into(),

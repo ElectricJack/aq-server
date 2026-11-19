@@ -191,7 +191,7 @@ fn fixture_selection(input: &mut aq_selection::SelectionInputs) -> aq_selection:
         name: "Sandbox".into(),
         description: "The fixture node.".into(),
         harnesses: vec!["codex".into()],
-        environment: "confined-worktree".into(),
+        environment: serde_json::from_value(json!("confined-worktree")).unwrap(),
         confinement: Confinement::Native,
         credentials: [("codex".to_string(), "account-a".to_string())].into(),
         limits: Limits {
@@ -216,7 +216,7 @@ fn fixture_selection(input: &mut aq_selection::SelectionInputs) -> aq_selection:
     input.launches = vec![aq_selection::PreparedLaunch {
         digest: aq_admission::Digest::of(b"fixture startup text"),
         harness: "codex".into(),
-        environment: execution.environment.clone(),
+        environment: "confined-worktree".into(),
         startup_bytes: 20,
         startup_limit_bytes: 8192,
     }];

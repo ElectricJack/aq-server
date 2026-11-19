@@ -7,6 +7,8 @@ publish.workspace = true
 [features]
 # Epic 0 (spec 0016): the delivery document and delivery limits.
 delivery_playbook = []
+# Spec 0017: environment offer refusals and task needs. Off by default.
+project_environments = ["aq-profiles/project_environments"]
 
 [dependencies]
 aq-profiles = { path = "../aq-profiles" }

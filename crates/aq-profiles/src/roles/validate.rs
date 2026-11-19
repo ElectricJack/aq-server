@@ -420,7 +420,11 @@ fn check_intelligence(r: &mut Report<'_>, profile: &Intelligence, defaults: &Sel
 }
 fn check_execution(r: &mut Report<'_>, profile: &Execution) {
     r.harnesses("harnesses", &profile.harnesses);
-    if !reference(&profile.environment) {
+    #[cfg(not(feature = "project_environments"))]
+    let environment = Some(&profile.environment);
+    #[cfg(feature = "project_environments")]
+    let environment = profile.environment.as_ref();
+    if environment.is_some_and(|e| !reference(e)) {
         r.add("environment", "must be one non-empty line");
     }
     for harness in &profile.harnesses {

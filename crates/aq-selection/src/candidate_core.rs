@@ -47,7 +47,11 @@ impl<'a> CoreProfile<'a> {
                 })
                 .collect(),
             harnesses: &launch.execution.harnesses,
+            #[cfg(not(feature = "project_environments"))]
             environments: std::slice::from_ref(&launch.execution.environment),
+            // Spec 0017: none pinned is the environment the offer placed it in.
+            #[cfg(feature = "project_environments")]
+            environments: launch.execution.environment.as_slice(),
             credentials: &launch.execution.credentials,
             confinement: launch.execution.confinement.execution_confinement(),
         }

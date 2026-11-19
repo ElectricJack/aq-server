@@ -2072,3 +2072,95 @@ async fn canceled_task_cleanup_retries_after_restart_and_releases_only_after_act
     assert_eq!(dispositions, 1);
     restarted.tick(&x.f.state).await.unwrap();
 }
+
+/// Spec 0017 §5.4: `task.create` and `task.graph.create` take `needs`, stored
+/// as `aq:needs`; an empty list stores nothing and a malformed one is refused.
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn filed_tasks_name_their_needs() {
+    let x = setup().await;
+    let single = Uuid::new_v4();
+    x.reply(
+        200,
+        change_set(vec![node(single, x.workspace(), "task", 1)]),
+    );
+    let named = json!({"needs":["node","playwright"]});
+    let (status, body) = x.act(&single_create(&x, single, named)).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let metadata = &x.posts()[0]["operations"][0]["metadata"];
+    assert_eq!(metadata["aq:needs"], json!(["node", "playwright"]));
+    for bad in [json!(["node", "node"]), json!(["c++"]), json!([""])] {
+        let (status, body) = x
+            .act(&single_create(&x, Uuid::new_v4(), json!({"needs":bad})))
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {body}");
+    }
+    let ids: Vec<Uuid> = (0..2).map(|_| Uuid::new_v4()).collect();
+    let tasks = json!([{"id":ids[0],"title":"Task","needs":["rust"]},{"id":ids[1],"title":"Task","needs":[]}]);
+    let payload = json!({"operation_id":Uuid::new_v4(),"project_id":x.project(),"expected_version":"1","tasks":tasks});
+    let created = ids.iter().map(|id| node(*id, x.workspace(), "task", 1));
+    x.reply(200, change_set(created.collect()));
+    let (status, body) = x
+        .act(&action(
+            "task.graph.create",
+            "project",
+            x.project(),
+            "1",
+            payload,
+        ))
+        .await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let operations = x.posts()[1]["operations"].clone();
+    assert_eq!(operations[0]["metadata"]["aq:needs"], json!(["rust"]));
+    assert!(operations[1]["metadata"].get("aq:needs").is_none());
+    assert_eq!(x.posts().len(), 2, "a refused create never reaches Graph");
+}
+
+/// Spec 0017 §5.4: the owner sets or clears a task's needs until an attempt
+/// of it has been granted.
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn task_needs_set_sets_and_clears_needs_and_is_refused_after_a_grant() {
+    let x = setup().await;
+    let pool = x.f.db.pool().await;
+    let task = x.f.selection.lineage.task_id;
+    let set = |version: &str, needs: Value| {
+        route_action("task.needs.set", task, version, &x, json!({"needs":needs}))
+    };
+    x.put(node(task, x.workspace(), "task", 5));
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 6)]));
+    let (status, body) = x.act(&set("5", json!(["node"]))).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let metadata = x.posts()[0]["operations"][0]["patch"]["metadata"].clone();
+    assert_eq!(metadata["aq:needs"], json!(["node"]));
+    assert_eq!(metadata["example:weight"], 2);
+    let (status, body) = x.act(&set("5", json!(["node", "node"]))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    // An empty list clears the key.
+    let mut named = node(task, x.workspace(), "task", 6);
+    named["metadata"] = metadata;
+    x.put(named);
+    x.reply(200, change_set(vec![node(task, x.workspace(), "task", 7)]));
+    let (status, body) = x.act(&set("6", json!([]))).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{status} {body}");
+    let cleared = &x.posts()[1]["operations"][0]["patch"]["metadata"];
+    assert!(cleared.get("aq:needs").is_none(), "{cleared}");
+    assert_eq!(cleared["example:weight"], 2);
+
+    // Once an attempt has been granted the needs are fixed.
+    let granted = r#"UPDATE execution_attempts SET state=state||'{"status":"granted","grant":{}}'::jsonb WHERE task_id=$1"#;
+    sqlx::query(granted)
+        .bind(task)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM profiled_authority_hot WHERE attempt_id IN (SELECT attempt_id FROM execution_attempts WHERE task_id=$1)")
+        .bind(task).execute(&pool).await.unwrap();
+    x.put(node(task, x.workspace(), "task", 7));
+    for needs in [json!(["rust"]), Value::Null] {
+        let (status, body) = x.act(&set("7", needs)).await;
+        assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
+    }
+    assert_eq!(x.posts().len(), 2, "a refused change never reaches Graph");
+}

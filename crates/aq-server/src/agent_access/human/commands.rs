@@ -49,6 +49,10 @@ pub(crate) struct Create {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
     pub(in crate::agent_access::human) task_type: Option<String>,
+    /// What the task needs from its environment (spec 0017), as `aq:needs`.
+    #[cfg(feature = "project_environments")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::agent_access::human) needs: Option<super::enqueue::Needs>,
 }
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -371,6 +375,8 @@ async fn create_on_node(
         &request.intelligence_hint,
         &request.task_type,
     );
+    #[cfg(feature = "project_environments")]
+    super::enqueue::needs(&mut payload["operations"][0]["metadata"], &request.needs);
     if let Some(points) = request.story_points {
         payload["operations"][0]["metadata"][aq_human_work::STORY_POINTS_KEY] = json!(points);
     }

@@ -888,10 +888,6 @@ impl Store {
 }
 
 #[cfg(test)]
-#[path = "store/human_graph34_tests.rs"]
-mod human_graph34_tests;
-
-#[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
     use crate::{READABLE_STATE_FORMATS, STATE_FORMAT_VERSION};
@@ -925,17 +921,9 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "store/supervisor35_tests.rs"]
-mod supervisor35_tests;
-
 #[path = "store/media36.rs"]
 mod media36;
 use media36::media36_storage_guard;
-#[cfg(test)]
-#[path = "store/media36_tests.rs"]
-mod media36_tests;
-
 #[path = "store/central37.rs"]
 mod central37;
 #[cfg(test)]

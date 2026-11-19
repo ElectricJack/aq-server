@@ -4,6 +4,10 @@ version = "0.1.5"
 edition = "2024"
 publish = false
 
+[features]
+# Spec 0017: an execution profile may pin no environment. Off by default.
+project_environments = ["aq-profiles/project_environments"]
+
 [dependencies]
 schemars = "1"
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }

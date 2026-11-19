@@ -153,7 +153,7 @@ pub fn fixture() -> (Fx, SelectionInputs) {
             name: "Sandbox".into(),
             description: "The fixture node.".into(),
             harnesses: vec!["codex".into(), "opencode".into()],
-            environment: ENVIRONMENT.into(),
+            environment: serde_json::from_value(serde_json::json!(ENVIRONMENT)).unwrap(),
             confinement: Confinement::Native,
             credentials: [("codex", "account-a"), ("opencode", "account-b")]
                 .into_iter()

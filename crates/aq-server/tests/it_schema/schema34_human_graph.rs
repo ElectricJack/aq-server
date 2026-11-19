@@ -1,19 +1,19 @@
 //! Actual PostgreSQL qualification of the state34 journal, independent of Graph.
-use super::{MIGRATIONS, StoreError, migrate_known};
-use crate::test_support::TestDb;
+use aq_server::store::StoreError;
+use aq_server::test_support::{TestDb, migrate_profile};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 // Qualify the historical state34 reader even after newer migrations are added.
 async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
-    migrate_known(pool, &MIGRATIONS[..34], 34).await
+    migrate_profile(pool, 34).await
 }
 
 async fn database(version: u32) -> (TestDb, PgPool) {
     let db = TestDb::create().await;
     let pool = db.pool().await;
-    migrate_known(&pool, &MIGRATIONS[..version as usize], version)
+    migrate_profile(&pool, version)
         .await
         .expect("apply actual migration prefix");
     (db, pool)
@@ -132,7 +132,7 @@ async fn actual33_upgrade_preserves_legacy_source_and_old_reader_refuses34() {
         before.push(rows(&pool, table).await);
     }
     assert!(matches!(
-        migrate_known(&pool, &MIGRATIONS[..33], 33).await,
+        migrate_profile(&pool, 33).await,
         Err(StoreError::IncompatibleState {
             found: 34,
             supported: 33
