@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
+pub mod attempts;
 pub mod holds;
 pub mod lapse;
 pub mod launch;
@@ -163,16 +164,15 @@ pub fn is_handoff_export(row: &HandoffRow, base: &str, handle: Uuid) -> bool {
         && op == handle
         && row.candidate_oid.as_deref() == Some(base)
 }
-/// Review I1(c): at most this many owner/service handoffs per lineage are exempt.
-pub const MAX_EXEMPT_HANDOFFS: usize = 5;
-/// Keeps the first `MAX_EXEMPT_HANDOFFS` exempt flags (in attempt order); every
-/// later handoff is charged as a normal attempt.
-pub fn cap_exempt(flags: impl IntoIterator<Item = bool>) -> Vec<bool> {
-    let mut left = MAX_EXEMPT_HANDOFFS;
+/// Review I1(c): keeps the first `max` exempt flags (in attempt order); every later handoff is
+/// charged as a normal attempt. `max` is Settings › Selection defaults
+/// `max_uncharged_continuations`.
+pub fn cap_exempt(flags: impl IntoIterator<Item = bool>, max: u32) -> Vec<bool> {
+    let mut left = max;
     (flags.into_iter())
         .map(|e| {
             let keep = e && left > 0;
-            left -= usize::from(keep);
+            left -= u32::from(keep);
             keep
         })
         .collect()
@@ -1021,11 +1021,12 @@ pub async fn set_owner_availability(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn only_the_first_five_exempt_handoffs_stay_exempt() {
+    fn only_the_first_exempt_handoffs_up_to_the_setting_stay_exempt() {
         let flags = [true, false, true, true, true, true, true, true];
-        let capped = super::cap_exempt(flags);
+        let capped = super::cap_exempt(flags, 5);
         assert_eq!(capped, [true, false, true, true, true, true, false, false]);
-        assert_eq!(super::cap_exempt([false; 3]), [false; 3]);
+        assert_eq!(super::cap_exempt(flags, 1)[2..], [false; 6]);
+        assert_eq!(super::cap_exempt([false; 3], 5), [false; 3]);
     }
 }
 

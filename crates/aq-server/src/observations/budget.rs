@@ -6,9 +6,6 @@
 use super::*;
 use aq_accounting::pricing::{self, Summary};
 
-/// Upper bound on canonical calls summarized for one read.
-const MAX_HEADS: i64 = 65536;
-
 pub(crate) enum Scope {
     Attempt(Uuid),
     Lineage(Uuid),
@@ -28,6 +25,8 @@ pub(crate) async fn priced_facts(
         Scope::Lineage(id) => ("h.lineage_id=$1", id),
         Scope::Node(id) => ("h.owner_attempt_id IS NOT NULL AND e.node_id=$1", id),
     };
+    let limits = aq_role_settings::observation_limits(tx).await?.0;
+    let most = limits.max_calls_per_summary.min(i64::MAX as u64 - 1) as i64;
     let rows = sqlx::query(&format!(
         "SELECT h.fact, s.authority->'billing' AS billing FROM observation_call_heads h \
          JOIN observation_events e ON e.event_id=(h.fact#>>'{{event,event_id}}')::uuid \
@@ -37,11 +36,11 @@ pub(crate) async fn priced_facts(
          WHERE {filter} ORDER BY h.call_key LIMIT $2"
     ))
     .bind(id)
-    .bind(MAX_HEADS + 1)
+    .bind(most + 1)
     .fetch_all(&mut **tx)
     .await?;
-    if rows.len() as i64 > MAX_HEADS {
-        return Err(Error::Capacity);
+    if rows.len() as i64 > most {
+        return Err(Error::Limit(limits.too_many_calls()));
     }
     rows.into_iter()
         .map(|row| {

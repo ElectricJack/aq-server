@@ -242,8 +242,16 @@ subject revision and the single `expected_versions` entry (`task` or
   attempt cleanup follows the same automatic path as cancellation.
 - `task.retry` asks B4 to assess the task; only an admissible replacement
   records the predecessor's replacement release (receipt `replacement_release`),
-  after which the scheduler starts the replacement attempt. An unsettled or
-  exhausted predecessor is `rejected`. Retry does not change Graph task lifecycle.
+  after which the scheduler starts the replacement attempt. An unsettled
+  predecessor is `rejected`. A task held only by a limit (attempts, lineage
+  time, sandbox time, cost or never-granted offers used up) is not: the retry
+  is the owner's explicit decision and overrides the limit. The override is
+  recorded with the action's optional `reason` (`task_limit_overrides`) and
+  named in a system comment on the task, and every budget of the task starts
+  again; for cost, only spend after the override counts. A hold that is not a
+  limit (a quarantine, a changed project binding, an undelivered result) is
+  refused with
+  HTTP 422 and the hold's code. Retry does not change Graph task lifecycle.
 - `knowledge.author` creates an unverified note (default content type `note`)
   whose Graph node ID equals the operation ID.
 - `knowledge.correct` patches title, body, labels or content type.

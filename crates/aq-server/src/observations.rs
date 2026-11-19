@@ -11,6 +11,7 @@ use aq_accounting::{
     wire::*,
 };
 use aq_observation_admission::{BatchReply, RefusalReason, Refusals};
+use aq_row_retention::observation_sources as sources;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -31,6 +32,9 @@ pub enum Error {
     Conflict,
     #[error("observation retained quota exhausted")]
     Capacity,
+    /// A node observation limit from Settings was reached; the text says which.
+    #[error("{0}")]
+    Limit(String),
     #[error("observation database failed")]
     Database(#[from] sqlx::Error),
     #[error("observation authority failed")]
@@ -50,10 +54,19 @@ fn integer(v: u64) -> Result<i64> {
 }
 
 pub use aq_accounting::source::OwnerSource;
+pub use aq_row_retention::observation_sources::facts as freshness;
 impl From<aq_accounting::Error> for Error {
     fn from(_: aq_accounting::Error) -> Self {
         Self::Invalid
     }
+}
+/// The stall sweep's call: releases the sources of ended attempts on every
+/// node (`aq_row_retention::observation_sources`). Enrollment runs it for its node.
+pub async fn release_ended(state: &AppState) -> Result<u64> {
+    let mut conn = state.store.observation_pool.acquire().await?;
+    let grace = aq_role_settings::observation_limits(&mut conn).await?.0;
+    let now = (state.clock)().timestamp_millis();
+    Ok(sources::release_ended(&mut conn, now, integer(grace.final_drain_grace_ms)?, None).await?)
 }
 fn node_of(binding: &Binding) -> Result<Uuid> {
     match binding.session {
@@ -153,16 +166,7 @@ pub async fn register_source(state: &AppState, source: &OwnerSource) -> Result<(
     .bind(node)
     .fetch_one(&mut *tx)
     .await?;
-    let old: Option<(String, bool)> = sqlx::query_as(
-        "SELECT s.authority_digest,r.node_id IS NOT NULL FROM observation_sources s \
-         LEFT JOIN observation_source_revocations r USING(node_id,source_id,generation) \
-         WHERE s.node_id=$1 AND s.source_id=$2 AND s.generation=$3",
-    )
-    .bind(node)
-    .bind(source.source_id)
-    .bind(integer(source.generation)?)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let old = sources::stored(&mut tx, node, source.source_id, integer(source.generation)?).await?;
     let digest = source.digest()?;
     transport::require_active_locked(&mut tx, node, None).await?;
     if let Some((old, revoked)) = old {
@@ -190,23 +194,18 @@ pub async fn register_source(state: &AppState, source: &OwnerSource) -> Result<(
     let bytes = serde_json::to_vec(source)
         .map_err(|_| Error::Invalid)?
         .len() as i64;
-    if row.get::<i32, _>("source_count") >= 256
-        || row.get::<i64, _>("retained_bytes") + bytes > 134217728
-    {
-        return Err(Error::Capacity);
-    }
+    let limits = aq_role_settings::observation_limits(&mut tx).await?.0;
+    let grace = integer(limits.final_drain_grace_ms)?;
+    // Ended attempts' sources are released first and no longer count.
+    let now = (state.clock)().timestamp_millis();
+    let live = sources::in_use_after_release(&mut tx, node, now, grace).await?;
+    limits
+        .admit_source(live, row.get("retained_bytes"), bytes)
+        .map_err(Error::Limit)?;
     // A new generation supersedes every unrevoked source of the attempt, on any
     // node. Generations only grow, so a stale re-derivation cannot displace a
     // newer enrollment.
-    let superseded: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
-        "SELECT s.node_id,s.source_id,s.generation FROM observation_sources s \
-         WHERE s.attempt_id=$1 AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r \
-          WHERE r.node_id=s.node_id AND r.source_id=s.source_id AND r.generation=s.generation) \
-         ORDER BY s.node_id,s.source_id,s.generation FOR UPDATE OF s",
-    )
-    .bind(source.binding.attempt_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    let superseded = sources::unrevoked(&mut tx, source.binding.attempt_id).await?;
     let generation = integer(source.generation)?;
     if superseded.iter().any(|(_, _, g)| *g >= generation) {
         return Err(Error::Conflict);
@@ -218,22 +217,9 @@ pub async fn register_source(state: &AppState, source: &OwnerSource) -> Result<(
         if revoked_at <= 0 {
             return Err(Error::Invalid);
         }
-        for (old_node, old_source, old_generation) in superseded {
-            sqlx::query(
-                "INSERT INTO observation_source_revocations(node_id,source_id,generation,attempt_id,\
-                 superseded_by_node_id,superseded_by_source_id,superseded_by_generation,revoked_at_ms) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-            )
-            .bind(old_node)
-            .bind(old_source)
-            .bind(old_generation)
-            .bind(source.binding.attempt_id)
-            .bind(node)
-            .bind(source.source_id)
-            .bind(generation)
-            .bind(revoked_at)
-            .execute(&mut *tx)
-            .await?;
+        let by = (node, source.source_id, generation);
+        for old in superseded {
+            sources::revoke(&mut tx, old, source.binding.attempt_id, by, revoked_at).await?;
         }
     }
     tx.commit().await?;
@@ -334,6 +320,10 @@ async fn ingest_subject(
     {
         return Err(Error::Conflict);
     }
+    let recorded_at = (state.clock)().timestamp_millis();
+    if recorded_at <= 0 {
+        return Err(Error::Invalid);
+    }
     let mut sources = BTreeMap::new();
     let mut keys = BTreeSet::new();
     let mut refused = Refusals::default();
@@ -344,18 +334,15 @@ async fn ingest_subject(
             continue;
         }
         if let std::collections::btree_map::Entry::Vacant(entry) = sources.entry(source_key) {
-            let source_row = sqlx::query(
-                "SELECT s.authority,s.authority_digest,r.node_id IS NOT NULL AS revoked,\
-                 EXISTS(SELECT 1 FROM observation_source_refusals x WHERE x.node_id=s.node_id \
-                 AND x.source_id=s.source_id AND x.generation=s.generation) AS refused \
-                 FROM observation_sources s \
-                 LEFT JOIN observation_source_revocations r USING(node_id,source_id,generation) \
-                 WHERE s.node_id=$1 AND s.source_id=$2 AND s.generation=$3",
+            // A source released at its attempt's end is gone after its final drain grace.
+            let generation = integer(p.source_generation)?;
+            let source_row = sources::for_ingest(
+                &mut tx,
+                authenticated_node,
+                p.source_id,
+                generation,
+                recorded_at,
             )
-            .bind(authenticated_node)
-            .bind(p.source_id)
-            .bind(integer(p.source_generation)?)
-            .fetch_optional(&mut *tx)
             .await?;
             let stands = source_row.as_ref().map(|r| r.get::<bool, _>("refused"));
             let Some(source_row) = source_row.filter(|_| stands == Some(false)) else {
@@ -439,10 +426,6 @@ async fn ingest_subject(
         .fetch_one(&mut *tx)
         .await?;
         attempt_projections.insert(attempt, parse::<Projection>(projection)?);
-    }
-    let recorded_at = (state.clock)().timestamp_millis();
-    if recorded_at <= 0 {
-        return Err(Error::Invalid);
     }
     let book = catalog::rate_book(state);
     let mut retained = 0i64;
@@ -615,14 +598,20 @@ async fn ingest_subject(
                 + 4096 * (projections.len() + attempt_projections.len()) as i64,
         )
         .ok_or(Error::Capacity)?;
-    if row
-        .get::<i64, _>("retained_bytes")
-        .checked_add(retained)
-        .is_none_or(|n| n > 134217728)
-        || row.get::<i64, _>("event_count") + events.len() as i64 > 65536
-    {
-        return Err(Error::Capacity);
-    }
+    let limits = aq_role_settings::observation_limits(&mut tx).await?.0;
+    limits
+        .admit_events(
+            row.get("event_count"),
+            events.len() as i64,
+            row.get("retained_bytes"),
+            retained,
+        )
+        .map_err(Error::Limit)?;
+    let progressed: BTreeSet<_> = events
+        .iter()
+        .filter(|e| crate::stall::evidence::is_progress(&e.body.kind))
+        .map(|e| e.body.binding.attempt_id)
+        .collect();
     for (lineage, projection) in projections {
         projection.validate().map_err(|_| Error::Invalid)?;
         sqlx::query("UPDATE observation_projections SET revision=revision+1,projection=$2,last_recorded_at_ms=GREATEST(last_recorded_at_ms,$3) WHERE lineage_id=$1").bind(lineage).bind(value(&projection)?).bind(recorded_at).execute(&mut *tx).await?;
@@ -632,7 +621,8 @@ async fn ingest_subject(
             continue;
         }
         projection.validate().map_err(|_| Error::Invalid)?;
-        sqlx::query("UPDATE observation_attempt_projections SET revision=revision+1,projection=$2,last_recorded_at_ms=GREATEST(last_recorded_at_ms,$3) WHERE attempt_id=$1").bind(attempt).bind(value(&projection)?).bind(recorded_at).execute(&mut *tx).await?;
+        let at = |seen: bool| if seen { recorded_at } else { 0 };
+        sqlx::query("UPDATE observation_attempt_projections SET revision=revision+1,projection=$2,last_recorded_at_ms=GREATEST(last_recorded_at_ms,$3),last_observed_at_ms=GREATEST(last_observed_at_ms,$4),last_progress_at_ms=GREATEST(last_progress_at_ms,$5) WHERE attempt_id=$1").bind(attempt).bind(value(&projection)?).bind(recorded_at).bind(at(current_attempts.contains(&attempt))).bind(at(progressed.contains(&attempt))).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO observation_packets(node_id,message_id,body_digest,receipt,refused) VALUES($1,$2,$3,$4,$5)").bind(authenticated_node).bind(packet.body.message_id).bind(packet.body_digest.as_str()).bind(value(&receipt)?).bind(refused_value).execute(&mut *tx).await?;
     if retention_enabled {

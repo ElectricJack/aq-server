@@ -1,5 +1,3 @@
--- Renumber to 0152 at merge (file name and the state_format_version below).
---
 -- 1. A node restarts without limit: the transport owner's boot counter and the
 --    receipt revision are no longer capped at 64. Storage is bounded by rolling
 --    retention instead: each new receipt deletes the node's receipts older
@@ -76,4 +74,4 @@ CREATE TABLE observation_source_refusals (
 );
 CREATE TRIGGER observation_source_refusal_immutable BEFORE UPDATE OR DELETE ON observation_source_refusals
  FOR EACH ROW EXECUTE FUNCTION refuse_observation_history_mutation();
-UPDATE meta SET value='149' WHERE key='state_format_version';
+UPDATE meta SET value='152' WHERE key='state_format_version';

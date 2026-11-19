@@ -118,6 +118,49 @@ async fn actual_origin_records_replays_reads_and_never_accepts_or_releases() {
     assert_eq!(before, invariant(&f).await);
     assert!(before["held"].as_bool().unwrap());
 }
+/// Format 149: the SQL origin owner keys on the admission contract id. A
+/// proposal recorded under an earlier digest of a known id stays valid; an
+/// unknown id, or the other profile's id, does not.
+#[tokio::test]
+async fn origin_owner_keys_on_contract_id_not_digest() {
+    let (f, report) = Box::pin(ready()).await;
+    let auth = terminal::auth(&f).await;
+    results::record(&f.c.env.env.state, &auth, &report)
+        .await
+        .unwrap();
+    let pool = &f.c.env.env.pool;
+    for name in ["profiled_result_origin_valid", "profiled_close_ungranted"] {
+        let pinned: bool = sqlx::query_scalar("SELECT bool_or(prosrc ~ '[0-9a-f]{64}\",\"id\":\"aq\\.admission\\.') FROM pg_proc WHERE proname=$1")
+            .bind(name).fetch_one(pool).await.unwrap();
+        assert!(!pinned, "{name} pins an admission contract digest");
+    }
+    let stored: String = sqlx::query_scalar("SELECT proposal#>>'{negotiation,contract,id}' FROM profiled_v2_proposals WHERE attempt_id=$1")
+        .bind(report.binding.attempt_id).fetch_one(pool).await.unwrap();
+    // The digests the long contracts had before the lease ceiling left the schema.
+    let (earlier, other) = if ORIGIN == "phase_execution_v2" {
+        ("8e60c64136ecc6653bf9d1488b98832f02eb841bd3ceef462662a098dd13e599", "aq.admission.preparation-registry-refresh-v1-contract")
+    } else {
+        ("bd9abe1d9ef02970beb7946c007418de90a6066a146698ac0c075da1c1f2a28f", "aq.admission.preparation-v2-contract")
+    };
+    let long = format!("{stored}.interactive-long-v1");
+    for (id, digest, valid) in [
+        (stored.as_str(), earlier, true),
+        (long.as_str(), earlier, true),
+        (long.as_str(), "0000000000000000000000000000000000000000000000000000000000000000", true),
+        (other, earlier, false),
+        ("aq.admission.unknown-contract", earlier, false),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        // History is immutable; only this rolled-back test transaction rewrites it.
+        sqlx::query("SET LOCAL session_replication_role=replica").execute(&mut *tx).await.unwrap();
+        sqlx::query("UPDATE profiled_v2_proposals SET proposal=jsonb_set(proposal,'{negotiation,contract}',jsonb_build_object('id',$2::text,'version','1','digest',$3::text)) WHERE attempt_id=$1")
+            .bind(report.binding.attempt_id).bind(id).bind(digest).execute(&mut *tx).await.unwrap();
+        let read: bool = sqlx::query_scalar("SELECT profiled_result_origin_valid(attempt_id,node_id,result_origin_kind,origin_execution_receipt_digest,origin_stopped_ack_bytes_digest) FROM profiled_result_reports WHERE report_id=$1")
+            .bind(report.report_id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(read, valid, "{id} {digest}");
+        tx.rollback().await.unwrap();
+    }
+}
 #[tokio::test]
 async fn historical_phase_read_and_replay_survive_expiry_cancellation_and_runtime_retirement() {
     let (f, report) = Box::pin(ready()).await;

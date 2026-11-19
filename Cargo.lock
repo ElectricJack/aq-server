@@ -616,6 +616,7 @@ name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
  "aq-machine-control",
+ "aq-profiles",
  "aq-selection",
  "aq-session-protocol",
  "aq-worker-protocol",
@@ -763,6 +764,7 @@ name = "aq-row-retention"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aq-stall-ladder",
  "async-trait",
  "serde",
  "serde_json",
