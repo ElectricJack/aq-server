@@ -187,6 +187,10 @@ subject revision and the single `expected_versions` entry (`task` or
 - `task.edit` patches title, body, acceptance criteria or labels. Every task
   and knowledge title (create, edit, author, correct) is 1 to 512 UTF-8 bytes,
   Graph's cap; schema `maxLength` values count characters and are upper bounds.
+- `task.create` and `task.edit` accept optional `story_points` as an integer
+  from 1 to 1000. `task.edit` with null clears the estimate. Omitting the field
+  leaves it intact. The estimate is stored as Graph metadata `aq:story_points`
+  and has no scheduling effect.
 - `task.reprioritize` writes Graph metadata `aq:priority` (integer in
   -1,000,000..1,000,000, higher first) and preserves other metadata keys.
 - `task.role.set` sets the role the task names (Graph metadata `aq:role`),

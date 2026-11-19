@@ -1,5 +1,6 @@
 //! Owner-started persistent sessions. Queue tasks and their authority are separate.
 mod api;
+mod attempt;
 mod conversation;
 mod diagnostics;
 mod history;
@@ -25,7 +26,18 @@ use uuid::Uuid;
 pub struct Runtime(
     Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
     Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
+    Arc<Mutex<BTreeMap<Uuid, terminal::Screen>>>,
 );
+/// What a live terminal stream is attached to. Each kind has its own screens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Subject {
+    /// A hand-started agent session.
+    Manual,
+    /// An owner shell on a worker host.
+    HostShell,
+    /// A queued attempt's session-host terminal on the node that runs it.
+    Attempt,
+}
 pub type Auth =
     Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
 pub type ComputeWitness = for<'a, 'c> fn(
@@ -82,7 +94,7 @@ pub struct Service {
     /// Only explicitly configured project source policies may be launched.
     pub sources: Arc<BTreeMap<Uuid, Value>>,
     runtime: Runtime,
-    host_mode: bool,
+    subject: Subject,
     origin: Option<(String, bool)>,
     login_materials: Option<logins::Materials>,
     compute_witness: Option<ComputeWitness>,
@@ -101,7 +113,7 @@ impl Service {
             node,
             sources: Arc::new(sources),
             runtime,
-            host_mode: false,
+            subject: Subject::Manual,
             origin: None,
             login_materials: None,
             compute_witness: None,
@@ -122,7 +134,13 @@ impl Service {
     fn host_service(&self) -> Self {
         let mut service = self.clone();
         service.runtime.0 = self.runtime.1.clone();
-        service.host_mode = true;
+        service.subject = Subject::HostShell;
+        service
+    }
+    fn attempt_service(&self) -> Self {
+        let mut service = self.clone();
+        service.runtime.0 = self.runtime.2.clone();
+        service.subject = Subject::Attempt;
         service
     }
     pub fn human_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
@@ -135,6 +153,7 @@ impl Service {
             .merge(stream::human_routes())
             .with_state(self.clone())
             .merge(host::human_routes().with_state(self.host_service()))
+            .merge(attempt::human_routes().with_state(self.attempt_service()))
     }
     pub fn worker_routes<S: Clone + Send + Sync + 'static>(&self) -> axum::Router<S> {
         worker::routes()
@@ -144,6 +163,7 @@ impl Service {
             .merge(diagnostics::worker_routes())
             .with_state(self.clone())
             .merge(host::worker_routes().with_state(self.host_service()))
+            .merge(attempt::worker_routes().with_state(self.attempt_service()))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -195,10 +215,12 @@ pub fn configured_sources<T: Serialize>(config: Option<&T>) -> BTreeMap<Uuid, Va
 }
 
 async fn terminal_subject(s: &Service, id: Uuid) -> Result<(Uuid, bool)> {
-    if s.host_mode {
-        host::subject(s, id).await
-    } else {
-        let v = session(s, id).await?;
-        Ok((v.node_id, terminal::live(&v)))
+    match s.subject {
+        Subject::HostShell => host::subject(s, id).await,
+        Subject::Attempt => attempt::subject(s, id).await,
+        Subject::Manual => {
+            let v = session(s, id).await?;
+            Ok((v.node_id, terminal::live(&v)))
+        }
     }
 }

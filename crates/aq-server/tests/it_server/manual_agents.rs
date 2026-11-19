@@ -722,7 +722,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         (
             f.state.config.server.public_origin.trim_end_matches('/'),
             &pool,
-            false,
+            "manual",
         ),
         id,
         client,
@@ -851,22 +851,30 @@ async fn live_stream_preserves_bytes_and_fences_input(
     admin: &Router,
     worker: &Router,
     credential: &str,
-    environment: (&str, &sqlx::PgPool, bool),
+    environment: (&str, &sqlx::PgPool, &str),
     id: Uuid,
     client: Uuid,
     generation: u64,
 ) {
     use futures_util::{SinkExt, StreamExt};
-    let (origin, pool, host) = environment;
-    let human_prefix = if host {
-        "/api/worker-terminals/shells"
-    } else {
-        "/api/manual-agents"
-    };
-    let worker_prefix = if host {
-        "/v1/worker/host-terminals"
-    } else {
-        "/v1/worker/manual-agents"
+    // The subject kind: a hand-started agent, a worker host shell or a queued attempt.
+    let (origin, pool, kind) = environment;
+    let (human_prefix, worker_prefix, node_query) = match kind {
+        "host" => (
+            "/api/worker-terminals/shells",
+            "/v1/worker/host-terminals",
+            "SELECT node_id FROM worker_host_shells WHERE id=$1",
+        ),
+        "attempt" => (
+            "/api/attempt-terminals",
+            "/v1/worker/attempt-terminals",
+            "SELECT node_id FROM execution_attempts WHERE attempt_id=$1",
+        ),
+        _ => (
+            "/api/manual-agents",
+            "/v1/worker/manual-agents",
+            "SELECT node_id FROM manual_agent_sessions WHERE id=$1",
+        ),
     };
     use tokio_tungstenite::{
         connect_async,
@@ -927,6 +935,14 @@ async fn live_stream_preserves_bytes_and_fences_input(
             .unwrap()
             .contains("ready")
     );
+    // A viewer of a queued attempt's pane is recorded for the stall ladder.
+    let viewers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM attempt_terminal_viewers WHERE attempt_id=$1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(viewers, i64::from(kind == "attempt"));
     let raw = b"\x1b[3;6Habc\x1b[?2004h";
     let mut output = connection.as_bytes().to_vec();
     output.extend_from_slice(raw);
@@ -986,15 +1002,11 @@ async fn live_stream_preserves_bytes_and_fences_input(
         "detach",
         "stale input is fenced, closing only its attach"
     );
-    let node_id: Uuid = sqlx::query_scalar(if host {
-        "SELECT node_id FROM worker_host_shells WHERE id=$1"
-    } else {
-        "SELECT node_id FROM manual_agent_sessions WHERE id=$1"
-    })
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let node_id: Uuid = sqlx::query_scalar(node_query)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
         .bind(node_id)
         .execute(pool)
@@ -1505,7 +1517,7 @@ async fn worker_host_shell_is_scoped_separate_persistent_and_fenced() {
         (
             f.state.config.server.public_origin.trim_end_matches('/'),
             &pool,
-            true,
+            "host",
         ),
         id,
         client,
@@ -2077,4 +2089,51 @@ async fn queued_conversation_is_bound_to_the_stopped_attempt_and_read_by_session
         saved,
         json!({"session_id":id,"project_id":project,"conversation":snapshot})
     );
+}
+
+/// A queued attempt's pane is watched and typed into over the same live stream as a
+/// hand-started agent: only the attempt's own node serves it, only while the attempt
+/// runs, and a viewer is recorded as human control of the pane.
+#[tokio::test]
+async fn queued_attempt_terminal_uses_the_live_stream_of_its_own_running_node() {
+    use common::native_started::{context, setup};
+
+    let (f, started) = setup(true).await;
+    let auth = context(&f).await;
+    let attempt = started.binding.attempt_id;
+    let admin = build_admin_router(f.state.clone());
+    let worker = build_worker_router(f.state.clone());
+    let pool = f.db.pool().await;
+    aq_server::profiled_execution::started::record(&f.state, &auth, &started)
+        .await
+        .unwrap();
+    let connect = format!("/api/attempt-terminals/{attempt}/terminal/connect");
+    let missing = format!("/api/attempt-terminals/{}/terminal/connect", Uuid::new_v4());
+    let client = Uuid::new_v4();
+    let body = Some(json!({"client_id":client}));
+    assert_eq!(
+        call(&admin, &missing, body.clone(), None, true).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, control) = call(&admin, &connect, body, None, true).await;
+    assert_eq!(status, StatusCode::OK, "{control}");
+    live_stream_preserves_bytes_and_fences_input(
+        &admin,
+        &worker,
+        &f.credential,
+        (
+            f.state.config.server.public_origin.trim_end_matches('/'),
+            &pool,
+            "attempt",
+        ),
+        attempt,
+        client,
+        control["generation"].as_u64().unwrap(),
+    )
+    .await;
+    let viewers: i64 = sqlx::query_scalar("SELECT count(*) FROM attempt_terminal_viewers")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(viewers, 0, "a detached viewer no longer holds the pane");
 }
