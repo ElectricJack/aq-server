@@ -132,6 +132,24 @@ pub async fn list(pool: &PgPool, kind: Kind) -> Result<Vec<Document>> {
 pub async fn get(pool: &PgPool, kind: Kind, id: &str) -> Result<Option<Document>> {
     Ok(list(pool, kind).await?.into_iter().find(|d| d.id == id))
 }
+/// The current selection defaults, read on `conn`. A store without the Settings table (held at
+/// an earlier migration) or without a saved value has the values a new installation starts with.
+pub async fn selection_defaults(conn: &mut PgConnection) -> Result<SelectionDefaults> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('role_settings') IS NOT NULL")
+        .fetch_one(&mut *conn)
+        .await?;
+    if !exists {
+        return Ok(SelectionDefaults::default());
+    }
+    let stored: Option<Option<serde_json::Value>> =
+        sqlx::query_scalar("SELECT selection_defaults FROM role_settings WHERE singleton")
+            .fetch_optional(conn)
+            .await?;
+    match stored.flatten() {
+        Some(value) => serde_json::from_value(value).map_err(|_| Error::Internal),
+        None => Ok(SelectionDefaults::default()),
+    }
+}
 pub async fn settings(pool: &PgPool) -> Result<Settings> {
     read_settings(&mut *pool.acquire().await?, Lock::None).await
 }

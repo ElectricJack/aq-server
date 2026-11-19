@@ -6746,7 +6746,7 @@
           }
         }
       },
-      "summary": "Release a task whose attempt has settled for a replacement attempt",
+      "summary": "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason",
       "target": {
         "rule": "subject"
       }

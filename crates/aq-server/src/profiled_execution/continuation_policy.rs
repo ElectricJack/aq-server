@@ -77,13 +77,12 @@ async fn pinned_body(
         .map_err(|_| refused())?;
     Ok(body)
 }
-/// The predecessor's pinned policy limits `(max_attempts,
-/// max_lineage_elapsed_ms)`; `None` when they cannot be read (spec 0007 Q1).
-pub(crate) async fn pinned_limits(
-    pool: &sqlx::PgPool,
+/// The selection policy the attempt's launch pinned; `None` when it cannot be read (spec 0007
+/// Q1). Its limits are the task's retry budget (`replacement::limits`).
+pub(crate) async fn pinned_policy(
+    conn: &mut sqlx::PgConnection,
     attempt: uuid::Uuid,
-) -> Result<Option<(u32, u64)>, AppError> {
-    let mut conn = pool.acquire().await.map_err(|_| AppError::Internal)?;
+) -> Result<Option<SelectionPolicy>, AppError> {
     let reference: Option<Value> = sqlx::query_scalar(
         "SELECT launch_manifest->'intelligence_profile' FROM profiled_launches WHERE attempt_id=$1",
     )
@@ -94,14 +93,11 @@ pub(crate) async fn pinned_limits(
     let Some(Ok(reference)) = reference.map(serde_json::from_value::<ArtifactRef>) else {
         return Ok(None);
     };
-    let Ok(body) = pinned_body(&mut conn, attempt, &reference, "").await else {
+    let Ok(body) = pinned_body(conn, attempt, &reference, "").await else {
         return Ok(None);
     };
-    Ok(policy_of(&reference, &body)
-        .ok()
-        .map(|p| (p.max_attempts, p.max_lineage_elapsed_ms)))
+    Ok(policy_of(&reference, &body).ok())
 }
-pub(crate) use aq_profiled_state::replacement::pinned_block;
 pub(crate) async fn load_locked(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,

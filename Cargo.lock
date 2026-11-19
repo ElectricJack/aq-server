@@ -616,6 +616,7 @@ name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
  "aq-machine-control",
+ "aq-profiles",
  "aq-selection",
  "aq-session-protocol",
  "aq-worker-protocol",

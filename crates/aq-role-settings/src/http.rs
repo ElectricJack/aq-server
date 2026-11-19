@@ -250,8 +250,14 @@ pub async fn write(
         (Target::DeliveryLimits, None, None, Some(limits)) => {
             Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
-        (Target::SelectionDefaults, None, Some(defaults), None) => {
-            Change::SelectionDefaults(serde_json::from_value(defaults).map_err(|_| bad())?)
+        // A key the request does not state keeps its stored value (a client that does not
+        // know a key cannot reset it); the merged whole is validated by the save.
+        (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {
+            let stored = store::settings(pool).await?.selection_defaults;
+            let mut merged = serde_json::to_value(stored).map_err(|_| Error::Internal)?;
+            let keys = merged.as_object_mut().ok_or(Error::Internal)?;
+            keys.extend(stated);
+            Change::SelectionDefaults(serde_json::from_value(merged).map_err(|_| bad())?)
         }
         (Target::Limits, None, None, Some(limits)) => {
             Change::Limits(serde_json::from_value(limits).map_err(|_| bad())?)
