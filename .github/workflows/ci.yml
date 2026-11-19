@@ -177,9 +177,13 @@ jobs:
           path: ${{ runner.temp }}/archive
       # Same selection, profile and groups as the unsharded run; hash
       # partitioning gives every test to exactly one shard.
+      # Extracting into the checkout puts every binary at the absolute path the
+      # build job compiled into `env!("CARGO_BIN_EXE_*")` (same runner layout);
+      # a temporary directory left those paths missing.
       - name: cargo nextest run (shard ${{ matrix.shard }}/6)
         run: |
           cargo nextest run --archive-file "$RUNNER_TEMP/archive/nextest-archive.tar.zst" \
+            --extract-to "$GITHUB_WORKSPACE" --extract-overwrite \
             --workspace-remap . --no-fail-fast --profile ci \
             --partition hash:${{ matrix.shard }}/6
 
