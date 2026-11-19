@@ -21,16 +21,26 @@ impl AttemptCounts {
         u64::from(self.history) + 1
     }
 }
-/// `$since` is the instant never-granted offers count from.
+/// `$since` is the instant never-granted offers count from; `$fresh` further narrows the
+/// started attempts.
 macro_rules! counts {
     ($since:literal) => {
-        concat!("SELECT count(*)::BIGINT AS history,count(*) FILTER(WHERE NOT (NOT a.holds_task AND profiled_never_granted_valid(a.attempt_id)))::BIGINT AS started,count(c.attempt_id) FILTER(WHERE c.closed_at_ms>", $since, ")::BIGINT AS never_granted FROM execution_attempts a LEFT JOIN profiled_never_granted_closures c ON c.attempt_id=a.attempt_id WHERE a.task_id=$1")
+        counts!($since, "")
+    };
+    ($since:literal, $fresh:literal) => {
+        concat!("SELECT count(*)::BIGINT AS history,count(*) FILTER(WHERE NOT (NOT a.holds_task AND profiled_never_granted_valid(a.attempt_id))", $fresh, ")::BIGINT AS started,count(c.attempt_id) FILTER(WHERE c.closed_at_ms>", $since, ")::BIGINT AS never_granted FROM execution_attempts a LEFT JOIN profiled_never_granted_closures c ON c.attempt_id=a.attempt_id WHERE a.task_id=$1")
     };
 }
 const COUNTS: &str = counts!("0");
 /// From migration 151: an owner override starts the never-granted count again.
 const COUNTS_151: &str = counts!(
     "COALESCE((SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=$1),0)"
+);
+/// From migration 155: an owner's fresh start (`crate::fresh`) leaves the attempts it released
+/// out of the started count and starts the never-granted count again, as an override does.
+const COUNTS_155: &str = counts!(
+    "GREATEST(COALESCE((SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=$1),0),COALESCE((SELECT max(f.recorded_at_ms) FROM task_fresh_starts f WHERE f.task_id=$1),0))",
+    " AND NOT EXISTS(SELECT 1 FROM task_fresh_starts f WHERE f.attempt_id=a.attempt_id)"
 );
 /// The counts of `task`, with the bound from Settings `max_never_granted_offers`.
 pub async fn counts(
@@ -39,6 +49,7 @@ pub async fn counts(
     max_never_granted: u32,
 ) -> Result<AttemptCounts, Error> {
     let sql = match crate::holds::has_overrides(conn).await? {
+        true if crate::fresh::has_fresh_starts(conn).await? => COUNTS_155,
         true => COUNTS_151,
         false => COUNTS,
     };

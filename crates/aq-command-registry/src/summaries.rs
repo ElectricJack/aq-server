@@ -51,7 +51,7 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         }
         "task.reprioritize" => "Set a task's priority (higher runs first)",
         "task.retry" => {
-            "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason"
+            "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason; with fresh, starts a task held by a changed project binding from the current source"
         }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"

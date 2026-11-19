@@ -6726,7 +6726,7 @@
       "principals": {
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:55723a165d16dea35f9d25531eee4f0a92a7378923f60428a7ee2d15ca7cadfa",
+          "params_digest": "sha256:3fcada50bf4ec47416e7c5ee6f50c3436a6a6d4b414f733a70afdfb6662a8951",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.retry"
           },
@@ -6746,7 +6746,7 @@
           }
         }
       },
-      "summary": "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason",
+      "summary": "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason; with fresh, starts a task held by a changed project binding from the current source",
       "target": {
         "rule": "subject"
       }
