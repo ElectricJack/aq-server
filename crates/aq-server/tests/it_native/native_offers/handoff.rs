@@ -297,6 +297,7 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
             panic!("{body}")
         };
         assert!(page.offers.is_empty(), "{body}");
+        native_offer::assembled(&c).await;
     }
     assert_eq!(
         count("SELECT count(*) FROM profiled_source_exports").await,
@@ -347,6 +348,10 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
             panic!("{body}")
         };
         assert!(page.offers.is_empty(), "{body}");
+        // A refused successor is counted when the poll's assembly ends, which on a
+        // loaded runner is after the poll has answered the empty page; until then
+        // a further poll counts nothing.
+        native_offer::assembled(&c).await;
     };
     // The case clock stands still: 20 skips within a moment are not stuck.
     for n in 1..=holds::STUCK_SKIPS {

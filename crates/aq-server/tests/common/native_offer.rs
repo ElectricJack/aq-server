@@ -518,6 +518,22 @@ pub async fn poll(c: &Case) -> (axum::http::StatusCode, Value) {
     let bytes = r.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
+/// Waits until the node's slot-1 offer assembler is idle. A poll waits only 750 ms
+/// for offer assembly (`producer::workflow::poll`); on a loaded runner it answers
+/// the empty page while the assembly goes on in the background, and what the
+/// assembly records (a counted refusal, a hold, a wait) lands only when it ends.
+/// Until then the slot is taken, so a further poll starts no assembly of its own.
+/// A test that reads such a record after a poll, or counts polls, waits here first.
+pub async fn assembled(c: &Case) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while aq_machine_control::offer_assembly::enter(c.env.env.node, 1).is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the poll's offer assembly did not finish in 30 s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
 /// Polls until the first offer arrives, as a worker does. A poll waits only
 /// 750 ms for offer assembly (`producer::workflow::poll`); slower assembly
 /// (a loaded CI runner) continues in the background and a later poll
