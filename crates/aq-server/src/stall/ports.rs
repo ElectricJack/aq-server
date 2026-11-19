@@ -205,9 +205,7 @@ impl Ports for DbPorts {
         let mut tx = pool.begin().await.map_err(db)?;
         let input = input_state(&mut tx, target.attempt_id).await?;
         tx.rollback().await.map_err(db)?;
-        // A gap, incomplete or fence record is neither progress nor proof of
-        // being stuck: while it is the newest record, or the server refused
-        // the attempt's source, what the agent does is unknown.
+        // A gap/incomplete/fence record as the newest one, or a refused source: unknown, not stuck.
         let blind =
             row.get::<bool, _>("refused") || latest.as_ref().is_some_and(|k| k["kind"] == "gap");
         let explanation = if blind

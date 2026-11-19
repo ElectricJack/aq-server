@@ -548,6 +548,81 @@ pub struct RefusedSource {
     pub generation: u64,
     pub reason: RefusalReason,
 }
+/// The refused sources of one batch while an adapter admits it. A refused
+/// source loses every record of the batch, also those before the refused one.
+#[derive(Default)]
+pub struct Refusals(std::collections::BTreeMap<(Uuid, u64), (RefusalReason, bool)>);
+impl Refusals {
+    fn key(record: &wire::ObservationRecord) -> (Uuid, u64) {
+        let p = &record.body.provenance;
+        (p.source_id, p.source_generation)
+    }
+    pub fn refused(&self, record: &wire::ObservationRecord) -> bool {
+        self.0.contains_key(&Self::key(record))
+    }
+    /// `enrolled`: the source exists and this refusal is new, so the adapter
+    /// records it against the source.
+    pub fn refuse(
+        &mut self,
+        record: &wire::ObservationRecord,
+        reason: RefusalReason,
+        enrolled: bool,
+    ) {
+        self.0.insert(Self::key(record), (reason, enrolled));
+    }
+    /// Refuses the record's source unless it is `bound` (its attempt may be
+    /// observed) and the enrolled source admits the record ([`refusal`]).
+    pub fn check(
+        &mut self,
+        record: &wire::ObservationRecord,
+        bound: bool,
+        binding: &wire::Binding,
+        session_key: &wire::Text,
+        parser_listed: bool,
+    ) {
+        let reason = if bound {
+            refusal(record, binding, session_key, parser_listed)
+        } else {
+            Some(RefusalReason::Binding)
+        };
+        if let Some(reason) = reason {
+            self.refuse(record, reason, true);
+        }
+    }
+    pub fn admitted<'a>(
+        &self,
+        batch: &'a wire::ObservationBatch,
+    ) -> Vec<&'a wire::ObservationRecord> {
+        batch.events.iter().filter(|e| !self.refused(e)).collect()
+    }
+    pub fn list(&self) -> Vec<RefusedSource> {
+        (self.0.iter())
+            .map(|(&(source_id, generation), &(reason, _))| RefusedSource {
+                source_id,
+                generation,
+                reason,
+            })
+            .collect()
+    }
+    /// The refusals to record against their source: source, generation, the
+    /// reason's wire name and the sequence of the source's first record.
+    pub fn recorded(&self, batch: &wire::ObservationBatch) -> Vec<(Uuid, u64, String, u64)> {
+        (self.0.iter())
+            .filter(|(_, (_, enrolled))| *enrolled)
+            .map(|(&key, (reason, _))| {
+                let first = batch.events.iter().find(|e| Self::key(e) == key);
+                let name = serde_json::to_value(reason).ok();
+                (
+                    key.0,
+                    key.1,
+                    name.and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default(),
+                    first.map_or(batch.first_sequence, |e| e.body.sequence),
+                )
+            })
+            .collect()
+    }
+}
 /// The batch route's reply: the unchanged CON03 receipt, plus the sources
 /// whose records in this batch were refused. The receipt still covers the
 /// whole batch, so one refused source never holds back the node sequence; the
@@ -561,6 +636,12 @@ pub struct BatchReply {
     pub refused_sources: Vec<RefusedSource>,
 }
 impl BatchReply {
+    pub fn new(receipt: wire::Receipt, refused_sources: Vec<RefusedSource>) -> Self {
+        Self {
+            receipt,
+            refused_sources,
+        }
+    }
     pub fn validate_against(&self, packet: &wire::Packet) -> Result<(), ContractError> {
         self.receipt.validate_against(packet)?;
         ensure(

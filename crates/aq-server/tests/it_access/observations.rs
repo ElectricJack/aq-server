@@ -379,7 +379,7 @@ async fn a_refused_source_is_dropped_and_the_batch_still_advances_the_node_seque
             ObservationRecord::seal(Uuid::new_v4(), foreign).unwrap(),
         ],
     );
-    let reply = observations::ingest_reply(&f.state, f.node.node_id, &p)
+    let reply = observations::ingest(&f.state, f.node.node_id, &p)
         .await
         .unwrap();
     assert_eq!(reply.receipt.through_sequence, Some(2));
@@ -401,7 +401,7 @@ async fn a_refused_source_is_dropped_and_the_batch_still_advances_the_node_seque
     assert_eq!(stored, [1]);
     // A retry gets the same reply; an unenrolled source leaves no source row.
     assert_eq!(
-        observations::ingest_reply(&f.state, f.node.node_id, &p)
+        observations::ingest(&f.state, f.node.node_id, &p)
             .await
             .unwrap(),
         reply
@@ -494,7 +494,7 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
             ),
         ],
     );
-    let reply = observations::ingest_reply(&f.state, f.node.node_id, &admitted)
+    let reply = observations::ingest(&f.state, f.node.node_id, &admitted)
         .await
         .unwrap();
     assert!(reply.refused_sources.is_empty());
@@ -540,7 +540,7 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
 
     // A fact cannot ride a control parser: the source is refused, the batch lands.
     let smuggled = packet(&f, vec![with(5, Some(CONTROL_PARSERS[2]), None)]);
-    let reply = observations::ingest_reply(&f.state, f.node.node_id, &smuggled)
+    let reply = observations::ingest(&f.state, f.node.node_id, &smuggled)
         .await
         .unwrap();
     assert_eq!(reply.refused_sources[0].reason, RefusalReason::ControlShape);
@@ -557,7 +557,7 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
     // The refusal stands: later records of the source are dropped, with the
     // sequence still advancing, and the usage it tried to add never counted.
     let later = packet(&f, vec![with(6, None, Some(turn))]);
-    let reply = observations::ingest_reply(&f.state, f.node.node_id, &later)
+    let reply = observations::ingest(&f.state, f.node.node_id, &later)
         .await
         .unwrap();
     assert_eq!(reply.refused_sources[0].reason, RefusalReason::Refused);
@@ -1901,7 +1901,7 @@ async fn retention_closes_late_packet_window_without_resetting_sequence() {
         .await
         .unwrap();
     let late = packet(&f, vec![event(&s, 2, 20)]);
-    let reply = observations::ingest_reply(&f.state, f.node.node_id, &late)
+    let reply = observations::ingest(&f.state, f.node.node_id, &late)
         .await
         .unwrap();
     assert_eq!(

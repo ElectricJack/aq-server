@@ -2,8 +2,9 @@
 --
 -- 1. A node restarts without limit: the transport owner's boot counter and the
 --    receipt revision are no longer capped at 64. Storage is bounded by rolling
---    retention instead: receipts older than the newest ones are deleted by the
---    transport adapter; the guard below never lets the current one go.
+--    retention instead: each new receipt deletes the node's receipts older
+--    than the newest 64 (a retention count, nothing is refused when it is
+--    reached); the guard below never lets the current one go.
 ALTER TABLE observation_transport_receipts
  DROP CONSTRAINT observation_transport_receipts_owner_revision_check;
 ALTER TABLE observation_transport_receipts
@@ -48,6 +49,14 @@ END $$;
 DROP TRIGGER observation_transport_receipt_immutable ON observation_transport_receipts;
 CREATE TRIGGER observation_transport_receipt_immutable BEFORE UPDATE OR DELETE ON observation_transport_receipts
  FOR EACH ROW EXECUTE FUNCTION observation_transport_receipt_retention_guard();
+CREATE FUNCTION observation_transport_receipt_roll() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+ DELETE FROM observation_transport_receipts
+  WHERE node_id=NEW.node_id AND owner_revision<=NEW.owner_revision-64;
+ RETURN NULL;
+END $$;
+CREATE TRIGGER observation_transport_receipt_rolls AFTER INSERT ON observation_transport_receipts
+ FOR EACH ROW EXECUTE FUNCTION observation_transport_receipt_roll();
 
 -- 2. A refused source no longer refuses its whole batch. The packet row keeps
 --    the refusals its reply listed (replayed with the receipt); a refusal of an
