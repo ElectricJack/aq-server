@@ -404,6 +404,15 @@ async fn an_attempt_recorded_before_roles_is_counted_unclassified() {
         running(counts(&mut tx).await.unwrap()),
         [("__unclassified".to_owned(), 1)]
     );
+    // Its node revoked, the attempt can never report a stop: it holds no capacity
+    // and no longer blocks every limited cell of its provider.
+    sqlx::query(
+        "UPDATE nodes SET revoked_at=now() WHERE id IN (SELECT node_id FROM execution_attempts)",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(running(counts(&mut tx).await.unwrap()), []);
     tx.rollback().await.unwrap();
 }
 
