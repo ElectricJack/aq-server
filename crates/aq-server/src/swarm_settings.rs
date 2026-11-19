@@ -17,14 +17,24 @@ fn error(error: aq_swarm_settings::Error) -> AppError {
         AppError::Internal,
     )
 }
-fn available(state: &AppState) -> Vec<aq_swarm_settings::providers::Provider> {
-    aq_swarm_settings::http::providers(
-        state
-            .config
-            .intelligence
-            .as_deref()
-            .map_or(&[], |r| r.credentials.as_slice()),
-    )
+/// The configured providers; one whose saved Codex login is past the owner's age limit
+/// says so, since selection then treats that credential as missing.
+async fn available(
+    state: &AppState,
+) -> Result<Vec<aq_swarm_settings::providers::Provider>, AppError> {
+    let Some(loaded) = state.config.intelligence.as_deref() else {
+        return Ok(aq_swarm_settings::http::providers(&[]));
+    };
+    let mut available = aq_swarm_settings::http::providers(&loaded.credentials);
+    let mut conn = state.store.pool.acquire().await.map_err(crate::error::db)?;
+    let now = (state.clock)().timestamp_millis();
+    for (index, reason) in aq_login_store::stale_logins(&mut conn, loaded, now).await? {
+        let provider = &loaded.credentials[index].provider;
+        if let Some(entry) = available.iter_mut().find(|p| &p.id == provider) {
+            entry.attention = Some(reason.replace("codex_login_stale: ", ""));
+        }
+    }
+    Ok(available)
 }
 pub(crate) fn routes() -> Router<AppState> {
     aq_swarm_settings::http::routes(get(read), post(save), get(operation))
@@ -34,7 +44,7 @@ async fn read(
     RequireOwner(_): RequireOwner,
     OriginalUri(uri): OriginalUri,
 ) -> Result<Json<Value>, AppError> {
-    aq_swarm_settings::http::read(&state.store.pool, &available(&state), uri.path())
+    aq_swarm_settings::http::read(&state.store.pool, &available(&state).await?, uri.path())
         .await
         .map(Json)
         .map_err(error)
@@ -49,7 +59,7 @@ async fn save(
         &state.store.pool,
         actor.id,
         body,
-        &available(&state),
+        &available(&state).await?,
         uri.path(),
     )
     .await

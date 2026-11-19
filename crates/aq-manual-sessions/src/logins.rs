@@ -1,4 +1,6 @@
-//! Owner-requested subscription delivery. No material is persisted in SQL or owner responses.
+//! Owner-requested delivery of the Claude token file to a node. No material is persisted in
+//! SQL or owner responses. A Codex login is never delivered to a node: every attempt and
+//! session leases it from the server's login store (aq-server `manual_agents/session_login`).
 use super::*;
 use axum::{
     Router,
@@ -53,21 +55,15 @@ async fn request(
     State(s): State<Service>,
     headers: HeaderMap,
     Path(node): Path<Uuid>,
-    Json(mut req): Json<Request>,
+    Json(req): Json<Request>,
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
     valid_id(req.operation_id)?;
-    if req.providers.is_empty()
-        || req.providers.len() > 2
-        || req
-            .providers
-            .iter()
-            .any(|p| !matches!(p.as_str(), "anthropic" | "openai"))
-    {
-        return Err(bad("Choose Claude or Codex"));
+    if req.providers != ["anthropic"] {
+        return Err(bad(
+            "Only the Claude token is pushed to a worker; Codex sessions lease AQ's saved login",
+        ));
     }
-    req.providers.sort();
-    req.providers.dedup();
     let mut tx = s.pool.begin().await?;
     aq_machine_control::management::lock(&mut tx)
         .await

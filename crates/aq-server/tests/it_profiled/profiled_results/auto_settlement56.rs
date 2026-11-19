@@ -683,6 +683,7 @@ async fn publish_env_with(outcome: Option<aq_admission::transport::ProcessOutcom
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
     };
     PublishEnv {
         delivery: aq_server::delivery::DeliveryService::new(pool, &config.git_socket),
@@ -819,6 +820,7 @@ async fn unchanged_source_completes_without_publication() {
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
     };
     let delivery = aq_server::delivery::DeliveryService::new(pool.clone(), &config.git_socket);
     let settling = env.report.binding.attempt_id;

@@ -62,6 +62,26 @@ central state. Older responses may omit lifecycle; an object with both times nul
 means this implemented projection has received no worker reports. Native facts
 queued only on worker disk appear only after their owning handlers admit them.
 
+Session rows carry `observation`, decided from the attempt's observation ledger
+with the stall ladder's own two windows (its grace and its evidence window), so a
+read and the ladder agree. `state` is one of:
+
+| `state` | Rule, first match wins | `reason` |
+| --- | --- | --- |
+| `ended` | the attempt's status is finished, declined or never granted | absent |
+| `unknown` | no observation source was enrolled and no event recorded | `no_observation_source` |
+| `awaiting` | a source is enrolled and no event has been recorded yet | absent |
+| `stale` | the last event is older than the ladder's grace | `no_observation_within_grace` |
+| `working` | an event counted as progress within the ladder's evidence window | absent |
+| `quiet` | events arrive, none counted as progress within that window | `no_progress_within_evidence_window` |
+
+`last_observation_at` and `last_progress_at` are the times the server recorded
+the attempt's last event and its last progress event; each is absent when there
+is none. `observed_at` and `fresh_until` are when the server decided the state
+and until when to trust it. `reason`, `last_observation_at` and
+`last_progress_at` are additive optional fields. The session list reads these
+facts for its whole page in one query.
+
 The lifecycle columns reuse the existing authorized offer lookup; they add no
 query roundtrip. The existing bounded list still performs per-session authority
 and ACL reads. A warmed one-session fixture sampled five full human detail reads

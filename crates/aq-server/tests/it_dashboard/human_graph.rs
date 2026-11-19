@@ -66,11 +66,124 @@ async fn absent_graph_and_viewer_scope_do_not_fabricate_empty_success() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(
+        read(&app, "/api/human/work/tasks", "viewer@localhost")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
         read(&app, &format!("{path}?limit=65"), "owner@localhost")
             .await
             .0,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn all_project_work_combines_bound_workspaces_and_rejects_changed_cursors() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let project = f.selection.lineage.project_id;
+    let workspace = f.selection.lineage.workspace_id;
+    let other_project = Uuid::new_v4();
+    let other_workspace = Uuid::new_v4();
+    let unsupported_project = Uuid::new_v4();
+    for (id, space, name, adapter) in [
+        (
+            other_project,
+            other_workspace,
+            "Other project",
+            "aq.graph.configured",
+        ),
+        (
+            unsupported_project,
+            workspace,
+            "Unsupported project",
+            "other.graph.adapter",
+        ),
+    ] {
+        sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) SELECT $2,1,binding || jsonb_build_object('project_id',$2::text,'name',$3::text,'graph_workspace_id',$4::text,'graph_adapter_reference',$5::text),validated_at_ms,binding_observation FROM project_execution_bindings WHERE project_id=$1")
+            .bind(project).bind(id).bind(name).bind(space).bind(adapter).execute(&f.db.pool().await).await.unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let token_path = dir.path().join("token");
+    let token = "all-project-work-fixture-service-token";
+    std::fs::write(&token_path, token).unwrap();
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let capture = calls.clone();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let graph = Router::new().route("/v1/task-list", axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+        let capture = capture.clone();
+        async move {
+            capture.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(headers["authorization"], format!("Bearer {token}"));
+            let requested: std::collections::BTreeSet<Uuid> = serde_json::from_value(body["workspace_ids"].clone()).unwrap();
+            assert_eq!(requested, [workspace, other_workspace].into_iter().collect());
+            assert_eq!(body["state"], "active");
+            assert_eq!(body["q"], "release");
+            assert_eq!(body["limit"], 1);
+            let page = if body["before"].is_null() {
+                json!({"items":[{"id":first,"workspace_id":workspace,"title":"Latest release task","task_state":"active","updated_at":"2026-11-01T12:00:00.123456Z"}],"unavailable_workspaces":[],"has_more":true})
+            } else {
+                assert_eq!(body["before"], json!(["2026-11-01T12:00:00.123456Z",first]));
+                json!({"items":[{"id":second,"workspace_id":other_workspace,"title":"Other release task","task_state":"active","updated_at":"2026-11-01T12:00:00.123455Z"}],"unavailable_workspaces":[],"has_more":false})
+            };
+            ([("x-aq-graph-api-version", "1")], axum::Json(page))
+        }
+    }));
+    f.state.agent_access = Some(Arc::new(
+        Runtime::new(&AgentAccessConfig {
+            graph_url: format!("http://{}", socket.local_addr().unwrap()),
+            graph_token_file: token_path,
+            mutation_actor_id: None,
+            credential_ttl_ms: 120000,
+        })
+        .await
+        .unwrap(),
+    ));
+    let graph = tokio::spawn(async move { axum::serve(socket, graph).await.unwrap() });
+    let app = human::routes(&f.state).with_state(f.state.clone());
+    let path = "/api/human/work/tasks?limit=1&q=release&state=active";
+    let (status, page) = read(&app, path, "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["contract"], "human-work-task-list-1");
+    assert_eq!(page["items"][0]["id"], json!(first));
+    assert_eq!(page["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(page["projects"][0]["id"], json!(project));
+    assert_eq!(page["unavailable_projects"], 1);
+    let cursor = page["next_cursor"].as_str().unwrap();
+    let next = format!("{path}&cursor={cursor}");
+    let (status, page) = read(&app, &next, "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"][0]["id"], json!(second));
+    assert_eq!(page["projects"][0]["id"], json!(other_project));
+    assert!(page["next_cursor"].is_null());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        read(
+            &app,
+            &next.replace("state=active", "state=completed"),
+            "owner@localhost"
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+        .bind(other_project)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&app, &next, "owner@localhost").await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    graph.abort();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires explicit pinned AQ_TEST_GRAPH_BINARY and AQ_TEST_GRAPH_SHA256"]

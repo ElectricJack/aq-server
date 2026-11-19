@@ -43,6 +43,8 @@ name: Standard, high
 - require_hard_cost_enforcement: true
 - max_cost_microunits: 5000000
 - currency: USD
+- max_lineage_sandbox_ms: 7200000
+- max_uncharged_continuations: 1
 ";
 const EXECUTION: &str = "---
 id: sandbox
@@ -253,9 +255,33 @@ fn intelligence_document_parses() {
             require_hard_cost_enforcement: Some(true),
             max_cost_microunits: Some(Some(5_000_000)),
             currency: Some(Some("USD".into())),
+            max_lineage_sandbox_ms: Some(7_200_000),
+            max_uncharged_continuations: Some(1),
         }
     );
     defaults().with(&profile.selection).check().unwrap();
+    // The policy a launch pins carries the retry budget, and Settings stored
+    // before the budget keys existed read as the initial values.
+    let policy = defaults().with(&profile.selection).policy(1, Vec::new());
+    assert_eq!(
+        (
+            policy.max_lineage_sandbox_ms,
+            policy.max_uncharged_continuations
+        ),
+        (Some(7_200_000), Some(1))
+    );
+    let mut stored = serde_json::to_value(defaults()).unwrap();
+    for key in [
+        "max_lineage_sandbox_ms",
+        "max_uncharged_continuations",
+        "max_wake_attempts",
+        "max_wake_lineage_elapsed_ms",
+        "max_never_granted_offers",
+    ] {
+        stored.as_object_mut().unwrap().remove(key).unwrap();
+    }
+    let read: SelectionDefaults = serde_json::from_value(stored).unwrap();
+    assert_eq!(read, defaults());
 }
 #[test]
 fn a_profile_is_its_candidates_and_selection_is_optional() {

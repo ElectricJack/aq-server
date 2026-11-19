@@ -8,10 +8,7 @@
 //! serializes against cancellation, completion and supersession under the
 //! wake row lock plus the predecessor's hot-authority row lock.
 use super::waits::{Result, WaitError, artifact, i64_of, load_caller, load_stored};
-use crate::{
-    AppState,
-    profiled_execution::{producer::fairness, replacement},
-};
+use crate::{AppState, profiled_execution::producer::fairness};
 use aq_wait_engine::wire::{self, Validate, worker_lifecycle as lc};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -409,7 +406,11 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
     }
     // Budgets carry forward from the lineage; they are never reset.
     // Owner and service handoffs are not charged (spec 0007 Q1), as in B4,
-    // up to MAX_EXEMPT_HANDOFFS per lineage (review I1).
+    // up to `max_uncharged_continuations` per lineage (review I1). The wake
+    // limits are Settings › Selection defaults; the server has none of its own.
+    let limits = aq_role_settings::selection_defaults(&mut tx)
+        .await
+        .map_err(|_| WaitError("internal"))?;
     let format: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
             .fetch_one(&mut *tx)
@@ -420,7 +421,7 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
     {
         format!(
             "-LEAST({},count(*) FILTER (WHERE EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))))",
-            aq_machine_control::MAX_EXEMPT_HANDOFFS
+            limits.max_uncharged_continuations
         )
     } else {
         String::new()
@@ -432,13 +433,13 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
     let spent = u32::try_from(started.max(1))
         .unwrap_or(u32::MAX)
         .saturating_add(u32::try_from(launch_failures).unwrap_or(0));
-    let retries = replacement::MAX_ATTEMPTS.saturating_sub(spent);
+    let retries = limits.max_wake_attempts.saturating_sub(spent);
     let lineage_start: Option<i64> = sqlx::query_scalar("SELECT min((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT) FROM profiled_launches l JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1")
         .bind(task_id)
         .fetch_one(&mut *tx)
         .await?;
     let start = u64::try_from(lineage_start.unwrap_or(wait_created).min(wait_created)).unwrap_or(0);
-    let elapsed = replacement::MAX_LINEAGE_ELAPSED_MS.saturating_sub(now.saturating_sub(start));
+    let elapsed = (limits.max_wake_lineage_elapsed_ms).saturating_sub(now.saturating_sub(start));
     if retries == 0 || elapsed == 0 {
         finish(&mut tx, intent, "escalated", "budget_exhausted", at).await?;
         tx.commit().await?;
@@ -521,8 +522,7 @@ async fn admit_one(state: &AppState, intent: Uuid, now: u64) -> Result<Step> {
                 wire::Digest::of(
                     format!(
                         "replacement:{}:{}",
-                        replacement::MAX_ATTEMPTS,
-                        replacement::MAX_LINEAGE_ELAPSED_MS
+                        limits.max_wake_attempts, limits.max_wake_lineage_elapsed_ms
                     )
                     .as_bytes(),
                 ),

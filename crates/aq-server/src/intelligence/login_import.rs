@@ -7,8 +7,8 @@ use anyhow::{Context, bail};
 use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path, sync::Arc};
 use zeroize::Zeroizing;
 
-/// Reads a regular file (symlinks refused) of 1..=64 KiB. No format check: a
-/// Claude token is plain text, a Codex login is JSON.
+/// Reads a regular file (symlinks refused) of 1..=64 KiB. The format is checked
+/// per credential by `import`: a Claude token is plain text, a Codex login is JSON.
 pub fn read_source(source: &Path) -> anyhow::Result<Zeroizing<Vec<u8>>> {
     let file = OpenOptions::new()
         .read(true)
@@ -56,6 +56,14 @@ pub async fn import(
         .credentials
         .get(index)
         .is_some_and(is_claude_setup_token);
+    // Every later write-back is compared with this login, so it must be one.
+    if configured.provider == login_refresh::codex::PROVIDER
+        && login_refresh::codex::stamp(&bytes).is_none()
+    {
+        bail!(
+            "the file is not a Codex ChatGPT login (the auth.json that `codex login` writes); an API-key login is refused"
+        );
+    }
     let bytes = Arc::new(if setup_token {
         normalize_claude_token(bytes)?
     } else {

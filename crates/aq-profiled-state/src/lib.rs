@@ -17,6 +17,23 @@ pub enum Status {
     Unknown,
     NeverGranted,
 }
+impl Status {
+    /// Whether an attempt in this state may write a refreshed subscription login
+    /// back to the login store (its material lease is checked separately). A live
+    /// attempt may. One exception to "a revoked attempt gets nothing": a granted
+    /// attempt that was cancelled (`Cancelling`) may still return the login its
+    /// sandbox refreshed, until closure revokes the lease. The write-back grants the
+    /// attempt nothing; without it a refresh inside a sandbox that is then cancelled
+    /// would rotate the token at the provider and strand the stored login. A stopped
+    /// attempt, and one cancelled before it was granted (no sandbox ran), may not.
+    pub fn login_write_back(self, revoked: bool, cancelled: bool) -> bool {
+        match self {
+            Self::Preparing | Self::Granted => !revoked && !cancelled,
+            Self::Cancelling => true,
+            _ => false,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Stop {
@@ -169,4 +186,25 @@ pub fn sql_function_body<'a>(sql: &'a str, name: &str) -> Option<&'a str> {
     let (_, tail) = sql.split_once(&format!("FUNCTION {name}("))?;
     let (_, tail) = tail.split_once("AS $$")?;
     tail.split_once("$$;").map(|(body, _)| body)
+}
+
+#[cfg(test)]
+mod login_write_back_tests {
+    use super::Status::*;
+    #[test]
+    fn a_live_attempt_and_a_cancelled_granted_one_may_write_a_login_back() {
+        for live in [Preparing, Granted] {
+            assert!(live.login_write_back(false, false));
+            assert!(
+                !live.login_write_back(true, true),
+                "cancelled before a grant"
+            );
+            assert!(!live.login_write_back(true, false));
+            assert!(!live.login_write_back(false, true));
+        }
+        assert!(Cancelling.login_write_back(true, true));
+        for over in [Offered, Finished, Declined, Unknown, NeverGranted] {
+            assert!(!over.login_write_back(false, false) && !over.login_write_back(true, true));
+        }
+    }
 }

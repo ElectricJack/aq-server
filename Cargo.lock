@@ -311,9 +311,15 @@ dependencies = [
 name = "aq-human-work"
 version = "0.1.0"
 dependencies = [
+ "aq-human-cursor",
+ "aq-project-policy",
+ "chrono",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror",
  "uuid",
 ]
 
@@ -379,6 +385,28 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "aq-login-store"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.1.13",
+ "aq-intelligence-config",
+ "aq-selection",
+ "aq-session-host",
+ "aq-swarm-settings",
+ "chrono",
+ "nix",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -610,6 +638,7 @@ name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
  "aq-machine-control",
+ "aq-profiles",
  "aq-selection",
  "aq-session-protocol",
  "aq-worker-protocol",
@@ -757,6 +786,7 @@ name = "aq-row-retention"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aq-stall-ladder",
  "async-trait",
  "serde",
  "serde_json",
@@ -802,6 +832,7 @@ dependencies = [
  "aq-intelligence-config",
  "aq-internal-work",
  "aq-lifecycle-api",
+ "aq-login-store",
  "aq-machine-control",
  "aq-manual-sessions",
  "aq-notifications",
