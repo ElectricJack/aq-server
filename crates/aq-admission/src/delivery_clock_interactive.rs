@@ -3,7 +3,8 @@
 use crate::{Invalid, Result, require, transport::DeliveryClock};
 
 impl DeliveryClock {
-    /// Explicit long interactive execution only; normal delivery TTLs stay 120s.
+    /// Policy-3 execution only; normal delivery TTLs stay 120s. No upper bound
+    /// here: the lease length is the owner's Setting, carried in the offer.
     pub fn new_interactive_session(server_time_ms: u64, expires_at_ms: u64) -> Result<Self> {
         let value = Self {
             server_time_ms,
@@ -19,7 +20,7 @@ impl DeliveryClock {
     pub fn validate_interactive_session(&self) -> Result<()> {
         require(
             self.server_time_ms > 0
-                && (1..=3_600_000).contains(&self.valid_for_ms)
+                && self.valid_for_ms > 0
                 && self.server_time_ms.checked_add(self.valid_for_ms) == Some(self.expires_at_ms),
             "conservative delivery TTL",
         )
@@ -29,8 +30,8 @@ impl DeliveryClock {
     pub fn client_interactive_deadline_ns(&self, sent_ns: u64, received_ns: u64) -> Result<u64> {
         self.validate_interactive_session()?;
         require(received_ns >= sent_ns, "monotonic response interval")?;
-        let deadline = sent_ns
-            .checked_add(self.valid_for_ms * 1_000_000)
+        let deadline = (self.valid_for_ms.checked_mul(1_000_000))
+            .and_then(|valid_ns| sent_ns.checked_add(valid_ns))
             .ok_or(Invalid("monotonic deadline overflow"))?;
         require(received_ns < deadline, "delivery consumed remaining TTL")?;
         Ok(deadline)

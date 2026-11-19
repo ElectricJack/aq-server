@@ -15,6 +15,8 @@ use uuid::Uuid;
 pub const MAX_WIRE_BYTES: usize = 65536;
 pub const MAX_BATCH: usize = 16;
 pub const MAX_WALL_MS: u64 = 3600000;
+/// Handshake timing: the longest window of one execution permit, reissued
+/// within a turn. It does not bound the turn; `MAX_WALL_MS` does.
 pub const MAX_PERMIT_MS: u64 = 120000;
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
