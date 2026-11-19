@@ -124,7 +124,8 @@ pub(crate) async fn auto_env_source(
         let pushed = aq_delivery::git_grant::PushedRef { reference, head };
         let pushed = aq_delivery::git_grant::Pushed::At(pushed);
         let auth = context(&f).await;
-        let recorded = results::record_pushed(&f.state, &auth, &report, Some(&pushed));
+        let headers = super::pushed_ref::headers(&pushed);
+        let recorded = results::record_pushed(&f.state, &auth, &report, &headers);
         recorded.await.unwrap();
         (report.report_id, task_ref)
     };

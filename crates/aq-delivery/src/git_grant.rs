@@ -315,6 +315,19 @@ pub async fn confirm_pushed(
     Ok(())
 }
 
+/// [`confirm_pushed`] of what a result request's headers name, if anything.
+pub async fn confirm_headers(
+    pool: &PgPool,
+    git: &SocketGit,
+    ids: (Uuid, Uuid, Uuid),
+    headers: &http::HeaderMap,
+) -> Result<(), PushedRefusal> {
+    match Pushed::from_headers(headers)? {
+        Some(pushed) => confirm_pushed(pool, git, ids, &pushed).await,
+        None => Ok(()),
+    }
+}
+
 /// The confirmed pushed ref of a recorded report, if it named one (a push
 /// conflict names no head).
 pub async fn pushed_of(

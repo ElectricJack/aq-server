@@ -48,6 +48,21 @@ fn ref_show_peer(
 
 /// A recorded git grant for the report's attempt, and aq-git's `ref.show`
 /// answering for its task ref. The report names no bundle receipt.
+/// The result request headers that name `pushed`.
+pub(crate) fn headers(pushed: &Pushed) -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    let mut set = |name: &'static str, value: &str| headers.insert(name, value.parse().unwrap());
+    match pushed {
+        Pushed::At(at) => {
+            set("aq-pushed-ref", &at.reference);
+            set("aq-pushed-head", &at.head);
+        }
+        Pushed::Conflict => {
+            set("aq-push-conflict", "true");
+        }
+    }
+    headers
+}
 pub(crate) struct TaskRef {
     pub task_ref: String,
     /// Where aq-git has the task ref (`None`: absent).
@@ -143,7 +158,7 @@ async fn a_report_is_recorded_only_when_its_task_ref_is_at_the_reported_head() {
     ] {
         *at.lock().unwrap() = head;
         let named = name(reference);
-        let refused = results::record_pushed(&f.state, &auth, &report, Some(&named)).await;
+        let refused = results::record_pushed(&f.state, &auth, &report, &headers(&named)).await;
         let status_of = refused.as_ref().map_err(|e| e.status().as_u16());
         assert_eq!(status_of.err(), Some(status), "{reference}: {refused:?}");
     }
@@ -160,12 +175,12 @@ async fn a_report_is_recorded_only_when_its_task_ref_is_at_the_reported_head() {
     let mut unanswered = f.state.clone();
     unanswered.source_retention = Some(Arc::new(runtime));
     let named = name(task_ref);
-    let refused = results::record_pushed(&unanswered, &auth, &report, Some(&named)).await;
+    let refused = results::record_pushed(&unanswered, &auth, &report, &headers(&named)).await;
     assert_eq!(refused.map_err(|e| e.status().as_u16()).err(), Some(503));
 
     // Recorded at the reported head, with the ref as the result's source.
     *at.lock().unwrap() = Some(pushed.clone());
-    results::record_pushed(&f.state, &auth, &report, Some(&named))
+    results::record_pushed(&f.state, &auth, &report, &headers(&named))
         .await
         .unwrap();
     assert_eq!(recorded().await, 1);
@@ -179,7 +194,7 @@ async fn a_report_is_recorded_only_when_its_task_ref_is_at_the_reported_head() {
     assert_eq!(facts["source"], source);
     // A replay of the recorded report is not asked again, even after the ref moved.
     *at.lock().unwrap() = Some("6".repeat(40));
-    results::record_pushed(&f.state, &auth, &report, Some(&named))
+    results::record_pushed(&f.state, &auth, &report, &headers(&named))
         .await
         .unwrap();
     assert_eq!(*calls.lock().unwrap(), 3);
@@ -197,11 +212,12 @@ async fn a_push_conflict_is_recorded_only_when_the_task_ref_left_its_lease() {
     let pool = f.db.pool().await;
     let served = task_ref(&mut f, &mut report).await;
     // The grant's lease is "absent" and aq-git has no such ref: no conflict.
-    let refused = results::record_pushed(&f.state, &auth, &report, Some(&Pushed::Conflict)).await;
+    let refused =
+        results::record_pushed(&f.state, &auth, &report, &headers(&Pushed::Conflict)).await;
     assert_eq!(refused.map_err(|e| e.status().as_u16()).err(), Some(409));
     // Another attempt pushed the branch meanwhile: the conflict is a fact.
     *served.at.lock().unwrap() = Some("7".repeat(40));
-    results::record_pushed(&f.state, &auth, &report, Some(&Pushed::Conflict))
+    results::record_pushed(&f.state, &auth, &report, &headers(&Pushed::Conflict))
         .await
         .unwrap();
     let facts: Value =

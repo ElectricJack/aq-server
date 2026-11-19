@@ -120,9 +120,9 @@ pub async fn record_pushed(
     state: &AppState,
     node: &AuthenticatedNode,
     report: &ResultReport,
-    pushed: Option<&aq_delivery::git_grant::Pushed>,
+    headers: &axum::http::HeaderMap,
 ) -> Result<Receipt, AppError> {
-    super::git_grant::confirm(state, node.id(), report, pushed).await?;
+    super::git_grant::confirm(state, node.id(), report, headers).await?;
     record(state, node, report).await
 }
 async fn record_only(
@@ -516,10 +516,7 @@ async fn report(
     crate::delegated_permits::runtime::require_binding(&node, &request.binding)?;
     crate::delegated_permits::runtime::require_binding(&node, &request.stop.binding)?;
     #[cfg(feature = "delivery_playbook")]
-    let pushed = aq_delivery::git_grant::Pushed::from_headers(&headers)
-        .map_err(|_| AppError::BadRequest("AQ-Pushed-* or AQ-Push-Conflict".into()))?;
-    #[cfg(feature = "delivery_playbook")]
-    let receipt = record_pushed(&state, &node, &request, pushed.as_ref()).await?;
+    let receipt = record_pushed(&state, &node, &request, &headers).await?;
     #[cfg(not(feature = "delivery_playbook"))]
     let receipt = record(&state, &node, &request).await?;
     crate::delegated_permits::receipts::result(&node, &request, receipt)
