@@ -99,63 +99,6 @@ async fn pins(c: &Case, attempt: Uuid) -> Vec<String> {
         .unwrap()
 }
 
-/// With an accounting source for the selected provider and harness, the offer
-/// delivers the catalog entry as one retained manifest module, and the worker
-/// reads back exactly the configured reference.
-#[tokio::test]
-async fn an_offer_delivers_the_observation_catalog_entry_as_a_module() {
-    use aq_server::intelligence::config::SourcePolicy;
-    let mut c = setup().await;
-    let art = |id: &str| crate::common::profiled::artifact(id, id.as_bytes());
-    let state = &mut c.env.env.state;
-    let mut registry = (**state.config.intelligence.as_ref().unwrap()).clone();
-    let parser = aq_accounting::reconcile::ParserAuthority {
-        parser: art("parser"),
-        category_claim: art("parser"),
-        priority: 1,
-        complete_accounting_evidence: None,
-    };
-    for credential in registry.config.credentials.clone() {
-        registry.config.accounting.sources.push(SourcePolicy {
-            provider: credential.credential.provider.clone(),
-            harness: roles::HARNESS.into(),
-            reference: art(&format!(
-                "aq.accounting.source/{}",
-                credential.credential.provider
-            )),
-            layout: aq_accounting::Layout {
-                policy: art("layout"),
-                input_includes_cache_read: false,
-                input_includes_cache_write: false,
-                output_includes_reasoning: false,
-            },
-            parsers: vec![parser.clone()],
-        });
-    }
-    registry.config.accounting.validate().unwrap();
-    let mut config = (*state.config).clone();
-    config.intelligence = Some(std::sync::Arc::new(registry));
-    state.config = std::sync::Arc::new(config);
-    // `offered` validates the offer as the worker does: every module retained.
-    let native = offered(&c).await;
-    let manifest = &native.offered.offer.manifest;
-    let entry = aq_admission::observation_source::entry(&manifest.modules)
-        .unwrap()
-        .expect("the offer delivers the entry");
-    assert_eq!(
-        entry,
-        art(&format!(
-            "aq.accounting.source/{}",
-            manifest.model.provider.as_str()
-        ))
-    );
-    let (module, body) = aq_admission::observation_source::module(&entry).unwrap();
-    let retained = (native.offered.artifacts.iter())
-        .find(|a| a.artifact == module)
-        .expect("retained module body");
-    assert_eq!(retained.bytes, body.len() as u64);
-}
-
 /// An unrouted task with no role: the project's default role on the
 /// project's default level, the startup text in the spec's order, and what
 /// the attempt ran with on its record.
@@ -213,11 +156,6 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     );
     assert!(provenance[3].starts_with("aq.authorized-task-context/"));
     assert_eq!(provenance.len(), 4);
-    // No accounting catalog source: the manifest delivers no observation entry.
-    assert_eq!(
-        aq_admission::observation_source::entry(&manifest.modules).unwrap(),
-        None
-    );
     // Only what the worker requires is a module: no agent or module body.
     for module in &manifest.modules {
         let id = module.id.as_str();

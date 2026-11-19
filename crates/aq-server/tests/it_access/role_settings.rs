@@ -957,41 +957,6 @@ async fn an_owner_reads_saves_and_deletes_documents_over_http() {
         .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
     assert_ne!(moved["digest"], saved["digest"]);
-    // A save keeps every key it does not state: a client that does not know the newer keys
-    // (the dashboard form) cannot reset them. An explicit value still changes one, an
-    // explicit `null` still clears a cost limit, and an unknown key is refused.
-    let revision = || async {
-        let read = f.call("GET", "/api/settings/selection-defaults", None, true, false);
-        read.await.1["revision"].as_str().unwrap().to_owned()
-    };
-    let put = |body: Value, revision: String| {
-        let body = json!({"selection_defaults": body, "expected_revision": revision, "operation_id": Uuid::new_v4()});
-        let path = "/api/settings/selection-defaults";
-        f.call("PUT", path, Some(body), true, true)
-    };
-    let stated = json!({"max_lineage_sandbox_ms": 7_200_000, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD"});
-    let (status, body) = put(stated, revision().await).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let partial = json!({"max_attempts": 4, "max_cost_microunits": null, "currency": null});
-    let (status, body) = put(partial, revision().await).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let (_, read) = f
-        .call("GET", "/api/settings/selection-defaults", None, true, false)
-        .await;
-    let now = &read["selection_defaults"];
-    assert_eq!(now["max_attempts"], 4);
-    assert_eq!(now["max_lineage_sandbox_ms"], 7_200_000, "kept: {now}");
-    assert_eq!(now["max_never_granted_offers"], 3, "kept: {now}");
-    assert_eq!(now["max_uncharged_continuations"], 5, "never stated: {now}");
-    assert_eq!(now["max_cost_microunits"], Value::Null, "cleared: {now}");
-    let (status, _) = put(json!({"no_such_key": 1}), revision().await).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, _) = put(json!({"max_never_granted_offers": 0}), revision().await).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "the merged whole is validated"
-    );
     let (_, limits) = f
         .call("GET", "/api/settings/profiles/limits", None, true, false)
         .await;
@@ -1267,71 +1232,6 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     let (status, _) = f.call("PUT", PATH, Some(wrong), true, true).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(DeliveryLimits::default().validate(), Ok(()));
-}
-
-#[tokio::test]
-async fn the_observation_limits_are_defaulted_validated_and_fenced_over_http() {
-    const PATH: &str = "/api/settings/observation-limits";
-    let f = started().await;
-    // The defaults are the numbers that were constants before.
-    let defaults = json!({
-        "max_sources_per_node": 256, "max_events_per_node": 65536,
-        "max_retained_bytes_per_node": 134217728, "max_calls_per_summary": 65536,
-        "final_drain_grace_ms": 300000});
-    let (status, body) = f.call("GET", PATH, None, true, false).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
-    let (status, _) = f.call("GET", PATH, None, false, false).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer does not read them");
-
-    let mut changed = defaults.clone();
-    changed["max_sources_per_node"] = json!(1024);
-    let put = json!({"limits": changed, "expected_revision": "0",
-        "operation_id": Uuid::new_v4()});
-    let (status, body) = f.call("PUT", PATH, Some(put.clone()), false, true).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    let before = f.active().await;
-    let (status, saved) = f.call("PUT", PATH, Some(put.clone()), true, true).await;
-    assert_eq!(status, StatusCode::OK, "{saved}");
-    assert_eq!(f.active().await.1, before.1, "nothing is compiled");
-    let (_, read) = f.call("GET", PATH, None, true, false).await;
-    assert_eq!(
-        read,
-        json!({"limits": changed, "revision": saved["revision"]})
-    );
-    // What a cap check reads on its own connection.
-    let mut conn = f.pool.acquire().await.unwrap();
-    let (limits, _) = settings::observation_limits(&mut conn).await.unwrap();
-    assert_eq!(limits.max_sources_per_node, 1024);
-    // The same operation again answers as the first time; a stale read is a
-    // conflict; an invalid or unknown value is refused. Nothing changes.
-    let (status, again) = f.call("PUT", PATH, Some(put), true, true).await;
-    assert_eq!((status, &again), (StatusCode::OK, &saved));
-    let stale = json!({"limits": defaults, "expected_revision": "0",
-        "operation_id": Uuid::new_v4()});
-    let (status, body) = f.call("PUT", PATH, Some(stale), true, true).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    let mut cases = Vec::new();
-    for field in defaults.as_object().unwrap().keys() {
-        for bad in [json!(0), json!(u64::MAX), json!(-1)] {
-            let mut limits = defaults.clone();
-            limits[field] = bad;
-            cases.push(limits);
-        }
-        let mut missing = defaults.clone();
-        missing.as_object_mut().unwrap().remove(field);
-        cases.push(missing);
-    }
-    let mut unknown = defaults.clone();
-    unknown["surprise"] = json!(1);
-    cases.push(unknown);
-    for limits in cases {
-        let put = json!({"limits": limits, "expected_revision": saved["revision"],
-            "operation_id": Uuid::new_v4()});
-        let (status, body) = f.call("PUT", PATH, Some(put), true, true).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{limits}: {body}");
-    }
-    assert_eq!(f.call("GET", PATH, None, true, false).await.1, read);
 }
 
 #[tokio::test]

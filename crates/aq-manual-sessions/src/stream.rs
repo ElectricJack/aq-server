@@ -119,7 +119,6 @@ pub(super) async fn browser(
         tx,
     });
     drop(rt);
-    attempt::controlled(&s, id, actor).await;
     Ok(ws
         .max_message_size(8192)
         .max_frame_size(8192)
@@ -146,7 +145,7 @@ fn controls(screen: &terminal::Screen, actor: Uuid, a: &Attach) -> bool {
         })
 }
 async fn permitted(s: &Service, id: Uuid) -> bool {
-    if s.subject != Subject::Manual {
+    if s.host_mode {
         return terminal_subject(s, id).await.is_ok_and(|(_, live)| live);
     }
     session(s,id).await.is_ok_and(|v|terminal::live(&v)) && sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM manual_agent_sessions m JOIN project_execution_bindings p ON p.project_id=m.project_id WHERE m.id=$1 AND p.binding->>'enabled'='true')").bind(id).fetch_one(&s.pool).await.unwrap_or(false)
@@ -208,7 +207,7 @@ async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socke
           let rt=s.runtime.0.lock().await;let Some(screen)=rt.get(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}
           let mut payload=payload;payload["connection_id"]=json!(connection);payload["generation"]=json!(a.generation);if relay.tx.try_send(payload).is_err(){break;}
          }
-         _=tick.tick()=>{input_bytes=0;if (s.owner)(headers.clone()).await.ok()!=Some(actor)||!permitted(&s,id).await{break;}let mut rt=s.runtime.0.lock().await;let Some(screen)=rt.get_mut(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}screen.controller=Some((a.client_id,actor,now()+15000));drop(rt);attempt::controlled(&s,id,actor).await;if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))){break;}}
+         _=tick.tick()=>{input_bytes=0;if (s.owner)(headers.clone()).await.ok()!=Some(actor)||!permitted(&s,id).await{break;}let mut rt=s.runtime.0.lock().await;let Some(screen)=rt.get_mut(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}screen.controller=Some((a.client_id,actor,now()+15000));drop(rt);if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))){break;}}
         }
     }
     let mut rt = s.runtime.0.lock().await;
@@ -222,7 +221,5 @@ async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socke
         let _ = relay.tx.try_send(
             json!({"kind":"detach","connection_id":connection,"generation":a.generation}),
         );
-        drop(rt);
-        attempt::released(&s, id).await;
     }
 }

@@ -1371,7 +1371,6 @@ async fn host7_production_startup_prepares_and_publishes_through_delivery_servic
                 max_bundle_bytes: 4096,
                 bulk_concurrency: 2,
                 incomplete_ttl_secs: 60,
-                git_deadline_ms: 30_000,
             },
         )
         .unwrap(),

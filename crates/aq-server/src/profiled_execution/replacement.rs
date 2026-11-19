@@ -6,7 +6,34 @@ use crate::{AppState, error::AppError};
 use aq_admission::ArtifactRef;
 pub use aq_profiled_state::replacement::*;
 use aq_profiled_state::replacement_sql as sql;
+use serde_json::Value;
+use sqlx::Row;
 use uuid::Uuid;
+
+fn decode(row: sqlx::postgres::PgRow) -> Result<Prior, AppError> {
+    let hot: crate::execution::authority::hot::HotState =
+        serde_json::from_value(row.get::<Value, _>("hot")).map_err(|_| AppError::Internal)?;
+    Ok(Prior {
+        attempt_id: row.get("attempt_id"),
+        offered_at_ms: row
+            .get::<Option<i64>, _>("offered_at_ms")
+            .and_then(|v| u64::try_from(v).ok()),
+        holds_task: row.get("holds_task"),
+        released: row.get("released"),
+        status: hot.status,
+        granted: hot.grant.is_some() || hot.execution_deadline_ms.is_some(),
+        execution_deadline_ms: hot.execution_deadline_ms,
+        stop: hot.stop,
+        retention: hot.retention,
+        effects: hot.effects,
+        accepted: row.get("accepted"),
+        rejected: row.get("rejected"),
+        needs_reconciliation: row.get("needs_reconciliation"),
+        cancelled_settled: row.get("cancelled"),
+        completion: row.get("completion"),
+        exempt: row.get("exempt"),
+    })
+}
 
 /// Loads started-attempt owner facts. A history that does not match the
 /// central started count (for example legacy attempts) is returned as `None`.
@@ -15,29 +42,28 @@ pub async fn load(
     task: Uuid,
     started: u32,
 ) -> Result<Option<Vec<Prior>>, AppError> {
-    let priors = sql::load(conn, task).await.map_err(internal)?;
-    Ok((priors.len() == started as usize).then_some(priors))
-}
-
-fn internal<E>(_: E) -> AppError {
-    AppError::Internal
-}
-/// The task's retry budget ([`Limits::of`]): the limits of the selection policy its latest
-/// attempt pinned, else the current Settings values. Nothing here is a server constant.
-pub async fn limits(conn: &mut sqlx::PgConnection, priors: &[Prior]) -> Result<Limits, AppError> {
-    let pinned = match latest(priors) {
-        Some(attempt) => super::continuation_policy::pinned_policy(conn, attempt).await?,
-        None => None,
+    let sql = match aq_machine_control::lost::has_lost_format(conn).await? {
+        true => sql::PRIORS_102,
+        false if aq_machine_control::has_format(conn).await? => sql::PRIORS,
+        false => sql::PRIORS_PRE_101,
     };
-    let settings = (aq_role_settings::selection_defaults(conn).await).map_err(internal)?;
-    Ok(Limits::of(pinned.as_ref(), &settings))
+    let rows = sqlx::query(sql)
+        .bind(task)
+        .fetch_all(conn)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let priors = rows
+        .into_iter()
+        .map(decode)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((priors.len() == started as usize).then_some(priors))
 }
 
 /// Scheduling assessment for one Graph-ready task.
 /// The decision attempt counts alone settle: an exhausted never-granted
 /// retry bound blocks, and no started attempt is an ordinary first attempt.
 pub fn precheck(counts: &super::no_grant::AttemptCounts) -> Option<Assessment> {
-    if counts.never_granted_bound_exhausted() {
+    if counts.check_retry_bound().is_err() {
         return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
     }
     (counts.started == 0).then_some(Assessment::Fresh)
@@ -124,7 +150,7 @@ pub async fn assess_task_in(
         return Ok(decided);
     }
     Ok(match load(conn, task, counts.started).await? {
-        Some(priors) => assess(&priors, &limits(conn, &priors).await?, now),
+        Some(priors) => assess(&priors, &Limits::default(), now),
         None => Assessment::Blocked("replacement_lineage_history_unknown"),
     })
 }
@@ -141,13 +167,6 @@ pub async fn assess_task_for_revision(
     project_revision: u64,
 ) -> Result<Assessment, AppError> {
     let assessment = assess_task(state, task, now).await?;
-    fence_revision(state, assessment, project_revision).await
-}
-async fn fence_revision(
-    state: &AppState,
-    assessment: Assessment,
-    project_revision: u64,
-) -> Result<Assessment, AppError> {
     let Some(replacement) = assessment.replacement() else {
         return Ok(assessment);
     };
@@ -155,58 +174,61 @@ async fn fence_revision(
     if pinned != Some(project_revision) {
         return Ok(Assessment::Blocked("replacement_project_revision_changed"));
     }
-    Ok(assessment)
+    // Spec 0007 Q1: a successor the predecessor's pinned selection policy
+    // would refuse is skipped here, so it never fails the poll.
+    let limits =
+        super::continuation_policy::pinned_limits(&state.store.pool, replacement.predecessor)
+            .await?;
+    let charged = replacement.attempts_started - replacement.exempt_attempts;
+    Ok(
+        match limits.and_then(|l| {
+            super::continuation_policy::pinned_block(l, charged, replacement.elapsed_ms)
+        }) {
+            Some(reason) => Assessment::Blocked(reason),
+            None => assessment,
+        },
+    )
 }
 
-/// The hold the offer path records for `task` ([`assess_task_for_revision`]), if any: why an
-/// owner retry cannot simply release it.
+/// Why an owner retry of `task` cannot take effect: the hold the offer path records for it
+/// ([`assess_task_for_revision`]) and, for an attempt budget, (charged, allowed) attempts.
 pub async fn retry_hold(
     state: &AppState,
     task: Uuid,
     now: u64,
     revision: u64,
-) -> Result<Option<&'static str>, AppError> {
-    Ok(
-        match assess_task_for_revision(state, task, now, revision).await? {
-            Assessment::Blocked(code) if aq_machine_control::holds::is_hold(code) => Some(code),
-            _ => None,
-        },
-    )
-}
-
-/// An owner's explicit retry overrides the limit hold `code` of `task` (owner decision
-/// 2026-11-18) and assesses it again, in one transaction: the override is recorded only when
-/// the task can then be offered, so it is never one the offer path would still refuse. Every
-/// budget starts again; what happened to the task refuses as before.
-pub async fn override_budget(
-    state: &AppState,
-    (project, task): (Uuid, Uuid),
-    code: &'static str,
-    mut o: aq_machine_control::holds::Override,
-    project_revision: u64,
-) -> Result<Assessment, AppError> {
-    use aq_machine_control::holds;
-    let at = (state.clock)();
-    let now = u64::try_from(o.recorded_at_ms).map_err(internal)?;
-    let mut tx = state.store.pool.begin().await.map_err(internal)?;
-    let known =
-        holds::is_budget_hold(code) && holds::has_overrides(&mut tx).await.map_err(internal)?;
-    let latest = holds::latest_attempt(&mut tx, task)
-        .await
-        .map_err(internal)?;
-    let Some(attempt) = latest.filter(|_| known) else {
-        return Ok(Assessment::Blocked(code));
+) -> Result<Option<(&'static str, Option<(u32, u32)>)>, AppError> {
+    let Assessment::Blocked(code) = assess_task_for_revision(state, task, now, revision).await?
+    else {
+        return Ok(None);
     };
-    (o.attempt_id, o.hold_code) = (attempt, code.into());
-    (holds::record_override(&mut tx, task, &o, at).await).map_err(internal)?;
-    let again = assess_task_in(&mut tx, task, now).await?;
-    let again = fence_revision(state, again, project_revision).await?;
-    if !matches!(again, Assessment::Blocked(_)) {
-        tx.commit().await.map_err(internal)?;
-        tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a limit hold; the task's budgets start again");
-        holds::post_override(&state.store.pool, project, task, &o, at).await;
+    if !aq_machine_control::holds::is_hold(code) {
+        return Ok(None);
     }
-    Ok(again)
+    let allowed = match code {
+        "lineage_retry_budget_exhausted" => Some(Limits::default().max_attempts),
+        "replacement_policy_retry_budget_exhausted" => None,
+        _ => return Ok(Some((code, None))),
+    };
+    let mut conn = state
+        .store
+        .pool
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let counts = super::no_grant::attempt_counts_locked(&mut conn, task).await?;
+    let priors = load(&mut conn, task, counts.started).await?;
+    drop(conn);
+    let Some((charged, Some(latest))) = priors.as_deref().map(charged) else {
+        return Ok(Some((code, None)));
+    };
+    let allowed = match allowed {
+        Some(n) => Some(n),
+        None => super::continuation_policy::pinned_limits(&state.store.pool, latest)
+            .await?
+            .map(|l| l.0),
+    };
+    Ok(Some((code, allowed.map(|n| (charged, n)))))
 }
 
 /// The project revision pinned by an attempt's linked source export request.
@@ -266,8 +288,7 @@ pub async fn release(
         .ok()
         .filter(|n| *n > 0)
         .ok_or(AppError::Internal)?;
-    let limits = limits(&mut tx, &priors).await?;
-    let Assessment::Replace(locked) = assess(&priors, &limits, now) else {
+    let Assessment::Replace(locked) = assess(&priors, &Limits::default(), now) else {
         return Err(AppError::Conflict(
             "replacement no longer admissible".into(),
         ));

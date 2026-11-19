@@ -591,7 +591,7 @@ Fixed on `ms1/retry` (aq-worker), each as its own commit:
   aq-worker binary because `RUNNER` contained a credential-labelled shell
   assignment (`credentials=false`). The flag is renamed `login_file`, and the
   `parse_token` fixtures no longer look like Anthropic tokens. `RUNNER`
-  changed, so the pinned `CLAUDE_RECIPE_DIGEST` was `b30030fb…8765`; the interactive tmux recipe (aq-worker #75) is `16f60ca1…3524`, Codex `453e000e…bbd9`.
+  changed, so the pinned `CLAUDE_RECIPE_DIGEST` is now `b30030fb…8765`.
 - **Recommended.** After a node kill, `reconcile-native` stopped the session
   host but not the docker-local sandbox, so Claude kept running there with the
   token in its environment. It now also stops (never destroys) the attempt's

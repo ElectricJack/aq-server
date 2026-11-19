@@ -7,4 +7,4 @@ pub mod engine;
 pub mod ports;
 pub mod runtime;
 pub mod store;
-pub use aq_stall_ladder::{action_id, episode_id, evidence, freshness, ladder, policy};
+pub use aq_stall_ladder::{action_id, episode_id, evidence, ladder, policy};

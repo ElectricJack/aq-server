@@ -259,7 +259,6 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
             max_staging_bytes: 4194304,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
-            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));

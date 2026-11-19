@@ -9,7 +9,6 @@
 //! | `/profiles/limits` | this store's limits | replace | |
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
-//! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |
 //! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
 //! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
 //!
@@ -56,7 +55,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/selection-defaults", value.clone())
         .route("/api/settings/profiles/limits", value.clone())
         .route("/api/settings/routing-document", value.clone())
-        .route("/api/settings/observation-limits", value.clone())
         .route("/api/settings/profiles/snapshot", read);
     #[cfg(feature = "delivery_playbook")]
     let router = router
@@ -72,7 +70,6 @@ enum Target {
     Limits,
     Snapshot,
     RoutingDocument,
-    ObservationLimits,
     #[cfg(feature = "delivery_playbook")]
     DeliveryDocument,
     #[cfg(feature = "delivery_playbook")]
@@ -91,7 +88,6 @@ fn target(path: &str) -> Result<Target> {
     match (first, id) {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
         ("routing-document", None) => Ok(Target::RoutingDocument),
-        ("observation-limits", None) => Ok(Target::ObservationLimits),
         #[cfg(feature = "delivery_playbook")]
         ("delivery-document", None) => Ok(Target::DeliveryDocument),
         #[cfg(feature = "delivery_playbook")]
@@ -179,10 +175,6 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
             let (markdown, revision) = store::routing_document(pool).await?;
             Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
         }
-        Target::ObservationLimits => {
-            let (limits, revision) = store::observation_limits(&mut *pool.acquire().await?).await?;
-            Ok(json!({"limits": limits, "revision": revision.to_string()}))
-        }
         #[cfg(feature = "delivery_playbook")]
         Target::DeliveryDocument => {
             let (markdown, revision) = store::delivery_document(pool).await?;
@@ -239,9 +231,6 @@ pub async fn write(
             Change::Save { kind, id, markdown }
         }
         (Target::RoutingDocument, Some(markdown), None, None) => Change::RoutingDocument(markdown),
-        (Target::ObservationLimits, None, None, Some(limits)) => {
-            Change::ObservationLimits(serde_json::from_value(limits).map_err(|_| bad())?)
-        }
         #[cfg(feature = "delivery_playbook")]
         (Target::DeliveryDocument, Some(markdown), None, None) => {
             Change::DeliveryDocument(markdown)
@@ -250,14 +239,8 @@ pub async fn write(
         (Target::DeliveryLimits, None, None, Some(limits)) => {
             Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
-        // A key the request does not state keeps its stored value (a client that does not
-        // know a key cannot reset it); the merged whole is validated by the save.
-        (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {
-            let stored = store::settings(pool).await?.selection_defaults;
-            let mut merged = serde_json::to_value(stored).map_err(|_| Error::Internal)?;
-            let keys = merged.as_object_mut().ok_or(Error::Internal)?;
-            keys.extend(stated);
-            Change::SelectionDefaults(serde_json::from_value(merged).map_err(|_| bad())?)
+        (Target::SelectionDefaults, None, Some(defaults), None) => {
+            Change::SelectionDefaults(serde_json::from_value(defaults).map_err(|_| bad())?)
         }
         (Target::Limits, None, None, Some(limits)) => {
             Change::Limits(serde_json::from_value(limits).map_err(|_| bad())?)

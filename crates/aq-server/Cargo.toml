@@ -22,7 +22,6 @@ aq-central-authority = { path = "../aq-central-authority", version = "=0.1.0" }
 aq-result-media = { path = "../aq-result-media", version = "=0.1.0" }
 aq-command-registry = { path = "../aq-command-registry", version = "=0.1.0" }
 aq-intelligence-config = { path = "../aq-intelligence-config", version = "=0.1.0" }
-aq-login-store = { path = "../aq-login-store" }
 aq-profiled-state = { path = "../aq-profiled-state", version = "=0.1.0" }
 aq-task-thread = { path = "../aq-task-thread", version = "=0.1.0" }
 aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }

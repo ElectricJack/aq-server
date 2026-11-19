@@ -50,7 +50,6 @@ async fn handed(reason: Option<&str>) -> Handed {
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
-            git_deadline_ms: 30_000,
         })
         .unwrap(),
     ));
@@ -432,10 +431,8 @@ async fn owner_stop_handoffs_do_not_exhaust_the_retry_budget() {
     );
 }
 
-/// Review I1(c): only the first exempt handoffs of a lineage are free, up to
-/// Settings › Selection defaults `max_uncharged_continuations`; later owner
-/// stops are charged as normal attempts against `max_attempts`. The fixture's
-/// attempts pin no policy, so the current Settings values apply.
+/// Review I1(c): only the first five exempt handoffs of a lineage are free;
+/// later owner stops are charged as normal attempts.
 #[tokio::test]
 async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     use crate::replacement_release::{fail, granted_at};
@@ -443,12 +440,7 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     let mut f = common::profiled::fixture().await;
     let task = f.selection.lineage.task_id;
     let pool = f.db.pool().await;
-    let limits = aq_profiles::roles::SelectionDefaults::default();
-    let (cap, last) = (
-        u64::from(limits.max_uncharged_continuations),
-        u64::from(limits.max_uncharged_continuations + limits.max_attempts),
-    );
-    for generation in 1..=last {
+    for generation in 1..=8 {
         if generation > 1 {
             next_attempt(&mut f, generation);
         }
@@ -458,21 +450,21 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
             .bind(attempt).bind(f.node.node_id).execute(&pool).await.unwrap();
         let assessed = replacement::assess_task(&f.state, task, NOW).await.unwrap();
         let Assessment::Replace(r) = assessed else {
-            assert_eq!(generation, last, "{assessed:?}");
+            assert_eq!(generation, 8, "{assessed:?}");
             assert_eq!(
                 assessed,
                 Assessment::Blocked("lineage_retry_budget_exhausted")
             );
             return;
         };
-        let exempt = generation.min(cap) as u32;
+        let exempt = generation.min(5) as u32;
         assert_eq!(
             (r.attempts_started, r.exempt_attempts),
             (generation as u32, exempt)
         );
         replacement::release(&f.state, task, &r).await.unwrap();
     }
-    panic!("the last owner stop leaves `max_attempts` charged attempts");
+    panic!("the eighth owner stop leaves three charged attempts");
 }
 
 #[cfg(not(feature = "delivery_playbook"))]
@@ -559,7 +551,6 @@ async fn quiet_successor(
         max_bundle_bytes: 4096,
         bulk_concurrency: 2,
         incomplete_ttl_secs: 60,
-        git_deadline_ms: 30_000,
     };
     let delivery = aq_server::delivery::DeliveryService::new(pool, &config.git_socket);
     (env, delivery, socket, git)

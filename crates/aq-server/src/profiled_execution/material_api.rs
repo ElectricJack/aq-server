@@ -258,15 +258,6 @@ pub async fn fetch(
     lease
         .verify_material(&request.binding, bytes.bytes(), now)
         .map_err(|_| refused())?;
-    // The owner's age limit on a stored Codex login, named so the node can show it.
-    let provider = lease.provider.as_str();
-    if version.is_some()
-        && let Some(reason) =
-            super::login_refresh::lease_refusal(&mut tx, provider, bytes.bytes(), now as i64)
-                .await?
-    {
-        return Err(AppError::Conflict(reason));
-    }
     let metadata = MaterialDelivery {
         clock: DeliveryClock::new(now, lease.expires_at_ms).map_err(|_| refused())?,
         lease,

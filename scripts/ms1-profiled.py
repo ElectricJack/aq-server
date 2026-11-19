@@ -76,25 +76,8 @@ _REV = int(os.environ.get("AQ_MS1_REVISION") or (_REV_FILE.read_text().strip() i
 PROFILED_REVISION = _REV
 INTELLIGENCE_REVISION = _REV + 1
 DEFINITION_VERSION = str(_REV)
-
-
-def _accounting_source(provider, harness, parser_id, parser_digest, cache_read):
-    """One [[intelligence.accounting.sources]] entry. `reference` and the layout
-    policy are owner names (digest = SHA-256 of the id and version); the parser
-    reference must equal the one the worker's observation engine stamps on its
-    events (aq-worker crates/aq-observation-engine, cfa36431)."""
-    def named(kind):
-        name = f"aq.accounting.{kind}/{provider}-{harness}"
-        return {"id": name, "version": "1", "digest": sha(name + "/v1")}
-    parser = {"id": parser_id, "version": "0.0.1-engine", "digest": parser_digest}
-    return {"provider": provider, "harness": harness, "reference": named("source"),
-            "layout": {"policy": named("layout"), "input_includes_cache_read": cache_read,
-                       "input_includes_cache_write": False, "output_includes_reasoning": True},
-            "parsers": [{"parser": parser, "category_claim": parser, "priority": 1}]}
-
-
 LONG_CONTRACT = {"id": "aq.admission.preparation-registry-refresh-v1-contract.interactive-long-v1", "version": "1",
-                 "digest": "4c4ab2ae711614db55b4b8077ce9ff5ad0200aa62d9d7bd298231da632d851bf"}
+                 "digest": "bd9abe1d9ef02970beb7946c007418de90a6066a146698ac0c075da1c1f2a28f"}
 TERMINAL_CONTRACT = {"id": "aq.phase-terminal.registry-refresh-v1.contract", "version": "1",
                      "digest": "f9af55c49127a8cb93f03ef5bbb28313d13f94a221affa3e26d91d45bffd6c2d"}
 NEGOTIATION_FEATURES = ["accepted_preparation_v2", "fresh_initial_confirmation_v2", "independent_execution_delivery_v2",
@@ -395,14 +378,7 @@ def build():
                         "allow_enrolled_nodes": ENROLLED_NODES,
                         "secret_file": "/var/lib/aq/credentials/owner-claude-subscription",
                         "delivery_mode": "server_material_v1"}],
-                    "qualified_harnesses": [harness],
-                    # Without a source the server refuses the sessions' observations and
-                    # the stall ladder has no progress evidence.
-                    "accounting": {"sources": [
-                        _accounting_source("anthropic", "claude", "claude-v1-9a9b8e8",
-                                           "5261dcb73fa8177af773c52ae07a54f9daf97f2ae66b283505e6239b343e6bf7", False),
-                        _accounting_source("openai", "codex", "codex-rollout-67f0994",
-                                           "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22", True)]}}
+                    "qualified_harnesses": [harness]}
     state_dir = NODE / "state"
     docker = dict(worker["docker_local"])
     host_config = {

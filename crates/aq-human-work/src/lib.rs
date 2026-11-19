@@ -2,8 +2,8 @@
 //! X8-X13): task-state counts, edge projection, readiness with its blockers
 //! and hold reasons, and a change summary for each task history entry.
 //!
-//! The all-project task list joins Graph's page to AQ's current owner and project bindings.
-pub mod task_list;
+//! Everything here is a pure function over Graph or AQ authority JSON. The
+//! aq-server handlers own authorization, Graph I/O and AQ's own SQL.
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -250,20 +250,6 @@ pub fn readiness_with(
         .chain(held)
         .collect();
     json!({"state":state,"blockers":blockers,"complete":complete,"reasons":reasons})
-}
-
-mod task_edit;
-pub use task_edit::{TaskEdit, TaskReprioritize};
-
-pub const STORY_POINTS_KEY: &str = "aq:story_points";
-pub const MAX_STORY_POINTS: u16 = 1000;
-
-/// The estimate stored on a Graph task. Legacy tasks may have no estimate.
-pub fn story_points(node: &Value) -> Option<u16> {
-    let points = node["metadata"][STORY_POINTS_KEY].as_u64()?;
-    u16::try_from(points)
-        .ok()
-        .filter(|n| (1..=MAX_STORY_POINTS).contains(n))
 }
 
 /// Revision fields a history diff names, in display order. `priority` is the

@@ -24,7 +24,7 @@ pub const DOCKER_LOCAL_PROFILES: [DockerLocalProfile; 2] = [
         adapter: "aq.claude-result-local-adapter",
         profile: "claude-2.1.318-docker-local-result-local-v1",
         recipe_id: "aq.claude-docker-local-result-local-recipe",
-        recipe_digest: Some("16f60ca10678169804096f15c0c98f0e935f6ba53784d3086fc7bcf55f633524"),
+        recipe_digest: Some("b30030fb9192268da6079f59d650bcbad5dae3b2e34bf28af2b9e96e9fad8765"),
     },
     // aq-worker W1: `aq_codex_mapper::docker_local::recipe_artifact()`
     // (`codex_recipe` in `aq-worker ms1-definitions`).
@@ -34,6 +34,6 @@ pub const DOCKER_LOCAL_PROFILES: [DockerLocalProfile; 2] = [
         adapter: "aq.codex-docker-result-local-adapter",
         profile: "codex-0.166-docker-local-result-local-v1",
         recipe_id: "aq.codex-docker-local-result-local-recipe",
-        recipe_digest: Some("453e000ecaa7f18d8c575fe37e03e2bcb875e45e94abcd4b55f789478111bbd9"),
+        recipe_digest: Some("64d136db5bfcb9a9c35f5930d0c37dc3647c04f293f7f95e6ea395e4bfd9b150"),
     },
 ];

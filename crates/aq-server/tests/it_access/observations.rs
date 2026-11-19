@@ -366,12 +366,10 @@ async fn exact_retries_corrections_and_history_replay_never_double_charge() {
     drop(f);
 }
 #[tokio::test]
-async fn a_refused_source_is_dropped_and_the_batch_still_advances_the_node_sequence() {
-    use aq_observation_admission::{RefusalReason, RefusedSource};
+async fn atomic_batch_refusal_does_not_advance_cursor_or_partial_totals() {
     let (f, s) = setup().await;
     let mut foreign = event(&s, 2, 12).body;
     foreign.provenance.source_id = Uuid::new_v4();
-    let unknown = foreign.provenance.source_id;
     let p = packet(
         &f,
         vec![
@@ -379,202 +377,28 @@ async fn a_refused_source_is_dropped_and_the_batch_still_advances_the_node_seque
             ObservationRecord::seal(Uuid::new_v4(), foreign).unwrap(),
         ],
     );
-    let reply = observations::ingest(&f.state, f.node.node_id, &p)
-        .await
-        .unwrap();
-    assert_eq!(reply.receipt.through_sequence, Some(2));
-    assert_eq!(
-        reply.refused_sources,
-        [RefusedSource {
-            source_id: unknown,
-            generation: 1,
-            reason: RefusalReason::UnknownSource
-        }]
-    );
-    // The good source's event landed and the sequence is past the batch.
-    assert_eq!(counts(&f).await, (2, 1));
-    assert_eq!(projection(&f, &s).await.known_subtotals[0], 10);
-    let stored: Vec<i64> = sqlx::query_scalar("SELECT sequence FROM observation_events")
-        .fetch_all(&f.db.pool().await)
-        .await
-        .unwrap();
-    assert_eq!(stored, [1]);
-    // A retry gets the same reply; an unenrolled source leaves no source row.
-    assert_eq!(
-        observations::ingest(&f.state, f.node.node_id, &p)
-            .await
-            .unwrap(),
-        reply
-    );
-    let refusals: i64 = sqlx::query_scalar("SELECT count(*) FROM observation_source_refusals")
+    assert!(matches!(
+        observations::ingest(&f.state, f.node.node_id, &p).await,
+        Err(observations::Error::Refused)
+    ));
+    assert_eq!(counts(&f).await, (0, 0));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM observation_events")
         .fetch_one(&f.db.pool().await)
         .await
         .unwrap();
-    assert_eq!(refusals, 0);
-    // The next batch of the good source continues at 3.
-    let next = packet(&f, vec![event(&s, 3, 10)]);
-    observations::ingest(&f.state, f.node.node_id, &next)
-        .await
-        .unwrap();
-    assert_eq!(counts(&f).await, (3, 2));
-    // What still refuses a whole batch: a skipped sequence, another node.
-    let skipped = packet(&f, vec![event(&s, 5, 1)]);
+    assert_eq!(count, 0);
+    let skipped = packet(&f, vec![event(&s, 2, 1)]);
     assert!(matches!(
         observations::ingest(&f.state, f.node.node_id, &skipped).await,
         Err(observations::Error::Conflict)
     ));
-    let p = packet(&f, vec![event(&s, 4, 10)]);
+    let p = packet(&f, vec![event(&s, 1, 10)]);
     assert!(
         observations::ingest(&f.state, Uuid::new_v4(), &p)
             .await
             .is_err()
     );
-    assert_eq!(counts(&f).await, (3, 2));
-    drop(f);
-}
-/// The node store's gap, source-change and fence records carry control
-/// parsers the catalog entry does not list. They are admitted by kind; a fact
-/// under a control parser refuses its source, durably. The ladder reads a
-/// control record, or a refused source, as unknown: a monitoring incident,
-/// never a nudge or a stop.
-#[tokio::test]
-async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder() {
-    use aq_observation_admission::{CONTROL_PARSERS, FENCED_BY_RESTART, RefusalReason};
-    use aq_server::stall::{
-        engine::{self, Ports, Target},
-        evidence::Explanation,
-        policy::ExecutionPolicy,
-        ports::DbPorts,
-    };
-    let (f, s) = setup().await;
-    assert_eq!(
-        s.policy.parsers.len(),
-        1,
-        "only the format parser is listed"
-    );
-    let pool = f.db.pool().await;
-    let with = |sequence: u64, parser: Option<&str>, kind: Option<ObservationKind>| {
-        let mut body = event(&s, sequence, 10).body;
-        if let Some(id) = parser {
-            // The digest is the worker's source file: any value is admitted.
-            body.provenance.parser = artifact(id, format!("worker build {sequence}").as_bytes());
-        }
-        if let Some(kind) = kind {
-            if let ObservationKind::Gap { reason, .. } = &kind {
-                body.provenance.cursor = SourceCursor::Record {
-                    id: text(&format!("{FENCED_BY_RESTART}{sequence}")),
-                };
-                body.provenance.raw_record = RawRecordEvidence::Unavailable {
-                    reason: reason.clone(),
-                };
-            }
-            body.kind = kind;
-        }
-        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
-    };
-    let gap = |reason| ObservationKind::Gap {
-        reason,
-        affected: None,
-    };
-    let turn = ObservationKind::TurnBoundary { in_turn: true };
-    let admitted = packet(
-        &f,
-        vec![
-            with(1, None, Some(turn.clone())),
-            with(
-                2,
-                Some(CONTROL_PARSERS[0]),
-                Some(gap(GapReason::SpoolOverflow)),
-            ),
-            with(3, Some(CONTROL_PARSERS[1]), Some(gap(GapReason::Truncated))),
-            with(
-                4,
-                Some(CONTROL_PARSERS[2]),
-                Some(gap(GapReason::ReplayUnavailable)),
-            ),
-        ],
-    );
-    let reply = observations::ingest(&f.state, f.node.node_id, &admitted)
-        .await
-        .unwrap();
-    assert!(reply.refused_sources.is_empty());
-    assert_eq!(counts(&f).await, (4, 4));
-
-    // Progress, then only control records: not progress, not proof of a stall.
-    let attempt = s.binding.attempt_id;
-    let target = Target {
-        attempt_id: attempt,
-        session_id: Uuid::new_v4(),
-        task_id: f.profiled.offer.manifest.bindings.task_id,
-        project_id: f.profiled.offer.manifest.bindings.project_id,
-        workspace_id: f.profiled.offer.manifest.bindings.graph_id,
-        generation: 1,
-    };
-    let policy = ExecutionPolicy::v1();
-    let ports = DbPorts {
-        state: f.state.clone(),
-    };
-    let evidence = ports.evidence(&target, &policy, NOW).await.unwrap();
-    assert!(evidence.last_progress_ms.is_some());
-    assert_eq!(
-        evidence.explanation,
-        Some(Explanation::ObservationsUnavailable)
-    );
-    // An hour without progress: one monitoring incident and no recovery.
-    for minute in 0..=60 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
-    }
-    let actions = |pool: sqlx::PgPool| async move {
-        sqlx::query_scalar::<_, String>(
-            "SELECT a.kind FROM stall_actions a JOIN stall_episodes e USING(episode_id) \
-             WHERE e.attempt_id=$1 ORDER BY a.created_at_ms,a.ordinal",
-        )
-        .bind(attempt)
-        .fetch_all(&pool)
-        .await
-        .unwrap()
-    };
-    assert_eq!(actions(pool.clone()).await, ["monitoring_incident"]);
-
-    // A fact cannot ride a control parser: the source is refused, the batch lands.
-    let smuggled = packet(&f, vec![with(5, Some(CONTROL_PARSERS[2]), None)]);
-    let reply = observations::ingest(&f.state, f.node.node_id, &smuggled)
-        .await
-        .unwrap();
-    assert_eq!(reply.refused_sources[0].reason, RefusalReason::ControlShape);
-    assert_eq!(counts(&f).await, (5, 4));
-    let recorded: (String, i64) = sqlx::query_as(
-        "SELECT reason,sequence FROM observation_source_refusals WHERE node_id=$1 AND source_id=$2",
-    )
-    .bind(f.node.node_id)
-    .bind(s.source_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(recorded, ("control_shape".to_owned(), 5));
-    // The refusal stands: later records of the source are dropped, with the
-    // sequence still advancing, and the usage it tried to add never counted.
-    let later = packet(&f, vec![with(6, None, Some(turn))]);
-    let reply = observations::ingest(&f.state, f.node.node_id, &later)
-        .await
-        .unwrap();
-    assert_eq!(reply.refused_sources[0].reason, RefusalReason::Refused);
-    assert_eq!(counts(&f).await, (6, 4));
-    assert_eq!(projection(&f, &s).await.known_subtotals[0], 0);
-    // A refused source is unknown too, and adds no ladder action.
-    let evidence = ports.evidence(&target, &policy, NOW).await.unwrap();
-    assert_eq!(
-        evidence.explanation,
-        Some(Explanation::ObservationsUnavailable)
-    );
-    for minute in 61..=90 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
-    }
-    assert_eq!(actions(pool).await, ["monitoring_incident"]);
+    assert_eq!(counts(&f).await, (0, 0));
     drop(f);
 }
 #[tokio::test]
@@ -666,7 +490,7 @@ async fn quota_and_database_failure_roll_back_all_accounting_effects() {
     let p = packet(&f, vec![event(&s, 1, 10)]);
     assert!(matches!(
         observations::ingest(&f.state, f.node.node_id, &p).await,
-        Err(observations::Error::Limit(_))
+        Err(observations::Error::Capacity)
     ));
     assert_eq!(counts(&f).await, (0, 0));
     sqlx::query("UPDATE observation_nodes SET retained_bytes=1000 WHERE node_id=$1")
@@ -1405,124 +1229,6 @@ mod accounting {
             .unwrap()
     }
 
-    /// The worker's half of the launch contract, computed without the server's
-    /// derivation: the delivered module gives back the catalog entry, and the
-    /// source ID is SHA-256 of the sorted-key JSON
-    /// `["aq.observation-source/v1", attempt, 1, entry]`, first 16 bytes,
-    /// version 8, RFC 4122 variant; the session key is `aq.attempt/<attempt>/1`.
-    fn worker_identity(modules: &[ArtifactRef], attempt: Uuid) -> (Uuid, Text) {
-        let entry = aq_admission::observation_source::entry(modules)
-            .unwrap()
-            .expect("the launch delivers the catalog entry");
-        let mut value = json!(["aq.observation-source/v1", attempt, 1, entry]);
-        value.sort_all_objects();
-        let digest = Digest::of(&serde_json::to_vec(&value).unwrap());
-        let mut id = [0u8; 16];
-        for (i, b) in id.iter_mut().enumerate() {
-            *b = u8::from_str_radix(&digest.as_str()[i * 2..i * 2 + 2], 16).unwrap();
-        }
-        id[6] = (id[6] & 0x0f) | 0x80;
-        id[8] = (id[8] & 0x3f) | 0x80;
-        (
-            Uuid::from_bytes(id),
-            text(&format!("aq.attempt/{attempt}/1")),
-        )
-    }
-    fn observed(source: &OwnerSource, sequence: u64, kind: ObservationKind) -> ObservationRecord {
-        let mut body = event(source, sequence, 0).body;
-        body.kind = kind;
-        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
-    }
-
-    #[tokio::test]
-    async fn delivered_entry_identity_is_enrolled_and_its_events_are_stall_progress() {
-        use aq_server::stall::{
-            engine::{Ports, Target},
-            evidence::Explanation,
-            policy::ExecutionPolicy,
-            ports::DbPorts,
-        };
-        let (mut f, unregistered) = seeded(Some(true)).await;
-        let attempt = f.profiled.offer.binding.attempt_id;
-        let target = Target {
-            attempt_id: attempt,
-            session_id: Uuid::new_v4(),
-            task_id: f.profiled.offer.manifest.bindings.task_id,
-            project_id: f.profiled.offer.manifest.bindings.project_id,
-            workspace_id: f.profiled.offer.manifest.bindings.graph_id,
-            generation: 1,
-        };
-        let policy = ExecutionPolicy::v1();
-        let evidence = |f: &Fixture| {
-            let ports = DbPorts {
-                state: f.state.clone(),
-            };
-            let (target, policy) = (target.clone(), policy.clone());
-            async move { ports.evidence(&target, &policy, NOW).await.unwrap() }
-        };
-        // No catalog source: nothing is delivered. The unenrolled source is
-        // refused, its record dropped (the node sequence moves past it), and
-        // the ladder has no evidence.
-        assert!(f.state.config.intelligence.is_none());
-        let turn = ObservationKind::TurnBoundary { in_turn: true };
-        let refused = packet(&f, vec![observed(&unregistered, 1, turn.clone())]);
-        assert_eq!(send(&f, &refused).await, StatusCode::OK);
-        assert_eq!(counts(&f).await, (1, 0));
-        let before = evidence(&f).await;
-        assert_eq!(before.last_progress_ms, None);
-        assert_eq!(
-            before.explanation,
-            Some(Explanation::ObservationsUnavailable)
-        );
-        // With a catalog source the launch delivers its entry, and the identity
-        // the worker derives from it is the one the batch route enrolls.
-        install(
-            &mut f,
-            aq_selection::CredentialKind::SubscriptionLogin,
-            vec![],
-        );
-        let registry = f.state.config.intelligence.clone().unwrap();
-        let choice = &f.selection.choice;
-        let entry = (registry.config.accounting)
-            .source(&choice.provider, &choice.harness)
-            .unwrap()
-            .reference
-            .clone();
-        let (module, _) = aq_admission::observation_source::module(&entry).unwrap();
-        let (source_id, session_key) = worker_identity(&[module], attempt);
-        let mut worker = catalog::source_for_attempt(&f.state, attempt)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            (
-                worker.source_id,
-                &worker.native_session_key,
-                worker.generation
-            ),
-            (source_id, &session_key, 1)
-        );
-        worker.source_id = source_id;
-        worker.native_session_key = session_key;
-        let tool = ObservationKind::ToolStarted {
-            call_id: text("call-1"),
-            tool_name: text("Bash"),
-        };
-        let accepted = packet(
-            &f,
-            vec![observed(&worker, 2, turn), observed(&worker, 3, tool)],
-        );
-        assert_eq!(send(&f, &accepted).await, StatusCode::OK);
-        assert_eq!(counts(&f).await, (3, 2));
-        let after = evidence(&f).await;
-        assert!(after.last_progress_ms.is_some() && after.observed_through_ms.is_some());
-        assert_ne!(
-            after.explanation,
-            Some(Explanation::ObservationsUnavailable)
-        );
-        drop(f);
-    }
-
     #[tokio::test]
     async fn attempt_usage_feeds_ledger_and_budget() {
         let (mut f, _) = seeded(Some(true)).await;
@@ -1894,253 +1600,12 @@ async fn retention_closes_late_packet_window_without_resetting_sequence() {
         .execute(&f.db.pool().await)
         .await
         .unwrap();
-    // A retry of the recorded packet gets its receipt and writes nothing. A
-    // late packet's source is refused and its record dropped; the node
-    // sequence still moves on, so the node's other sources are not held back.
-    observations::ingest(&f.state, f.node.node_id, &first)
-        .await
-        .unwrap();
-    let late = packet(&f, vec![event(&s, 2, 20)]);
-    let reply = observations::ingest(&f.state, f.node.node_id, &late)
-        .await
-        .unwrap();
-    assert_eq!(
-        reply.refused_sources[0].reason,
-        aq_observation_admission::RefusalReason::Binding
-    );
-    assert_eq!(counts(&f).await, (2, 1));
+    for p in [first, packet(&f, vec![event(&s, 2, 20)])] {
+        assert!(matches!(
+            observations::ingest(&f.state, f.node.node_id, &p).await,
+            Err(observations::Error::Refused)
+        ));
+    }
+    assert_eq!(counts(&f).await, (1, 1));
     assert_eq!(projection(&f, &s).await.known_subtotals[0], 10);
-}
-
-mod state_limits_and_release {
-    use super::*;
-    use aq_observation_admission::{RefusalReason, RefusedSource};
-    use aq_role_settings::observation::ObservationLimits;
-    use aq_server::stall::{
-        freshness::{self, State},
-        policy::ExecutionPolicy,
-    };
-    use std::sync::atomic::Ordering;
-
-    fn session(source: &OwnerSource) -> Uuid {
-        match source.binding.session {
-            SessionIdentity::Remote { session_id, .. } => session_id,
-            _ => unreachable!(),
-        }
-    }
-    fn progress(source: &OwnerSource, sequence: u64) -> ObservationRecord {
-        let mut body = event(source, sequence, 0).body;
-        body.kind = ObservationKind::TurnBoundary { in_turn: true };
-        ObservationRecord::seal(Uuid::new_v4(), body).unwrap()
-    }
-    async fn send(f: &Fixture, events: Vec<ObservationRecord>) -> observations::Result<Packet> {
-        let packet = packet(f, events);
-        observations::ingest(&f.state, f.node.node_id, &packet)
-            .await
-            .map(|_| packet)
-    }
-    /// Saves the Settings value as the owner does; the next use reads it.
-    async fn save(f: &Fixture, change: impl FnOnce(&mut ObservationLimits)) {
-        let pool = f.db.pool().await;
-        let mut conn = pool.acquire().await.unwrap();
-        let (mut limits, expected_revision) = aq_role_settings::observation_limits(&mut conn)
-            .await
-            .unwrap();
-        change(&mut limits);
-        let mutation = aq_role_settings::Mutation {
-            change: aq_role_settings::Change::ObservationLimits(limits),
-            expected_revision,
-            operation_id: Uuid::new_v4(),
-        };
-        aq_role_settings::apply(&pool, f.actor, &mutation, NOW as i64)
-            .await
-            .unwrap();
-    }
-    async fn one(f: &Fixture, id: Uuid, now: u64) -> (freshness::Facts, Decided) {
-        let facts = observations::freshness(&f.db.pool().await, &[id])
-            .await
-            .unwrap()[&id];
-        (facts, freshness::state(&facts, &ExecutionPolicy::v1(), now))
-    }
-    type Decided = (State, Option<&'static str>);
-    async fn states(f: &Fixture, sessions: &[Uuid], now: u64) -> Vec<Decided> {
-        // One call, one query, however many sessions the page has.
-        let facts = observations::freshness(&f.db.pool().await, sessions)
-            .await
-            .unwrap();
-        assert_eq!(facts.len(), sessions.len());
-        sessions
-            .iter()
-            .map(|id| freshness::state(&facts[id], &ExecutionPolicy::v1(), now))
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn each_observation_state_is_produced_by_the_matching_ledger_contents() {
-        let policy = ExecutionPolicy::v1();
-        let (mut f, s) = seeded(Some(true)).await;
-        let id = session(&s);
-        assert_eq!(
-            one(&f, id, NOW).await.1,
-            (State::Unknown, Some("no_observation_source"))
-        );
-        observations::register_source(&f.state, &s).await.unwrap();
-        assert_eq!(one(&f, id, NOW).await.1, (State::Awaiting, None));
-        // Usage is an observation, not progress.
-        send(&f, vec![event(&s, 1, 10)]).await.unwrap();
-        let (facts, state) = one(&f, id, NOW).await;
-        assert_eq!(
-            (facts.last_observation_ms, facts.last_progress_ms),
-            (Some(NOW), None)
-        );
-        assert_eq!(
-            state,
-            (State::Quiet, Some("no_progress_within_evidence_window"))
-        );
-        f.time.store((NOW + 1000) as i64, Ordering::SeqCst);
-        send(&f, vec![progress(&s, 2)]).await.unwrap();
-        let (facts, state) = one(&f, id, NOW + 1000).await;
-        assert_eq!(
-            (facts.last_observation_ms, facts.last_progress_ms),
-            (Some(NOW + 1000), Some(NOW + 1000))
-        );
-        assert_eq!(state, (State::Working, None));
-        // Later usage keeps the session observed; the progress ages out of
-        // the ladder's evidence window.
-        let later = NOW + 1000 + policy.evidence_window_ms + 1;
-        f.time.store(later as i64, Ordering::SeqCst);
-        send(&f, vec![event(&s, 3, 20)]).await.unwrap();
-        let (facts, state) = one(&f, id, later).await;
-        assert_eq!(
-            (facts.last_observation_ms, facts.last_progress_ms),
-            (Some(later), Some(NOW + 1000))
-        );
-        assert_eq!(
-            state,
-            (State::Quiet, Some("no_progress_within_evidence_window"))
-        );
-        // Nothing for longer than the ladder's grace: the evidence is stale.
-        assert_eq!(
-            one(&f, id, later + policy.grace_ms + 1).await.1,
-            (State::Stale, Some("no_observation_within_grace"))
-        );
-        // The attempt ends; its successor is enrolled and has sent nothing.
-        f.time.store(NOW as i64, Ordering::SeqCst);
-        let next = successor(&mut f, &s).await;
-        assert_eq!(
-            states(&f, &[id, session(&next)], NOW).await,
-            [(State::Ended, None), (State::Awaiting, None)]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_cap_read_from_settings_refuses_at_its_value_and_admits_once_raised() {
-        let (f, s) = setup().await;
-        save(&f, |limits| limits.max_events_per_node = 1).await;
-        send(&f, vec![event(&s, 1, 10)]).await.unwrap();
-        let Err(observations::Error::Limit(refusal)) = send(&f, vec![event(&s, 2, 20)]).await
-        else {
-            panic!("the second event passes the limit of 1")
-        };
-        for part in ["1 events in use", "limit of 1", "max_events_per_node"] {
-            assert!(refusal.contains(part), "{refusal}");
-        }
-        assert_eq!(counts(&f).await, (1, 1));
-        // No restart: the next batch reads the raised value.
-        save(&f, |limits| limits.max_events_per_node = 2).await;
-        send(&f, vec![event(&s, 2, 20)]).await.unwrap();
-        assert_eq!(counts(&f).await, (2, 2));
-        // The byte limit is refused the same way, by name.
-        save(&f, |limits| {
-            limits.max_events_per_node = 10;
-            limits.max_retained_bytes_per_node = 1;
-        })
-        .await;
-        let Err(observations::Error::Limit(refusal)) = send(&f, vec![event(&s, 3, 30)]).await
-        else {
-            panic!("the node is over its byte limit")
-        };
-        assert!(refusal.contains("max_retained_bytes_per_node"), "{refusal}");
-    }
-
-    #[tokio::test]
-    async fn a_source_is_released_at_attempt_end_and_drains_for_the_grace_only() {
-        let (mut f, s) = setup().await;
-        let pool = f.db.pool().await;
-        save(&f, |limits| {
-            limits.max_sources_per_node = 1;
-            limits.final_drain_grace_ms = 1000;
-        })
-        .await;
-        let first = send(&f, vec![event(&s, 1, 10)]).await.unwrap();
-        // The node has enrolled as many sources in its life as the former
-        // fixed cap allowed, and its one live source fills today's limit.
-        sqlx::query("UPDATE observation_nodes SET source_count=256 WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(observations::release_ended(&f.state).await.unwrap(), 0);
-        // The attempt ends. Its successor enrolls on the same node: the ended
-        // attempt's source is released first and no longer counts.
-        let next = successor(&mut f, &s).await;
-        let released: Vec<(Uuid, i64, i64)> = sqlx::query_as(
-            "SELECT source_id,released_at_ms,accept_until_ms FROM observation_source_releases",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert_eq!(released, [(s.source_id, NOW as i64, NOW as i64 + 1000)]);
-        // Idempotent: a later sweep, with another grace, changes nothing.
-        save(&f, |limits| limits.final_drain_grace_ms = 60_000).await;
-        f.time.store((NOW + 500) as i64, Ordering::SeqCst);
-        assert_eq!(observations::release_ended(&f.state).await.unwrap(), 0);
-        // The live source fills the limit of 1: a further one is refused by name.
-        let mut extra = next.clone();
-        (extra.source_id, extra.generation) = (Uuid::new_v4(), 2);
-        let Err(observations::Error::Limit(refusal)) =
-            observations::register_source(&f.state, &extra).await
-        else {
-            panic!("the live source fills the limit")
-        };
-        assert!(refusal.contains("max_sources_per_node"), "{refusal}");
-        // The final drain of the ended attempt, inside the grace: accepted
-        // and accounted as usual.
-        f.time.store((NOW + 1000) as i64, Ordering::SeqCst);
-        send(&f, vec![event(&s, 2, 20)]).await.unwrap();
-        assert_eq!(counts(&f).await, (2, 2));
-        // After the grace the released source is refused, not the batch: the
-        // node's sequence advances and nothing of the source is recorded; an
-        // exact replay of an accepted batch still returns its receipt.
-        f.time.store((NOW + 1001) as i64, Ordering::SeqCst);
-        let late = packet(&f, vec![event(&s, 3, 30)]);
-        let reply = observations::ingest(&f.state, f.node.node_id, &late)
-            .await
-            .unwrap();
-        assert_eq!(reply.receipt.through_sequence, Some(3));
-        assert_eq!(
-            reply.refused_sources,
-            [RefusedSource {
-                source_id: s.source_id,
-                generation: s.generation,
-                reason: RefusalReason::UnknownSource
-            }]
-        );
-        // The sequence moved on; no event of the released source was recorded.
-        assert_eq!(counts(&f).await, (3, 2));
-        observations::ingest(&f.state, f.node.node_id, &first)
-            .await
-            .unwrap();
-        // The node's sequence is not stalled for the live attempt.
-        send(&f, vec![event(&next, 4, 5)]).await.unwrap();
-        assert_eq!(counts(&f).await, (4, 3));
-        // The released source's events stay readable.
-        let kept: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM observation_events WHERE attempt_id=$1")
-                .bind(s.binding.attempt_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(kept, 2);
-    }
 }

@@ -40,8 +40,6 @@ pub fn policy() -> SelectionPolicy {
         max_output_tokens: 128,
         max_attempts: 3,
         max_lineage_elapsed_ms: 60_000,
-        max_lineage_sandbox_ms: None,
-        max_uncharged_continuations: None,
         required_capabilities: vec![],
         budget: IntelligenceBudgetPolicy {
             max_cost_microunits: None,

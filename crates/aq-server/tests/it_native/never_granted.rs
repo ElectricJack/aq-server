@@ -288,9 +288,7 @@ async fn repeated_unissued_offers_keep_lineage_generation_and_finite_retry_budge
     )
     .unwrap();
     f.time.store((NOW + 30000) as i64, Ordering::SeqCst);
-    // The bound is Settings › Selection defaults `max_never_granted_offers`.
-    let max = aq_profiles::roles::SelectionDefaults::default().max_never_granted_offers;
-    for generation in 1..=max {
+    for generation in 1..=no_grant::MAX_UNGRANTED_RETRIES {
         assert_eq!(
             no_grant::next_generation(&pool, f.selection.lineage.task_id)
                 .await
@@ -316,11 +314,11 @@ async fn repeated_unissued_offers_keep_lineage_generation_and_finite_retry_budge
             )
             .unwrap()
         );
-        if generation == max {
-            assert!(no_grant::check_retry_bound(counts).is_err());
+        if generation == no_grant::MAX_UNGRANTED_RETRIES {
+            assert!(counts.check_retry_bound().is_err());
             break;
         }
-        no_grant::check_retry_bound(counts).unwrap();
+        counts.check_retry_bound().unwrap();
         let next = Uuid::new_v4();
         let session = Uuid::new_v4();
         let next_generation_value = u64::from(generation) + 1;

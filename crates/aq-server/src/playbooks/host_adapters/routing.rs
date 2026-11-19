@@ -54,9 +54,7 @@ impl RoutingPort for ServerRouting {
         let priors = replacement::load(&mut conn, task, started).await;
         let mut priors = priors.map_err(|_| Error::Unknown)?.unwrap_or_default();
         priors.retain(|p| !p.holds_task);
-        let limits = replacement::limits(&mut conn, &priors).await;
-        let limits = limits.map_err(|_| Error::Unknown)?;
-        let charged = aq_profiled_state::replacement::charged(&priors, &limits).0;
+        let charged = aq_profiled_state::replacement::charged(&priors).0;
         Ok((charged, u32::try_from(ended).unwrap_or(u32::MAX)))
     }
     async fn options(&self) -> Result<Options> {

@@ -1,122 +1,4 @@
 {
-  "batch_reply": {
-    "$defs": {
-      "Digest": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "ReceiptDisposition": {
-        "enum": [
-          "observation_recorded",
-          "suspension_recorded",
-          "checkpoint_recorded",
-          "parking_recorded",
-          "continuation_received",
-          "bootstrap_acknowledgment_recorded"
-        ],
-        "type": "string"
-      },
-      "RefusalReason": {
-        "description": "Why the server refused every record of one source in a batch.",
-        "oneOf": [
-          {
-            "const": "unknown_source",
-            "description": "The node has no such enrolled source.",
-            "type": "string"
-          },
-          {
-            "const": "binding",
-            "description": "The record's attempt binding is not the enrolled one, or the attempt\nmay no longer be observed.",
-            "type": "string"
-          },
-          {
-            "const": "provenance",
-            "description": "The record's session key is not the enrolled one.",
-            "type": "string"
-          },
-          {
-            "const": "parser",
-            "description": "The parser is not in the source's catalog entry.",
-            "type": "string"
-          },
-          {
-            "const": "control_shape",
-            "description": "A control parser on a record that is not a gap.",
-            "type": "string"
-          },
-          {
-            "const": "refused",
-            "description": "An earlier batch already refused this source.",
-            "type": "string"
-          }
-        ]
-      },
-      "RefusedSource": {
-        "additionalProperties": false,
-        "properties": {
-          "generation": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "reason": {
-            "$ref": "#/$defs/RefusalReason"
-          },
-          "source_id": {
-            "format": "uuid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "source_id",
-          "generation",
-          "reason"
-        ],
-        "type": "object"
-      }
-    },
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The batch route's reply: the unchanged CON03 receipt, plus the sources\nwhose records in this batch were refused. The receipt still covers the\nwhole batch, so one refused source never holds back the node sequence; the\nworker stops collecting each listed source. Without refusals the bytes are\nexactly the receipt's.",
-    "properties": {
-      "body_digest": {
-        "$ref": "#/$defs/Digest"
-      },
-      "disposition": {
-        "$ref": "#/$defs/ReceiptDisposition"
-      },
-      "message_id": {
-        "format": "uuid",
-        "type": "string"
-      },
-      "refused_sources": {
-        "items": {
-          "$ref": "#/$defs/RefusedSource"
-        },
-        "type": "array"
-      },
-      "schema_version": {
-        "format": "uint32",
-        "minimum": 0,
-        "type": "integer"
-      },
-      "through_sequence": {
-        "format": "uint64",
-        "minimum": 0,
-        "type": [
-          "integer",
-          "null"
-        ]
-      }
-    },
-    "required": [
-      "schema_version",
-      "message_id",
-      "body_digest",
-      "disposition"
-    ],
-    "title": "BatchReply",
-    "type": "object"
-  },
   "reply": {
     "$defs": {
       "Digest": {
@@ -171,8 +53,7 @@
         "additionalProperties": false,
         "properties": {
           "boot_transitions": {
-            "description": "Counts every boot advance. A node may restart without limit.",
-            "format": "uint64",
+            "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
@@ -482,8 +363,7 @@
         "additionalProperties": false,
         "properties": {
           "boot_transitions": {
-            "description": "Counts every boot advance. A node may restart without limit.",
-            "format": "uint64",
+            "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },

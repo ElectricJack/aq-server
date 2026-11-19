@@ -2,7 +2,6 @@
 //! decides one rung at a time from [`evidence::Evidence`]. aq-server's
 //! `stall::engine` persists each intent before its effect and runs it.
 pub mod evidence;
-pub mod freshness;
 pub mod ladder;
 pub mod policy;
 

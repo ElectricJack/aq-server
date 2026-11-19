@@ -297,7 +297,7 @@ pub(super) async fn read(
                 for hit in &group.hits {
                     if hit.r#ref.kind == SearchType::Session {
                         let id = hit.r#ref.id.parse().map_err(|_| Error::Restart)?;
-                        service::session(&state, &runtime, &user, id, &scope, None)
+                        service::session(&state, &runtime, &user, id, &scope)
                             .await
                             .map_err(|_| Error::AuthorizationChanged)?;
                     }
@@ -427,7 +427,7 @@ async fn collect(
                 service::membership(state, runtime, auth, scope, Resource::Sessions).await?;
             partial |= more || ids.len() > 32;
             for id in ids.into_iter().take(32) {
-                let s = service::session(state, runtime, user, id, scope, None)
+                let s = service::session(state, runtime, user, id, scope)
                     .await?
                     .summary;
                 let excerpt = format!("{} {}", s.authority, s.execution_authority);

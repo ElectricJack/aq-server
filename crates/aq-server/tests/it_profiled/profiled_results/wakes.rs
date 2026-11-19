@@ -187,10 +187,14 @@ async fn wake_schedules_continuation_on_other_node_when_original_offline() {
     assert_eq!(*node_id, second);
     assert_eq!(a.continuation, wait.continuation);
     // Budgets carry forward: the predecessor's attempt is already spent.
-    // The wake limits are the Selection defaults of Settings.
-    let limits = aq_profiles::roles::SelectionDefaults::default();
-    assert!(a.remaining.remaining_failure_retries < limits.max_wake_attempts);
-    assert!(a.remaining.remaining_elapsed_ms < limits.max_wake_lineage_elapsed_ms);
+    assert!(
+        a.remaining.remaining_failure_retries
+            < aq_server::profiled_execution::replacement::MAX_ATTEMPTS
+    );
+    assert!(
+        a.remaining.remaining_elapsed_ms
+            < aq_server::profiled_execution::replacement::MAX_LINEAGE_ELAPSED_MS
+    );
     assert_eq!(winner.differences["node"]["changed"], json!(true));
     let state: String = sqlx::query_scalar("SELECT state FROM agent_wait_wakes WHERE wait_id=$1")
         .bind(wait.wait.wait_id)
