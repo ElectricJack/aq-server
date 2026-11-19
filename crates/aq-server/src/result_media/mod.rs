@@ -3,7 +3,7 @@
 pub mod api;
 mod body;
 mod cleanup;
-pub mod config;
+pub use aq_result_media::config;
 mod db;
 mod files;
 mod processing;

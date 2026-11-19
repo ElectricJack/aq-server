@@ -31,6 +31,28 @@ pub(super) async fn offer(
         AppError::Conflict("git grant unavailable".into())
     })
 }
+/// Spec 0016 §5.1: a new result report's pushed ref is the attempt's task ref
+/// at its reported head; recorded for the report before the report itself.
+pub(super) async fn confirm(
+    state: &AppState,
+    node: Uuid,
+    report: &aq_admission::transport::ResultReport,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), AppError> {
+    use aq_delivery::git_grant::{PushedRefusal, confirm_headers};
+    let socket = state
+        .source_retention
+        .as_ref()
+        .map(|r| &r.config.git_socket);
+    let git = SocketGit::new(socket.cloned().unwrap_or_default());
+    let ids = (node, report.binding.attempt_id, report.report_id);
+    match confirm_headers(&state.store.pool, &git, ids, headers).await {
+        Ok(()) => Ok(()),
+        Err(PushedRefusal::BadRequest(why)) => Err(AppError::BadRequest(why.into())),
+        Err(PushedRefusal::Refused(why)) => Err(AppError::Conflict(why.into())),
+        Err(PushedRefusal::Unavailable) => Err(AppError::Maintenance("aq-git unavailable".into())),
+    }
+}
 pub fn routes(state: AppState) -> axum::Router<AppState> {
     let route = axum::routing::any(proxy);
     let routes = axum::Router::new().route("/v1/git/{repository}/{*path}", route);

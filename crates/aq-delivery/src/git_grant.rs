@@ -3,7 +3,8 @@
 //! through the server's `/v1/git/<repository>/…` route with its own node
 //! credential, naming the attempt in the `AQ-Attempt` header. This module
 //! builds the grant (the lease is the task ref's head from aq-git's
-//! `ref.show`), records it with the attempt, and forwards
+//! `ref.show`), records it with the attempt, confirms a result's pushed ref
+//! (spec 0016 §5.1), and forwards
 //! one git smart-HTTP request to aq-git's git socket with the grant headers
 //! the server sets. Client headers are never forwarded, except the few that
 //! describe the request body. The server itself refuses a push that updates
@@ -15,7 +16,9 @@ pub mod fake;
 #[cfg(test)]
 mod tests;
 
-use crate::commands::{GitFailure, GitTarget, SocketGit, object_id, task_branch};
+use crate::commands::{
+    GitFailure, GitTarget, SocketGit, TASK_BRANCH_PREFIX, object_id, task_branch,
+};
 use aq_admission::SourceAdmission;
 use bytes::{Bytes, BytesMut};
 use http::{Method, Request, Response, header};
@@ -162,12 +165,15 @@ pub async fn record_locked(
 }
 
 /// The recorded grant of `attempt` while the attempt still holds its task on
-/// `node`. The `/v1/git/grants/<attempt>` route serves it.
+/// `node` and has recorded no result: once a result names the task ref's
+/// head, the attempt cannot move it. The `/v1/git/grants/<attempt>` route
+/// serves it.
 pub async fn live(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Option<GitGrant>> {
     let row = sqlx::query(
         "SELECT g.repository_id,g.base,g.task_ref,g.lease,g.update_from_main \
          FROM delivery_git_grants g JOIN execution_attempts a USING(attempt_id) \
-         WHERE g.attempt_id=$1 AND a.node_id=$2 AND a.holds_task",
+         WHERE g.attempt_id=$1 AND a.node_id=$2 AND a.holds_task \
+         AND NOT EXISTS(SELECT 1 FROM profiled_result_reports r WHERE r.attempt_id=g.attempt_id)",
     )
     .bind(attempt)
     .bind(node)
@@ -180,6 +186,163 @@ pub async fn live(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Opti
         task_ref: row.get("task_ref"),
         lease: row.get("lease"),
         update_from_main: row.get("update_from_main"),
+    }))
+}
+
+/// What a result request says of the task branch (spec 0016 §5.2), beside
+/// the frozen report: it pushed the ref at a head (`AQ-Pushed-Ref`,
+/// `AQ-Pushed-Head`), or its lease no longer held (`AQ-Push-Conflict: true`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pushed {
+    At(PushedRef),
+    Conflict,
+}
+
+/// The task branch a result report names and the commit pushed to it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PushedRef {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub head: String,
+}
+
+impl Pushed {
+    /// The headers of a result request: both `AQ-Pushed-*`, or
+    /// `AQ-Push-Conflict: true`, or none of them.
+    pub fn from_headers(headers: &http::HeaderMap) -> Result<Option<Self>, PushedRefusal> {
+        let get = |name| headers.get(name).map(|v| v.to_str().map(str::to_owned));
+        let conflict = get("aq-push-conflict");
+        match (get("aq-pushed-ref"), get("aq-pushed-head"), conflict) {
+            (None, None, None) => Ok(None),
+            (Some(Ok(reference)), Some(Ok(head)), None) => {
+                Ok(Some(Self::At(PushedRef { reference, head })))
+            }
+            (None, None, Some(Ok(flag))) if flag == "true" => Ok(Some(Self::Conflict)),
+            _ => Err(PushedRefusal::BadRequest(
+                "send AQ-Pushed-Ref with AQ-Pushed-Head, or AQ-Push-Conflict: true, or none",
+            )),
+        }
+    }
+}
+
+/// Why a result report's pushed ref is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushedRefusal {
+    BadRequest(&'static str),
+    Refused(&'static str),
+    /// The database or aq-git is unavailable; the same report may be retried.
+    Unavailable,
+}
+
+/// Confirms and records what a new result report of `node`'s `attempt` says
+/// of its task branch. A pushed ref must be the attempt's granted task ref,
+/// and central aq-git's `ref.show` must have it at the reported head: the ref
+/// is the record of the result, and nothing else is retained. A push conflict
+/// must be a fact: the task ref is no longer at the grant's lease. A report
+/// already recorded is a replay, checked byte for byte by the result path,
+/// and is not asked again.
+pub async fn confirm_pushed(
+    pool: &PgPool,
+    git: &SocketGit,
+    (node, attempt, report): (Uuid, Uuid, Uuid),
+    pushed: &Pushed,
+) -> Result<(), PushedRefusal> {
+    let pushed_at = match pushed {
+        Pushed::At(at) => Some(at),
+        Pushed::Conflict => None,
+    };
+    if pushed_at
+        .is_some_and(|p| !p.reference.starts_with(TASK_BRANCH_PREFIX) || !object_id(&p.head))
+    {
+        return Err(PushedRefusal::BadRequest(
+            "AQ-Pushed-Ref must be a task branch at a commit",
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT g.repository_id,g.task_ref,g.lease,\
+         (l.execution_spec#>>'{source,repository_binding_generation}')::bigint AS generation,\
+         EXISTS(SELECT 1 FROM profiled_result_reports r WHERE r.report_id=$3) AS recorded \
+         FROM delivery_git_grants g JOIN execution_attempts a USING(attempt_id) \
+         JOIN profiled_launches l USING(attempt_id) WHERE g.attempt_id=$1 AND a.node_id=$2",
+    )
+    .bind(attempt)
+    .bind(node)
+    .bind(report)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| PushedRefusal::Unavailable)?;
+    let row = row.ok_or(PushedRefusal::Refused("the attempt has no git grant"))?;
+    if row.get::<bool, _>("recorded") {
+        return Ok(());
+    }
+    let task_ref: String = row.get("task_ref");
+    if pushed_at.is_some_and(|p| p.reference != task_ref) {
+        return Err(PushedRefusal::Refused(
+            "the pushed ref is not the attempt's task ref",
+        ));
+    }
+    let generation = row
+        .get::<Option<i64>, _>("generation")
+        .and_then(|g| u64::try_from(g).ok());
+    let target = GitTarget {
+        repository_id: row.get("repository_id"),
+        binding_generation: generation.ok_or(PushedRefusal::Unavailable)?,
+    };
+    let head = git.show_ref(&target, &task_ref).await;
+    let head = head.map_err(|_| PushedRefusal::Unavailable)?;
+    match pushed_at {
+        Some(p) if head.as_deref() != Some(p.head.as_str()) => {
+            return Err(PushedRefusal::Refused(
+                "the task ref is not at the reported head",
+            ));
+        }
+        None if head == row.get::<Option<String>, _>("lease") => {
+            return Err(PushedRefusal::Refused("the task ref is still at the lease"));
+        }
+        _ => {}
+    }
+    sqlx::query(
+        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
+         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
+    )
+    .bind(report)
+    .bind(attempt)
+    .bind(&task_ref)
+    .bind(pushed_at.map(|p| &p.head))
+    .execute(pool)
+    .await
+    .map_err(|_| PushedRefusal::Unavailable)?;
+    Ok(())
+}
+
+/// [`confirm_pushed`] of what a result request's headers name, if anything.
+pub async fn confirm_headers(
+    pool: &PgPool,
+    git: &SocketGit,
+    ids: (Uuid, Uuid, Uuid),
+    headers: &http::HeaderMap,
+) -> Result<(), PushedRefusal> {
+    match Pushed::from_headers(headers)? {
+        Some(pushed) => confirm_pushed(pool, git, ids, &pushed).await,
+        None => Ok(()),
+    }
+}
+
+/// The confirmed pushed ref of a recorded report, if it named one (a push
+/// conflict names no head).
+pub async fn pushed_of(
+    db: impl sqlx::PgExecutor<'_>,
+    report: Uuid,
+) -> sqlx::Result<Option<PushedRef>> {
+    let row = sqlx::query(
+        "SELECT task_ref,head FROM delivery_pushed_results WHERE report_id=$1 AND head IS NOT NULL",
+    )
+    .bind(report)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|row| PushedRef {
+        reference: row.get("task_ref"),
+        head: row.get("head"),
     }))
 }
 

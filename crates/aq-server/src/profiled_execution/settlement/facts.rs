@@ -40,6 +40,20 @@ pub(super) async fn gather_locked(
     .await?;
     // The exact retained source is the central receipt pinned by this report.
     let (mut source, mut lineage_unknown) = (None, false);
+    // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
+    // head when the report was recorded; the report id keys its evidence.
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
+        .await
+        .map_err(db)?
+    {
+        let start = &r.spec.source.resolved_object.hex;
+        let base = aq_machine_control::lineage_base(tx, r.spec.task.task_id, start).await?;
+        lineage_unknown = base.is_none();
+        let changed = base.is_none_or(|base| pushed.head != base);
+        source = Some((r.report.report_id, pushed.head, changed));
+    }
+    #[cfg(not(feature = "delivery_playbook"))]
     for op in &r.report.source_receipt_ids {
         match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
             Ok(confirmed) => {
