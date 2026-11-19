@@ -1,5 +1,6 @@
 //! Exact parser/history dispatch. A selected parser never authenticates an owner.
 use crate::error::AppError;
+use aq_admission::preparation_family::{Family, family};
 use aq_admission::{ArtifactRef, preparation_refresh_v1 as refresh, preparation_v2 as frozen};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
@@ -19,56 +20,26 @@ fn malformed() -> AppError {
     AppError::BadRequest("invalid phase preparation document".into())
 }
 impl Profile {
-    pub(super) fn for_contract(contract: &ArtifactRef) -> Result<Self, AppError> {
-        if *contract == frozen::contract_artifact().map_err(|_| refused())?
-            || *contract == frozen::long_contract_artifact().map_err(|_| refused())?
-        {
-            Ok(Self::Frozen)
-        } else if *contract == refresh::contract_artifact().map_err(|_| refused())?
-            || *contract == refresh::long_contract_artifact().map_err(|_| refused())?
-        {
-            Ok(Self::Refresh)
-        } else {
-            Err(refused())
+    /// `exact` is false only for a proposal already recorded (see `family`).
+    pub(super) fn for_contract(contract: &ArtifactRef, exact: bool) -> Result<Self, AppError> {
+        match family(contract, exact) {
+            Some(Family::Frozen) => Ok(Self::Frozen),
+            Some(Family::Refresh) => Ok(Self::Refresh),
+            None => Err(refused()),
         }
     }
-    /// The profile of a proposal already recorded: matched by contract id and version, so
-    /// an attempt recorded under an earlier digest of the same contract stays readable.
-    /// The long contracts changed digest when their lease ceiling was removed (migration
-    /// 0149 keys the SQL owners on the id the same way). New documents use `for_contract`.
-    fn for_recorded_contract(contract: &ArtifactRef) -> Result<Self, AppError> {
-        let same =
-            |known: ArtifactRef| known.id == contract.id && known.version == contract.version;
-        if same(frozen::contract_artifact().map_err(|_| refused())?)
-            || same(frozen::long_contract_artifact().map_err(|_| refused())?)
-        {
-            Ok(Self::Frozen)
-        } else if same(refresh::contract_artifact().map_err(|_| refused())?)
-            || same(refresh::long_contract_artifact().map_err(|_| refused())?)
-        {
-            Ok(Self::Refresh)
-        } else {
-            Err(refused())
-        }
-    }
-    fn from_recorded_proposal(value: &Value) -> Result<Self, AppError> {
+    pub(super) fn from_proposal(value: &Value, exact: bool) -> Result<Self, AppError> {
         let contract: ArtifactRef =
             serde_json::from_value(value["negotiation"]["contract"].clone())
                 .map_err(|_| malformed())?;
-        Self::for_recorded_contract(&contract)
-    }
-    pub(super) fn from_proposal(value: &Value) -> Result<Self, AppError> {
-        let contract: ArtifactRef =
-            serde_json::from_value(value["negotiation"]["contract"].clone())
-                .map_err(|_| malformed())?;
-        Self::for_contract(&contract)
+        Self::for_contract(&contract, exact)
     }
     fn from_document(bytes: &[u8]) -> Result<Self, AppError> {
         if bytes.len() > frozen::MAX_BYTES {
             return Err(AppError::PayloadTooLarge("phase document bound".into()));
         }
         let value: Value = serde_json::from_slice(bytes).map_err(|_| malformed())?;
-        Self::from_proposal(&value["body"])
+        Self::from_proposal(&value["body"], true)
     }
 }
 
@@ -83,7 +54,7 @@ pub(super) fn decode_proposal(bytes: &[u8]) -> Result<ProposalRequest, AppError>
     let value: Value = serde_json::from_slice(bytes).map_err(|_| malformed())?;
     // The header only chooses the strict full decoder below. In particular it
     // cannot discard duplicate/unknown fields before authoritative validation.
-    match Profile::from_proposal(&value)? {
+    match Profile::from_proposal(&value, true)? {
         Profile::Frozen => {
             let request: super::accepted_preparation::ProposalRequest =
                 serde_json::from_slice(bytes).map_err(|_| malformed())?;
@@ -152,7 +123,7 @@ pub(super) async fn for_attempt_locked(
     .map_err(|_| AppError::Internal)?;
     value
         .as_ref()
-        .map(Profile::from_recorded_proposal)
+        .map(|v| Profile::from_proposal(v, false))
         .transpose()
 }
 
@@ -160,22 +131,6 @@ pub(super) async fn for_attempt_locked(
 mod tests {
     use super::*;
     use serde_json::json;
-    #[test]
-    fn a_recorded_proposal_under_an_earlier_digest_of_its_contract_is_still_read() {
-        let mut earlier = refresh::long_contract_artifact().unwrap();
-        earlier.digest = aq_admission::Digest::of(b"an earlier long schema");
-        let recorded = json!({"negotiation": {"contract": earlier}});
-        assert_eq!(
-            Profile::from_recorded_proposal(&recorded).unwrap(),
-            Profile::Refresh
-        );
-        // A new document must still name the exact current contract.
-        assert!(Profile::from_proposal(&recorded).is_err());
-        // Another contract id is refused either way.
-        earlier.id = aq_admission::Text::new("aq.admission.unknown-contract").unwrap();
-        let other = json!({"negotiation": {"contract": earlier}});
-        assert!(Profile::from_recorded_proposal(&other).is_err());
-    }
     fn fixture(refresh: bool) -> Value {
         if refresh {
             serde_json::from_str::<Value>(include_str!(
