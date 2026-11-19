@@ -7,7 +7,7 @@ use crate::dashboard_api::{
     errors::ApiError,
 };
 use crate::profiled_execution::replacement;
-use aq_human_work::Execution;
+use aq_human_work::TaskRetry as Retry;
 use async_trait::async_trait;
 
 pub(crate) struct TaskRetry(Arc<ReadRuntime>);
@@ -27,7 +27,7 @@ async fn authorize(
     runtime: &ReadRuntime,
     user: &User,
     request: &ActionRequest,
-    p: &Execution,
+    p: &Retry,
 ) -> std::result::Result<Scope, ApiError> {
     admit(
         state,
@@ -45,7 +45,8 @@ async fn authorize(
     // quarantine, a changed project binding, ...) cannot take effect, so it is refused with the
     // hold and what the owner can do, before anything is admitted. A budget hold is not refused:
     // the retry is the owner's explicit decision and overrides it (owner decision 2026-11-18).
-    // A replay of an admitted operation keeps its outcome.
+    // A fresh retry (2026-11-19) is for a changed project binding alone. A replay of an
+    // admitted operation keeps its outcome.
     if !actions::journal::admitted(&state.store.pool, p.operation_id).await? {
         let task: Uuid = request
             .subject
@@ -54,8 +55,7 @@ async fn authorize(
             .map_err(|_| ApiError::invalid())?;
         let revision = crate::project_bindings::current(state, p.project_id).await?;
         let held = replacement::retry_hold(state, task, now(state)?, revision.revision).await?;
-        if let Some(code) = held.filter(|c| !aq_machine_control::holds::is_budget_hold(c)) {
-            let message = aq_machine_control::holds::retry_refusal(code);
+        if let Some((code, message)) = aq_machine_control::fresh::refusal(p.fresh, held) {
             let status = axum::http::StatusCode::UNPROCESSABLE_ENTITY;
             return Err(ApiError::new(status, code, "").with_message(&message));
         }
@@ -76,7 +76,7 @@ async fn fresh(
     runtime: &ReadRuntime,
     user: &User,
     request: &ActionRequest,
-    p: &Execution,
+    p: &Retry,
 ) -> Result<std::result::Result<(Uuid, Value, u64, Uuid), Outcome>> {
     let task: Uuid = request.subject.id.parse().map_err(|_| invalid())?;
     let expected = graph_actions::version(&p.expected_version).ok_or_else(invalid)?;
@@ -105,10 +105,45 @@ async fn fresh(
 fn rejected() -> Outcome {
     existing::disposition(actions::Disposition::Rejected)
 }
+/// A fresh retry (owner decision 2026-11-19) of a task held because the project binding
+/// changed: the held attempt is released as for a replacement, and the task's next attempt is a
+/// first attempt from the project's current source. Its earlier results stay retained.
+async fn fresh_start(
+    state: &AppState,
+    user: &User,
+    request: &ActionRequest,
+    p: &Retry,
+    (task, revision): (Uuid, u64),
+    assessment: replacement::Assessment,
+) -> std::result::Result<Outcome, AppError> {
+    use aq_machine_control::fresh;
+    if !matches!(assessment, replacement::Assessment::Blocked(c) if c == fresh::HOLD) {
+        return Ok(Outcome::refused("fresh_retry_not_applicable"));
+    }
+    let now = now(state)?;
+    let replacement::Assessment::Replace(r) = replacement::assess_task(state, task, now).await?
+    else {
+        return Ok(rejected());
+    };
+    let reason = request.reason.as_deref().map(str::trim);
+    let f = fresh::FreshStart {
+        operation_id: p.operation_id,
+        reason: reason.filter(|r| !r.is_empty()).unwrap_or(NO_REASON).into(),
+        actor: user.email.clone(),
+        recorded_at_ms: i64::try_from(now).map_err(|_| AppError::Internal)?,
+        project_revision: revision,
+    };
+    replacement::release_as(state, task, &r, Some(&f)).await?;
+    fresh::post(&state.store.pool, p.project_id, task, &f, (state.clock)()).await;
+    Ok(Outcome::confirmed(
+        vec![existing::entity("replacement_release", r.predecessor, None)],
+        vec![existing::entity("execution_attempt", r.predecessor, None)],
+    ))
+}
 
 #[async_trait]
 impl ActionKind for TaskRetry {
-    type Payload = Execution;
+    type Payload = Retry;
     const KIND: &'static str = "task.retry";
     const GRANT: &'static str = "task.retry";
     const TARGET: aq_command_registry::TargetRule = aq_command_registry::TargetRule::Subject;
@@ -117,7 +152,7 @@ impl ActionKind for TaskRetry {
         state: &AppState,
         user: &User,
         request: &ActionRequest,
-        p: &Execution,
+        p: &Retry,
     ) -> std::result::Result<Scope, ApiError> {
         authorize(state, &self.0, user, request, p).await
     }
@@ -135,7 +170,7 @@ impl ActionKind for TaskRetry {
         state: &AppState,
         user: &User,
         request: &ActionRequest,
-        p: Execution,
+        p: Retry,
     ) -> Outcome {
         let run = async {
             let (task, raw, revision, workspace) =
@@ -153,6 +188,9 @@ impl ActionKind for TaskRetry {
             let now = now(state)?;
             let mut assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
+            if p.fresh {
+                return fresh_start(state, user, request, &p, (task, revision), assessment).await;
+            }
             let recorded = holds::current(&state.store.pool, p.project_id, task).await;
             let recorded = recorded.map_err(|_| AppError::Internal)?;
             let limit = match assessment {

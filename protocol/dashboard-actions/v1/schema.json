@@ -2269,10 +2269,14 @@
               "$id": "urn:aq:dashboard-actions:1:task.retry:payload",
               "$schema": "https://json-schema.org/draft/2020-12/schema",
               "additionalProperties": false,
+              "description": "`task.retry`: the owner releases a settled attempt for a replacement attempt. With `fresh`\nthe task instead starts from the project's current pinned source under the current binding,\na first attempt rather than a replacement; only for a task held by\n`replacement_project_revision_changed`.",
               "properties": {
                 "expected_version": {
                   "pattern": "^[1-9][0-9]{0,18}$",
                   "type": "string"
+                },
+                "fresh": {
+                  "type": "boolean"
                 },
                 "operation_id": {
                   "format": "uuid",
@@ -2288,7 +2292,7 @@
                 "project_id",
                 "expected_version"
               ],
-              "title": "Execution",
+              "title": "TaskRetry",
               "type": "object"
             }
           },
