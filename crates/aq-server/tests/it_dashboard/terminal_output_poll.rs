@@ -222,6 +222,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
             expected_session_revision: 1,
             expires_at_ms,
             bytes: b"PRIVATE_INPUT_SENTINEL".to_vec(),
+            escape_key: false,
         });
         let response = aq_server::build_admin_router(f.state.clone())
             .oneshot(
@@ -260,6 +261,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
             expected_session_revision: 1,
             expires_at_ms: NOW + 2000,
             bytes: b"unexecuted fixture input".to_vec(),
+            escape_key: false,
         }),
     )
     .await

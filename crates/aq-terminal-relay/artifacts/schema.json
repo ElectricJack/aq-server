@@ -673,6 +673,9 @@
           "format": "uint64",
           "minimum": 0
         },
+        "escape_key": {
+          "type": "boolean"
+        },
         "issued_at_ms": {
           "type": "integer",
           "format": "uint64",
@@ -752,6 +755,9 @@
           },
           "maxItems": 4096,
           "minItems": 1
+        },
+        "escape_key": {
+          "type": "boolean"
         },
         "expected_controller_generation": {
           "type": "integer",

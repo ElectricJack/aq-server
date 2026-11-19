@@ -197,6 +197,9 @@
           "minItems": 1,
           "type": "array"
         },
+        "escape_key": {
+          "type": "boolean"
+        },
         "expected_controller_generation": {
           "format": "uint64",
           "minimum": 1,

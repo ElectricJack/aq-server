@@ -602,6 +602,7 @@ impl Ledger {
             issued_at_ms: now,
             deadline_ms: r.expires_at_ms,
             bytes: r.bytes.clone(),
+            escape_key: r.escape_key,
         };
         valid(&command)?;
         let pending: usize = self
@@ -676,6 +677,9 @@ impl Ledger {
         }
         let input = self.inputs.get(&id).ok_or(Error::Stale)?;
         let c = input.command.as_ref().ok_or(Error::Transition)?;
+        if !complete_terminal_input(&c.bytes, c.escape_key) {
+            return Err(Error::Transition);
+        }
         self.auth(a, &c.lease.terminal, self.session_revision, true, now)?;
         self.active(a, c.lease.lease_id, c.lease.generation, now)?;
         if now >= input.deadline_ms
@@ -764,6 +768,13 @@ impl Ledger {
                 } else {
                     InputDisposition::Expired
                 };
+            } else if !input.dispatched
+                && input.command.as_ref().is_some_and(|command| {
+                    !complete_terminal_input(&command.bytes, command.escape_key)
+                })
+            {
+                input.command = None;
+                input.disposition = InputDisposition::Rejected;
             }
         }
         n.viewers.retain(|_, v| now < v.expires_at_ms);
@@ -917,7 +928,7 @@ impl Ledger {
                 return Err(Error::Invalid);
             }
             if let Some(c) = &input.command {
-                valid(c)?;
+                c.validate_envelope().map_err(|_| Error::Invalid)?;
                 if c.operation_id != *id
                     || c.lease.terminal != self.terminal
                     || digest(c)? != input.command_digest
