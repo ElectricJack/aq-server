@@ -118,7 +118,7 @@ async fn actual_origin_records_replays_reads_and_never_accepts_or_releases() {
     assert_eq!(before, invariant(&f).await);
     assert!(before["held"].as_bool().unwrap());
 }
-/// Format 148: the SQL origin owner keys on the admission contract id. A
+/// Format 149: the SQL origin owner keys on the admission contract id. A
 /// proposal recorded under an earlier digest of a known id stays valid; an
 /// unknown id, or the other profile's id, does not.
 #[tokio::test]

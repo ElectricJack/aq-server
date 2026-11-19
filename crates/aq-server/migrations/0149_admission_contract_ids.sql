@@ -151,4 +151,4 @@ BEGIN
  RETURN QUERY SELECT raw,hashed,TRUE;
 END $$;
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='148' WHERE key='state_format_version';
+UPDATE meta SET value='149' WHERE key='state_format_version';

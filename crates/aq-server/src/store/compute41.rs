@@ -9,10 +9,10 @@ pub(super) fn function_body(name: &str) -> Result<&'static str> {
     let sql = include_str!("../../migrations/0041_native_compute_occupancy.sql");
     aq_profiled_state::sql_function_body(sql, name).ok_or_else(corrupt)
 }
-const IDS: &str = include_str!("../../migrations/0148_admission_contract_ids.sql");
-/// Format 148 redefines the two admission-contract owners to key on the contract id.
+const IDS: &str = include_str!("../../migrations/0149_admission_contract_ids.sql");
+/// Format 149 redefines the two admission-contract owners to key on the contract id.
 pub(super) fn contract_ids(supported: u32, name: &str) -> Option<&'static str> {
-    (supported >= 148).then(|| aq_profiled_state::sql_function_body(IDS, name))?
+    (supported >= 149).then(|| aq_profiled_state::sql_function_body(IDS, name))?
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
     for (name, signature, language, volatility, result) in [
