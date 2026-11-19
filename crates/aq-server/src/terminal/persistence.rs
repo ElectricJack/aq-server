@@ -116,6 +116,15 @@ pub async fn authorize(
     actor: Uuid,
     right: Right,
 ) -> Result<Access> {
+    if matches!(right, Right::Control | Right::Both)
+        && !aq_swarm_settings::terminal_input(&mut **tx)
+            .await
+            .map_err(|_| AppError::Internal)?
+    {
+        return Err(AppError::Forbidden(
+            "Terminal input is disabled in Settings".into(),
+        ));
+    }
     let scopes = scopes(state, tx, view, terminal, actor).await?;
     match right {
         Right::Inspect => scopes.inspect,

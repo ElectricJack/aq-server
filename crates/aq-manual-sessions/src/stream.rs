@@ -205,6 +205,7 @@ async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socke
           Message::Text(text)=>{let Ok(v)=serde_json::from_str::<Value>(&text) else{break};let (Some(c),Some(r))=(v["columns"].as_u64(),v["rows"].as_u64()) else{break};if v["kind"]!="resize"||c>500||r>300||!dimensions(c as u16,r as u16){break;}json!({"kind":"resize","columns":c,"rows":r})},
           Message::Close(_)=>break,Message::Ping(_)|Message::Pong(_)=>continue,_=>break};
           let rt=s.runtime.0.lock().await;let Some(screen)=rt.get(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}
+          if payload["kind"]=="input" && !aq_swarm_settings::terminal_input(&s.pool).await.unwrap_or(false){continue;}
           let mut payload=payload;payload["connection_id"]=json!(connection);payload["generation"]=json!(a.generation);if relay.tx.try_send(payload).is_err(){break;}
          }
          _=tick.tick()=>{input_bytes=0;if (s.owner)(headers.clone()).await.ok()!=Some(actor)||!permitted(&s,id).await{break;}let mut rt=s.runtime.0.lock().await;let Some(screen)=rt.get_mut(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}screen.controller=Some((a.client_id,actor,now()+15000));drop(rt);if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))){break;}}

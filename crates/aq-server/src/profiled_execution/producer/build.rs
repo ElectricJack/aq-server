@@ -615,7 +615,11 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         terminal: wire::TerminalPolicy {
             host: wire::TerminalHost::Tmux,
             input_enabled: super::result_startup::for_adapter(state, &selected.choice.adapter)?
-                .is_some_and(|reporting| reporting.interactive),
+                .is_some_and(|r| r.interactive)
+                && (selected.choice.harness != "claude"
+                    || aq_swarm_settings::terminal_input(&state.store.pool)
+                        .await
+                        .map_err(|_| AppError::Internal)?),
             max_input_bytes: 4096,
             max_pending_input_bytes: 32768,
             max_frame_bytes: 65536,

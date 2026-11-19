@@ -6,6 +6,6 @@ publish = false
 description = "C4 environment templates: the allowlist and resolving an environment to one image digest"
 
 [dependencies]
-aq-admission = { path = "../aq-admission", version = "=0.1.12" }
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 serde.workspace = true
 serde_json.workspace = true

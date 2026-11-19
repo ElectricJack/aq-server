@@ -10,6 +10,7 @@ pub mod internal;
 mod journal;
 pub mod service;
 pub mod subscription;
+mod terminal;
 pub mod tool;
 mod verifier;
 use anyhow::{Context, Result, bail, ensure};

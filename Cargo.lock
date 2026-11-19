@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "aq-admission"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aq-lifecycle-protocol",
  "aq-session-protocol",
@@ -224,7 +224,7 @@ name = "aq-dashboard-contract"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-lifecycle-api",
  "schemars",
  "semver",
@@ -257,7 +257,7 @@ dependencies = [
 name = "aq-environment-templates"
 version = "0.1.0"
 dependencies = [
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "serde",
  "serde_json",
 ]
@@ -469,7 +469,7 @@ dependencies = [
 name = "aq-phase-terminal-protocol"
 version = "0.1.2"
 dependencies = [
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-session-protocol",
  "schemars",
  "serde",
@@ -704,6 +704,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-result-startup"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.1.13",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aq-review-protocol"
 version = "0.1.0"
 dependencies = [
@@ -773,7 +783,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aq-accounting",
- "aq-admission 0.1.12",
+ "aq-admission 0.1.13",
  "aq-admission 0.3.3",
  "aq-agent-api",
  "aq-agent-grants",
@@ -806,6 +816,7 @@ dependencies = [
  "aq-provider-quota",
  "aq-release",
  "aq-result-media",
+ "aq-result-startup",
  "aq-review-protocol",
  "aq-role-settings",
  "aq-routing",
@@ -2445,9 +2456,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lru-slab"
@@ -4245,9 +4256,9 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "uuid"
-version = "1.29.0"
+version = "1.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
+checksum = "4a06f08a856b009bc7bbaf7d3e79808595d032dd19074c0c2ef26e49e03e6bdc"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",

@@ -143,7 +143,11 @@ impl ActionKind for SendMessage {
             return Outcome::unknown();
         };
         let bytes = Bytes::from(serde_json::to_vec(&payload).expect("typed enqueue"));
-        match enqueue_domain(state, &self.0, user, id, bytes).await {
+        let at = match stamp(state) {
+            Ok(at) => at,
+            Err(e) => return existing::failure(e),
+        };
+        match enqueue_domain(at, &self.0, user, id, bytes, None).await {
             Ok(r) => result(r),
             Err(e) => existing::failure(e),
         }

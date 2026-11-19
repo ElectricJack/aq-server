@@ -191,8 +191,14 @@ pub async fn set_limits(
     if settings.revision != request.expected_revision {
         return Err(conflict("Swarm settings changed; reload before saving"));
     }
-    if request.provider.is_none() && request.cell.is_none() {
+    if request.provider.is_none()
+        && request.cell.is_none()
+        && request.terminal_input_enabled.is_none()
+    {
         return Err(invalid("Select a provider or intelligence class limit"));
+    }
+    if let Some(enabled) = request.terminal_input_enabled {
+        settings.limits.terminal_input_enabled = enabled;
     }
     if let Some(provider) = request.provider {
         if !levels.iter().any(|c| c.provider == provider.provider) {

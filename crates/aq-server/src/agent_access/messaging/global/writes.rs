@@ -217,25 +217,43 @@ pub(super) async fn enqueue_historical_fixture(
     id: Uuid,
     bytes: Bytes,
 ) -> Result<Response> {
-    enqueue_domain(state, &Service::new(state), user, id, bytes)
+    enqueue_domain(stamp(state)?, &Service::new(state), user, id, bytes, None)
         .await
         .map(Receipt::outcome)
 }
 
 async fn enqueue_domain(
-    state: &AppState,
+    at: u64,
     service: &Service,
     user: &User,
     id: Uuid,
     bytes: Bytes,
+    terminal: Option<&aq_central_authority::CentralPlan>,
 ) -> Result<Receipt> {
     let request = Create::parse(&bytes)?;
     if id.is_nil() {
         return Err(invalid());
     }
-    let at = stamp(state)?;
     let mut tx = service.tx().await?;
     owner(&mut tx, user).await?;
+    if let Some(plan) = terminal {
+        let state: String = sqlx::query_scalar("SELECT g.state_bytes FROM central_session_generations g JOIN central_session_heads h USING(actor_id) WHERE g.actor_id=$1 AND g.generation=$2 AND g.session_id=$3 AND h.current_generation=g.generation AND h.conversation_id=$4 FOR SHARE OF g,h")
+            .bind(plan.subject.actor_id()).bind(plan.generation as i64).bind(dispatch::session_id(plan).ok_or_else(conflict)?).bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(conflict)?;
+        let aq_central_authority::Document::State(run) =
+            aq_central_authority::decode(state.as_bytes()).map_err(|_| conflict())?
+        else {
+            return Err(conflict());
+        };
+        if run.plan() != plan
+            || !matches!(
+                run.phase(),
+                aq_central_authority::Phase::StartCommitted
+                    | aq_central_authority::Phase::RunningReported
+            )
+        {
+            return Err(conflict());
+        }
+    }
     let conversation = definition(&mut tx, Some(id), true).await?;
     let sender = author(user.id);
     let sender_key = sender_key(&sender).map_err(|_| unavailable())?;
@@ -334,6 +352,28 @@ async fn enqueue_domain(
     .map_err(|_| unavailable())?;
     tx.commit().await.map_err(db)?;
     Ok(result)
+}
+/// The guardian-owned supervisor wrapper submits complete terminal lines through
+/// the ordinary owner mailbox writer, fenced atomically to its current turn.
+pub async fn terminal_message(
+    pool: &PgPool,
+    user: &User,
+    plan: &aq_central_authority::CentralPlan,
+    text: &str,
+    at: u64,
+) -> Result<Uuid> {
+    let id = plan.subject.conversation_id();
+    let message = Uuid::new_v4();
+    let bytes = serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"message_id":message,"expected_conversation_revision":"1","body":text,"context":[],"attachments":[]})).map_err(|_| invalid())?;
+    let service = Service {
+        pool: pool.clone(),
+        gate: Semaphore::new(1),
+    };
+    let receipt = enqueue_domain(at, &service, user, id, bytes.into(), Some(plan)).await?;
+    if receipt.state != "queued" {
+        return Err(conflict());
+    }
+    Ok(message)
 }
 /// Spec 0012 §8: AQ itself tells a supervisor, through the same mailbox
 /// append and retained-capacity charge as an owner's message, so the next

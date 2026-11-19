@@ -502,3 +502,27 @@ async fn independent_limits_require_current_supervisor_admission_marker() {
         .unwrap();
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn terminal_input_is_owner_controlled_revisioned_and_preserves_limits() {
+    let (_db, app, pool, initial) = installed().await;
+    assert_eq!(initial["terminal_input_enabled"], true);
+    let path = "/api/settings/swarm/limits";
+    let request = json!({"operation_id":Uuid::new_v4(),"expected_revision":initial["revision"],"terminal_input_enabled":false});
+    let (status, saved) = call(&app, path, Some(request.clone()), true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["terminal_input_enabled"], false);
+    assert_eq!(saved["provider_limits"], initial["provider_limits"]);
+    assert_eq!(saved["cell_limits"], initial["cell_limits"]);
+    assert!(!aq_swarm_settings::terminal_input(&pool).await.unwrap());
+    assert_eq!(call(&app, path, Some(request.clone()), true).await.1, saved);
+    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":initial["revision"],"terminal_input_enabled":true});
+    assert_eq!(
+        call(&app, path, Some(stale), true).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(&app, path, Some(request), false).await.0,
+        StatusCode::FORBIDDEN
+    );
+}

@@ -120,7 +120,9 @@ pub async fn retain(
         });
     }
     if let Some(reporting) = &prepared.reporting {
-        reporting.validate_rendered(reports, &counted.bytes)?;
+        reporting
+            .validate_rendered(reports, &counted.bytes)
+            .map_err(|_| refused())?;
     }
     if tasks != 1 || reconstructed != counted.bytes {
         return Err(refused());

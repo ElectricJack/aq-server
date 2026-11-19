@@ -654,7 +654,15 @@ async fn start_turn(
     let turn = dispatch::prepare_turn(pool, ctl.actor, reservation, generation, session, now())
         .await
         .map_err(api_error)?;
-    let candidate = plan::assemble(config, ctl, policy, generation, session, turn)?;
+    let candidate = plan::assemble(
+        config,
+        ctl,
+        policy,
+        generation,
+        session,
+        turn,
+        aq_swarm_settings::terminal_input(pool).await?,
+    )?;
     plan::install(config, &candidate)?;
     let (_, host) = installed(config)?.context("installed supervisor turn missing")?;
     let state = host

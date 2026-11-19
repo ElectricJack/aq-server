@@ -488,8 +488,8 @@ mod long_phase_manifest {
         let mut input = with(&[container]);
         input.terminal.input_enabled = true;
         assert!(
-            long().validate_for_manifest(&input).is_err(),
-            "terminal input"
+            long().validate_for_manifest(&input).is_ok(),
+            "owner message input uses the same container boundary"
         );
         let mut other = with(&[container]);
         other.harness.cli_version = Text::new("2.1.319").unwrap();

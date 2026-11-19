@@ -25,6 +25,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 pub(crate) use writes::action::SendMessage;
 pub(crate) use writes::system_message;
+pub use writes::terminal_message;
 type Result<T> = std::result::Result<T, AppError>;
 const CONTRACT: &str = "human-supervisor-conversation-1";
 pub(super) const MAX_OPERATIONS: i64 = 4096;

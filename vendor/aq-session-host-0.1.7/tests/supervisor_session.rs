@@ -94,7 +94,7 @@ fn supervisor_session_contract_and_v1_validation() {
         assert!(!text.contains(forbidden));
     }
     for (field, value) in [
-        ("host_plan_version", serde_json::json!(2)),
+        ("host_plan_version", serde_json::json!(3)),
         ("extra", serde_json::json!(1)),
         ("task_id", serde_json::json!(Uuid::new_v4())),
     ] {
@@ -106,6 +106,8 @@ fn supervisor_session_contract_and_v1_validation() {
     let mut changed = p.clone();
     changed.terminal.input_enabled = true;
     assert!(changed.validate().is_err());
+    changed.host_plan_version = 2;
+    changed.validate().unwrap();
     let mut changed = p.clone();
     changed.deadline_boot_ms += 1;
     assert!(changed.validate().is_err());

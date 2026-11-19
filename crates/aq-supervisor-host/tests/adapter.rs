@@ -67,7 +67,7 @@ fn native_recipe_uses_scoped_route_stdin_and_no_provider_material() {
             },
             12345
         )
-        .is_err()
+        .is_ok()
     );
 }
 

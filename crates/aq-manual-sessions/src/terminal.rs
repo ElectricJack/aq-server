@@ -158,6 +158,16 @@ async fn input(
     Json(v): Json<Input>,
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
+    if v.bytes.is_some()
+        && !aq_swarm_settings::terminal_input(&s.pool)
+            .await
+            .unwrap_or(false)
+    {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "Terminal input is disabled in Settings",
+        ));
+    }
     valid_id(v.operation_id)?;
     if !live(&session(&s, id).await?) {
         return Err(conflict("The agent is not connected"));

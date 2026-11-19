@@ -149,7 +149,7 @@ impl PhasePolicy {
                 && manifest.harness.cli_version.as_str() == "0.166.0"
                 && manifest.harness.adapter.id.as_str() == "aq.codex-result-local-adapter";
             // MS1: Claude Code 2.1.318 driven in a docker-local sandbox; no
-            // terminal input, container confinement.
+            // owner message input (or one-shot), container confinement.
             let declares = |id: &str| {
                 manifest
                     .harness
@@ -157,8 +157,7 @@ impl PhasePolicy {
                     .iter()
                     .any(|c| c.id.as_str() == id && c.version == 1)
             };
-            let claude = !manifest.terminal.input_enabled
-                && manifest.harness.harness.as_str() == "claude"
+            let claude = manifest.harness.harness.as_str() == "claude"
                 && manifest.harness.cli_version.as_str() == "2.1.318"
                 && manifest.harness.adapter.id.as_str() == "aq.claude-result-local-adapter"
                 && declares(aq_session_protocol::CONTAINER_CONFINEMENT_CAPABILITY)

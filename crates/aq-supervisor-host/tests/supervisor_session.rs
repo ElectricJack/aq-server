@@ -1313,9 +1313,57 @@ async fn owner_message_reaches_supervisor_and_reply_is_recorded() {
         expected.push(id);
     }
     assert_history_pages_exactly(&owner_app, &messages, &as_owner, &expected).await;
+    // A terminal line is retained as ordinary owner mail for the next turn.
+    let typed = conversation::terminal_message(
+        &case.pool,
+        &user,
+        started.run.plan(),
+        "Terminal follow-up",
+        1_000_001,
+    )
+    .await
+    .unwrap();
+    let retained: (String, bool) = sqlx::query_as("SELECT body,central_global_mail_source_valid(message_id) FROM mailbox_messages WHERE message_id=$1").bind(typed).fetch_one(&case.pool).await.unwrap();
+    assert_eq!(retained, ("Terminal follow-up".into(), true));
+    assert_eq!(
+        std::fs::read(&staged_input).unwrap(),
+        turn.input,
+        "the current startup remains immutable"
+    );
+    let mut stale = started.run.plan().clone();
+    stale.generation += 1;
+    assert!(
+        conversation::terminal_message(&case.pool, &user, &stale, "wrong generation", 1_000_002)
+            .await
+            .is_err()
+    );
+    let mut stranger = user.clone();
+    stranger.id = Uuid::new_v4();
+    assert!(
+        conversation::terminal_message(
+            &case.pool,
+            &stranger,
+            started.run.plan(),
+            "not an owner",
+            1_000_002
+        )
+        .await
+        .is_err()
+    );
     // 9. Stopping the generation ends the credential and the live capability.
     let stopped = host.stop(actor).await.unwrap();
     assert_eq!(stopped.run.phase(), Phase::StoppedReported);
+    assert!(
+        conversation::terminal_message(
+            &case.pool,
+            &user,
+            started.run.plan(),
+            "too late",
+            1_000_003
+        )
+        .await
+        .is_err()
+    );
     assert!(host.enable_replies(actor, 1_000_000).await.is_err());
     assert!(!dispatch::live(&case.pool).await);
     let late = json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"dispatch_id":turn.dispatch_id,"body":"too late"}).to_string();

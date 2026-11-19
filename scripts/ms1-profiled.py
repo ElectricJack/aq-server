@@ -57,7 +57,7 @@ HARNESS = "claude"
 CLI_VERSION = "2.1.318"
 PROVIDER = "anthropic"
 MODEL = "claude-sonnet-5-5"
-PROFILE = "claude-2.1.318-docker-local-result-local-v1"
+PROFILE = "claude-2.1.318-docker-local-interactive-result-local-v1"
 CONTEXT_BYTES = 65536
 MAX_OUTPUT_TOKENS = 32000
 EXECUTION_MS = 900000
@@ -152,7 +152,7 @@ class Builder:
         self.definitions = []
 
     def raw(self, identifier, body, version="1"):
-        require(not any(d["artifact"]["id"] == identifier for d in self.definitions), f"duplicate {identifier}")
+        require(not any(d["artifact"]["id"] == identifier and d["artifact"]["version"] == version for d in self.definitions), f"duplicate {identifier}")
         artifact = {"id": identifier, "version": version, "digest": sha(body)}
         self.definitions.append({"artifact": artifact, "kind": "definition", "body": body})
         return artifact
@@ -272,6 +272,8 @@ def build():
             "result-local bodies differ from the pinned aq-worker")
     b.raw("aq.agent-result-local", contract_body)
     b.raw("aq.agent-result-startup", startup_body)
+    old_recipe = b.raw(worker_defs["recipe"]["id"], worker_defs["recipe"]["body"])
+    worker_defs["recipe"] = worker_defs["interactive_recipe"]
     recipe = b.raw(worker_defs["recipe"]["id"], worker_defs["recipe"]["body"])
     require(recipe["digest"] == worker_defs["recipe"]["digest"], "recipe digest")
     client_manifest = {"schema_version": 1, "profile": "aq-agent-result-client-named-readonly-v1",
@@ -282,6 +284,8 @@ def build():
     composite = {"schema_version": 1, "profile": PROFILE, "runtime": runtime, "environment": environment,
                  "client_manifest": client_ref, "client_executable": client["artifact"], "contract": contract,
                  "recipe": recipe, "permission_digest": permission_digest, "reserved_client_bytes": CLIENT_RESERVATION}
+    b.add("aq.claude-result-local-adapter", {**composite, "profile": "claude-2.1.318-docker-local-result-local-v1",
+                                             "recipe": old_recipe}, DEFINITION_VERSION + "-one-shot")
     adapter = b.add("aq.claude-result-local-adapter", composite, DEFINITION_VERSION)
     qualification = b.add("aq.ms1-runtime-qualification", {
         "schema_version": 1, "runtime": runtime, "adapter": adapter, "environment": environment, "scope": scope,

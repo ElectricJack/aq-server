@@ -3,6 +3,7 @@ pub mod admission;
 pub mod http;
 pub mod providers;
 mod store;
+pub mod terminal;
 use serde::{Deserialize, Serialize};
 pub use store::{levels, lock, operation, read, save, set_limits, set_mode};
 
@@ -48,16 +49,44 @@ pub struct IndividualCellLimit {
     pub intelligence_class: String,
     pub limit: Option<u32>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+fn default_input() -> bool {
+    true
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Limits {
+    #[serde(default = "default_input")]
+    pub terminal_input_enabled: bool,
     #[serde(default)]
     pub provider_limits: Vec<ProviderLimit>,
     #[serde(default)]
     pub cell_limits: Vec<IndividualCellLimit>,
 }
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            terminal_input_enabled: true,
+            provider_limits: vec![],
+            cell_limits: vec![],
+        }
+    }
+}
+/// The stack policy for owner terminal input. Existing launch manifests remain frozen.
+pub async fn terminal_input<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+) -> Result<bool> {
+    let value: serde_json::Value =
+        sqlx::query_scalar("SELECT limits FROM swarm_settings WHERE singleton")
+            .fetch_one(executor)
+            .await?;
+    Ok(serde_json::from_value::<Limits>(value)
+        .map_err(|_| Error::Internal)?
+        .terminal_input_enabled)
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LimitsRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_input_enabled: Option<bool>,
     pub operation_id: uuid::Uuid,
     pub expected_revision: String,
     pub provider: Option<ProviderLimit>,

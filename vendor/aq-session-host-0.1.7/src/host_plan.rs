@@ -65,7 +65,7 @@ impl Validate for HostPlan {
             }
         };
         self.session.validate()?;
-        require(self.host_plan_version == 1, "host plan version")?;
+        require(matches!(self.host_plan_version, 1 | 2), "host plan version")?;
         let HostSubject::CentralConversation {
             actor_id,
             conversation_id,
@@ -132,7 +132,7 @@ impl Validate for HostPlan {
         )?;
         let t = &self.terminal;
         require(
-            !t.input_enabled
+            (!t.input_enabled || self.host_plan_version == 2)
                 && t.max_input_bytes > 0
                 && t.max_input_bytes <= 4096
                 && t.max_pending_input_bytes >= t.max_input_bytes
@@ -141,7 +141,7 @@ impl Validate for HostPlan {
                 && t.max_frame_bytes <= 65536
                 && t.replay_bytes >= t.max_frame_bytes
                 && t.replay_bytes <= 1048576,
-            "host terminal bounds; live input unqualified",
+            "host terminal bounds or owner-mail input requires host plan v2",
         )?;
         require(
             self.startup.bytes > 0 && self.startup.bytes <= 1_048_576,

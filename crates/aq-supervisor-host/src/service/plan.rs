@@ -33,6 +33,7 @@ pub(super) fn assemble(
     generation: u64,
     session_id: Uuid,
     turn: dispatch::Turn,
+    terminal_input_enabled: bool,
 ) -> Result<Config> {
     let profile = &control.profile;
     let model = profile["model"]
@@ -130,7 +131,7 @@ pub(super) fn assemble(
         )?,
     };
     let host = HostPlan {
-        host_plan_version: 1,
+        host_plan_version: if terminal_input_enabled { 2 } else { 1 },
         subject: HostSubject::CentralConversation {
             actor_id: control.actor,
             conversation_id: config.conversation_id,
@@ -149,7 +150,7 @@ pub(super) fn assemble(
             json!({"cpu_millis":500,"memory_bytes":2147483648_u64,"process_limit":512,"wall_time_ms":3600000,"stop_grace_ms":10000}),
         )?,
         terminal: serde_json::from_value(
-            json!({"host":"tmux","input_enabled":false,"max_frame_bytes":65536,"max_input_bytes":4096,"max_pending_input_bytes":32768,"replay_bytes":1048576}),
+            json!({"host":"tmux","input_enabled":terminal_input_enabled,"max_frame_bytes":65536,"max_input_bytes":4096,"max_pending_input_bytes":32768,"replay_bytes":1048576}),
         )?,
         startup: HostStartup {
             descriptor: startup_descriptor.clone(),
@@ -321,6 +322,7 @@ mod tests {
             1,
             Uuid::new_v4(),
             turn,
+            true,
         )
         .unwrap();
         candidate.host.digest().unwrap();
@@ -337,5 +339,22 @@ mod tests {
                 .iter()
                 .any(|c| c.id.as_str() == "aq.harness.confined-worktree")
         );
+        assert!(candidate.host.terminal.input_enabled);
+        let off = assemble(
+            &config,
+            &control,
+            &Digest::of(b"policy"),
+            2,
+            Uuid::new_v4(),
+            dispatch::Turn {
+                batch: candidate.central.batch.clone(),
+                dispatch_id: Uuid::new_v4(),
+                host_operation_id: Uuid::new_v4(),
+                input: b"next turn".to_vec(),
+            },
+            false,
+        )
+        .unwrap();
+        assert!(!off.host.terminal.input_enabled);
     }
 }

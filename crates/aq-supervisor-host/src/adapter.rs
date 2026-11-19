@@ -19,7 +19,7 @@ use std::{
 pub fn native_recipe(
     harness: &HarnessSettings,
     model: &ModelSettings,
-    input: bool,
+    _input: bool,
     paths: Paths<'_>,
     port: u16,
 ) -> Result<Recipe> {
@@ -28,7 +28,7 @@ pub fn native_recipe(
         Settings {
             harness,
             model,
-            terminal_input_enabled: input,
+            terminal_input_enabled: false,
         },
         paths,
     )?;
@@ -84,7 +84,7 @@ impl HostAdapter for NativeAdapter {
         aq_codex_mapper::validate_settings(Settings {
             harness: &plan.harness,
             model: &c.model,
-            terminal_input_enabled: plan.terminal.input_enabled,
+            terminal_input_enabled: false,
         })?;
         Ok(AdapterLaunch {
             manifest_digest: plan.digest()?,
@@ -272,7 +272,7 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
         .take()
         .context("native stdin")?
         .write_all(&startup)?;
-    let result = tokio::task::spawn_blocking(move || child.wait()).await?;
+    let result = crate::terminal::wait(&c, child).await;
     transport.stop().await?;
     ensure!(result?.success(), "native process failed");
     Ok(())

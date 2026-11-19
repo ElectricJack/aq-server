@@ -134,7 +134,7 @@ pub async fn native(
         .take()
         .context("native stdin")?
         .write_all(startup)?;
-    let status = tokio::task::spawn_blocking(move || child.wait()).await??;
+    let status = crate::terminal::wait(c, child).await?;
     // Retain only a validated refresh of this subscription account inside this
     // central container; never write the operator's original host auth document.
     let copied = copy_back(&c.secret_file, &auth_path, &auth, identity);

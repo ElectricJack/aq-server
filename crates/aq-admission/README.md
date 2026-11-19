@@ -1,4 +1,4 @@
-# AQ admission contracts 0.1.6 (candidate)
+# AQ admission contracts 0.1.13
 
 Pure versioned preparation contracts and bounded placement proposals. This crate
 contains no daemon, database, network client, provider call or secret delivery.
@@ -217,3 +217,10 @@ private journal; installation rechecks expiry before publishing its receipt.
 `artifacts/control.*` publishes the new schema/fixtures/independent Python hash
 vectors and a hash inventory from the exact0.1.6 archive. Packaged drift tests
 verify all old module/publication bytes (the old lib.rs prefix) are retained.
+
+## Owner message input (0.1.13)
+
+Long-phase docker-local Claude 2.1.318 may enable terminal input under the same
+container-confinement requirement. The worker must independently validate the
+input-capable adapter recipe; this policy does not qualify an installed adapter.
+Schemas and wire contract artifacts retain their existing identities and bytes.
