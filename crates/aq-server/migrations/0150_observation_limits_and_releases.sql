@@ -46,4 +46,4 @@ UPDATE observation_attempt_projections p SET
             OR (e.record->'body'->'kind'->>'kind' = 'text_reference'
                 AND e.record->'body'->'kind'->>'role' = 'assistant'))), 0);
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='148' WHERE key='state_format_version';
+UPDATE meta SET value='150' WHERE key='state_format_version';
