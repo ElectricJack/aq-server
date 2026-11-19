@@ -260,7 +260,19 @@ subject revision and the single `expected_versions` entry (`task` or
   again; for cost, only spend after the override counts. A hold that is not a
   limit (a quarantine, a changed project binding, an undelivered result) is
   refused with
-  HTTP 422 and the hold's code. Retry does not change Graph task lifecycle.
+  HTTP 422 and the hold's code, except the changed project binding below. Retry
+  does not change Graph task lifecycle.
+  A task held by `replacement_project_revision_changed` (the project binding
+  changed since its last attempt, whose retained source a replacement would
+  reuse) is released by the optional payload field `fresh: true`: the held
+  attempt is released as for a replacement, the owner's `reason` is recorded
+  (`task_fresh_starts`) and named in a system comment, and the task's next
+  attempt is a first attempt from the project's current pinned source under the
+  current binding, not a replacement. The earlier attempts and their retained
+  results stay; they no longer count against the task's budgets. `fresh` is
+  refused with HTTP 422 for a task held by anything else (or not held), naming
+  that hold; without it the binding-change hold is refused as before, and its
+  message names the option.
 - `knowledge.author` creates an unverified note (default content type `note`)
   whose Graph node ID equals the operation ID.
 - `knowledge.correct` patches title, body, labels or content type.
