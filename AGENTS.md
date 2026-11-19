@@ -124,8 +124,10 @@ another PR has taken your number, do not renumber by hand: after
 `python3 scripts/renumber-migrations.py`. It renames the migrations your
 branch adds to follow main's newest one and rewrites the number where your
 branch wrote it (`value='N'`, `supported >= N`, `COUNTS_N`, `PRIORS_N`,
-`*_FORMAT N`, `migration N`). `--check` only reports and exits 1 when
+`*_FORMAT N`, `const FORMAT: u32 = N;`, `migration N`). `--check` only reports and exits 1 when
 renumbering is needed. Its test is `python3 scripts/test-renumber-migrations.py`.
+CI ran against an older main, so run `python3 scripts/renumber-migrations.py --check`
+again right before merging (after `git fetch`).
 
 ### Budgets
 
