@@ -67,6 +67,27 @@ confinement: container
 - max_output_tokens: 32000
 ";
 
+#[cfg(not(feature = "project_environments"))]
+fn env(environment: &str) -> String {
+    environment.into()
+}
+#[cfg(feature = "project_environments")]
+fn env(environment: &str) -> Option<String> {
+    Some(environment.into())
+}
+/// Spec 0017 §5.3: a profile may leave the environment out; it then pins none.
+#[cfg(feature = "project_environments")]
+#[test]
+fn an_execution_profile_may_name_no_environment() {
+    let source = EXECUTION.replace("environment: aq-ms1-docker-local-claude\n", "");
+    let profile = parse_execution(&source).unwrap();
+    assert_eq!(profile.environment, None);
+    assert_eq!(profile.to_markdown(), source);
+    let mut s = set();
+    s.execution[0].environment = None;
+    assert!(validate(s, &defaults(), &limits()).is_ok());
+}
+
 fn role_error(source: &str) -> String {
     parse_role(source).unwrap_err().to_string()
 }
@@ -383,7 +404,7 @@ fn execution_document_parses() {
             name: "Sandbox".into(),
             description: "A container.".into(),
             harnesses: vec!["claude".into(), "codex".into()],
-            environment: "aq-ms1-docker-local-claude".into(),
+            environment: env("aq-ms1-docker-local-claude"),
             confinement: Confinement::Container,
             credentials: [
                 (
@@ -533,7 +554,7 @@ fn defaults_compile_into_a_snapshot() {
     assert_eq!(snapshot.execution_profiles().count(), 1);
     let sandbox = snapshot.execution("sandbox").unwrap();
     assert_eq!(sandbox.harnesses, ["claude"]);
-    assert_eq!(sandbox.environment, "aq-ms1-docker-local-claude");
+    assert_eq!(sandbox.environment, env("aq-ms1-docker-local-claude"));
     assert_eq!(sandbox.confinement, Confinement::Container);
     assert_eq!(sandbox.credentials["claude"], "owner-claude-subscription");
     assert_eq!(
@@ -809,7 +830,7 @@ fn execution_profile_rules() {
         ]
     );
     assert_eq!(
-        check(|e| e.environment = String::new()),
+        check(|e| e.environment = env("")),
         [format!("{p}environment: must be one non-empty line")]
     );
     assert_eq!(
@@ -1000,7 +1021,7 @@ fn snapshot_digest_changes_with_any_content() {
         |s| s.intelligence[3].id.push('x'),
         |s| s.execution[0].limits.wall_time_ms += 1,
         |s| s.execution[0].confinement = Confinement::ContainerPermitted,
-        |s| s.execution[0].environment.push('x'),
+        |s| s.execution[0].environment = env("aq-ms1-docker-local-claudex"),
         |s| {
             s.execution[0]
                 .credentials

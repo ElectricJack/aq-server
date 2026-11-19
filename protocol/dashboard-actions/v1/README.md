@@ -200,6 +200,15 @@ subject revision and the single `expected_versions` entry (`task` or
   shows as a `role` change. Once any attempt of the task has been granted the
   operation is `rejected`; an offer that was declined or never granted does
   not count.
+- `task.needs.set` (spec 0017 §5.4; only in a server built with the
+  compile-time feature `project_environments`, so not in the published
+  `schema.json`, which is the feature-off build's) sets what the task needs
+  from its environment (Graph metadata `aq:needs`, a list of at most 32
+  distinct capability labels) or clears it when `needs` is null, absent or
+  empty. It preserves other metadata keys. Once any attempt of the task has
+  been granted the operation is `rejected`, as for `task.role.set`. The same
+  build accepts `needs` on `task.create` and on each task of
+  `task.graph.create`; a malformed list is `422`.
 - `task.route.set` puts an owner route on the task: `class` is
   `<parent>-<effort>` (for example `standard-high`), with optional `harnesses`
   and `providers` limits. It is refused (`422`) when Settings assigns no profile

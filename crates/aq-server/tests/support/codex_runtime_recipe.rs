@@ -165,6 +165,8 @@ pub fn project(
         allow_enrolled_nodes: false,
         allowed_worker_groups: vec![GROUP.into()],
         allowed_environments: vec![ENVIRONMENT.into()],
+        #[cfg(feature = "project_environments")]
+        default_environment: None,
         policy: Reference {
             identity: policy.artifact().id.as_str().into(),
             revision: "1".into(),
@@ -766,7 +768,7 @@ mod tests {
         .unwrap_or_else(|problems| panic!("{problems:?}"));
         let launch = snapshot.resolve(ROLE, INTELLIGENCE).unwrap();
         assert_eq!(launch.execution.id, EXECUTION);
-        assert_eq!(launch.execution.environment, ENVIRONMENT);
+        assert_eq!(serde_json::json!(launch.execution.environment), ENVIRONMENT);
         assert_eq!(
             launch.role.operations,
             ["task.read", "knowledge.read", "source.write"]

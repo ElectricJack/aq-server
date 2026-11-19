@@ -53,6 +53,9 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "task.retry" => {
             "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason"
         }
+        "task.needs.set" => {
+            "Set or clear the capabilities a task needs from its environment, before any attempt of it has been granted"
+        }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
         }

@@ -159,8 +159,8 @@ pub(super) async fn work(
     );
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
-        "role":role.shown(),"readiness":readiness,
-        "parent":parent,"execution":execution});
+        "readiness":readiness,"parent":parent,"execution":execution});
+    crate::role_settings::show(&mut data, &raw["node"], &a.record.binding.default_role);
     // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
     if root["task_state"] == "completed" {
         let quiet = sqlx::query_scalar::<_, Option<String>>(

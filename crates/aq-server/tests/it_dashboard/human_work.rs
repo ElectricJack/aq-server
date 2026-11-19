@@ -757,3 +757,38 @@ async fn routes_history_lists_reasons_newest_first() {
             {"sequence":1,"at_ms":1000,"route":route}]})
     );
 }
+
+/// Spec 0017 §5.4: every task read shows what the task needs (`aq:needs`,
+/// sorted; empty when it names none).
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn task_reads_show_the_needs() {
+    let x = setup().await;
+    let w = x.w();
+    let (plain, web) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut needing = task(web, w, "Web", "active");
+    needing["metadata"] = json!({"aq:needs":["playwright","node"]});
+    let nodes = [(plain, task(plain, w, "Plain", "active")), (web, needing)];
+    x.graph.nodes.lock().unwrap().extend(nodes.clone());
+    for (id, node) in &nodes {
+        let others = nodes.iter().filter(|(other, _)| other != id);
+        let c = context(
+            node,
+            others.map(|(_, n)| n.clone()).collect(),
+            vec![],
+            false,
+        );
+        x.graph.contexts.lock().unwrap().insert(*id, c);
+    }
+    let page = x.get("/tasks?limit=10").await;
+    let graph = x.get(&format!("/tasks/{plain}/graph")).await;
+    for (id, needs) in [(plain, json!([])), (web, json!(["node", "playwright"]))] {
+        assert_eq!(x.get(&format!("/tasks/{id}")).await["needs"], needs);
+        assert_eq!(x.get(&format!("/tasks/{id}/work")).await["needs"], needs);
+        for listed in [&page["items"], &graph["nodes"]] {
+            let mut found = listed.as_array().unwrap().iter();
+            let found = found.find(|n| n["id"] == json!(id)).unwrap();
+            assert_eq!(found["needs"], needs, "{found}");
+        }
+    }
+}

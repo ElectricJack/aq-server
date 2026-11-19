@@ -196,7 +196,13 @@ pub struct Execution {
     pub name: String,
     pub description: String,
     pub harnesses: Vec<String>,
+    #[cfg(not(feature = "project_environments"))]
     pub environment: String,
+    /// Spec 0017 §5.3: pins one environment; absent (the normal case), the
+    /// attempt runs where the project's environment rule places it.
+    #[cfg(feature = "project_environments")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
     pub confinement: Confinement,
     /// Credential profile per harness.
     pub credentials: BTreeMap<String, String>,

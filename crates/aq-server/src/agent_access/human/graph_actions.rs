@@ -336,20 +336,52 @@ impl GraphPayload for TaskRoleSet {
         self.role.as_deref().into_iter().collect()
     }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
-        // A Graph metadata patch replaces the object; keep every other key.
-        let mut metadata = c
-            .node
-            .get("metadata")
-            .and_then(Value::as_object)
-            .cloned()
-            .ok_or_else(ApiError::unavailable)?;
-        match &self.role {
-            Some(role) => metadata.insert(aq_role_settings::tasks::ROLE_KEY.into(), json!(role)),
-            None => metadata.remove(aq_role_settings::tasks::ROLE_KEY),
-        };
-        let mut patch = serde_json::Map::new();
-        patch.insert("metadata".into(), Value::Object(metadata));
-        Ok(update(c, patch))
+        let role = self.role.as_ref().map(|role| json!(role));
+        metadata_patch(c, aq_role_settings::tasks::ROLE_KEY, role)
+    }
+}
+/// Sets (or, with `None`, removes) one key of the task's Graph metadata. A
+/// metadata patch replaces the object, so every other key is kept.
+fn metadata_patch(c: &Current<'_>, key: &str, value: Option<Value>) -> ApiResult<Vec<Value>> {
+    let metadata = c.node.get("metadata").and_then(Value::as_object);
+    let mut metadata = metadata.cloned().ok_or_else(ApiError::unavailable)?;
+    match value {
+        Some(value) => metadata.insert(key.into(), value),
+        None => metadata.remove(key),
+    };
+    let mut patch = serde_json::Map::new();
+    patch.insert("metadata".into(), Value::Object(metadata));
+    Ok(update(c, patch))
+}
+
+/// Spec 0017 §5.4: what a task needs from its environment, set or cleared by
+/// the owner until an attempt of the task has been granted.
+#[cfg(feature = "project_environments")]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskNeedsSet {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// The capability labels the task needs, stored as Graph metadata
+    /// `aq:needs`. Null, absent or empty clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<super::enqueue::Needs>,
+}
+#[cfg(feature = "project_environments")]
+impl GraphPayload for TaskNeedsSet {
+    common!("task.needs.set", "task", aq_agent_grants::op::TASK_EDIT);
+    fn valid(&self) -> bool {
+        true
+    }
+    fn never_granted() -> bool {
+        true
+    }
+    fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
+        let needs = (self.needs.as_ref()).filter(|n| !n.0.is_empty());
+        let key = aq_project_policy::environments::NEEDS_KEY;
+        metadata_patch(c, key, needs.map(|n| json!(n.0)))
     }
 }
 
@@ -753,6 +785,9 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task reprioritize adapter");
     r.register(GraphAction::<TaskRoleSet>::new(state))
         .expect("task role set adapter");
+    #[cfg(feature = "project_environments")]
+    r.register(GraphAction::<TaskNeedsSet>::new(state))
+        .expect("task needs set adapter");
     r.register(GraphAction::<TaskRouteSet>::new(state))
         .expect("task route set adapter");
     r.register(GraphAction::<TaskRouteClear>::new(state))
@@ -791,6 +826,9 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task reprioritize schema");
     r.register_schema::<GraphAction<TaskRoleSet>>()
         .expect("task role set schema");
+    #[cfg(feature = "project_environments")]
+    r.register_schema::<GraphAction<TaskNeedsSet>>()
+        .expect("task needs set schema");
     r.register_schema::<GraphAction<TaskRouteSet>>()
         .expect("task route set schema");
     r.register_schema::<GraphAction<TaskRouteClear>>()

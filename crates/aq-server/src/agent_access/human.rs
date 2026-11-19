@@ -561,7 +561,7 @@ async fn list(
             return Err(unavailable());
         }
         if kind == "task" {
-            value["role"] = crate::role_settings::shown(raw, &a.record.binding.default_role);
+            crate::role_settings::show(&mut value, raw, &a.record.binding.default_role);
         }
         items.push(value)
     }
@@ -666,7 +666,7 @@ async fn detail(
     }
     let mut projected = node(&raw, w, kind)?;
     if kind == "task" {
-        projected["role"] = crate::role_settings::shown(&raw, &a.record.binding.default_role);
+        crate::role_settings::show(&mut projected, &raw, &a.record.binding.default_role);
     }
     finish(s, r, a, projected).await
 }
@@ -758,9 +758,10 @@ async fn graph(
     let a = access(&s, &r, u, p).await?;
     let w = a.record.binding.graph_workspace_id;
     let raw = context(&s, w, id).await?;
-    let role = |n: &Value| crate::role_settings::shown(n, &a.record.binding.default_role);
+    let role =
+        |p: &mut Value, n: &Value| crate::role_settings::show(p, n, &a.record.binding.default_role);
     let mut root = node(&raw["node"], w, "task")?;
-    root["role"] = role(&raw["node"]);
+    role(&mut root, &raw["node"]);
     let upstream_truncated = raw["truncated"].as_bool().ok_or_else(unavailable)?;
     let mut truncated = upstream_truncated;
     let mut nodes = vec![root];
@@ -786,7 +787,7 @@ async fn graph(
             continue;
         }
         let mut n = node(value, w, "task")?;
-        n["role"] = role(value);
+        role(&mut n, value);
         ids.insert(vid);
         nodes.push(n)
     }

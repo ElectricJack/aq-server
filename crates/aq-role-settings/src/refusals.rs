@@ -25,12 +25,26 @@ pub enum OfferRefusal {
     },
     /// The server ships no platform text for `environment`.
     PlatformTextMissing { environment: String },
+    /// Spec 0017 §5.4: `environment` lacks the `missing` labels of the
+    /// task's `aq:needs`.
+    #[cfg(feature = "project_environments")]
+    EnvironmentMissingCapability {
+        environment: String,
+        missing: Vec<String>,
+    },
+    /// Spec 0017 §5.4: no node's inventory lists `environment`.
+    #[cfg(feature = "project_environments")]
+    NoNodeHasEnvironment { environment: String },
 }
 impl OfferRefusal {
     pub fn code(&self) -> &'static str {
         match self {
             Self::StartupOverLimit { .. } => "startup_over_limit",
             Self::PlatformTextMissing { .. } => "platform_text_missing",
+            #[cfg(feature = "project_environments")]
+            Self::EnvironmentMissingCapability { .. } => "environment_missing_capability",
+            #[cfg(feature = "project_environments")]
+            Self::NoNodeHasEnvironment { .. } => "no_node_has_environment",
         }
     }
     /// Which of the two limits is the one exceeded.
@@ -64,6 +78,18 @@ impl OfferRefusal {
             }
             Self::PlatformTextMissing { environment } => format!(
                 "AQ does not offer this task: the server has no platform text for environment `{environment}`, and an agent is not launched without it."
+            ),
+            #[cfg(feature = "project_environments")]
+            Self::EnvironmentMissingCapability {
+                environment,
+                missing,
+            } => format!(
+                "AQ does not offer this task: it needs {}, which environment `{environment}` does not provide, and no other environment of the project provides everything it needs. Change the task's needs or the project's environments.",
+                missing.join(", ")
+            ),
+            #[cfg(feature = "project_environments")]
+            Self::NoNodeHasEnvironment { environment } => format!(
+                "AQ does not offer this task yet: no node lists environment `{environment}` in its inventory. It is offered once a node can run that environment."
             ),
         }
     }

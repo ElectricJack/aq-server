@@ -17,6 +17,8 @@ execution attempt, worker assignment or launch is manufactured.
   aq:priority, aq:role, aq:intelligence_hint and aq:task_type metadata.
   role must be an existing role (spec 0014 §5.5): an unknown one is refused
   with 400 and a message naming it and listing the roles that exist.
+  With the compile-time feature `project_environments` (spec 0017) needs is
+  a list of at most 32 distinct capability labels, stored as aq:needs.
   Omitted fields retain the original serialization and defaults.
   Expected project revision is a positive signed 64-bit decimal string.
 - GET `/api/human/operations/{operation_id}`: pure retained status lookup. It

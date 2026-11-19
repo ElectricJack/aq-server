@@ -5,6 +5,10 @@ edition.workspace = true
 publish.workspace = true
 description = "Pure project policy and admission snapshots (project bindings, ceilings, eligibility)"
 
+[features]
+# Spec 0017 (sandbox environments per project and per task), off by default.
+project_environments = ["aq-profiles/project_environments"]
+
 [dependencies]
 aq-delivery = { path = "../aq-delivery" }
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
