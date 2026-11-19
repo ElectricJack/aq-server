@@ -1,4 +1,5 @@
-//! Observation sources outside ingest: their release when the attempt ends,
+//! Observation source queries: the stored source an enrolment or a batch is
+//! checked against, supersession, refusals, their release when the attempt ends,
 //! the count a node's source limit is checked against, and the ledger facts
 //! the session reads decide a state from. Sources and releases are
 //! append-only; the events of a released source stay until `collect` removes
@@ -99,4 +100,88 @@ pub async fn facts(pool: &PgPool, sessions: &[Uuid]) -> sqlx::Result<HashMap<Uui
             (row.get("session_id"), facts)
         })
         .collect())
+}
+
+/// The stored authority digest of a source and whether it was revoked.
+pub async fn stored(
+    conn: &mut PgConnection,
+    node: Uuid,
+    source: Uuid,
+    generation: i64,
+) -> sqlx::Result<Option<(String, bool)>> {
+    sqlx::query_as(
+        "SELECT s.authority_digest,r.node_id IS NOT NULL FROM observation_sources s \
+         LEFT JOIN observation_source_revocations r USING(node_id,source_id,generation) \
+         WHERE s.node_id=$1 AND s.source_id=$2 AND s.generation=$3",
+    )
+    .bind(node)
+    .bind(source)
+    .bind(generation)
+    .fetch_optional(conn)
+    .await
+}
+
+/// Every unrevoked source of `attempt` on any node, locked: a new generation supersedes them.
+pub async fn unrevoked(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<Vec<(Uuid, Uuid, i64)>> {
+    sqlx::query_as(
+        "SELECT s.node_id,s.source_id,s.generation FROM observation_sources s \
+         WHERE s.attempt_id=$1 AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r \
+          WHERE r.node_id=s.node_id AND r.source_id=s.source_id AND r.generation=s.generation) \
+         ORDER BY s.node_id,s.source_id,s.generation FOR UPDATE OF s",
+    )
+    .bind(attempt)
+    .fetch_all(conn)
+    .await
+}
+
+/// Revokes `old` (node, source, generation) of `attempt`, superseded by `by`.
+pub async fn revoke(
+    conn: &mut PgConnection,
+    old: (Uuid, Uuid, i64),
+    attempt: Uuid,
+    by: (Uuid, Uuid, i64),
+    at_ms: i64,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO observation_source_revocations(node_id,source_id,generation,attempt_id,\
+         superseded_by_node_id,superseded_by_source_id,superseded_by_generation,revoked_at_ms) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(old.0)
+    .bind(old.1)
+    .bind(old.2)
+    .bind(attempt)
+    .bind(by.0)
+    .bind(by.1)
+    .bind(by.2)
+    .bind(at_ms)
+    .execute(conn)
+    .await
+    .map(|_| ())
+}
+
+/// The source a batch event names, as ingest checks it: `None` when it is unknown or was
+/// released with its final drain over before `now_ms`. The row carries
+/// `authority`, `authority_digest`, `revoked` and `refused` (a durable source refusal).
+pub async fn for_ingest(
+    conn: &mut PgConnection,
+    node: Uuid,
+    source: Uuid,
+    generation: i64,
+    now_ms: i64,
+) -> sqlx::Result<Option<sqlx::postgres::PgRow>> {
+    sqlx::query(
+        "SELECT s.authority,s.authority_digest,r.node_id IS NOT NULL AS revoked,\
+         EXISTS(SELECT 1 FROM observation_source_refusals x WHERE x.node_id=s.node_id \
+         AND x.source_id=s.source_id AND x.generation=s.generation) AS refused \
+         FROM observation_sources s \
+         LEFT JOIN observation_source_revocations r USING(node_id,source_id,generation) \
+         WHERE s.node_id=$1 AND s.source_id=$2 AND s.generation=$3 AND NOT EXISTS(\
+         SELECT 1 FROM observation_source_releases x WHERE x.node_id=s.node_id AND x.source_id=s.source_id \
+         AND x.generation=s.generation AND x.accept_until_ms<$4)",
+    )
+    .bind(node).bind(source).bind(generation).bind(now_ms).fetch_optional(conn).await
 }
