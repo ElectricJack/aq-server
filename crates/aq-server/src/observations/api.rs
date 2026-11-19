@@ -142,6 +142,7 @@ impl From<Error> for AppError {
             Error::Refused => Self::Forbidden("observation source is not admitted".into()),
             Error::Conflict => Self::Conflict("observation identity or cursor conflicts".into()),
             Error::Capacity => Self::Maintenance("observation retention quota exhausted".into()),
+            Error::Limit(message) => Self::Maintenance(message),
             Error::Invalid => Self::BadRequest("invalid observation document".into()),
             Error::Authority(v) => v.into(),
             Error::Database(_) => Self::Internal,
@@ -182,7 +183,11 @@ async fn batch(
         .map(|event| event.body.binding.attempt_id)
         .collect();
     for attempt in attempts {
-        let _ = catalog::register_attempt(&state, attempt, Some(node.id())).await;
+        // A limit refusal is reported as itself, not as "source not admitted".
+        let enrolled = catalog::register_attempt(&state, attempt, Some(node.id())).await;
+        if let Err(limit @ Error::Limit(_)) = enrolled {
+            return Err(limit.into());
+        }
     }
     let receipt = ingest_authenticated(&state, &node, &packet).await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)))

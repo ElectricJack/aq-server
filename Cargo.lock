@@ -763,6 +763,7 @@ name = "aq-row-retention"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aq-stall-ladder",
  "async-trait",
  "serde",
  "serde_json",

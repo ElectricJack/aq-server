@@ -746,6 +746,8 @@ pub(super) async fn session(
     user: &User,
     id: Uuid,
     scope: &Scope,
+    // The list reads the observation facts of its whole page in one query.
+    observed: Option<&std::collections::HashMap<Uuid, crate::stall::freshness::Facts>>,
 ) -> Result<SessionDetail> {
     if id.is_nil() {
         return Err(Error::Invalid);
@@ -875,6 +877,16 @@ pub(super) async fn session(
     if now < access.checked_at_ms || now >= access.valid_until_ms {
         return Err(Error::AuthorizationChanged);
     }
+    let facts = match observed {
+        Some(page) => page.get(&id).copied(),
+        None => crate::observations::freshness(&state.store.pool, &[id])
+            .await?
+            .remove(&id),
+    }
+    .unwrap_or_default();
+    // The ladder's own windows decide the state (`stall::runtime::run`).
+    let (observation_state, reason) =
+        crate::stall::freshness::state(&facts, &crate::stall::policy::ExecutionPolicy::v1(), now);
     let status = serde_json::to_value(view.status)
         .map_err(|_| Error::Unavailable)?
         .as_str()
@@ -901,11 +913,14 @@ pub(super) async fn session(
         project,
         profile,
         authority: "remote".into(),
-        // Fresh "unknown" for one envelope interval, never instantly stale (RA-16).
+        // Decided now and fresh for one envelope interval, never instantly stale (RA-16).
         observation: ProcessObservation {
-            state: "unknown".into(),
+            state: observation_state.as_str().into(),
             observed_at: timestamp(now)?,
             fresh_until: timestamp(now.saturating_add(5000))?,
+            reason: reason.map(Into::into),
+            last_observation_at: facts.last_observation_ms.map(timestamp).transpose()?,
+            last_progress_at: facts.last_progress_ms.map(timestamp).transpose()?,
         },
         wait: None,
         controller: Controller {
@@ -951,7 +966,7 @@ pub(super) async fn detail(
     if !a.visibility_complete {
         return Err(Error::AuthorizationChanged);
     }
-    let data = session(state, runtime, user, id, &scope).await?;
+    let data = session(state, runtime, user, id, &scope, None).await?;
     fence(state, runtime, user, &a).await?;
     envelope(
         state,
@@ -972,8 +987,12 @@ pub(super) async fn sessions(
     let end = (offset + usize::from(limit)).min(snapshot.ids.len());
     let mut items = vec![];
     let mut skipped = false;
+    // Facts of ids this user may not inspect are fetched and never shown:
+    // `session` authorizes each row before it uses them.
+    let observed =
+        crate::observations::freshness(&state.store.pool, &snapshot.ids[offset..end]).await?;
     for id in &snapshot.ids[offset..end] {
-        match session(state, runtime, user, *id, &snapshot.scope).await {
+        match session(state, runtime, user, *id, &snapshot.scope, Some(&observed)).await {
             Ok(value) => items.push(value.summary),
             Err(Error::Api(AppError::Forbidden(_) | AppError::NotFound(_))) => skipped = true,
             Err(error) => return Err(error),
