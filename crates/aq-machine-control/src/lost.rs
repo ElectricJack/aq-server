@@ -16,6 +16,9 @@ pub async fn has_lost_format(conn: &mut PgConnection) -> Result<bool, Error> {
     Ok(v.parse::<u32>().map_err(|_| Error::Invalid("format"))? >= LOST_FORMAT)
 }
 
+/// First `state_format_version` with `release_revoked_node_attempts`.
+pub const REVOKED_FORMAT: u32 = 154;
+
 /// A held attempt the node may release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lost {
@@ -189,6 +192,35 @@ pub async fn record(
     .execute(&mut *conn)
     .await?;
     Ok(())
+}
+
+/// Revocation of `nodes` (their rows locked, `revoked_at` set in this transaction) releases the
+/// attempts they still hold, which a revoked node never releases itself: each is recorded as a
+/// lost-attempt release with the reason `node_revoked` (not charged), stopped, and its task
+/// claim freed through the B4 replacement release, so the task is retryable. The attempts are
+/// those `check_locked` admits for the node; others settle through their own owners. Returns
+/// the number released; before [`REVOKED_FORMAT`] nothing is.
+pub async fn release_revoked(
+    conn: &mut PgConnection,
+    nodes: &[Uuid],
+    now: DateTime<Utc>,
+) -> Result<u32, Error> {
+    let v: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+        .fetch_one(&mut *conn)
+        .await?;
+    if v.parse::<u32>().map_err(|_| Error::Invalid("format"))? < REVOKED_FORMAT {
+        return Ok(0);
+    }
+    let mut released = 0;
+    for node in nodes {
+        let n: i32 = sqlx::query_scalar("SELECT release_revoked_node_attempts($1,$2)")
+            .bind(node)
+            .bind(now)
+            .fetch_one(&mut *conn)
+            .await?;
+        released += u32::try_from(n).unwrap_or(0);
+    }
+    Ok(released)
 }
 
 /// The system comment id of a lost attempt's hold (one per attempt).
