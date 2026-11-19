@@ -6,6 +6,7 @@ use crate::{AppState, error::AppError};
 use aq_admission::ArtifactRef;
 pub use aq_profiled_state::replacement::*;
 use aq_profiled_state::replacement_sql as sql;
+pub use sql::predecessor_project_revision;
 use uuid::Uuid;
 
 /// Loads started-attempt owner facts. A history that does not match the
@@ -42,29 +43,6 @@ pub fn precheck(counts: &super::no_grant::AttemptCounts) -> Option<Assessment> {
     }
     (counts.started == 0).then_some(Assessment::Fresh)
 }
-/// First store format carrying `profiled_auto_settlements` (migration 59, D3).
-pub const AUTO_SETTLEMENT_FORMAT: u32 = 59;
-/// First store format carrying `stall_quarantines` (migration 81, H3).
-pub const STALL_QUARANTINE_FORMAT: u32 = 81;
-
-/// Whether the H3 stall ladder quarantined this lineage. A store held at an
-/// earlier migration prefix has no quarantine table and so records no
-/// quarantine, instead of failing every poll and replacement assessment.
-async fn lineage_quarantined(conn: &mut sqlx::PgConnection, task: Uuid) -> Result<bool, AppError> {
-    let version: String =
-        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(|_| AppError::Internal)?;
-    if version.parse::<u32>().map_err(|_| AppError::Internal)? < STALL_QUARANTINE_FORMAT {
-        return Ok(false);
-    }
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stall_quarantines WHERE lineage_id=$1)")
-        .bind(task)
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|_| AppError::Internal)
-}
 pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Assessment, AppError> {
     let mut conn = state
         .store
@@ -85,39 +63,23 @@ pub async fn assess_task_in(
         return Ok(Assessment::Blocked("task_terminally_disposed"));
     }
     // H3 rung 5: a quarantined lineage is never replaced until an owner acts.
-    if lineage_quarantined(conn, task).await? {
+    if sql::lineage_quarantined(conn, task)
+        .await
+        .map_err(internal)?
+    {
         return Ok(Assessment::Blocked("stall_quarantined"));
     }
-    // Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`.
+    // Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`. D1: a successor
+    // reuses the predecessor's immutable export, so a result refused because its publication
+    // was definitively not applied would recur; such a lineage needs a new source admission.
     #[cfg(not(feature = "delivery_playbook"))]
+    if sql::delivery_unpublished(conn, task)
+        .await
+        .map_err(internal)?
     {
-        // D1: a successor reuses the predecessor's immutable export, so a result
-        // refused because its publication was definitively not applied (moved
-        // target, conflicted candidate) would recur. Such a lineage needs a new
-        // source admission (a new task attempt from the current source head).
-        // A store held at an earlier migration prefix has no automatic settlement
-        // table and so records no unpublished delivery (as for quarantines).
-        let format: String =
-            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-                .fetch_one(&mut *conn)
-                .await
-                .map_err(|_| AppError::Internal)?;
-        let unpublished: bool = if format.parse::<u32>().map_err(|_| AppError::Internal)?
-            >= AUTO_SETTLEMENT_FORMAT
-        {
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished')")
-                .bind(task)
-                .fetch_one(&mut *conn)
-                .await
-                .map_err(|_| AppError::Internal)?
-        } else {
-            false
-        };
-        if unpublished {
-            return Ok(Assessment::Blocked(
-                "replacement_after_unpublished_delivery_needs_new_source",
-            ));
-        }
+        return Ok(Assessment::Blocked(
+            "replacement_after_unpublished_delivery_needs_new_source",
+        ));
     }
     let counts = super::no_grant::attempt_counts_locked(conn, task).await?;
     if let Some(decided) = precheck(&counts) {
@@ -151,7 +113,8 @@ async fn fence_revision(
     let Some(replacement) = assessment.replacement() else {
         return Ok(assessment);
     };
-    let pinned = predecessor_project_revision(&state.store.pool, replacement.predecessor).await?;
+    let pinned = sql::predecessor_project_revision(&state.store.pool, replacement.predecessor);
+    let pinned = pinned.await.map_err(internal)?;
     if pinned != Some(project_revision) {
         return Ok(Assessment::Blocked("replacement_project_revision_changed"));
     }
@@ -209,29 +172,20 @@ pub async fn override_budget(
     Ok(again)
 }
 
-/// The project revision pinned by an attempt's linked source export request.
-pub async fn predecessor_project_revision(
-    pool: &sqlx::PgPool,
-    attempt: Uuid,
-) -> Result<Option<u64>, AppError> {
-    let pinned: Option<Option<i64>> = sqlx::query_scalar(
-        "SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1",
-    )
-    .bind(attempt)
-    .fetch_optional(pool)
-    .await
-    .map_err(|_| AppError::Internal)?;
-    Ok(pinned.flatten().and_then(|r| u64::try_from(r).ok()))
-}
-
 /// Releases the failed predecessor's task claim under the common node →
 /// attempt/hot locks, after re-assessing the locked history. Idempotent.
-pub async fn release(
+pub async fn release(state: &AppState, task: Uuid, r: &Replacement) -> Result<(), AppError> {
+    release_as(state, task, r, None).await
+}
+/// [`release`]; an owner's `fresh` start also records, in the same transaction, that the task's
+/// attempts are no longer its history ([`aq_machine_control::fresh`]).
+pub async fn release_as(
     state: &AppState,
     task: Uuid,
     replacement: &Replacement,
+    fresh: Option<&aq_machine_control::fresh::FreshStart>,
 ) -> Result<(), AppError> {
-    if !replacement.needs_release {
+    if !replacement.needs_release && fresh.is_none() {
         return Ok(());
     }
     let db = |_: sqlx::Error| AppError::Internal;
@@ -294,6 +248,11 @@ pub async fn release(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
+    }
+    if let Some(f) = fresh {
+        let at = (state.clock)();
+        let recorded = aq_machine_control::fresh::record(&mut tx, task, locked.predecessor, f, at);
+        recorded.await.map_err(internal)?;
     }
     tx.commit().await.map_err(db)?;
     Ok(())

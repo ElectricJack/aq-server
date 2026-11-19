@@ -52,7 +52,7 @@ pub fn phrase(code: &str) -> String {
         }
         "never_granted_retry_bound_exhausted" => "too many of its offers were never granted",
         "replacement_project_revision_changed" => {
-            "the project binding changed since its last attempt, whose input a retry would reuse"
+            "the project binding changed since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
         }
         "replacement_after_unpublished_delivery_needs_new_source" => {
             "its delivery was not published, so a retry needs a new source"
@@ -86,6 +86,10 @@ pub fn phrase(code: &str) -> String {
 /// phrase and what the owner can do. Only a hold that is not a budget is refused: an owner
 /// retry of a budget hold overrides it ([`is_budget_hold`]). Fixed text; at most 256 characters.
 pub fn retry_refusal(code: &str) -> String {
+    // The binding change is the one hold an owner retry can clear: its phrase names how.
+    if code == crate::fresh::HOLD {
+        return format!("Retry refused: {}.", phrase(code));
+    }
     format!(
         "Retry refused: {}. A retry cannot clear this hold: cancel this task and create a new one (re-add its dependencies) to run it again.",
         phrase(code)
