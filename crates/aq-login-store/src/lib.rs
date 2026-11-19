@@ -6,7 +6,11 @@
 pub mod codex;
 pub mod store;
 
-use aq_selection::ArtifactRef;
+use aq_intelligence_config::{
+    LoadedRegistry,
+    material::{MaterialError, ProtectedMaterial, read_configured},
+};
+use aq_selection::{ArtifactRef, AuthorizedCredential};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -185,6 +189,156 @@ pub async fn append_locked(
         .await
         ?;
     Ok((sequence, revision_id))
+}
+
+/// A lineage entry to serve instead of the configured file. Opaque to logs.
+#[derive(Clone)]
+pub struct HeadSource {
+    pub revision_id: Uuid,
+    pub digest: String,
+    pub bytes: u64,
+    pub dir: std::path::PathBuf,
+}
+impl std::fmt::Debug for HeadSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadSource").finish_non_exhaustive()
+    }
+}
+impl HeadSource {
+    pub fn of(entry: &Entry, dir: &std::path::Path) -> Self {
+        Self {
+            revision_id: entry.revision_id,
+            digest: entry.content_digest.clone(),
+            bytes: entry.content_bytes as u64,
+            dir: dir.to_path_buf(),
+        }
+    }
+}
+
+/// The lineage revision `source`, else the configured file (version 0). The
+/// configured file must match its startup fingerprint either way.
+pub fn source_or_configured(
+    registry: &LoadedRegistry,
+    index: usize,
+    source: Option<&HeadSource>,
+) -> Result<ProtectedMaterial, MaterialError> {
+    let configured = read_configured(registry, index)?;
+    match source {
+        None => Ok(configured),
+        Some(s) => {
+            drop(configured);
+            store::read(&s.dir, s.revision_id, &s.digest, s.bytes)
+        }
+    }
+}
+
+/// Why a stored login of `provider` is not leased now: the owner's Codex login
+/// age limit (Settings › Providers), with a reason the node shows. None when it
+/// may be leased. An attempt's material fetch and a session's lease both ask.
+pub async fn lease_refusal(
+    conn: &mut sqlx::PgConnection,
+    provider: &str,
+    login: &[u8],
+    now_ms: i64,
+) -> Result<Option<String>, Error> {
+    if provider != codex::PROVIDER {
+        return Ok(None);
+    }
+    let limit = aq_swarm_settings::providers::codex_login_max_age_days(conn).await?;
+    Ok(codex::stale(login, limit, now_ms))
+}
+
+/// Server-side rule for a node write-back of a Codex login, on the attempt and
+/// the session route alike: `new` must be the lineage's newest login refreshed
+/// ([`codex::refreshed`]). Other providers' logins are not inspected. The
+/// caller holds the lineage lock.
+pub async fn refresh_of_head(
+    registry: std::sync::Arc<LoadedRegistry>,
+    index: usize,
+    lineage: &Lineage,
+    dir: &std::path::Path,
+    new: std::sync::Arc<zeroize::Zeroizing<Vec<u8>>>,
+) -> Result<bool, Error> {
+    if registry.credentials[index].provider != codex::PROVIDER {
+        return Ok(true);
+    }
+    let source = head(lineage).map(|e| HeadSource::of(e, dir));
+    tokio::task::spawn_blocking(move || {
+        source_or_configured(&registry, index, source.as_ref())
+            .is_ok_and(|stored| codex::refreshed(stored.bytes(), &new))
+    })
+    .await
+    .map_err(|_| Error::Store)
+}
+
+/// The configured Codex subscription logins whose newest stored version is
+/// older than the owner's limit: (credential index, the reason a lease of it
+/// is refused). Empty without a limit, before any file is read.
+pub async fn stale_logins(
+    conn: &mut sqlx::PgConnection,
+    loaded: &LoadedRegistry,
+    now_ms: i64,
+) -> Result<Vec<(usize, String)>, Error> {
+    let limit = aq_swarm_settings::providers::codex_login_max_age_days(&mut *conn).await?;
+    let mut stale = Vec::new();
+    if limit.is_none() {
+        return Ok(stale);
+    }
+    for (index, credential) in loaded.credentials.iter().enumerate() {
+        let (Some(configured), Some(Some(base))) = (
+            loaded.config.credentials.get(index),
+            loaded.fingerprints.get(index),
+        ) else {
+            continue;
+        };
+        if credential.provider != codex::PROVIDER
+            || configured.kind != aq_selection::CredentialKind::SubscriptionLogin
+        {
+            continue;
+        }
+        let name = identity(&credential.profile);
+        let lineage = read(&mut *conn, &name, credential.revision, base).await?;
+        let source = match (head(&lineage), &loaded.config.material_store) {
+            (Some(entry), Some(dir)) => Some(HeadSource::of(entry, dir)),
+            _ => None,
+        };
+        // One small owner-only file, read in place: selection asks rarely.
+        if let Ok(login) = source_or_configured(loaded, index, source.as_ref())
+            && let Some(reason) = codex::stale(login.bytes(), limit, now_ms)
+        {
+            stale.push((index, reason));
+        }
+    }
+    Ok(stale)
+}
+
+/// A stale Codex login ([`stale_logins`]) cannot be provisioned, so selection
+/// sees its credential as missing and falls back instead of placing an attempt
+/// whose lease would be refused. An attempt that already owns its selection
+/// keeps what was `frozen` with it, as provider membership does.
+pub async fn mask_stale(
+    conn: &mut sqlx::PgConnection,
+    loaded: &LoadedRegistry,
+    credentials: &mut [AuthorizedCredential],
+    frozen: Option<&[AuthorizedCredential]>,
+    now_ms: i64,
+) -> Result<(), Error> {
+    if let Some(frozen) = frozen {
+        for credential in credentials {
+            let old = frozen.iter().find(|old| old.profile == credential.profile);
+            credential.provisionable &= old.is_some_and(|old| old.provisionable);
+        }
+        return Ok(());
+    }
+    for (index, _) in stale_logins(conn, loaded, now_ms).await? {
+        let stale = &loaded.credentials[index];
+        for credential in credentials.iter_mut() {
+            if credential.profile == stale.profile && credential.revision == stale.revision {
+                credential.provisionable = false;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

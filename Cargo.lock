@@ -395,6 +395,7 @@ dependencies = [
  "aq-intelligence-config",
  "aq-selection",
  "aq-session-host",
+ "aq-swarm-settings",
  "chrono",
  "nix",
  "serde",

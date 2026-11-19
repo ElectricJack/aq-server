@@ -153,6 +153,10 @@ async fn resolve_with_principal(
     aq_swarm_settings::providers::mask(&mut membership, &mut credentials, None)
         .await
         .map_err(db)?;
+    let time = now(state)?;
+    // A stored Codex login past the owner's age limit is a missing credential here.
+    aq_login_store::mask_stale(&mut membership, loaded, &mut credentials, None, time as i64)
+        .await?;
     drop(membership);
     let observations: Vec<Value> = sqlx::query_scalar(
         "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
@@ -166,7 +170,6 @@ async fn resolve_with_principal(
         .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
         .map_err(|_| AppError::Internal)?;
     let mut observations = relevant(observations, &credentials, node_id);
-    let time = now(state)?;
     let registry_revision = sqlx::query_scalar::<_, i64>(
         "SELECT revision FROM intelligence_registry WHERE singleton=TRUE",
     )
@@ -623,13 +626,12 @@ async fn fence_snapshot(
         return Err(conflict("installed capability snapshot changed"));
     }
     let mut credentials = aq_intelligence_config::node_credentials(loaded(state)?, node_id);
-    aq_swarm_settings::providers::mask(
-        tx,
-        &mut credentials,
-        owned_attempt.then_some(decision.inputs.credentials.as_slice()),
-    )
-    .await
-    .map_err(db)?;
+    let frozen = owned_attempt.then_some(decision.inputs.credentials.as_slice());
+    aq_swarm_settings::providers::mask(tx, &mut credentials, frozen)
+        .await
+        .map_err(db)?;
+    let decided = decision.inputs.now_ms as i64;
+    aq_login_store::mask_stale(tx, loaded(state)?, &mut credentials, frozen, decided).await?;
     if digest(&credentials).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.credentials).map_err(|_| AppError::Internal)?
     {

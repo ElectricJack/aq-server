@@ -906,3 +906,82 @@ async fn owner_import_is_the_newest_codex_login_and_must_be_a_chatgpt_login() {
         json!({"accepted": false, "version": 1, "replayed": false})
     );
 }
+
+/// The node's credentials as selection sees them at `at`.
+async fn masked(
+    c: &Case,
+    frozen: Option<&[AuthorizedCredential]>,
+    at: i64,
+) -> Vec<AuthorizedCredential> {
+    let loaded = c.f.state.config.intelligence.clone().unwrap();
+    let mut credentials = aq_intelligence_config::node_credentials(&loaded, c.f.node.node_id);
+    let mut conn = c.f.db.pool().await.acquire().await.unwrap();
+    let done = aq_server::profiled_execution::login_refresh::mask_stale(
+        &mut conn,
+        &loaded,
+        &mut credentials,
+        frozen,
+        at,
+    );
+    done.await.ok().unwrap();
+    credentials
+}
+#[tokio::test]
+async fn stale_codex_login_is_a_missing_credential_for_selection_and_a_provider_state() {
+    use aq_server::profiled_execution::login_refresh::stale_logins;
+    let stored = codex_login("acct", NOW as i64);
+    let c = codex(&stored).await;
+    let id = session(&c, c.f.node.node_id, "running", true).await;
+    let loaded = c.f.state.config.intelligence.clone().unwrap();
+    let later = NOW as i64 + 10 * DAY_MS + 5;
+    let mut conn = c.f.db.pool().await.acquire().await.unwrap();
+    let fresh = masked(&c, None, later).await;
+    assert!(fresh[0].provisionable, "no limit: nothing is stale");
+    age_limit(&c, Some(7)).await;
+    assert!(
+        masked(&c, None, NOW as i64).await[0].provisionable,
+        "within the limit"
+    );
+    // Past the limit selection sees the credential as missing (it then falls
+    // back: aq-selection `a_credential_that_cannot_be_provisioned_falls_back...`).
+    let stale = masked(&c, None, later).await;
+    assert!(!stale[0].provisionable && stale[0].enabled);
+    let reason =
+        "codex_login_stale: stored Codex login is 10 days old (limit 7): import your current login";
+    assert_eq!(
+        stale_logins(&mut conn, &loaded, later).await.ok().unwrap(),
+        [(0, reason.to_owned())]
+    );
+    // An attempt that owns its selection keeps what was frozen with it.
+    assert!(masked(&c, Some(&fresh), later).await[0].provisionable);
+    assert!(!masked(&c, Some(&stale), NOW as i64).await[0].provisionable);
+    // The owner sees it on the provider in Settings.
+    c.f.time.store(later, std::sync::atomic::Ordering::SeqCst);
+    let provider = || async {
+        let response = aq_server::build_admin_router(c.f.state.clone())
+            .oneshot(
+                Request::get("/api/settings/providers")
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = accepted(&response.into_body().collect().await.unwrap().to_bytes());
+        let all = body["available"].as_array().unwrap().clone();
+        all.into_iter().find(|p| p["id"] == "openai").unwrap()
+    };
+    assert_eq!(
+        provider().await["attention"],
+        "stored Codex login is 10 days old (limit 7): import your current login"
+    );
+    // A refreshed login written back by the running session ends it.
+    let refreshed = codex_login("acct", later - 5);
+    assert_eq!(
+        session_refresh(&c, id, 0, &refreshed).await.0,
+        StatusCode::OK
+    );
+    assert!(masked(&c, None, later).await[0].provisionable);
+    assert!(provider().await.get("attention").is_none());
+}

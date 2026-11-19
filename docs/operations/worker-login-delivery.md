@@ -32,7 +32,14 @@ therefore installed on a worker.
 - **Age limit.** Settings → Providers has "Codex login age limit (days)". When
   set, the server refuses to lease a stored login last refreshed longer ago,
   on both paths, with `codex_login_stale: stored Codex login is N days old
-  (limit M): import your current login`, which the agent shows.
+  (limit M): import your current login`, which the agent shows. Before that
+  point is reached for queued work, selection already treats the credential
+  as missing: a task whose level lists another candidate (for example Claude)
+  and permits the `missing_credentials` fallback is routed there, and nothing
+  is placed only to be refused. The provider's row in Settings → Providers
+  says "Not used for new agents: stored Codex login is N days old ...". It
+  clears by itself when a current login is imported or a running agent writes
+  a refreshed one back.
 
 ## Claude: token delivery to connected workers
 

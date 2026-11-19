@@ -12,6 +12,10 @@ pub struct Provider {
     pub name: String,
     pub accounts: Vec<String>,
     pub credential_status: String,
+    /// What the owner must do before this provider's agents can start again, when the
+    /// server knows (a saved Codex login older than the owner's limit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

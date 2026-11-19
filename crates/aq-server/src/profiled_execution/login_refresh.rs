@@ -14,81 +14,15 @@
 //! which starts a new lineage) or revocation stops renewal.
 pub mod api;
 pub use aq_login_store::{
-    Entry, Lineage, Origin, append_locked, codex, head, head_digest, head_version, identity,
-    lineage_locked, read, renewable, store, version_of,
+    Entry, HeadSource, Lineage, Origin, append_locked, codex, head, head_digest, head_version,
+    identity, lease_refusal, lineage_locked, mask_stale, read, refresh_of_head, renewable,
+    stale_logins, store, version_of,
 };
 
 use crate::{error::AppError, intelligence::config::LoadedRegistry};
 use aq_admission::MaterialLease;
 use sqlx::{Postgres, Transaction};
-use uuid::Uuid;
 
-use crate::error::db;
-
-/// Why a stored login of `provider` is not leased now: the owner's Codex login
-/// age limit (Settings › Providers), with a reason the node shows. None when it
-/// may be leased. An attempt's material fetch and a session's lease both ask.
-pub async fn lease_refusal(
-    conn: &mut sqlx::PgConnection,
-    provider: &str,
-    login: &[u8],
-    now_ms: i64,
-) -> Result<Option<String>, AppError> {
-    if provider != codex::PROVIDER {
-        return Ok(None);
-    }
-    let limit = aq_swarm_settings::providers::codex_login_max_age_days(conn)
-        .await
-        .map_err(db)?;
-    Ok(codex::stale(login, limit, now_ms))
-}
-
-/// Server-side rule for a node write-back of a Codex login, on the attempt and
-/// the session route alike: `new` must be the lineage's newest login refreshed
-/// ([`codex::refreshed`]). Other providers' logins are not inspected. The
-/// caller holds the lineage lock.
-pub(crate) async fn refresh_of_head(
-    registry: std::sync::Arc<LoadedRegistry>,
-    index: usize,
-    lineage: &Lineage,
-    dir: &std::path::Path,
-    new: std::sync::Arc<zeroize::Zeroizing<Vec<u8>>>,
-) -> Result<bool, AppError> {
-    if registry.credentials[index].provider != codex::PROVIDER {
-        return Ok(true);
-    }
-    let source = head(lineage).map(|e| HeadSource::of(e, dir));
-    tokio::task::spawn_blocking(move || {
-        super::material::source_or_configured(&registry, index, source.as_ref())
-            .is_ok_and(|stored| codex::refreshed(stored.bytes(), &new))
-    })
-    .await
-    .map_err(|_| AppError::Internal)
-}
-
-/// A lineage entry to serve instead of the configured file. Opaque to logs.
-#[derive(Clone)]
-pub struct HeadSource {
-    pub revision_id: Uuid,
-    pub digest: String,
-    pub bytes: u64,
-    pub dir: std::path::PathBuf,
-}
-impl std::fmt::Debug for HeadSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadSource").finish_non_exhaustive()
-    }
-}
-impl HeadSource {
-    pub(crate) fn of(entry: &Entry, dir: &std::path::Path) -> Self {
-        Self {
-            revision_id: entry.revision_id,
-            digest: entry.content_digest.clone(),
-            bytes: entry.content_bytes as u64,
-            dir: dir.to_path_buf(),
-        }
-    }
-}
 async fn lineage_for(
     executor: impl sqlx::PgExecutor<'_>,
     loaded: &LoadedRegistry,
