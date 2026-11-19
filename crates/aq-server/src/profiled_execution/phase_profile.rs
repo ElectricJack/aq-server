@@ -32,6 +32,31 @@ impl Profile {
             Err(refused())
         }
     }
+    /// The profile of a proposal already recorded: matched by contract id and version, so
+    /// an attempt recorded under an earlier digest of the same contract stays readable.
+    /// The long contracts changed digest when their lease ceiling was removed (migration
+    /// 0149 keys the SQL owners on the id the same way). New documents use `for_contract`.
+    fn for_recorded_contract(contract: &ArtifactRef) -> Result<Self, AppError> {
+        let same =
+            |known: ArtifactRef| known.id == contract.id && known.version == contract.version;
+        if same(frozen::contract_artifact().map_err(|_| refused())?)
+            || same(frozen::long_contract_artifact().map_err(|_| refused())?)
+        {
+            Ok(Self::Frozen)
+        } else if same(refresh::contract_artifact().map_err(|_| refused())?)
+            || same(refresh::long_contract_artifact().map_err(|_| refused())?)
+        {
+            Ok(Self::Refresh)
+        } else {
+            Err(refused())
+        }
+    }
+    fn from_recorded_proposal(value: &Value) -> Result<Self, AppError> {
+        let contract: ArtifactRef =
+            serde_json::from_value(value["negotiation"]["contract"].clone())
+                .map_err(|_| malformed())?;
+        Self::for_recorded_contract(&contract)
+    }
     pub(super) fn from_proposal(value: &Value) -> Result<Self, AppError> {
         let contract: ArtifactRef =
             serde_json::from_value(value["negotiation"]["contract"].clone())
@@ -125,13 +150,32 @@ pub(super) async fn for_attempt_locked(
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| AppError::Internal)?;
-    value.as_ref().map(Profile::from_proposal).transpose()
+    value
+        .as_ref()
+        .map(Profile::from_recorded_proposal)
+        .transpose()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn a_recorded_proposal_under_an_earlier_digest_of_its_contract_is_still_read() {
+        let mut earlier = refresh::long_contract_artifact().unwrap();
+        earlier.digest = aq_admission::Digest::of(b"an earlier long schema");
+        let recorded = json!({"negotiation": {"contract": earlier}});
+        assert_eq!(
+            Profile::from_recorded_proposal(&recorded).unwrap(),
+            Profile::Refresh
+        );
+        // A new document must still name the exact current contract.
+        assert!(Profile::from_proposal(&recorded).is_err());
+        // Another contract id is refused either way.
+        earlier.id = aq_admission::Text::new("aq.admission.unknown-contract").unwrap();
+        let other = json!({"negotiation": {"contract": earlier}});
+        assert!(Profile::from_recorded_proposal(&other).is_err());
+    }
     fn fixture(refresh: bool) -> Value {
         if refresh {
             serde_json::from_str::<Value>(include_str!(
