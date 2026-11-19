@@ -1,0 +1,25 @@
+[package]
+name = "aq-login-store"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Versioned subscription-login store (moved out of the aq-server lib)"
+
+[dependencies]
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
+aq-intelligence-config = { path = "../aq-intelligence-config", version = "=0.1.0" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
+aq-session-host.workspace = true
+chrono.workspace = true
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+zeroize = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1110,6 +1110,14 @@ async fn logins_are_owner_requested_private_current_and_revocable() {
     let uri = format!("/api/worker-logins/{node}");
     let op = Uuid::new_v4();
     let request = json!({"operation_id":op,"providers":["anthropic"]});
+    // A Codex login is never pushed to a node: its sessions lease it.
+    for providers in [json!(["openai"]), json!(["anthropic", "openai"])] {
+        let codex = json!({"operation_id":Uuid::new_v4(),"providers":providers});
+        assert_eq!(
+            call(&admin, &uri, Some(codex), None, true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
     assert_eq!(
         call(&admin, &uri, Some(request.clone()), None, false)
             .await
