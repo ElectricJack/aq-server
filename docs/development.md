@@ -194,6 +194,122 @@ does not read a sibling checkout. `AQ_WORKER_BIN=/absolute/path/to/aq-worker`
 explicitly selects a development executable; the command prints that override.
 Official artifact checks reject local executable/source overrides.
 
+## Re-pin the ms1 sandbox template or session-host helper
+
+On the `aq-ms1` stack the sandbox template image digest and the session-host
+helper pin (`aq.ms1-host/aq-session-host`: digest, bytes, path) sit inside
+several definition bodies of the vault config and in the node's `native.json`.
+`scripts/ms1-repin-template.py` rewrites both consistently: changed bodies get
+a new version, every reference follows, and the `[profiled_execution]` and
+`[intelligence]` revisions go up by one. It changes nothing in place. Like
+`scripts/ms1-repin-project.py` (project commit pins), it needs the server
+recreated afterwards. The server is unavailable for about a minute.
+
+Paths below are the ms1 defaults. `compose.sh` is the copy your rollout uses
+(see [the live authoring runbook](operations/0013-live-authoring-runbook.md),
+4.3). Run everything as the stack's operator.
+
+```sh
+B=~/.local/share/aq-ms1
+N=$B/node/config                          # installed node files
+W=$B/runtime-manual/aq-worker              # the installed node executable
+OUT=$B/repin-$(date -u +%Y%m%dT%H%M%SZ)   # new, private output directory
+API=http://127.0.0.1:28080
+```
+
+1. **Build and push.** Template: build and push the image, then note its
+   `sha256` digest (64 hex characters) and the digest it replaces (the one in
+   the current config). Helper: build it in the worker checkout with
+   `cargo build --release --locked -p aq-session-host` and copy the binary to
+   its permanent path (the path is recorded in the config). Keep the previous
+   helper binary and the previous image: rollback needs them.
+
+2. **Save the current files.**
+
+   ```sh
+   mkdir -p -m 0700 "$OUT" "$OUT/before"
+   docker exec aq-ms1-server-1 cat /vault/settlement/config.toml > "$OUT/before/config.toml"
+   cp -p "$N"/*.json "$OUT/before/"
+   chmod 0600 "$OUT"/before/*
+   ```
+
+3. **Run the script** on those copies. Give `--template-digest` with
+   `--old-template-digest` (both 64 lowercase hex, no `sha256:`), and/or
+   `--helper-path`. It refuses when nothing would change.
+
+   ```sh
+   scripts/ms1-repin-template.py "$OUT/before/config.toml" "$OUT/before/native.json" "$OUT/new" \
+     --template-digest NEW_HEX --old-template-digest OLD_HEX \
+     --helper-path /path/to/new/aq-session-host
+   ```
+
+   It prints id, old and new version and digest for each changed body, and the
+   new revisions. `$OUT/new` receives `config.toml`, `native.json`,
+   `composite.json`, `codex-composite.json` (when the config has that body) and
+   `inventory.json`, each mode 0600.
+
+4. **Check the node files.** `native.json` must be mode 0600 or `check-native`
+   refuses it; the script writes it that way, so do not copy it without
+   `cp -p`. Stop here if the check fails.
+
+   ```sh
+   ls -l "$OUT/new"/*.json
+   "$W" check-native --config "$N/worker.toml" --native-config "$OUT/new/native.json"
+   ```
+
+5. **Write the vault config** (the previous one is kept beside it):
+
+   ```sh
+   tag=$(date -u +%Y%m%dT%H%M%SZ)
+   image=$(docker inspect aq-ms1-server-1 --format '{{.Config.Image}}')
+   docker run --rm -i --user 10001 --entrypoint sh -v aq-ms1_dev_vault:/vault "$image" \
+     -c "umask 077; cp -p /vault/settlement/config.toml /vault/settlement/config.toml.bak-repin-$tag && cat > /vault/settlement/config.toml.next && mv /vault/settlement/config.toml.next /vault/settlement/config.toml" \
+     < "$OUT/new/config.toml"
+   ```
+
+6. **Recreate the server** so it loads the config, and wait for it to be
+   healthy (`--force-recreate` is required: without it nothing is reloaded):
+
+   ```sh
+   compose.sh up -d --no-deps --no-build --force-recreate --wait --wait-timeout 300 server
+   curl -fsS "$API/healthz"; echo
+   ```
+
+
+7. **Register** the new registry revision (owner request, CSRF header
+   required; answers `{"installed":true}`):
+
+   ```sh
+   curl -fsS -X POST -H 'X-AQ-Request: 1' -H 'Content-Type: application/json' -d '{}' \
+     "$API/api/intelligence/register"
+   ```
+
+8. **Install the node files** (the node service must not be mid-attempt;
+   stop it first if one runs), then **restart the worker**:
+
+   ```sh
+   systemctl --user stop aq-node@ms1.service
+   install -m 0600 "$OUT"/new/{native,composite,inventory}.json "$N"/
+   [ -f "$OUT/new/codex-composite.json" ] && install -m 0600 "$OUT/new/codex-composite.json" "$N"/
+   systemctl --user start aq-node@ms1.service
+   systemctl --user status aq-node@ms1.service
+   ```
+
+   `adapter.json` does not change. If a controller was started by hand with
+   `scripts/ms1-demo.sh node`, use `scripts/ms1-demo.sh node-stop` and
+   `scripts/ms1-demo.sh node` instead of systemd.
+
+**Roll back** by re-pinning forward. The script only raises revisions and the
+server refuses changed content under an old version, so putting the old
+`config.toml` back is not a rollback. Repeat steps 2 to 8 with the values
+swapped: `--template-digest OLD_HEX --old-template-digest NEW_HEX` and
+`--helper-path` set to the kept previous helper binary. The first run's
+`$OUT/before` files and `config.toml.bak-repin-<time>` stay as the record of
+the old state. If the failure is before step 5, nothing is changed: delete
+`$OUT/new`. If it is after step 5 but before step 8, the vault config and
+server already carry the new pin and the node files the old one: finish
+step 8 or re-pin back.
+
 ## Simulating another user
 
 Dev auth treats every request as the vault's `dev_email`. To act as a viewer
