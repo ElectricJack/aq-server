@@ -471,11 +471,15 @@ async fn launch_reason(
     let Ok(launch) = snapshot.resolve(&request.role, &request.intelligence_profile) else {
         return Ok(Some("launch_documents_missing"));
     };
+    #[cfg(not(feature = "project_environments"))]
+    let elsewhere = launch.execution.environment != request.environment;
+    // Spec 0017 §5.3: only a pinned environment is fixed by the profile.
+    #[cfg(feature = "project_environments")]
+    let elsewhere =
+        (launch.execution.environment.as_ref()).is_some_and(|e| *e != request.environment);
     Ok(if !launch.role.enabled {
         Some("role_disabled")
-    } else if launch.execution.id != request.execution_profile
-        || launch.execution.environment != request.environment
-    {
+    } else if launch.execution.id != request.execution_profile || elsewhere {
         Some("profile_combination_denied")
     } else {
         None

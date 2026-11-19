@@ -179,9 +179,15 @@ pub(crate) async fn hold(
     let snapshot = active(pool).await?;
     Ok(tasks::role_hold(snapshot.as_ref(), &role.id).map(|hold| hold.shown()))
 }
-/// A task's effective role as every task read shows it: `{id, source}`.
-pub(crate) fn shown(node: &Value, default_role: &str) -> Value {
-    tasks::effective_role(&node["metadata"], default_role).shown()
+/// A task's effective role as every task read shows it: `{id, source}`; and
+/// what it needs from its environment (spec 0017 §5.4).
+pub(crate) fn show(projected: &mut Value, node: &Value, default_role: &str) {
+    projected["role"] = tasks::effective_role(&node["metadata"], default_role).shown();
+    #[cfg(feature = "project_environments")]
+    {
+        let needs = aq_project_policy::environments::needs(&node["metadata"]);
+        projected["needs"] = serde_json::json!(needs);
+    }
 }
 /// Whether an attempt of `task` was ever granted; its role is then fixed.
 pub(crate) async fn granted(pool: &PgPool, task: Uuid) -> Result<bool, AppError> {

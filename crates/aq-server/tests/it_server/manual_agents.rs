@@ -898,9 +898,24 @@ async fn live_stream_preserves_bytes_and_fences_input(
     bearer.set_sensitive(true);
     request.headers_mut().insert("authorization", bearer);
     let (mut node, _) = connect_async(request).await.unwrap();
+    // A queued attempt's pane keeps its launch geometry, so its viewer sends none.
+    let fixed = kind == "attempt";
+    let geometry = if fixed { "" } else { "&columns=101&rows=37" };
     let url = format!(
-        "ws://127.0.0.1:{ap}{human_prefix}/{id}/terminal/live?client_id={client}&generation={generation}&columns=101&rows=37"
+        "ws://127.0.0.1:{ap}{human_prefix}/{id}/terminal/live?client_id={client}&generation={generation}{geometry}"
     );
+    if fixed {
+        let mut sized = format!("{url}&columns=101&rows=37")
+            .into_client_request()
+            .unwrap();
+        sized
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        assert!(
+            connect_async(sized).await.is_err(),
+            "an attempt viewer cannot choose the pane geometry"
+        );
+    }
     let mut bad = url.clone().into_client_request().unwrap();
     bad.headers_mut().insert(
         "origin",
@@ -918,23 +933,31 @@ async fn live_stream_preserves_bytes_and_fences_input(
     let message = stream_frame(&mut node).await.into_text().unwrap();
     let attach: Value = serde_json::from_str(&message).unwrap();
     assert_eq!(attach["kind"], "attach");
-    assert_eq!(attach["columns"], 101);
-    assert_eq!(attach["rows"], 37);
+    if fixed {
+        assert!(attach.get("columns").is_none() && attach.get("rows").is_none());
+        assert_eq!(attach["read_only"], false);
+    } else {
+        assert_eq!(attach["columns"], 101);
+        assert_eq!(attach["rows"], 37);
+    }
     let connection: Uuid = serde_json::from_value(attach["connection_id"].clone()).unwrap();
+    // The worker reports the pane's own geometry when the attach is ready.
     node.send(Message::Text(
-        json!({"kind":"ready","connection_id":connection})
+        json!({"kind":"ready","connection_id":connection,"columns":120,"rows":40})
             .to_string()
             .into(),
     ))
     .await
     .unwrap();
-    assert!(
-        stream_frame(&mut browser)
-            .await
-            .into_text()
-            .unwrap()
-            .contains("ready")
-    );
+    let ready: Value =
+        serde_json::from_str(&stream_frame(&mut browser).await.into_text().unwrap()).unwrap();
+    assert_eq!(ready["kind"], "ready");
+    if fixed {
+        assert_eq!(
+            (&ready["columns"], &ready["rows"]),
+            (&json!(120), &json!(40))
+        );
+    }
     // A viewer of a queued attempt's pane is recorded for the stall ladder.
     let viewers: i64 =
         sqlx::query_scalar("SELECT count(*) FROM attempt_terminal_viewers WHERE attempt_id=$1")
@@ -967,17 +990,39 @@ async fn live_stream_preserves_bytes_and_fences_input(
         assert_eq!(v["bytes"], expected);
         assert_eq!(v["generation"], generation);
     }
-    browser
-        .send(Message::Text(
-            json!({"kind":"resize","columns":90,"rows":31})
+    if fixed {
+        // An attempt viewer asks for a fresh paint instead of resizing the pane.
+        browser
+            .send(Message::Text(json!({"kind":"repaint"}).to_string().into()))
+            .await
+            .unwrap();
+        let repaint: Value =
+            serde_json::from_str(&stream_frame(&mut node).await.into_text().unwrap()).unwrap();
+        assert_eq!(repaint["kind"], "repaint");
+        assert_eq!(repaint["connection_id"], json!(connection));
+        // The worker re-opens the pane and reports ready, ending the paint.
+        node.send(Message::Text(
+            json!({"kind":"ready","connection_id":connection,"columns":120,"rows":40})
                 .to_string()
                 .into(),
         ))
         .await
         .unwrap();
-    let resized: Value =
-        serde_json::from_str(&stream_frame(&mut node).await.into_text().unwrap()).unwrap();
-    assert_eq!(resized["columns"], 90);
+        let painted = stream_frame(&mut browser).await.into_text().unwrap();
+        assert!(painted.contains("ready"));
+    } else {
+        browser
+            .send(Message::Text(
+                json!({"kind":"resize","columns":90,"rows":31})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let resized: Value =
+            serde_json::from_str(&stream_frame(&mut node).await.into_text().unwrap()).unwrap();
+        assert_eq!(resized["columns"], 90);
+    }
     let other = Uuid::new_v4();
     let takeover = call(
         admin,

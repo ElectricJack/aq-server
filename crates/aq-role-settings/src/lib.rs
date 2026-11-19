@@ -13,6 +13,8 @@ use uuid::Uuid;
 pub mod attempts;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery;
+#[cfg(feature = "project_environments")]
+pub mod environments;
 pub mod http;
 pub mod observation;
 pub mod refusals;

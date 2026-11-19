@@ -97,6 +97,7 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
         | "task.edit"
         | "task.reprioritize"
         | "task.role.set"
+        | "task.needs.set"
         | "task.route.set"
         | "task.route.clear"
         | "task.dependency.add"

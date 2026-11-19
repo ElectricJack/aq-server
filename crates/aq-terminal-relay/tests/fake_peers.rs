@@ -145,6 +145,7 @@ fn input(l: &Ledger, c: &ControllerLease, n: u128, now: u64) -> api::InputReques
         expected_session_revision: 1,
         expires_at_ms: now + 1000,
         bytes: b"literal\n".to_vec(),
+        escape_key: false,
     }
 }
 fn snapshot(t: &TerminalIdentity, n: u128, capture: Uuid, through: u64) -> Snapshot {
@@ -1276,5 +1277,53 @@ fn trusted_scope_refusal_rejects_only_never_dispatched_and_keeps_all_replay_fenc
             .unwrap()
             .disposition,
         InputDisposition::DeliveryUnknown
+    );
+}
+
+#[test]
+fn finite_relay_refuses_split_input_before_dispatch() {
+    let (ledger, mut store, access, peer) = setup(false);
+    let (ledger, lease) = grant(ledger, &mut store, &access, &peer, 0, 800);
+    let mut request = input(&ledger, &lease, 810, 10);
+    for bytes in [b"\x1b".as_slice(), b"\x1b[<43;37"] {
+        request.bytes = bytes.into();
+        assert!(matches!(
+            ledger.input(&access, &request, 10),
+            Err(Error::Invalid)
+        ));
+    }
+    request.bytes = b"\x1b[1;5D".to_vec();
+    assert!(ledger.input(&access, &request, 10).is_ok());
+    request.bytes = vec![0x1b];
+    request.escape_key = true;
+    assert!(ledger.input(&access, &request, 10).is_ok());
+}
+
+#[test]
+fn a_pending_split_packet_does_not_block_ledger_reload_or_dispatch() {
+    let (ledger, mut store, access, peer) = setup(false);
+    let (ledger, lease) = grant(ledger, &mut store, &access, &peer, 0, 800);
+    let request = input(&ledger, &lease, 810, 10);
+    let next = apply(ledger.input(&access, &request, 10).unwrap(), &mut store).ledger;
+    let mut stored: serde_json::Value = serde_json::from_slice(&next.encode().unwrap()).unwrap();
+    let packet = &mut stored["inputs"][request.operation_id.to_string()];
+    packet["command"]["bytes"] = serde_json::json!([27]);
+    packet["byte_count"] = 1.into();
+    let mut command = packet["command"].clone();
+    command.sort_all_objects();
+    packet["command_digest"] =
+        serde_json::to_value(Digest::of(&serde_json::to_vec(&command).unwrap())).unwrap();
+    let ledger = Ledger::load(&serde_json::to_vec(&stored).unwrap()).unwrap();
+    assert!(matches!(
+        ledger.dispatch_input(&access, request.operation_id, 11),
+        Err(Error::Transition)
+    ));
+    let expired = apply(ledger.expire(11).unwrap(), &mut store).ledger;
+    assert_eq!(
+        expired
+            .receipt(&access, request.operation_id, 11)
+            .unwrap()
+            .disposition,
+        InputDisposition::Rejected
     );
 }

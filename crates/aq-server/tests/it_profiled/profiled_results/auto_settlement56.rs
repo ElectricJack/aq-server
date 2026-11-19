@@ -35,6 +35,8 @@ pub(crate) struct AutoEnv {
     pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
     _directory: tempfile::TempDir,
+    #[cfg(feature = "delivery_playbook")]
+    _task_ref: super::pushed_ref::TaskRef,
 }
 
 async fn auto_env(delivery: &str, graph_status: axum::http::StatusCode) -> AutoEnv {
@@ -102,19 +104,44 @@ pub(crate) async fn auto_env_source(
     if let Some(conclusion) = conclusion {
         report.conclusion = Label::new(conclusion).unwrap();
     }
+    #[cfg(not(feature = "delivery_playbook"))]
     let source = Uuid::new_v4();
+    #[cfg(not(feature = "delivery_playbook"))]
     report.source_receipt_ids.push(source);
-    let auth = context(&f).await;
-    results::record(&f.state, &auth, &report).await.unwrap();
+    // Spec 0016 §5.1: the source is the task ref at the pushed commit, and
+    // the report keys its evidence.
+    #[cfg(feature = "delivery_playbook")]
+    let (source, task_ref) = {
+        let task_ref = super::pushed_ref::task_ref(&mut f, &mut report).await;
+        let base = &f.profiled.source.base.hex;
+        let head = if changed {
+            "4".repeat(40)
+        } else {
+            base.clone()
+        };
+        *task_ref.at.lock().unwrap() = Some(head.clone());
+        let reference = task_ref.task_ref.clone();
+        let pushed = aq_delivery::git_grant::PushedRef { reference, head };
+        let pushed = aq_delivery::git_grant::Pushed::At(pushed);
+        let auth = context(&f).await;
+        let headers = super::pushed_ref::headers(&pushed);
+        let recorded = results::record_pushed(&f.state, &auth, &report, &headers);
+        recorded.await.unwrap();
+        (report.report_id, task_ref)
+    };
+    #[cfg(not(feature = "delivery_playbook"))]
+    results::record(&f.state, &context(&f).await, &report)
+        .await
+        .unwrap();
     // Epic 0 (spec 0016 section 7): the record hook records the result's facts
-    // (nothing is retained yet) and gives no verdict: no settlement row.
+    // (its pushed source included) and gives no verdict: no settlement row.
     #[cfg(feature = "delivery_playbook")]
     {
         assert_eq!(settlement_rows(&f, report.report_id).await, 0);
         let facts = result_facts(&f, report.report_id)
             .await
             .expect("facts recorded");
-        assert_eq!(facts["source"], Value::Null);
+        assert_eq!(facts["source"]["changed"], json!(changed));
     }
     // The record hook evaluated already: nothing is retained yet, so it holds.
     #[cfg(not(feature = "delivery_playbook"))]
@@ -263,6 +290,8 @@ pub(crate) async fn auto_env_source(
         writes,
         bodies,
         _directory: directory,
+        #[cfg(feature = "delivery_playbook")]
+        _task_ref: task_ref,
     }
 }
 

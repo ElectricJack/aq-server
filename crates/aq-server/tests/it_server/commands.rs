@@ -5,15 +5,22 @@
 //!   route or on the reviewed list in `protocol/commands/v1/routes.json`.
 use aq_command_registry::routes::{self, Class};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+/// The dashboard action union this build serves (the published one without
+/// the feature, checked by `dashboard_actions_contract -- --check`).
+fn actions() -> serde_json::Value {
+    serde_json::from_slice(&aq_server::dashboard_api::actions::contract::schema_bytes()).unwrap()
 }
 
+/// The published contract is the feature-off build's; with
+/// `project_environments` the generated one adds `task.needs.set` and
+/// `needs` (checked by [`the_project_environments_contract_adds_needs`]).
+#[cfg(not(feature = "project_environments"))]
 #[test]
 fn commands_json_is_generated_from_the_registry() {
-    let path = repo().join("protocol/commands/v1/commands.json");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../protocol/commands/v1/commands.json");
     let mut generated = serde_json::to_string_pretty(&aq_server::commands::document()).unwrap();
     generated.push('\n');
     if std::env::var_os("AQ_REGENERATE_COMMANDS").is_some() {
@@ -30,10 +37,7 @@ fn commands_json_is_generated_from_the_registry() {
 #[test]
 fn every_action_kind_is_a_command_with_a_declared_grant() {
     let registry = aq_server::commands::registry();
-    let schema: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../protocol/dashboard-actions/v1/schema.json"
-    ))
-    .unwrap();
+    let schema = actions();
     for kind in schema["$defs"]["ActionRequest"]["oneOf"]
         .as_array()
         .unwrap()
@@ -72,10 +76,7 @@ fn every_command_has_its_own_summary() {
 #[test]
 fn subject_rules_match_the_action_schemas() {
     use aq_command_registry::SubjectId;
-    let schema: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../protocol/dashboard-actions/v1/schema.json"
-    ))
-    .unwrap();
+    let schema = actions();
     for kind in schema["$defs"]["ActionRequest"]["oneOf"]
         .as_array()
         .unwrap()
@@ -357,4 +358,40 @@ fn section_9_maps_every_agent_route_to_its_registry_command() {
             "{path} has no registry command (spec 0006 §9 step 2)"
         );
     }
+}
+
+/// Spec 0017: with `project_environments` the owner's `task.needs.set` is a
+/// command on the action route with the `task.edit` grant, its payload and
+/// the task create payloads take `needs`, and a request validates.
+#[cfg(feature = "project_environments")]
+#[test]
+fn the_project_environments_contract_adds_needs() {
+    let c = aq_server::commands::registry()
+        .get("task.needs.set")
+        .unwrap();
+    assert_eq!(c.grant, Some(aq_agent_grants::op::TASK_EDIT));
+    assert!(c.owner.is_some() && c.supervisor.is_none() && c.agent.is_none());
+    let schema = actions();
+    let kinds = schema["$defs"]["ActionRequest"]["oneOf"]
+        .as_array()
+        .unwrap();
+    let payload = |kind: &str| {
+        let found = kinds
+            .iter()
+            .find(|k| k["properties"]["kind"]["const"] == kind);
+        found.unwrap()["properties"]["payload"].clone()
+    };
+    assert!(payload("task.needs.set")["properties"]["needs"].is_object());
+    assert!(payload("task.create")["properties"]["needs"].is_object());
+    let graph = payload("task.graph.create").to_string();
+    assert!(graph.contains("\"needs\""), "{graph}");
+    let set = payload("task.needs.set");
+    let valid = serde_json::json!({"operation_id":"00000000-0000-4000-8000-000000000206",
+        "project_id":"00000000-0000-4000-8000-000000000010","expected_version":"4","needs":["node","playwright"]});
+    assert!(aq_agent_api::check(&set, &set, &valid), "{set}");
+    let unknown = serde_json::json!({"operation_id":"00000000-0000-4000-8000-000000000206",
+        "project_id":"00000000-0000-4000-8000-000000000010","expected_version":"4","role":"x"});
+    assert!(!aq_agent_api::check(&set, &set, &unknown));
+    let document = aq_server::commands::document().to_string();
+    assert!(document.contains("task.needs.set"));
 }

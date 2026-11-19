@@ -123,23 +123,28 @@ impl DeliveryPort for PgDelivery {
         let Some(row) = row else { return Ok(None) };
         let (attempt, report): (Uuid, serde_json::Value) =
             (row.get("attempt_id"), row.get("report"));
-        // The source the report pins and the owner retained, as evaluation reads it.
-        let source = sqlx::query(
-            "SELECT manifest->'checkpoint'->>'hex' AS head,manifest->'source'->'base'->>'hex' AS base \
-             FROM source_transfers WHERE attempt_id=$1 AND state='retained' \
-             AND import_operation_id::text IN (SELECT jsonb_array_elements_text($2::jsonb->'source_receipt_ids')) \
-             ORDER BY transfer_id LIMIT 1",
+        // Spec 0016 §5.1: the pushed task ref, confirmed at its head when the
+        // report was recorded, from the commit the attempt was offered.
+        let start: Option<String> = sqlx::query_scalar(
+            "SELECT execution_spec#>>'{source,resolved_object,hex}' FROM profiled_launches WHERE attempt_id=$1",
         )
         .bind(attempt)
-        .bind(&report)
         .fetch_optional(&mut *conn)
-        .await?;
-        let (head, start): (String, String) = match &source {
-            Some(s) => (
-                s.get::<Option<String>, _>("head").unwrap_or_default(),
-                s.get::<Option<String>, _>("base").unwrap_or_default(),
-            ),
-            None => Default::default(),
+        .await?
+        .flatten();
+        // A push whose lease no longer held names no head: its outcome is
+        // `push_conflict`, so the policy can send the task back.
+        let pushed: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT head FROM delivery_pushed_results WHERE report_id=$1")
+                .bind(row.get::<Uuid, _>("report_id"))
+                .fetch_optional(&mut *conn)
+                .await?;
+        let conflict = matches!(pushed, Some((None,)));
+        let head = pushed.and_then(|(head,)| head).unwrap_or_default();
+        let start = if head.is_empty() {
+            String::new()
+        } else {
+            start.unwrap_or_default()
         };
         // The lineage's original base; past the handoff bound it is unknown,
         // and a result with a source then counts as changed.
@@ -154,7 +159,10 @@ impl DeliveryPort for PgDelivery {
             project_id: row.get("project_id"),
             attempt_id: attempt,
             result_id: row.get("report_id"),
-            outcome: report["outcome"].as_str().unwrap_or("").to_owned(),
+            outcome: match conflict {
+                true => "push_conflict".to_owned(),
+                false => report["outcome"].as_str().unwrap_or("").to_owned(),
+            },
             changed: !head.is_empty() && base.as_deref() != Some(head.as_str()),
             head,
             base: base.unwrap_or_default(),

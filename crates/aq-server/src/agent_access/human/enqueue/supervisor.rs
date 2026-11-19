@@ -75,6 +75,8 @@ fn single(request: &ActionRequest, p: &super::super::commands::Create) -> ApiRes
             role: p.role.clone(),
             intelligence_hint: p.intelligence_hint.clone(),
             task_type: p.task_type.clone(),
+            #[cfg(feature = "project_environments")]
+            needs: p.needs.clone(),
         }],
         edges: vec![],
     }))

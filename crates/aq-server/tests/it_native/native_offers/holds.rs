@@ -332,10 +332,22 @@ pub(super) async fn full_work(c: &Case, task: Uuid) -> Value {
 
 /// The owner's `task.retry` dashboard action on the case's task, with the action's `reason`.
 async fn retry(c: &Case, operation: Uuid, reason: Option<&str>) -> (axum::http::StatusCode, Value) {
+    retry_with(c, operation, reason, false).await
+}
+/// [`retry`], with the payload's `fresh` option when asked for.
+async fn retry_with(
+    c: &Case,
+    operation: Uuid,
+    reason: Option<&str>,
+    fresh: bool,
+) -> (axum::http::StatusCode, Value) {
     let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
     let mut action = serde_json::json!({"operation_id":operation,"kind":"task.retry",
         "subject":{"type":"task","id":task,"revision":"1"},"expected_versions":{"task":"1"},
         "payload":{"operation_id":operation,"project_id":project,"expected_version":"1"}});
+    if fresh {
+        action["payload"]["fresh"] = true.into();
+    }
     if let Some(reason) = reason {
         action["reason"] = reason.into();
     }
@@ -838,4 +850,204 @@ async fn an_owner_retry_overrides_a_recorded_cost_hold_and_starts_the_cost_budge
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered_tasks(&body), [task], "{body}");
+}
+
+/// A case whose task's only attempt failed and keeps its claim, and whose project binding then
+/// changed (2026-11-19: the owner raised a ceiling), so the offer path holds the task with
+/// `replacement_project_revision_changed`: a retry would reuse the attempt's source, exported
+/// under the revision it was offered at. The hold is recorded as the poll's decision records it.
+/// Also returns the binding's new revision.
+async fn binding_changed() -> (Case, Uuid, i64) {
+    let mut c = setup().await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let predecessor = page.offers.remove(0).offered.offer.binding.attempt_id;
+    native_offer::fail(&c, predecessor).await;
+    // The fixture's binding is not at revision 1, so the change is relative.
+    let revision: i64 = sqlx::query_scalar(
+        "UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1 RETURNING revision",
+    )
+    .bind(c.env.lineage.project_id)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    let (pool, at) = (c.env.env.pool.clone(), (c.env.env.state.clock)());
+    holds::hold(
+        &pool,
+        decision(&c, "replacement_project_revision_changed", 1),
+        at,
+    )
+    .await;
+    owner_actions(&mut c).await;
+    (c, predecessor, revision)
+}
+
+/// Owner decision 2026-11-19: after a binding change a plain retry stays refused (its source
+/// was exported under the old revision), and says that `fresh` starts the task again. A fresh
+/// retry releases the held attempt, records who and why, and the next offer is a first attempt
+/// from the project's current pin under the current binding. The old attempt, its retained
+/// source and its release are untouched.
+#[tokio::test]
+async fn a_fresh_owner_retry_starts_a_task_held_by_a_binding_change_from_the_current_pin() {
+    use aq_server::profiled_execution::replacement::{self, Assessment};
+    let (c, predecessor, revision) = binding_changed().await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let code = "replacement_project_revision_changed";
+    let readiness = work(&c, task).await;
+    assert_eq!(held_reason(&readiness).as_deref(), Some(code));
+    let message = (readiness["reasons"].as_array().unwrap().iter())
+        .find(|r| r["code"] == "task_held")
+        .unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains("fresh=true"), "{message}");
+    // A plain retry is refused, naming the option, and admits nothing.
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("try")).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], code);
+    assert!(body["message"].as_str().unwrap().contains("fresh=true"));
+    let retained_before: Value = sqlx::query_scalar(
+        "SELECT state->'retention' FROM profiled_authority_hot WHERE attempt_id=$1",
+    )
+    .bind(predecessor)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // The fresh retry releases it.
+    let operation = Uuid::new_v4();
+    let (status, body) = retry_with(&c, operation, Some("ceilings raised"), true).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let (status, replay) = retry_with(&c, operation, Some("ceilings raised"), true).await;
+    assert_eq!(status, 200, "{replay}");
+    let recorded: Vec<(Uuid, Uuid, String, String, String, i64)> = sqlx::query_as("SELECT attempt_id,released_attempt_id,hold_code,reason,actor,project_revision FROM task_fresh_starts WHERE task_id=$1")
+        .bind(task)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    let want = (
+        predecessor,
+        predecessor,
+        code,
+        "ceilings raised",
+        "owner@localhost",
+        revision,
+    );
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    let r = &recorded[0];
+    assert_eq!(
+        (r.0, r.1, r.2.as_str(), r.3.as_str(), r.4.as_str(), r.5),
+        want
+    );
+    let shown: Vec<_> = (system_comments(&c, task).await.into_iter())
+        .filter(|(_, body)| body.contains("started this task fresh"))
+        .collect();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0].1.ends_with("Owner's reason: ceilings raised"));
+    let changed = sqlx::query("UPDATE task_fresh_starts SET reason='x' WHERE task_id=$1")
+        .bind(task)
+        .execute(&pool)
+        .await;
+    assert!(changed.is_err(), "fresh starts are immutable");
+    // The hold is gone and the claim released; nothing of the attempt was deleted.
+    assert_eq!(held_reason(&work(&c, task).await), None);
+    assert!(swarm(&c).await.is_empty());
+    let holding: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(predecessor)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!holding);
+    let retained_after: Value = sqlx::query_scalar(
+        "SELECT state->'retention' FROM profiled_authority_hot WHERE attempt_id=$1",
+    )
+    .bind(predecessor)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_after, retained_before);
+    assert_eq!(retained_after["kind"], "retained");
+    let exports: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM profiled_launch_source_exports WHERE attempt_id=$1",
+    )
+    .bind(predecessor)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        exports, 1,
+        "the previous attempt's source is still retained"
+    );
+    // The offer path sees a task without history: a first attempt, not a replacement.
+    let state = &c.env.env.state;
+    let now = (state.clock)().timestamp_millis() as u64;
+    let assessed = replacement::assess_task_for_revision(state, task, now, revision as u64).await;
+    assert_eq!(assessed.unwrap(), Assessment::Fresh);
+    let counts = aq_server::profiled_execution::no_grant::attempt_counts(&pool, task).await;
+    assert_eq!(
+        (counts.as_ref().unwrap().started, counts.unwrap().history),
+        (0, 1)
+    );
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let next = page.offers[0].offered.offer.binding.attempt_id;
+    assert_ne!(next, predecessor);
+    // The new attempt's source is exported from the current pin, under the current binding.
+    let pinned = replacement::predecessor_project_revision(&pool, next).await;
+    assert_eq!(pinned.unwrap(), Some(revision as u64));
+    let releases: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM profiled_replacement_releases WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(releases, 1, "only the held attempt was released");
+}
+
+/// The option is for the binding-change hold alone: a task held by anything else, or not held
+/// at all, is refused with a clear reason and nothing is admitted or recorded.
+#[tokio::test]
+async fn a_fresh_owner_retry_is_refused_for_any_other_hold() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    owner_actions(&mut c).await;
+    let (status, body) = retry_with(&c, Uuid::new_v4(), Some("try"), true).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "lineage_retry_budget_exhausted");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.starts_with("Fresh retry refused"), "{message}");
+    assert!(message.contains("project binding changed"), "{message}");
+    // A quarantine is refused the same way.
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'test quarantine','owner','{}',$3,1)")
+        .bind(predecessor)
+        .bind(task)
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = retry_with(&c, Uuid::new_v4(), None, true).await;
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(body["code"], "stall_quarantined");
+    let admitted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dashboard_operations WHERE kind='task.retry'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(admitted, 0);
+    let fresh: i64 = sqlx::query_scalar("SELECT count(*) FROM task_fresh_starts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fresh, 0);
 }

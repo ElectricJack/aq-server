@@ -29,6 +29,8 @@ fn input() -> ActualSetup {
             allow_enrolled_nodes: false,
             allowed_worker_groups: vec!["actual-fixture".into()],
             allowed_environments: vec!["confined-worktree".into()],
+            #[cfg(feature = "project_environments")]
+            default_environment: None,
             policy: Reference {
                 identity: "pure-policy".into(),
                 revision: "1".into(),

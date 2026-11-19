@@ -463,6 +463,9 @@
           "format": "uint64",
           "minimum": 0
         },
+        "escape_key": {
+          "type": "boolean"
+        },
         "issued_at_ms": {
           "type": "integer",
           "format": "uint64",

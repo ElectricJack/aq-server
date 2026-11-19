@@ -65,7 +65,9 @@ class RenumberTests(unittest.TestCase):
         text = (self.root / SOURCE).read_text()
         gates = "".join(f"// FEATURE_FORMAT {n}\nif supported >= {n} {{ feature{n}(); }}\n"
                         f"const PRIORS_{n}: &str = \"{n:04}_feature{n}.sql\";\n" for n in numbers)
-        self.write(SOURCE, gates + text)
+        consts = "".join(f"pub const FORMAT: u32 = {n};\npub(crate) const STATE_FORMAT: u64 = {n};\n"
+                         f"const LIMIT: u32 = {n};\n" for n in numbers)
+        self.write(SOURCE, gates + consts + text)
         self.commit("feature")
 
     def run_script(self, *args):
@@ -108,6 +110,7 @@ class RenumberTests(unittest.TestCase):
         check = self.run_script("--check")
         self.assertEqual(check.returncode, 1, check.stdout)
         self.assertIn("0003_feature3.sql -> 0004_feature3.sql", check.stdout)
+        self.assertIn(f"would update {SOURCE}", check.stdout)  # the stale FORMAT constant is reported
         self.assertEqual(self.git("status", "--porcelain"), before)
         self.assertTrue((self.root / MIGRATIONS / "0003_feature3.sql").exists())
 
@@ -121,6 +124,8 @@ class RenumberTests(unittest.TestCase):
         source = (self.root / SOURCE).read_text()
         self.assertIn("// FEATURE_FORMAT 4\nif supported >= 4 { feature3(); }\n"
                       'const PRIORS_4: &str = "0004_feature3.sql";\n', source)
+        self.assertIn("pub const FORMAT: u32 = 4;\npub(crate) const STATE_FORMAT: u64 = 4;\n", source)
+        self.assertIn("const LIMIT: u32 = 3;\n", source)  # an unrelated constant keeps its number
         # Main's own gate for its migration 3 is not the branch's line and stays.
         self.assertIn("if supported >= 3 { up3(); }\n", source)
         self.assertEqual(self.migration_files_unchanged_from_main(), "")

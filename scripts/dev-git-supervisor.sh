@@ -2,6 +2,14 @@
 # One authority owns this private state/socket. The child PID is diagnostic only.
 set -eu
 child=''
+# Spec 0016 §5.2 (delivery_playbook): with AQ_GIT_HTTP_SOCKET set, aq-git also
+# serves git smart-HTTP for task attempts on that socket, beside the JSON one
+# in the same shared directory. Only an aq-git built with its own
+# delivery_playbook feature accepts the flag, so it stays off by default.
+set --
+if [ -n "${AQ_GIT_HTTP_SOCKET:-}" ]; then
+    set -- --git-http-socket "$AQ_GIT_HTTP_SOCKET"
+fi
 shutdown() {
     trap '' TERM INT
     if [ -n "$child" ]; then
@@ -15,7 +23,7 @@ trap shutdown TERM INT
 while :; do
     # Keep the guard and its engine in a separate process group. If the guard
     # itself dies, no orphaned engine may keep serving during a restart loop.
-    setsid aq-git --state-dir /var/lib/aq/git --git-executable /opt/aq-git-runtime/bin/git --listen /run/aq-git/central.sock serve &
+    setsid aq-git --state-dir /var/lib/aq/git --git-executable /opt/aq-git-runtime/bin/git --listen /run/aq-git/central.sock "$@" serve &
     child=$!
     printf '%s\n' "$child" > /run/aq-git/child.pid
     wait "$child" || true

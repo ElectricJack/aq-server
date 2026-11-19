@@ -73,6 +73,7 @@ pub fn artifacts() -> BTreeMap<String, String> {
             issued_at_ms: 200,
             deadline_ms: 1000,
             bytes: b"literal\n".to_vec(),
+            escape_key: false,
         };
         let resize = ResizeCommand {
             operation_id: id(8),
@@ -309,6 +310,7 @@ pub fn artifacts() -> BTreeMap<String, String> {
             expected_session_revision: 1,
             expires_at_ms: 5,
             bytes: b"x".to_vec(),
+            escape_key: false,
         },
     };
     let document = DraftDocument::EpochInput(request.clone());
@@ -337,6 +339,7 @@ pub fn artifacts() -> BTreeMap<String, String> {
             issued_at_ms: 2,
             deadline_ms: 5,
             bytes: b"x".to_vec(),
+            escape_key: false,
         },
     };
     let envelope = Envelope {

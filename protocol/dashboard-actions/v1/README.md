@@ -200,6 +200,15 @@ subject revision and the single `expected_versions` entry (`task` or
   shows as a `role` change. Once any attempt of the task has been granted the
   operation is `rejected`; an offer that was declined or never granted does
   not count.
+- `task.needs.set` (spec 0017 §5.4; only in a server built with the
+  compile-time feature `project_environments`, so not in the published
+  `schema.json`, which is the feature-off build's) sets what the task needs
+  from its environment (Graph metadata `aq:needs`, a list of at most 32
+  distinct capability labels) or clears it when `needs` is null, absent or
+  empty. It preserves other metadata keys. Once any attempt of the task has
+  been granted the operation is `rejected`, as for `task.role.set`. The same
+  build accepts `needs` on `task.create` and on each task of
+  `task.graph.create`; a malformed list is `422`.
 - `task.route.set` puts an owner route on the task: `class` is
   `<parent>-<effort>` (for example `standard-high`), with optional `harnesses`
   and `providers` limits. It is refused (`422`) when Settings assigns no profile
@@ -251,7 +260,19 @@ subject revision and the single `expected_versions` entry (`task` or
   again; for cost, only spend after the override counts. A hold that is not a
   limit (a quarantine, a changed project binding, an undelivered result) is
   refused with
-  HTTP 422 and the hold's code. Retry does not change Graph task lifecycle.
+  HTTP 422 and the hold's code, except the changed project binding below. Retry
+  does not change Graph task lifecycle.
+  A task held by `replacement_project_revision_changed` (the project binding
+  changed since its last attempt, whose retained source a replacement would
+  reuse) is released by the optional payload field `fresh: true`: the held
+  attempt is released as for a replacement, the owner's `reason` is recorded
+  (`task_fresh_starts`) and named in a system comment, and the task's next
+  attempt is a first attempt from the project's current pinned source under the
+  current binding, not a replacement. The earlier attempts and their retained
+  results stay; they no longer count against the task's budgets. `fresh` is
+  refused with HTTP 422 for a task held by anything else (or not held), naming
+  that hold; without it the binding-change hold is refused as before, and its
+  message names the option.
 - `knowledge.author` creates an unverified note (default content type `note`)
   whose Graph node ID equals the operation ID.
 - `knowledge.correct` patches title, body, labels or content type.

@@ -57,6 +57,11 @@ max_age = 2592000 # seconds (30 days)
 staging_root = "/var/lib/aq/source-staging"
 git_root = "/var/lib/aq/git"
 git_socket = "/run/aq-git/central.sock"
+# Spec 0016 §5.2, only for a server built with the `delivery_playbook` feature
+# and aq-git started with AQ_GIT_HTTP_SOCKET (compose.yaml): offers carry a git
+# grant and workers fetch and push through /v1/git with their node credential.
+# [delivery]
+# git_http_socket = "/run/aq-git/git-http.sock"
 [updates]
 spool_dir = "/updater"
 

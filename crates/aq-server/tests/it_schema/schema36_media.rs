@@ -1,15 +1,13 @@
 //! Actual frozen-prefix upgrade/refusal and destructive storage-drift checks.
-use super::{MIGRATIONS, StoreError, migrate_known};
-use crate::test_support::TestDb;
+use aq_server::store::StoreError;
+use aq_server::test_support::{TestDb, migrate_profile};
 use serde_json::Value;
 use sqlx::PgPool;
 
 async fn database(version: u32) -> (TestDb, PgPool) {
     let db = TestDb::create().await;
     let pool = db.pool().await;
-    migrate_known(&pool, &MIGRATIONS[..version as usize], version)
-        .await
-        .unwrap();
+    migrate_profile(&pool, version).await.unwrap();
     (db, pool)
 }
 async fn rows(pool: &PgPool, table: &str) -> Value {
@@ -19,7 +17,7 @@ async fn rows(pool: &PgPool, table: &str) -> Value {
 async fn fresh36_and_actual35_upgrade_preserve_conversation_and_refuse_old_reader() {
     let (_db, pool) = database(35).await;
     let conversation = rows(&pool, "global_supervisor_conversation").await;
-    migrate_known(&pool, &MIGRATIONS[..36], 36).await.unwrap();
+    migrate_profile(&pool, 36).await.unwrap();
     assert_eq!(
         rows(&pool, "global_supervisor_conversation").await,
         conversation
@@ -31,7 +29,7 @@ async fn fresh36_and_actual35_upgrade_preserve_conversation_and_refuse_old_reade
     let ledger = rows(&pool, "schema_migrations").await;
     let meta = rows(&pool, "meta").await;
     assert!(matches!(
-        migrate_known(&pool, &MIGRATIONS[..35], 35).await,
+        migrate_profile(&pool, 35).await,
         Err(StoreError::IncompatibleState {
             found: 36,
             supported: 35
@@ -39,7 +37,7 @@ async fn fresh36_and_actual35_upgrade_preserve_conversation_and_refuse_old_reade
     ));
     assert_eq!(rows(&pool, "schema_migrations").await, ledger);
     assert_eq!(rows(&pool, "meta").await, meta);
-    migrate_known(&pool, &MIGRATIONS[..36], 36).await.unwrap();
+    migrate_profile(&pool, 36).await.unwrap();
     let (_fresh, fresh) = database(36).await;
     assert_eq!(
         rows(&fresh, "result_media_intents").await,
@@ -52,7 +50,7 @@ async fn corrupt(sql: &str) {
     let ledger = rows(&pool, "schema_migrations").await;
     let meta = rows(&pool, "meta").await;
     assert!(
-        matches!(migrate_known(&pool,&MIGRATIONS[..36],36).await,Err(StoreError::Corrupt(message))if message.contains("result media")),
+        matches!(migrate_profile(&pool, 36).await,Err(StoreError::Corrupt(message))if message.contains("result media")),
         "{sql}"
     );
     assert_eq!(rows(&pool, "schema_migrations").await, ledger);

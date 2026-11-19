@@ -679,6 +679,7 @@ async fn offers(
                 &context,
                 &metadata,
                 route,
+                replacement.as_ref().map(|r| r.predecessor),
             )
         };
         let compiled = match on_heap(compile).await {
@@ -842,6 +843,7 @@ async fn offers(
                 &context,
                 &metadata,
                 route,
+                replacement.as_ref().map(|r| r.predecessor),
             )
         };
         let compiled = match on_heap(compile).await {
