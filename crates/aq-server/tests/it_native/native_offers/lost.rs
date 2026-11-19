@@ -254,3 +254,104 @@ async fn a_quarantined_lost_hold_is_counted_as_the_task_views_show_it() {
         "{comments:?}"
     );
 }
+
+/// The offer is accepted and granted, and the attempt never started.
+async fn granted(c: &mut Case, offer: &NativeOffer) -> Uuid {
+    let (_, _, request, _) = native_offer::prepare_request(c, offer).await;
+    let state = c.env.env.state.clone();
+    let auth = auth(c).await;
+    let grant = initial_grant::prepare(&state, &auth, &request, Uuid::new_v4())
+        .await
+        .unwrap();
+    grant.original.grant.binding.attempt_id
+}
+/// Revokes the case's node (its machine, when it belongs to one) in one transaction.
+async fn revoke(c: &Case) -> u32 {
+    let node = c.env.env.node;
+    let pool = &c.env.env.pool;
+    let key: Option<String> = sqlx::query_scalar("SELECT machine_key FROM nodes WHERE id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let target = key.unwrap_or_else(|| format!("node:{node}"));
+    let mut tx = pool.begin().await.unwrap();
+    let n = aq_machine_control::revoke_machine(&mut tx, &target, chrono::Utc::now())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    n
+}
+/// The attempt is released as a revoked node's: recorded, stopped, its claim freed, not charged.
+async fn assert_released(c: &Case, attempt: Uuid) {
+    let pool = &c.env.env.pool;
+    let held: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(!held, "the revoked node's attempt no longer holds its task");
+    let (reason, charged): (String, bool) =
+        sqlx::query_as("SELECT reason,charged FROM lost_attempt_releases WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!((reason.as_str(), charged), ("node_revoked", false));
+    let (status, stop): (String, String) = sqlx::query_as(
+        "SELECT state->>'status',state#>>'{stop,kind}' FROM profiled_authority_hot WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((status.as_str(), stop.as_str()), ("finished", "stopped"));
+    let releases: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM profiled_replacement_releases WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(releases, 1, "the task is retryable as after a lost attempt");
+}
+async fn release_count(c: &Case) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM lost_attempt_releases")
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn revoking_a_node_releases_its_granted_attempt() {
+    let (mut c, offer) = native_offer::published().await;
+    let attempt = granted(&mut c, &offer).await;
+    assert_eq!(revoke(&c).await, 1);
+    assert_released(&c, attempt).await;
+}
+
+#[tokio::test]
+async fn revoking_a_node_releases_its_running_attempt_and_replays_harmlessly() {
+    let (mut c, offer) = native_offer::published().await;
+    let attempt = running(&mut c, &offer).await;
+    assert_eq!(revoke(&c).await, 1);
+    assert_released(&c, attempt).await;
+    // A replay revokes no live node and releases nothing more; the function itself is idempotent.
+    assert_eq!(revoke(&c).await, 0);
+    let again: i32 = sqlx::query_scalar("SELECT release_revoked_node_attempts($1,now())")
+        .bind(c.env.env.node)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(again, 0);
+    assert_eq!(release_count(&c).await, 1);
+    assert_released(&c, attempt).await;
+}
+
+#[tokio::test]
+async fn revoking_a_node_without_held_attempts_releases_nothing() {
+    let (c, _offer) = native_offer::published().await;
+    assert_eq!(revoke(&c).await, 1);
+    assert_eq!(release_count(&c).await, 0);
+}

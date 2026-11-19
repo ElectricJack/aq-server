@@ -40,6 +40,7 @@ jobs:
         run: |
           python3 scripts/migration_catalog.py
           python3 scripts/test-migration-catalog.py
+          python3 scripts/test-renumber-migrations.py
       - name: cargo fmt
         run: cargo fmt --all --check
       - name: Verify the pinned standalone worker and public contracts

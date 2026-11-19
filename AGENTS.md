@@ -114,6 +114,19 @@ A substring such as `config::` also matches `profiled_config::...` in another
 module, so anchor module filters with nextest's `test(/^module::/)` when that
 matters.
 
+### Adding a migration
+
+Migrations in `crates/aq-server/migrations/` are numbered without gaps
+(`python3 scripts/migration_catalog.py` checks them; see
+[`docs/development.md`](docs/development.md#database-migrations)). When
+another PR has taken your number, do not renumber by hand: after
+`git fetch origin` and merging `origin/main`, run
+`python3 scripts/renumber-migrations.py`. It renames the migrations your
+branch adds to follow main's newest one and rewrites the number where your
+branch wrote it (`value='N'`, `supported >= N`, `COUNTS_N`, `PRIORS_N`,
+`*_FORMAT N`, `migration N`). `--check` only reports and exits 1 when
+renumbering is needed. Its test is `python3 scripts/test-renumber-migrations.py`.
+
 ### Budgets
 
 `build-budget.toml` holds ceilings, and `scripts/build-budget.py` (CI lint job)

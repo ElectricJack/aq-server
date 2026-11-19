@@ -811,31 +811,34 @@ pub async fn revoke_machine(
                 return Err(Error::MachineNode(key));
             }
         }
-        let n = sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL")
-            .bind(id)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-        return Ok(n as u32);
+        let revoked: Vec<Uuid> = sqlx::query_scalar(
+            "UPDATE nodes SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL RETURNING id",
+        )
+        .bind(id)
+        .bind(now)
+        .fetch_all(&mut *tx)
+        .await?;
+        lost::release_revoked(tx, &revoked, now).await?;
+        return Ok(revoked.len() as u32);
     }
     if !valid_machine_key(machine) {
         return Err(Error::Invalid("machine"));
     }
     lock_machine(tx, machine).await?;
     lock_live_nodes(tx, Some(machine)).await?;
-    let n =
-        sqlx::query("UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL")
-            .bind(machine)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
+    let revoked: Vec<Uuid> = sqlx::query_scalar(
+        "UPDATE nodes SET revoked_at=$2 WHERE machine_key=$1 AND revoked_at IS NULL RETURNING id",
+    )
+    .bind(machine)
+    .bind(now)
+    .fetch_all(&mut *tx)
+    .await?;
+    lost::release_revoked(tx, &revoked, now).await?;
     sqlx::query("DELETE FROM machine_controls WHERE machine_key=$1")
         .bind(machine)
         .execute(&mut *tx)
         .await?;
-    Ok(n as u32)
+    Ok(revoked.len() as u32)
 }
 
 pub async fn owner_availability(conn: &mut PgConnection) -> Result<OwnerAvailability, Error> {

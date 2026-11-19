@@ -275,7 +275,10 @@ reject the missing 0061 until it includes the first migration. If both branches
 choose 0061, the combined catalog fails CI even when Git merges their different
 filenames cleanly. Renumber only an unpublished, unapplied migration after
 coordination. Never rename, renumber or edit a migration already applied to a
-database; add a new migration instead.
+database; add a new migration instead. To move a branch's unpublished
+migrations behind main's newest one, run `python3 scripts/renumber-migrations.py`
+(`--check` only reports); it renames the files and rewrites the number in the
+branch's own lines, and the catalog passes afterwards.
 
 Each migration must set `meta.state_format_version` to its number in the same
 transaction. `store.rs` registration, `STATE_FORMAT_VERSION`, and
