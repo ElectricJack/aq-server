@@ -83,20 +83,140 @@ pub fn phrase(code: &str) -> String {
 }
 
 /// Why an owner Retry of a held task is refused (M2, owner decision 2026-11-13): the hold's
-/// phrase, the charged and allowed attempts for an attempt budget, and what the owner can do.
-/// A retry never overrides a budget. Fixed text and integers only; at most 256 characters.
-pub fn retry_refusal(code: &str, budget: Option<(u32, u32)>) -> String {
-    let facts = budget.map_or(String::new(), |(charged, allowed)| {
-        format!(" ({charged} of {allowed} allowed attempts charged)")
-    });
-    let next = match code.ends_with("_budget_exhausted") {
-        true => "A retry cannot override the budget",
-        false => "A retry cannot clear this hold",
-    };
+/// phrase and what the owner can do. Only a hold that is not a budget is refused: an owner
+/// retry of a budget hold overrides it ([`is_budget_hold`]). Fixed text; at most 256 characters.
+pub fn retry_refusal(code: &str) -> String {
     format!(
-        "Retry refused: {}{facts}. {next}: cancel this task and create a new one (re-add its dependencies) to run it again.",
+        "Retry refused: {}. A retry cannot clear this hold: cancel this task and create a new one (re-add its dependencies) to run it again.",
         phrase(code)
     )
+}
+
+/// A hold that is only a limit (attempts, lineage time or sandbox time used up; the
+/// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner
+/// retry overrides it and the budget starts again (owner decision 2026-11-18). Every other
+/// hold is about what happened to the task and is never overridden.
+pub fn is_budget_hold(code: &str) -> bool {
+    matches!(
+        code,
+        "lineage_retry_budget_exhausted"
+            | "lineage_time_budget_exhausted"
+            | "task_sandbox_minutes_budget_exhausted"
+            | "replacement_policy_retry_budget_exhausted"
+            | "replacement_policy_time_budget_exhausted"
+    )
+}
+
+/// First `state_format_version` with `task_limit_overrides`.
+pub const OVERRIDES_FORMAT: u32 = 149;
+/// The longest owner reason an override records.
+pub const REASON_MAX: usize = 1024;
+
+/// An owner's override of a budget hold, as recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Override {
+    pub operation_id: Uuid,
+    pub attempt_id: Uuid,
+    pub hold_code: String,
+    pub reason: String,
+    pub actor: String,
+    pub recorded_at_ms: i64,
+}
+/// The system comment of an override: the task's history shows who overrode what and why.
+pub fn override_comment(code: &str, actor: &str, reason: &str) -> String {
+    format!(
+        "AQ: an owner ({actor}) overrode this task's hold: {} (hold reason: {code}). Its attempt, time and sandbox budgets start again. Owner's reason: {reason}",
+        phrase(code)
+    )
+}
+/// Records the override once per `operation_id` (a replay records nothing) and clears the
+/// task's current hold. Attempts offered up to `now_ms` are no longer charged.
+pub async fn record_override(
+    conn: &mut PgConnection,
+    task: Uuid,
+    o: &Override,
+    now: DateTime<Utc>,
+) -> Result<(), Error> {
+    if !is_budget_hold(&o.hold_code) || o.reason.is_empty() || o.reason.chars().count() > REASON_MAX
+    {
+        return Err(Error::Invalid("limit override"));
+    }
+    sqlx::query(
+        "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms) \
+         VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+    )
+    .bind(o.operation_id)
+    .bind(task)
+    .bind(o.attempt_id)
+    .bind(&o.hold_code)
+    .bind(&o.reason)
+    .bind(&o.actor)
+    .bind(o.recorded_at_ms)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "UPDATE task_holds SET cleared_at=$2,cleared_by='owner_override' WHERE task_id=$1 AND cleared_at IS NULL",
+    )
+    .bind(task)
+    .bind(now)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+/// Names a recorded override in the task's history: one system comment whose id is derived
+/// from the operation's, so a replay posts nothing new. The record stands if the post fails
+/// (logged).
+pub async fn post_override(
+    pool: &PgPool,
+    project: Uuid,
+    task: Uuid,
+    o: &Override,
+    now: DateTime<Utc>,
+) {
+    let thread = aq_task_comments::Thread {
+        project_id: project,
+        task_id: task,
+    };
+    let author = aq_task_comments::Author::System {
+        component: "aq.swarm".into(),
+    };
+    let id = Uuid::new_v5(
+        &task,
+        format!("aq.limit-override/{}", o.operation_id).as_bytes(),
+    );
+    let body = override_comment(&o.hold_code, &o.actor, &o.reason);
+    match aq_task_comments::add(pool, id, thread, &author, &body, now).await {
+        Ok(_) | Err(aq_task_comments::Error::IdConflict) => {}
+        Err(e) => tracing::warn!(%task, error = ?e, "limit override comment not posted"),
+    }
+}
+/// A task's overrides, oldest first (empty before [`OVERRIDES_FORMAT`]).
+pub async fn overrides(conn: &mut PgConnection, task: Uuid) -> Result<Vec<Override>, Error> {
+    if !has_overrides(conn).await? {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "SELECT operation_id,attempt_id,hold_code,reason,actor,recorded_at_ms FROM task_limit_overrides \
+         WHERE task_id=$1 ORDER BY recorded_at_ms,operation_id",
+    )
+    .bind(task)
+    .fetch_all(conn)
+    .await?;
+    let read = |r: &sqlx::postgres::PgRow| Override {
+        operation_id: r.get("operation_id"),
+        attempt_id: r.get("attempt_id"),
+        hold_code: r.get("hold_code"),
+        reason: r.get("reason"),
+        actor: r.get("actor"),
+        recorded_at_ms: r.get("recorded_at_ms"),
+    };
+    Ok(rows.iter().map(read).collect())
+}
+pub async fn has_overrides(conn: &mut PgConnection) -> Result<bool, Error> {
+    let v: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(v.parse::<u32>().map_err(|_| Error::Invalid("format"))? >= OVERRIDES_FORMAT)
 }
 
 /// Whether an offer-path refusal is a hold: it stays until an owner acts or the task changes
@@ -121,9 +241,12 @@ fn stuck(code: &str) -> bool {
 
 /// The system comment of an offer-path hold.
 pub fn comment_body(code: &str) -> String {
-    let next = match stuck(code) {
-        true => "AQ keeps offering it; an owner can retire the task.",
-        false => "It is not offered again until an owner acts; an owner can retire the task.",
+    let next = match (stuck(code), is_budget_hold(code)) {
+        (true, _) => "AQ keeps offering it; an owner can retire the task.",
+        (_, true) => {
+            "It is not offered again until an owner acts; an owner retry starts its budget again, or an owner can retire the task."
+        }
+        _ => "It is not offered again until an owner acts; an owner can retire the task.",
     };
     format!(
         "AQ: this task is held: {} (hold reason: {code}). {next}",
@@ -607,22 +730,56 @@ mod tests {
             phrase("some_new_code"),
             "held by the retry policy: some_new_code"
         );
-        // A refused retry says why, with the budget, and fits the 256-character error message.
+        // A refused retry says why and fits the 256-character error message.
         assert_eq!(
-            retry_refusal("replacement_policy_retry_budget_exhausted", Some((2, 2))),
-            "Retry refused: the catalog retry policy's maximum attempts are used up (2 of 2 \
-             allowed attempts charged). A retry cannot override the budget: cancel this task \
-             and create a new one (re-add its dependencies) to run it again."
+            retry_refusal("stall_quarantined"),
+            "Retry refused: the stall ladder quarantined it. A retry cannot clear this hold: \
+             cancel this task and create a new one (re-add its dependencies) to run it again."
         );
-        assert!(retry_refusal("stall_quarantined", None).contains("cannot clear this hold"));
         for code in known {
-            // Only an attempt budget carries the counts.
-            let budget = code
-                .ends_with("retry_budget_exhausted")
-                .then_some((u32::MAX, u32::MAX));
-            let text = retry_refusal(code, budget);
+            let text = retry_refusal(code);
             assert!(text.chars().count() <= 256, "{code}: {text}");
         }
+    }
+    #[test]
+    fn only_limits_are_budget_holds_an_owner_retry_overrides() {
+        for code in [
+            "lineage_retry_budget_exhausted",
+            "lineage_time_budget_exhausted",
+            "task_sandbox_minutes_budget_exhausted",
+            "replacement_policy_retry_budget_exhausted",
+            "replacement_policy_time_budget_exhausted",
+        ] {
+            assert!(is_budget_hold(code) && is_hold(code), "{code}");
+        }
+        // What happened to the task is never overridden.
+        for code in [
+            "stall_quarantined",
+            "task_terminally_disposed",
+            "task_already_settled_accepted",
+            "replacement_prior_execution_uncertain",
+            "replacement_effects_unreconciled",
+            "replacement_source_retention_unknown",
+            "replacement_predecessor_not_failed",
+            "replacement_lineage_history_unknown",
+            "replacement_project_revision_changed",
+            "replacement_after_unpublished_delivery_needs_new_source",
+            "never_granted_retry_bound_exhausted",
+            "lineage_cost_budget_exhausted",
+            "handoff_successor_stuck",
+        ] {
+            assert!(!is_budget_hold(code), "{code}");
+        }
+        let text = override_comment(
+            "lineage_retry_budget_exhausted",
+            "owner@localhost",
+            "S5 was progressing",
+        );
+        assert!(text.contains("its retry budget is exhausted"), "{text}");
+        assert!(
+            text.ends_with("Owner's reason: S5 was progressing"),
+            "{text}"
+        );
     }
     #[test]
     fn holds_are_budget_and_stuck_codes_and_waits_are_not() {
@@ -654,6 +811,8 @@ mod tests {
         let body = comment_body("replacement_policy_retry_budget_exhausted");
         assert!(body.contains("the catalog retry policy's maximum attempts are used up"));
         assert!(body.contains("not offered again"));
+        assert!(body.contains("an owner retry starts its budget again"));
+        assert!(!comment_body("stall_quarantined").contains("owner retry"));
         assert!(comment_body("handoff_successor_stuck").contains("AQ keeps offering it"));
         assert!(valid_code("handoff_successor_stuck"));
         for bad in ["", "Bad", "has space", "drop;table", "_x"] {

@@ -24,6 +24,34 @@ pub struct SelectionDefaults {
     /// `None` is no cost limit. Goes together with `currency`.
     pub max_cost_microunits: Option<u64>,
     pub currency: Option<String>,
+    /// Sandbox time a task's charged attempts may be admitted for in total.
+    #[serde(default = "initial_sandbox_ms")]
+    pub max_lineage_sandbox_ms: u64,
+    /// Owner- or service-stopped attempts (and lost or never-started ones) a
+    /// task may have before a further one is charged as a normal attempt.
+    #[serde(default = "initial_uncharged")]
+    pub max_uncharged_continuations: u32,
+    /// Launches (started attempts and failed wake launches) a task may have
+    /// spent for a waiting session to still be woken.
+    #[serde(default = "initial_wake_attempts")]
+    pub max_wake_attempts: u32,
+    /// Time since a task's first offer within which a waiting session is
+    /// still woken.
+    #[serde(default = "initial_wake_elapsed_ms")]
+    pub max_wake_lineage_elapsed_ms: u64,
+}
+// Settings stored before these keys existed take the initial values.
+fn initial_sandbox_ms() -> u64 {
+    SelectionDefaults::default().max_lineage_sandbox_ms
+}
+fn initial_uncharged() -> u32 {
+    SelectionDefaults::default().max_uncharged_continuations
+}
+fn initial_wake_attempts() -> u32 {
+    SelectionDefaults::default().max_wake_attempts
+}
+fn initial_wake_elapsed_ms() -> u64 {
+    SelectionDefaults::default().max_wake_lineage_elapsed_ms
 }
 impl Default for SelectionDefaults {
     /// The values a new installation starts with.
@@ -45,6 +73,10 @@ impl Default for SelectionDefaults {
             require_hard_cost_enforcement: false,
             max_cost_microunits: None,
             currency: None,
+            max_lineage_sandbox_ms: 240 * 60_000,
+            max_uncharged_continuations: 5,
+            max_wake_attempts: 3,
+            max_wake_lineage_elapsed_ms: 24 * 3_600_000,
         }
     }
 }
@@ -87,6 +119,10 @@ pub struct SelectionOverrides {
         deserialize_with = "stated"
     )]
     pub currency: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lineage_sandbox_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uncharged_continuations: Option<u32>,
 }
 impl SelectionOverrides {
     pub fn is_empty(&self) -> bool {
@@ -124,6 +160,14 @@ impl SelectionOverrides {
             ),
             max_cost_microunits: keep(self.max_cost_microunits, &defaults.max_cost_microunits),
             currency: keep(self.currency, &defaults.currency),
+            max_lineage_sandbox_ms: keep(
+                self.max_lineage_sandbox_ms,
+                &defaults.max_lineage_sandbox_ms,
+            ),
+            max_uncharged_continuations: keep(
+                self.max_uncharged_continuations,
+                &defaults.max_uncharged_continuations,
+            ),
         }
     }
 }
@@ -150,6 +194,12 @@ impl SelectionDefaults {
                 .unwrap_or(d.require_hard_cost_enforcement),
             max_cost_microunits: s.max_cost_microunits.unwrap_or(d.max_cost_microunits),
             currency: s.currency.unwrap_or(d.currency),
+            max_lineage_sandbox_ms: s.max_lineage_sandbox_ms.unwrap_or(d.max_lineage_sandbox_ms),
+            max_uncharged_continuations: s
+                .max_uncharged_continuations
+                .unwrap_or(d.max_uncharged_continuations),
+            max_wake_attempts: d.max_wake_attempts,
+            max_wake_lineage_elapsed_ms: d.max_wake_lineage_elapsed_ms,
         }
     }
     /// The full policy: these values, and from the execution profile the
@@ -167,6 +217,8 @@ impl SelectionDefaults {
             max_output_tokens,
             max_attempts: self.max_attempts,
             max_lineage_elapsed_ms: self.max_lineage_elapsed_ms,
+            max_lineage_sandbox_ms: Some(self.max_lineage_sandbox_ms),
+            max_uncharged_continuations: Some(self.max_uncharged_continuations),
             required_capabilities,
             budget: IntelligenceBudgetPolicy {
                 max_cost_microunits: self.max_cost_microunits,
@@ -180,6 +232,9 @@ impl SelectionDefaults {
     /// The rules of [`SelectionPolicy::validate`] that do not depend on an
     /// execution profile.
     pub fn check(&self) -> Result<(), String> {
+        if self.max_wake_attempts == 0 || self.max_wake_lineage_elapsed_ms == 0 {
+            return Err("wake limits must be above zero".into());
+        }
         (self.policy(1, Vec::new()).validate()).map_err(|crate::Error::Invalid(message)| message)
     }
 }

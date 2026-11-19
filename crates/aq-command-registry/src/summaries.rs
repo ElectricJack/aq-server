@@ -50,7 +50,9 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
             "Make a completed or canceled task schedulable again, if it never had an attempt"
         }
         "task.reprioritize" => "Set a task's priority (higher runs first)",
-        "task.retry" => "Release a task whose attempt has settled for a replacement attempt",
+        "task.retry" => {
+            "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason"
+        }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
         }

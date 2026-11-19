@@ -11,6 +11,8 @@ use aq_human_work::Execution;
 use async_trait::async_trait;
 
 pub(crate) struct TaskRetry(Arc<ReadRuntime>);
+/// Recorded as the reason of an override whose retry stated none.
+const NO_REASON: &str = "owner retry (no reason given)";
 
 pub(crate) fn register(state: &AppState, r: &mut Registry) {
     let runtime = Arc::new(ReadRuntime::new(state));
@@ -39,9 +41,11 @@ async fn authorize(
         &[],
     )
     .await?;
-    // M2 (owner decision 2026-11-13): a new retry of a task AQ holds (an exhausted retry budget,
-    // a quarantine, ...) cannot take effect, so it is refused with the hold and what the owner
-    // can do, before anything is admitted. A replay of an admitted operation keeps its outcome.
+    // M2 (owner decision 2026-11-13): a new retry of a task AQ holds for what happened to it (a
+    // quarantine, a changed project binding, ...) cannot take effect, so it is refused with the
+    // hold and what the owner can do, before anything is admitted. A budget hold is not refused:
+    // the retry is the owner's explicit decision and overrides it (owner decision 2026-11-18).
+    // A replay of an admitted operation keeps its outcome.
     if !actions::journal::admitted(&state.store.pool, p.operation_id).await? {
         let task: Uuid = request
             .subject
@@ -50,8 +54,8 @@ async fn authorize(
             .map_err(|_| ApiError::invalid())?;
         let revision = crate::project_bindings::current(state, p.project_id).await?;
         let held = replacement::retry_hold(state, task, now(state)?, revision.revision).await?;
-        if let Some((code, budget)) = held {
-            let message = aq_machine_control::holds::retry_refusal(code, budget);
+        if let Some(code) = held.filter(|c| !aq_machine_control::holds::is_budget_hold(c)) {
+            let message = aq_machine_control::holds::retry_refusal(code);
             let status = axum::http::StatusCode::UNPROCESSABLE_ENTITY;
             return Err(ApiError::new(status, code, "").with_message(&message));
         }
@@ -135,12 +139,26 @@ impl ActionKind for TaskRetry {
             if raw["task_state"] != "active" {
                 return Ok(rejected());
             }
-            // B4 and the offer path's budgets decide admissibility, as the scheduler does: an
-            // unsettled or exhausted predecessor is a rejection, never a forced replacement
-            // (and never a confirmation the offer path would then refuse, M2).
+            // B4 decides admissibility, as the scheduler does: an unsettled predecessor is a
+            // rejection, never a forced replacement. A budget hold alone is overridden: the
+            // owner's reason is recorded, the budget starts again, and the assessment below is
+            // the one the offer path makes next (never a confirmation it would refuse, M2).
             let now = now(state)?;
-            let assessment =
+            let mut assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
+            if let replacement::Assessment::Blocked(code) = assessment {
+                let reason = request.reason.as_deref().map(str::trim);
+                let o = aq_machine_control::holds::Override {
+                    operation_id: p.operation_id,
+                    attempt_id: Uuid::nil(),
+                    hold_code: String::new(),
+                    reason: reason.filter(|r| !r.is_empty()).unwrap_or(NO_REASON).into(),
+                    actor: user.email.clone(),
+                    recorded_at_ms: i64::try_from(now).map_err(|_| AppError::Internal)?,
+                };
+                let at = (p.project_id, task);
+                assessment = replacement::override_budget(state, at, code, o, revision).await?;
+            }
             // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
             let r = match &assessment {
                 replacement::Assessment::Replace(r) => r,
