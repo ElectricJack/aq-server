@@ -380,6 +380,8 @@ fn build_worker_router_inner(
         Some(policy) => profiled_execution::closure::api::routes(state.clone(), policy),
         None => Router::new(),
     };
+    #[cfg(feature = "delivery_playbook")]
+    let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
     let router = Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))

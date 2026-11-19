@@ -11,6 +11,7 @@ pub use placement::*;
 mod route;
 pub use aq_routing::RouteLimits;
 pub use route::{RouteRefusal, route_refusal};
+pub mod context_budget;
 mod select;
 mod validate;
 pub use aq_session_protocol::{ArtifactRef, Digest, Scope, Text, Validate};
