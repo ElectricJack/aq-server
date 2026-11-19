@@ -26,7 +26,7 @@ impl PolicyDefinition {
             return Err("phase policy shape".into());
         }
         self.phase.validate().map_err(|_| "phase policy limits")?;
-        super::super::phase_profile::Profile::for_contract(&self.contract)
+        super::super::phase_profile::Profile::for_contract(&self.contract, true)
             .map_err(|_| "phase policy parser unavailable")?;
         use aq_session_protocol::Validate;
         for a in [&self.runtime, &self.qualification, &self.source_profile] {
