@@ -182,6 +182,8 @@ jobs:
       # a temporary directory left those paths missing.
       - name: cargo nextest run (shard ${{ matrix.shard }}/6)
         run: |
+          # env!("CARGO_TARGET_TMPDIR") points here; the archive does not carry it.
+          mkdir -p "$GITHUB_WORKSPACE/target/tmp"
           cargo nextest run --archive-file "$RUNNER_TEMP/archive/nextest-archive.tar.zst" \
             --extract-to "$GITHUB_WORKSPACE" --extract-overwrite \
             --workspace-remap . --no-fail-fast --profile ci \
