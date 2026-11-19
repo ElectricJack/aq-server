@@ -11,7 +11,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 /// First `state_format_version` with `task_fresh_starts`.
-pub const FORMAT: u32 = 155;
+pub const FORMAT: u32 = 156;
 /// The only hold a fresh start releases.
 pub const HOLD: &str = "replacement_project_revision_changed";
 

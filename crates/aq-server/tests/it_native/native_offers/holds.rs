@@ -855,8 +855,9 @@ async fn an_owner_retry_overrides_a_recorded_cost_hold_and_starts_the_cost_budge
 /// A case whose task's only attempt failed and keeps its claim, and whose project binding then
 /// changed (2026-11-19: the owner raised a ceiling), so the offer path holds the task with
 /// `replacement_project_revision_changed`: a retry would reuse the attempt's source, exported
-/// under revision 1. The hold is recorded as the poll's decision records it.
-async fn binding_changed() -> (Case, Uuid) {
+/// under the revision it was offered at. The hold is recorded as the poll's decision records it.
+/// Also returns the binding's new revision.
+async fn binding_changed() -> (Case, Uuid, i64) {
     let mut c = setup().await;
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
@@ -866,11 +867,14 @@ async fn binding_changed() -> (Case, Uuid) {
     };
     let predecessor = page.offers.remove(0).offered.offer.binding.attempt_id;
     native_offer::fail(&c, predecessor).await;
-    sqlx::query("UPDATE project_execution_bindings SET revision=2 WHERE project_id=$1")
-        .bind(c.env.lineage.project_id)
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
+    // The fixture's binding is not at revision 1, so the change is relative.
+    let revision: i64 = sqlx::query_scalar(
+        "UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1 RETURNING revision",
+    )
+    .bind(c.env.lineage.project_id)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
     let (pool, at) = (c.env.env.pool.clone(), (c.env.env.state.clock)());
     holds::hold(
         &pool,
@@ -879,7 +883,7 @@ async fn binding_changed() -> (Case, Uuid) {
     )
     .await;
     owner_actions(&mut c).await;
-    (c, predecessor)
+    (c, predecessor, revision)
 }
 
 /// Owner decision 2026-11-19: after a binding change a plain retry stays refused (its source
@@ -890,7 +894,7 @@ async fn binding_changed() -> (Case, Uuid) {
 #[tokio::test]
 async fn a_fresh_owner_retry_starts_a_task_held_by_a_binding_change_from_the_current_pin() {
     use aq_server::profiled_execution::replacement::{self, Assessment};
-    let (c, predecessor) = binding_changed().await;
+    let (c, predecessor, revision) = binding_changed().await;
     let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
     let code = "replacement_project_revision_changed";
     let readiness = work(&c, task).await;
@@ -932,7 +936,7 @@ async fn a_fresh_owner_retry_starts_a_task_held_by_a_binding_change_from_the_cur
         code,
         "ceilings raised",
         "owner@localhost",
-        2,
+        revision,
     );
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     let r = &recorded[0];
@@ -983,7 +987,7 @@ async fn a_fresh_owner_retry_starts_a_task_held_by_a_binding_change_from_the_cur
     // The offer path sees a task without history: a first attempt, not a replacement.
     let state = &c.env.env.state;
     let now = (state.clock)().timestamp_millis() as u64;
-    let assessed = replacement::assess_task_for_revision(state, task, now, 2).await;
+    let assessed = replacement::assess_task_for_revision(state, task, now, revision as u64).await;
     assert_eq!(assessed.unwrap(), Assessment::Fresh);
     let counts = aq_server::profiled_execution::no_grant::attempt_counts(&pool, task).await;
     assert_eq!(
@@ -1001,7 +1005,7 @@ async fn a_fresh_owner_retry_starts_a_task_held_by_a_binding_change_from_the_cur
     assert_ne!(next, predecessor);
     // The new attempt's source is exported from the current pin, under the current binding.
     let pinned = replacement::predecessor_project_revision(&pool, next).await;
-    assert_eq!(pinned.unwrap(), Some(2));
+    assert_eq!(pinned.unwrap(), Some(revision as u64));
     let releases: i64 =
         sqlx::query_scalar("SELECT count(*) FROM profiled_replacement_releases WHERE task_id=$1")
             .bind(task)
