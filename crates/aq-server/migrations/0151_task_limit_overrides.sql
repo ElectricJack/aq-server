@@ -4,7 +4,7 @@
 -- with the hold it overrode and the owner's reason. Every budget of the task
 -- starts again: attempts offered and never-granted offers closed up to
 -- `recorded_at_ms` are not charged (aq-profiled-state
--- `replacement_sql::PRIORS_149`, aq-machine-control `attempts::COUNTS_149`),
+-- `replacement_sql::PRIORS_151`, aq-machine-control `attempts::COUNTS_151`),
 -- and only spend above `spent_microunits` counts. Rows are never changed.
 -- Additive: a new table and one more allowed `task_holds.cleared_by` value;
 -- no row is touched, so an older server keeps running on the migrated schema.
@@ -33,4 +33,4 @@ ALTER TABLE task_holds DROP CONSTRAINT task_holds_cleared_by_check;
 ALTER TABLE task_holds ADD CONSTRAINT task_holds_cleared_by_check
   CHECK (cleared_by IN ('new_attempt','claim_released','task_closed','owner_override'));
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='149' WHERE key='state_format_version';
+UPDATE meta SET value='151' WHERE key='state_format_version';

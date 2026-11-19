@@ -28,8 +28,8 @@ macro_rules! counts {
     };
 }
 const COUNTS: &str = counts!("0");
-/// From migration 149: an owner override starts the never-granted count again.
-const COUNTS_149: &str = counts!(
+/// From migration 151: an owner override starts the never-granted count again.
+const COUNTS_151: &str = counts!(
     "COALESCE((SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=$1),0)"
 );
 /// The counts of `task`, with the bound from Settings `max_never_granted_offers`.
@@ -39,7 +39,7 @@ pub async fn counts(
     max_never_granted: u32,
 ) -> Result<AttemptCounts, Error> {
     let sql = match crate::holds::has_overrides(conn).await? {
-        true => COUNTS_149,
+        true => COUNTS_151,
         false => COUNTS,
     };
     let row = sqlx::query(sql).bind(task).fetch_one(conn).await?;

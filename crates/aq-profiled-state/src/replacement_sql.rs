@@ -1,7 +1,7 @@
 //! The started-attempt history query of the B4 replacement decision (moved out of the
 //! aq-server lib).
 /// `$exempt` is the spec 0007 Q1 handoff exemption, `FALSE` before format 101. `$forgiven` is
-/// "offered before the owner's latest override of a budget hold", `FALSE` before format 149.
+/// "offered before the owner's latest override of a budget hold", `FALSE` before format 151.
 macro_rules! priors {
     ($exempt:literal) => {
         priors!($exempt, "FALSE")
@@ -29,8 +29,8 @@ pub const PRIORS_PRE_101: &str = priors!("FALSE");
 pub const PRIORS_102: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)"
 );
-/// From migration 149: the owner's override of a budget hold starts the budget again.
-pub const PRIORS_149: &str = priors!(
+/// From migration 151: the owner's override of a budget hold starts the budget again.
+pub const PRIORS_151: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)"
 );
@@ -69,7 +69,7 @@ pub async fn load(
     task: uuid::Uuid,
 ) -> Result<Vec<crate::replacement::Prior>, aq_machine_control::Error> {
     let sql = match aq_machine_control::lost::has_lost_format(conn).await? {
-        true if aq_machine_control::holds::has_overrides(conn).await? => PRIORS_149,
+        true if aq_machine_control::holds::has_overrides(conn).await? => PRIORS_151,
         true => PRIORS_102,
         false if aq_machine_control::has_format(conn).await? => PRIORS,
         false => PRIORS_PRE_101,

@@ -116,7 +116,7 @@ pub fn budget_code(code: &str) -> Option<&'static str> {
 }
 
 /// First `state_format_version` with `task_limit_overrides`.
-pub const OVERRIDES_FORMAT: u32 = 149;
+pub const OVERRIDES_FORMAT: u32 = 151;
 /// The longest owner reason an override records.
 pub const REASON_MAX: usize = 1024;
 
