@@ -38,7 +38,6 @@ use std::collections::BTreeSet;
 use transport::{Accept, NoLaunchReservation, Prepare, WorkerIdentity};
 pub const MAX_BYTES: usize = 131072;
 pub const MAX_PREPARATION_MS: u64 = 120000;
-pub const MAX_INTERACTIVE_EXECUTION_MS: u64 = 3_600_000;
 fn same(a: &impl Serialize, b: &impl Serialize) -> Result<bool> {
     Ok(
         serde_json::to_value(a).map_err(|_| Invalid("phase encoding"))?
@@ -133,7 +132,7 @@ impl PhasePolicy {
     pub fn validate(&self) -> Result<()> {
         require(
             ((self.schema_version == 2 && (1..=120000).contains(&self.maximum_execution_lease_ms))
-                || (self.schema_version == 3 && (1..=MAX_INTERACTIVE_EXECUTION_MS).contains(&self.maximum_execution_lease_ms)))
+                || (self.schema_version == 3 && self.maximum_execution_lease_ms > 0))
                 && (1..=MAX_PREPARATION_MS).contains(&self.maximum_preparation_ms)
                 && (1..=30000).contains(&self.maximum_observation_ms),
             "phase policy bounds",
@@ -1002,13 +1001,13 @@ pub fn long_schema() -> Value {
     let mut value = schema();
     value["$id"] = serde_json::json!(format!("{}:interactive-long-v1", $schema_urn));
     value["$defs"][$PhasePolicy]["properties"]["schema_version"]["const"] = serde_json::json!(3);
-    value["$defs"][$PhasePolicy]["properties"]["maximum_execution_lease_ms"]["maximum"] = serde_json::json!(MAX_INTERACTIVE_EXECUTION_MS);
-    value["$defs"]["DeliveryClock"]["properties"]["valid_for_ms"]["maximum"] = serde_json::json!(MAX_INTERACTIVE_EXECUTION_MS);
+    value["$defs"][$PhasePolicy]["properties"]["maximum_execution_lease_ms"]["minimum"] = serde_json::json!(1);
+    value["$defs"]["DeliveryClock"]["properties"]["valid_for_ms"]["minimum"] = serde_json::json!(1);
     value
 }
 fn build_long_contract_artifact() -> Result<ArtifactRef> {
     let manifest = serde_json::json!({"schema_version":3,"publication":"aq-admission/0.1.11",
-        "scope":"explicit-interactive-one-hour","schema_digest":Digest::of(&bytes(&long_schema())?),
+        "scope":"explicit-interactive-lease","schema_digest":Digest::of(&bytes(&long_schema())?),
         "required_features":required_features()});
     Ok(ArtifactRef { id:Text::new(format!("{}.interactive-long-v1",$contract_id)).map_err(|_| Invalid("long phase contract id"))?,
         version:Text::new("1").map_err(|_| Invalid("long phase contract version"))?,digest:hash("aq.phase.contract.v2",&manifest)? })

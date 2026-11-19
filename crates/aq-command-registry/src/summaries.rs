@@ -45,12 +45,14 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "task.delete" => "Delete a task and its relationships; its history is kept",
         "task.dependency.add" => "Make one task block another",
         "task.dependency.remove" => "Remove a blocking dependency between two tasks",
-        "task.edit" => "Edit a task's title, body, acceptance criteria or labels",
+        "task.edit" => "Edit a task's title, body, acceptance criteria, labels or story points",
         "task.reopen" => {
             "Make a completed or canceled task schedulable again, if it never had an attempt"
         }
         "task.reprioritize" => "Set a task's priority (higher runs first)",
-        "task.retry" => "Release a task whose attempt has settled for a replacement attempt",
+        "task.retry" => {
+            "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason"
+        }
         "task.role.set" => {
             "Set or clear the role a task names, before any attempt of it has been granted"
         }

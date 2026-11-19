@@ -26,6 +26,7 @@
     {"path": "/api/human/result-media-uploads/{operation}/finalize", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media-uploads", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/results/{report}/revisions/{revision}/media/{artifact}/content", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
+    {"path": "/api/human/work/tasks", "class": "owner_admin", "note": "Dashboard task list for the current Owner. Checks project bindings and Graph workspace access for each bounded page."},
     {"path": "/api/intelligence/observations", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/intelligence/register", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/me", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
@@ -173,6 +174,7 @@
     {"path": "/api/settings/selection-defaults", "class": "owner_admin", "note": "Owner-only roles, intelligence profiles and execution profiles as Settings documents (spec 0014 section 7, aq-role-settings); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/profiles/limits", "class": "owner_admin", "note": "Owner-only roles, intelligence profiles and execution profiles as Settings documents (spec 0014 section 7, aq-role-settings); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/profiles/snapshot", "class": "owner_admin", "note": "Owner-only roles, intelligence profiles and execution profiles as Settings documents (spec 0014 section 7, aq-role-settings); RequireOwner and existing CSRF guard."},
+    {"path": "/api/settings/observation-limits", "class": "owner_admin", "note": "Owner-only node observation limits as a Settings value (aq-role-settings observation.rs): sources, events, retained bytes, calls per summary and the final drain grace; RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/delivery-document", "class": "owner_admin", "note": "Owner-only delivery document and delivery limits as Settings values (spec 0016 sections 4, 8, aq-role-settings, feature delivery_playbook); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/delivery-limits", "class": "owner_admin", "note": "Owner-only delivery document and delivery limits as Settings values (spec 0016 sections 4, 8, aq-role-settings, feature delivery_playbook); RequireOwner and existing CSRF guard."},
     {"path": "/api/settings/model-suggestions", "class": "owner_admin", "note": "Owner-only read of the models a host tool discovered per harness; suggestions for the level editor, never a gate (spec 0014 section 5.2); RequireOwner."},
@@ -189,6 +191,8 @@
     {"path": "/v1/worker/diagnostics", "class": "node", "note": "Node poll for queued sandbox diagnostics under the node credential (aq-manual-sessions diagnostics.rs); node guard."},
     {"path": "/api/worker-logins", "class": "owner_admin", "note": "Owner-only saved subscription login delivery to enrolled nodes (aq-manual-sessions logins.rs); owner guard."},
     {"path": "/api/worker-logins/{node}", "class": "owner_admin", "note": "Owner-only saved subscription login delivery to enrolled nodes (aq-manual-sessions logins.rs); owner guard."},
+    {"path": "/v1/worker/manual-agents/{id}/login", "class": "node", "note": "Owning node leases the newest stored subscription login for its hand-started session (aq-server manual_agents/session_login.rs); node guard."},
+    {"path": "/v1/worker/manual-agents/{id}/login/refresh", "class": "node", "note": "Owning node writes a refreshed Codex login back as the next stored version, compare-and-swap (aq-server manual_agents/session_login.rs); node guard."},
     {"path": "/v1/worker/logins", "class": "node", "note": "Node poll for queued subscription logins under the node credential (aq-manual-sessions logins.rs); node guard."},
     {"path": "/api/worker-management", "class": "owner_admin", "note": "Owner-only machine and worker names, removal and agent limits (aq-manual-sessions management.rs); owner guard."},
     {"path": "/api/worker-management/{kind}/{id}", "class": "owner_admin", "note": "Owner-only machine and worker names, removal and agent limits (aq-manual-sessions management.rs); owner guard."},
@@ -197,6 +201,9 @@
     {"path": "/api/worker-terminals/shells/{id}/terminal/connect", "class": "owner_admin", "note": "Owner-only worker host terminal sessions (aq-manual-sessions host.rs); owner guard, live stream also checks origin."},
     {"path": "/api/worker-terminals/shells/{id}/terminal/live", "class": "owner_admin", "note": "Owner-only worker host terminal sessions (aq-manual-sessions host.rs); owner guard, live stream also checks origin."},
     {"path": "/v1/worker/host-terminals", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."},
-    {"path": "/v1/worker/host-terminals/{id}/terminal-stream", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."}
+    {"path": "/v1/worker/host-terminals/{id}/terminal-stream", "class": "node", "note": "Node poll and stream for worker host terminal sessions under the node credential (aq-manual-sessions host.rs); node guard."},
+    {"path": "/api/attempt-terminals/{id}/terminal/connect", "class": "owner_admin", "note": "Owner-only live terminal of a running queued attempt (aq-manual-sessions attempt.rs, spec 0009 section 10); owner guard, live stream also checks origin."},
+    {"path": "/api/attempt-terminals/{id}/terminal/live", "class": "owner_admin", "note": "Owner-only live terminal of a running queued attempt (aq-manual-sessions attempt.rs, spec 0009 section 10); owner guard, live stream also checks origin."},
+    {"path": "/v1/worker/attempt-terminals/{id}/terminal-stream", "class": "node", "note": "Stream for a queued attempt's live terminal under the node credential, only for the node that runs the attempt (aq-manual-sessions attempt.rs); node guard."}
   ]
 }

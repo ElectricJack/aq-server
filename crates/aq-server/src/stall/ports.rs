@@ -20,8 +20,8 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
-/// `$1` is the attempt. A human controller holds the attempt's pane.
-pub(crate) const HUMAN_CONTROL_SQL: &str = "EXISTS(SELECT 1 FROM terminal_sessions hc WHERE hc.attempt_id=$1 AND hc.controller_principal IS NOT NULL)";
+/// `$1` is the attempt. A human holds its pane: a finite-relay controller, or a fresh viewer of its live stream (0009 §10).
+pub(crate) const HUMAN_CONTROL_SQL: &str = "(EXISTS(SELECT 1 FROM terminal_sessions hc WHERE hc.attempt_id=$1 AND hc.controller_principal IS NOT NULL) OR EXISTS(SELECT 1 FROM attempt_terminal_viewers tv WHERE tv.attempt_id=$1 AND tv.seen_at_ms>(extract(epoch FROM clock_timestamp())*1000)::bigint-15000))";
 /// `$1` is the attempt. A terminal input is still in flight or its outcome is
 /// unknown, so the pane's input state cannot be trusted (0003 §5.1).
 pub(crate) const INPUT_UNKNOWN_SQL: &str = "EXISTS(SELECT 1 FROM terminal_sessions iu JOIN terminal_input_receipts ir ON ir.terminal_id=iu.terminal_id WHERE iu.attempt_id=$1 AND ir.disposition IN ('queued','received','injecting','delivery_unknown'))";
@@ -187,10 +187,10 @@ impl Ports for DbPorts {
         let pool = &self.state.store.pool;
         let row = sqlx::query(&format!("SELECT \
             (SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1 AND {PROGRESS_SQL}) AS progress, \
-            GREATEST((SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1), \
-                     (SELECT (extract(epoch FROM n.last_seen_at)*1000)::bigint FROM nodes n JOIN execution_attempts a ON a.node_id=n.id WHERE a.attempt_id=$1)) AS observed, \
+            (SELECT max(recorded_at_ms) FROM observation_events WHERE attempt_id=$1) AS observed, \
             (SELECT record->'body'->'kind' FROM observation_events WHERE attempt_id=$1 AND record->'body'->'kind'->>'kind'<>'usage' ORDER BY recorded_at_ms DESC,sequence DESC LIMIT 1) AS latest, \
             (SELECT max(recorded_at_ms) FROM observation_events s WHERE s.attempt_id=$1 AND s.record->'body'->'kind'->>'kind'='tool_started' AND NOT EXISTS(SELECT 1 FROM observation_events r WHERE r.attempt_id=$1 AND r.record->'body'->'kind'->>'kind'='tool_result' AND r.record->'body'->'kind'->>'call_id'=s.record->'body'->'kind'->>'call_id')) AS open_tool, \
+            EXISTS(SELECT 1 FROM observation_source_refusals x JOIN observation_sources xs USING(node_id,source_id,generation) WHERE xs.attempt_id=$1) AS refused, \
             NOT a.holds_task AS released, \
             EXISTS(SELECT 1 FROM profiled_cancellations c WHERE c.attempt_id=$1) AS cancelled, \
             COALESCE(h.state#>>'{{stop,kind}}' IN ('stopped','not_started'),FALSE) AS stopped \
@@ -205,7 +205,12 @@ impl Ports for DbPorts {
         let mut tx = pool.begin().await.map_err(db)?;
         let input = input_state(&mut tx, target.attempt_id).await?;
         tx.rollback().await.map_err(db)?;
-        let explanation = if observed.is_none_or(|t| now.saturating_sub(t) > policy.grace_ms) {
+        // A gap/incomplete/fence record as the newest one, or a refused source: unknown, not stuck.
+        let blind =
+            row.get::<bool, _>("refused") || latest.as_ref().is_some_and(|k| k["kind"] == "gap");
+        let explanation = if blind
+            || observed.is_none_or(|t| now.saturating_sub(t) > policy.grace_ms)
+        {
             Some(Explanation::ObservationsUnavailable)
         } else if input == InputState::HumanControlled {
             Some(Explanation::HumanControl)

@@ -858,6 +858,7 @@ mod tests {
             max_bundle_bytes: 4096,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         })
         .unwrap()
     }
@@ -950,6 +951,7 @@ mod actual_git_test {
             max_bundle_bytes: 1_048_576,
             bulk_concurrency: 2,
             incomplete_ttl_secs: 60,
+            git_deadline_ms: 30_000,
         };
         let runtime = std::sync::Arc::new(Runtime::new(settings).unwrap());
         let mut child =

@@ -2,7 +2,7 @@
 //! revision id, created exclusively with mode 0600 inside a 0700 directory
 //! owned by the server's effective user. No path, byte or digest from here is
 //! logged; callers record digests in SQL only after the file is durable.
-use crate::profiled_execution::material::{MaterialError, ProtectedMaterial};
+use aq_intelligence_config::material::{MaterialError, ProtectedMaterial};
 use std::{
     fs::{DirBuilder, OpenOptions},
     io::{self, Read, Write},

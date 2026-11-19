@@ -38,6 +38,11 @@ pub struct SelectionPolicy {
     pub max_output_tokens: u64,
     pub max_attempts: u32,
     pub max_lineage_elapsed_ms: u64,
+    /// Absent in a policy pinned before these limits were Settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lineage_sandbox_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uncharged_continuations: Option<u32>,
     pub required_capabilities: Vec<Capability>,
     pub budget: IntelligenceBudgetPolicy,
 }
@@ -55,7 +60,8 @@ impl SelectionPolicy {
                 && self.max_output_tokens <= 1_048_576
                 && (1..=32).contains(&self.max_attempts)
                 && self.max_lineage_elapsed_ms > 0
-                && self.max_lineage_elapsed_ms <= 604_800_000,
+                && self.max_lineage_elapsed_ms <= 604_800_000
+                && self.max_lineage_sandbox_ms != Some(0),
             "selection policy bounds",
         )?;
         require_capabilities(&self.required_capabilities, &self.required_capabilities)

@@ -242,9 +242,24 @@ pub struct Profile {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessObservation {
+    /// One of `unknown`, `awaiting`, `working`, `quiet`, `stale`, `ended`
+    /// (`aq_stall_ladder::freshness::State`), decided from the attempt's
+    /// observation ledger with the stall ladder's own windows.
     pub state: String,
+    /// When the server decided the state, and until when to trust it.
     pub observed_at: Timestamp,
     pub fresh_until: Timestamp,
+    /// Why, for the states that need saying: `no_observation_source`
+    /// (unknown), `no_observation_within_grace` (stale) or
+    /// `no_progress_within_evidence_window` (quiet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// When the server last recorded an observation event of the attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observation_at: Option<Timestamp>,
+    /// When it last recorded one that counts as progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<Timestamp>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

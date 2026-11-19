@@ -263,59 +263,29 @@ pub(crate) async fn close_locked(
     Ok(result)
 }
 
-pub const MAX_UNGRANTED_RETRIES: u32 = 8;
-#[derive(Debug, Clone, Copy)]
-pub struct AttemptCounts {
-    pub started: u32,
-    pub history: u32,
-    pub never_granted: u32,
-}
-const COUNTS: &str = "SELECT count(*)::BIGINT AS history,count(*) FILTER(WHERE NOT (NOT a.holds_task AND profiled_never_granted_valid(a.attempt_id)))::BIGINT AS started,count(c.attempt_id)::BIGINT AS never_granted FROM execution_attempts a LEFT JOIN profiled_never_granted_closures c ON c.attempt_id=a.attempt_id WHERE a.task_id=$1";
-fn counts(row: sqlx::postgres::PgRow) -> Result<AttemptCounts, AppError> {
-    let value = |name: &str| {
-        u32::try_from(row.get::<i64, _>(name))
-            .map_err(|_| AppError::Conflict("task attempt history bound".into()))
-    };
-    Ok(AttemptCounts {
-        started: value("started")?,
-        history: value("history")?,
-        never_granted: value("never_granted")?,
-    })
-}
-impl AttemptCounts {
-    pub fn check_retry_bound(self) -> Result<Self, AppError> {
-        if self.never_granted >= MAX_UNGRANTED_RETRIES {
-            Err(AppError::Conflict(
-                "never-granted retry budget exhausted".into(),
-            ))
-        } else {
-            Ok(self)
-        }
-    }
-    pub fn budget_revision(self) -> u64 {
-        u64::from(self.history) + 1
+pub use aq_machine_control::attempts::AttemptCounts;
+pub fn check_retry_bound(counts: AttemptCounts) -> Result<AttemptCounts, AppError> {
+    match counts.never_granted_bound_exhausted() {
+        true => Err(AppError::Conflict(
+            "never-granted retry budget exhausted".into(),
+        )),
+        false => Ok(counts),
     }
 }
 pub async fn attempt_counts(pool: &sqlx::PgPool, task: Uuid) -> Result<AttemptCounts, AppError> {
-    counts(
-        sqlx::query(COUNTS)
-            .bind(task)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| AppError::Internal)?,
-    )
+    let mut conn = pool.acquire().await.map_err(|_| AppError::Internal)?;
+    attempt_counts_locked(&mut conn, task).await
 }
 pub async fn attempt_counts_locked(
     conn: &mut sqlx::PgConnection,
     task: Uuid,
 ) -> Result<AttemptCounts, AppError> {
-    counts(
-        sqlx::query(COUNTS)
-            .bind(task)
-            .fetch_one(conn)
-            .await
-            .map_err(|_| AppError::Internal)?,
-    )
+    let settings = aq_role_settings::selection_defaults(conn).await;
+    let max = settings
+        .map_err(|_| AppError::Internal)?
+        .max_never_granted_offers;
+    let counts = aq_machine_control::attempts::counts(conn, task, max).await;
+    counts.map_err(|_| AppError::Internal)
 }
 
 pub async fn next_generation(pool: &sqlx::PgPool, task: Uuid) -> Result<u64, AppError> {

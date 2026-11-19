@@ -12,7 +12,7 @@ pub(super) struct Binding {
     pub q: Option<String>,
 }
 pub(super) struct Codec {
-    shared: CursorCodec,
+    pub(super) shared: CursorCodec,
 }
 impl Codec {
     pub fn new() -> Self {
