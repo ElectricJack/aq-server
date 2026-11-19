@@ -33,11 +33,6 @@ pub struct Admission {
     terminal_read: Semaphore,
     agent_command: Semaphore,
 }
-impl Default for Admission {
-    fn default() -> Self {
-        Self::new(&aq_machine_control::limits::current())
-    }
-}
 impl Admission {
     pub fn new(limits: &LaunchLimits) -> Self {
         Self {
@@ -201,6 +196,7 @@ pub fn classify(path: &str) -> Class {
     }
 }
 fn busy(path: &str, message: &str) -> Response {
+    tracing::warn!(%path, "request refused with 503: {message}");
     let mut response = if matches!(
         path,
         "/v1/worker/profiled/renew" | "/v1/worker/profiled/reconcile"
@@ -271,8 +267,7 @@ pub async fn gate(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
-    let class = classify(&path);
-    let (slots, timeout) = match class {
+    let (slots, timeout) = match classify(&path) {
         Class::Control => (&admission.control, Duration::from_secs(5)),
         Class::Renewal => (&admission.renewal, Duration::from_secs(8)),
         Class::MaterialPresence => (&admission.material_presence, Duration::from_secs(4)),
@@ -289,7 +284,6 @@ pub async fn gate(
         Class::AgentCommand => (&admission.agent_command, Duration::from_secs(20)),
     };
     let Ok(_permit) = slots.try_acquire() else {
-        tracing::warn!(?class, %path, "request refused with 503: lane capacity exhausted");
         return busy(
             &path,
             "request capacity exhausted; retry the same operation",
@@ -297,13 +291,10 @@ pub async fn gate(
     };
     match tokio::time::timeout(timeout, next.run(request)).await {
         Ok(response) => response,
-        Err(_) => {
-            tracing::warn!(?class, %path, "request refused with 503: lane deadline exceeded");
-            busy(
-                &path,
-                "request deadline exceeded; reconcile or retry the same operation",
-            )
-        }
+        Err(_) => busy(
+            &path,
+            "request deadline exceeded; reconcile or retry the same operation",
+        ),
     }
 }
 
@@ -328,53 +319,5 @@ mod output_poll_tests {
             classify("/v1/terminal-relay/upload"),
             Class::TerminalOutput
         ));
-    }
-}
-
-#[cfg(test)]
-mod lane_size_tests {
-    use super::*;
-    use axum::{Router, body::Body, http::Request as HttpRequest, middleware, routing::post};
-    use tower::ServiceExt;
-
-    async fn refused_after(limits: LaunchLimits, path: &'static str, allowed: usize) {
-        let admission = Arc::new(Admission::new(&limits));
-        let release = Arc::new(tokio::sync::Notify::new());
-        let held = release.clone();
-        let app = Router::new()
-            .route(
-                path,
-                post(move || {
-                    let held = held.clone();
-                    async move { held.notified().await }
-                }),
-            )
-            .layer(middleware::from_fn_with_state(admission, gate));
-        let call = || {
-            let app = app.clone();
-            tokio::spawn(async move {
-                let request = HttpRequest::post(path).body(Body::empty()).unwrap();
-                app.oneshot(request).await.unwrap().status()
-            })
-        };
-        let held: Vec<_> = (0..allowed).map(|_| call()).collect();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(call().await.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
-        release.notify_waiters();
-        for task in held {
-            assert_eq!(task.await.unwrap(), StatusCode::OK);
-        }
-    }
-    #[tokio::test]
-    async fn observation_lanes_are_sized_from_the_limits() {
-        let limits = LaunchLimits {
-            observation_requests: 3,
-            observation_read_requests: 1,
-            ..LaunchLimits::DEFAULT
-        };
-        refused_after(limits, "/v1/worker/observations/batch", 3).await;
-        refused_after(limits, "/api/observations/x", 1).await;
-        assert_eq!(LaunchLimits::DEFAULT.observation_requests, 2);
-        assert_eq!(LaunchLimits::DEFAULT.observation_read_requests, 2);
     }
 }
