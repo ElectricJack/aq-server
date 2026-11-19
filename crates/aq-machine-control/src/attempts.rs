@@ -36,9 +36,9 @@ const COUNTS: &str = counts!("0");
 const COUNTS_151: &str = counts!(
     "COALESCE((SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=$1),0)"
 );
-/// From migration 155: an owner's fresh start (`crate::fresh`) leaves the attempts it released
+/// From migration 156: an owner's fresh start (`crate::fresh`) leaves the attempts it released
 /// out of the started count and starts the never-granted count again, as an override does.
-const COUNTS_155: &str = counts!(
+const COUNTS_156: &str = counts!(
     "GREATEST(COALESCE((SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=$1),0),COALESCE((SELECT max(f.recorded_at_ms) FROM task_fresh_starts f WHERE f.task_id=$1),0))",
     " AND NOT EXISTS(SELECT 1 FROM task_fresh_starts f WHERE f.attempt_id=a.attempt_id)"
 );
@@ -49,7 +49,7 @@ pub async fn counts(
     max_never_granted: u32,
 ) -> Result<AttemptCounts, Error> {
     let sql = match crate::holds::has_overrides(conn).await? {
-        true if crate::fresh::has_fresh_starts(conn).await? => COUNTS_155,
+        true if crate::fresh::has_fresh_starts(conn).await? => COUNTS_156,
         true => COUNTS_151,
         false => COUNTS,
     };

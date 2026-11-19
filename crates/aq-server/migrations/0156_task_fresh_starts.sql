@@ -6,8 +6,8 @@
 -- records here, once per attempt of the task at that moment, that those
 -- attempts are no longer the lineage's history: the next attempt is a first
 -- attempt from the project's current pinned source under the current binding
--- (aq-profiled-state `replacement_sql::PRIORS_155`, aq-machine-control
--- `attempts::COUNTS_155`). Nothing is deleted: the attempts, their retained
+-- (aq-profiled-state `replacement_sql::PRIORS_156`, aq-machine-control
+-- `attempts::COUNTS_156`). Nothing is deleted: the attempts, their retained
 -- results and the replacement release stay. Rows are never changed.
 -- Additive: a new table; no row is touched, so an older server keeps running
 -- on the migrated schema.
@@ -33,4 +33,4 @@ END $$;
 CREATE TRIGGER task_fresh_starts_no_change BEFORE UPDATE OR DELETE
   ON task_fresh_starts FOR EACH ROW EXECUTE FUNCTION task_fresh_starts_immutable();
 SET LOCAL lock_timeout TO DEFAULT;
-UPDATE meta SET value='155' WHERE key='state_format_version';
+UPDATE meta SET value='156' WHERE key='state_format_version';

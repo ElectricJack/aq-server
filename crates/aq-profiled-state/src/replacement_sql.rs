@@ -38,9 +38,9 @@ pub const PRIORS_151: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)"
 );
-/// From migration 155: an owner's fresh start (`aq_machine_control::fresh`) leaves the attempts
+/// From migration 156: an owner's fresh start (`aq_machine_control::fresh`) leaves the attempts
 /// it released out of the history, so the task's next attempt is a first attempt.
-pub const PRIORS_155: &str = priors!(
+pub const PRIORS_156: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)",
     " AND NOT EXISTS(SELECT 1 FROM task_fresh_starts f WHERE f.attempt_id=a.attempt_id)"
@@ -80,7 +80,7 @@ pub async fn load(
     task: uuid::Uuid,
 ) -> Result<Vec<crate::replacement::Prior>, aq_machine_control::Error> {
     let sql = match aq_machine_control::lost::has_lost_format(conn).await? {
-        true if aq_machine_control::fresh::has_fresh_starts(conn).await? => PRIORS_155,
+        true if aq_machine_control::fresh::has_fresh_starts(conn).await? => PRIORS_156,
         true if aq_machine_control::holds::has_overrides(conn).await? => PRIORS_151,
         true => PRIORS_102,
         false if aq_machine_control::has_format(conn).await? => PRIORS,
