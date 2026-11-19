@@ -1,6 +1,6 @@
 //! Kind-dispatched common authority reads. Current eligibility is sampled AFTER
 //! node/attempt locks. Consumers still own independent graph/source/terminal ACLs.
-pub mod cache;
+pub use aq_profiled_state::authority_cache as cache;
 pub mod hot;
 use super::{
     AttemptState, AuthorityStatus,

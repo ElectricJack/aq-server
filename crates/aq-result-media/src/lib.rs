@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 mod clip;
 mod codec;
+pub mod config;
 mod domain;
 mod limits;
 

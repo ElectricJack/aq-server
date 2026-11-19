@@ -477,4 +477,12 @@ fn delivery_section_deserializer_validates() {
         parse(json!({"gitlab": {}})).is_err(),
         "unknown keys refused"
     );
+    let socket = parse(json!({"git_http_socket": "/run/aq-git/git-http.sock"})).unwrap();
+    assert_eq!(
+        socket.unwrap().git_http_socket.unwrap(),
+        PathBuf::from("/run/aq-git/git-http.sock")
+    );
+    for bad in ["git-http.sock", "/run/../git-http.sock"] {
+        assert!(parse(json!({"git_http_socket": bad})).is_err(), "{bad}");
+    }
 }

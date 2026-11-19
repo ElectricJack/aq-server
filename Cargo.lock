@@ -237,12 +237,19 @@ dependencies = [
 name = "aq-delivery"
 version = "0.1.0"
 dependencies = [
+ "aq-admission 0.1.13",
  "aq-role-settings",
  "aq-worker-protocol",
  "async-trait",
  "axum",
+ "bytes",
  "chrono",
  "hex",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonwebtoken",
  "rand 0.8.8",
  "reqwest",
@@ -742,6 +749,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "toml",
  "uuid",
 ]
 
