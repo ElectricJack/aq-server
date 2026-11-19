@@ -295,6 +295,26 @@ async fn nudge_never_injects_during_unknown_input_state() {
         .execute(&pool)
         .await
         .unwrap();
+    // A viewer of the attempt's live terminal stream (the transport sandboxed
+    // sessions use) can type, so it is human control too, while its lease is fresh.
+    assert_eq!(
+        ports::injectable(&pool, attempt).await.unwrap(),
+        vec![eligible]
+    );
+    let seen = |ago: i64| {
+        sqlx::query("INSERT INTO attempt_terminal_viewers(attempt_id,principal,seen_at_ms) VALUES($1,$2,(extract(epoch FROM clock_timestamp())*1000)::bigint-$3) ON CONFLICT(attempt_id) DO UPDATE SET seen_at_ms=excluded.seen_at_ms")
+            .bind(attempt)
+            .bind(Uuid::new_v4())
+            .bind(ago)
+    };
+    seen(0).execute(&pool).await.unwrap();
+    assert!(ports::injectable(&pool, attempt).await.unwrap().is_empty());
+    seen(20_000).execute(&pool).await.unwrap();
+    assert_eq!(
+        ports::injectable(&pool, attempt).await.unwrap(),
+        vec![eligible],
+        "a viewer that went away without detaching stops holding the pane"
+    );
     sqlx::query("UPDATE terminal_input_receipts SET disposition='injecting' WHERE terminal_id=$1")
         .bind(term)
         .execute(&pool)
