@@ -4,8 +4,7 @@ use crate::STATE_FORMAT_VERSION;
 use crate::migration_catalog::MIGRATIONS;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgRow;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow};
 use sqlx::{FromRow, PgPool, Row};
 use std::time::Duration;
 use uuid::Uuid;
@@ -653,7 +652,8 @@ impl Store {
             control_pool,
             renewal_pool,
             presence_pool,
-            admission: std::sync::Arc::new(crate::admission::Admission::default()),
+            admission: crate::admission::Admission::new(&aq_machine_control::limits::current())
+                .into(),
             verified_profiled_facts: Default::default(),
             #[cfg(feature = "recovery-test-support")]
             recovery_test: std::sync::Arc::new(crate::execution::testing::Controls::default()),

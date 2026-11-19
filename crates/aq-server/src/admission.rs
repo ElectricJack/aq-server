@@ -33,9 +33,8 @@ pub struct Admission {
     terminal_read: Semaphore,
     agent_command: Semaphore,
 }
-impl Default for Admission {
-    fn default() -> Self {
-        let limits = aq_machine_control::limits::current();
+impl Admission {
+    pub fn new(limits: &LaunchLimits) -> Self {
         Self {
             control: Semaphore::new(limits.control_requests),
             renewal: Semaphore::new(limits.renewal_requests),
@@ -44,8 +43,8 @@ impl Default for Admission {
             general: Semaphore::new(limits.general_requests),
             bulk: Semaphore::new(limits.bulk_transfers),
             notification: Semaphore::new(4),
-            observation: Semaphore::new(2),
-            observation_read: Semaphore::new(2),
+            observation: Semaphore::new(limits.observation_requests),
+            observation_read: Semaphore::new(limits.observation_read_requests),
             terminal_poll: Semaphore::new(32),
             terminal_output: Semaphore::new(4),
             terminal_interactive: Semaphore::new(8),
@@ -197,6 +196,7 @@ pub fn classify(path: &str) -> Class {
     }
 }
 fn busy(path: &str, message: &str) -> Response {
+    tracing::warn!(%path, "request refused with 503: {message}");
     let mut response = if matches!(
         path,
         "/v1/worker/profiled/renew" | "/v1/worker/profiled/reconcile"
