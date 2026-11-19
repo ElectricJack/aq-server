@@ -191,6 +191,8 @@
     {"path": "/v1/worker/diagnostics", "class": "node", "note": "Node poll for queued sandbox diagnostics under the node credential (aq-manual-sessions diagnostics.rs); node guard."},
     {"path": "/api/worker-logins", "class": "owner_admin", "note": "Owner-only saved subscription login delivery to enrolled nodes (aq-manual-sessions logins.rs); owner guard."},
     {"path": "/api/worker-logins/{node}", "class": "owner_admin", "note": "Owner-only saved subscription login delivery to enrolled nodes (aq-manual-sessions logins.rs); owner guard."},
+    {"path": "/v1/worker/manual-agents/{id}/login", "class": "node", "note": "Owning node leases the newest stored subscription login for its hand-started session (aq-server manual_agents/session_login.rs); node guard."},
+    {"path": "/v1/worker/manual-agents/{id}/login/refresh", "class": "node", "note": "Owning node writes a refreshed Codex login back as the next stored version, compare-and-swap (aq-server manual_agents/session_login.rs); node guard."},
     {"path": "/v1/worker/logins", "class": "node", "note": "Node poll for queued subscription logins under the node credential (aq-manual-sessions logins.rs); node guard."},
     {"path": "/api/worker-management", "class": "owner_admin", "note": "Owner-only machine and worker names, removal and agent limits (aq-manual-sessions management.rs); owner guard."},
     {"path": "/api/worker-management/{kind}/{id}", "class": "owner_admin", "note": "Owner-only machine and worker names, removal and agent limits (aq-manual-sessions management.rs); owner guard."},

@@ -388,6 +388,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-login-store"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.1.13",
+ "aq-intelligence-config",
+ "aq-selection",
+ "aq-session-host",
+ "aq-swarm-settings",
+ "chrono",
+ "nix",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "aq-machine-control"
 version = "0.1.0"
 dependencies = [
@@ -810,6 +832,7 @@ dependencies = [
  "aq-intelligence-config",
  "aq-internal-work",
  "aq-lifecycle-api",
+ "aq-login-store",
  "aq-machine-control",
  "aq-manual-sessions",
  "aq-notifications",

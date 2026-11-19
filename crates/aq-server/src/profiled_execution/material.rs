@@ -6,7 +6,6 @@ use crate::intelligence::config::LoadedRegistry;
 use aq_admission::{MaterialLease, SessionIdentity};
 use uuid::Uuid;
 
-use aq_intelligence_config::material::read_configured;
 pub use aq_intelligence_config::material::{MaterialError, ProtectedMaterial};
 
 pub fn read_for_lease(
@@ -63,22 +62,8 @@ pub fn read_for_lease_from(
     Ok(bytes)
 }
 
-pub(crate) fn source_or_configured(
-    registry: &LoadedRegistry,
-    index: usize,
-    source: Option<&HeadSource>,
-) -> Result<ProtectedMaterial, MaterialError> {
-    let configured = read_configured(registry, index)?;
-    match source {
-        None => Ok(configured),
-        Some(s) => {
-            drop(configured);
-            super::login_refresh::store::read(&s.dir, s.revision_id, &s.digest, s.bytes)
-        }
-    }
-}
-
 pub(crate) use aq_intelligence_config::material::provisioning_bindings;
+pub(crate) use aq_login_store::source_or_configured;
 
 #[cfg(test)]
 mod tests {

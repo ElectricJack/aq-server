@@ -240,6 +240,10 @@ pub async fn write_back(
             replayed: true,
         });
     }
+    // A Codex login must be the stored one refreshed: same account, later.
+    if !super::refresh_of_head(registry.clone(), index, &lineage, &dir, bytes.clone()).await? {
+        return Err(refused());
+    }
     let now = (state.clock)().timestamp_millis();
     let (version, _) = append_locked(
         &mut tx,
