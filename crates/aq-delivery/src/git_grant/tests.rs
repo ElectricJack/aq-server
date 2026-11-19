@@ -128,3 +128,42 @@ async fn the_body_fails_past_the_push_limit() {
     };
     assert!((&mut body).collect().await.is_err());
 }
+
+#[test]
+fn a_result_names_a_pushed_ref_a_conflict_or_nothing() {
+    let headers = |pairs: &[(&'static str, &str)]| {
+        let mut map = http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(*name, value.parse().unwrap());
+        }
+        map
+    };
+    let (reference, head) = ("refs/heads/aq/t", "a".repeat(40));
+    let parse = |pairs: &[(&'static str, &str)]| Pushed::from_headers(&headers(pairs));
+    assert_eq!(parse(&[]), Ok(None));
+    let both = parse(&[("aq-pushed-ref", reference), ("aq-pushed-head", &head)]);
+    let at = PushedRef {
+        reference: reference.into(),
+        head: head.clone(),
+    };
+    assert_eq!(both, Ok(Some(Pushed::At(at))));
+    assert_eq!(
+        parse(&[("aq-push-conflict", "true")]),
+        Ok(Some(Pushed::Conflict))
+    );
+    for bad in [
+        vec![("aq-pushed-ref", reference)],
+        vec![("aq-pushed-head", head.as_str())],
+        vec![("aq-push-conflict", "yes")],
+        vec![
+            ("aq-pushed-ref", reference),
+            ("aq-pushed-head", &head),
+            ("aq-push-conflict", "true"),
+        ],
+    ] {
+        assert!(
+            matches!(parse(&bad), Err(PushedRefusal::BadRequest(_))),
+            "{bad:?}"
+        );
+    }
+}

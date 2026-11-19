@@ -113,6 +113,18 @@ pub async fn record(
     }
     Ok(receipt)
 }
+/// Spec 0016 §5.2: [`record`] of a report that names the task branch its node
+/// pushed (at the named head in central aq-git) or a push conflict.
+#[cfg(feature = "delivery_playbook")]
+pub async fn record_pushed(
+    state: &AppState,
+    node: &AuthenticatedNode,
+    report: &ResultReport,
+    pushed: Option<&aq_delivery::git_grant::Pushed>,
+) -> Result<Receipt, AppError> {
+    super::git_grant::confirm(state, node.id(), report, pushed).await?;
+    record(state, node, report).await
+}
 async fn record_only(
     state: &AppState,
     node: &AuthenticatedNode,
@@ -503,6 +515,12 @@ async fn report(
     .await?;
     crate::delegated_permits::runtime::require_binding(&node, &request.binding)?;
     crate::delegated_permits::runtime::require_binding(&node, &request.stop.binding)?;
+    #[cfg(feature = "delivery_playbook")]
+    let pushed = aq_delivery::git_grant::Pushed::from_headers(&headers)
+        .map_err(|_| AppError::BadRequest("AQ-Pushed-* or AQ-Push-Conflict".into()))?;
+    #[cfg(feature = "delivery_playbook")]
+    let receipt = record_pushed(&state, &node, &request, pushed.as_ref()).await?;
+    #[cfg(not(feature = "delivery_playbook"))]
     let receipt = record(&state, &node, &request).await?;
     crate::delegated_permits::receipts::result(&node, &request, receipt)
 }
