@@ -211,3 +211,50 @@ connection and input lifecycle.
 
 Record delivered scope, exact revisions/tests, desktop/phone images, served bundle
 identity, native-session retention limitations and any deferred differences.
+
+## 10. Sandboxed queue sessions run the interactive CLI in tmux (2026-11-18)
+
+**(owner, 2026-11-18)** "All agents including sandboxed agents should be running in
+tmux." A queued attempt in the docker-local sandbox runs the harness's interactive
+terminal UI, not a print-mode run. The owner watches it and types into it from the
+same Terminals pane as a hand-started agent.
+
+**(implementation decision)** How it is built (worker PR "Sandboxed agents run the
+interactive CLI in the session host's tmux pane"):
+
+- The interactive CLI runs inside the sandbox container on the container's own
+  terminal. The node driver, which is the session host's pane program, attaches
+  that terminal to its pane. The driver knows the attempt's login, so it masks
+  every exact occurrence of it (also when split across reads) and every AQ
+  credential shape **before** it writes to the pane. Nothing after the pane (tmux,
+  viewers, the output relay, a server tail) ever holds an unmasked credential.
+- The startup context is the CLI's first prompt. The attempt ends when the turn
+  ends: the harness's stop hook (Claude `Stop`/`StopFailure` hooks, Codex `notify`)
+  leaves its final message in the sandbox, the driver stops the sandbox, copies
+  the work back and submits the claim from that message. Settlement is unchanged.
+  The attempt's wall time still stops and preserves a session that never ends its
+  turn. A CLI that exits by itself has no final message and is reported failed,
+  with its work retained.
+- Viewing and typing use the live stream of §2 (`aq-manual-sessions` `stream.rs`),
+  with a third subject kind, a running queued attempt on its own node:
+  `POST /api/attempt-terminals/{attempt}/terminal/connect`,
+  `GET /api/attempt-terminals/{attempt}/terminal/live` (browser) and
+  `GET /v1/worker/attempt-terminals/{attempt}/terminal-stream` (the node that runs
+  the attempt). The worker's terminal-relay companion answers an attach with a
+  disposable PTY running a tmux client on the attempt's session-host tmux. tmux
+  paints the current screen on attach, so an opened pane is never blank.
+- The dashboard picks the transport per terminal: a native terminal whose finite
+  policy has input turned off (every docker-local attempt) uses the attempt stream
+  while its session runs; a terminal with finite input keeps the finite relay. An
+  ended session keeps its retained tail.
+- `manifest.terminal.input_enabled` stays false for docker-local attempts. The
+  finite relay does not carry their input.
+- **Stall ladder.** Every viewer of the attempt stream can type, so an attached
+  viewer is human control of the pane. The stream records it in
+  `attempt_terminal_viewers` (renewed every 2 s while attached, removed on detach,
+  ignored after 15 s without renewal) and `HUMAN_CONTROL_SQL` reads it beside
+  `terminal_sessions.controller_principal`.
+
+Known limits: input typed in the last instant of a turn can be lost when the turn
+ends the session; Codex has no failure hook, so a failed Codex turn waits for the
+wall time; a CLI waiting at an unexpected dialog is bounded by the wall time only.

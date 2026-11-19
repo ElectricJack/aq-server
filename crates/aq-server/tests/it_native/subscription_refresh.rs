@@ -357,6 +357,40 @@ async fn writeback_is_idempotent_on_lease_and_digest() {
         aq_server::admission::Class::Bulk
     );
 }
+/// The cancelled-attempt exception is for a granted attempt only (`Cancelling`: a
+/// sandbox ran and may have refreshed the login; the rule itself is unit-tested as
+/// `aq_profiled_state::Status::login_write_back`). An attempt cancelled while still
+/// preparing never ran a sandbox and stays refused.
+#[tokio::test]
+async fn attempt_cancelled_before_its_grant_cannot_write_a_login_back() {
+    let c = setup(CredentialKind::SubscriptionLogin).await;
+    let pool = c.f.db.pool().await;
+    let attempt = c.request.binding.attempt_id;
+    let state = || async {
+        sqlx::query_scalar::<_, Value>(
+            "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let cancel = Uuid::new_v4();
+    aq_server::profiled_execution::cancellation::cancel(&c.f.state, attempt, cancel, "owner")
+        .await
+        .unwrap();
+    let hot = state().await;
+    assert_eq!(hot["status"], "never_granted", "no sandbox ran");
+    assert_eq!(hot["revoked"], true);
+    let (status, _) = refresh(&c, &doc(&c, REFRESHED), REFRESHED).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "cancelled before any sandbox ran"
+    );
+    assert_eq!(rows(&c).await.len(), 0);
+}
+
 #[tokio::test]
 async fn writeback_refuses_oversize_and_api_key() {
     let c = setup(CredentialKind::SubscriptionLogin).await;

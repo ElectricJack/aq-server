@@ -1759,6 +1759,15 @@
                     "null"
                   ]
                 },
+                "story_points": {
+                  "format": "uint16",
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
                 "task_state": {
                   "$ref": "#/$defs/TaskState"
                 },
@@ -1966,6 +1975,16 @@
                 "project_id": {
                   "format": "uuid",
                   "type": "string"
+                },
+                "story_points": {
+                  "description": "Absent leaves the estimate intact. Null removes it.",
+                  "format": "uint16",
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 },
                 "title": {
                   "maxLength": 512,

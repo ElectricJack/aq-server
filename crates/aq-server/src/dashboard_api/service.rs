@@ -261,6 +261,11 @@ pub(super) async fn bootstrap(
             "Recorded task summaries require an owner account and configured Graph runtime",
         ),
         capability(
+            "human.work.tasks.read",
+            graph,
+            "Work across projects requires an owner account and configured Graph runtime",
+        ),
+        capability(
             "tasks.read",
             graph,
             "Task inspection requires an owner account and configured Graph runtime",
@@ -289,6 +294,11 @@ pub(super) async fn bootstrap(
             "tasks.edit",
             graph_mutation,
             "Task edits require an owner account and configured Graph mutation identity",
+        ),
+        capability(
+            "tasks.story_points",
+            graph_mutation,
+            "Editing task estimates requires an owner account and configured Graph mutation identity",
         ),
         capability(
             "tasks.reprioritize",
