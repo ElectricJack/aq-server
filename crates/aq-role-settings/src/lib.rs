@@ -14,14 +14,16 @@ pub mod attempts;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery;
 pub mod http;
+pub mod observation;
 pub mod refusals;
 mod store;
 pub mod suggestions;
 pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, document_of,
-    get, install_defaults, list, pin, release_finished_pins, routing_document, save, save_limits,
-    save_routing_document, save_selection_defaults, settings, snapshot, startup, unpin,
+    get, install_defaults, list, observation_limits, pin, release_finished_pins, routing_document,
+    save, save_limits, save_routing_document, save_selection_defaults, selection_defaults,
+    settings, snapshot, startup, unpin,
 };
 #[cfg(feature = "delivery_playbook")]
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
@@ -155,6 +157,8 @@ pub enum Change {
     Limits(StoreLimits),
     /// The routing document. It is not part of a snapshot.
     RoutingDocument(String),
+    /// The node observation limits. They are not part of a snapshot.
+    ObservationLimits(observation::ObservationLimits),
     /// The delivery document. It is not part of a snapshot.
     #[cfg(feature = "delivery_playbook")]
     DeliveryDocument(String),

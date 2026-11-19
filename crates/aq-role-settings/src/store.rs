@@ -132,6 +132,24 @@ pub async fn list(pool: &PgPool, kind: Kind) -> Result<Vec<Document>> {
 pub async fn get(pool: &PgPool, kind: Kind, id: &str) -> Result<Option<Document>> {
     Ok(list(pool, kind).await?.into_iter().find(|d| d.id == id))
 }
+/// The current selection defaults, read on `conn`. A store without the Settings table (held at
+/// an earlier migration) or without a saved value has the values a new installation starts with.
+pub async fn selection_defaults(conn: &mut PgConnection) -> Result<SelectionDefaults> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('role_settings') IS NOT NULL")
+        .fetch_one(&mut *conn)
+        .await?;
+    if !exists {
+        return Ok(SelectionDefaults::default());
+    }
+    let stored: Option<Option<serde_json::Value>> =
+        sqlx::query_scalar("SELECT selection_defaults FROM role_settings WHERE singleton")
+            .fetch_optional(conn)
+            .await?;
+    match stored.flatten() {
+        Some(value) => serde_json::from_value(value).map_err(|_| Error::Internal),
+        None => Ok(SelectionDefaults::default()),
+    }
+}
 pub async fn settings(pool: &PgPool) -> Result<Settings> {
     read_settings(&mut *pool.acquire().await?, Lock::None).await
 }
@@ -331,6 +349,7 @@ pub async fn apply_referenced(
             current
         }
         Change::RoutingDocument(_) => state.routing_revision,
+        Change::ObservationLimits(_) => observation_limits(&mut tx).await?.1,
         #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(_) => state.delivery_revision,
         #[cfg(feature = "delivery_playbook")]
@@ -382,6 +401,9 @@ pub async fn apply_referenced(
                 markdown.len()
             )));
         }
+        None
+    } else if let Change::ObservationLimits(limits) = &mutation.change {
+        limits.validate().map_err(|message| invalid(&message))?;
         None
     } else if delivery {
         // Like the routing document, the delivery settings compile and
@@ -440,6 +462,15 @@ pub async fn apply_referenced(
             )
             .bind(revision)
             .bind(markdown)
+            .execute(&mut *tx)
+            .await?;
+        }
+        Change::ObservationLimits(limits) => {
+            sqlx::query(
+                "UPDATE role_settings SET revision=$1,observation_limits=$2,observation_limits_revision=$1 WHERE singleton",
+            )
+            .bind(revision)
+            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
             .execute(&mut *tx)
             .await?;
         }
@@ -639,6 +670,25 @@ pub async fn save_delivery_limits(
 pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.delivery_limits, settings.delivery_limits_revision))
+}
+/// The node observation limits and their revision (the defaults at revision
+/// 0 until first saved), read on the caller's connection: a cap check reads
+/// them inside its own transaction, under the locks it already holds. They
+/// are read apart from the other Settings values, whose one read must keep
+/// working on a store whose role tables predate these columns.
+pub async fn observation_limits(
+    conn: &mut PgConnection,
+) -> sqlx::Result<(crate::observation::ObservationLimits, i64)> {
+    let (stored, revision): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT observation_limits,observation_limits_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    let limits = match stored {
+        Some(value) => serde_json::from_value(value).map_err(|e| sqlx::Error::Decode(e.into()))?,
+        None => Default::default(),
+    };
+    Ok((limits, revision))
 }
 pub async fn save_limits(
     pool: &PgPool,

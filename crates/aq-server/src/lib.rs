@@ -427,6 +427,7 @@ fn build_worker_router_inner(
         .merge(execution::api::worker_routes(state.clone()))
         .merge(terminal::api::worker_routes(state.clone()))
         .merge(manual_agents::service(&state).worker_routes())
+        .merge(manual_agents::session_login_routes(state.clone()))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readiness::readyz))
         .route("/dependency-readyz", get(readiness::dependency_readyz))

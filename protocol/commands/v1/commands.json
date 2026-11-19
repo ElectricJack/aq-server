@@ -5931,7 +5931,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
+          "params_digest": "sha256:c321c52de288a0c00a07f845e13efa86820a19626463fb59b6848d1a9f1026e9",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -5952,7 +5952,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:a35ed16731bfb579c117e60f9138996f692dd7465acde292380c9b35d129fc79",
+          "params_digest": "sha256:c321c52de288a0c00a07f845e13efa86820a19626463fb59b6848d1a9f1026e9",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.create"
           },
@@ -6146,7 +6146,7 @@
       "principals": {
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:e4e95ad0d28a4845223602e3f7de88204164301863204f44eec4486ddc2c22aa",
+          "params_digest": "sha256:dd1dc767d3c1911cbc128fadbc93cbca2e12d43170c050b8fe647d125c99db0d",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.edit"
           },
@@ -6167,7 +6167,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:e4e95ad0d28a4845223602e3f7de88204164301863204f44eec4486ddc2c22aa",
+          "params_digest": "sha256:dd1dc767d3c1911cbc128fadbc93cbca2e12d43170c050b8fe647d125c99db0d",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.edit"
           },
@@ -6187,7 +6187,7 @@
           }
         }
       },
-      "summary": "Edit a task's title, body, acceptance criteria or labels",
+      "summary": "Edit a task's title, body, acceptance criteria, labels or story points",
       "target": {
         "rule": "subject"
       }
@@ -6746,7 +6746,7 @@
           }
         }
       },
-      "summary": "Release a task whose attempt has settled for a replacement attempt",
+      "summary": "Release a task whose attempt has settled for a replacement attempt; overrides a budget hold and records the reason",
       "target": {
         "rule": "subject"
       }

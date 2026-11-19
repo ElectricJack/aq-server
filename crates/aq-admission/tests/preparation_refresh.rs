@@ -338,7 +338,7 @@ fn normative_schema_contract_and_facts_are_exact_and_never_claim_owner_authentic
 }
 
 #[test]
-fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
+fn explicit_interactive_policy_three_has_no_lease_ceiling_and_refuses_zero() {
     let c = case();
     let mut policy = c.proposal.policy.clone();
     policy.maximum_execution_lease_ms = 120000;
@@ -349,8 +349,14 @@ fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
         "old policy2 keeps its exact two-minute bound"
     );
     policy.schema_version = 3;
-    policy.maximum_execution_lease_ms = 3_600_000;
-    assert!(policy.validate().is_ok());
+    policy.maximum_execution_lease_ms = 0;
+    assert!(policy.validate().is_err(), "zero is still refused");
+    // Any positive lease is structurally valid; its length is a Setting.
+    for lease in [1, 14_400_000, u64::MAX] {
+        policy.maximum_execution_lease_ms = lease;
+        assert!(policy.validate().is_ok());
+    }
+    policy.maximum_execution_lease_ms = 14_400_000;
     let mut manifest = c.proposal.original.offered.offer.manifest.clone();
     assert!(policy.validate_for_manifest(&manifest).is_err());
     manifest.terminal.input_enabled = true;
@@ -370,14 +376,14 @@ fn explicit_interactive_policy_three_extends_only_the_new_mode_to_one_hour() {
         policy.validate_for_manifest(&manifest).is_ok(),
         "definition revision is not schema/recipe version"
     );
-    policy.maximum_execution_lease_ms += 1;
+    policy.maximum_execution_lease_ms = 0;
     assert!(policy.validate_for_manifest(&manifest).is_err());
 }
 
 #[test]
 fn interactive_clock_rejects_invalid_times_and_monotonic_overflow() {
     use aq_admission::transport::DeliveryClock;
-    for (server, expiry) in [(0, 1), (1000, 999), (1000, 1000), (1000, 3_601_001)] {
+    for (server, expiry) in [(0, 1), (1000, 999), (1000, 1000)] {
         assert!(DeliveryClock::new_interactive_session(server, expiry).is_err());
     }
     for clock in [
@@ -402,6 +408,14 @@ fn interactive_clock_rejects_invalid_times_and_monotonic_overflow() {
             .client_interactive_deadline_ns(u64::MAX - 1, u64::MAX)
             .is_err()
     );
+    // No upper bound on the window; an unrepresentable deadline is refused, not wrapped.
+    let four_hours = DeliveryClock::new_interactive_session(1000, 14_401_000).unwrap();
+    assert_eq!(
+        four_hours.client_interactive_deadline_ns(1, 2).unwrap(),
+        14_400_000_000_001
+    );
+    let widest = DeliveryClock::new_interactive_session(1, u64::MAX).unwrap();
+    assert!(widest.client_interactive_deadline_ns(1, 2).is_err());
     let shortest = DeliveryClock::new_interactive_session(1000, 1001).unwrap();
     assert_eq!(
         shortest.client_interactive_deadline_ns(1, 2).unwrap(),
@@ -436,7 +450,6 @@ fn long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract() {
             .client_interactive_deadline_ns(10_000_000_000, 3_610_000_000_000)
             .is_err()
     );
-    assert!(DeliveryClock::new_interactive_session(1000, 3_601_001).is_err());
     let old = contract_artifact().unwrap();
     let long = long_contract_artifact().unwrap();
     assert_ne!(old, long);
@@ -448,6 +461,14 @@ fn long_delivery_is_explicit_and_keeps_original_clock_bounds_and_contract() {
         long_schema()["$defs"]["PreparationRefreshV1PhasePolicy"]["properties"]["schema_version"]["const"],
         json!(3)
     );
+    // Lease fields are positive integers with no policy maximum.
+    for field in [
+        &long_schema()["$defs"]["PreparationRefreshV1PhasePolicy"]["properties"]["maximum_execution_lease_ms"],
+        &long_schema()["$defs"]["DeliveryClock"]["properties"]["valid_for_ms"],
+    ] {
+        assert_eq!(field["minimum"], json!(1));
+        assert!(field.get("maximum").is_none());
+    }
     Negotiation {
         contract: long.clone(),
         features: required_features(),
