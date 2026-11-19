@@ -415,3 +415,27 @@ fn manifest_declares_exactly_one_confinement_mode() {
         assert!(decode::<LaunchManifest>(&serde_json::to_vec(bad).unwrap()).is_err());
     }
 }
+
+#[test]
+fn a_command_never_accepts_a_split_escape_report_as_a_key() {
+    for report in [
+        b"\x1b[<43;37;5M".as_slice(),
+        b"\x1b[1;5D",
+        b"\x1bOA",
+        b"\x1b[M !!",
+    ] {
+        let mut packet = input();
+        for end in 1..report.len() {
+            packet.bytes = report[..end].into();
+            assert!(packet.validate().is_err(), "prefix of length {end}");
+        }
+        packet.bytes = report.into();
+        assert!(packet.validate().is_ok());
+    }
+    let mut packet = input();
+    packet.bytes = vec![0x1b];
+    packet.escape_key = true;
+    assert!(packet.validate().is_ok());
+    packet.bytes.push(b'[');
+    assert!(packet.validate().is_err());
+}

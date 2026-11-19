@@ -274,6 +274,9 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
     .fetch_one(&f.db.pool().await)
     .await
     .unwrap();
+    // A task pane keeps its launch geometry: a viewer resize is refused and
+    // never reaches the worker.
+    let before = queue_snapshot(&f).await;
     service::mutate(
         &f.state,
         f.actor,
@@ -290,8 +293,8 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         }),
     )
     .await
-    .unwrap();
-    let before = queue_snapshot(&f).await;
+    .unwrap_err();
+    assert_eq!(before, queue_snapshot(&f).await);
     let (code, body) = http(&f, &request(&r)).await;
     assert_eq!(code, StatusCode::OK, "{body}");
     let envelope: Envelope = serde_json::from_value(body).unwrap();
@@ -314,7 +317,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         1,
         "full poll still dispatches with unchanged zero-controller activity hint"
     );
-    assert!(full.effects.iter().any(|e| matches!(e, Effect::Resize(_))));
+    assert!(!full.effects.iter().any(|e| matches!(e, Effect::Resize(_))));
 }
 
 #[tokio::test]

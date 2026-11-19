@@ -1722,7 +1722,8 @@ async fn epoch_receipts_roll_over_bounded_sql_window_and_retired_input_cannot_re
                 expected_session_revision: 1,
                 expires_at_ms: NOW + 2000,
                 bytes: vec![sequence as u8],
-                escape_key: false,
+                // A lone ESC (sequence 27) is only a complete packet as the Escape key.
+                escape_key: sequence == 0x1b,
             },
         };
         if sequence == 1 {
