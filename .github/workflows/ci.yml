@@ -83,27 +83,18 @@ jobs:
           "$RUNNER_TEMP/agent-contract-venv/bin/python" protocol/agent-access/v1/generate.py --check
           "$RUNNER_TEMP/agent-contract-venv/bin/python" -m unittest discover -s protocol/agent-access/v1 -p test_conformance.py -v
 
-  test:
-    name: tests
+  # The `tests` check is split across runners (AGENTS.md "CI wall time"):
+  #   tests-build  compiles every test binary once into a nextest archive
+  #   tests-shard  runs 1/N of the archive's tests per runner (nextest
+  #                --partition hash:i/N), each with its own PostgreSQL
+  #   tests-extra  the two feature-on runs, which need their own build
+  #   tests-doc    doctests (nextest does not run them)
+  #   tests        the single aggregate check: fails unless every job above
+  #                succeeded. This is the name to read (and to require).
+  tests-build:
+    name: tests (build archive)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:17-bookworm
-        env:
-          POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
-        # The data directory is memory, as scripts/test-db has it: every test
-        # creates and drops its own database, and nothing here outlives the job.
-        options: >-
-          --tmpfs /var/lib/postgresql/data
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 30
-    env:
-      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -124,18 +115,177 @@ jobs:
             echo "::error::AQ_SOURCE_REVISION is set; cargo test must build unstamped"
             exit 1
           fi
-      # nextest runs every test in its own process, in parallel across all test
-      # binaries (cargo test runs the binaries one after another). Test groups
-      # and timeouts are in .config/nextest.toml.
-      - name: cargo nextest run --workspace
-        run: cargo nextest run --workspace --locked --no-fail-fast --profile ci
-      # nextest does not run doctests.
-      - name: cargo test --workspace --doc
-        run: cargo test --workspace --locked --doc
+      - name: cargo nextest archive --workspace
+        run: cargo nextest archive --workspace --locked --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+      # The archive's total, to compare with the sum of the shards' counts.
+      - name: Count the archived tests
+        run: |
+          count=$(cargo nextest list --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . --message-format oneline | wc -l)
+          echo "tests in the archive: $count"
+          echo "Tests in the archive: $count" >> "$GITHUB_STEP_SUMMARY"
+      # The archive is already zstd-compressed.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  tests-shard:
+    name: tests (shard ${{ matrix.shard }}/6)
+    needs: tests-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The shard count and the partition denominator below must agree.
+        shard: [1, 2, 3, 4, 5, 6]
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+    steps:
+      # The archive holds the compiled test binaries only; the checkout
+      # supplies the sources tests read at run time, .config/nextest.toml
+      # (profiles, test groups) and Cargo.lock/manifests.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$toolchain" --profile minimal
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-nextest@0.9.148
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}/archive
+      # Same selection, profile and groups as the unsharded run; hash
+      # partitioning gives every test to exactly one shard.
+      # Extracting into the checkout puts every binary at the absolute path the
+      # build job compiled into `env!("CARGO_BIN_EXE_*")` (same runner layout);
+      # a temporary directory left those paths missing.
+      - name: cargo nextest run (shard ${{ matrix.shard }}/6)
+        run: |
+          # env!("CARGO_TARGET_TMPDIR") points here; the archive does not carry it.
+          mkdir -p "$GITHUB_WORKSPACE/target/tmp"
+          cargo nextest run --archive-file "$RUNNER_TEMP/archive/nextest-archive.tar.zst" \
+            --extract-to "$GITHUB_WORKSPACE" --extract-overwrite \
+            --workspace-remap . --no-fail-fast --profile ci \
+            --partition hash:${{ matrix.shard }}/6
+
+  # The feature-on runs rebuild aq-updater and aq-server with different
+  # features, so they cannot use the archive. They run beside the build job.
+  tests-extra:
+    name: tests (feature-on runs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$toolchain" --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Check the build is unstamped
+        run: |
+          if [ -n "${AQ_SOURCE_REVISION:-}" ]; then
+            echo "::error::AQ_SOURCE_REVISION is set; cargo test must build unstamped"
+            exit 1
+          fi
       - name: cargo nextest run -p aq-updater --features test-verifier
         run: cargo nextest run -p aq-updater --locked --no-fail-fast --profile ci --features test-verifier
       - name: Recovery authority and reserved control capacity regressions
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features recovery-test-support --test it_server -E 'test(/^execution::/) | test(/^readiness::/)'
+
+  # nextest does not run doctests.
+  tests-doc:
+    name: tests (doctests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$toolchain" --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo test --workspace --doc
+        run: cargo test --workspace --locked --doc
+
+  # The one check that reports the whole test suite. `if: always()` makes it
+  # run (and fail) when a shard fails or is skipped, instead of being skipped.
+  tests:
+    name: tests
+    needs: [tests-build, tests-shard, tests-extra, tests-doc]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every test job must have succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != success ]; then
+              echo "::error::a test job did not succeed ($RESULTS)"
+              exit 1
+            fi
+          done
 
   # The static updater and v2 CLI that release.yml ships, built the same way,
   # so musl breakage shows up here rather than at tag time.
