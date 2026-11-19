@@ -14,6 +14,25 @@ pub(super) fn hints_valid(priority: Option<u16>, hints: [&Option<String>; 3]) ->
             })
         })
 }
+/// Spec 0017 §5.4: the capabilities a task needs from its environment,
+/// stored as `aq:needs`: distinct bounded labels. Empty names none.
+#[cfg(feature = "project_environments")]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "Vec<String>")]
+pub(crate) struct Needs(#[schemars(length(max = 32))] pub Vec<String>);
+#[cfg(feature = "project_environments")]
+impl TryFrom<Vec<String>> for Needs {
+    type Error = String;
+    fn try_from(needs: Vec<String>) -> std::result::Result<Self, String> {
+        aq_project_policy::environments::check_needs(&needs).map(|()| Self(needs))
+    }
+}
+#[cfg(feature = "project_environments")]
+pub(super) fn needs(value: &mut Value, needs: &Option<Needs>) {
+    if let Some(Needs(needs)) = needs.as_ref().filter(|n| !n.0.is_empty()) {
+        value[aq_project_policy::environments::NEEDS_KEY] = json!(needs);
+    }
+}
 /// `role` is the role the task names (spec 0014 §5.5), stored as `aq:role`.
 pub(super) fn metadata(
     value: &mut Value,
@@ -69,6 +88,10 @@ pub(crate) struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 128))]
     pub task_type: Option<String>,
+    /// What the task needs from its environment (spec 0017), as `aq:needs`.
+    #[cfg(feature = "project_environments")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Needs>,
 }
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -117,6 +140,8 @@ impl Task {
             &self.intelligence_hint,
             &self.task_type,
         );
+        #[cfg(feature = "project_environments")]
+        needs(&mut m, &self.needs);
         json!({"op":"create_node","id":self.id,"kind":"task","title":self.title,"body":self.body,"acceptance_criteria":self.acceptance_criteria,"labels":self.labels,"task_state":self.task_state,"metadata":m})
     }
 }

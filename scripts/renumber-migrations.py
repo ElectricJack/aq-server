@@ -18,6 +18,8 @@ lines belong to main's migrations):
   * `value='N'` (the migration's `UPDATE meta SET value='N'`);
   * identifiers ending in `_N`, for example `COUNTS_N` and `PRIORS_N`;
   * `supported >= N`, `STATE_FORMAT_VERSION < N` and `*_FORMAT N` comparisons;
+  * a version constant named `FORMAT` or `*_FORMAT` (any case), as in
+    `pub const FORMAT: u32 = N;`; other constants keep their numbers;
   * `migration N` in comments and docs, and a zero padded `NNNN`.
 
 The catalog itself is generated from the directory, so it needs no edit. If
@@ -114,6 +116,8 @@ def rewriter(numbers, stems):
         r"(?P<gate>(?<![A-Za-z0-9_])[A-Za-z_]*(?i:supported|format|version)[A-Za-z_]*\s*"
         r"(?:>=|<=|==|!=|>|<|=|:)\s*)(?P<n2>[0-9]+)(?![0-9A-Za-z_])(?!\.[0-9])",
         r"(?P<fmt>(?<![A-Za-z0-9_])[A-Za-z0-9_]*(?i:format)[A-Za-z0-9_]*[ \t]+)(?P<n3>[0-9]+)(?![0-9A-Za-z_])(?!\.[0-9])",
+        r"(?P<const>(?<![A-Za-z0-9_])(?:pub(?:\([a-z: ]+\))?\s+)?const\s+(?:[A-Za-z0-9_]*_)?(?i:format)\s*:\s*"
+        r"(?:[iu](?:8|16|32|64|128|size))\s*=\s*)(?P<n7>[0-9]+)(?![0-9A-Za-z_])(?!\.[0-9])",
         r"(?P<sql>value\s*=\s*')(?P<n4>[0-9]+)(?=')",
         r"(?P<mig>(?i:\bmigrations?\s+(?:no\.?\s*)?))(?P<n5>[0-9]+)(?![0-9A-Za-z_])",
         r"(?<![0-9A-Za-z_])(?<!\.)(?P<n6>0[0-9]{3})(?![0-9A-Za-z_])(?!\.[0-9])",
@@ -123,7 +127,7 @@ def rewriter(numbers, stems):
     def replace(match):
         if match["stem"]:
             return stems[match["stem"]]
-        for prefix, group in [("ident", "n1"), ("gate", "n2"), ("fmt", "n3"), ("sql", "n4"),
+        for prefix, group in [("ident", "n1"), ("gate", "n2"), ("fmt", "n3"), ("const", "n7"), ("sql", "n4"),
                               ("mig", "n5"), (None, "n6")]:
             digits = match[group]
             if digits is not None:

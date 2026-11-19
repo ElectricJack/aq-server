@@ -189,6 +189,13 @@
           "maxLength": 128,
           "description": "The role the task expects; it must exist. Absent: the project's default role."
         },
+        "needs": {
+          "type": ["array", "null"],
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "description": "What the task needs from its environment (spec 0017), stored as `aq:needs`. Accepted only by a server built with the project_environments feature."
+        },
         "intelligence_hint": {
           "type": [
             "string",

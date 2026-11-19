@@ -8,6 +8,10 @@ publish = false
 name = "aq-profile"
 path = "src/main.rs"
 
+[features]
+# Spec 0017: the execution profile's `environment` is optional. Off by default.
+project_environments = []
+
 [dependencies]
 aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0" }
 aq-agent-api = { path = "../aq-agent-api", version = "=0.1.0" }

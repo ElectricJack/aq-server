@@ -5,7 +5,7 @@
 //! again, and a class with no level document holds the task. The actual mounted poll,
 //! selection and publication run; the Graph peer and the routing switch are synthetic owner
 //! facts (no routing policy is compiled and no provider is called).
-use crate::common::native_offer::{Case, fail_and_release, poll, poll_offered, setup};
+use crate::common::native_offer::{Case, assembled, fail_and_release, poll, poll_offered, setup};
 use crate::common::roles;
 use aq_admission::control::{ControlReply, decode_reply};
 use aq_profiles::roles::Kind;
@@ -107,6 +107,8 @@ async fn not_offered(c: &Case) -> usize {
             assert_eq!(status, 200, "{body}");
             assert!(offered(&body).is_empty(), "{body}");
         }
+        // What the assembly records lands when it ends, not when the poll answers.
+        assembled(c).await;
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     assert_eq!(attempts(c).await, 0, "no attempt was published");

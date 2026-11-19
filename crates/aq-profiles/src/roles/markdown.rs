@@ -481,7 +481,10 @@ pub fn parse_execution(source: &str) -> Parsed<Execution> {
         name,
         description,
         harnesses: front.required("harnesses", list)?,
+        #[cfg(not(feature = "project_environments"))]
         environment: front.required("environment", text)?,
+        #[cfg(feature = "project_environments")]
+        environment: front.optional("environment", text)?,
         confinement: front.required("confinement", named)?,
         credentials,
         limits: Limits {
@@ -606,14 +609,23 @@ impl Intelligence {
     }
 }
 impl Execution {
+    #[cfg(not(feature = "project_environments"))]
+    fn environment_line(&self) -> String {
+        format!("environment: {}\n", scalar(&self.environment))
+    }
+    #[cfg(feature = "project_environments")]
+    fn environment_line(&self) -> String {
+        (self.environment.as_deref())
+            .map_or_else(String::new, |e| format!("environment: {}\n", scalar(e)))
+    }
     /// The document [`parse_execution`] reads back as this profile.
     pub fn to_markdown(&self) -> String {
         let mut out = front(&self.id, &self.name, &self.description);
         let _ = write!(
             out,
-            "harnesses: [{}]\nenvironment: {}\nconfinement: {}\n---\n",
+            "harnesses: [{}]\n{}confinement: {}\n---\n",
             self.harnesses.join(", "),
-            scalar(&self.environment),
+            self.environment_line(),
             self.confinement.name()
         );
         if !self.credentials.is_empty() {
