@@ -212,7 +212,7 @@ Paths below are the ms1 defaults. `compose.sh` is the copy your rollout uses
 ```sh
 B=~/.local/share/aq-ms1
 N=$B/node/config                          # installed node files
-W=$B/runtime/aq-worker
+W=$B/runtime-manual/aq-worker              # the installed node executable
 OUT=$B/repin-$(date -u +%Y%m%dT%H%M%SZ)   # new, private output directory
 API=http://127.0.0.1:28080
 ```
@@ -254,7 +254,7 @@ API=http://127.0.0.1:28080
 
    ```sh
    ls -l "$OUT/new"/*.json
-   "$W" --config "$B/node/config/worker.toml" check-native --native-config "$OUT/new/native.json"
+   "$W" check-native --config "$N/worker.toml" --native-config "$OUT/new/native.json"
    ```
 
 5. **Write the vault config** (the previous one is kept beside it):
@@ -271,12 +271,10 @@ API=http://127.0.0.1:28080
    healthy (`--force-recreate` is required: without it nothing is reloaded):
 
    ```sh
-   compose.sh after up -d --no-deps --no-build --force-recreate --wait server
+   compose.sh up -d --no-deps --no-build --force-recreate --wait --wait-timeout 300 server
    curl -fsS "$API/healthz"; echo
    ```
 
-   (`after` is the mode argument of the 0119/0123 rollouts' `compose.sh`; use
-   your copy's own.)
 
 7. **Register** the new registry revision (owner request, CSRF header
    required; answers `{"installed":true}`):
