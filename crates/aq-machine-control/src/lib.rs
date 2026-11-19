@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
+pub mod attempts;
 pub mod holds;
 pub mod lapse;
 pub mod launch;

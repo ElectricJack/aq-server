@@ -39,6 +39,13 @@ pub struct SelectionDefaults {
     /// still woken.
     #[serde(default = "initial_wake_elapsed_ms")]
     pub max_wake_lineage_elapsed_ms: u64,
+    /// Offers of a task that may expire without ever being granted before the
+    /// task is held.
+    #[serde(default = "initial_never_granted")]
+    pub max_never_granted_offers: u32,
+}
+fn initial_never_granted() -> u32 {
+    SelectionDefaults::default().max_never_granted_offers
 }
 // Settings stored before these keys existed take the initial values.
 fn initial_sandbox_ms() -> u64 {
@@ -77,6 +84,7 @@ impl Default for SelectionDefaults {
             max_uncharged_continuations: 5,
             max_wake_attempts: 3,
             max_wake_lineage_elapsed_ms: 24 * 3_600_000,
+            max_never_granted_offers: 8,
         }
     }
 }
@@ -200,6 +208,7 @@ impl SelectionDefaults {
                 .unwrap_or(d.max_uncharged_continuations),
             max_wake_attempts: d.max_wake_attempts,
             max_wake_lineage_elapsed_ms: d.max_wake_lineage_elapsed_ms,
+            max_never_granted_offers: d.max_never_granted_offers,
         }
     }
     /// The full policy: these values, and from the execution profile the
@@ -232,8 +241,11 @@ impl SelectionDefaults {
     /// The rules of [`SelectionPolicy::validate`] that do not depend on an
     /// execution profile.
     pub fn check(&self) -> Result<(), String> {
-        if self.max_wake_attempts == 0 || self.max_wake_lineage_elapsed_ms == 0 {
-            return Err("wake limits must be above zero".into());
+        if self.max_wake_attempts == 0
+            || self.max_wake_lineage_elapsed_ms == 0
+            || self.max_never_granted_offers == 0
+        {
+            return Err("wake and never-granted limits must be above zero".into());
         }
         (self.policy(1, Vec::new()).validate()).map_err(|crate::Error::Invalid(message)| message)
     }

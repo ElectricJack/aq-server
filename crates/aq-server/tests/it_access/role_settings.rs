@@ -957,6 +957,41 @@ async fn an_owner_reads_saves_and_deletes_documents_over_http() {
         .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
     assert_ne!(moved["digest"], saved["digest"]);
+    // A save keeps every key it does not state: a client that does not know the newer keys
+    // (the dashboard form) cannot reset them. An explicit value still changes one, an
+    // explicit `null` still clears a cost limit, and an unknown key is refused.
+    let revision = || async {
+        let read = f.call("GET", "/api/settings/selection-defaults", None, true, false);
+        read.await.1["revision"].as_str().unwrap().to_owned()
+    };
+    let put = |body: Value, revision: String| {
+        let body = json!({"selection_defaults": body, "expected_revision": revision, "operation_id": Uuid::new_v4()});
+        let path = "/api/settings/selection-defaults";
+        f.call("PUT", path, Some(body), true, true)
+    };
+    let stated = json!({"max_lineage_sandbox_ms": 7_200_000, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD"});
+    let (status, body) = put(stated, revision().await).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let partial = json!({"max_attempts": 4, "max_cost_microunits": null, "currency": null});
+    let (status, body) = put(partial, revision().await).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, read) = f
+        .call("GET", "/api/settings/selection-defaults", None, true, false)
+        .await;
+    let now = &read["selection_defaults"];
+    assert_eq!(now["max_attempts"], 4);
+    assert_eq!(now["max_lineage_sandbox_ms"], 7_200_000, "kept: {now}");
+    assert_eq!(now["max_never_granted_offers"], 3, "kept: {now}");
+    assert_eq!(now["max_uncharged_continuations"], 5, "never stated: {now}");
+    assert_eq!(now["max_cost_microunits"], Value::Null, "cleared: {now}");
+    let (status, _) = put(json!({"no_such_key": 1}), revision().await).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = put(json!({"max_never_granted_offers": 0}), revision().await).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the merged whole is validated"
+    );
     let (_, limits) = f
         .call("GET", "/api/settings/profiles/limits", None, true, false)
         .await;

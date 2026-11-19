@@ -37,7 +37,7 @@ pub async fn limits(conn: &mut sqlx::PgConnection, priors: &[Prior]) -> Result<L
 /// The decision attempt counts alone settle: an exhausted never-granted
 /// retry bound blocks, and no started attempt is an ordinary first attempt.
 pub fn precheck(counts: &super::no_grant::AttemptCounts) -> Option<Assessment> {
-    if counts.check_retry_bound().is_err() {
+    if counts.never_granted_bound_exhausted() {
         return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
     }
     (counts.started == 0).then_some(Assessment::Fresh)
@@ -174,9 +174,9 @@ pub async fn retry_hold(
     )
 }
 
-/// An owner's explicit retry overrides the budget hold `code` of `task` (owner decision
+/// An owner's explicit retry overrides the limit hold `code` of `task` (owner decision
 /// 2026-11-18) and assesses it again, in one transaction: the override is recorded only when
-/// the task is then replaceable, so it is never one the offer path would still refuse. The
+/// the task can then be offered, so it is never one the offer path would still refuse. Every
 /// budget starts again; what happened to the task refuses as before.
 pub async fn override_budget(
     state: &AppState,
@@ -191,18 +191,19 @@ pub async fn override_budget(
     let mut tx = state.store.pool.begin().await.map_err(internal)?;
     let known =
         holds::is_budget_hold(code) && holds::has_overrides(&mut tx).await.map_err(internal)?;
-    let counts = super::no_grant::attempt_counts_locked(&mut tx, task).await?;
-    let priors = load(&mut tx, task, counts.started).await?;
-    let Some(attempt) = priors.as_deref().and_then(latest).filter(|_| known) else {
+    let latest = holds::latest_attempt(&mut tx, task)
+        .await
+        .map_err(internal)?;
+    let Some(attempt) = latest.filter(|_| known) else {
         return Ok(Assessment::Blocked(code));
     };
     (o.attempt_id, o.hold_code) = (attempt, code.into());
     (holds::record_override(&mut tx, task, &o, at).await).map_err(internal)?;
     let again = assess_task_in(&mut tx, task, now).await?;
     let again = fence_revision(state, again, project_revision).await?;
-    if again.replacement().is_some() {
+    if !matches!(again, Assessment::Blocked(_)) {
         tx.commit().await.map_err(internal)?;
-        tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a budget hold; the task's budget starts again");
+        tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a limit hold; the task's budgets start again");
         holds::post_override(&state.store.pool, project, task, &o, at).await;
     }
     Ok(again)

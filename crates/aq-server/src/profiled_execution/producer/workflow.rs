@@ -925,7 +925,7 @@ mod tests {
     use super::*;
     use crate::{
         agent_access::scheduling::{GraphReadStamp, ReadyPage, ReadyTask},
-        profiled_execution::no_grant::{AttemptCounts, MAX_UNGRANTED_RETRIES},
+        profiled_execution::no_grant::AttemptCounts,
     };
 
     fn ready(count: usize) -> ReadyPage {
@@ -1022,17 +1022,20 @@ mod tests {
                 started: 1,
                 history: 1,
                 never_granted: 0,
+                max_never_granted: 8,
             },
             AttemptCounts {
                 started: 0,
-                history: MAX_UNGRANTED_RETRIES,
-                never_granted: MAX_UNGRANTED_RETRIES,
+                history: 8,
+                never_granted: 8,
+                max_never_granted: 8,
             },
             // An owner-verified never-granted closure may retry below the cap.
             AttemptCounts {
                 started: 0,
                 history: 1,
                 never_granted: 1,
+                max_never_granted: 8,
             },
         ];
         let mut observed = Vec::new();
@@ -1107,6 +1110,7 @@ mod tests {
             started: 1,
             history: 1,
             never_granted: 0,
+            max_never_granted: 8,
         };
         assert!(replacement::precheck(&held).is_none());
         assert!(

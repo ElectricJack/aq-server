@@ -276,6 +276,7 @@ fn intelligence_document_parses() {
         "max_uncharged_continuations",
         "max_wake_attempts",
         "max_wake_lineage_elapsed_ms",
+        "max_never_granted_offers",
     ] {
         stored.as_object_mut().unwrap().remove(key).unwrap();
     }

@@ -92,19 +92,27 @@ pub fn retry_refusal(code: &str) -> String {
     )
 }
 
-/// A hold that is only a limit (attempts, lineage time or sandbox time used up; the
-/// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner
-/// retry overrides it and the budget starts again (owner decision 2026-11-18). Every other
-/// hold is about what happened to the task and is never overridden.
+/// A hold that is only a limit: attempts, lineage time, sandbox time, cost or never-granted
+/// offers used up (the `replacement_policy_*` codes are holds recorded before the budgets
+/// became one; `..._or_unknown` is selection's own time check). An owner retry overrides it and
+/// every budget starts again (owner decision 2026-11-18). Every other hold is about what
+/// happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
-    matches!(
-        code,
-        "lineage_retry_budget_exhausted"
-            | "lineage_time_budget_exhausted"
-            | "task_sandbox_minutes_budget_exhausted"
-            | "replacement_policy_retry_budget_exhausted"
-            | "replacement_policy_time_budget_exhausted"
-    )
+    budget_code(code).is_some()
+}
+/// `code` as the fixed code of a limit hold, if it is one.
+pub fn budget_code(code: &str) -> Option<&'static str> {
+    const CODES: [&str; 8] = [
+        "lineage_retry_budget_exhausted",
+        "lineage_time_budget_exhausted",
+        "lineage_time_budget_exhausted_or_unknown",
+        "lineage_cost_budget_exhausted",
+        "task_sandbox_minutes_budget_exhausted",
+        "never_granted_retry_bound_exhausted",
+        "replacement_policy_retry_budget_exhausted",
+        "replacement_policy_time_budget_exhausted",
+    ];
+    CODES.into_iter().find(|c| *c == code)
 }
 
 /// First `state_format_version` with `task_limit_overrides`.
@@ -121,11 +129,14 @@ pub struct Override {
     pub reason: String,
     pub actor: String,
     pub recorded_at_ms: i64,
+    /// The lineage's accounted spend when the owner overrode the hold (None when unknown). Only
+    /// spend above it counts against the cost budget afterwards.
+    pub spent_microunits: Option<i64>,
 }
 /// The system comment of an override: the task's history shows who overrode what and why.
 pub fn override_comment(code: &str, actor: &str, reason: &str) -> String {
     format!(
-        "AQ: an owner ({actor}) overrode this task's hold: {} (hold reason: {code}). Its attempt, time and sandbox budgets start again. Owner's reason: {reason}",
+        "AQ: an owner ({actor}) overrode this task's hold: {} (hold reason: {code}). Its attempt, time, sandbox and cost budgets start again. Owner's reason: {reason}",
         phrase(code)
     )
 }
@@ -142,8 +153,8 @@ pub async fn record_override(
         return Err(Error::Invalid("limit override"));
     }
     sqlx::query(
-        "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms) \
-         VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+        "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
     )
     .bind(o.operation_id)
     .bind(task)
@@ -152,6 +163,7 @@ pub async fn record_override(
     .bind(&o.reason)
     .bind(&o.actor)
     .bind(o.recorded_at_ms)
+    .bind(o.spent_microunits)
     .execute(&mut *conn)
     .await?;
     sqlx::query(
@@ -196,7 +208,7 @@ pub async fn overrides(conn: &mut PgConnection, task: Uuid) -> Result<Vec<Overri
         return Ok(Vec::new());
     }
     let rows = sqlx::query(
-        "SELECT operation_id,attempt_id,hold_code,reason,actor,recorded_at_ms FROM task_limit_overrides \
+        "SELECT operation_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits FROM task_limit_overrides \
          WHERE task_id=$1 ORDER BY recorded_at_ms,operation_id",
     )
     .bind(task)
@@ -209,8 +221,27 @@ pub async fn overrides(conn: &mut PgConnection, task: Uuid) -> Result<Vec<Overri
         reason: r.get("reason"),
         actor: r.get("actor"),
         recorded_at_ms: r.get("recorded_at_ms"),
+        spent_microunits: r.get("spent_microunits"),
     };
     Ok(rows.iter().map(read).collect())
+}
+/// The spend the cost budget of `task` starts from: its latest override's (0 without one).
+pub async fn cost_baseline(pool: &PgPool, task: Uuid) -> Result<u64, Error> {
+    let latest = overrides(&mut *pool.acquire().await?, task).await?.pop();
+    let spent = latest.and_then(|o| o.spent_microunits).unwrap_or(0);
+    Ok(u64::try_from(spent).unwrap_or(0))
+}
+/// The task's latest attempt of any kind (an override names it).
+pub async fn latest_attempt(conn: &mut PgConnection, task: Uuid) -> Result<Option<Uuid>, Error> {
+    Ok(sqlx::query_scalar(
+        "SELECT a.attempt_id FROM execution_attempts a LEFT JOIN profiled_launches l USING(attempt_id) \
+         WHERE a.task_id=$1 ORDER BY a.holds_task DESC, \
+         (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT DESC NULLS LAST, \
+         a.attempt_id DESC LIMIT 1",
+    )
+    .bind(task)
+    .fetch_optional(conn)
+    .await?)
 }
 pub async fn has_overrides(conn: &mut PgConnection) -> Result<bool, Error> {
     let v: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
@@ -343,15 +374,7 @@ pub async fn note(
     .await?;
     let attempt = match d.attempt {
         Some(a) => Some(a),
-        None => sqlx::query_scalar(
-            "SELECT a.attempt_id FROM execution_attempts a LEFT JOIN profiled_launches l USING(attempt_id) \
-             WHERE a.task_id=$1 ORDER BY a.holds_task DESC, \
-             (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT DESC NULLS LAST, \
-             a.attempt_id DESC LIMIT 1",
-        )
-        .bind(d.task)
-        .fetch_optional(&mut *conn)
-        .await?,
+        None => latest_attempt(conn, d.task).await?,
     };
     let Some(attempt) = attempt.filter(|_| d.seen > 0) else {
         return Err(Error::Invalid("a hold needs an attempt of its task"));
@@ -746,7 +769,10 @@ mod tests {
         for code in [
             "lineage_retry_budget_exhausted",
             "lineage_time_budget_exhausted",
+            "lineage_time_budget_exhausted_or_unknown",
+            "lineage_cost_budget_exhausted",
             "task_sandbox_minutes_budget_exhausted",
+            "never_granted_retry_bound_exhausted",
             "replacement_policy_retry_budget_exhausted",
             "replacement_policy_time_budget_exhausted",
         ] {
@@ -764,9 +790,10 @@ mod tests {
             "replacement_lineage_history_unknown",
             "replacement_project_revision_changed",
             "replacement_after_unpublished_delivery_needs_new_source",
-            "never_granted_retry_bound_exhausted",
-            "lineage_cost_budget_exhausted",
+            "lost_attempt_release_not_admitted",
             "handoff_successor_stuck",
+            "replacement_successor_stuck",
+            "route_class_unassigned",
         ] {
             assert!(!is_budget_hold(code), "{code}");
         }

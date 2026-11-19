@@ -373,7 +373,7 @@ async fn budget_held(code: &str) -> (Case, Uuid) {
     let mut c = setup().await;
     pin_policy(&mut c, |p| match code {
         "lineage_retry_budget_exhausted" => p.max_attempts = 1,
-        "lineage_time_budget_exhausted" => p.max_lineage_elapsed_ms = 50_000,
+        "lineage_time_budget_exhausted" => p.max_lineage_elapsed_ms = 2_500,
         _ => p.max_lineage_sandbox_ms = 1_000,
     })
     .await;
@@ -401,7 +401,8 @@ async fn budget_held(code: &str) -> (Case, Uuid) {
         tx.commit().await.unwrap();
     }
     if code == "lineage_time_budget_exhausted" {
-        c.env.env.time.fetch_add(50_000, Ordering::SeqCst);
+        // Three seconds, so the node's observations stay fresh for the poll after the override.
+        c.env.env.time.fetch_add(3_000, Ordering::SeqCst);
     }
     // The failed attempt keeps its claim: B4 releases nothing while a budget holds the task.
     // The hold is recorded as the poll's decision records it (the fixture's synthetic stop
@@ -508,6 +509,17 @@ async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
             .execute(&pool)
             .await;
         assert!(changed.is_err(), "{code}: overrides are immutable");
+        // The real offer path: the node polls and is offered the task again.
+        let (status, body) = poll_offered(&c).await;
+        assert_eq!(status, 200, "{code}: {body}");
+        assert_eq!(offered_tasks(&body), [task], "{code}: {body}");
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE task_id=$1")
+                .bind(task)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 2, "{code}: a new attempt of the task");
     }
 }
 
@@ -713,4 +725,117 @@ async fn a_stuck_successor_needs_ten_minutes_of_skips_not_only_twenty() {
         .await
         .unwrap();
     assert_eq!(gap, (1, None), "a five-minute gap restarts the count");
+}
+
+/// The never-granted bound is Settings › Selection defaults `max_never_granted_offers`, and an
+/// owner retry overrides its hold too: the count starts again and the node is offered the task
+/// through the real poll.
+#[tokio::test]
+async fn an_owner_retry_overrides_the_never_granted_bound_and_the_task_is_offered_again() {
+    use aq_server::profiled_execution::no_grant;
+    let mut c = setup().await;
+    pin_policy(&mut c, |p| p.max_never_granted_offers = 1).await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let first = page.offers.remove(0).offered.offer.binding.attempt_id;
+    // The offer expires without a grant and is closed as never granted.
+    c.env.env.time.fetch_add(30_000, Ordering::SeqCst);
+    let node = c.env.env.node;
+    no_grant::close_expired(&c.env.env.state, node, first)
+        .await
+        .unwrap()
+        .unwrap();
+    // The fixture's node observations are fresh for five seconds only, so the case clock goes
+    // back and the closure's instant with it (synthetic; its guards are bypassed).
+    c.env.env.time.fetch_sub(30_000, Ordering::SeqCst);
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_never_granted_closures SET closed_at_ms=closed_at_ms-30000 WHERE attempt_id=$1")
+        .bind(first)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let counts = no_grant::attempt_counts(&pool, task).await.unwrap();
+    assert_eq!((counts.never_granted, counts.max_never_granted), (1, 1));
+    // The poll holds the task at the bound.
+    let (status, body) = poll(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(offered_tasks(&body).is_empty(), "{body}");
+    owner_actions(&mut c).await;
+    let code = "never_granted_retry_bound_exhausted";
+    assert_eq!(held_reason(&work(&c, task).await).as_deref(), Some(code));
+
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("the node was down")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    drop(conn);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (recorded[0].hold_code.as_str(), recorded[0].reason.as_str()),
+        (code, "the node was down")
+    );
+    assert_eq!(recorded[0].attempt_id, first);
+    assert_eq!(held_reason(&work(&c, task).await), None);
+    let counts = no_grant::attempt_counts(&pool, task).await.unwrap();
+    assert_eq!(counts.never_granted, 0, "the count starts again");
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
+}
+
+/// A cost hold is recorded by selection, not by B4's assessment, so the retry reads the
+/// recorded hold. Overriding it is the owner's decision to spend more: the reason and the
+/// lineage's spend at that moment are recorded, and only later spend counts against the cost
+/// budget (`holds::cost_baseline`, which the selection budget snapshot subtracts).
+#[tokio::test]
+async fn an_owner_retry_overrides_a_recorded_cost_hold_and_starts_the_cost_budget_again() {
+    let (mut c, predecessor) = failed_once(None).await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let code = "lineage_cost_budget_exhausted";
+    holds::hold(&pool, decision(&c, code, 1), (c.env.env.state.clock)()).await;
+    owner_actions(&mut c).await;
+    assert_eq!(held_reason(&work(&c, task).await).as_deref(), Some(code));
+    assert_eq!(holds::cost_baseline(&pool, task).await.unwrap(), 0);
+
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("spend more on this one")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (recorded[0].hold_code.as_str(), recorded[0].attempt_id),
+        (code, predecessor)
+    );
+    assert_eq!(recorded[0].reason, "spend more on this one");
+    drop(conn);
+    assert_eq!(held_reason(&work(&c, task).await), None);
+    // A later override that saw 700 microunits spent: the cost budget counts from there.
+    let mut conn = pool.acquire().await.unwrap();
+    let later = holds::Override {
+        operation_id: Uuid::new_v4(),
+        recorded_at_ms: recorded[0].recorded_at_ms + 1,
+        spent_microunits: Some(700),
+        ..recorded[0].clone()
+    };
+    let at = (c.env.env.state.clock)();
+    holds::record_override(&mut conn, task, &later, at)
+        .await
+        .unwrap();
+    drop(conn);
+    assert_eq!(holds::cost_baseline(&pool, task).await.unwrap(), 700);
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
 }
