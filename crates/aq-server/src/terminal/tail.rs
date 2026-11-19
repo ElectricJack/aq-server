@@ -30,6 +30,7 @@ pub struct TailReply {
     pub availability: Availability,
     pub disconnected: bool,
     pub initial_incomplete: bool,
+    pub grid: Option<(u16, u16)>,
     pub frames: Vec<OutputFrame>,
     pub gaps: Vec<OutputGap>,
     pub next_sequence: u64,
@@ -132,12 +133,14 @@ async fn read_inner(
         availability: Availability::NotRetained,
         disconnected: true,
         initial_incomplete: true,
+        grid: None,
         frames: vec![],
         gaps: vec![],
         next_sequence: query.after_sequence,
         more: false,
     };
     if let Some(replay) = replay {
+        reply.grid = replay.snapshot.as_ref().map(|s| (s.columns, s.rows));
         let observed = checked_at.saturating_sub(replay.age_ms);
         if observed > 0 {
             reply.last_observed_at_ms = Some(observed);
@@ -187,11 +190,8 @@ async fn read_inner(
             .collect();
         reply.next_sequence = cutoff;
     }
-    if serde_json::to_vec(&reply)
-        .map_err(|_| AppError::Internal)?
-        .len()
-        > MAX_WIRE_BYTES
-    {
+    let wire = serde_json::to_vec(&reply).map_err(|_| AppError::Internal)?;
+    if wire.len() > MAX_WIRE_BYTES {
         return Err(AppError::Internal);
     }
     Ok(reply)

@@ -255,6 +255,7 @@ async fn lost_poll_response_never_redispatches_input_and_expiry_is_durable_unkno
         expected_session_revision: 1,
         expires_at_ms: NOW + 2_000,
         bytes: b"private literal input".to_vec(),
+        escape_key: false,
     };
     service::mutate(
         &f.state,
@@ -939,6 +940,7 @@ fn literal_request(
         expected_session_revision: 1,
         expires_at_ms: NOW + 2000,
         bytes: b"private literal input".to_vec(),
+        escape_key: false,
     }
 }
 async fn queued_input_as(f: &Fixture, r: &Register, actor: Uuid) -> aq_session_api::InputRequest {
@@ -1170,6 +1172,7 @@ async fn lower_sealed_input_pending_frame_replay_policy_is_binding_in_sql_and_ou
         expected_session_revision: 1,
         expires_at_ms: NOW + 2000,
         bytes: vec![1; 3],
+        escape_key: false,
     };
     assert!(
         service::mutate(&f.state, f.actor, &service::Mutation::Input(input.clone()))
@@ -1431,6 +1434,7 @@ async fn saturated_data_connections_do_not_block_metadata_control_ack_and_input_
         expected_session_revision: 1,
         expires_at_ms: NOW + 2000,
         bytes: b"literal".to_vec(),
+        escape_key: false,
     };
     service::mutate(
         &f.state,
@@ -1718,6 +1722,8 @@ async fn epoch_receipts_roll_over_bounded_sql_window_and_retired_input_cannot_re
                 expected_session_revision: 1,
                 expires_at_ms: NOW + 2000,
                 bytes: vec![sequence as u8],
+                // A lone ESC (sequence 27) is only a complete packet as the Escape key.
+                escape_key: sequence == 0x1b,
             },
         };
         if sequence == 1 {

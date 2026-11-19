@@ -230,6 +230,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "escape_key": {
+          "type": "boolean"
+        },
         "issued_at_ms": {
           "format": "uint64",
           "minimum": 0,

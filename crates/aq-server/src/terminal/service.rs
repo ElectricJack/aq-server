@@ -69,7 +69,7 @@ impl MutationExt for Mutation {
             Self::Input(r) => l.input(a, r, clock),
             Self::EpochInput(r) => l.epoch_input(a, r, clock),
             Self::OpenEpoch(r) => l.open_epoch_request(a, r, token, clock),
-            Self::Resize(r) => l.resize(a, r, clock),
+            Self::Resize(_) => Err(aq_terminal_relay::Error::Unsupported),
             Self::Capture(r) => l.capture(a, r, token, clock),
             Self::Resolve(r) => l.resolve(a, r, clock),
         }

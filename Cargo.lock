@@ -445,6 +445,7 @@ dependencies = [
  "aq-profiles",
  "aq-project-policy",
  "aq-role-settings",
+ "aq-session-protocol",
  "aq-swarm-settings",
  "axum",
  "chrono",

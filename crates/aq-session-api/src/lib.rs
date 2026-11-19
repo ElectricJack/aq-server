@@ -162,6 +162,8 @@ pub struct InputRequest {
     pub expires_at_ms: u64,
     #[schemars(length(min = 1, max = 4096))]
     pub bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub escape_key: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

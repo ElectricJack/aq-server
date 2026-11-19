@@ -8,7 +8,7 @@
   "session_dependency": {
     "package": "aq-session-protocol",
     "version": "=0.1.0",
-    "archive_sha256": "33ab907dddc7c47809ea3d212838a8670a6addbd96e68494bc5f46d7d116f0c9"
+    "archive_sha256": "f33933c64a6d396192e7db03163ec9ee62f81bfdb0af48d81c54914a079c0381"
   },
   "files": [
     {

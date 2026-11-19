@@ -313,15 +313,6 @@ impl Drop for Stdin {
         unsafe { nix::libc::fcntl(0, nix::libc::F_SETFL, self.flags) };
     }
 }
-fn terminal_size() -> Option<(u16, u16)> {
-    let mut size = std::mem::MaybeUninit::<nix::libc::winsize>::zeroed();
-    if unsafe { nix::libc::ioctl(0, nix::libc::TIOCGWINSZ, size.as_mut_ptr()) } < 0 {
-        return None;
-    }
-    let size = unsafe { size.assume_init() };
-    ((1..=1000).contains(&size.ws_col) && (1..=1000).contains(&size.ws_row))
-        .then_some((size.ws_col, size.ws_row))
-}
 async fn attach(client: &Client, id: Uuid, seconds: u32, control: bool) -> Result<(), String> {
     if !(1..=300).contains(&seconds) {
         return Err("attach duration must be1..300 seconds".into());
@@ -336,8 +327,6 @@ async fn attach(client: &Client, id: Uuid, seconds: u32, control: bool) -> Resul
     let mut lease: Option<aq_session_protocol::ControllerLease> = None;
     let mut permit: Option<epoch::Permit> = None;
     let mut sequence = 0;
-    let mut resize_sequence = 0;
-    let mut last_size = None;
     let mut pending: Option<Uuid> = None;
     if control {
         if !initial.terminal_policy.input_enabled {
@@ -522,8 +511,6 @@ async fn attach(client: &Client, id: Uuid, seconds: u32, control: bool) -> Resul
                 lease = status.lease.clone();
                 permit = None;
                 sequence = 0;
-                resize_sequence = 0;
-                last_size = None;
                 print(&status)?;
             } else if current.control.fence_acknowledged
                 && pending.is_none()
@@ -532,30 +519,6 @@ async fn attach(client: &Client, id: Uuid, seconds: u32, control: bool) -> Resul
                     .as_ref()
                     .is_none_or(|p| clock.saturating_add(250) < p.expires_at_ms)
             {
-                if stdin.is_some()
-                    && let Some(size) = terminal_size()
-                    && Some(size) != last_size
-                {
-                    resize_sequence += 1;
-                    print(
-                        &mutate(
-                            client,
-                            &Mutation::Resize(aq_session_api::ResizeRequest {
-                                terminal: exact.clone(),
-                                operation_id: Uuid::new_v4(),
-                                lease_id: old.lease_id,
-                                expected_controller_generation: old.generation,
-                                expected_session_revision: current.session_revision,
-                                expires_at_ms: now()?.saturating_add(2000).min(old.expires_at_ms),
-                                sequence: resize_sequence,
-                                columns: size.0,
-                                rows: size.1,
-                            }),
-                        )
-                        .await?,
-                    )?;
-                    last_size = Some(size);
-                }
                 if current.input_mode == draft::InputMode::EpochV1 && permit.is_none() {
                     let reply = mutate(
                         client,
@@ -607,6 +570,7 @@ async fn attach(client: &Client, id: Uuid, seconds: u32, control: bool) -> Resul
                                 .min(old.expires_at_ms)
                                 .min(permit.as_ref().map_or(u64::MAX, |p| p.expires_at_ms)),
                             bytes,
+                            escape_key: false,
                         };
                         let request = if let Some(p) = &permit {
                             Mutation::EpochInput(epoch::Request {
@@ -788,6 +752,7 @@ mod tests {
             expected_session_revision: 1,
             expires_at_ms: 100,
             bytes: b"private literal input".to_vec(),
+            escape_key: false,
         });
         std::fs::write(&path, serde_json::to_vec(&intent).unwrap()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();

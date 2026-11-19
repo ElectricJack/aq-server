@@ -1,5 +1,6 @@
 //! Disposable, fenced byte streams. Closing an attach never stops its agent.
 use super::*;
+use aq_session_protocol::{MAX_INPUT_BYTES, complete_terminal_input};
 use axum::{
     Router,
     extract::{
@@ -27,8 +28,10 @@ pub(super) struct Viewer {
 pub(super) struct Attach {
     client_id: Uuid,
     generation: u64,
-    columns: u16,
-    rows: u16,
+    columns: Option<u16>,
+    rows: Option<u16>,
+    #[serde(default)]
+    read_only: bool,
 }
 struct Browser {
     s: Service,
@@ -98,7 +101,20 @@ pub(super) async fn browser(
     }
     let actor = (s.owner)(headers.clone()).await?;
     valid_id(a.client_id)?;
-    if !dimensions(a.columns, a.rows) || !terminal_subject(&s, id).await?.1 {
+    let fixed = s.subject == Subject::Attempt;
+    if a.read_only && !fixed {
+        return Err(conflict("Invalid viewer mode"));
+    }
+    let mut attach = json!({"kind":"attach","generation":a.generation});
+    match (fixed, a.columns, a.rows) {
+        (true, None, None) => attach["read_only"] = json!(a.read_only),
+        (false, Some(c), Some(r)) if dimensions(c, r) => {
+            attach["columns"] = json!(c);
+            attach["rows"] = json!(r);
+        }
+        _ => return Err(conflict("Invalid viewer dimensions")),
+    }
+    if !terminal_subject(&s, id).await?.1 {
         return Err(conflict("The terminal is not ready"));
     }
     let mut rt = s.runtime.0.lock().await;
@@ -112,14 +128,20 @@ pub(super) async fn browser(
         .ok_or_else(|| conflict("Live terminal transport is connecting"))?;
     let connection = Uuid::new_v4();
     let (tx, rx) = mpsc::channel(64);
-    relay.tx.try_send(json!({"kind":"attach","connection_id":connection,"generation":a.generation,"columns":a.columns,"rows":a.rows})).map_err(|_|conflict("Live terminal transport is busy"))?;
+    attach["connection_id"] = json!(connection);
+    relay
+        .tx
+        .try_send(attach)
+        .map_err(|_| conflict("Live terminal transport is busy"))?;
     screen.viewer = Some(Viewer {
         connection,
         generation: a.generation,
         tx,
     });
     drop(rt);
-    attempt::controlled(&s, id, actor).await;
+    if !a.read_only {
+        attempt::controlled(&s, id, actor).await;
+    }
     Ok(ws
         .max_message_size(8192)
         .max_frame_size(8192)
@@ -170,7 +192,7 @@ async fn worker_socket(
           let Some(v)=screen.viewer.as_ref().filter(|v|v.generation==screen.generation&&screen.controller.is_some_and(|(_,_,until)|until>now())) else{continue};
           let output=match frame{
            Message::Binary(bytes) if bytes.len()>16 && bytes.len()<=16400 && bytes[..16]==*v.connection.as_bytes()=>Some(Message::Binary(bytes.slice(16..))),
-           Message::Text(text)=>{match serde_json::from_str::<Value>(&text){Ok(value) if value["kind"]=="ready"&&value["connection_id"]==v.connection.to_string()=>Some(Message::Text(json!({"kind":"ready","server_time_ms":now()}).to_string().into())),_=>None}},
+           Message::Text(text) => ready(&text, v.connection, s.subject == Subject::Attempt),
            Message::Close(_)=>break,_=>None};
           if let Some(output)=output && v.tx.try_send(output).is_err(){let connection=v.connection;let generation=v.generation;screen.viewer=None;if let Some(relay)=&screen.relay{let _=relay.tx.try_send(json!({"kind":"detach","connection_id":connection,"generation":generation}));}}
          }
@@ -185,6 +207,38 @@ async fn worker_socket(
         screen.viewer = None;
     }
 }
+fn ready(text: &str, connection: Uuid, fixed: bool) -> Option<Message> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    if value["kind"] != "ready" || value["connection_id"] != connection.to_string() {
+        return None;
+    }
+    let mut reply = json!({"kind":"ready","server_time_ms":now()});
+    if fixed {
+        let columns = u16::try_from(value["columns"].as_u64()?).ok()?;
+        let rows = u16::try_from(value["rows"].as_u64()?).ok()?;
+        if !dimensions(columns, rows) {
+            return None;
+        }
+        reply["columns"] = json!(columns);
+        reply["rows"] = json!(rows);
+    }
+    Some(Message::Text(reply.to_string().into()))
+}
+
+fn browser_control(text: &str, fixed: bool, read_only: bool) -> Option<(Value, usize)> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    match value["kind"].as_str()? {
+        "repaint" if fixed => Some((json!({"kind":"repaint"}), 0)),
+        "escape" if fixed && !read_only => Some((json!({"kind":"escape"}), 1)),
+        "resize" if !fixed => {
+            let c = u16::try_from(value["columns"].as_u64()?).ok()?;
+            let r = u16::try_from(value["rows"].as_u64()?).ok()?;
+            dimensions(c, r).then(|| (json!({"kind":"resize","columns":c,"rows":r}), 0))
+        }
+        _ => None,
+    }
+}
+
 async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socket: WebSocket) {
     let Browser {
         s,
@@ -198,17 +252,63 @@ async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socke
     let (mut sink, mut source) = socket.split();
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut input_bytes = 0usize;
+    let fixed = s.subject == Subject::Attempt;
+    let mut painting = fixed;
     loop {
         tokio::select! {
-         output=rx.recv()=>{let Some(output)=output else{break};match tokio::time::timeout(Duration::from_secs(2),sink.send(output)).await{Ok(Ok(()))=>{},_=>break}}
-         frame=source.next()=>{let Some(Ok(frame))=frame else{break};let payload=match frame{
-          Message::Binary(bytes) if !bytes.is_empty()&&bytes.len()<=4096=>{input_bytes+=bytes.len();if input_bytes>65536{break;}json!({"kind":"input","bytes":bytes.to_vec()})},
-          Message::Text(text)=>{let Ok(v)=serde_json::from_str::<Value>(&text) else{break};let (Some(c),Some(r))=(v["columns"].as_u64(),v["rows"].as_u64()) else{break};if v["kind"]!="resize"||c>500||r>300||!dimensions(c as u16,r as u16){break;}json!({"kind":"resize","columns":c,"rows":r})},
-          Message::Close(_)=>break,Message::Ping(_)|Message::Pong(_)=>continue,_=>break};
+         output = rx.recv() => {
+            let Some(output) = output else { break };
+            if matches!(output, Message::Text(_)) {
+                painting = false;
+            }
+            if !matches!(tokio::time::timeout(Duration::from_secs(2), sink.send(output)).await, Ok(Ok(()))) {
+                break;
+            }
+         }
+         frame=source.next()=>{
+          let Some(Ok(frame))=frame else{break};
+          let (payload, charge) = match frame {
+            Message::Binary(bytes) if !a.read_only && !bytes.is_empty() && bytes.len() <= MAX_INPUT_BYTES
+                && (!fixed || complete_terminal_input(&bytes, false)) =>
+                (json!({"kind":"input","bytes":bytes.to_vec()}), bytes.len()),
+            Message::Text(text) => { let Some(command) = browser_control(&text, fixed, a.read_only) else { break }; command }
+            Message::Ping(_) | Message::Pong(_) => continue,
+            _ => break,
+          };
+          if payload["kind"] == "repaint" {
+            if painting { continue; }
+            painting = true;
+          } else if painting {
+            continue;
+          }
+          input_bytes += charge;
+          if input_bytes > 65536 { break; }
           let rt=s.runtime.0.lock().await;let Some(screen)=rt.get(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}
           let mut payload=payload;payload["connection_id"]=json!(connection);payload["generation"]=json!(a.generation);if relay.tx.try_send(payload).is_err(){break;}
          }
-         _=tick.tick()=>{input_bytes=0;if (s.owner)(headers.clone()).await.ok()!=Some(actor)||!permitted(&s,id).await{break;}let mut rt=s.runtime.0.lock().await;let Some(screen)=rt.get_mut(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}screen.controller=Some((a.client_id,actor,now()+15000));drop(rt);attempt::controlled(&s,id,actor).await;if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))){break;}}
+         _ = tick.tick() => {
+            input_bytes = 0;
+            if (s.owner)(headers.clone()).await.ok() != Some(actor) || !permitted(&s, id).await {
+                break;
+            }
+            let mut rt = s.runtime.0.lock().await;
+            let Some(screen) = rt.get_mut(&id) else { break };
+            if !controls(screen, actor, &a)
+                || screen.viewer.as_ref().is_none_or(|v| v.connection != connection)
+                || screen.relay.as_ref().is_none_or(|r| r.id != relay.id)
+            {
+                break;
+            }
+            screen.controller = Some((a.client_id, actor, now() + 15000));
+            drop(rt);
+            if !a.read_only {
+                attempt::controlled(&s, id, actor).await;
+            }
+            let ping = sink.send(Message::Ping(Vec::new().into()));
+            if !matches!(tokio::time::timeout(Duration::from_secs(2), ping).await, Ok(Ok(()))) {
+                break;
+            }
+         }
         }
     }
     let mut rt = s.runtime.0.lock().await;
@@ -223,6 +323,43 @@ async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socke
             json!({"kind":"detach","connection_id":connection,"generation":a.generation}),
         );
         drop(rt);
-        attempt::released(&s, id).await;
+        if !a.read_only {
+            attempt::released(&s, id).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attempt_controls_repaint_without_input_and_refuse_viewer_resize() {
+        let resize = r#"{"kind":"resize","columns":80,"rows":8}"#;
+        assert!(browser_control(resize, true, false).is_none());
+        assert!(browser_control(resize, false, false).is_some());
+        assert_eq!(
+            browser_control(r#"{"kind":"repaint"}"#, true, true),
+            Some((json!({"kind":"repaint"}), 0))
+        );
+        assert_eq!(
+            browser_control(r#"{"kind":"escape"}"#, true, false),
+            Some((json!({"kind":"escape"}), 1))
+        );
+        assert!(browser_control(r#"{"kind":"repaint"}"#, false, false).is_none());
+        assert!(browser_control(r#"{"kind":"escape"}"#, true, true).is_none());
+    }
+
+    #[test]
+    fn attempt_ready_relays_only_the_bound_workers_pane_geometry() {
+        let connection = Uuid::from_u128(1);
+        let text = json!({"kind":"ready","connection_id":connection,"columns":120,"rows":40});
+        let Some(Message::Text(reply)) = ready(&text.to_string(), connection, true) else {
+            panic!("expected pane dimensions");
+        };
+        let reply: Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["columns"], 120);
+        assert_eq!(reply["rows"], 40);
+        assert!(ready(&text.to_string(), Uuid::from_u128(2), true).is_none());
     }
 }
