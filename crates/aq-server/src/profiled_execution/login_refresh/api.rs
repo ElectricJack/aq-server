@@ -12,10 +12,7 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
-    execution::{
-        authority::{self, Kind, Policy, hot::HotState},
-        profiled::Status,
-    },
+    execution::authority::{self, Kind, Policy, hot::HotState},
     worker_api::AuthenticatedNode,
 };
 use aq_admission::{Digest, LaunchBinding, MaterialLease, transport::WorkerIdentity};
@@ -166,10 +163,9 @@ pub async fn write_back(
     let hot: HotState = serde_json::from_value(hot).map_err(|_| refused())?;
     hot.validate_against(&request.binding)
         .map_err(|_| refused())?;
-    if !matches!(hot.status, Status::Preparing | Status::Granted)
-        || hot.revoked
-        || hot.cancellation_id.is_some()
-    {
+    // Live, or cancelled after its grant (`Status::login_write_back`); the lease is checked below.
+    let cancelled = hot.cancellation_id.is_some();
+    if !hot.status.login_write_back(hot.revoked, cancelled) {
         return Err(refused());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
