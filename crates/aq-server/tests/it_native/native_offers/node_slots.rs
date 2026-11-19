@@ -55,15 +55,24 @@ async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
     };
     page.offers
 }
+/// Polls until `slot` is offered work, as a worker does. A poll waits only 750 ms
+/// for offer assembly (`producer::workflow::poll`); slower assembly (a loaded CI
+/// runner) continues in the background, further polls of the slot return an empty
+/// page until it finishes, and a later poll redelivers the published offer. A
+/// fixed number of back-to-back polls therefore cannot wait for it.
 async fn offered(c: &Case, slot: u32) -> NativeOffer {
-    for _ in 0..50 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         let mut offers = poll_slot(c, slot).await;
         if !offers.is_empty() {
             return offers.remove(0);
         }
-        tokio::task::yield_now().await;
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "slot {slot} received no offer in 30 s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    panic!("slot {slot} received no offer");
 }
 
 #[tokio::test]

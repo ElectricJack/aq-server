@@ -45,12 +45,13 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
     let plan = native_offer::accept(&case, &accepted).await.original;
     let clock = Arc::new(AtomicI64::new(plan.clock.server_time_ms as i64 + 1));
     let at = clock.clone();
+    // The case clock is frozen, as in `native_offer::prepare_request`. The
+    // offer's facts are valid for a few seconds of that frozen time, so a clock
+    // that also followed the wall clock expired them whenever the fixture took
+    // longer than that (a loaded 4-core runner) and the grant was refused as
+    // "selection expired during admission locks".
     case.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(
-            at.load(Ordering::SeqCst)
-                .max(chrono::Utc::now().timestamp_millis()),
-        )
-        .unwrap()
+        chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
     });
     let mut artifacts = offer
         .offered
