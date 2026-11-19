@@ -7,4 +7,4 @@ ALTER TABLE provider_settings ADD COLUMN codex_login_max_age_days INTEGER
 ALTER TABLE credential_material_revisions DROP CONSTRAINT credential_material_revisions_check;
 ALTER TABLE credential_material_revisions ADD CONSTRAINT credential_material_revisions_check
     CHECK (origin <> 'operator' OR lease_id IS NULL);
-UPDATE meta SET value='149' WHERE key='state_format_version';
+UPDATE meta SET value='153' WHERE key='state_format_version';
