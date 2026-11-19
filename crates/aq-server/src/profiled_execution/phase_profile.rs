@@ -1,5 +1,6 @@
 //! Exact parser/history dispatch. A selected parser never authenticates an owner.
 use crate::error::AppError;
+use aq_admission::preparation_family::{Family, family};
 use aq_admission::{ArtifactRef, preparation_refresh_v1 as refresh, preparation_v2 as frozen};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
@@ -19,31 +20,26 @@ fn malformed() -> AppError {
     AppError::BadRequest("invalid phase preparation document".into())
 }
 impl Profile {
-    pub(super) fn for_contract(contract: &ArtifactRef) -> Result<Self, AppError> {
-        if *contract == frozen::contract_artifact().map_err(|_| refused())?
-            || *contract == frozen::long_contract_artifact().map_err(|_| refused())?
-        {
-            Ok(Self::Frozen)
-        } else if *contract == refresh::contract_artifact().map_err(|_| refused())?
-            || *contract == refresh::long_contract_artifact().map_err(|_| refused())?
-        {
-            Ok(Self::Refresh)
-        } else {
-            Err(refused())
+    /// `exact` is false only for a proposal already recorded (see `family`).
+    pub(super) fn for_contract(contract: &ArtifactRef, exact: bool) -> Result<Self, AppError> {
+        match family(contract, exact) {
+            Some(Family::Frozen) => Ok(Self::Frozen),
+            Some(Family::Refresh) => Ok(Self::Refresh),
+            None => Err(refused()),
         }
     }
-    pub(super) fn from_proposal(value: &Value) -> Result<Self, AppError> {
+    pub(super) fn from_proposal(value: &Value, exact: bool) -> Result<Self, AppError> {
         let contract: ArtifactRef =
             serde_json::from_value(value["negotiation"]["contract"].clone())
                 .map_err(|_| malformed())?;
-        Self::for_contract(&contract)
+        Self::for_contract(&contract, exact)
     }
     fn from_document(bytes: &[u8]) -> Result<Self, AppError> {
         if bytes.len() > frozen::MAX_BYTES {
             return Err(AppError::PayloadTooLarge("phase document bound".into()));
         }
         let value: Value = serde_json::from_slice(bytes).map_err(|_| malformed())?;
-        Self::from_proposal(&value["body"])
+        Self::from_proposal(&value["body"], true)
     }
 }
 
@@ -58,7 +54,7 @@ pub(super) fn decode_proposal(bytes: &[u8]) -> Result<ProposalRequest, AppError>
     let value: Value = serde_json::from_slice(bytes).map_err(|_| malformed())?;
     // The header only chooses the strict full decoder below. In particular it
     // cannot discard duplicate/unknown fields before authoritative validation.
-    match Profile::from_proposal(&value)? {
+    match Profile::from_proposal(&value, true)? {
         Profile::Frozen => {
             let request: super::accepted_preparation::ProposalRequest =
                 serde_json::from_slice(bytes).map_err(|_| malformed())?;
@@ -125,7 +121,10 @@ pub(super) async fn for_attempt_locked(
     .fetch_optional(&mut **tx)
     .await
     .map_err(|_| AppError::Internal)?;
-    value.as_ref().map(Profile::from_proposal).transpose()
+    value
+        .as_ref()
+        .map(|v| Profile::from_proposal(v, false))
+        .transpose()
 }
 
 #[cfg(test)]
