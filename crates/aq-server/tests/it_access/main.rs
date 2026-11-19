@@ -10,6 +10,7 @@ mod common;
 
 mod agent_access;
 mod agent_commands;
+mod chan_proof;
 mod agent_route_grants;
 mod agent_task_comments;
 mod graph_mutations;
