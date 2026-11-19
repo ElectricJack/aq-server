@@ -5,10 +5,10 @@
 -- charged to the lineage budgets), the hot stop that names it, and the B4
 -- replacement release that frees the claim (0052), so the task is retryable.
 ALTER TABLE lost_attempt_releases DROP CONSTRAINT lost_attempt_releases_proof_kind_check;
-ALTER TABLE lost_attempt_releases DROP CONSTRAINT lost_attempt_releases_reason_check;
+ALTER TABLE lost_attempt_releases DROP CONSTRAINT lost_attempt_releases_check;
 ALTER TABLE lost_attempt_releases ADD CONSTRAINT lost_attempt_releases_proof_kind_check
   CHECK (proof_kind IN ('boot_changed','cgroup_teardown','node_revoked'));
-ALTER TABLE lost_attempt_releases ADD CONSTRAINT lost_attempt_releases_reason_check CHECK (
+ALTER TABLE lost_attempt_releases ADD CONSTRAINT lost_attempt_releases_check CHECK (
     (proof_kind = 'boot_changed' AND reason = 'lost_after_reboot')
     OR (proof_kind = 'cgroup_teardown' AND reason = 'lost_after_crash')
     OR (proof_kind = 'node_revoked' AND reason = 'node_revoked'));
