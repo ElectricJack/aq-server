@@ -573,3 +573,15 @@ async fn project_supervisor_action_body_bounds() {
         assert_eq!(response.status(), expected);
     }
 }
+
+#[tokio::test]
+async fn project_supervisor_is_refused_when_its_workspace_is_shared() {
+    let o = project_owner().await;
+    let path = format!("/api/human/projects/{}/tasks", o.project);
+    assert_eq!(o.supervisor("GET", &path, None).await.0, StatusCode::OK);
+    let shared = Uuid::new_v4();
+    bind(&o.f, shared, o.workspace).await;
+    let (status, out) = o.supervisor("GET", &path, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert_eq!(out["message"], REFUSAL, "{out}");
+}

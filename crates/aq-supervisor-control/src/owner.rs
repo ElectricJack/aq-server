@@ -57,6 +57,9 @@ pub fn names_only(project: uuid::Uuid, method: &Method, path: &str, body: Option
     !named.is_empty() && named.iter().all(|n| *n == Some(project))
 }
 
+/// Whether project `$1` has a non-nil Graph workspace no other project shares.
+const OWN_WORKSPACE: &str = "SELECT EXISTS(SELECT 1 FROM project_execution_bindings b WHERE b.project_id=$1 AND b.binding->>'graph_workspace_id'<>'00000000-0000-0000-0000-000000000000' AND NOT EXISTS(SELECT 1 FROM project_execution_bindings o WHERE o.project_id<>b.project_id AND o.binding->>'graph_workspace_id'=b.binding->>'graph_workspace_id'))";
+
 /// Mounts `{PREFIX}/{*rest}` for every method; each request is forwarded to
 /// `owner_app` at `/{rest}` with the owner's identity and none of the caller's.
 pub fn routes<S: Clone + Send + Sync + 'static>(
@@ -64,9 +67,9 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
     pool: sqlx::PgPool,
     clock: Clock,
 ) -> axum::Router<S> {
-    let auth = bearer(pool, clock, "owner");
+    let auth = bearer(pool.clone(), clock, "owner");
     let bridge = any(move |request: Request| {
-        let (auth, owner_app) = (auth.clone(), owner_app.clone());
+        let (auth, owner_app, pool) = (auth.clone(), owner_app.clone(), pool.clone());
         async move {
             let permit = match auth(request.headers().clone()).await {
                 Ok(p) => p,
@@ -96,10 +99,23 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
                     };
                     (json, body) = (Some(value), Body::from(bytes));
                 }
+                let refusal = aq_manual_sessions::Error(
+                    StatusCode::FORBIDDEN,
+                    "Project supervisor can act only on its own project",
+                );
                 if !names_only(project, &parts.method, uri.path(), json.as_ref()) {
-                    let refusal = "Project supervisor can act only on its own project";
-                    return aq_manual_sessions::Error(StatusCode::FORBIDDEN, refusal)
-                        .into_response();
+                    return refusal.into_response();
+                }
+                // Owner handlers bind a task only to its project's Graph workspace,
+                // so a workspace shared with another project would let one in.
+                match sqlx::query_scalar::<_, bool>(OWN_WORKSPACE)
+                    .bind(project)
+                    .fetch_one(&pool)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => return refusal.into_response(),
+                    Err(e) => return aq_manual_sessions::Error::from(e).into_response(),
                 }
             }
             // A fresh request: the outer router's path params and matched
