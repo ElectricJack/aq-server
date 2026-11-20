@@ -366,3 +366,64 @@ async fn owner_mount_does_not_forward_the_bearer() {
             "dev": false, "csrf": "1", "owner": "owner@localhost", "delegated": o.f.user.id})
     );
 }
+
+#[test]
+fn owner_prefix_matches_the_bridge() {
+    assert_eq!(
+        aq_command_registry::OWNER_PREFIX,
+        aq_supervisor_control::owner::PREFIX
+    );
+    assert_eq!(PREFIX, aq_supervisor_control::owner::PREFIX);
+}
+
+impl Owner {
+    /// `POST /api/v1/commands/{name}` on the machine listener as the supervisor.
+    async fn command(&self, name: &str, request: Value) -> (StatusCode, Value) {
+        let path = format!("/api/v1/commands/{name}");
+        let who = As::Supervisor(&self.token);
+        call(&self.machine, "POST", &path, who, Some(request)).await
+    }
+}
+
+#[tokio::test]
+async fn supervisor_invokes_owner_commands_through_the_command_endpoint() {
+    let o = owner().await;
+    let (id, a) = o.draft();
+    let request = json!({"operation_id":a["operation_id"],"subject":a["subject"],
+        "expected_versions":a["expected_versions"],"params":a["payload"]});
+    let (status, out) = o.command("task.activate", request).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["disposition"], "confirmed", "{out}");
+    assert_eq!(o.graph.nodes.lock().unwrap()[&id]["task_state"], "active");
+    let who = As::Supervisor(&o.token);
+    let (status, listed) = call(&o.machine, "GET", "/api/v1/commands", who, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let names: Vec<&str> = listed["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    for name in [
+        "task.delete",
+        "message.send",
+        "playbook.catalog.definitions",
+    ] {
+        assert!(names.contains(&name), "{name}: {names:?}");
+    }
+}
+
+#[tokio::test]
+async fn task_list_limit_survives_the_bridge() {
+    let o = owner().await;
+    for version in 1..=3 {
+        let task = node(Uuid::new_v4(), o.workspace, "task", version);
+        let id = task["id"].as_str().unwrap().parse().unwrap();
+        o.graph.nodes.lock().unwrap().insert(id, task);
+    }
+    let params = json!({"project_id":o.project,"limit":2});
+    let (status, out) = o.command("task.list", json!({"params":params})).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["items"].as_array().unwrap().len(), 2, "{out}");
+    assert!(out["data"]["next_cursor"].is_string(), "{out}");
+}

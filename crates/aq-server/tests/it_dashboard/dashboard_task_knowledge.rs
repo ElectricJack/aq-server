@@ -142,6 +142,24 @@ async fn mutate(State(g): State<Graph>, headers: HeaderMap, bytes: Bytes) -> Res
     graph_response(status, &reply)
 }
 
+/// A page of nodes of `kind`, in id order; the cursor is the last id served.
+async fn list_nodes(
+    State(g): State<Graph>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let limit: usize = q["limit"].parse().unwrap();
+    let mut nodes: Vec<Value> = g.nodes.lock().unwrap().values().cloned().collect();
+    nodes.retain(|n| {
+        n["kind"] == q["kind"].as_str()
+            && q.get("cursor")
+                .is_none_or(|c| n["id"].as_str().unwrap() > c.as_str())
+    });
+    nodes.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let next = (nodes.len() > limit).then(|| nodes[limit - 1]["id"].clone());
+    nodes.truncate(limit);
+    graph_response(200, &json!({"items":nodes,"next_cursor":next}))
+}
+
 async fn read_tree(State(g): State<Graph>) -> Response {
     graph_response(
         200,
@@ -188,6 +206,7 @@ pub(crate) async fn graph_runtime(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let app = Router::new()
+        .route("/v1/workspaces/{w}/nodes", get(list_nodes))
         .route("/v1/workspaces/{w}/nodes/{id}", get(read_node))
         .route("/v1/workspaces/{w}/nodes/{id}/history", get(read_history))
         .route("/v1/workspaces/{w}/nodes/{id}/tree", get(read_tree))

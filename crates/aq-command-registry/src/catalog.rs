@@ -171,6 +171,7 @@ pub fn catalog() -> Vec<CommandSpec> {
         "Create several related tasks and their edges in one operation",
     );
     graph_create.supervisor = Some(Route::action());
+    #[cfg_attr(feature = "supervisor_full_access", allow(unused_mut))]
     let mut commands = vec![
         whoami,
         operation,
@@ -1280,6 +1281,8 @@ pub fn catalog() -> Vec<CommandSpec> {
             )),
         ),
     ];
+    // With full access the registry routes these through the owner bridge.
+    #[cfg(not(feature = "supervisor_full_access"))]
     for command in &mut commands {
         let path = match command.name {
             "task.list" => "/v1/supervisor/read/api/human/projects/{project}/tasks",

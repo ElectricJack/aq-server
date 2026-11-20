@@ -95,10 +95,14 @@ const RESULT_LIMIT: QueryParam = opt(
 const RESULT_PROFILE: QueryParam = opt("profile", r#"{"enum":["recorded_native_v2"]}"#);
 
 /// The declared query of the GET route at `path`. A supervisor read
-/// (`/v1/supervisor/read/...`) is the owner's handler behind a gate that
-/// passes the query string through, so it takes the owner route's params.
+/// (`/v1/supervisor/read/...`, or the owner bridge) is the owner's handler
+/// behind a gate that passes the query string through, so it takes the owner
+/// route's params.
 pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
-    let path = path.strip_prefix("/v1/supervisor/read").unwrap_or(path);
+    let path = path
+        .strip_prefix("/v1/supervisor/read")
+        .or_else(|| path.strip_prefix(crate::OWNER_PREFIX))
+        .unwrap_or(path);
     Some(match path {
         // agent_access/human.rs::tasks, ::knowledge
         "/api/human/projects/{project}/tasks" | "/api/human/projects/{project}/knowledge" => {
