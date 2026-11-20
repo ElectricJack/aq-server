@@ -5,9 +5,11 @@ from contextlib import closing
 from fcntl import LOCK_EX, flock
 from hashlib import file_digest, sha256
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -60,6 +62,7 @@ def open_state(root, timeout):
             image_id TEXT NOT NULL,
             source_archive_digest TEXT NOT NULL,
             image_archive_digest TEXT NOT NULL,
+            source_position INTEGER NOT NULL,
             state TEXT NOT NULL,
             requested_at_ms INTEGER NOT NULL,
             dispatch_at_ms INTEGER NOT NULL DEFAULT 0,
@@ -68,6 +71,14 @@ def open_state(root, timeout):
             retry_provider_id TEXT NOT NULL DEFAULT '',
             observed_digest TEXT NOT NULL DEFAULT '',
             diagnostic TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS merge_claim (
+            operation_id TEXT PRIMARY KEY,
+            revision TEXT NOT NULL,
+            pull_request INTEGER NOT NULL,
+            observed_at_ms INTEGER NOT NULL,
+            resolution TEXT NOT NULL DEFAULT 'pending',
+            generation INTEGER REFERENCES deployment(generation)
         );
         CREATE TABLE IF NOT EXISTS receipt (
             key TEXT PRIMARY KEY,
@@ -87,9 +98,11 @@ def artifact(root, revision):
     try:
         evidence = read_json(root / "provenance" / f"{revision}.json")
         pinned = tuple(evidence[key] for key in keys)
+        position = evidence["source_position"]
         if (evidence["revision"] == revision and evidence["source"] == SOURCE
-                and all(re.fullmatch(DIGEST, value) for value in pinned)):
-            return pinned
+                and all(re.fullmatch(DIGEST, value) for value in pinned)
+                and type(position) is int and 0 < position < 2**53):
+            return (*pinned, position)
     except FileNotFoundError:
         raise Refused("build_unavailable") from None
     except (OSError, KeyError, TypeError, ValueError):
@@ -105,6 +118,7 @@ def snapshot(row):
     observation = dict(row)
     del observation["dispatch_at_ms"]
     del observation["retry_provider_id"]
+    del observation["source_position"]
     if (observation["state"] == "healthy"
             and not 0 <= now() - observation["observed_at_ms"] <= HEALTH_MAX_AGE_MS):
         observation.update(state="running", diagnostic="observation_expired", observed_digest="")
@@ -131,6 +145,8 @@ def submit(db, root, request):
     if expected != generation:
         raise Refused("generation_changed")
     frozen = artifact(root, revision)
+    if desired and frozen[-1] <= desired["source_position"]:
+        raise Refused("stale_revision")
     db.execute("""
         UPDATE deployment SET state='superseded', diagnostic='newer_desired_generation'
         WHERE generation=?
@@ -138,10 +154,103 @@ def submit(db, root, request):
     db.execute("""
         INSERT INTO deployment
             (generation, operation_id, revision, image_digest, image_id,
-             source_archive_digest, image_archive_digest, state, requested_at_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+             source_archive_digest, image_archive_digest, source_position, state, requested_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
     """, (generation + 1, str(uuid4()), revision, *frozen, now()))
     return response("registered", {"generation": generation + 1})
+
+
+def merge_evidence(binding):
+    source = binding.get("merge_source")
+    if not isinstance(source, str) or not Path(source).is_absolute():
+        raise Refused("automatic_deployment_disabled")
+    try:
+        info = Path(source).stat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid()):
+            raise Refused("invalid_merge_source")
+        client = binding.get("merge_client", "psql")
+        if client != "psql" and not Path(client).is_absolute():
+            raise Refused("invalid_merge_source")
+        result = subprocess.run(
+            [client, "-XAtw", "-v", "ON_ERROR_STOP=1", "-c",
+             "SELECT row_to_json(m) FROM aq_graph_deploy_export.merged m "
+             "ORDER BY observed_at_ms, operation_id LIMIT 10001"],
+            env={
+                "PATH": os.environ["PATH"], "PGSERVICEFILE": source, "PGSERVICE": "aq_graph_deploy",
+                "PGCONNECT_TIMEOUT": "2",
+                "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=2000",
+            },
+            capture_output=True, text=True, timeout=4,
+        )
+        if result.returncode:
+            raise Refused("merge_source_unavailable")
+        rows = result.stdout.splitlines()
+        if len(rows) > 10000:
+            raise Refused("merge_source_limit")
+        for line in rows:
+            row = json.loads(line)
+            if (str(UUID(row["operation_id"])) != row["operation_id"]
+                    or not re.fullmatch(SHA, row["merge_sha"])
+                    or not 0 < row["pull_request"] <= 1_000_000_000
+                    or not 0 < row["observed_at_ms"] < 2**63):
+                raise Refused("invalid_merge_evidence")
+            yield row
+    except (OSError, KeyError, TypeError, ValueError, subprocess.TimeoutExpired):
+        raise Refused("merge_source_unavailable") from None
+
+
+def claim_merge(db, root, binding):
+    if not binding.get("merge_source"):
+        raise Refused("automatic_deployment_disabled")
+    desired = latest(db)
+    if desired and desired["state"] in ("queued", "running"):
+        return response("idle", {"reason": "rollout_in_progress"})
+    generation = desired["generation"] if desired else 0
+    # Rescan the scoped view. A lower timestamp can commit late on the
+    # producer, so a high-water cursor could silently skip a merge.
+    for evidence in merge_evidence(binding):
+        operation = evidence["operation_id"]
+        revision = evidence["merge_sha"]
+        retained = db.execute(
+            "SELECT * FROM merge_claim WHERE operation_id=?", (operation,)
+        ).fetchone()
+        pull, observed = evidence["pull_request"], evidence["observed_at_ms"]
+        if retained:
+            if (retained["revision"], retained["pull_request"], retained["observed_at_ms"]) != (
+                revision, pull, observed
+            ):
+                raise Refused("merge_evidence_changed")
+            if retained["resolution"] != "pending":
+                continue
+        else:
+            db.execute("""
+                INSERT INTO merge_claim (operation_id, revision, pull_request, observed_at_ms)
+                VALUES (?, ?, ?, ?)
+            """, (operation, revision, pull, observed))
+        existing = db.execute(
+            "SELECT generation FROM deployment WHERE revision=?", (revision,)
+        ).fetchone()
+        if existing:
+            db.execute("""
+                UPDATE merge_claim SET resolution='already_registered', generation=? WHERE operation_id=?
+            """, (existing["generation"], operation))
+            continue
+        try:
+            result = submit(db, root, {"revision": revision, "expected_generation": generation})
+        except Refused as exc:
+            if str(exc) == "build_unavailable":
+                return response("idle", {"reason": "waiting_for_build"})
+            if str(exc) != "stale_revision":
+                raise
+            db.execute("UPDATE merge_claim SET resolution='superseded' WHERE operation_id=?", (operation,))
+            continue
+        result["output"]["merge_operation_id"] = operation
+        db.execute("""
+            UPDATE merge_claim SET resolution='registered', generation=? WHERE operation_id=?
+        """, (result["output"]["generation"], operation))
+        return result
+    return response("idle", {"reason": "no_merge"})
 
 
 def observe(db, request):
@@ -183,6 +292,13 @@ def invoke(call):
                 result = submit(db, root, request)
             elif command == "ext.graph_deploy.observe":
                 result = observe(db, request)
+            elif command == "ext.graph_deploy.request":
+                if "scheduled" not in request:
+                    result = submit(db, root, request)
+                elif request["scheduled"]:
+                    result = claim_merge(db, root, call["binding"])
+                else:
+                    result = response("ignored", None)
             else:
                 raise Refused("unknown_command")
         except Refused as exc:

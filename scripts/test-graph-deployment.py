@@ -3,78 +3,24 @@
 
 import argparse
 from contextlib import ExitStack
-from hashlib import file_digest
 import json
 import os
 from pathlib import Path
 import re
+import runpy
 import secrets
+import shutil
 import subprocess
-import tarfile
 from tempfile import TemporaryDirectory
 import time
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = "https://github.com/ElectricJack/aq-graph"
 ENVIRONMENT = "aq-graph-deploy-canary"
 OWNER = "io.aq.graph-deploy.environment"
-TEST = "real_adapter_pilots::deployment_canary::merged_graph_rolls_out_by_verified_digest"
-
-
-def git(repo, *args):
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
-
-
-def docker(directory, *args, **options):
-    return subprocess.check_output(
-        ["docker", "--config", str(directory / "docker"),
-         "--host", "unix:///var/run/docker.sock", *args],
-        timeout=options.pop("timeout", 30), **options,
-    )
-
-
-def digest(path):
-    with path.open("rb") as stream:
-        return "sha256:" + file_digest(stream, "sha256").hexdigest()
-
-
-def private(path, text):
-    path.touch(mode=0o600, exist_ok=False)
-    path.write_text(text)
-
-
-def build(directory, repo, revision, instance, cleanup):
-    print(f"Building aq-graph {revision}", flush=True)
-    archive = directory / f"{revision}.source.tar"
-    iid = directory / f"{revision}.id"
-    tag = f"{ENVIRONMENT}-{instance}:{revision}"
-    with archive.open("wb") as stream:
-        subprocess.run(
-            ["git", "-C", str(repo), "archive", "--format=tar", revision],
-            stdout=stream, check=True, timeout=30,
-        )
-    with archive.open("rb") as stream:
-        docker(
-            directory, "buildx", "build", "--builder", "default", "--load", "--platform", "linux/amd64",
-            "--build-arg", "CARGO_PROFILE=ci-image", "--iidfile", str(iid),
-            "--label", f"org.opencontainers.image.revision={revision}",
-            "--label", f"org.opencontainers.image.source={SOURCE}", "-t", tag, "-",
-            stdin=stream, timeout=900,
-        )
-    cleanup.callback(docker, directory, "image", "rm", tag)
-    image_id = iid.read_text().strip()
-    output = directory / "provenance" / f"{revision}.tar"
-    docker(directory, "image", "save", "-o", str(output), image_id, timeout=90)
-    with tarfile.open(output) as layout, layout.extractfile("index.json") as stream:
-        manifest, = json.load(stream)["manifests"]
-    evidence = {
-        "source": SOURCE, "revision": revision, "image_id": image_id,
-        "image_digest": manifest["digest"], "source_archive_digest": digest(archive),
-        "image_archive_digest": digest(output),
-    }
-    (directory / "provenance" / f"{revision}.json").write_text(json.dumps(evidence))
-    print(json.dumps(evidence, sort_keys=True), flush=True)
+TEST_PREFIX = "real_adapter_pilots::deployment_canary"
+BUILDER = runpy.run_path(str(ROOT / "deploy/graph-deployment/build-image.py"))
+build, docker, history, private = (BUILDER[key] for key in ("build", "docker", "history", "private"))
 
 
 def provision(directory, instance, resources):
@@ -119,16 +65,19 @@ def remove_graph(directory, instance):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--automatic", action="store_true")
+    parser.add_argument("--merge-client", type=Path, help="absolute path to psql (defaults to PATH)")
     parser.add_argument("graph_repo", type=Path)
     parser.add_argument("older_revision")
     parser.add_argument("newer_revision")
     args = parser.parse_args()
-    if git(args.graph_repo, "remote", "get-url", "origin").removesuffix(".git") != SOURCE:
-        parser.error("expected the aq-graph origin")
+    client = args.merge_client or shutil.which("psql")
+    if args.automatic and not client:
+        parser.error("automatic canary requires psql")
     revisions = (args.older_revision, args.newer_revision)
-    history = git(args.graph_repo, "rev-list", "--first-parent", "refs/remotes/origin/main").splitlines()
-    if (any(revision not in history for revision in revisions)
-            or history.index(revisions[0]) <= history.index(revisions[1])):
+    merged = history(args.graph_repo)
+    if (any(revision not in merged for revision in revisions)
+            or merged.index(revisions[0]) <= merged.index(revisions[1])):
         parser.error("supply two full aq-graph revisions in first-parent origin/main order")
 
     state = ROOT / "state" / ENVIRONMENT
@@ -143,7 +92,7 @@ def main():
         (directory / "environment.json").write_text(json.dumps({
             "environment": ENVIRONMENT, "instance": instance,
         }))
-        for revision in revisions:
+        for revision in revisions[1:] if args.automatic else revisions:
             build(directory, args.graph_repo, revision, instance, cleanup)
         database_url = provision(directory, instance, cleanup)
         env = {
@@ -152,9 +101,16 @@ def main():
             "CARGO_PROFILE_TEST_DEBUG": os.environ.get("CARGO_PROFILE_TEST_DEBUG", "0"),
             "CARGO_TARGET_DIR": str(ROOT / "target"),
         }
+        features = []
+        test = "merged_graph_rolls_out_by_verified_digest"
+        if args.automatic:
+            features = ["--features", "delivery_playbook"]
+            test = "automatic::host10_evidence_drives_host11"
+            env["AQ_GRAPH_DEPLOY_PSQL"] = str(Path(client).absolute())
+            env["AQ_GRAPH_DEPLOY_GRAPH_REPO"] = str(args.graph_repo.resolve())
         subprocess.run(
-            ["timeout", "900", "cargo", "test", "--locked", "-p", "aq-server", "--test", "it_playbook",
-             "--", TEST, "--exact", "--ignored", "--nocapture"],
+            ["timeout", "900", "cargo", "test", "--locked", "-p", "aq-server", *features,
+             "--test", "it_playbook", "--", f"{TEST_PREFIX}::{test}", "--exact", "--ignored", "--nocapture"],
             env=env, cwd=ROOT, check=True,
         )
 

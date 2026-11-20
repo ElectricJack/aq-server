@@ -69,9 +69,26 @@ struct Canary {
     directory: PathBuf,
     plugin: PathBuf,
     container: String,
+    bindings: PathBuf,
+    #[cfg(feature = "delivery_playbook")]
+    scope: GrantScope,
+    #[cfg(feature = "delivery_playbook")]
+    artifact: String,
 }
 
 impl Canary {
+    fn opt_in(&self, extra: &str) {
+        fs::write(
+            &self.bindings,
+            format!(
+                "[projects.\"{}\"]\nenvironment = \"{ENVIRONMENT}\"\ndirectory = {:?}\n{extra}",
+                self.service.namespace.project_id, self.directory
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&self.bindings, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     async fn admit(&self, revision: &str, expected: u64) -> String {
         let request = PrepareRequest {
             request_id: Uuid::new_v4(),
@@ -216,14 +233,14 @@ impl Canary {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires the isolated Docker fixture from scripts/test-graph-deployment.py"]
-async fn merged_graph_rolls_out_by_verified_digest() {
+fn proof_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/graph-deployment")
+}
+
+async fn prepare() -> Canary {
     let directory = PathBuf::from(std::env::var_os("AQ_GRAPH_DEPLOY_CANARY").unwrap());
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/graph-deployment");
+    let root = proof_root();
     let plugin = root.join("plugins/graph_deploy/bin/graph-deploy");
-    let revisions = std::env::var("AQ_GRAPH_DEPLOY_REVISIONS").unwrap();
-    let (older, newer) = revisions.split_once(',').unwrap();
     let f = fixture().await;
     insert(&f).await;
     let lineage = &f.selection.lineage;
@@ -266,16 +283,17 @@ async fn merged_graph_rolls_out_by_verified_digest() {
     ));
     service.initialize(f.actor).await.unwrap();
     let grant = Uuid::new_v4();
+    let scope = GrantScope {
+        workspace_id: lineage.workspace_id,
+        project_id: lineage.project_id,
+        recipients: vec![],
+        capabilities: BTreeSet::from(["ext.graph_deploy".into()]),
+    };
     service
         .grant(
             f.actor,
             grant,
-            GrantScope {
-                workspace_id: lineage.workspace_id,
-                project_id: lineage.project_id,
-                recipients: vec![],
-                capabilities: BTreeSet::from(["ext.graph_deploy".into()]),
-            },
+            scope.clone(),
             (f.state.clock)().timestamp_millis() + 600_000,
         )
         .await
@@ -292,12 +310,12 @@ async fn merged_graph_rolls_out_by_verified_digest() {
     let driver = start(&service, &f).await;
     driver.install(artifact.clone()).await.unwrap();
     let activation = driver
-        .activate(BINDING.into(), artifact.digest, grant, 1)
+        .activate(BINDING.into(), artifact.digest.clone(), grant, 1)
         .await
         .unwrap()["revision"]
         .as_u64()
         .unwrap();
-    let mut canary = Canary {
+    Canary {
         f,
         service,
         driver,
@@ -306,23 +324,27 @@ async fn merged_graph_rolls_out_by_verified_digest() {
         directory,
         plugin,
         container,
-    };
+        bindings,
+        #[cfg(feature = "delivery_playbook")]
+        scope,
+        #[cfg(feature = "delivery_playbook")]
+        artifact: artifact.digest,
+    }
+}
 
+#[tokio::test]
+#[ignore = "requires the isolated Docker fixture from scripts/test-graph-deployment.py"]
+async fn merged_graph_rolls_out_by_verified_digest() {
+    let revisions = std::env::var("AQ_GRAPH_DEPLOY_REVISIONS").unwrap();
+    let (older, newer) = revisions.split_once(',').unwrap();
+    let mut canary = prepare().await;
     let disabled = canary.admit(older, 0).await;
     canary.finish(&disabled, "refused").await;
     assert_eq!(
         canary.receipt(&disabled, "refused").await.unwrap()["reason"],
         "deployment_disabled"
     );
-    fs::write(
-        &bindings,
-        format!(
-            "[projects.\"{}\"]\nenvironment = \"{ENVIRONMENT}\"\ndirectory = {:?}\n",
-            canary.service.namespace.project_id, canary.directory
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&bindings, fs::Permissions::from_mode(0o600)).unwrap();
+    canary.opt_in("");
 
     // Unknown source evidence is refused before any generation is registered.
     let unknown = canary.admit(&"0".repeat(40), 0).await;
@@ -392,3 +414,7 @@ async fn merged_graph_rolls_out_by_verified_digest() {
     assert_eq!(canary.provider(), second_provider);
     canary.driver.stop().await.unwrap();
 }
+
+#[cfg(feature = "delivery_playbook")]
+#[path = "graph_deployment_automatic.rs"]
+mod automatic;

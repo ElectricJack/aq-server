@@ -15,3 +15,10 @@ Report a refusal with its reason and a deployment failure with its diagnostic.
 On success report the generation, observed OCI manifest digest and provider
 container ID. A later manual run can observe the same operation or retry a
 failed current generation using its pinned build.
+
+When the binding has the `graph-merge` interval, respond to its schedule
+signal by claiming scoped Host10 merge evidence. Use the recorded merge SHA
+and wait for a build of that exact commit. If a merge registers a generation,
+observe it through the same rollout steps as a manual run. Return idle when
+there is no new merge to deploy, a build is still pending, or the controller
+is reconciling the previous rollout.

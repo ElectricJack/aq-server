@@ -1,5 +1,5 @@
 name = "graph_deploy"
-version = "0.1.0"
+version = "0.2.0"
 protocol = "aq.plugin/1"
 exe = "bin/graph-deploy"
 contracts = "contracts/registry.json"

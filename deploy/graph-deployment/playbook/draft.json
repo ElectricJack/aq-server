@@ -42,22 +42,77 @@
           "required": ["reason"],
           "properties": {"reason": {"type": "string", "max_length": 64}}
         },
-        "error": {"type": "null"}
+        "error": {"type": "null"},
+        "idle": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "ignored": {"type": "null"}
+      },
+      "start": "submit"
+    },
+    "automatic": {
+      "input": {
+        "type": "object",
+        "properties": {"scheduled": {"type": "boolean"}},
+        "required": ["scheduled"]
+      },
+      "outcomes": {
+        "healthy": {
+          "type": "object",
+          "required": ["generation", "observed_digest", "provider_id"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64}
+          }
+        },
+        "failed": {
+          "type": "object",
+          "required": ["generation", "diagnostic"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "superseded": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "timed_out": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "error": {"type": "null"},
+        "idle": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "ignored": {"type": "null"}
       },
       "start": "submit"
     }
   },
-  "triggers": [],
+  "triggers": [{"id": "graph-merge-scan", "event": "aq.signal.reported", "entry": "automatic", "input": {"op": "object", "fields": {"scheduled": {"op": "eq", "left": {"op": "ref", "root": "event", "path": ["reference"]}, "right": {"op": "literal", "value": "aq.schedule/graph-merge"}}}}}],
   "steps": {
     "submit": {
       "op": {
         "kind": "invoke",
-        "command": "ext.graph_deploy.submit",
+        "command": "ext.graph_deploy.request",
         "input": {"op": "ref", "root": "input", "path": []},
         "bind": "registration",
         "retry": null
       },
-      "edges": {"registered": "observe", "refused": "submit-refused"},
+      "edges": {"registered": "observe", "refused": "submit-refused", "idle": "idle", "ignored": "ignored"},
       "on_error": "error"
     },
     "observe": {
@@ -156,6 +211,20 @@
     },
     "error": {
       "op": {"kind": "return", "outcome": "error", "output": {"op": "literal", "value": null}},
+      "edges": {},
+      "on_error": null
+    },
+    "idle": {
+      "op": {
+        "kind": "return",
+        "outcome": "idle",
+        "output": {"op": "ref", "root": "registration", "path": []}
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "ignored": {
+      "op": {"kind": "return", "outcome": "ignored", "output": {"op": "literal", "value": null}},
       "edges": {},
       "on_error": null
     }

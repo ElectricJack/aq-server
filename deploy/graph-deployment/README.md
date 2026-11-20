@@ -3,7 +3,8 @@
 `aq.graph-deployment` is a project-scoped Host11 playbook for the
 `aq-graph-deploy-canary` development environment. Its manual entry takes a full
 merged aq-graph commit SHA and the expected desired generation, starting at
-zero. The canary builds each revision from its Git archive on the first-parent
+zero. Deployment can also run from [scoped Host10 merge evidence](automatic.md).
+The manual canary builds each revision from its Git archive on the first-parent
 history of the aq-graph `origin/main` ref.
 
 ## Run the canary
@@ -61,13 +62,12 @@ canary project. The canary test shows the compiler workspace and binding.
 Run the controller on the local Docker host with
 `plugins/graph_deploy/bin/graph-deploy tick <instance directory>` at an
 interval below the 15-second observation freshness window. The AQ plugin
-process only records intents and reads observations. The controller needs
-Docker access and uses a fresh CLI configuration under the instance
-directory.
+process only records intents and reads observations. Keep the Docker socket on the builder and controller host. The controller
+uses a fresh Docker CLI configuration under the instance directory.
 
 The builder is the trust root for this proof. Its receipt binds the Git
-commit and source archive checksum to the OCI manifest, image config and
-image archive checksums. Before replacing a container, the controller
+commit, first-parent position and source archive checksum to the OCI
+manifest, image config and image archive checksums. Before replacing a container, the controller
 verifies the archive, manifest and config digests and the image's embedded
 source and revision. It imports the untagged image and starts by immutable
 config digest. A healthy result includes the corresponding manifest digest

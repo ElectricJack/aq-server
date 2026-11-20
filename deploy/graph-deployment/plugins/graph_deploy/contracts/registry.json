@@ -154,6 +154,45 @@
       "sensitive_input_fields": [],
       "max_payload_bytes": 2048,
       "deadline_ms": 15000
+    },
+    "ext.graph_deploy.request": {
+      "name": "ext.graph_deploy.request",
+      "version": "1.0.0",
+      "input": {
+        "type": "union",
+        "variants": [{"type": "object", "required": ["revision", "expected_generation"], "properties": {"revision": {"type": "string", "max_length": 40}, "expected_generation": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}}}, {"type": "object", "properties": {"scheduled": {"type": "boolean"}}, "required": ["scheduled"]}]
+      },
+      "outcomes": {
+        "registered": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "merge_operation_id": {"type": "string", "max_length": 36}
+          }
+        },
+        "idle": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "ignored": {"type": "null"}
+      },
+      "capabilities": ["ext.graph_deploy"],
+      "scopes": ["project"],
+      "effect": "mutation",
+      "recovery": "keyed_idempotent",
+      "asynchronous": null,
+      "cancellation": false,
+      "public_result_fields": ["generation", "merge_operation_id", "reason"],
+      "sensitive_input_fields": [],
+      "max_payload_bytes": 2048,
+      "deadline_ms": 15000
     }
   },
   "events": {}
