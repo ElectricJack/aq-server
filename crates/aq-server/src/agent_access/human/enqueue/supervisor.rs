@@ -248,13 +248,21 @@ fn agent_registry(
     state: &AppState,
     ids: aq_agent_grants::AttemptIds,
     guards: std::collections::BTreeMap<Uuid, u64>,
+    workspace: Option<Uuid>,
 ) -> ApiResult<Registry> {
     use super::super::graph_actions::{DependencyAdd, DependencyRemove, TaskEdit};
     let mut registry = Registry::default();
     let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
     macro_rules! adapter {
         ($payload:ty) => {
-            GraphAction::<$payload>::for_agent(state, attempt, task, project, guards.clone())
+            GraphAction::<$payload>::for_agent(
+                state,
+                attempt,
+                task,
+                project,
+                guards.clone(),
+                workspace,
+            )
         };
     }
     registry.register(Single(adapter!(SingleGraph)))?;
@@ -302,7 +310,7 @@ pub(crate) async fn agent_lookup(
     ids: aq_agent_grants::AttemptIds,
     operation: Uuid,
 ) -> ApiResult<axum::response::Response> {
-    let registry = agent_registry(state, ids, Default::default())?;
+    let registry = agent_registry(state, ids, Default::default(), None)?;
     let op =
         actions::lookup_scoped(state, &registry, &agent_user(state, ids).await?, operation).await?;
     Ok(agent_response(state, op))
@@ -313,7 +321,7 @@ pub(crate) async fn agent_replay(
     ids: aq_agent_grants::AttemptIds,
     request: &ActionRequest,
 ) -> ApiResult<Option<axum::response::Response>> {
-    let registry = agent_registry(state, ids, Default::default())?;
+    let registry = agent_registry(state, ids, Default::default(), None)?;
     let scope = Scope::Project {
         project_id: ids.project_id,
     };
@@ -333,8 +341,9 @@ pub(crate) async fn agent_action(
     ids: aq_agent_grants::AttemptIds,
     request: ActionRequest,
     guards: std::collections::BTreeMap<Uuid, u64>,
+    workspace: Option<Uuid>,
 ) -> ApiResult<axum::response::Response> {
-    let registry = agent_registry(state, ids, guards)?;
+    let registry = agent_registry(state, ids, guards, workspace)?;
     let op =
         actions::submit_scoped(state, &registry, &agent_user(state, ids).await?, request).await?;
     Ok(agent_response(state, op))

@@ -53,7 +53,11 @@ pub async fn reserve(
         };
     }
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks WHERE attempt_id=$1")
+        sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks c WHERE c.attempt_id=$1 AND NOT EXISTS (
+            SELECT 1 FROM dashboard_operations d
+            WHERE d.operation_id=c.operation_id AND d.principal_id=c.attempt_id
+              AND d.kind IN ('task.create','task.graph.create') AND d.disposition IN ('conflict','rejected')
+        )")
             .bind(ids.attempt_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -71,4 +75,59 @@ pub async fn reserve(
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// Older single-task grants used reservations as subtree evidence. Draft
+/// batches can name many caller-supplied IDs, so their rows confer authority
+/// only after the matching create operation confirms a Graph mutation.
+const CREATED: &str = r#"(
+    NOT COALESCE(g.grants @> '[{"operation":"task.create.subtask","limits":{"draft_only":true}}]', false)
+    OR EXISTS (
+        SELECT 1 FROM dashboard_operations d
+        WHERE d.operation_id=c.operation_id AND d.principal_id=c.attempt_id
+          AND d.kind IN ('task.create','task.graph.create') AND d.disposition='confirmed'
+    )
+)"#;
+
+pub async fn depth(pool: &PgPool, root: Uuid, task: Uuid) -> Result<Option<i32>, sqlx::Error> {
+    let sql = format!(
+        "SELECT c.depth FROM agent_created_tasks c LEFT JOIN agent_launch_grants g USING(attempt_id)
+         WHERE c.task_id=$1 AND c.root_task_id=$2 AND c.depth IS NOT NULL AND {CREATED}"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(task)
+        .bind(root)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn subtree<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    root: Uuid,
+    project: Uuid,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let sql = format!(
+        "SELECT c.task_id FROM agent_created_tasks c LEFT JOIN agent_launch_grants g USING(attempt_id)
+         WHERE c.root_task_id=$1 AND c.project_id=$2 AND {CREATED}
+         ORDER BY c.task_id LIMIT 256"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(root)
+        .bind(project)
+        .fetch_all(executor)
+        .await
+}
+
+pub async fn creator<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    task: Uuid,
+) -> Result<Option<serde_json::Value>, sqlx::Error> {
+    let sql = format!(
+        "SELECT g.grants FROM agent_created_tasks c JOIN agent_launch_grants g USING(attempt_id)
+         WHERE c.task_id=$1 AND {CREATED}"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(task)
+        .fetch_optional(executor)
+        .await
 }

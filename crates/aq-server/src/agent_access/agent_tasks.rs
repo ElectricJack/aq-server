@@ -177,8 +177,14 @@ async fn admit(
             "The task is malformed.",
         )
     })?;
-    match super::human::enqueue::supervisor::agent_action(state, a.ids, request, Default::default())
-        .await
+    match super::human::enqueue::supervisor::agent_action(
+        state,
+        a.ids,
+        request,
+        Default::default(),
+        None,
+    )
+    .await
     {
         Err(e) if e.status() == axum::http::StatusCode::FORBIDDEN => {
             let r = Refusal::parent_outside_project(spec.name, grant, a.grants.related(grant));

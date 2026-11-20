@@ -34,8 +34,11 @@ pub(crate) async fn agent_caller(
         let node = super::human::graph_actions::current(rt, workspace, ids.task_id, "task")
             .await
             .map_err(|_| RefusalCode::Internal)?;
-        if let Some(kind) = policy.work_kind(work_kind(&node, ids.project_id)) {
-            p.grants = kind.narrow(&p.grants);
+        let metadata = verified_work_metadata(state, &node, ids.project_id)
+            .await
+            .map_err(|_| RefusalCode::Internal)?;
+        if let Some(policy) = policy.work_kind(metadata.and_then(|m| m["aq:work_kind"].as_str())) {
+            p.grants = policy.narrow(&p.grants);
         }
     }
     Ok(AgentCaller {
@@ -98,24 +101,39 @@ impl AgentCaller {
 /// `task` relative to the attempt's task: a task an agent created under it
 /// (at the recorded depth), or any other task.
 pub(crate) async fn relation(state: &AppState, own: Uuid, task: Uuid) -> aq_agent_grants::Relation {
-    let depth: Option<i32> = sqlx::query_scalar("SELECT depth FROM agent_created_tasks WHERE task_id=$1 AND root_task_id=$2 AND depth IS NOT NULL")
-        .bind(task).bind(own).fetch_optional(&state.store.pool).await.ok().flatten();
+    let depth = aq_agent_grants::store::depth(&state.store.pool, own, task)
+        .await
+        .ok()
+        .flatten();
     depth.map_or(aq_agent_grants::Relation::Other, |d| {
         aq_agent_grants::Relation::Descendant(d as u32)
     })
 }
-/// Only the work host writes these task metadata fields.
-pub(crate) fn work_kind(node: &Value, project: Uuid) -> Option<&str> {
+/// Trust work metadata only for a task registered by the work host.
+pub(crate) async fn verified_work_metadata<'a>(
+    state: &AppState,
+    node: &'a Value,
+    project: Uuid,
+) -> std::result::Result<Option<&'a Value>, sqlx::Error> {
+    use aq_agent_grants::draft_scope::uuid;
     let metadata = &node["metadata"];
-    if metadata["aq:project_id"] != json!(project)
-        || metadata["aq:playbook_namespace"]
-            .as_str()
-            .and_then(|id| id.parse::<Uuid>().ok())
-            .is_none()
-    {
-        return None;
+    if metadata["aq:project_id"] != json!(project) {
+        return Ok(None);
     }
-    metadata["aq:work_kind"].as_str()
+    let (Some(task), Some(workspace), Some(namespace), Some(key)) = (
+        uuid(&node["id"]),
+        uuid(&node["workspace_id"]),
+        uuid(&metadata["aq:playbook_namespace"]),
+        metadata["aq:logical_key"].as_str(),
+    ) else {
+        return Ok(None);
+    };
+    let ensured: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM playbook_work_keys k JOIN playbook_namespaces n USING(namespace_id,generation)
+         WHERE k.namespace_id=$1 AND k.logical_key=$2 AND k.task_id=$3 AND n.project_id=$4 AND n.workspace_id=$5)",
+    ).bind(namespace).bind(key).bind(task).bind(project).bind(workspace)
+        .fetch_one(&state.store.pool).await?;
+    Ok(ensured.then_some(metadata))
 }
 /// The project's agent-grant policy (`ProjectPolicy.agent_grants`).
 pub(crate) fn project_grants(
@@ -170,8 +188,7 @@ pub(crate) async fn resolve_native(
             scope_reference: s,
         })
         .collect();
-    let creator: Option<Value> = sqlx::query_scalar("SELECT g.grants FROM agent_created_tasks c JOIN agent_launch_grants g USING(attempt_id) WHERE c.task_id=$1")
-        .bind(task).fetch_optional(&mut **tx).await?;
+    let creator = aq_agent_grants::store::creator(&mut **tx, task).await?;
     // A creator whose grants cannot be read holds none, so the child gets none.
     let creator = creator.map(|v| sealed(Some(v)).unwrap_or_default());
     Ok(resolve_work(

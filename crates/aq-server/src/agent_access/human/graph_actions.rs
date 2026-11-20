@@ -711,6 +711,7 @@ pub(crate) struct GraphAction<P> {
     /// `(attempt, task, project)` of an agent creating under its own grants.
     agent: Option<(Uuid, Uuid, Uuid)>,
     guards: BTreeMap<Uuid, u64>,
+    agent_workspace: Option<Uuid>,
     payload: std::marker::PhantomData<P>,
 }
 impl<P> GraphAction<P> {
@@ -730,10 +731,12 @@ impl<P> GraphAction<P> {
         task: Uuid,
         project: Uuid,
         guards: BTreeMap<Uuid, u64>,
+        workspace: Option<Uuid>,
     ) -> Self {
         let mut adapter = Self::new(state);
         adapter.agent = Some((attempt, task, project));
         adapter.guards = guards;
+        adapter.agent_workspace = workspace;
         adapter
     }
     fn machine(&self) -> bool {
@@ -755,6 +758,9 @@ impl<P> GraphAction<P> {
             }
             let record = project_bindings::current(state, project).await?;
             if record.binding.graph_workspace_id.is_nil()
+                || self
+                    .agent_workspace
+                    .is_some_and(|workspace| workspace != record.binding.graph_workspace_id)
                 || record.binding.graph_adapter_reference != "aq.graph.configured"
             {
                 return Err(unavailable());
@@ -772,6 +778,7 @@ impl<P> GraphAction<P> {
             supervisor: None,
             agent: None,
             guards: BTreeMap::new(),
+            agent_workspace: None,
             payload: std::marker::PhantomData,
         }
     }

@@ -92,22 +92,10 @@ impl<'a> Scope<'a> {
         let own = graph_actions::current(rt, workspace, a.ids.task_id, "task")
             .await
             .map_err(|_| error_for_unavailable(spec))?;
-        let metadata = &own["metadata"];
-        let mut subject = None;
-        if let (Some(candidate), Some(namespace), Some(key)) = (
-            uuid(&metadata["aq:subject"]["id"]),
-            uuid(&metadata["aq:playbook_namespace"]),
-            metadata["aq:logical_key"].as_str(),
-        ) {
-            let ensured: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM playbook_work_keys k JOIN playbook_namespaces n USING(namespace_id,generation)
-                 WHERE k.namespace_id=$1 AND k.logical_key=$2 AND k.task_id=$3 AND n.project_id=$4 AND n.workspace_id=$5)",
-            ).bind(namespace).bind(key).bind(a.ids.task_id).bind(a.ids.project_id).bind(workspace)
-                .fetch_one(&state.store.pool).await.map_err(|_| error_for_unavailable(spec))?;
-            if ensured && metadata["aq:project_id"] == json!(a.ids.project_id) {
-                subject = Some(candidate);
-            }
-        }
+        let subject = grant_check::verified_work_metadata(state, &own, a.ids.project_id)
+            .await
+            .map_err(|_| error_for_unavailable(spec))?
+            .and_then(|metadata| uuid(&metadata["aq:subject"]["id"]));
         let version = own["version"]
             .as_u64()
             .ok_or_else(|| error_for_unavailable(spec))?;
@@ -429,9 +417,13 @@ async fn checked_action(
         }
         _ => scope.edit(&request).await?,
     }
-    Ok(
-        enqueue::supervisor::agent_action(state, a.ids, request, scope.guards)
-            .await
-            .unwrap_or_else(IntoResponse::into_response),
+    Ok(enqueue::supervisor::agent_action(
+        state,
+        a.ids,
+        request,
+        scope.guards,
+        Some(scope.task_scope.workspace),
     )
+    .await
+    .unwrap_or_else(IntoResponse::into_response))
 }

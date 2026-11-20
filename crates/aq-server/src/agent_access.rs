@@ -703,7 +703,12 @@ async fn authenticate_locked(
         p.created = records.into_iter().map(|id| json!(id)).collect();
     }
     if p.grants.reads_subtree() {
-        let tasks: Vec<Uuid> = sqlx::query_scalar("SELECT task_id FROM agent_created_tasks WHERE root_task_id=$1 AND project_id=$2 ORDER BY task_id LIMIT 256").bind(id(&p.binding, "task_id")?).bind(id(&p.binding, "project_id")?).fetch_all(&mut **tx).await?;
+        let tasks = aq_agent_grants::store::subtree(
+            &mut **tx,
+            id(&p.binding, "task_id")?,
+            id(&p.binding, "project_id")?,
+        )
+        .await?;
         p.subtree = tasks.into_iter().map(|id| json!(id)).collect();
     }
     Ok(p)

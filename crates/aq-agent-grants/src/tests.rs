@@ -411,7 +411,7 @@ fn parent_child_edges_follow_the_task_read_scope() {
 #[test]
 fn work_kind_policies_set_draft_grants_without_changing_coding_defaults() {
     use super::resolve::{ProjectGrants, default_coding, resolve_work};
-    let policies: ProjectGrants = serde_json::from_value(json!({"by_work_kind":{
+    let policies: ProjectGrants = serde_json::from_value(serde_json::json!({"by_work_kind":{
         "investigation":{"max_created_tasks":0},
         "spec_ingestion":{"max_created_tasks":30},
         "fidelity_review":{"max_created_tasks":10,"edit_drafts":true}

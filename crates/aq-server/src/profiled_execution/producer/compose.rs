@@ -41,6 +41,7 @@ pub struct Compiled {
     pub effective: Vec<Permission>,
     /// The identity of the task thread in the startup text, when it has one.
     pub thread_identity: Option<String>,
+    pub work_kind: Option<String>,
     /// A routed task's harness and provider limits (spec 0011 §4).
     pub route: Option<aq_routing::RouteLimits>,
 }
@@ -164,11 +165,20 @@ pub async fn compile(
         return Err(refused());
     }
     let task = String::from_utf8(projection.bytes.clone()).map_err(|_| refused())?;
+    let work_kind = crate::agent_access::grant_check::verified_work_metadata(
+        state,
+        &context.context["node"],
+        project,
+    )
+    .await
+    .map_err(crate::error::db)?
+    .and_then(|metadata| metadata["aq:work_kind"].as_str())
+    .map(str::to_owned);
     let thread = crate::agent_access::task_thread::startup_input(
         state,
         project,
         context.revision.task_id,
-        crate::agent_access::grant_check::work_kind(&context.context["node"], project),
+        work_kind.as_deref(),
     )
     .await;
     let thread_identity = thread.as_ref().map(|input| input.identity.clone());
@@ -263,6 +273,7 @@ pub async fn compile(
         requested,
         effective,
         thread_identity,
+        work_kind,
         route: route.map(aq_routing::CompactRoute::limits),
         snapshot: active,
     })

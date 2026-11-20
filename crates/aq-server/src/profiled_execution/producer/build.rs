@@ -747,11 +747,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         state: state_projection,
         retained: set,
         graph_profile: profile,
-        work_kind: crate::agent_access::grant_check::work_kind(
-            &context.context["node"],
-            project.project_id,
-        )
-        .map(str::to_owned),
+        work_kind: compiled.work_kind,
         context: compiled.projection.context,
         central_observation,
         source,

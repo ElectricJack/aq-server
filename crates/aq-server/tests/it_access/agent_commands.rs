@@ -1850,6 +1850,25 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     }
 
     let attempt: Uuid = base["attempt_id"].as_str().unwrap().parse().unwrap();
+    let root = own.as_str().unwrap().parse::<Uuid>().unwrap();
+    sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms)
+                 VALUES($1,$2,$3,$4,$4,1,$5,0)")
+        .bind(outside).bind(attempt).bind(project.as_str().unwrap().parse::<Uuid>().unwrap())
+        .bind(root).bind(Uuid::new_v4()).execute(&e.pool).await.unwrap();
+    // A conflicting or pending create can reserve an existing UUID, but
+    // only a confirmed draft creation contributes subtree authority.
+    assert_eq!(
+        aq_agent_grants::store::depth(&e.pool, root, outside)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        aq_agent_grants::store::creator(&e.pool, outside)
+            .await
+            .unwrap(),
+        None
+    );
     let set_grants = |kind| {
         let (pool, grants) = (e.pool.clone(), grants(kind));
         async move {
