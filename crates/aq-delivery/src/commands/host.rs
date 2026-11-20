@@ -48,6 +48,11 @@ pub async fn onboarded_target(
     let Some(state) = state else {
         return Ok(None);
     };
+    // An adopted row names the generation it verified; a rebinding since then
+    // makes it stale, and delivery must not use it.
+    if state["adopted"] == true && state["binding_generation"] != git.binding_generation {
+        return Ok(None);
+    }
     let github = &state["request"]["github"];
     let (Some(owner), Some(name), Some(branch)) = (
         github["owner"].as_str(),

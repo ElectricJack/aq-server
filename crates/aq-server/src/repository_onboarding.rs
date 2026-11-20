@@ -104,6 +104,7 @@ pub fn admin_routes() -> Router<AppState> {
     Router::new()
         .route("/api/repositories/onboard", post(route))
         .route("/api/repositories/onboard/{operation_id}", get(show))
+        .route("/api/repositories/adopt", post(adopt_route))
         .layer(DefaultBodyLimit::max(128 * 1024))
 }
 async fn route(
@@ -745,4 +746,199 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
             _ => return Ok(()),
         }
     }
+}
+
+/// Adoption of a project that was seeded before repository onboarding: its
+/// project binding and central aq-git binding already exist and are kept as
+/// they are (same IDs, same history). Only the delivery target is recorded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdoptRequest {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    pub repository_id: Uuid,
+    /// The repository binding generation the owner inspected; it must still be
+    /// the project binding's and aq-git's current one.
+    pub expected_binding_generation: u64,
+    pub github: GithubRepository,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_profile: Option<String>,
+    /// Optional expectation; GitHub's `default_branch` must equal it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+}
+async fn adopt_route(
+    State(state): State<AppState>,
+    RequireOwner(actor): RequireOwner,
+    Json(request): Json<AdoptRequest>,
+) -> Result<Json<Value>> {
+    adopt(&state, actor.id, request).await.map(Json)
+}
+
+/// Verifies the seeded project's current binding, the central origin and
+/// GitHub's default branch, then records a `bound` onboarding row that
+/// delivery resolves. An already onboarded project is answered from its row.
+/// Nothing is recorded on a refusal, and a replay of the operation returns the
+/// first answer.
+pub async fn adopt(state: &AppState, actor: Uuid, r: AdoptRequest) -> Result<Value> {
+    if r.operation_id.is_nil()
+        || r.project_id.is_nil()
+        || r.repository_id.is_nil()
+        || r.expected_binding_generation == 0
+        || !slug(&r.github.owner)
+        || !slug(&r.github.name)
+    {
+        return Err(bad("invalid adoption request"));
+    }
+    let config = state
+        .config
+        .onboarding
+        .as_ref()
+        .ok_or_else(|| bad("repository onboarding is not configured"))?;
+    let profile = match &r.credential_profile {
+        None => None,
+        Some(n) => Some(
+            label(n)
+                .then(|| config.credential_profiles.get(n))
+                .flatten()
+                .filter(|p| p.kind == CredentialKind::HttpsFineGrainedToken)
+                .ok_or_else(|| bad("unknown credential profile"))?,
+        ),
+    };
+    let digest = aq_profiles::digest(&json!({"kind":"repository.adopt","request":r}))
+        .map_err(|_| bad("invalid adoption request"))?;
+    let _gate = GATE.lock().await;
+    if let Some(row) = load(state, r.operation_id).await? {
+        if row.actor != actor || row.digest != digest {
+            return Err(AppError::Conflict(
+                "operation_id was used for a different request".into(),
+            ));
+        }
+        return Ok(response(&row));
+    }
+    let binding = match crate::project_bindings::current(state, r.project_id).await? {
+        record if record.binding.enabled => record.binding,
+        _ => return Err(AppError::Conflict("project binding is disabled".into())),
+    };
+    let stale = |m: &str| AppError::Conflict(format!("stale repository binding: {m}"));
+    if binding.repository_id != r.repository_id {
+        return Err(stale("project is bound to another repository"));
+    }
+    if binding.repository_binding_generation != r.expected_binding_generation {
+        return Err(stale("project binding generation differs"));
+    }
+    // A project onboarded through `onboard` keeps its own target.
+    let existing = sqlx::query("SELECT actor_id,request_digest,step,state FROM repository_onboardings WHERE project_id=$1 AND repository_id=$2 AND step='bound' ORDER BY updated_at_ms DESC LIMIT 1")
+        .bind(r.project_id)
+        .bind(r.repository_id)
+        .fetch_optional(&state.store.pool)
+        .await
+        .map_err(db)?
+        .map(|x| Row_ { actor: x.get(0), digest: x.get(1), step: x.get(2), state: x.get(3) });
+    if let Some(row) = existing {
+        let g = &row.state["request"]["github"];
+        let current = row.state["adopted"] != true
+            || row.state["binding_generation"] == r.expected_binding_generation;
+        if g["owner"] != r.github.owner.as_str() || g["name"] != r.github.name.as_str() {
+            return Err(AppError::Conflict(
+                "project is already bound to another GitHub repository".into(),
+            ));
+        }
+        if current {
+            return Ok(response(&row));
+        }
+    }
+    let show = match aq_git(
+        state,
+        step_operation(r.operation_id, "repo.show"),
+        "repo.show",
+        r.repository_id,
+        r.expected_binding_generation,
+        json!({}),
+    )
+    .await
+    {
+        Git::Ok(v) => v,
+        Git::Refused { code, .. } if code == "binding_conflict" => {
+            return Err(stale("aq-git generation differs"));
+        }
+        Git::Refused { code, message } => {
+            return Err(bad(&format!("aq-git refused repo.show: {code}: {message}")));
+        }
+        Git::Unavailable => return Err(AppError::Busy),
+    };
+    let remote = show["remote_url"].as_str().unwrap_or("");
+    let (o, n) = (&r.github.owner, &r.github.name);
+    let origins = [
+        format!("https://github.com/{o}/{n}.git"),
+        format!("https://github.com/{o}/{n}"),
+        format!("ssh://git@github.com/{o}/{n}.git"),
+    ];
+    if show["repository_id"] != r.repository_id.to_string()
+        || show["binding_generation"] != r.expected_binding_generation
+        || show["mode"] != "central"
+        || show["object_format"] != "sha1"
+    {
+        return Err(stale(
+            "aq-git binding is not the expected central SHA-1 binding",
+        ));
+    }
+    if !origins.iter().any(|x| x == remote) {
+        return Err(AppError::Conflict(
+            "central origin does not match the GitHub repository".into(),
+        ));
+    }
+    let token = match profile {
+        Some(p) => match tokio::fs::read_to_string(&p.secret_file).await {
+            Ok(t) => Some(t.trim().to_string()),
+            Err(_) => return Err(AppError::Busy),
+        },
+        None => None,
+    };
+    let branch = match (Github { config, token }).metadata(&r.github, None).await {
+        Meta::Branch { signing: true, .. } => {
+            return Err(AppError::Conflict(
+                "the default branch requires signed commits".into(),
+            ));
+        }
+        Meta::Branch { branch, .. } => branch,
+        Meta::Unavailable(_) => return Err(AppError::Busy),
+    };
+    if r.default_branch.as_deref().is_some_and(|b| b != branch) {
+        return Err(AppError::Conflict(
+            "GitHub default branch differs from the expected one".into(),
+        ));
+    }
+    let target = format!("refs/heads/{branch}");
+    let allowed = show["allowed_targets"].as_array();
+    if !allowed.is_some_and(|a| a.iter().any(|t| *t == target.as_str()))
+        || binding
+            .publication
+            .as_ref()
+            .is_some_and(|p| p.target != target)
+    {
+        return Err(AppError::Conflict(
+            "default branch is not the binding's publication target".into(),
+        ));
+    }
+    let now = (state.clock)().timestamp_millis();
+    let value = json!({"request":r,"remote_url":remote,"default_branch":branch,
+        "binding_generation":r.expected_binding_generation,"adopted":true});
+    sqlx::query("INSERT INTO repository_onboardings (operation_id,actor_id,request_digest,project_id,repository_id,step,state,created_at_ms,updated_at_ms) VALUES ($1,$2,$3,$4,$5,'bound',$6,$7,$7)")
+        .bind(r.operation_id)
+        .bind(actor)
+        .bind(&digest)
+        .bind(r.project_id)
+        .bind(r.repository_id)
+        .bind(&value)
+        .bind(now)
+        .execute(&state.store.pool)
+        .await
+        .map_err(db)?;
+    Ok(response(&Row_ {
+        actor,
+        digest,
+        step: "bound".into(),
+        state: value,
+    }))
 }

@@ -24,6 +24,9 @@ struct Fake {
     signing: bool,
     registers: Vec<Value>,
     syncs: Vec<Value>,
+    /// `repo.show`: the binding generation and the origin aq-git reports.
+    generation: u64,
+    remote: String,
 }
 type Shared = Arc<Mutex<Fake>>;
 
@@ -85,9 +88,21 @@ fn fake_git(path: &std::path::Path, fake: Shared) -> tokio::task::JoinHandle<()>
                         assert_eq!(r["params"]["oid"], json!({"algorithm":"sha1","hex":HEAD}));
                         Ok(json!({"entries":fake.lock().unwrap().tree,"truncated":false}))
                     }
-                    "repo.show" => Ok(
-                        json!({"repository_id":r["repository_id"],"binding_generation":1,"mode":"central","object_format":"sha1","allowed_targets":[target]}),
-                    ),
+                    "repo.show" => {
+                        let (generation, remote) = {
+                            let f = fake.lock().unwrap();
+                            (f.generation, f.remote.clone())
+                        };
+                        if r["expected_binding_generation"] != generation {
+                            Err(("binding_conflict", "stale"))
+                        } else {
+                            let mut shown = json!({"repository_id":r["repository_id"],"binding_generation":generation,"mode":"central","object_format":"sha1","allowed_targets":[target]});
+                            if !remote.is_empty() {
+                                shown["remote_url"] = remote.into();
+                            }
+                            Ok(shown)
+                        }
+                    }
                     other => panic!("unexpected aq-git operation {other}"),
                 };
                 let bytes = reply(&r, outcome);
@@ -124,6 +139,7 @@ async fn onboarding() -> Onboarding {
     let dir = tempfile::tempdir().unwrap();
     let fake: Shared = Arc::new(Mutex::new(Fake {
         branch: "trunk".into(),
+        generation: 1,
         tree: vec![
             json!({"mode":"100644","type":"blob","oid":{"algorithm":"sha1","hex":HEAD},"path":{"encoding":"utf8","value":"README.md"}}),
         ],
@@ -357,4 +373,172 @@ async fn onboarding_resumes_after_partial_failure() {
     body["github"]["name"] = "other".into();
     let (status, _) = onboard(&o, body).await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+fn adopt_request(op: Uuid) -> Value {
+    json!({"operation_id":op,"project_id":Uuid::from_u128(1),"repository_id":Uuid::from_u128(2),
+        "expected_binding_generation":1,"github":{"owner":"acme","name":"widgets"}})
+}
+async fn adopt(o: &Onboarding, body: Value) -> (StatusCode, Value) {
+    call(
+        &o.app,
+        "/api/repositories/adopt",
+        Some(body),
+        "owner@localhost",
+    )
+    .await
+}
+async fn rows(o: &Onboarding) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM repository_onboardings")
+        .fetch_one(&o.env.pool)
+        .await
+        .unwrap()
+}
+#[cfg(feature = "delivery_playbook")]
+async fn delivery_target(
+    o: &Onboarding,
+    generation: u64,
+) -> Option<aq_delivery::commands::DeliveryTarget> {
+    let git = aq_delivery::commands::GitTarget {
+        repository_id: Uuid::from_u128(2),
+        binding_generation: generation,
+    };
+    aq_delivery::commands::onboarded_target(&o.env.pool, Uuid::from_u128(1), git)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn adopting_a_seeded_project_records_a_replayable_delivery_target() {
+    let o = onboarding().await;
+    o.fake.lock().unwrap().remote = "https://github.com/acme/widgets.git".into();
+    let seeded = bind(&o.env).await;
+    #[cfg(feature = "delivery_playbook")]
+    assert!(delivery_target(&o, 1).await.is_none());
+    let op = Uuid::new_v4();
+    let (status, v) = adopt(&o, adopt_request(op)).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["disposition"], "bound", "{v}");
+    assert_eq!(v["default_branch"], "trunk");
+    assert_eq!(v["repository_binding_generation"], 1);
+    #[cfg(feature = "delivery_playbook")]
+    {
+        let target = delivery_target(&o, 1).await.expect("target resolves");
+        assert_eq!(
+            (target.github.owner.as_str(), target.github.name.as_str()),
+            ("acme", "widgets")
+        );
+        assert_eq!(target.default_branch, "trunk");
+        assert_eq!(target.git.repository_id, Uuid::from_u128(2));
+        // A rebinding since the adoption makes the recorded target stale.
+        assert!(delivery_target(&o, 2).await.is_none());
+    }
+    // Replay: the same answer, no second row, no registration, same project.
+    assert_eq!(adopt(&o, adopt_request(op)).await.1, v);
+    assert_eq!(rows(&o).await, 1);
+    assert!(o.fake.lock().unwrap().registers.is_empty());
+    let (_, project) = call(&o.app, &path(), None, "owner@localhost").await;
+    assert_eq!(project, seeded);
+    // The operation id is bound to its request.
+    let mut other = adopt_request(op);
+    other["github"]["name"] = "other".into();
+    assert_eq!(adopt(&o, other).await.0, StatusCode::CONFLICT);
+    // A second operation for the same project reuses the recorded target.
+    let (status, again) = adopt(&o, adopt_request(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again, v);
+    assert_eq!(rows(&o).await, 1);
+}
+
+#[tokio::test]
+async fn adopting_an_onboarded_project_reuses_its_bound_target() {
+    let o = onboarding().await;
+    let op = Uuid::new_v4();
+    let (_, onboarded) = onboard(&o, request(&o, op)).await;
+    assert_eq!(onboarded["disposition"], "bound", "{onboarded}");
+    // No origin is reported and the generation is stale: the row is not consulted.
+    let (status, v) = adopt(&o, adopt_request(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v, onboarded);
+    assert_eq!(rows(&o).await, 1);
+    let mut other = adopt_request(Uuid::new_v4());
+    other["github"]["name"] = "other".into();
+    assert_eq!(adopt(&o, other).await.0, StatusCode::CONFLICT);
+    assert_eq!(rows(&o).await, 1);
+    #[cfg(feature = "delivery_playbook")]
+    assert_eq!(
+        delivery_target(&o, 1).await.unwrap().default_branch,
+        "trunk"
+    );
+}
+
+#[tokio::test]
+async fn adoption_refuses_mismatches_and_records_nothing() {
+    let o = onboarding().await;
+    bind(&o.env).await;
+    let remote = "https://github.com/acme/widgets.git";
+    let body = |f: &dyn Fn(&mut Value)| {
+        let mut b = adopt_request(Uuid::new_v4());
+        f(&mut b);
+        b
+    };
+    let cases: Vec<(&str, &str, Value)> = vec![
+        ("https://github.com/acme/other.git", "origin", body(&|_| {})),
+        ("", "no origin reported", body(&|_| {})),
+        (
+            remote,
+            "expected generation",
+            body(&|b| b["expected_binding_generation"] = 2.into()),
+        ),
+        (
+            remote,
+            "other project",
+            body(&|b| b["project_id"] = json!(Uuid::from_u128(9))),
+        ),
+        (
+            remote,
+            "other repository",
+            body(&|b| b["repository_id"] = json!(Uuid::from_u128(9))),
+        ),
+        (
+            remote,
+            "default branch",
+            body(&|b| b["default_branch"] = "main".into()),
+        ),
+        (
+            remote,
+            "other github repo",
+            body(&|b| b["github"]["owner"] = "mallory".into()),
+        ),
+    ];
+    for (origin, why, b) in cases {
+        o.fake.lock().unwrap().remote = origin.into();
+        let (status, v) = adopt(&o, b.clone()).await;
+        // `mallory/widgets` differs from the origin; an unknown project is absent.
+        let expected = if why == "other project" {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::CONFLICT
+        };
+        assert_eq!(status, expected, "{why}: {v}");
+    }
+    // aq-git moved to another generation after the project binding was written.
+    {
+        let mut f = o.fake.lock().unwrap();
+        f.remote = remote.into();
+        f.generation = 2;
+    }
+    let (status, v) = adopt(&o, adopt_request(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::CONFLICT, "stale aq-git generation: {v}");
+    // GitHub requires signed commits on the default branch.
+    {
+        let mut f = o.fake.lock().unwrap();
+        f.generation = 1;
+        f.signing = true;
+    }
+    let (status, v) = adopt(&o, adopt_request(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::CONFLICT, "signing: {v}");
+    assert_eq!(rows(&o).await, 0);
+    #[cfg(feature = "delivery_playbook")]
+    assert!(delivery_target(&o, 1).await.is_none());
 }
