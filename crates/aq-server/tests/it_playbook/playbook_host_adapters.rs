@@ -193,7 +193,9 @@ async fn host_with_profile(
         ),
     };
     if profile == CatalogProfile::Host11 {
-        scope.capabilities.insert("work.activate".into());
+        scope
+            .capabilities
+            .extend(["work.activate", "decision.request", "operation.get"].map(String::from));
     }
     let grant = Uuid::new_v4();
     service
@@ -315,6 +317,36 @@ async fn host11_activates_only_subtrees_of_ensured_tasks_and_retains_counts() {
     assert_eq!(h.graph.mutations(), 2);
     assert_eq!(h.run(&intent).await.unwrap(), result);
     assert_eq!(h.graph.mutations(), 2);
+
+    let decision = h
+        .run(&h.intent(
+            "decision",
+            "decision.request",
+            json!({"subject":{"id":task,"revision":1}, "question":"Is the plan ready?",
+                "choices":["approved","rejected"], "responders":[format!("user:{}", f.actor)],
+                "expires_at_ms":h.now + 4000}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(decision.outcome, "accepted");
+    let handle = serde_json::from_value(decision.output["handle"].clone()).unwrap();
+    let note = "Add the rollback steps.";
+    let answer = h
+        .service
+        .answer_decision(f.actor, handle, "rejected", Some(note))
+        .await
+        .unwrap();
+    assert_eq!(answer.outcome, "rejected");
+    assert_eq!(answer.output["note"], note);
+    let retained = h
+        .run(&h.intent("read-decision", "operation.get", json!({"handle": handle})))
+        .await
+        .unwrap();
+    assert_eq!(retained.outcome, "completed");
+    assert_eq!(
+        retained.output,
+        json!({"outcome":"rejected","output":answer.output})
+    );
 }
 
 #[tokio::test]
