@@ -9,6 +9,7 @@ pub mod wire;
 pub use api::{Auth, Service};
 pub use aq_manual_sessions::intelligence::resolve_stored;
 use sqlx::{Postgres, Row, Transaction};
+use std::sync::Arc;
 use uuid::Uuid;
 pub use wire::Conversation;
 /// The supervisor routes on the machine listener: `/v1/supervisor/projects`,
@@ -19,8 +20,9 @@ pub fn machine_routes<S: Clone + Send + Sync + 'static>(
     settings: axum::Router<S>,
     owner_app: Option<axum::Router>,
     pool: sqlx::PgPool,
-    clock: read::Clock,
+    clock: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 ) -> axum::Router<S> {
+    let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
     let projects = read::projects(pool.clone(), clock.clone());
     #[cfg(feature = "supervisor_full_access")]
     {
