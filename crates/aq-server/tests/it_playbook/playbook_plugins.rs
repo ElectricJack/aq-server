@@ -261,7 +261,7 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
                 ("ok".into(), "done".into()),
                 ("refused".into(), "refused".into()),
             ]),
-            on_error: None,
+            on_error: Some("refused".into()),
         },
     );
     producer.playbook.steps.insert(
@@ -278,6 +278,7 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
     let event = service.registry().events[EVENT].clone();
     producer.registry.events.insert(EVENT.into(), event.clone());
     let producer = Artifact::seal(producer).unwrap();
+    producer.verify().unwrap();
     let artifact = producer.digest.clone();
 
     let mut consumer = pure_artifact().content;
