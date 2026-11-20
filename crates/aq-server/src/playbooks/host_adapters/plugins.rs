@@ -61,12 +61,11 @@ impl Service {
             }) => {
                 let plugin = plugin.ok_or(Error::Unknown)?;
                 let now = self.now()?;
-                let producer = format!("ext.{name}");
                 let validated = produced
                     .into_iter()
                     .enumerate()
                     .map(|(index, event)| {
-                        let envelope = plugin.event(&producer, &intent.id, index, event, now)?;
+                        let envelope = plugin.event(&intent.id, index, event, now)?;
                         // The outbox caps the complete protected envelope at 64 KiB.
                         (canonical_bytes(&envelope).ok()?.len() <= 65_536).then_some(envelope)
                     })

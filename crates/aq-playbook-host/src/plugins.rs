@@ -1,5 +1,5 @@
 //! Operator-installed exec plugins for the playbook host.
-use crate::model::{CatalogExtension, CommandContract, ContractRef, EventEnvelope, Registry};
+use crate::model::{CatalogExtension, CommandContract, EventEnvelope, Registry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -341,45 +341,14 @@ impl Plugin {
 
     pub fn event(
         &self,
-        producer: &str,
         intent_id: &str,
         index: usize,
         event: ProducedEvent,
         now_ms: i64,
     ) -> Option<EventEnvelope> {
-        let contract = self.registry().events.get(&event.name)?;
-        let field = |path: &str| {
-            path.split('.')
-                .try_fold(&event.payload, |value, key| value.get(key))
-        };
-        let subject = field(contract.subject_field.as_deref()?)?.as_str()?;
-        if subject.is_empty() {
-            return None;
-        }
-        let revision = field(contract.revision_field.as_deref()?)?.as_u64()?;
-        let correlation = contract
-            .correlation_fields
-            .iter()
-            .map(|name| Some((name.clone(), field(name)?.as_str()?.to_owned())))
-            .collect::<Option<_>>()?;
-        let envelope = EventEnvelope {
-            producer: producer.into(),
-            event_id: crate::model::digest(&(intent_id, index)).ok()?,
-            contract: ContractRef {
-                name: event.name,
-                fingerprint: contract.fingerprint().ok()?,
-            },
-            scope: "project".into(),
-            correlation,
-            subject: Some(subject.to_owned()),
-            revision: Some(revision),
-            causation: Some(intent_id.to_owned()),
-            occurred_at_ms: Some(now_ms),
-            observed_at_ms: Some(now_ms),
-            payload: event.payload,
-        };
-        crate::model::validate_event(&envelope, self.registry()).ok()?;
-        Some(envelope)
+        self.extension
+            .event_envelope(intent_id, index, event.name, event.payload, now_ms)
+            .ok()
     }
 }
 
