@@ -321,6 +321,7 @@ version = "0.1.0"
 dependencies = [
  "aq-human-cursor",
  "aq-project-policy",
+ "aq-role-settings",
  "chrono",
  "schemars",
  "serde",

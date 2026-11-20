@@ -1,6 +1,6 @@
 //! Resolve an agent's draft-task scope from a validated Graph context snapshot.
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub fn uuid(value: &Value) -> Option<Uuid> {
@@ -80,26 +80,4 @@ impl TaskScope {
             .find(|edge| edge["id"] == json!(edge_id) && self.incoming(edge, task, "blocks"))?;
         uuid(&edge["source"])
     }
-}
-
-/// Return each new task's existing ancestor and the path length to it.
-/// A cycle, an absent parent or a duplicate node makes the batch invalid.
-pub fn batch_paths(tasks: &[(Uuid, Option<Uuid>)]) -> Option<BTreeMap<Uuid, (Uuid, u32)>> {
-    let parents: BTreeMap<_, _> = tasks.iter().copied().collect();
-    if parents.len() != tasks.len() {
-        return None;
-    }
-    let mut paths = BTreeMap::new();
-    for (task, parent) in tasks {
-        let mut next = (*parent)?;
-        let mut chain = BTreeSet::from([*task]);
-        while let Some(parent) = parents.get(&next) {
-            if !chain.insert(next) {
-                return None;
-            }
-            next = (*parent)?;
-        }
-        paths.insert(*task, (next, chain.len() as u32));
-    }
-    Some(paths)
 }

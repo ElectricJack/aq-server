@@ -15,6 +15,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
+use schemars::JsonSchema;
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
 

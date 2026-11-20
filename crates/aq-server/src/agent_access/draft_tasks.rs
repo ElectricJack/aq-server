@@ -5,7 +5,7 @@ use super::*;
 use crate::dashboard_api::actions::ActionRequest;
 use aq_agent_grants::{
     AuditEntry, Decision, Grant, Holder, Refusal, RefusalCode, Relation, Target,
-    draft_scope::{MAX_ANCESTRY, TaskScope, batch_paths, uuid},
+    draft_scope::{MAX_ANCESTRY, TaskScope, uuid},
     store::{Reservation, ReserveError},
 };
 use aq_command_registry::CommandSpec;
@@ -221,36 +221,15 @@ impl<'a> Scope<'a> {
     }
 
     async fn graph(&mut self, graph: &enqueue::GraphCreate) -> Checked<Vec<Reservation>> {
-        if !graph_actions::GraphPayload::valid(graph) {
-            return Err(self.invalid());
-        }
-        let tasks: Vec<_> = graph
-            .tasks
-            .iter()
-            .map(|task| (task.id, task.parent_id))
-            .collect();
-        let paths = batch_paths(&tasks).ok_or_else(|| self.denied())?;
-        if graph
-            .edges
-            .iter()
-            .any(|edge| !paths.contains_key(&edge.source) || !paths.contains_key(&edge.target))
-        {
-            return Err(self.denied());
-        }
+        use aq_human_work::task_graph::DraftBatchError;
+        let drafts = graph.draft_tasks().map_err(|e| match e {
+            DraftBatchError::Invalid => self.invalid(),
+            DraftBatchError::OutsideScope => self.denied(),
+        })?;
         let mut parents = BTreeMap::new();
-        let mut rows = Vec::new();
-        for task in &graph.tasks {
-            if !matches!(task.task_state, enqueue::InitialState::Draft)
-                || task.intelligence_hint.is_some()
-            {
-                return Err(self.denied());
-            }
-            #[cfg(feature = "project_environments")]
-            if task.needs.is_some() {
-                return Err(self.denied());
-            }
-            let parent = task.parent_id.ok_or_else(|| self.denied())?;
-            let (ancestor, levels) = paths[&task.id];
+        let mut rows = Vec::with_capacity(drafts.len());
+        for task in drafts {
+            let ancestor = task.ancestor;
             let (root, depth) = if let Some(found) = parents.get(&ancestor).copied() {
                 found
             } else {
@@ -259,7 +238,7 @@ impl<'a> Scope<'a> {
                 parents.insert(ancestor, found);
                 found
             };
-            let depth = depth + levels;
+            let depth = depth + task.new_levels;
             if self.grant.limits.max_depth.is_some_and(|max| depth > max) {
                 return Err(self.quota("max_depth"));
             }
@@ -268,7 +247,7 @@ impl<'a> Scope<'a> {
             }
             rows.push(Reservation {
                 task: task.id,
-                parent,
+                parent: task.parent,
                 root,
                 depth,
             });
