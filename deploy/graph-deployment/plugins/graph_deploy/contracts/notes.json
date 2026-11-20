@@ -1,0 +1,42 @@
+{
+  "commands": {
+    "ext.graph_deploy.submit": {
+      "purpose": "Register one rollout of a builder-approved merged aq-graph revision in the opted-in disposable environment.",
+      "input": {
+        "revision": "Full merged aq-graph Git commit SHA.",
+        "expected_generation": "Last observed desired generation, or zero for an empty environment."
+      },
+      "outcomes": {
+        "registered": "The deployment generation is durable.",
+        "refused": "The project, revision, provenance or generation did not qualify."
+      }
+    },
+    "ext.graph_deploy.observe": {
+      "purpose": "Read reconciliation evidence for a previously registered generation.",
+      "input": {"generation": "Deployment generation returned by submit."},
+      "outcomes": {
+        "queued": "Intent is durable and awaits controller dispatch.",
+        "running": "Controller work is in progress or health needs a fresh observation.",
+        "healthy": "Docker reports the verified image config running with a healthy Graph readiness check.",
+        "failed": "Staging or reconciliation failed with a diagnostic.",
+        "superseded": "A newer desired generation fences this operation.",
+        "refused": "The project or deployment generation is unavailable."
+      }
+    },
+    "ext.graph_deploy.request": {
+      "purpose": "Register the requested merged revision or claim one from the opted-in Host10 merge evidence view.",
+      "input": {
+        "revision": "Full merged aq-graph Git commit SHA for a manual deployment.",
+        "expected_generation": "Last observed desired generation, or zero for an empty environment.",
+        "scheduled": "True for the deployment binding interval."
+      },
+      "outcomes": {
+        "registered": "The durable Host10 operation and resulting deployment generation are recorded.",
+        "idle": "The view has no unprocessed merge, a build is pending, or a rollout is in progress.",
+        "refused": "Automatic deployment is disabled or the scoped merge source or evidence is unavailable.",
+        "ignored": "Signal belongs to a different schedule."
+      }
+    }
+  },
+  "events": {}
+}

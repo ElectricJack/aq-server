@@ -1,0 +1,10 @@
+{
+  "id": "graph-deployment",
+  "binding": "aq.graph-deployment",
+  "scope": "project",
+  "purpose": "Deploy a merged aq-graph revision to the opted-in disposable development environment.",
+  "commands": ["ext.graph_deploy.observe", "ext.graph_deploy.request"],
+  "events": ["aq.signal.reported"],
+  "capabilities": ["ext.graph_deploy"],
+  "facts_version": "graph-deployment-1"
+}

@@ -1767,3 +1767,6 @@ async fn pilots_end_to_end() {
 
 #[path = "routing_scale.rs"]
 mod routing_scale;
+
+#[path = "graph_deployment_canary.rs"]
+mod deployment_canary;

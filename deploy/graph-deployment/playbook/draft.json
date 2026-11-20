@@ -1,0 +1,232 @@
+{
+  "entries": {
+    "main": {
+      "input": {
+        "type": "object",
+        "required": ["revision", "expected_generation"],
+        "properties": {
+          "revision": {"type": "string", "max_length": 40},
+          "expected_generation": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+        }
+      },
+      "outcomes": {
+        "healthy": {
+          "type": "object",
+          "required": ["generation", "observed_digest", "provider_id"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64}
+          }
+        },
+        "failed": {
+          "type": "object",
+          "required": ["generation", "diagnostic"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "superseded": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "timed_out": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "error": {"type": "null"},
+        "idle": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "ignored": {"type": "null"}
+      },
+      "start": "submit"
+    },
+    "automatic": {
+      "input": {
+        "type": "object",
+        "properties": {"scheduled": {"type": "boolean"}},
+        "required": ["scheduled"]
+      },
+      "outcomes": {
+        "healthy": {
+          "type": "object",
+          "required": ["generation", "observed_digest", "provider_id"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64}
+          }
+        },
+        "failed": {
+          "type": "object",
+          "required": ["generation", "diagnostic"],
+          "properties": {
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "superseded": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "timed_out": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "error": {"type": "null"},
+        "idle": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        },
+        "ignored": {"type": "null"}
+      },
+      "start": "submit"
+    }
+  },
+  "triggers": [{"id": "graph-merge-scan", "event": "aq.signal.reported", "entry": "automatic", "input": {"op": "object", "fields": {"scheduled": {"op": "eq", "left": {"op": "ref", "root": "event", "path": ["reference"]}, "right": {"op": "literal", "value": "aq.schedule/graph-merge"}}}}}],
+  "steps": {
+    "submit": {
+      "op": {
+        "kind": "invoke",
+        "command": "ext.graph_deploy.request",
+        "input": {"op": "ref", "root": "input", "path": []},
+        "bind": "registration",
+        "retry": null
+      },
+      "edges": {"registered": "observe", "refused": "submit-refused", "idle": "idle", "ignored": "ignored"},
+      "on_error": "error"
+    },
+    "observe": {
+      "op": {
+        "kind": "invoke",
+        "command": "ext.graph_deploy.observe",
+        "input": {
+          "op": "object",
+          "fields": {"generation": {"op": "ref", "root": "registration", "path": ["generation"]}}
+        },
+        "bind": "observation",
+        "retry": {"max_attempts": 16, "backoff_ms": 10000, "outcomes": ["queued", "running"]}
+      },
+      "edges": {
+        "healthy": "healthy",
+        "failed": "failed",
+        "superseded": "superseded",
+        "queued": "timed-out",
+        "running": "timed-out",
+        "refused": "observe-refused"
+      },
+      "on_error": "error"
+    },
+    "healthy": {
+      "op": {
+        "kind": "return",
+        "outcome": "healthy",
+        "output": {
+          "op": "object",
+          "fields": {
+            "generation": {"op": "ref", "root": "observation", "path": ["generation"]},
+            "observed_digest": {"op": "ref", "root": "observation", "path": ["observed_digest"]},
+            "provider_id": {"op": "ref", "root": "observation", "path": ["provider_id"]}
+          }
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "failed": {
+      "op": {
+        "kind": "return",
+        "outcome": "failed",
+        "output": {
+          "op": "object",
+          "fields": {
+            "generation": {"op": "ref", "root": "observation", "path": ["generation"]},
+            "diagnostic": {"op": "ref", "root": "observation", "path": ["diagnostic"]}
+          }
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "superseded": {
+      "op": {
+        "kind": "return",
+        "outcome": "superseded",
+        "output": {
+          "op": "object",
+          "fields": {"generation": {"op": "ref", "root": "observation", "path": ["generation"]}}
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "timed-out": {
+      "op": {
+        "kind": "return",
+        "outcome": "timed_out",
+        "output": {
+          "op": "object",
+          "fields": {"generation": {"op": "ref", "root": "observation", "path": ["generation"]}}
+        }
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "submit-refused": {
+      "op": {
+        "kind": "return",
+        "outcome": "refused",
+        "output": {"op": "ref", "root": "registration", "path": []}
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "observe-refused": {
+      "op": {
+        "kind": "return",
+        "outcome": "refused",
+        "output": {"op": "ref", "root": "observation", "path": []}
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "error": {
+      "op": {"kind": "return", "outcome": "error", "output": {"op": "literal", "value": null}},
+      "edges": {},
+      "on_error": null
+    },
+    "idle": {
+      "op": {
+        "kind": "return",
+        "outcome": "idle",
+        "output": {"op": "ref", "root": "registration", "path": []}
+      },
+      "edges": {},
+      "on_error": null
+    },
+    "ignored": {
+      "op": {"kind": "return", "outcome": "ignored", "output": {"op": "literal", "value": null}},
+      "edges": {},
+      "on_error": null
+    }
+  }
+}
