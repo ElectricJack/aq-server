@@ -141,6 +141,12 @@ pub enum Request {
         artifact: String,
         authority: Authority,
     },
+    ActivateAt {
+        binding: String,
+        artifact: String,
+        authority: Authority,
+        now_ms: i64,
+    },
     ConfigureBinding {
         binding: String,
         artifact: String,
@@ -260,6 +266,12 @@ impl Request {
                 binding,
                 artifact,
                 authority: a,
+            }
+            | Self::ActivateAt {
+                binding,
+                artifact,
+                authority: a,
+                ..
             } => valid(binding) && valid(artifact) && authority(a),
             Self::ConfigureBinding {
                 binding,
@@ -796,6 +808,17 @@ fn execute<S: Storage>(
             engine
                 .activate(&binding, &artifact, authority)
                 .map_err(engine_error)?;
+            Value::Null
+        }
+        Request::ActivateAt {
+            binding,
+            artifact,
+            authority,
+            now_ms,
+        } => {
+            engine
+                .activate_at(&binding, &artifact, authority, now_ms)
+                .map_err(runner_error)?;
             Value::Null
         }
         Request::ConfigureBinding {

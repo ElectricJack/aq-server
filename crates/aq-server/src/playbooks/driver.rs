@@ -534,10 +534,11 @@ impl Driver {
             .await?;
         self.owner
             .call(
-                Request::Activate {
+                Request::ActivateAt {
                     binding: binding.clone(),
                     artifact,
                     authority: active_authority,
+                    now_ms: self.service_clock(),
                 },
                 self.deadline,
             )

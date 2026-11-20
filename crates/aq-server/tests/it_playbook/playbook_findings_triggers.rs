@@ -793,7 +793,12 @@ async fn monitoring_driver_delivers_schedule_and_restarts_without_another_root()
 async fn binding_intervals_coalesce_across_restart_and_deactivate_in_host9() {
     use aq_playbook_host::model::schedules::BindingSchedule;
     use aq_server::playbooks::driver::Driver;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use std::sync::atomic::Ordering;
+    use tower::ServiceExt;
 
     let e = setup_profile(CatalogProfile::Host9).await;
     e.s.retire_runtime(&e.owner).await.unwrap();
@@ -895,25 +900,98 @@ async fn binding_intervals_coalesce_across_restart_and_deactivate_in_host9() {
         6
     );
 
+    let driver = Arc::new(driver);
+    let admin =
+        aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let post = |action: &str, body: Value| {
+        admin.clone().oneshot(
+            Request::post(format!("/api/playbooks/bindings/scheduled/{action}"))
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
     let active = driver.inspect_binding("scheduled".into()).await.unwrap();
     let revision = active["revision"].as_u64().unwrap();
-    assert!(matches!(
-        driver
-            .deactivate_binding("scheduled".into(), revision + 1)
-            .await,
-        Err(Error::Conflict)
-    ));
-    driver
-        .deactivate_binding("scheduled".into(), revision)
-        .await
-        .unwrap();
-    driver
-        .deactivate_binding("scheduled".into(), revision)
-        .await
-        .unwrap();
-    driver.stop().await.unwrap();
+    assert_eq!(
+        post("deactivate", json!({"revision": revision + 1}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT,
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            post("deactivate", json!({"revision": revision}))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK,
+        );
+    }
 
     clock(750_000);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        7
+    );
+    assert_eq!(
+        post(
+            "activate",
+            json!({
+                "op_id": "reactivate-test",
+                "artifact": a.digest,
+                "grant_id": e.grant,
+                "grant_revision": 1
+            })
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::OK,
+    );
+    clock(779_999);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        7
+    );
+    clock(780_000);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        9
+    );
+
+    let active = driver.inspect_binding("scheduled".into()).await.unwrap();
+    assert_eq!(
+        post("deactivate", json!({"revision": active["revision"]}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+    );
+    driver.stop().await.unwrap();
+
+    clock(810_000);
     let driver = start().await.unwrap();
     driver
         .ensure_binding(
@@ -934,7 +1012,7 @@ async fn binding_intervals_coalesce_across_restart_and_deactivate_in_host9() {
             .unwrap()
             .items
             .len(),
-        7
+        10
     );
     driver.stop().await.unwrap();
 
@@ -962,7 +1040,7 @@ async fn binding_intervals_coalesce_across_restart_and_deactivate_in_host9() {
             .iter_mut()
             .for_each(|revisions| revisions.sort_unstable());
         indexes.sort_unstable();
-        assert_eq!(indexes, [vec![0, 1], vec![0, 1, 2, 22, 23]]);
+        assert_eq!(indexes, [vec![0, 0, 1, 2, 22, 23], vec![0, 1, 2, 3]]);
         engine.release().unwrap();
     })
     .await

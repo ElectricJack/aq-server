@@ -534,8 +534,8 @@ The namespace owner can deactivate a binding with
 `{"revision": 1}`, substituting the revision returned by
 `GET /api/playbooks/bindings/{id}`. Deactivation removes its schedules and
 blocks new starts on that binding, including across restart. Already started
-runs retain their activation. The existing activate endpoint can reactivate
-the binding, and startup reconciles the declarations of an active binding.
+runs retain their activation. Reactivating a binding restores its configured
+schedules with a new cadence starting at activation.
 
 ## Production notes
 
