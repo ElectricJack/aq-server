@@ -427,3 +427,74 @@ async fn task_list_limit_survives_the_bridge() {
     assert_eq!(out["data"]["items"].as_array().unwrap().len(), 2, "{out}");
     assert!(out["data"]["next_cursor"].is_string(), "{out}");
 }
+
+impl Owner {
+    /// The supervisor's own (not bridged) routes on the machine listener.
+    async fn direct(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+        call(
+            &self.machine,
+            method,
+            path,
+            As::Supervisor(&self.token),
+            body,
+        )
+        .await
+    }
+    /// A `task.create` in the fixture project, and Graph's answer to it.
+    fn create(&self) -> Value {
+        let id = Uuid::new_v4();
+        let created = change_set(vec![node(id, self.workspace, "task", 1)]);
+        *self.graph.reply.lock().unwrap() = Some((200, created));
+        let payload = json!({"operation_id":id,"expected_project_revision":"1","title":"Single",
+            "body":"","acceptance_criteria":"","labels":[],"task_state":"active"});
+        action("task.create", "project", self.project, "1", payload)
+    }
+}
+
+#[tokio::test]
+async fn project_supervisor_creates_a_task_in_another_project() {
+    let o = owner().await;
+    // Synthetic, on this test's own database: scope the fixture supervisor
+    // to an unbound project, so the bound one is another project.
+    for sql in [
+        "ALTER TABLE supervisor_conversation_ids DISABLE TRIGGER supervisor_scope_immutable",
+        "ALTER TABLE supervisor_conversation_ids DROP CONSTRAINT supervisor_conversation_ids_project_id_fkey",
+        "UPDATE supervisor_conversation_ids SET project_id=gen_random_uuid() WHERE project_id IS NULL",
+    ] {
+        sqlx::query(sql).execute(&o.f.pool).await.unwrap();
+    }
+    let (status, out) = o.direct("POST", "/api/v1/actions", Some(o.create())).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["disposition"], "confirmed", "{out}");
+}
+
+#[tokio::test]
+async fn operation_show_finds_an_operation_sent_through_the_owner_mount() {
+    let o = owner().await;
+    let (_, a) = o.draft();
+    let request = json!({"operation_id":a["operation_id"],"subject":a["subject"],
+        "expected_versions":a["expected_versions"],"params":a["payload"]});
+    let (status, sent) = o.command("task.activate", request).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let path = format!("/api/v1/operations/{}", a["operation_id"].as_str().unwrap());
+    let (status, shown) = o.direct("GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["data"], sent["data"]);
+}
+
+#[tokio::test]
+async fn operation_show_still_finds_the_supervisors_own_task_create() {
+    let o = owner().await;
+    let create = o.create();
+    let (status, sent) = o
+        .direct("POST", "/api/v1/actions", Some(create.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let path = format!(
+        "/api/v1/operations/{}",
+        create["operation_id"].as_str().unwrap()
+    );
+    let (status, shown) = o.direct("GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["data"], sent["data"]);
+}

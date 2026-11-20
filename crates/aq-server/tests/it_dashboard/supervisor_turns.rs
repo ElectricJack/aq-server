@@ -1587,7 +1587,13 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
     let token = reply::issue_credential(&f.pool, f.actor, 60000, 999000)
         .await
         .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
     let machine = aq_server::build_worker_router(f.state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let machine = aq_server::build_worker_router_with_owner_app(
+        f.state.clone(),
+        aq_server::build_admin_router(f.state.clone()),
+    );
     let read = |path: String| {
         let app = machine.clone();
         let token = token.clone();
@@ -1635,6 +1641,13 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
             Uuid::new_v4()
         );
         assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    }
+    // With it, another project reads through the owner bridge.
+    #[cfg(feature = "supervisor_full_access")]
+    {
+        let cross = format!("/v1/supervisor/owner/api/human/conversations/projects/{other}");
+        let (status, out) = read(cross).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
     }
     f.answer(&p).await;
     f.assert_consumed(r.id).await;

@@ -18,6 +18,20 @@ tokio::task_local! {
 
 pub const PREFIX: &str = "/v1/supervisor/owner";
 
+/// The owner who approved `p`, when `p` may act as that owner.
+pub async fn approving_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    p: &crate::authority::SupervisorPrincipal,
+) -> Option<uuid::Uuid> {
+    if !p.scopes.iter().any(|s| s == "owner") {
+        return None;
+    }
+    crate::read::owner(tx, p.actor_id)
+        .await
+        .ok()
+        .map(|owner| owner.id)
+}
+
 /// Mounts `{PREFIX}/{*rest}` for every method; each request is forwarded to
 /// `owner_app` at `/{rest}` with the owner's identity and none of the caller's.
 pub fn routes<S: Clone + Send + Sync + 'static>(
