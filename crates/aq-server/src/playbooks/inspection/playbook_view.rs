@@ -18,11 +18,7 @@ use axum::{
     extract::{Path, Query},
 };
 use serde::Serialize;
-use std::{
-    collections::BTreeSet,
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 const ACTIVATION_PAGES: usize = 4;
 /// Per-page budget for reading current activations. 500 ms was too tight on
@@ -82,7 +78,9 @@ pub(super) async fn definition_graph(
 impl Service {
     pub(crate) async fn register_definition(&self, artifact: &Artifact) -> Result<()> {
         let mut tx = self.tx().await?;
-        ViewStore(&self.namespace).register_definition(&mut tx, artifact, self.current_time()).await?;
+        ViewStore(&self.namespace)
+            .register_definition(&mut tx, artifact, self.current_time())
+            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -135,51 +133,11 @@ impl Driver {
             return Ok(());
         }
         let activations = self.current_activations().await;
-        let artifacts = runs
-            .iter()
-            .map(|r| r.artifact.clone())
-            .chain(activations.iter().flatten().map(|a| a.artifact.clone()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let store = ViewStore(&self.service.namespace);
         let mut tx = self.service.tx().await?;
-        let registry = store.registered(&mut tx, &artifacts).await?;
-        let intents = runs
-            .iter()
-            .flat_map(|r| r.pending_intents.iter().cloned())
-            .collect::<Vec<_>>();
-        let waiting = store.pending_decisions(&mut tx, &intents).await?;
-        let ids = runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
-        let admitted = store.admitted_runs(&mut tx, &ids).await?;
+        ViewStore(&self.service.namespace)
+            .enrich_runs(&mut tx, runs, activations.as_deref())
+            .await?;
         tx.commit().await?;
-        for run in runs.iter_mut() {
-            if let Some((binding, revision)) = admitted.get(&run.id) {
-                run.binding = binding.clone();
-                run.activation_revision = Some(revision.to_string());
-            }
-            run.waiting = run
-                .pending_intents
-                .iter()
-                .find_map(|intent| waiting.get(intent).cloned());
-            run.definition = registry.get(&run.artifact).map(|(name, version)| {
-                let pins = activations.as_ref().map(|items| {
-                    items.iter().map(|item| ActivationPin {
-                        binding: &item.binding,
-                        artifact: &item.artifact,
-                        revision: &item.revision,
-                    })
-                });
-                definition_view(
-                    &run.artifact,
-                    run.binding.as_deref(),
-                    name,
-                    *version,
-                    pins,
-                    &registry,
-                )
-            });
-        }
         Ok(())
     }
     pub(super) async fn step_timeline(&self, run: &RunView) -> Result<Option<StepTimeline>> {

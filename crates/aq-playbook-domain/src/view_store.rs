@@ -1,8 +1,13 @@
 //! Retained definitions, admissions, and decisions used by playbook inspection.
-use crate::{Namespace, Result, playbook_view::{WaitingView, graph_for_storage}};
+use crate::{
+    Namespace, Result,
+    catalog_view::Activation,
+    inspection::RunView,
+    playbook_view::{ActivationPin, WaitingView, definition_view, graph_for_storage},
+};
 use aq_playbook_host::model::Artifact;
 use sqlx::{PgConnection, Row};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub struct ViewStore<'a>(pub &'a Namespace);
@@ -10,7 +15,12 @@ pub struct ViewStore<'a>(pub &'a Namespace);
 impl ViewStore<'_> {
     /// Idempotent: the first install of an artifact in this namespace
     /// generation fixes its per-name version.
-    pub async fn register_definition(&self, db: &mut PgConnection, artifact: &Artifact, now: i64) -> Result<()> {
+    pub async fn register_definition(
+        &self,
+        db: &mut PgConnection,
+        artifact: &Artifact,
+        now: i64,
+    ) -> Result<()> {
         let graph = graph_for_storage(&artifact.content.playbook)?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!(
@@ -30,7 +40,11 @@ impl ViewStore<'_> {
             .await?;
         Ok(())
     }
-    pub async fn registered(&self, db: &mut PgConnection, artifacts: &[String]) -> Result<BTreeMap<String, (String, i64)>> {
+    pub async fn registered(
+        &self,
+        db: &mut PgConnection,
+        artifacts: &[String],
+    ) -> Result<BTreeMap<String, (String, i64)>> {
         let rows = sqlx::query("SELECT artifact,name,version FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND artifact=ANY($3)")
             .bind(self.0.namespace_id)
             .bind(self.0.generation)
@@ -68,7 +82,11 @@ impl ViewStore<'_> {
             })
             .collect())
     }
-    pub async fn pending_decisions(&self, db: &mut PgConnection, intents: &[String]) -> Result<BTreeMap<String, WaitingView>> {
+    pub async fn pending_decisions(
+        &self,
+        db: &mut PgConnection,
+        intents: &[String],
+    ) -> Result<BTreeMap<String, WaitingView>> {
         if intents.is_empty() {
             return Ok(BTreeMap::new());
         }
@@ -102,5 +120,61 @@ impl ViewStore<'_> {
             );
         }
         Ok(out)
+    }
+    /// Join already authorized run projections to retained definition and decision rows.
+    pub async fn enrich_runs(
+        &self,
+        db: &mut PgConnection,
+        runs: &mut [RunView],
+        activations: Option<&[Activation]>,
+    ) -> Result<()> {
+        let artifacts = runs
+            .iter()
+            .map(|r| r.artifact.clone())
+            .chain(
+                activations
+                    .into_iter()
+                    .flatten()
+                    .map(|a| a.artifact.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let registry = self.registered(&mut *db, &artifacts).await?;
+        let intents = runs
+            .iter()
+            .flat_map(|r| r.pending_intents.iter().cloned())
+            .collect::<Vec<_>>();
+        let waiting = self.pending_decisions(&mut *db, &intents).await?;
+        let ids = runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+        let admitted = self.admitted_runs(&mut *db, &ids).await?;
+        for run in runs.iter_mut() {
+            if let Some((binding, revision)) = admitted.get(&run.id) {
+                run.binding = binding.clone();
+                run.activation_revision = Some(revision.to_string());
+            }
+            run.waiting = run
+                .pending_intents
+                .iter()
+                .find_map(|intent| waiting.get(intent).cloned());
+            run.definition = registry.get(&run.artifact).map(|(name, version)| {
+                let pins = activations.map(|items| {
+                    items.iter().map(|item| ActivationPin {
+                        binding: &item.binding,
+                        artifact: &item.artifact,
+                        revision: &item.revision,
+                    })
+                });
+                definition_view(
+                    &run.artifact,
+                    run.binding.as_deref(),
+                    name,
+                    *version,
+                    pins,
+                    &registry,
+                )
+            });
+        }
+        Ok(())
     }
 }

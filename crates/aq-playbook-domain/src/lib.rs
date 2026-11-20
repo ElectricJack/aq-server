@@ -16,6 +16,7 @@ pub mod host_values;
 pub mod inspection;
 pub mod loaded_definitions;
 pub mod playbook_view;
+pub mod plugin_effects;
 pub mod review_domain;
 mod step_inspection;
 pub mod view_store;
