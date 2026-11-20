@@ -216,19 +216,8 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
-        let name = intent.command.name.as_str();
-        if aq_playbook_host::plugins::command_plugin(name).is_none() {
+        if aq_playbook_host::plugins::command_plugin(&intent.command.name).is_none() {
             self.ports()?;
-            let commands: &[&str] = if self.profile.has_routing() {
-                self.profile.commands()
-            } else if self.profile.is_host2() {
-                &HOST7_COMMANDS
-            } else {
-                &HOST5_COMMANDS
-            };
-            if !commands.contains(&name) {
-                return Err(Error::Invalid);
-            }
         }
         if !self.known_contract(&intent.command) {
             return Err(Error::Invalid);

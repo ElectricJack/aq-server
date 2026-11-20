@@ -289,15 +289,12 @@ impl MailHost {
             },
         }
     }
-    /// Host-adapter commands of the pinned profile (5: D4 catalog 1.0.0;
-    /// 7: AQ host catalog 2.0.0, which also owns operation.get).
+    /// Legacy review and mailbox profiles own their base adapters separately.
     fn host_command(&self, intent: &Intent) -> bool {
-        let name = intent.command.name.as_str();
+        let name = &intent.command.name;
         command_plugin(name).is_some()
-            || super::host_adapters::HOST5_COMMANDS.contains(&name)
-            || (self.service.profile.is_host2()
-                && super::host_adapters::HOST7_COMMANDS.contains(&name))
-            || self.service.profile.commands().contains(&name)
+            || (self.service.profile.is_host()
+                && self.service.registry().commands.contains_key(name))
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
