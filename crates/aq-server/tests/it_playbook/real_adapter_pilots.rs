@@ -452,7 +452,7 @@ impl Destination {
 struct Pilot {
     f: common::profiled::Fixture,
     service: Service,
-    driver: Option<Driver>,
+    driver: Option<Arc<Driver>>,
     graph: Arc<FakeGraph>,
     model: Arc<FakeModel>,
     checks: Arc<FakeChecks>,
@@ -527,6 +527,10 @@ fn scope(f: &common::profiled::Fixture) -> GrantScope {
 
 impl Pilot {
     async fn new() -> Self {
+        Self::new_in_profile(CatalogProfile::Host8).await
+    }
+
+    async fn new_in_profile(profile: CatalogProfile) -> Self {
         let f = common::profiled::fixture().await;
         let attempt = common::profiled::insert(&f).await;
         let l = &f.selection.lineage;
@@ -540,7 +544,7 @@ impl Pilot {
         let mut config = (*state.config).clone();
         config.server.public_origin = "https://aq.example".into();
         state.config = Arc::new(config);
-        let service = Service::new_host8_integration(
+        let service = Service::new_host2(
             &state,
             Namespace {
                 namespace_id: Uuid::new_v4(),
@@ -551,6 +555,7 @@ impl Pilot {
                 owner_user_id: f.actor,
             },
             keyring(),
+            profile,
             graph.clone(),
             Some(checks.clone()),
             Some(model.clone()),
@@ -592,7 +597,7 @@ impl Pilot {
         self.f.time.fetch_add(ms, Ordering::SeqCst);
     }
     fn driver(&self) -> &Driver {
-        self.driver.as_ref().unwrap()
+        self.driver.as_deref().unwrap()
     }
     async fn start(&mut self) {
         // Vendored playbooks 0173673 persists the whole namespace per
@@ -612,7 +617,7 @@ impl Pilot {
         for a in &self.installed {
             driver.install(a.clone()).await.unwrap();
         }
-        self.driver = Some(driver);
+        self.driver = Some(Arc::new(driver));
     }
     /// Process loss: stop the owner, then start a new one over the same
     /// storage and run explicit recovery.
@@ -874,6 +879,308 @@ fn required_checks() -> Vec<RequiredCheck> {
         validator_version: v.version,
         validator_digest: v.digest,
     }]
+}
+
+#[test]
+fn host9_decisions_answer_through_owner_http() {
+    common::on_large_stack(exercise_host9_decision_routes);
+}
+
+async fn exercise_host9_decision_routes() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    let mut p = Pilot::new_in_profile(CatalogProfile::Host9).await;
+    let grant = p.grant;
+    const REVIEWER: &str = "reviewer@localhost";
+    let now = (p.f.state.clock)();
+    let reviewer =
+        p.f.state
+            .store
+            .invite_user(REVIEWER, aq_server::store::Role::Owner, now)
+            .await
+            .unwrap()
+            .id;
+    let actor_responder = format!("user:{reviewer}");
+    let policy = CodingPolicy {
+        human_decision: Some(HumanDecision {
+            question: "Is the spec ready?".into(),
+            responders: vec![actor_responder.clone()],
+        }),
+        ..CodingPolicy::project_default(required_checks())
+    };
+    let artifact = policy.build().unwrap().decision.unwrap();
+    let rev = p.install(&[&artifact], "decision", grant).await;
+    let task = Uuid::new_v4();
+    p.graph.nodes.lock().unwrap().insert(
+        task,
+        json!({"id": task, "kind": "task", "deleted": false, "version": 1}),
+    );
+    let subject = json!({"id": task, "revision": 1});
+    let expires = p.now() + 60_000;
+    let ask = |question: &str, responder: &str, expiry| {
+        json!({"question": question, "choices": ["approved", "rejected"],
+            "responders": [responder], "subject": subject, "expires_at_ms": expiry})
+    };
+    let run = p
+        .admit(
+            "decision",
+            rev,
+            grant,
+            ask("Is the spec ready?", &actor_responder, expires),
+        )
+        .await;
+    p.until_waiting(&run).await;
+    let other = p
+        .admit(
+            "decision",
+            rev,
+            grant,
+            ask(
+                "Someone else's decision",
+                &format!("user:{}", Uuid::new_v4()),
+                expires,
+            ),
+        )
+        .await;
+    p.until_waiting(&other).await;
+    let expired = p
+        .admit(
+            "decision",
+            rev,
+            grant,
+            ask("Due first", &actor_responder, p.now() + 1_000),
+        )
+        .await;
+    p.until_waiting(&expired).await;
+
+    let app = aq_server::build_admin_router_with_playbooks(p.f.state.clone(), p.driver.clone());
+    let call = |method: &str, path: &str, body: Option<Value>, email: &str, csrf: bool| {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-aq-dev-email", email)
+            .header("content-type", "application/json");
+        if csrf {
+            request = request.header("x-aq-request", "1");
+        }
+        let request = request
+            .body(body.map_or_else(Body::empty, |v| Body::from(v.to_string())))
+            .unwrap();
+        let app = app.clone();
+        async move {
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    const PATH: &str = "/api/playbooks/decisions";
+    const OWNER: &str = "owner@localhost";
+    let (status, bootstrap) = call("GET", "/api/v1/bootstrap", None, REVIEWER, false).await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let capabilities = bootstrap["data"]["capabilities"].as_array().unwrap();
+    assert!(
+        capabilities
+            .iter()
+            .any(|c| c["name"] == "playbooks.decisions" && c["enabled"] == true)
+    );
+    let (status, list) = call("GET", PATH, None, OWNER, false).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let rows = list["decisions"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{list}");
+    let by_question = |q: &str| rows.iter().find(|row| row["question"] == q).unwrap();
+    let open = by_question("Is the spec ready?");
+    assert_eq!(
+        open["namespace"]["namespace_id"],
+        json!(p.service.namespace.namespace_id)
+    );
+    assert_eq!(
+        open["namespace"]["project_id"],
+        json!(p.service.namespace.project_id)
+    );
+    assert_eq!(open["subject"], subject);
+    assert_eq!(open["choices"], json!(["approved", "rejected"]));
+    assert_eq!(open["responders"], json!([actor_responder]));
+    assert_eq!(open["expires_at_ms"], expires);
+    let handle: Uuid = serde_json::from_value(open["handle"].clone()).unwrap();
+    let path = format!("{PATH}/{handle}");
+    let (status, detail) = call("GET", &path, None, REVIEWER, false).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["handle"], open["handle"]);
+    assert!(
+        detail["produced_knowledge_ids"].is_null(),
+        "fixture has no human Graph runtime"
+    );
+
+    p.f.state
+        .store
+        .invite_user("viewer@localhost", aq_server::store::Role::Viewer, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        call("GET", PATH, None, "viewer@localhost", false).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let answer_path = format!("{path}/answer");
+    let answer = json!({"choice": "rejected", "note": "Add an example."});
+    assert_eq!(
+        call("POST", &answer_path, Some(answer.clone()), REVIEWER, false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let other_path = format!(
+        "{PATH}/{}/answer",
+        by_question("Someone else's decision")["handle"]
+            .as_str()
+            .unwrap()
+    );
+    for (path, email) in [(&other_path, REVIEWER), (&answer_path, OWNER)] {
+        assert_eq!(
+            call("POST", path, Some(answer.clone()), email, true)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let expired_path = format!(
+        "{PATH}/{}/answer",
+        by_question("Due first")["handle"].as_str().unwrap()
+    );
+    p.advance(1_000);
+    assert_eq!(
+        call("POST", &expired_path, Some(answer.clone()), REVIEWER, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (_, list) = call("GET", PATH, None, OWNER, false).await;
+    assert_eq!(list["decisions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        call(
+            "POST",
+            &answer_path,
+            Some(json!({"choice":"approved","note":"é".repeat(1025)})),
+            REVIEWER,
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let pool = p.f.db.pool().await;
+    let namespace = &p.service.namespace;
+    let set_workspace = |workspace| {
+        sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{graph_workspace_id}',to_jsonb($2::uuid)) WHERE project_id=$1")
+            .bind(namespace.project_id)
+            .bind(workspace)
+            .execute(&pool)
+    };
+    set_workspace(Uuid::new_v4()).await.unwrap();
+    assert_eq!(
+        call("GET", PATH, None, REVIEWER, false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call("GET", &path, None, REVIEWER, false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call("POST", &answer_path, Some(answer.clone()), REVIEWER, true)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    set_workspace(namespace.workspace_id).await.unwrap();
+    let intent: String =
+        sqlx::query_scalar("SELECT intent_id FROM playbook_host_operations WHERE operation_id=$1")
+            .bind(handle)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let comment_id = stable_id(
+        "aq.playbook.decision.comment",
+        namespace.namespace_id,
+        namespace.generation,
+        &intent,
+    )
+    .unwrap();
+    // A conflicting comment operation must roll back the decision and its completion event.
+    let thread = aq_task_comments::Thread {
+        task_id: task,
+        project_id: namespace.project_id,
+    };
+    aq_task_comments::add(
+        &pool,
+        comment_id,
+        thread,
+        &aq_task_comments::Author::Owner { user_id: reviewer },
+        "Conflicting comment",
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call("POST", &answer_path, Some(answer.clone()), REVIEWER, true)
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        call("GET", &path, None, OWNER, false).await.0,
+        StatusCode::OK
+    );
+    sqlx::query("DELETE FROM task_comment_operations WHERE operation_id=$1")
+        .bind(comment_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM task_comments WHERE comment_id=$1")
+        .bind(comment_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (first, retry) = tokio::join!(
+        call("POST", &answer_path, Some(answer.clone()), REVIEWER, true),
+        call("POST", &answer_path, Some(answer), REVIEWER, true)
+    );
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(first, retry);
+    assert_eq!(
+        first.1,
+        json!({"outcome": "rejected", "output": {"reference": format!("decision:{handle}"), "subject": subject}})
+    );
+    let comments = aq_task_comments::list(&pool, thread, None, 10)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body.as_deref(), Some("Add an example."));
+    assert_eq!(
+        comments[0].author,
+        aq_task_comments::Author::Owner { user_id: reviewer }
+    );
+    let note: String = sqlx::query_scalar(
+        "SELECT request->>'answer_note' FROM playbook_host_operations WHERE operation_id=$1",
+    )
+    .bind(handle)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(note, "Add an example.");
+    assert_eq!(
+        call("GET", &path, None, OWNER, false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let view = p.settle(&run).await;
+    assert_eq!(outcome(&view), ("completed", "rejected"), "{view}");
+    p.driver().stop().await.unwrap();
 }
 
 /// One end-to-end pass; its (debug-build) future is large, so it runs on a
@@ -1373,14 +1680,14 @@ async fn pilots_end_to_end() {
         .unwrap();
     assert_eq!(
         p.service
-            .answer_decision(Uuid::new_v4(), handle, "approved")
+            .answer_decision(Uuid::new_v4(), handle, "approved", None)
             .await,
         Err(Error::Forbidden),
         "only a listed responder answers"
     );
     let answer = p
         .service
-        .answer_decision(actor, handle, "approved")
+        .answer_decision(actor, handle, "approved", None)
         .await
         .unwrap();
     assert_eq!(answer.outcome, "approved");

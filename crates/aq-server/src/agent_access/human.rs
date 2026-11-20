@@ -635,6 +635,30 @@ async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
     }
     Ok(raw)
 }
+
+pub(crate) async fn decision_subject(
+    state: &AppState,
+    actor: User,
+    scope: &aq_playbook_domain::Namespace,
+    task: Option<Uuid>,
+) -> Option<(Uuid, Option<Vec<Uuid>>)> {
+    let task = task?;
+    let runtime = ReadRuntime::new(state);
+    let a = access(state, &runtime, actor, scope.project_id)
+        .await
+        .ok()?;
+    let workspace = scope.workspace_id;
+    if a.record.binding.graph_workspace_id != workspace || !a.record.binding.enabled {
+        return None;
+    }
+    let raw = context(state, workspace, task).await.ok()?;
+    node(&raw["node"], workspace, "task").ok()?;
+    fence_records(&runtime, &a.actor, &[a.record]).await.ok()?;
+    Some((
+        task,
+        aq_playbook_domain::host_operations::produced_knowledge(&raw, task),
+    ))
+}
 /// Parent of `id` from a present `parent-child` edge (source is the parent).
 fn parent(raw: &Value, w: Uuid, id: Uuid) -> Result<Value> {
     let Some(edge) = raw["edges"].as_array().into_iter().flatten().find(|e| {

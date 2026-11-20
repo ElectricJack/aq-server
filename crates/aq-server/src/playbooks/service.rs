@@ -372,17 +372,9 @@ impl Service {
         }
         let mut tx = self.tx().await?;
         Self::owner(&mut tx, actor).await?;
-        let binding: Option<Value> = sqlx::query_scalar(
-            "SELECT binding FROM project_execution_bindings WHERE project_id=$1 FOR SHARE",
-        )
-        .bind(self.namespace.project_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if !binding.is_some_and(|b| {
-            b["enabled"] == true && b["graph_workspace_id"] == json!(self.namespace.workspace_id)
-        }) {
-            return Err(Error::Forbidden);
-        }
+        aq_playbook_domain::host_operations::Operations(&self.namespace)
+            .require_project_workspace(&mut *tx)
+            .await?;
         if self.profile == CatalogProfile::Mail1 {
             sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(namespace_id) DO NOTHING").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&self.namespace.name).bind(self.namespace.workspace_id).bind(self.namespace.project_id).bind(actor).bind(digest(&self.profile.registry())?).bind(SOURCE).execute(&mut *tx).await?;
         } else {

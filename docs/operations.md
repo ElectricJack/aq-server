@@ -7,6 +7,9 @@ The provisioning of the real host (Bluehost VPS, Cloudflare Tunnel and
 Access) and the live demonstrations of self-update belong to the
 hosted-access plan; see [Not covered here](#not-covered-here).
 
+To respond to a playbook decision from a terminal, see
+[Answer a host playbook decision with curl](operations/playbook-decisions.md).
+
 ## The pieces
 
 - **Images** on GHCR, always referenced by digest:

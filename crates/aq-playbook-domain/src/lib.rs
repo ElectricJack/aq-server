@@ -9,6 +9,7 @@ pub mod delivery_store;
 #[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;
+pub mod host_operations;
 pub mod host_requests;
 pub mod host_values;
 pub mod inspection;

@@ -37,6 +37,12 @@ async fn gate(State(budget): State<Arc<Budget>>, request: Request, next: Next) -
 pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
     Router::new()
         .route("/api/playbooks/status", get(status))
+        .route("/api/playbooks/decisions", get(decisions))
+        .route("/api/playbooks/decisions/{handle}", get(decision))
+        .route(
+            "/api/playbooks/decisions/{handle}/answer",
+            post(answer_decision),
+        )
         .route("/api/playbooks/bindings/{id}", get(binding))
         .route("/api/playbooks/grants", post(grant))
         .route("/api/playbooks/grants/{id}/revoke", post(revoke))
@@ -75,6 +81,73 @@ fn owner(driver: &Driver, id: Uuid) -> Result<()> {
         return Err(Error::Forbidden);
     }
     Ok(())
+}
+
+async fn decisions(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        json!({"decisions": d.service.decisions(user.id, None).await?}),
+    ))
+}
+
+async fn decision(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    State(state): State<AppState>,
+    Path(handle): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let decision = d
+        .service
+        .decisions(user.id, Some(handle))
+        .await?
+        .pop()
+        .ok_or(Error::Forbidden)?;
+    let (task, documents) = crate::agent_access::human::decision_subject(
+        &state,
+        user,
+        &decision.namespace,
+        decision.request.subject_id(),
+    )
+    .await
+    .map(|(task, documents)| (Some(task), documents))
+    .unwrap_or_default();
+    let mut view = serde_json::to_value(decision)?;
+    view["subject_task_id"] = json!(task);
+    view["produced_knowledge_ids"] = json!(documents);
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecisionAnswer {
+    choice: String,
+    note: Option<String>,
+}
+
+async fn answer_decision(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    Path(handle): Path<Uuid>,
+    Json(r): Json<DecisionAnswer>,
+) -> Result<Response> {
+    match d
+        .service
+        .answer_decision(user.id, handle, &r.choice, r.note.as_deref())
+        .await
+    {
+        Ok(answer) if answer.outcome != "expired" => {
+            Ok(Json(json!({"outcome": answer.outcome, "output": answer.output})).into_response())
+        }
+        Ok(_) | Err(Error::Conflict) => Err(Error::Conflict),
+        Err(Error::Forbidden) => Ok((
+            StatusCode::FORBIDDEN,
+            Json(json!({"code":"playbook_scope_refused"})),
+        )
+            .into_response()),
+        Err(err) => Err(err),
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

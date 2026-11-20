@@ -280,6 +280,9 @@ pub fn build_admin_router_with_optional_owners(
         playbook_owner: playbooks
             .as_ref()
             .map(|d| d.service.namespace.owner_user_id),
+        playbook_decisions: playbooks
+            .as_ref()
+            .is_some_and(|d| d.service.profile.is_host2()),
     };
     let policy_routes = playbooks
         .clone()

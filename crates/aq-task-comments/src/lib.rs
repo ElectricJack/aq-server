@@ -311,9 +311,13 @@ const SELECT: &str = "SELECT c.*, u.email AS author_display FROM task_comments c
     LEFT JOIN users u ON c.author_kind='owner' AND u.id=(c.author_ref->>'user_id')::uuid";
 
 pub async fn get(pool: &PgPool, comment_id: Uuid) -> Result<Option<Comment>> {
+    read(pool, comment_id).await
+}
+
+async fn read(db: impl sqlx::PgExecutor<'_>, comment_id: Uuid) -> Result<Option<Comment>> {
     sqlx::query(&format!("{SELECT} WHERE c.comment_id=$1"))
         .bind(comment_id)
-        .fetch_optional(pool)
+        .fetch_optional(db)
         .await?
         .as_ref()
         .map(Comment::from_row)
@@ -443,6 +447,58 @@ async fn mutate(
     body: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Applied> {
+    let mut tx = pool.begin().await?;
+    let applied = mutate_in_tx(
+        &mut tx,
+        kind,
+        operation_id,
+        project_id,
+        target,
+        actor,
+        expected,
+        body,
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(applied)
+}
+
+/// Add a comment as part of a caller's database transaction.
+pub async fn add_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    operation_id: Uuid,
+    thread: Thread,
+    author: &Author,
+    body: &str,
+    now: DateTime<Utc>,
+) -> Result<Applied> {
+    mutate_in_tx(
+        tx,
+        ADD,
+        operation_id,
+        thread.project_id,
+        thread.task_id,
+        author,
+        None,
+        Some(body),
+        now,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mutate_in_tx(
+    tx: &mut sqlx::PgConnection,
+    kind: &str,
+    operation_id: Uuid,
+    project_id: Uuid,
+    target: Uuid,
+    actor: &Author,
+    expected: Option<i64>,
+    body: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<Applied> {
     if [operation_id, project_id, target].iter().any(Uuid::is_nil) {
         return Err(Error::Invalid);
     }
@@ -460,7 +516,6 @@ async fn mutate(
         kind, project_id, target, expected, body
     ]))?));
     let actor_value = serde_json::to_value(actor)?;
-    let mut tx = pool.begin().await?;
     // The operation row serializes concurrent replays of one operation ID.
     let fresh = sqlx::query("INSERT INTO task_comment_operations(operation_id,kind,comment_id,actor,fingerprint,revision,created_at) VALUES($1,$2,$3,$4,$5,0,$6) ON CONFLICT DO NOTHING")
         .bind(operation_id)
@@ -478,14 +533,15 @@ async fn mutate(
             .bind(operation_id)
             .fetch_one(&mut *tx)
             .await?;
-        tx.commit().await?;
         if row.try_get::<String, _>("kind")? != kind
             || row.try_get::<Value, _>("actor")? != actor_value
             || row.try_get::<String, _>("fingerprint")? != fingerprint
         {
             return Err(Error::IdConflict);
         }
-        let comment = get(pool, comment_id).await?.ok_or(Error::Unavailable)?;
+        let comment = read(&mut *tx, comment_id)
+            .await?
+            .ok_or(Error::Unavailable)?;
         return Ok(Applied {
             comment,
             revision: row.try_get("revision")?,
@@ -546,8 +602,9 @@ async fn mutate(
         .bind(revision)
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-    let comment = get(pool, comment_id).await?.ok_or(Error::Unavailable)?;
+    let comment = read(&mut *tx, comment_id)
+        .await?
+        .ok_or(Error::Unavailable)?;
     Ok(Applied { comment, revision })
 }
 

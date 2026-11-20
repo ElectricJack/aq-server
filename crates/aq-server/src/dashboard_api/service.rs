@@ -396,6 +396,11 @@ pub(super) async fn bootstrap(
             "Decision inspection requires an owner account and a mounted review owner",
         ),
         capability(
+            "playbooks.decisions",
+            a.owner && mounted.playbook_decisions,
+            "Playbook decisions require an owner account and a mounted host playbook namespace",
+        ),
+        capability(
             "decisions.resolve",
             reviews,
             "Decision resolution requires an owner account and a mounted review owner",
