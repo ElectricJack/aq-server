@@ -1,0 +1,160 @@
+{
+  "commands": {
+    "ext.graph_deploy.submit": {
+      "name": "ext.graph_deploy.submit",
+      "version": "1.0.0",
+      "input": {
+        "type": "object",
+        "required": ["revision", "expected_generation"],
+        "properties": {
+          "revision": {"type": "string", "max_length": 40},
+          "expected_generation": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+        }
+      },
+      "outcomes": {
+        "registered": {
+          "type": "object",
+          "required": ["generation"],
+          "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        }
+      },
+      "capabilities": ["ext.graph_deploy"],
+      "scopes": ["project"],
+      "effect": "mutation",
+      "recovery": "keyed_idempotent",
+      "asynchronous": null,
+      "cancellation": false,
+      "public_result_fields": ["generation"],
+      "sensitive_input_fields": [],
+      "max_payload_bytes": 2048,
+      "deadline_ms": 15000
+    },
+    "ext.graph_deploy.observe": {
+      "name": "ext.graph_deploy.observe",
+      "version": "1.0.0",
+      "input": {
+        "type": "object",
+        "required": ["generation"],
+        "properties": {"generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}
+      },
+      "outcomes": {
+        "queued": {
+          "type": "object",
+          "required": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+          "properties": {
+            "environment": {"type": "string", "max_length": 32},
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "operation_id": {"type": "string", "max_length": 36},
+            "revision": {"type": "string", "max_length": 40},
+            "image_digest": {"type": "string", "max_length": 71},
+            "image_id": {"type": "string", "max_length": 71},
+            "source_archive_digest": {"type": "string", "max_length": 71},
+            "image_archive_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "requested_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "observed_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "running": {
+          "type": "object",
+          "required": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+          "properties": {
+            "environment": {"type": "string", "max_length": 32},
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "operation_id": {"type": "string", "max_length": 36},
+            "revision": {"type": "string", "max_length": 40},
+            "image_digest": {"type": "string", "max_length": 71},
+            "image_id": {"type": "string", "max_length": 71},
+            "source_archive_digest": {"type": "string", "max_length": 71},
+            "image_archive_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "requested_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "observed_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "healthy": {
+          "type": "object",
+          "required": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+          "properties": {
+            "environment": {"type": "string", "max_length": 32},
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "operation_id": {"type": "string", "max_length": 36},
+            "revision": {"type": "string", "max_length": 40},
+            "image_digest": {"type": "string", "max_length": 71},
+            "image_id": {"type": "string", "max_length": 71},
+            "source_archive_digest": {"type": "string", "max_length": 71},
+            "image_archive_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "requested_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "observed_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "failed": {
+          "type": "object",
+          "required": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+          "properties": {
+            "environment": {"type": "string", "max_length": 32},
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "operation_id": {"type": "string", "max_length": 36},
+            "revision": {"type": "string", "max_length": 40},
+            "image_digest": {"type": "string", "max_length": 71},
+            "image_id": {"type": "string", "max_length": 71},
+            "source_archive_digest": {"type": "string", "max_length": 71},
+            "image_archive_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "requested_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "observed_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "superseded": {
+          "type": "object",
+          "required": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+          "properties": {
+            "environment": {"type": "string", "max_length": 32},
+            "generation": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "operation_id": {"type": "string", "max_length": 36},
+            "revision": {"type": "string", "max_length": 40},
+            "image_digest": {"type": "string", "max_length": 71},
+            "image_id": {"type": "string", "max_length": 71},
+            "source_archive_digest": {"type": "string", "max_length": 71},
+            "image_archive_digest": {"type": "string", "max_length": 71},
+            "provider_id": {"type": "string", "max_length": 64},
+            "observed_digest": {"type": "string", "max_length": 71},
+            "requested_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "observed_at_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "diagnostic": {"type": "string", "max_length": 64}
+          }
+        },
+        "refused": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"type": "string", "max_length": 64}}
+        }
+      },
+      "capabilities": ["ext.graph_deploy"],
+      "scopes": ["project"],
+      "effect": "observation",
+      "recovery": "keyed_idempotent",
+      "asynchronous": null,
+      "cancellation": false,
+      "public_result_fields": ["environment", "generation", "operation_id", "revision", "image_digest", "image_id", "source_archive_digest", "image_archive_digest", "provider_id", "observed_digest", "requested_at_ms", "observed_at_ms", "diagnostic"],
+      "sensitive_input_fields": [],
+      "max_payload_bytes": 2048,
+      "deadline_ms": 15000
+    }
+  },
+  "events": {}
+}

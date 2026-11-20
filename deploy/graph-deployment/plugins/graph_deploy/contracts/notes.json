@@ -1,0 +1,28 @@
+{
+  "commands": {
+    "ext.graph_deploy.submit": {
+      "purpose": "Register one rollout of a builder-approved merged aq-graph revision in the opted-in disposable environment.",
+      "input": {
+        "revision": "Full merged aq-graph Git commit SHA.",
+        "expected_generation": "Last observed desired generation, or zero for an empty environment."
+      },
+      "outcomes": {
+        "registered": "The deployment generation is durable.",
+        "refused": "The project, revision, provenance or generation did not qualify."
+      }
+    },
+    "ext.graph_deploy.observe": {
+      "purpose": "Read reconciliation evidence for a previously registered generation.",
+      "input": {"generation": "Deployment generation returned by submit."},
+      "outcomes": {
+        "queued": "Intent is durable and awaits controller dispatch.",
+        "running": "Controller work is in progress or health needs a fresh observation.",
+        "healthy": "Docker reports the verified image config running with a healthy Graph readiness check.",
+        "failed": "Staging or reconciliation failed with a diagnostic.",
+        "superseded": "A newer desired generation fences this operation.",
+        "refused": "The project or deployment generation is unavailable."
+      }
+    }
+  },
+  "events": {}
+}

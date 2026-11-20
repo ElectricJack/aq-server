@@ -1,0 +1,418 @@
+#!/usr/bin/python3
+"""Project-scoped AQ plugin and local aq-graph development reconciler."""
+
+from contextlib import closing
+from fcntl import LOCK_EX, flock
+from hashlib import file_digest, sha256
+import json
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import time
+from uuid import UUID, uuid4
+
+ENVIRONMENT = "aq-graph-deploy-canary"
+SOURCE = "https://github.com/ElectricJack/aq-graph"
+OWNER_LABEL = "io.aq.graph-deploy.environment"
+OP_LABEL = "io.aq.graph-deploy.operation"
+SHA = r"[0-9a-f]{40}"
+DIGEST = r"sha256:[0-9a-f]{64}"
+HEALTH_MAX_AGE_MS = 15_000
+START_TIMEOUT_MS = 90_000
+
+
+class Refused(Exception):
+    pass
+
+
+def now():
+    return time.time_ns() // 1_000_000
+
+
+def read_json(path):
+    return json.loads(path.read_text())
+
+
+def config(root):
+    try:
+        settings = read_json(root / "environment.json")
+        if (settings["environment"] == ENVIRONMENT
+                and re.fullmatch(r"[0-9a-f]{12}", settings["instance"])
+                and str(UUID(settings["project_id"])) == settings["project_id"]):
+            return settings
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    raise Refused("invalid_environment")
+
+
+def open_state(root, timeout):
+    db = sqlite3.connect(root / "deployments.sqlite3", timeout=timeout)
+    db.row_factory = sqlite3.Row
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS deployment (
+            generation INTEGER PRIMARY KEY,
+            operation_id TEXT NOT NULL UNIQUE,
+            revision TEXT NOT NULL UNIQUE,
+            image_digest TEXT NOT NULL,
+            image_id TEXT NOT NULL,
+            source_archive_digest TEXT NOT NULL,
+            image_archive_digest TEXT NOT NULL,
+            state TEXT NOT NULL,
+            requested_at_ms INTEGER NOT NULL,
+            dispatch_at_ms INTEGER NOT NULL DEFAULT 0,
+            observed_at_ms INTEGER NOT NULL DEFAULT 0,
+            provider_id TEXT NOT NULL DEFAULT '',
+            retry_provider_id TEXT NOT NULL DEFAULT '',
+            observed_digest TEXT NOT NULL DEFAULT '',
+            diagnostic TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS receipt (
+            key TEXT PRIMARY KEY,
+            request TEXT NOT NULL,
+            response TEXT NOT NULL
+        );
+    """)
+    return db
+
+
+def latest(db):
+    return db.execute("SELECT * FROM deployment ORDER BY generation DESC LIMIT 1").fetchone()
+
+
+def artifact(root, revision):
+    keys = ("image_digest", "image_id", "source_archive_digest", "image_archive_digest")
+    try:
+        evidence = read_json(root / "provenance" / f"{revision}.json")
+        pinned = tuple(evidence[key] for key in keys)
+        if (evidence["revision"] == revision and evidence["source"] == SOURCE
+                and all(re.fullmatch(DIGEST, value) for value in pinned)):
+            return pinned
+    except FileNotFoundError:
+        raise Refused("build_unavailable") from None
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    raise Refused("invalid_provenance")
+
+
+def response(outcome, output):
+    return {"outcome": outcome, "output": output, "events": []}
+
+
+def snapshot(row):
+    observation = dict(row)
+    del observation["dispatch_at_ms"]
+    del observation["retry_provider_id"]
+    if (observation["state"] == "healthy"
+            and not 0 <= now() - observation["observed_at_ms"] <= HEALTH_MAX_AGE_MS):
+        observation.update(state="running", diagnostic="observation_expired", observed_digest="")
+    return response(observation.pop("state"), {"environment": ENVIRONMENT, **observation})
+
+
+def submit(db, root, request):
+    revision, expected = request["revision"], request["expected_generation"]
+    if type(expected) is not int or not 0 <= expected < 2**53:
+        raise Refused("invalid_generation")
+    if not isinstance(revision, str) or not re.fullmatch(SHA, revision):
+        raise Refused("invalid_revision")
+    desired = latest(db)
+    generation = desired["generation"] if desired else 0
+    existing = db.execute("SELECT * FROM deployment WHERE revision=?", (revision,)).fetchone()
+    if existing:
+        if existing["state"] == "failed" and existing["generation"] == expected == generation:
+            db.execute("""
+                UPDATE deployment SET state='queued', dispatch_at_ms=0, observed_at_ms=0,
+                    retry_provider_id=provider_id, provider_id='',
+                    observed_digest='', diagnostic='' WHERE generation=?
+            """, (generation,))
+        return response("registered", {"generation": existing["generation"]})
+    if expected != generation:
+        raise Refused("generation_changed")
+    frozen = artifact(root, revision)
+    db.execute("""
+        UPDATE deployment SET state='superseded', diagnostic='newer_desired_generation'
+        WHERE generation=?
+    """, (generation,))
+    db.execute("""
+        INSERT INTO deployment
+            (generation, operation_id, revision, image_digest, image_id,
+             source_archive_digest, image_archive_digest, state, requested_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+    """, (generation + 1, str(uuid4()), revision, *frozen, now()))
+    return response("registered", {"generation": generation + 1})
+
+
+def observe(db, request):
+    row = db.execute(
+        "SELECT * FROM deployment WHERE generation=?", (request["generation"],)
+    ).fetchone()
+    if row is None:
+        raise Refused("unknown_generation")
+    return snapshot(row)
+
+
+def invoke(call):
+    if call["protocol"] != "aq.plugin/1":
+        raise Refused("invalid_protocol")
+    if call["binding"].get("environment") != ENVIRONMENT:
+        raise Refused("deployment_disabled")
+    path = call["binding"].get("directory")
+    if not isinstance(path, str):
+        raise Refused("invalid_environment")
+    root = Path(path)
+    if not root.is_absolute() or not root.is_dir():
+        raise Refused("invalid_environment")
+    settings = config(root)
+    if call["project_id"] != settings["project_id"]:
+        raise Refused("deployment_disabled")
+    command, request, key = (call[field] for field in ("command", "input", "idempotency_key"))
+    identity = json.dumps([call["project_id"], command, request], sort_keys=True)
+    with closing(open_state(root, timeout=1)) as db, db:
+        # A response and its intent commit together before stdout. BEGIN IMMEDIATE
+        # also serializes submission with the controller's provider mutation.
+        db.execute("BEGIN IMMEDIATE")
+        cached = db.execute("SELECT * FROM receipt WHERE key=?", (key,)).fetchone()
+        if cached:
+            if cached["request"] != identity:
+                raise Refused("idempotency_conflict")
+            return cached["response"]
+        try:
+            if command == "ext.graph_deploy.submit":
+                result = submit(db, root, request)
+            elif command == "ext.graph_deploy.observe":
+                result = observe(db, request)
+            else:
+                raise Refused("unknown_command")
+        except Refused as exc:
+            result = response("refused", {"reason": str(exc)})
+        encoded = json.dumps(result, sort_keys=True)
+        db.execute("INSERT INTO receipt VALUES (?, ?, ?)", (key, identity, encoded))
+        return encoded
+
+
+class Docker:
+    def __init__(self, root, settings):
+        self.root = root
+        self.cli = ["docker", "--config", str(root / "docker"),
+                    "--host", "unix:///var/run/docker.sock"]
+        self.instance = settings["instance"]
+        self.prefix = f"{ENVIRONMENT}-{self.instance}"
+        self.graph = f"{self.prefix}-graph"
+        self.database = f"{self.prefix}-postgres"
+        self.network = f"{self.prefix}-network"
+
+    def run(self, *args, timeout=5):
+        result = subprocess.run(
+            [*self.cli, *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode:
+            raise Refused("provider_unavailable")
+        return result.stdout.strip()
+
+    def inspect(self, kind, name):
+        # List first so a daemon error never looks like an absent resource.
+        if kind == "container" and name not in self.run(
+            "container", "ls", "-a", "--filter", f"name=^/{name}$", "--format", "{{.Names}}"
+        ).splitlines():
+            return None
+        return json.loads(self.run(kind, "inspect", name))[0]
+
+    def owned(self, labels):
+        if (labels or {}).get(OWNER_LABEL) != self.instance:
+            raise Refused("foreign_resource")
+
+    def stage_image(self, row):
+        archive = self.root / "provenance" / f"{row['revision']}.tar"
+        # Use the same open file for verification and import.
+        with archive.open("rb") as stream:
+            if "sha256:" + file_digest(stream, "sha256").hexdigest() != row["image_archive_digest"]:
+                raise Refused("image_archive_mismatch")
+            stream.seek(0)
+            with tarfile.open(fileobj=stream) as layout:
+                index = json.loads(archive_member(layout, "index.json"))
+                if [entry["digest"] for entry in index["manifests"]] != [row["image_digest"]]:
+                    raise Refused("image_provenance_mismatch")
+                manifest = verified_blob(layout, row["image_digest"])
+                image = verified_blob(layout, row["image_id"])
+                docker_manifest = json.loads(archive_member(layout, "manifest.json"))
+                if (manifest["config"]["digest"] != row["image_id"]
+                        or len(docker_manifest) != 1 or docker_manifest[0]["RepoTags"]
+                        or docker_manifest[0]["Config"] != blob_path(row["image_id"])):
+                    raise Refused("image_provenance_mismatch")
+            labels = image["config"]["Labels"] or {}
+            if (labels.get("org.opencontainers.image.source") != SOURCE
+                    or labels.get("org.opencontainers.image.revision") != row["revision"]
+                    or (image["os"], image["architecture"]) != ("linux", "amd64")):
+                raise Refused("image_provenance_mismatch")
+            stream.seek(0)
+            loaded = subprocess.run(
+                [*self.cli, "image", "load"],
+                stdin=stream, capture_output=True, timeout=60,
+            )
+            if loaded.returncode or self.inspect("image", row["image_id"])["Id"] != row["image_id"]:
+                raise Refused("image_import_failed")
+
+    def container(self):
+        current = self.inspect("container", self.graph)
+        if current:
+            self.owned(current["Config"]["Labels"])
+        return current
+
+    def verify_target(self):
+        self.owned(self.inspect("network", self.network)["Labels"])
+        database = self.inspect("container", self.database)
+        if database is None:
+            raise Refused("database_missing")
+        self.owned(database["Config"]["Labels"])
+        if self.network not in database["NetworkSettings"]["Networks"]:
+            raise Refused("database_network_mismatch")
+        try:
+            settings = (self.root / "graph.env").read_text()
+        except OSError:
+            raise Refused("database_binding_missing") from None
+        if not re.fullmatch(
+            rf"DATABASE_URL=postgres://postgres:[0-9a-f]{{48}}@{self.database}/graph\n", settings
+        ):
+            raise Refused("database_binding_mismatch")
+
+    def start(self, row):
+        container_id = self.run(
+            "create", "--pull=never", "--name", self.graph,
+            "--network", self.network, "-p", "127.0.0.1::8741",
+            "--label", f"{OWNER_LABEL}={self.instance}",
+            "--label", f"{OP_LABEL}={row['operation_id']}",
+            "--env-file", str(self.root / "graph.env"),
+            row["image_id"],
+        )
+        self.run("start", container_id)
+
+
+def blob_path(digest):
+    return "blobs/sha256/" + digest.removeprefix("sha256:")
+
+
+def archive_member(layout, path):
+    member = layout.extractfile(path)
+    if member is None:
+        raise Refused("invalid_image_archive")
+    with member:
+        return member.read()
+
+
+def verified_blob(layout, digest):
+    data = archive_member(layout, blob_path(digest))
+    if "sha256:" + sha256(data).hexdigest() != digest:
+        raise Refused("image_provenance_mismatch")
+    return json.loads(data)
+
+
+def update(db, row, state, diagnostic="", provider_id="", observed_digest=""):
+    db.execute("""
+        UPDATE deployment SET state=?, diagnostic=?, provider_id=?, observed_digest=?,
+            observed_at_ms=? WHERE generation=?
+    """, (state, diagnostic, provider_id, observed_digest, now(), row["generation"]))
+
+
+def reconcile(db, docker, row):
+    current = docker.container()
+    if current and current["Config"]["Labels"].get(OP_LABEL) == row["operation_id"]:
+        provider = current["Id"]
+        if current["Image"] != row["image_id"] or current["Config"]["Image"] != row["image_id"]:
+            update(db, row, "failed", "running_image_mismatch", provider)
+            return
+        state = current["State"]
+        if state["Status"] == "created":
+            docker.run("start", provider)
+        elif state["Status"] == "running" and state["Health"]["Status"] == "healthy":
+            update(db, row, "healthy", provider_id=provider, observed_digest=row["image_digest"])
+            return
+        elif state["Status"] in ("exited", "dead") or state["Health"]["Status"] == "unhealthy":
+            if row["retry_provider_id"] != provider:
+                update(db, row, "failed", "graph_unhealthy", provider)
+                return
+            # Only an explicit retry may replace a definitively failed instance.
+            docker.verify_target()
+            docker.run("rm", "-f", provider)
+            docker.start(row)
+            update(db, row, "running", "waiting_for_health")
+            return
+        if now() - row["dispatch_at_ms"] >= START_TIMEOUT_MS:
+            update(db, row, "failed", "health_timeout", provider)
+        else:
+            update(db, row, "running", "waiting_for_health", provider)
+        return
+
+    if row["state"] == "healthy" or row["provider_id"]:
+        update(db, row, "failed", "provider_instance_missing", row["provider_id"])
+        return
+    docker.verify_target()
+    if current:
+        previous = db.execute(
+            "SELECT state FROM deployment WHERE operation_id=?",
+            (current["Config"]["Labels"].get(OP_LABEL),),
+        ).fetchone()
+        if previous is None or previous["state"] != "superseded":
+            raise Refused("foreign_resource")
+        docker.run("rm", "-f", current["Id"])
+    docker.start(row)
+    # The next tick discovers the provider ID and health from Docker.
+    update(db, row, "running", "waiting_for_health")
+
+
+def tick(root):
+    docker = Docker(root, config(root))
+    with (root / "controller.lock").open("a") as lock, closing(open_state(root, timeout=5)) as db:
+        flock(lock, LOCK_EX)
+        row = latest(db)
+        if row is None or row["state"] == "failed":
+            return
+        staging_failure = None
+        if row["state"] == "queued":
+            # Archive verification/import can outlast an AQ call. Recheck the
+            # desired generation under the write lock before touching the target.
+            try:
+                docker.stage_image(row)
+            except Refused as exc:
+                staging_failure = str(exc)
+            except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.TimeoutExpired):
+                staging_failure = "image_staging_failed"
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            desired = latest(db)
+            if row["generation"] != desired["generation"]:
+                return
+            if row["state"] == "queued":
+                if staging_failure:
+                    update(db, row, "failed", staging_failure)
+                    return
+                db.execute("""
+                    UPDATE deployment SET state='running', dispatch_at_ms=? WHERE generation=?
+                """, (now(), row["generation"]))
+                row = latest(db)
+            try:
+                reconcile(db, docker, row)
+            except (Refused, subprocess.TimeoutExpired) as exc:
+                diagnostic = str(exc) if isinstance(exc, Refused) else "provider_timeout"
+                expired = now() - row["dispatch_at_ms"] >= START_TIMEOUT_MS
+                state = "failed" if expired or diagnostic == "foreign_resource" else "running"
+                update(db, row, state, diagnostic, row["provider_id"])
+
+
+def main():
+    if sys.argv[1:] == ["invoke"]:
+        try:
+            result = invoke(json.load(sys.stdin))
+        except Refused as exc:
+            result = json.dumps(response("refused", {"reason": str(exc)}), sort_keys=True)
+        print(result)
+    elif len(sys.argv) == 3 and sys.argv[1] == "tick":
+        tick(Path(sys.argv[2]).resolve())
+    else:
+        sys.exit("usage: graph-deploy invoke | tick ENVIRONMENT_DIRECTORY")
+
+
+if __name__ == "__main__":
+    main()
