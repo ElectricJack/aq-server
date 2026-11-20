@@ -54,13 +54,13 @@ fn instructions(config: &ServiceConfig, control: &Control) -> String {
     format!(
         r#"{scope}
 You manage AQ work through authenticated tools and hold the owner's powers: every owner command is available to you.
-Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request; never invent success or replay a replacement.
+Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
 Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify with dashboard.swarm, session.list and attempt.show rather than assuming a worker started.
 This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
 Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
 Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
 Respect human review gates unless the owner has delegated that review to you.
-Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not deploy or alter host services or credentials.
+Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
 "#,
         conversation = config.conversation_id
     )
@@ -358,6 +358,8 @@ mod tests {
             for want in [
                 "Create tasks active unless the owner asks for a draft",
                 "every owner command is available to you",
+                "Do not merge, deploy or alter host services or credentials.",
+                "resend it to recheck an owner command",
             ] {
                 assert!(text.contains(want), "{want}");
             }
