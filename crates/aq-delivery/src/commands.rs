@@ -177,10 +177,17 @@ impl Delivery {
         target: &DeliveryTarget,
         task: Uuid,
         expected_old: Option<&str>,
+        expected_source: Option<&str>,
     ) -> Step {
         let published = self
             .git
-            .publish_ref(operation, &target.git, &task_branch(task), expected_old)
+            .publish_ref(
+                operation,
+                &target.git,
+                &task_branch(task),
+                expected_old,
+                expected_source,
+            )
             .await;
         Step::Done(match published {
             Ok(RefPublication::Published { head }) => {
@@ -601,18 +608,15 @@ impl Delivery {
                         }
                     }
                 }
-                if let Some(head) = text("result_head") {
-                    match self.git.task_head(&target.git, &task_branch(task)).await {
-                        Ok(Some(current)) if current == head => {}
-                        Ok(_) => return done(Step::Done(Completion::refused("no_branch"))),
-                        Err(_) => {
-                            return done(Step::Retry("observe the recorded task head".into()));
-                        }
-                    }
-                }
                 done(
-                    self.branch_publish(operation, target, task, text("expected_old"))
-                        .await,
+                    self.branch_publish(
+                        operation,
+                        target,
+                        task,
+                        text("expected_old"),
+                        text("result_head"),
+                    )
+                    .await,
                 )
             }
             ("pull_request.open", Some(task)) => done(

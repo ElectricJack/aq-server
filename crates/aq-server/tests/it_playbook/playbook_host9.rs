@@ -2331,6 +2331,7 @@ mod delivery {
                 _: &GitTarget,
                 reference: &str,
                 expected_old: Option<&str>,
+                _expected_source: Option<&str>,
             ) -> std::result::Result<RefPublication, GitFailure> {
                 let lease = expected_old.unwrap_or("absent");
                 self.log
@@ -2338,13 +2339,6 @@ mod delivery {
                     .unwrap()
                     .push(format!("publish {reference} lease {lease}"));
                 Ok(RefPublication::Published { head: oid('a') })
-            }
-            async fn task_head(
-                &self,
-                _: &GitTarget,
-                _: &str,
-            ) -> std::result::Result<Option<String>, GitFailure> {
-                Ok(Some(oid('a')))
             }
             async fn delete_ref(
                 &self,
