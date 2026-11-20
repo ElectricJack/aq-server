@@ -11,6 +11,7 @@ pub mod host10;
 pub mod host9;
 pub mod host_requests;
 pub mod host_values;
+pub mod inspection;
 pub mod playbook_view;
 pub mod review_domain;
 mod step_inspection;
