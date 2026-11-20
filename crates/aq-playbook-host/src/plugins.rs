@@ -115,7 +115,7 @@ impl Plugins {
                     tracing::info!(plugin = %name, %version, "playbook plugin loaded");
                     installed.insert(name, plugin);
                 }
-                Err(reason) => tracing::warn!(plugin = %name, reason, "playbook plugin refused"),
+                Err(reason) => tracing::warn!(plugin = %name, %reason, "playbook plugin refused"),
             }
         }
         Self(installed)

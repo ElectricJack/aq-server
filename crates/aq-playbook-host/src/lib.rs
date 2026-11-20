@@ -934,7 +934,7 @@ fn execute<S: Storage>(
 
 /// Run-local pins remain available to the owner even after an extension
 /// changes. Unknown lookup results must never authorize a new plugin call.
-struct PluginCatalogHost<'a, S, H> {
+struct PluginCatalogHost<'a, S: Storage, H> {
     engine: &'a Engine<S>,
     host: &'a mut H,
     stale_artifacts: Option<&'a BTreeSet<String>>,
