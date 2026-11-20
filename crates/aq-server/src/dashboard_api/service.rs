@@ -291,6 +291,11 @@ pub(super) async fn bootstrap(
             "Task graph creation requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "epic.retirement.register",
+            graph_mutation,
+            "Epic retirement registration requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.edit",
             graph_mutation,
             "Task edits require an owner account and configured Graph mutation identity",

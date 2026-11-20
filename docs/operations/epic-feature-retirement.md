@@ -2,7 +2,24 @@
 
 Use the owner CLI to register a compile-time flag, approve its vetted revisions and close the epic after ordinary delivery and cleanup verification. The workflow uses AQ Graph v1 changesets, verified records and task dependencies. The delivery playbook can pick up the released cleanup task through its normal result-ready flow.
 
-Run it against the Graph workspace in the accountable AQ project's binding. Use `aq projects show PROJECT_ID` to confirm the workspace. The epic must already exist as an open task in that workspace. Use the Graph administrator credential for the accountable owner actor, in a private token file. Protect that credential like other Graph administration credentials.
+## Register staged tasks through the AQ owner CLI
+
+Use `epic.retirement.register` on an AQ server that advertises it in `aq commands`. On the desktop, connect through the existing `--local` loopback owner session. For HTTPS, use the existing owner authentication with `--cf-access-token-file`. AQ binds the registration to the authenticated account's immutable principal ID and dispatches as its configured Graph service. The owner supplies no Graph token or actor name. The Graph service must already support verification. An underprivileged service causes the atomic Graph write to be refused.
+
+The owner command adopts the two draft tasks in the registration manifest. They must have confirmed AQ task-creation receipts under the same owner and project, and approval must already block cleanup. Supply the epic's current version as `expected_version`. For example, after this command is available, the accountable desktop owner can run the following with the prepared manifest and current epic version. Assign a fresh UUID to `operation_id` and retain it for any replay.
+
+```bash
+python3 -c 'import json, sys; p = json.load(open(sys.argv[1])); p["expected_version"] = sys.argv[2]; print(json.dumps(p))' \
+  "$registration_manifest" "$epic_version" |
+  aq --local --origin http://127.0.0.1:28080 --json run epic.retirement.register \
+    --operation-id "$operation_id" --params-file -
+```
+
+Use `aq --local --origin http://127.0.0.1:28080 --json operations show "$operation_id"` to recover the operation and Graph receipt. The registration records the original task IDs and adds a protected closure guard. It preserves the draft approval at its previous revision and leaves the protected cleanup draft with the original blocker. This command exposes registration only. Decisions and closure for an AQ-owned registration require a separately authorized AQ action.
+
+## Run the direct Graph qualification workflow
+
+Run the direct CLI against a disposable Graph workspace or with a separately provisioned Graph owner account. Use `aq projects show PROJECT_ID` to confirm the project binding. The epic must already exist as an open task in that workspace. Keep the legitimate Graph credential in a private token file.
 
 ```bash
 retirement() {

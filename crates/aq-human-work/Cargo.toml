@@ -21,4 +21,4 @@ thiserror.workspace = true
 serde.workspace = true
 schemars = "1"
 serde_json.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v5"] }

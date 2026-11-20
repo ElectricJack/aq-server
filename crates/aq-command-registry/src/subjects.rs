@@ -87,6 +87,7 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
     // A result action checks its thread or assessment version, not the result's.
     let result = |id, key| rule("result", id, Some((VERSION, key)));
     Some(match kind {
+        "epic.retirement.register" => rule("task", Id::Payload("epic_id"), Some((VERSION, "task"))),
         // agent_access/human/graph_actions.rs::admit; task_execution.rs
         "task.activate"
         | "task.activate.subtree"
