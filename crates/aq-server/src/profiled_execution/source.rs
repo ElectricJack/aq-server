@@ -339,6 +339,70 @@ async fn observe_source(
     if object.format != ObjectFormat::Sha1 {
         return Err(refused());
     }
+    // Enrollment selects the result path. A first offer on either path must
+    // still prove the chosen base against its completed blockers.
+    #[cfg(feature = "delivery_playbook")]
+    let object = if let Some(offer) = _offer.filter(|_| !evidence.contains_key("main_sync")) {
+        use aq_delivery::main_sync::{OfferAncestry, Scope};
+        let task = offer.revision.task_id;
+        let project_id = binding.project_id;
+        let repository = aq_delivery::commands::GitTarget {
+            repository_id: binding.repository_id,
+            binding_generation: binding.repository_binding_generation,
+        };
+        let moving = match &selection {
+            SourceSelection::NamedRef { reference }
+                if reference.as_str().starts_with("refs/heads/") =>
+            {
+                Some(Scope::new(
+                    project_id,
+                    repository.repository_id,
+                    repository.binding_generation,
+                    reference.as_str(),
+                ))
+            }
+            _ => None,
+        };
+        let pool = &state.store.pool;
+        let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
+        let runtime = state.source_retention.as_ref().ok_or_else(refused)?;
+        let verified = async {
+            OfferAncestry::load(pool, repository, task, &offer.context)
+                .await?
+                .verify_or_refresh(
+                    pool,
+                    &runtime.config.git_socket,
+                    &object.hex,
+                    moving.as_ref(),
+                    clock,
+                )
+                .await
+        }
+        .await;
+        match verified {
+            Ok(None) => object,
+            Ok(Some(synced)) => {
+                observed = clock();
+                if observed >= project.binding_observation.expires_at_ms {
+                    return Err(refused());
+                }
+                retention_handle = synced.retention_handle;
+                evidence.remove("reference_observation");
+                evidence.remove("publication_head");
+                evidence.insert(
+                    "main_sync",
+                    serde_json::to_value(&synced).map_err(|_| AppError::Internal)?,
+                );
+                ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: synced.head,
+                }
+            }
+            Err(wait) => return Err(ancestry_wait(state, project_id, task, wait).await),
+        }
+    } else {
+        object
+    };
     let inspected = read(
         state,
         binding.repository_id,

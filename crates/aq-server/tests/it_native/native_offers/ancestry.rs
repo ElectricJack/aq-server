@@ -135,6 +135,12 @@ impl Fixture {
         ));
         if named_source {
             let mut config = (*state.config).clone();
+            config.delivery = Some(aq_delivery::github::DeliveryConfig {
+                project_allowlist: [lineage.project_id].into(),
+                task_allowlist: Some([task].into()),
+                git_http_socket: Some(case.env.env._dir.path().join("ancestry-git-http.sock")),
+                ..Default::default()
+            });
             let profiled = Arc::make_mut(config.profiled_execution.as_mut().unwrap());
             profiled.revision += 1;
             profiled.projects[0].source = SourceSelection::NamedRef {
@@ -176,6 +182,16 @@ impl Fixture {
                     reply["operation_id"] = operation.clone();
                 }
                 let result = match request["operation"].as_str().unwrap() {
+                    "repo.observation" => {
+                        assert_eq!(
+                            params,
+                            &json!({"refs":["refs/heads/main"],"max_age_ms":30000})
+                        );
+                        let now = clock().timestamp_millis();
+                        json!({"observation_id":Uuid::new_v4(),"binding_generation":1,
+                            "started_at_ms":now,"completed_at_ms":now,"refs":{"refs/heads/main":OLD},
+                            "covered_refs":["refs/heads/main"],"last_refresh_error":null})
+                    }
                     "repo.retain_ref" => {
                         assert_eq!(params, &json!({"ref":"refs/heads/main"}));
                         let head = *peer_remote.lock().unwrap();
@@ -261,7 +277,7 @@ impl Fixture {
         }
     }
 
-    async fn insert_merges(&self) {
+    async fn insert_merges(&self, same_repository_blockers: bool) {
         let repository = self.case.env.frozen.project.binding.repository_id;
         let project = self.case.env.lineage.project_id;
         let [first, second, other_repo, _, parent, outgoing] = self.blockers;
@@ -272,6 +288,9 @@ impl Fixture {
             (parent, repository, UNRELATED),
             (outgoing, repository, UNRELATED),
         ] {
+            if !same_repository_blockers && [first, second].contains(&task) {
+                continue;
+            }
             sqlx::query("INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,target_ref,expected_head_sha,merge_sha,observed_at_ms)
                         VALUES($1,$2,$3,1,$4,'refs/heads/main',$5,$6,1)")
                 .bind(Uuid::new_v4()).bind(project).bind(task)
@@ -293,6 +312,20 @@ impl Fixture {
     async fn refusal(&self) -> Option<Value> {
         aq_role_settings::refusals::shown(&self.case.env.env.pool, self.case.env.lineage.task_id)
             .await
+    }
+
+    async fn granted_base(&self, offer: &NativeOffer) -> Option<String> {
+        sqlx::query_scalar("SELECT base FROM delivery_git_grants WHERE attempt_id=$1")
+            .bind(offer.offered.lifecycle_binding.attempt_id)
+            .fetch_optional(&self.case.env.env.pool)
+            .await
+            .unwrap()
+    }
+
+    fn unenroll_tasks(&mut self) {
+        let mut config = (*self.case.env.env.state.config).clone();
+        config.delivery.as_mut().unwrap().task_allowlist = Some(Default::default());
+        self.case.env.env.state.config = Arc::new(config);
     }
 
     async fn offer(&self) -> NativeOffer {
@@ -325,9 +358,11 @@ async fn write_reply(mut stream: BufReader<UnixStream>, reply: &Value) {
 #[tokio::test]
 async fn missing_merge_refreshes_fresh_cache_and_an_independent_sibling_can_offer() {
     let f = Fixture::new(true, true).await;
-    f.insert_merges().await;
+    f.insert_merges(true).await;
     let offer = f.offer().await;
     assert_eq!(offer.offered.lifecycle_binding.task_id, f.case.second_task);
+    assert_eq!(f.granted_base(&offer).await, None);
+    assert!(!f.operations("repo.observation").is_empty());
     assert_eq!(f.operations("repo.retain_ref").len(), 1);
     assert_eq!(
         f.operations("contains").len(),
@@ -347,8 +382,8 @@ async fn missing_merge_refreshes_fresh_cache_and_an_independent_sibling_can_offe
 
 #[tokio::test]
 async fn cached_export_cannot_bypass_a_new_blocker_and_replay_keeps_the_verified_offer() {
-    let f = Fixture::new(true, false).await;
-    f.insert_merges().await;
+    let mut f = Fixture::new(true, false).await;
+    f.insert_merges(true).await;
     f.late_blockers.store(true, Ordering::SeqCst);
     for (expected_retains, expected_wait) in
         [(1, "merge_missing_from_base"), (2, "ancestry_unavailable")]
@@ -411,6 +446,7 @@ async fn cached_export_cannot_bypass_a_new_blocker_and_replay_keeps_the_verified
     .await
     .unwrap();
     assert_eq!(offered_base, NEW);
+    assert_eq!(f.granted_base(&offered).await.as_deref(), Some(NEW));
     for sha in [MERGE, SECOND_MERGE] {
         assert!(
             f.operations("contains")
@@ -419,15 +455,17 @@ async fn cached_export_cannot_bypass_a_new_blocker_and_replay_keeps_the_verified
     }
     assert!(f.refusal().await.is_none());
     let before_replay = f.requests.lock().unwrap().len();
+    f.unenroll_tasks();
     let replay = f.offer().await;
     assert_eq!(replay.offered.offer, offered.offered.offer);
+    assert_eq!(f.granted_base(&replay).await.as_deref(), Some(NEW));
     assert_eq!(f.requests.lock().unwrap().len(), before_replay);
 }
 
 #[tokio::test]
 async fn immutable_legacy_source_keeps_its_offer_and_export_identity() {
     let f = Fixture::new(false, false).await;
-    f.insert_merges().await;
+    f.insert_merges(false).await;
     let offered = f.offer().await;
     assert_eq!(
         offered.offered.lifecycle_binding.task_id,
@@ -437,6 +475,66 @@ async fn immutable_legacy_source_keeps_its_offer_and_export_identity() {
     assert!(f.operations("repo.retain_ref").is_empty());
     assert_eq!(f.operations("artifact.export")[0]["base"], oid(OLD));
     assert_eq!(f.offer().await.offered.offer, offered.offered.offer);
+    assert_eq!(f.granted_base(&offered).await, None);
     assert_eq!(f.operations("artifact.export").len(), 1);
     assert!(f.refusal().await.is_none());
+}
+
+#[tokio::test]
+async fn unenrolled_named_source_refreshes_its_legacy_base_without_a_git_grant() {
+    let mut f = Fixture::new(true, false).await;
+    f.unenroll_tasks();
+    f.insert_merges(true).await;
+    let (status, body) = poll(&f.case).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["body"]["offers"], json!([]));
+    assembled(&f.case).await;
+    assert_eq!(f.operations("repo.retain_ref").len(), 1);
+    assert!(f.operations("artifact.export").is_empty());
+    assert_eq!(f.refusal().await.unwrap()["wait"]["base"], OLD);
+
+    *f.remote.lock().unwrap() = NEW;
+    let offered = f.offer().await;
+    assert_eq!(
+        offered.offered.lifecycle_binding.task_id,
+        f.case.env.lineage.task_id
+    );
+    assert_eq!(f.granted_base(&offered).await, None);
+    assert_eq!(f.operations("artifact.export")[0]["base"], oid(NEW));
+    for sha in [MERGE, SECOND_MERGE] {
+        assert!(
+            f.operations("contains")
+                .contains(&json!({"ancestor":oid(sha), "descendant":oid(NEW)}))
+        );
+    }
+    assert!(f.refusal().await.is_none());
+}
+
+#[tokio::test]
+async fn unenrolled_stale_immutable_dependent_waits_without_refreshing_its_base() {
+    let f = Fixture::new(false, true).await;
+    f.insert_merges(true).await;
+    let sibling = f.offer().await;
+    assert_eq!(
+        sibling.offered.lifecycle_binding.task_id,
+        f.case.second_task
+    );
+    assert_eq!(f.granted_base(&sibling).await, None);
+    assert!(f.operations("repo.retain_ref").is_empty());
+    let checks = f.operations("contains");
+    assert_eq!(
+        checks.len(),
+        1,
+        "only the dependent needs an ancestry check"
+    );
+    assert_eq!(checks[0]["descendant"], oid(OLD));
+    assert_eq!(
+        f.operations("artifact.export").len(),
+        1,
+        "only the sibling exported"
+    );
+    let reason = f.refusal().await.unwrap();
+    assert_eq!(reason["code"], "delivery_ancestry_wait");
+    assert_eq!(reason["wait"]["reason"], "merge_missing_from_base");
+    assert_eq!(reason["wait"]["base"], OLD);
 }

@@ -20,7 +20,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 mod ancestry;
-pub use ancestry::dependent_current;
+pub use ancestry::{OfferAncestry, dependent_current};
 
 /// The named ref of one repository binding that a project follows.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -55,6 +55,7 @@ pub fn export_operation(
     generation: u64,
     policy_ref: impl Serialize,
     commit: Option<&str>,
+    enrolled: bool,
 ) -> Result<Uuid> {
     let mut key = match commit {
         None => serde_json::to_value((project, task, project_revision, generation, policy_ref))?,
@@ -68,8 +69,14 @@ pub fn export_operation(
         ))?,
     };
     key.sort_all_objects();
+    // Separate legacy reservations from new delivery offers, even at the same base.
+    let namespace = if enrolled {
+        *b"aq-delivery-base"
+    } else {
+        *b"aq-native-export"
+    };
     Ok(Uuid::new_v5(
-        &Uuid::from_bytes(*b"aq-native-export"),
+        &Uuid::from_bytes(namespace),
         &serde_json::to_vec(&key)?,
     ))
 }
@@ -84,7 +91,11 @@ mod tests {
         let task = json!({"workspace_id":Uuid::from_u128(8),"task_id":Uuid::from_u128(9),"version":1,"content_revision":1});
         let policy_ref = "policy";
         let (a, b) = ("a".repeat(40), "b".repeat(40));
-        let key = |commit| export_operation(project, &task, 3, 1, policy_ref, commit).unwrap();
+        let scoped = |commit, enrolled| {
+            export_operation(project, &task, 3, 1, policy_ref, commit, enrolled).unwrap()
+        };
+        let key = |commit| scoped(commit, false);
+        assert_ne!(scoped(Some(&a), true), key(Some(&a)));
         assert_ne!(key(Some(&a)), key(Some(&b)));
         assert_eq!(key(Some(&a)), key(Some(&a)));
         assert_ne!(key(Some(&a)), key(None));

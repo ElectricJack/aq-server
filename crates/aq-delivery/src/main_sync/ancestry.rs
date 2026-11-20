@@ -2,6 +2,7 @@
 use super::{MainSync, Scope, cached, limits, refresh};
 use crate::{
     DeliveryError, OperationContext, Result,
+    commands::GitTarget,
     protocol::{self, WireResult},
     source_checks::hex40,
 };
@@ -28,37 +29,108 @@ pub async fn dependent_current(
     context: &Value,
     now_ms: impl Fn() -> u64,
 ) -> std::result::Result<MainSync, Wait> {
-    let blockers = completed_blockers(task, context)?;
-    let merges = if blockers.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as(
-            "SELECT DISTINCT task_id, merge_sha FROM delivery_merge_evidence \
-             WHERE task_id=ANY($1) AND target #>> '{git,repository_id}'=$2 \
-             ORDER BY task_id, merge_sha",
-        )
-        .bind(blockers)
-        .bind(scope.repository_id.to_string())
-        .fetch_all(pool)
-        .await
-        .map_err(|error| {
-            tracing::warn!(%task, %error, "reading prerequisite merge evidence failed");
-            Wait::MergeEvidenceUnavailable
-        })?
-    };
+    let required = OfferAncestry::load(pool, scope.into(), task, context).await?;
     let limits = limits(pool).await.map_err(sync_failed)?;
     if let Some(head) = cached(pool, scope, &limits, &now_ms)
         .await
         .map_err(sync_failed)?
-        && check(socket, scope, &head.head, &merges).await.is_ok()
+        && required.check(socket, &head.head).await.is_ok()
     {
         return Ok(head);
     }
-    let head = refresh(pool, socket, scope, &limits, now_ms)
+    required
+        .retain_and_check(pool, socket, scope, &limits, now_ms)
         .await
-        .map_err(sync_failed)?;
-    check(socket, scope, &head.head, &merges).await?;
-    Ok(head)
+}
+
+impl From<&Scope> for GitTarget {
+    fn from(scope: &Scope) -> Self {
+        Self {
+            repository_id: scope.repository_id,
+            binding_generation: scope.binding_generation,
+        }
+    }
+}
+
+/// Durable same-repository merges required by the task's current Graph context.
+pub struct OfferAncestry {
+    repository: GitTarget,
+    merges: Vec<(Uuid, String)>,
+}
+
+impl OfferAncestry {
+    pub async fn load(
+        pool: &PgPool,
+        repository: GitTarget,
+        task: Uuid,
+        context: &Value,
+    ) -> std::result::Result<Self, Wait> {
+        let blockers = completed_blockers(task, context)?;
+        let merges = if blockers.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_as(
+                "SELECT DISTINCT task_id, merge_sha FROM delivery_merge_evidence \
+                 WHERE task_id=ANY($1) AND target #>> '{git,repository_id}'=$2 \
+                 ORDER BY task_id, merge_sha",
+            )
+            .bind(blockers)
+            .bind(repository.repository_id.to_string())
+            .fetch_all(pool)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%task, %error, "reading prerequisite merge evidence failed");
+                Wait::MergeEvidenceUnavailable
+            })?
+        };
+        Ok(Self { repository, merges })
+    }
+
+    /// Preserve the selected base when its ancestry is sufficient. A moving
+    /// source can refresh after a failed proof. An immutable source can wait.
+    pub async fn verify_or_refresh(
+        &self,
+        pool: &PgPool,
+        socket: &Path,
+        base: &str,
+        moving: Option<&Scope>,
+        now_ms: impl Fn() -> u64,
+    ) -> std::result::Result<Option<MainSync>, Wait> {
+        match self.check(socket, base).await {
+            Ok(()) => Ok(None),
+            Err(wait) => {
+                let Some(scope) = moving else {
+                    return Err(wait);
+                };
+                let limits = limits(pool).await.map_err(sync_failed)?;
+                self.retain_and_check(pool, socket, scope, &limits, now_ms)
+                    .await
+                    .map(Some)
+            }
+        }
+    }
+
+    async fn retain_and_check(
+        &self,
+        pool: &PgPool,
+        socket: &Path,
+        scope: &Scope,
+        limits: &super::DeliveryLimits,
+        now_ms: impl Fn() -> u64,
+    ) -> std::result::Result<MainSync, Wait> {
+        if GitTarget::from(scope) != self.repository {
+            return Err(Wait::MainSyncUnavailable);
+        }
+        let head = refresh(pool, socket, scope, limits, now_ms)
+            .await
+            .map_err(sync_failed)?;
+        self.check(socket, &head.head).await?;
+        Ok(head)
+    }
+
+    async fn check(&self, socket: &Path, base: &str) -> std::result::Result<(), Wait> {
+        check(socket, &self.repository, base, &self.merges).await
+    }
 }
 
 fn sync_failed(error: DeliveryError) -> Wait {
@@ -99,7 +171,7 @@ fn completed_blockers(task: Uuid, context: &Value) -> std::result::Result<Vec<Uu
 
 async fn check(
     socket: &Path,
-    scope: &Scope,
+    repository: &GitTarget,
     base: &str,
     merges: &[(Uuid, String)],
 ) -> std::result::Result<(), Wait> {
@@ -107,7 +179,7 @@ async fn check(
     for (prerequisite, sha) in merges {
         let result = contains(
             socket,
-            scope,
+            repository,
             sha,
             base,
             deadline.saturating_duration_since(Instant::now()),
@@ -148,7 +220,7 @@ impl WireResult for Ancestry {
 
 async fn contains(
     socket: &Path,
-    scope: &Scope,
+    repository: &GitTarget,
     ancestor: &str,
     descendant: &str,
     wait: Duration,
@@ -158,8 +230,8 @@ async fn contains(
     }
     let context = OperationContext {
         operation_id: Uuid::new_v4(),
-        repository_id: scope.repository_id,
-        binding_generation: scope.binding_generation,
+        repository_id: repository.repository_id,
+        binding_generation: repository.binding_generation,
     };
     let params = json!({
         "ancestor": {"algorithm": "sha1", "hex": ancestor},
@@ -168,7 +240,7 @@ async fn contains(
     // The v1 aq-git repository ancestry operation is spelled "contains".
     let mut request = serde_json::to_vec(&json!({
         "protocol_version": 1, "request_id": context.operation_id, "operation": "contains",
-        "repository_id": scope.repository_id, "expected_binding_generation": scope.binding_generation,
+        "repository_id": repository.repository_id, "expected_binding_generation": repository.binding_generation,
         "params": params, "deadline_ms": wait.as_millis(),
     }))?;
     request.push(b'\n');
