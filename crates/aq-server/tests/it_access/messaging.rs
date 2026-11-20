@@ -53,7 +53,7 @@ pub(crate) struct Env {
     pub(crate) admin: Router,
     pub(crate) token: String,
     pub(crate) binding: Value,
-    time: Arc<std::sync::atomic::AtomicI64>,
+    pub(crate) time: Arc<std::sync::atomic::AtomicI64>,
     node_token: String,
 }
 pub(crate) async fn setup() -> Env {
@@ -74,6 +74,15 @@ pub(crate) async fn setup_graph_with(
     grants: Option<Value>,
     graph_url: &str,
     mutation_actor_id: Option<&str>,
+    edit: impl FnOnce(&mut Value, &mut Value),
+) -> Env {
+    setup_graph_with_attempt(grants, graph_url, mutation_actor_id, None, edit).await
+}
+pub(crate) async fn setup_graph_with_attempt(
+    grants: Option<Value>,
+    graph_url: &str,
+    mutation_actor_id: Option<&str>,
+    attempt: Option<Uuid>,
     edit: impl FnOnce(&mut Value, &mut Value),
 ) -> Env {
     let db = TestDb::create().await;
@@ -119,6 +128,9 @@ pub(crate) async fn setup_graph_with(
     let original_context = context.clone();
     edit(&mut profile, &mut context);
     let mut binding = fixture["context"]["binding"].clone();
+    if let Some(attempt) = attempt {
+        binding["attempt_id"] = json!(attempt);
+    }
     binding["node_id"] = json!(node.id);
     binding["profile_digest"] = json!(tokens::verifier(&profile.to_string()));
     if context != original_context {

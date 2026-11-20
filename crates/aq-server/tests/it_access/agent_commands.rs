@@ -2,7 +2,7 @@
 //! agent reaches its commands through `/api/v1/commands` with the same
 //! grants, refusals and audit as the `/v1/agent/*` routes; the owner reaches
 //! the same handlers as the REST routes.
-use crate::messaging::{send, setup_graph, setup_graph_with, setup_with};
+use crate::messaging::{send, setup_graph, setup_graph_with, setup_graph_with_attempt, setup_with};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use std::sync::{
@@ -1797,10 +1797,12 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
         ))
         .unwrap()
     };
-    let e = setup_graph_with(
+    let attempt = Uuid::new_v4();
+    let e = setup_graph_with_attempt(
         Some(grants("spec_ingestion")),
         &url,
         Some("dev-service"),
+        Some(attempt),
         |_, _| {},
     )
     .await;
@@ -1871,7 +1873,6 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
         );
     }
 
-    let attempt: Uuid = base["attempt_id"].as_str().unwrap().parse().unwrap();
     let root = own.as_str().unwrap().parse::<Uuid>().unwrap();
     sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms)
                  VALUES($1,$2,$3,$4,$4,1,$5,0)")
