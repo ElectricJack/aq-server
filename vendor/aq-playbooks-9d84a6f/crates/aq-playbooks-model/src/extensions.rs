@@ -1,4 +1,7 @@
-use super::{ModelError, Recovery, Registry, Schema, valid_name};
+use super::{
+    ContractRef, EventEnvelope, ModelError, Recovery, Registry, Schema, digest, valid_name,
+    validate_event,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -141,13 +144,22 @@ impl CatalogExtension {
                 )));
             }
         }
-        if !notes.is_object()
-            || ["commands", "events"]
-                .into_iter()
-                .any(|key| notes.get(key).is_some_and(|value| !value.is_object()))
-        {
+        let known_notes = |kind| {
+            notes.get(kind).is_none_or(|map| {
+                map.as_object().is_some_and(|entries| {
+                    entries.iter().all(|(key, note)| {
+                        note.is_object()
+                            && match kind {
+                                "commands" => registry.commands.contains_key(key),
+                                _ => registry.events.contains_key(key),
+                            }
+                    })
+                })
+            })
+        };
+        if !notes.is_object() || !known_notes("commands") || !known_notes("events") {
             return Err(ModelError::Invalid(format!(
-                "extension {name}: catalog notes must be an object with command and event maps"
+                "extension {name}: catalog notes must describe its own registered commands and events"
             )));
         }
         Ok(Self {
@@ -167,6 +179,69 @@ impl CatalogExtension {
 
     pub fn notes(&self) -> &Value {
         &self.notes
+    }
+
+    /// Derive an F5 event from the host's intent identity and the plugin's
+    /// zero-based response index. The plugin supplies only its event name
+    /// and payload. The host supplies the remaining envelope fields.
+    pub fn event_envelope(
+        &self,
+        intent_id: &str,
+        index: usize,
+        name: String,
+        payload: Value,
+        now_ms: i64,
+    ) -> Result<EventEnvelope, ModelError> {
+        let invalid =
+            || ModelError::Invalid("invalid plugin event subject, revision or correlation".into());
+        let contract = self
+            .registry
+            .events
+            .get(&name)
+            .ok_or_else(|| ModelError::Invalid("unknown plugin event".into()))?;
+        let field = |path: &str| {
+            path.split('.')
+                .try_fold(&payload, |value, key| value.get(key))
+        };
+        let subject = contract
+            .subject_field
+            .as_deref()
+            .and_then(field)
+            .and_then(Value::as_str)
+            .filter(|subject| !subject.is_empty())
+            .ok_or_else(invalid)?;
+        let revision = contract
+            .revision_field
+            .as_deref()
+            .and_then(field)
+            .and_then(Value::as_u64)
+            .ok_or_else(invalid)?;
+        let correlation = contract
+            .correlation_fields
+            .iter()
+            .map(|path| {
+                let value = field(path).and_then(Value::as_str).ok_or_else(invalid)?;
+                Ok((path.clone(), value.to_owned()))
+            })
+            .collect::<Result<_, ModelError>>()?;
+        let event = EventEnvelope {
+            producer: format!("ext.{}", self.name),
+            event_id: digest(&(intent_id, index))?,
+            contract: ContractRef {
+                name,
+                fingerprint: contract.fingerprint()?,
+            },
+            scope: "project".into(),
+            correlation,
+            subject: Some(subject.to_owned()),
+            revision: Some(revision),
+            causation: Some(intent_id.to_owned()),
+            occurred_at_ms: Some(now_ms),
+            observed_at_ms: Some(now_ms),
+            payload,
+        };
+        validate_event(&event, &self.registry)?;
+        Ok(event)
     }
 }
 

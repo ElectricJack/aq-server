@@ -16,9 +16,10 @@
 use anyhow::{Context, Result, anyhow, bail};
 use aq_playbooks_compiler::Diagnostic;
 use aq_playbooks_compiler::draft::{
-    self, CATALOG_FILE, DRAFT_FILE, FACTS_FILE, RECORD_FILE, SOURCE_FILE, SourceRecord, Workspace,
+    self, CATALOG_FILE, DRAFT_FILE, EXTENSIONS_FILE, FACTS_FILE, RECORD_FILE, SOURCE_FILE,
+    SourceRecord, Workspace,
 };
-use aq_playbooks_model::{Artifact, Registry, canonical_bytes};
+use aq_playbooks_model::{Artifact, CatalogExtension, Registry, canonical_bytes};
 use aq_playbooks_simulation::{
     CASES_TRANSITION_BUDGET, Case, CaseReport, HOST_FILES, MAX_CASES, MAX_OUTCOME_BYTES,
     MAX_QUESTION_BYTES, MAX_REASON_BYTES, MAX_SENTENCES, MIN_CASES, OUTCOME_FILE, Outcome,
@@ -33,10 +34,11 @@ use std::path::{Component, Path, PathBuf};
 
 const CASES_DIR: &str = "cases";
 /// What `seal --output` never writes over: the host's files and the outcome.
-const HOST_INPUTS: [&str; 9] = [
+const HOST_INPUTS: [&str; 10] = [
     SOURCE_FILE,
     RECORD_FILE,
     CATALOG_FILE,
+    EXTENSIONS_FILE,
     FACTS_FILE,
     DRAFT_FILE,
     PREVIOUS_FILE,
@@ -740,8 +742,11 @@ fn shown(line: u32, end: Option<u32>) -> String {
 
 /// The catalog `commands` and `events` describe: in a workspace, its
 /// `catalog.json` (or `--registry`, under the workspace's path rule); else
-/// `./catalog.json` when present. `None` leaves the default to the caller.
-pub fn workspace_registry(registry: Option<&Path>) -> Result<Option<Registry>> {
+/// `./catalog.json` when present. Also returns the extensions for their notes.
+/// `None` leaves the default to the caller.
+pub fn workspace_registry(
+    registry: Option<&Path>,
+) -> Result<Option<(Registry, Vec<CatalogExtension>)>> {
     let cwd = std::env::current_dir().context("the current directory cannot be read")?;
     if !is_workspace(&cwd) && cwd.ancestors().skip(1).any(is_workspace) {
         // In a subdirectory of a workspace: the same refusal as the tools.
@@ -757,5 +762,13 @@ pub fn workspace_registry(registry: Option<&Path>) -> Result<Option<Registry>> {
         None => return Ok(None),
     };
     let text = read_inside(&cwd, &file, MAX_CATALOG_BYTES)?;
-    Ok(Some(parse_json(&file, &text)?))
+    let base: Registry = parse_json(&file, &text)?;
+    let extensions =
+        draft::read_extensions(&cwd).map_err(|e| anyhow!("{}: {}", e.path, e.message))?;
+    let catalog = if extensions.is_empty() {
+        base
+    } else {
+        base.with_extensions(&extensions)?
+    };
+    Ok(Some((catalog, extensions)))
 }

@@ -1,0 +1,24 @@
+{
+  "entries": {
+    "main": {
+      "input": {"type": "object", "properties": {"text": {"type": "string", "max_length": 128}}, "required": ["text"]},
+      "outcomes": {"done": {"type": "null"}, "failed": {"type": "null"}},
+      "start": "echo"
+    }
+  },
+  "triggers": [{
+    "id": "test-ping",
+    "event": "ext.test.pinged",
+    "entry": "main",
+    "input": {"op": "object", "fields": {"text": {"op": "ref", "root": "event", "path": ["text"]}}}
+  }],
+  "steps": {
+    "echo": {
+      "op": {"kind": "invoke", "command": "ext.test.echo", "bind": "reply", "input": {"op": "ref", "root": "input", "path": []}},
+      "edges": {"echoed": "done", "refused": "failed"},
+      "on_error": "failed"
+    },
+    "done": {"op": {"kind": "return", "outcome": "done", "output": {"op": "literal", "value": null}}, "edges": {}, "on_error": null},
+    "failed": {"op": {"kind": "return", "outcome": "failed", "output": {"op": "literal", "value": null}}, "edges": {}, "on_error": null}
+  }
+}

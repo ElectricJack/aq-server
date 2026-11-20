@@ -74,7 +74,12 @@ pub const MAX_SENTENCES: usize = 16;
 pub const MAX_SENTENCE_BYTES: usize = 8192;
 /// The workspace files the host writes, which an `unable` may name instead
 /// of a sentence when the fault is in one of them.
-pub const HOST_FILES: [&str; 3] = ["record.json", "catalog.json", "facts.json"];
+pub const HOST_FILES: [&str; 4] = [
+    "record.json",
+    "catalog.json",
+    "facts.json",
+    "extensions.json",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

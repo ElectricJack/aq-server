@@ -45,6 +45,7 @@ use std::path::Path;
 pub const SOURCE_FILE: &str = "source.md";
 pub const RECORD_FILE: &str = "record.json";
 pub const CATALOG_FILE: &str = "catalog.json";
+pub const EXTENSIONS_FILE: &str = "extensions.json";
 pub const FACTS_FILE: &str = "facts.json";
 pub const DRAFT_FILE: &str = "draft.json";
 const MAX_SOURCE_BYTES: u64 = 4_194_304;
@@ -511,9 +512,21 @@ fn keep<T>(result: Result<T, Diagnostic>, faults: &mut Vec<Diagnostic>) -> Optio
     result.map_err(|d| faults.push(d)).ok()
 }
 
+/// Read optional extension registrations for a local authoring workspace.
+pub fn read_extensions(dir: &Path) -> Result<Vec<CatalogExtension>, Diagnostic> {
+    if std::fs::symlink_metadata(dir.join(EXTENSIONS_FILE))
+        .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(vec![]);
+    }
+    let text = read_file(dir, EXTENSIONS_FILE, MAX_CATALOG_BYTES)?;
+    parse(EXTENSIONS_FILE, &text, true, None)
+}
+
 impl Workspace {
     /// Reads `source.md`, `record.json`, `catalog.json`, `facts.json` and
     /// `draft.json` from `dir`, reporting every unreadable or malformed file.
+    /// An optional `extensions.json` overlays plugin contracts on the catalog.
     ///
     /// This is for the agent's own tools, in the agent's own directory. A
     /// host never calls it on a directory an agent can write: it builds the
@@ -527,6 +540,17 @@ impl Workspace {
             .and_then(|t| keep(parse::<SourceRecord>(RECORD_FILE, &t, true, None), f));
         let catalog = keep(read_file(dir, CATALOG_FILE, MAX_CATALOG_BYTES), f)
             .and_then(|t| keep(parse::<Registry>(CATALOG_FILE, &t, true, None), f));
+        let extensions = keep(read_extensions(dir), f);
+        let catalog = match (catalog, extensions) {
+            (Some(catalog), Some(extensions)) if extensions.is_empty() => Some(catalog),
+            (Some(catalog), Some(extensions)) => keep(
+                catalog.with_extensions(&extensions).map_err(|e| {
+                    Diagnostic::error("catalog_extension", EXTENSIONS_FILE, e.to_string())
+                }),
+                f,
+            ),
+            _ => None,
+        };
         let facts = keep(read_file(dir, FACTS_FILE, MAX_FACTS_BYTES), f).and_then(|t| {
             keep(
                 parse::<BTreeMap<String, Value>>(FACTS_FILE, &t, true, None),

@@ -4,8 +4,14 @@
 #[path = "support/schemas.rs"]
 mod schemas;
 use aq_playbooks_cli::catalog::catalog_v2_2;
-use aq_playbooks_compiler::draft::{SourceRecord, retain_registry};
-use aq_playbooks_model::{EvalContext, EvalLimits, EvalValue, Expr, eval};
+use aq_playbooks_compiler::{
+    docs,
+    draft::{SourceRecord, retain_registry},
+};
+use aq_playbooks_model::{
+    Artifact, CatalogExtension, EvalContext, EvalLimits, EvalValue, Expr, Registry, eval,
+    hash_bytes,
+};
 use aq_playbooks_simulation::{MAX_CASES, MAX_OUTCOME_BYTES};
 use schemas::strings;
 use serde_json::{Value, json};
@@ -17,6 +23,7 @@ use std::{
 };
 
 const ROUTING_DRAFT: &str = include_str!("data/routing_draft.json");
+const TEST_EXTENSION: &str = include_str!("data/test-extension.json");
 const LINE_21: &str = "Research is Standard, high effort, unless it is clearly harder.";
 /// Line 22 continues the sentence of line 21, as a person wraps it.
 const LINE_22: &str = "  in which case it is Complex, high effort.";
@@ -314,6 +321,166 @@ fn check_try_compare_save_on_a_workspace() {
     let (ok, compared) = json_of(d, &["compare"]);
     assert!(ok, "{compared:#}");
     assert_eq!(compared["change"], "executable", "{compared:#}");
+}
+
+#[test]
+fn extension_contracts_compile_and_run_in_authoring_cases() {
+    let ws = temp("extension");
+    let d = &ws.0;
+    fs::write(d.join("source.md"), "# Echo\n\nEcho a test ping.\n").unwrap();
+    write(
+        d,
+        "record.json",
+        &json!({
+            "id": "echo", "binding": "aq.echo", "scope": "project", "purpose": "Echo a test ping",
+            "commands": ["ext.test.echo"], "events": ["ext.test.pinged"], "capabilities": ["ext.test"],
+            "facts_version": "settings-1"
+        }),
+    );
+    write(
+        d,
+        "catalog.json",
+        &serde_json::to_value(Registry::default()).unwrap(),
+    );
+    write(d, "facts.json", &json!({}));
+    fs::write(
+        d.join("draft.json"),
+        include_str!("data/test-extension-draft.json"),
+    )
+    .unwrap();
+    fs::write(
+        d.join("case.json"),
+        include_str!("data/test-extension-case.json"),
+    )
+    .unwrap();
+
+    let (ok, refused) = json_of(d, &["check"]);
+    assert!(!ok);
+    assert!(
+        refused["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fault| fault["code"] == "unknown_command"
+                && fault["message"].as_str().unwrap().contains("ext.test.echo")),
+        "{refused:#}"
+    );
+
+    let extension: CatalogExtension = serde_json::from_str(TEST_EXTENSION).unwrap();
+    write(d, "extensions.json", &json!([extension]));
+    let (ok, sealed) = json_of(d, &["seal", "--output", "sealed.json"]);
+    assert!(ok, "{sealed:#}");
+    let artifact =
+        Artifact::from_canonical_bytes(&fs::read(d.join("sealed.json")).unwrap()).unwrap();
+    assert_eq!(artifact.content.registry, *extension.registry());
+    let command = &artifact.content.registry.commands["ext.test.echo"];
+    assert_eq!(
+        command.fingerprint().unwrap(),
+        extension.registry().commands["ext.test.echo"]
+            .fingerprint()
+            .unwrap()
+    );
+    let (ok, described) = json_of(d, &["commands", "describe", "ext.test.echo"]);
+    assert!(ok, "{described:#}");
+    assert_eq!(
+        described["notes"],
+        extension.notes()["commands"]["ext.test.echo"]
+    );
+    let (ok, report) = json_of(d, &["try", "case.json"]);
+    assert!(ok, "{report:#}");
+    assert_eq!(report["outcome"], "done");
+    assert_eq!(report["calls"][0]["outcome"], "echoed");
+
+    let rendered = docs::catalog_with_extensions(
+        &Registry::default(),
+        "{}",
+        &strings(&["ext.test.echo"]),
+        &strings(&["ext.test.pinged"]),
+        &[extension],
+    )
+    .unwrap();
+    assert!(rendered.contains("## Extension `test`"));
+    assert!(rendered.contains("Echoes text from a test playbook."));
+    assert!(rendered.contains("Reports a test ping."));
+}
+
+#[test]
+fn an_unused_extension_preserves_the_legacy_artifact_bytes() {
+    let ws = temp("extension-golden");
+    let d = &ws.0;
+    for (name, text) in docs::example_files() {
+        if let Some(
+            name @ ("source.md" | "record.json" | "catalog.json" | "facts.json" | "draft.json"),
+        ) = name.strip_prefix("notify-when-ready/")
+        {
+            fs::write(d.join(name), text).unwrap();
+        }
+    }
+    let (ok, sealed) = json_of(d, &["seal", "--output", "legacy.json"]);
+    assert!(ok, "{sealed:#}");
+    let original = fs::read(d.join("legacy.json")).unwrap();
+    write(
+        d,
+        "extensions.json",
+        &json!([serde_json::from_str::<Value>(TEST_EXTENSION).unwrap()]),
+    );
+    let (ok, sealed) = json_of(d, &["seal", "--output", "overlay.json"]);
+    assert!(ok, "{sealed:#}");
+    assert_eq!(fs::read(d.join("overlay.json")).unwrap(), original);
+    assert_eq!(
+        hash_bytes(&original),
+        "sha256:873718cbd68805b4ae07e3baac171e9e4c0d2241261e9fc086baa3192fca6975"
+    );
+}
+
+#[test]
+fn extensions_refuse_bad_names_outcomes_and_collisions() {
+    let extension: CatalogExtension = serde_json::from_str(TEST_EXTENSION).unwrap();
+    for forbidden in ["work.ensure", "ext.other.x"] {
+        let mut registry = extension.registry().clone();
+        let mut command = registry.commands.remove("ext.test.echo").unwrap();
+        command.name = forbidden.into();
+        registry.commands.insert(forbidden.into(), command);
+        assert!(
+            CatalogExtension::new("test", registry, json!({}))
+                .unwrap_err()
+                .to_string()
+                .contains("under ext.test.")
+        );
+    }
+    let mut registry = extension.registry().clone();
+    registry
+        .commands
+        .get_mut("ext.test.echo")
+        .unwrap()
+        .outcomes
+        .remove("refused");
+    assert!(
+        CatalogExtension::new("test", registry, json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("requires refused")
+    );
+    assert!(
+        extension
+            .registry()
+            .with_extensions(std::slice::from_ref(&extension))
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate registration")
+    );
+    let mut registry = extension.registry().clone();
+    registry
+        .events
+        .get_mut("ext.test.pinged")
+        .unwrap()
+        .revision_field = Some("subject.id".into());
+    assert!(
+        CatalogExtension::new("test", registry, json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("integer revision")
+    );
 }
 
 #[test]
