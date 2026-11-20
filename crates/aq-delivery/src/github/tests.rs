@@ -486,3 +486,27 @@ fn delivery_section_deserializer_validates() {
         assert!(parse(json!({"git_http_socket": bad})).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn delivery_task_allowlist_narrows_enrolled_projects() {
+    let project = Uuid::new_v4();
+    let task = Uuid::new_v4();
+    let parse = |tasks: Option<Vec<Uuid>>| {
+        let mut config = json!({
+            "project_allowlist": [project],
+            "git_http_socket": "/run/aq-git/git-http.sock"
+        });
+        if let Some(tasks) = tasks {
+            config["task_allowlist"] = json!(tasks);
+        }
+        deserialize(config).map(Option::unwrap)
+    };
+    assert!(parse(None).unwrap().enrolls(project, Uuid::new_v4()));
+    let pilot = parse(Some(vec![task])).unwrap();
+    assert!(pilot.enrolls(project, task));
+    assert!(!pilot.enrolls(project, Uuid::new_v4()));
+    assert!(!pilot.enrolls(Uuid::new_v4(), task));
+    assert!(!parse(Some(vec![])).unwrap().has_enrollment());
+    assert!(parse(Some(vec![Uuid::nil()])).is_err());
+    assert!(deserialize(json!({"project_allowlist": [project]})).is_err());
+}

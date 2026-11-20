@@ -13,20 +13,22 @@ use uuid::Uuid;
 fn socket(state: &AppState) -> Option<&std::path::Path> {
     state.config.delivery.as_ref()?.git_http_socket.as_deref()
 }
-/// The grant of a new offer; none while the server serves no git endpoint.
+/// Freeze the grant of an enrolled offer before publishing the attempt.
 pub(super) async fn offer(
     state: &AppState,
     source: &Observation,
     task: Uuid,
     attempt: Uuid,
-) -> Result<Option<GitGrant>, AppError> {
+) -> Result<GitGrant, AppError> {
     let (Some(_), Some(retention)) = (socket(state), state.source_retention.as_ref()) else {
-        return Ok(None);
+        return Err(AppError::Maintenance(
+            "enrolled git endpoint unavailable".into(),
+        ));
     };
     let git = SocketGit::new(&retention.config.git_socket);
     let grant =
         aq_delivery::git_grant::offer(&state.store.pool, &git, &source.admission, task).await;
-    grant.map(Some).map_err(|error| {
+    grant.map_err(|error| {
         tracing::warn!(%attempt, code = %error.code, "git grant not issued");
         AppError::Conflict("git grant unavailable".into())
     })
@@ -61,18 +63,21 @@ pub fn routes(state: AppState) -> axum::Router<AppState> {
         .route("/v1/git/grants/{attempt}", grant)
         .with_state(state)
 }
-/// The attempt's grant, for its node while the attempt holds its task.
+/// Discovery returns the frozen grant to its node even on replay. Smart HTTP
+/// separately requires a live grant.
 async fn grant(
     State(state): State<AppState>,
     Path(attempt): Path<Uuid>,
     headers: axum::http::HeaderMap,
 ) -> Result<axum::Json<GitGrant>, AppError> {
     let node = crate::worker_api::authenticate_context(&state, &headers).await?;
-    let grant = aq_delivery::git_grant::live(&state.store.pool, attempt, node.id()).await;
-    let grant = grant.map_err(|_| AppError::Maintenance("git grants unavailable".into()))?;
-    grant
-        .map(axum::Json)
-        .ok_or_else(|| AppError::NotFound("no live git grant".into()))
+    use aq_delivery::git_grant::Lookup;
+    match aq_delivery::git_grant::lookup(&state.store.pool, attempt, node.id()).await {
+        Ok(Lookup::Granted(grant)) => Ok(axum::Json(grant)),
+        Ok(Lookup::Absent) => Err(AppError::NotFound("no git grant".into())),
+        Ok(Lookup::WrongNode) => Err(AppError::Forbidden("git grant node mismatch".into())),
+        Err(_) => Err(AppError::Maintenance("git grants unavailable".into())),
+    }
 }
 async fn proxy(
     State(state): State<AppState>,

@@ -40,18 +40,24 @@ pub async fn onboarded_target(
     project: Uuid,
     git: GitTarget,
 ) -> Result<Option<DeliveryTarget>, sqlx::Error> {
-    let state: Option<Value> = sqlx::query_scalar("SELECT state FROM repository_onboardings WHERE project_id=$1 AND repository_id=$2 AND step='bound' ORDER BY updated_at_ms DESC LIMIT 1")
-        .bind(project)
-        .bind(git.repository_id)
-        .fetch_optional(pool)
-        .await?;
-    let Some(state) = state else {
+    let Some(state) = crate::repository_onboarding::delivery_state(
+        pool,
+        project,
+        git.repository_id,
+        git.binding_generation,
+    )
+    .await?
+    else {
         return Ok(None);
     };
     let github = &state["request"]["github"];
     let (Some(owner), Some(name), Some(branch)) = (
-        github["owner"].as_str(),
-        github["name"].as_str(),
+        github["owner"]
+            .as_str()
+            .filter(|s| crate::repository_onboarding::slug(s)),
+        github["name"]
+            .as_str()
+            .filter(|s| crate::repository_onboarding::slug(s)),
         state["default_branch"].as_str(),
     ) else {
         return Ok(None);
@@ -152,6 +158,8 @@ pub async fn frozen_request(
                 .await?
                 .flatten();
             request["expected_old"] = json!(last);
+            request["pull_request"] = json!(known.as_ref().map(number));
+            request["result_head"] = json!(accepting.head);
         }
         "pull_request.open" => {
             let (title, body) = accepting
@@ -159,9 +167,13 @@ pub async fn frozen_request(
                 .ok_or(DeliveryError::InvalidInput("pull request text"))?;
             request["title"] = json!(title);
             request["body"] = json!(body);
+            request["pull_request"] = json!(known.as_ref().map(number));
         }
         "pull_request.merge" => {
-            let Some(open) = known.as_ref().filter(|(_, state)| state == "open") else {
+            let Some(open) = known
+                .as_ref()
+                .filter(|(_, state)| state == "open" || state == "merged")
+            else {
                 return Ok(Err("no_pull_request"));
             };
             request["pull_request"] = json!(number(open));
@@ -176,9 +188,13 @@ pub async fn frozen_request(
                 request["result_id"] = json!(result);
             }
         }
-        "pull_request.close" => request["pull_request"] = json!(known.as_ref().map(number)),
+        "pull_request.close" => {
+            request["pull_request"] = json!(known.as_ref().map(number));
+            request["result_head"] = json!(accepting.head);
+        }
         "pull_request.await_checks" => {
             request["pull_request"] = json!(known.as_ref().map(number));
+            request["result_head"] = json!(accepting.head);
             let longest = accepting
                 .longest_check_wait_ms
                 .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;
@@ -369,7 +385,17 @@ async fn run_merge_step(
         }
     }
     Ok(Some(
-        delivery.finish_merge(operation, target, task, pr).await,
+        delivery
+            .finish_merge(
+                operation,
+                target,
+                task,
+                pr,
+                request["expected_head_sha"]
+                    .as_str()
+                    .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?,
+            )
+            .await,
     ))
 }
 

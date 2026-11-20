@@ -52,7 +52,7 @@ struct Configuration {
     request_bytes: Option<usize>,
     deployments: Vec<DeploymentInput>,
     /// R1: `work.read`, `work.route`, `work.unroutable` and `judgment.assess`
-    /// serve a task of any project on the automatic router (`host_v9` only).
+    /// serve a task of any project on a routing-capable host.
     #[serde(default)]
     installation_routing: bool,
     /// D7 integration policy (Host7/Host8 only). Absent leaves the D1 port unbound.
@@ -66,9 +66,6 @@ struct IntegrationInput {
     commit_name: String,
     commit_email: String,
     /// Check ids each needing a passing check receipt before publication.
-    /// Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`;
-    /// which checks are required is the delivery playbook's to say.
-    #[cfg(not(feature = "delivery_playbook"))]
     #[serde(default)]
     checks: Vec<String>,
     #[serde(default)]
@@ -92,15 +89,10 @@ impl IntegrationInput {
                     (1..=64).contains(&x.len()) && !x.contains('\0') && !v[..i].contains(x)
                 })
         };
-        // Epic 0 (spec 0016 section 7): no evidence policy is required.
-        #[cfg(feature = "delivery_playbook")]
-        let checks_named = true;
-        #[cfg(not(feature = "delivery_playbook"))]
-        let checks_named = names(&self.checks)
-            && !(self.checks.is_empty() && !self.review && self.judgment_choices.is_empty());
         if !identity(&self.commit_name)
             || !identity(&self.commit_email)
-            || !checks_named
+            || !names(&self.checks)
+            || (self.checks.is_empty() && !self.review && self.judgment_choices.is_empty())
             || !names(&self.judgment_choices)
         {
             return Err("invalid playbook integration policy");
@@ -109,10 +101,7 @@ impl IntegrationInput {
             commit_name: self.commit_name,
             commit_email: self.commit_email,
             evidence: super::host_adapters::EvidencePolicy {
-                #[cfg(not(feature = "delivery_playbook"))]
                 checks: self.checks,
-                #[cfg(feature = "delivery_playbook")]
-                checks: Vec::new(),
                 review: self.review,
                 judgment_choices: self.judgment_choices,
             },
@@ -248,7 +237,9 @@ impl Configuration {
             Profile::Host11 => CatalogProfile::Host11,
         };
         if self.installation_routing && !profile.has_routing() {
-            return Err("playbook installation_routing requires the host_v9 profile");
+            return Err(
+                "playbook installation_routing requires the host_v9 profile or a later routing profile",
+            );
         }
         if self.integration.is_some() && !profile.is_host2() {
             return Err("playbook integration requires the host_v7 or host_v8 profile");

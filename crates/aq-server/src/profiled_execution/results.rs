@@ -59,16 +59,17 @@ pub(crate) async fn compute_stop_locked(
         "stopped_ack": pin.stopped_ack_bytes.ok_or_else(conflict)?,
     }))
 }
-/// Records the result, then lets the D3 default-policy actor settle it. A
-/// settlement failure never fails the durable record; it is replayed by the
-/// next (duplicate) record of the same report. With `delivery_playbook` (spec
-/// 0016 section 7) only the result's facts are recorded: a playbook decides.
+/// Records the result, then runs its attempt's settlement path. A duplicate
+/// report can replay deferred settlement. Attempts with Git grants only record
+/// facts here and wait for the delivery playbook.
 pub async fn record(
     state: &AppState,
     node: &AuthenticatedNode,
     report: &ResultReport,
 ) -> Result<Receipt, AppError> {
     let (pool, attempt) = (&state.store.pool, report.binding.attempt_id);
+    #[cfg(feature = "delivery_playbook")]
+    let enrolled = super::has_delivery_grant(pool, attempt).await?;
     let receipt = match record_only(state, node, report).await {
         // The attempt was released (its task cancelled): tell the worker, which retried forever.
         Err(AppError::Conflict(_))
@@ -79,10 +80,12 @@ pub async fn record(
         recorded => recorded?,
     };
     #[cfg(feature = "delivery_playbook")]
-    if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
-        tracing::warn!(report_id = %report.report_id, ?error, "result facts deferred");
+    if enrolled {
+        if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
+            tracing::warn!(report_id = %report.report_id, ?error, "result facts deferred");
+        }
+        return Ok(receipt);
     }
-    #[cfg(not(feature = "delivery_playbook"))]
     match super::settlement::settle_after_record(state, report.report_id).await {
         // D1: an accepted result waiting only on required delivery is published
         // detached from this request, so a dropped client cannot cancel a

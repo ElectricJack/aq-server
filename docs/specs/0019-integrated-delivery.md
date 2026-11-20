@@ -2,6 +2,8 @@
 
 Builds on [0016 Delivery by playbook](0016-delivery-by-playbook.md). The pilot uses one task branch and one PR into the project default branch. Multiple epics can share that branch. Graph records explicit prerequisites independently of the parent ticket.
 
+The [repository enrollment runbook](../operations/delivery-enrollment.md) covers the GitHub App, required checks, AQ bindings and the evidence to collect before widening a pilot.
+
 ## Result to merge
 
 1. On aq.work.result_ready, read the current attempt and result. The initial code policy holds an unsuccessful or unchanged result and notifies its supervisor once. A report-only project may author a different rule.

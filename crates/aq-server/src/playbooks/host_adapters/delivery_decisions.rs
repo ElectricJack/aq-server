@@ -11,7 +11,10 @@
 //! which is idempotent per result. `work.hold` and `supervisor.notify` have
 //! no external effect: their rows commit with the final intent row.
 use super::*;
-use aq_playbook_domain::delivery_decisions::{self as decisions, Decision, Named, Settled};
+use aq_playbook_domain::{
+    delivery_decisions::{self as decisions, Decision, Named, Settled},
+    delivery_runs,
+};
 pub use decisions::DeliverySettlement;
 
 /// Production port: the server's automatic settlement.
@@ -73,6 +76,15 @@ impl Service {
                 (id("task")?, id("result_id")?)
             }
             Stage::Fresh => {
+                if let Some(origin) =
+                    delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?
+                    && !origin.names_result(input)
+                {
+                    let refused = decisions::refused("stale_result");
+                    return self
+                        .settle_fresh(tx, id, revision, intent, &identity, refused)
+                        .await;
+                }
                 let early = match self.named(input).await? {
                     Err(reason) => Err(decisions::refused(reason)),
                     Ok(named) => {
@@ -122,10 +134,8 @@ impl Service {
     }
 
     /// `work.hold`: the hold on the task's latest result, unless a decision
-    /// is on it already. `held` is the catalog's only outcome: a result that
-    /// is not the latest, or is already completed or sent back, is answered
-    /// `held` and nothing changes (the newer result has its own run). A task
-    /// or result that does not exist is an invalid request.
+    /// is on it already. A stale hold fails through the host error path:
+    /// reporting `held` would allow its following notification to run.
     pub(super) async fn work_hold(
         &self,
         owner: &RuntimeOwner,
@@ -138,23 +148,10 @@ impl Service {
             tx.commit().await?;
             return Ok(retained);
         }
-        match self.named(&intent.input).await? {
-            Ok((task, result)) => {
-                let reason = Some(text(&intent.input, "reason")?);
-                let (detail, update_from_main, decision) = (None, None, "held");
-                let d = Decision {
-                    task,
-                    result,
-                    decision,
-                    reason,
-                    detail,
-                    update_from_main,
-                };
-                decisions::record(&mut tx, &d, self.now()?).await?;
-            }
-            Err("stale_result") => {}
-            Err(_) => return Err(Error::Invalid),
-        }
+        let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
+        decisions::fence_hold(&mut tx, self.delivery.as_ref(), origin, &intent.input).await?;
+        let named = self.named(&intent.input).await?;
+        decisions::hold(&mut tx, named, &intent.input, self.now()?).await?;
         let held = decisions::held();
         (self.settle_fresh(tx, id, revision, intent, &identity, held)).await
     }
@@ -183,7 +180,10 @@ impl Service {
         {
             return Err(Error::Forbidden);
         }
-        let key = decisions::notify_key(text(input, "identity")?)?;
+        let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
+        let key =
+            decisions::notification_key(&mut tx, self.delivery.as_ref(), origin, project, input)
+                .await?;
         let told = decisions::told(&mut tx, project, &key).await?;
         if !told {
             let now = self.now()?;

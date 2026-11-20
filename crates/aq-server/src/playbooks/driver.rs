@@ -916,7 +916,15 @@ impl Driver {
             Err(error) => Err(error),
         };
         let complete = match status {
-            Ok(status) => status["pending"].as_u64().ok_or(Error::Unknown)? == 0,
+            Ok(status) => {
+                #[cfg(feature = "delivery_playbook")]
+                if event.contract.name == "aq.work.result_ready" {
+                    self.service
+                        .record_delivery_runs(&self.runtime, id, event, &status["runs"])
+                        .await?;
+                }
+                status["pending"].as_u64().ok_or(Error::Unknown)? == 0
+            }
             // Forgotten: `Fanout` does not find the event itself (another
             // missing record fails the fan-out), or `EventStatus` does not.
             Err(aq_playbook_host::Error::NotFound(what)) if what == key => true,

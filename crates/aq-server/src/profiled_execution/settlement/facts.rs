@@ -1,8 +1,7 @@
 //! The server-owned facts of one recorded result: the attempt's fences, the
 //! central source receipt it pins (changed against the lineage's base?), the
-//! check and delivery evidence. Gathering decides nothing. Without the cargo
-//! feature `delivery_playbook` the D3 default policy judges them; with it
-//! (spec 0016 section 7) [`record_facts`] stores them and a playbook decides.
+//! check and delivery evidence. The D3 policy evaluates legacy reports. For
+//! attempts with a Git grant the server stores facts for the delivery playbook.
 use super::owner::*;
 use crate::{AppState, execution::authority, profiled_execution::results};
 use serde_json::{Value, json};
@@ -19,7 +18,6 @@ pub(super) struct Gathered {
     pub source: Option<(Uuid, String, bool)>,
     pub lineage_unknown: bool,
     /// One verdict per offered `required_checks` entry, and as evidence.
-    #[cfg_attr(feature = "delivery_playbook", allow(dead_code))]
     pub checks: Vec<CheckVerdict>,
     pub check_evidence: Vec<Value>,
     pub delivery_state: DeliveryState,
@@ -30,6 +28,7 @@ pub(super) async fn gather_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     r: &results::RecordedResult,
+    enrolled: bool,
 ) -> Result<Gathered> {
     let view = authority::load_locked(
         state,
@@ -43,9 +42,10 @@ pub(super) async fn gather_locked(
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
     // head when the report was recorded; the report id keys its evidence.
     #[cfg(feature = "delivery_playbook")]
-    if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
-        .await
-        .map_err(db)?
+    if enrolled
+        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
+            .await
+            .map_err(db)?
     {
         let start = &r.spec.source.resolved_object.hex;
         let base = aq_machine_control::lineage_base(tx, r.spec.task.task_id, start).await?;
@@ -53,25 +53,26 @@ pub(super) async fn gather_locked(
         let changed = base.is_none_or(|base| pushed.head != base);
         source = Some((r.report.report_id, pushed.head, changed));
     }
-    #[cfg(not(feature = "delivery_playbook"))]
-    for op in &r.report.source_receipt_ids {
-        match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
-            Ok(confirmed) => {
-                // Review C-1: judged against the lineage's original base, never a handoff
-                // successor's own starting commit (its predecessor's saved edits).
-                let m = &confirmed.manifest;
-                let task = r.spec.task.task_id;
-                let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
-                // the D3 gate holds only a report that would otherwise succeed.
-                let base = base.await?;
-                lineage_unknown = base.is_none();
-                let changed = base.is_none_or(|base| m.checkpoint.hex != base);
-                source = Some((*op, m.checkpoint.hex.clone(), changed));
-                break;
+    if !enrolled {
+        for op in &r.report.source_receipt_ids {
+            match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
+                Ok(confirmed) => {
+                    // Review C-1: judged against the lineage's original base, never a handoff
+                    // successor's own starting commit (its predecessor's saved edits).
+                    let m = &confirmed.manifest;
+                    let task = r.spec.task.task_id;
+                    let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
+                    // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
+                    // the D3 gate holds only a report that would otherwise succeed.
+                    let base = base.await?;
+                    lineage_unknown = base.is_none();
+                    let changed = base.is_none_or(|base| m.checkpoint.hex != base);
+                    source = Some((*op, m.checkpoint.hex.clone(), changed));
+                    break;
+                }
+                Err(crate::error::AppError::Conflict(_)) => {}
+                Err(e) => return Err(e),
             }
-            Err(crate::error::AppError::Conflict(_)) => {}
-            Err(e) => return Err(e),
         }
     }
     let attempt = r.report.binding.attempt_id;
@@ -158,7 +159,10 @@ pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    let g = gather_locked(state, &mut tx, &r).await?;
+    if !super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {
+        return Err(conflict());
+    }
+    let g = gather_locked(state, &mut tx, &r, true).await?;
     // H5: a parked predecessor is suspended, its report neither success nor failure.
     let suspended =
         crate::hibernation::suspended_hold(&mut tx, r.report.binding.attempt_id).await?;

@@ -10,6 +10,9 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(feature = "delivery_playbook")]
+#[path = "native_offers/ancestry.rs"]
+mod ancestry;
 #[cfg(feature = "project_environments")]
 #[path = "native_offers/environments.rs"]
 mod environments;

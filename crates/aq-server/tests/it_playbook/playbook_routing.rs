@@ -133,6 +133,16 @@ fn offered(body: &Value) -> Vec<String> {
 
 #[tokio::test]
 async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_level() {
+    Box::pin(routes_with_saved_artifact(CatalogProfile::Host9)).await;
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn host10_reinstalls_and_runs_the_active_host9_routing_artifact() {
+    Box::pin(routes_with_saved_artifact(CatalogProfile::Host10)).await;
+}
+
+async fn routes_with_saved_artifact(target: CatalogProfile) {
     let mut c = setup().await;
     let wired = InternalWork::new(
         c.env.env.pool.clone(),
@@ -169,14 +179,15 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     };
     let graph = Arc::new(GatewayGraph(state.agent_access.clone().unwrap()));
     let judge = Arc::new(MediumRisk);
+    let keys = Arc::new(keys);
     let mut service = Service::new_host2(
         &state,
-        namespace,
-        Arc::new(keys),
+        namespace.clone(),
+        keys.clone(),
         CatalogProfile::Host9,
-        graph,
+        graph.clone(),
         None,
-        Some(judge),
+        Some(judge.clone()),
         None,
     )
     .await
@@ -202,7 +213,11 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
         )
     };
     let limits = aq_playbook_host::Limits::default();
-    let driver = Arc::new(Driver::start(service, limits, factory).await.unwrap());
+    let mut driver = Arc::new(
+        Driver::start(service, limits.clone(), factory.clone())
+            .await
+            .unwrap(),
+    );
     state.internal_work.test_engine(driver.clone());
 
     // (1) The built-in source exists; with no playbook the switch stays off.
@@ -274,6 +289,42 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     assert_eq!(view["source"]["id"], "routing");
     assert_eq!(view["source"]["active"]["artifact"], active.artifact_digest);
     assert_eq!(view["source"]["latest"]["status"], "saved");
+
+    if target != CatalogProfile::Host9 {
+        driver.stop().await.unwrap();
+        let mut upgraded = Service::new_host2(
+            &state,
+            Namespace {
+                name: format!("routing-{}", Uuid::new_v4()),
+                namespace_id: Uuid::new_v4(),
+                ..namespace
+            },
+            keys,
+            target,
+            graph,
+            None,
+            Some(judge),
+            None,
+        )
+        .await
+        .unwrap();
+        upgraded.installation_routing = true;
+        upgraded.initialize(actor).await.unwrap();
+        driver = Arc::new(Driver::start(upgraded, limits, factory).await.unwrap());
+        state.internal_work.test_engine(driver.clone());
+        assert_eq!(authoring::reinstall_active(&state).await.unwrap(), 1);
+        let binding = driver
+            .inspect_binding(routing::BINDING.into())
+            .await
+            .unwrap();
+        assert_eq!(binding["artifact"], active.artifact_digest);
+        assert!(
+            !binding["authority"]["actor"]
+                .as_str()
+                .unwrap()
+                .contains(&grant.to_string())
+        );
+    }
 
     // (5) A ready task without a route waits, the server asks for a route,
     // and a run of the playbook reads the task, asks the judgment and routes it.

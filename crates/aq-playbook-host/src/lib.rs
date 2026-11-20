@@ -757,7 +757,12 @@ fn execute<S: Storage>(
         Request::EventStatus { event_key } => {
             let snapshot = engine.snapshot().map_err(engine_error)?;
             let event = snapshot.events.get(&event_key).ok_or(Error::Invalid)?;
-            serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.iter().filter(|d|d.run.is_none()).count()})
+            let runs: Vec<_> = event
+                .destinations
+                .iter()
+                .filter_map(|d| d.run.as_deref())
+                .collect();
+            serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.len() - runs.len(),"runs":runs})
         }
         Request::AdmitOnce {
             request,
@@ -1046,10 +1051,31 @@ fn accepts(registry: &Registry, artifact: &Registry) -> bool {
 // or removal. Only base-profile changes prevent reopening a namespace.
 fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
     artifact.commands.iter().all(|(name, contract)| {
-        plugins::extension_command(name, contract) || registry.commands.get(name) == Some(contract)
+        plugins::extension_command(name, contract) || accepts_command(registry, contract)
     }) && artifact.events.iter().all(|(name, contract)| {
         plugins::command_plugin(name).is_some() || registry.events.get(name) == Some(contract)
     })
+}
+
+/// Exact host contracts, including the pinned Host9 work.read on Host10 so
+/// the existing routing artifact can be installed in the new namespace.
+pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool {
+    let current = registry.commands.get(&contract.name);
+    if current == Some(contract) {
+        return true;
+    }
+    #[cfg(feature = "delivery_playbook")]
+    if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.3.0") {
+        static HOST9: OnceLock<Registry> = OnceLock::new();
+        let legacy = HOST9.get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.2.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.2.0 parses")
+        });
+        return legacy.commands.get(&contract.name) == Some(contract);
+    }
+    false
 }
 
 pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {

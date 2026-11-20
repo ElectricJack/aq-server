@@ -294,6 +294,10 @@ async fn ready(base: &str, task: &JoinHandle<anyhow::Result<()>>) {
     panic!("owner startup timeout");
 }
 async fn get(base: &str, path: &str) -> Value {
+    get_when(base, path, |_| true).await
+}
+
+async fn get_when(base: &str, path: &str, observed: impl Fn(&Value) -> bool) -> Value {
     // Inspection reads queue on the single owner thread behind a drive quantum
     // (up to 8 transitions, ~1-2s in unoptimized test builds) and report 503
     // playbook_storage_unknown when that outlasts the 2s inspect deadline.
@@ -311,10 +315,24 @@ async fn get(base: &str, path: &str) -> Value {
             continue;
         }
         assert!(status.is_success(), "{status}: {body}");
-        return body;
+        if observed(&body) || attempt == 5 {
+            return body;
+        }
     }
     unreachable!()
 }
+
+// The live activation comparison is a separate, optional catalog read. An
+// unknown observation may be retried, but a known inactive pin must fail.
+fn activation_observed(run: &Value) -> bool {
+    let definition = &run["definition"];
+    if definition.get("pinned_is_active") == Some(&Value::Null) {
+        assert_eq!(definition.get("active"), Some(&Value::Null), "{definition}");
+        return false;
+    }
+    true
+}
+
 #[tokio::test]
 async fn explicit_unix_owner_starts_dispatches_restarts_without_regrant_and_drains() {
     let mut s = setup().await;
@@ -906,21 +924,30 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
         admission["items"][0]["request_id"],
         next["items"][0]["request_id"]
     );
+    let list_path = "/api/playbooks/inspection/runs?limit=1";
     let mut page = Value::Null;
     for _ in 0..100 {
-        page = get(&base, "/api/playbooks/inspection/runs?limit=1").await;
+        page = get(&base, list_path).await;
         if page["items"].as_array().unwrap().len() == 1 && page["next_cursor"].is_string() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
+    if !activation_observed(&page["items"][0]) {
+        let first_id = page["items"][0]["id"].clone();
+        page = get_when(&base, list_path, |body| {
+            activation_observed(&body["items"][0])
+        })
+        .await;
+        assert_eq!(page["items"][0]["id"], first_id);
+    }
     let run = page["items"][0]["id"]
         .as_str()
         .expect("actual admitted run");
-    let detail = get(
-        &base,
-        &format!("/api/playbooks/inspection/runs/{run}?limit=1"),
-    )
+    let detail_path = format!("/api/playbooks/inspection/runs/{run}?limit=1");
+    let detail = get_when(&base, &detail_path, |body| {
+        activation_observed(&body["run"])
+    })
     .await;
     assert_eq!(detail["run"]["id"], run);
     assert_eq!(detail["run"]["artifact"], binding["artifact"]);
@@ -936,7 +963,7 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
     let definition = &detail["run"]["definition"];
     assert_eq!(definition["version"], "1", "{definition}");
     assert!(definition["name"].as_str().is_some_and(|n| !n.is_empty()));
-    assert_eq!(definition["pinned_is_active"], true);
+    assert_eq!(definition["pinned_is_active"], true, "{definition}");
     assert_eq!(definition["active"]["binding"], "mail");
     assert_eq!(definition["active"]["artifact"], binding["artifact"]);
     assert_eq!(definition["active"]["version"], "1");
@@ -948,11 +975,8 @@ async fn inspection_discovers_actual_admissions_runs_and_public_timeline() {
     assert!(steps.iter().any(|step| step["id"] == "send"), "{steps:?}");
     // X33: no human decision is pending in this fixture.
     assert!(detail["run"]["waiting"].is_null());
-    let parallel_detail_path = format!("/api/playbooks/inspection/runs/{run}?limit=1");
-    let (parallel_list, parallel_detail) = tokio::join!(
-        get(&base, "/api/playbooks/inspection/runs?limit=1"),
-        get(&base, &parallel_detail_path)
-    );
+    let (parallel_list, parallel_detail) =
+        tokio::join!(get(&base, list_path), get(&base, &detail_path));
     assert_eq!(parallel_list["api_version"], "playbooks-inspection-1");
     assert_eq!(parallel_detail["run"]["id"], run);
     assert!(detail["receipts"]["revision"].is_string());

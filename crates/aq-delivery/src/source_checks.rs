@@ -1,6 +1,7 @@
 //! Checks over aq-git's public source observations, moved out of the
 //! aq-server profiled source reader. Pure: no I/O and no decision. A `false`
 //! or `None` means the observation does not prove what the caller needs.
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -12,15 +13,69 @@ pub fn hex40(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// The project's integration-branch head as last published by AQ. Recorded in
+/// the `published` delivery evidence that established it; the newest
+/// `sequence` per project, repository, generation and target is current.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceHead {
+    pub schema_version: u32,
+    pub project_id: Uuid,
+    pub repository_id: Uuid,
+    pub binding_generation: u64,
+    pub target: String,
+    pub sequence: u64,
+    /// The published commit (40 lowercase hex digits).
+    pub oid: String,
+    /// The aq-git candidate retention handle that retains `oid` centrally.
+    pub retention_handle: Uuid,
+    pub candidate_operation_id: Uuid,
+    pub publication_operation_id: Uuid,
+    /// The `expected_old` this publication fast-forwarded.
+    pub previous: String,
+}
+impl SourceHead {
+    pub fn validate(&self) -> bool {
+        self.schema_version == 1
+            && ![
+                self.project_id,
+                self.repository_id,
+                self.retention_handle,
+                self.candidate_operation_id,
+                self.publication_operation_id,
+            ]
+            .iter()
+            .any(Uuid::is_nil)
+            && (1..=i64::MAX as u64).contains(&self.binding_generation)
+            && (1..=i64::MAX as u64).contains(&self.sequence)
+            && self.target.starts_with("refs/heads/")
+            && self.target.len() <= 1024
+            && hex40(&self.oid)
+            && hex40(&self.previous)
+    }
+}
+
 /// The commit a complete, original, fresh `repo.observation` reports for
 /// `reference` at `generation`, as of `now`.
 pub fn resolve_ref(value: &Value, reference: &str, generation: u64, now: u64) -> Option<String> {
     let completed = value["completed_at_ms"].as_u64()?;
+    if completed > now || now - completed > 30_000 {
+        return None;
+    }
+    observed_ref(value, reference, generation).map(str::to_owned)
+}
+
+/// The retained SHA-1 observation of this exact ref and generation, without a
+/// freshness requirement. Adoption also checks the forge's current default.
+pub(crate) fn observed_ref<'a>(
+    value: &'a Value,
+    reference: &str,
+    generation: u64,
+) -> Option<&'a str> {
+    let completed = value["completed_at_ms"].as_u64()?;
     let started = value["started_at_ms"].as_u64()?;
     if started == 0
         || completed < started
-        || completed > now
-        || now - completed > 30000
         || value["binding_generation"] != generation
         || value["observation_id"]
             .as_str()
@@ -34,7 +89,7 @@ pub fn resolve_ref(value: &Value, reference: &str, generation: u64, now: u64) ->
         return None;
     }
     let hex = value["refs"][reference].as_str()?;
-    hex40(hex).then(|| hex.into())
+    hex40(hex).then_some(hex)
 }
 
 /// A `retention.inspect` reply proves `handle` is an exact, active, complete
@@ -141,5 +196,44 @@ mod tests {
             .unwrap()
             .remove("release_operation");
         assert!(!retention_holds(&incomplete, handle, repository, 2, &hex));
+    }
+}
+
+#[cfg(test)]
+mod source_head_tests {
+    use super::*;
+    fn head() -> SourceHead {
+        SourceHead {
+            schema_version: 1,
+            project_id: Uuid::from_u128(1),
+            repository_id: Uuid::from_u128(2),
+            binding_generation: 1,
+            target: "refs/heads/main".into(),
+            sequence: 1,
+            oid: "a".repeat(40),
+            retention_handle: Uuid::from_u128(3),
+            candidate_operation_id: Uuid::from_u128(3),
+            publication_operation_id: Uuid::from_u128(4),
+            previous: "b".repeat(40),
+        }
+    }
+    #[test]
+    fn source_head_shape_is_exact() {
+        assert!(head().validate());
+        let mut h = head();
+        h.oid = "0".repeat(40);
+        assert!(!h.validate());
+        let mut h = head();
+        h.target = "refs/tags/v1".into();
+        assert!(!h.validate());
+        let mut h = head();
+        h.sequence = 0;
+        assert!(!h.validate());
+        let mut h = head();
+        h.retention_handle = Uuid::nil();
+        assert!(!h.validate());
+        let mut v = serde_json::to_value(head()).unwrap();
+        v["extra"] = json!(1);
+        assert!(serde_json::from_value::<SourceHead>(v).is_err());
     }
 }

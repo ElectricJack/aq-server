@@ -1,11 +1,6 @@
 //! D3 automatic default-policy settlement with a SYNTHETIC Graph peer and a
 //! synthetic retained-source owner row. Check and delivery evidence rows are
 //! the server-owned D6 and D1a/D1b seams, written here as those owners would.
-//!
-//! With the cargo feature `delivery_playbook` (Epic 0, spec 0016 section 7)
-//! the default policy and the automatic publication are compiled out: their
-//! tests run only without it, and [`playbook`] tests what replaces them.
-#![cfg_attr(feature = "delivery_playbook", allow(dead_code, unused_imports))]
 use super::*;
 use aq_server::profiled_execution::settlement::{self, AutoDisposition, AutoSettlement};
 use axum::{Json, Router, routing::post};
@@ -36,7 +31,7 @@ pub(crate) struct AutoEnv {
     bodies: Arc<Mutex<Vec<Value>>>,
     _directory: tempfile::TempDir,
     #[cfg(feature = "delivery_playbook")]
-    _task_ref: super::pushed_ref::TaskRef,
+    _task_ref: Option<super::pushed_ref::TaskRef>,
 }
 
 async fn auto_env(delivery: &str, graph_status: axum::http::StatusCode) -> AutoEnv {
@@ -89,7 +84,7 @@ pub(crate) async fn auto_env_source(
     changed: bool,
     conclusion: Option<&str>,
 ) -> AutoEnv {
-    let (mut f, _, mut report) = Box::pin(prepare_with_policy_checks(
+    let (f, _, mut report) = Box::pin(prepare_with_policy_checks(
         true,
         true,
         graph_profile,
@@ -104,64 +99,65 @@ pub(crate) async fn auto_env_source(
     if let Some(conclusion) = conclusion {
         report.conclusion = Label::new(conclusion).unwrap();
     }
-    #[cfg(not(feature = "delivery_playbook"))]
-    let source = Uuid::new_v4();
-    #[cfg(not(feature = "delivery_playbook"))]
-    report.source_receipt_ids.push(source);
-    // Spec 0016 §5.1: the source is the task ref at the pushed commit, and
-    // the report keys its evidence.
+    finish_auto_env(f, report, graph_status, changed, false).await
+}
+
+async fn finish_auto_env(
+    mut f: Fixture,
+    mut report: ResultReport,
+    graph_status: axum::http::StatusCode,
+    changed: bool,
+    enrolled: bool,
+) -> AutoEnv {
+    let auth = context(&f).await;
     #[cfg(feature = "delivery_playbook")]
-    let (source, task_ref) = {
+    let task_ref = if enrolled {
         let task_ref = super::pushed_ref::task_ref(&mut f, &mut report).await;
-        let base = &f.profiled.source.base.hex;
         let head = if changed {
             "4".repeat(40)
         } else {
-            base.clone()
+            f.profiled.source.base.hex.clone()
         };
         *task_ref.at.lock().unwrap() = Some(head.clone());
-        let reference = task_ref.task_ref.clone();
-        let pushed = aq_delivery::git_grant::PushedRef { reference, head };
-        let pushed = aq_delivery::git_grant::Pushed::At(pushed);
-        let auth = context(&f).await;
+        let pushed = aq_delivery::git_grant::Pushed::At(aq_delivery::git_grant::PushedRef {
+            reference: task_ref.task_ref.clone(),
+            head,
+        });
         let headers = super::pushed_ref::headers(&pushed);
-        let recorded = results::record_pushed(&f.state, &auth, &report, &headers);
-        recorded.await.unwrap();
-        (report.report_id, task_ref)
-    };
-    #[cfg(not(feature = "delivery_playbook"))]
-    results::record(&f.state, &context(&f).await, &report)
-        .await
-        .unwrap();
-    // Epic 0 (spec 0016 section 7): the record hook records the result's facts
-    // (its pushed source included) and gives no verdict: no settlement row.
-    #[cfg(feature = "delivery_playbook")]
-    {
+        results::record_pushed(&f.state, &auth, &report, &headers)
+            .await
+            .unwrap();
         assert_eq!(settlement_rows(&f, report.report_id).await, 0);
         let facts = result_facts(&f, report.report_id)
             .await
             .expect("facts recorded");
         assert_eq!(facts["source"]["changed"], json!(changed));
-    }
-    // The record hook evaluated already: nothing is retained yet, so it holds.
-    #[cfg(not(feature = "delivery_playbook"))]
-    let first = settlement_row(&f, report.report_id).await;
-    #[cfg(not(feature = "delivery_playbook"))]
-    if matches!(
-        report.outcome,
-        aq_admission::transport::ProcessOutcome::Success
-    ) {
-        assert_eq!(first.0, "held");
-        assert_eq!(first.1.as_deref(), Some("source_not_retained"));
+        Some(task_ref)
     } else {
-        // Acceptance precedes every evidence gate: a non-Success report is
-        // refused at once, retained source or not.
-        assert_eq!(first.0, "rework_required");
-        assert!(matches!(
-            first.1.as_deref(),
-            Some("not_accepted" | "agent_blocked")
-        ));
-    }
+        None
+    };
+    let source = if enrolled {
+        report.report_id
+    } else {
+        let source = Uuid::new_v4();
+        report.source_receipt_ids.push(source);
+        results::record(&f.state, &auth, &report).await.unwrap();
+        let first = settlement_row(&f, report.report_id).await;
+        if matches!(
+            report.outcome,
+            aq_admission::transport::ProcessOutcome::Success
+        ) {
+            assert_eq!(first.0, "held");
+            assert_eq!(first.1.as_deref(), Some("source_not_retained"));
+        } else {
+            assert_eq!(first.0, "rework_required");
+            assert!(matches!(
+                first.1.as_deref(),
+                Some("not_accepted" | "agent_blocked")
+            ));
+        }
+        source
+    };
 
     // Synthetic retained-source owner row (validation only, not real Git).
     let pool = &f.db.pool().await;
@@ -327,7 +323,6 @@ async fn result_facts(f: &Fixture, report: Uuid) -> Option<Value> {
 }
 
 impl AutoEnv {
-    #[cfg(not(feature = "delivery_playbook"))]
     async fn settle(&self) -> AutoSettlement {
         settlement::settle_after_record(&self.f.state, self.report.report_id)
             .await
@@ -374,7 +369,6 @@ impl AutoEnv {
     }
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn false_pass_result_does_not_complete_task() {
     let env = auto_env("not_required", axum::http::StatusCode::OK).await;
@@ -412,7 +406,6 @@ async fn false_pass_result_does_not_complete_task() {
         .await;
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn false_pass_result_does_not_complete_task_without_published_delivery() {
     let env = auto_env("required", axum::http::StatusCode::OK).await;
@@ -435,7 +428,6 @@ async fn false_pass_result_does_not_complete_task_without_published_delivery() {
     assert_eq!(s.evidence["checks"][0]["verdict"], "passed", "{s:?}");
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn accepted_result_completes_task_with_expected_version() {
     let env = auto_env("required", axum::http::StatusCode::OK).await;
@@ -488,7 +480,6 @@ async fn accepted_result_completes_task_with_expected_version() {
     );
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn version_conflict_holds_and_never_overwrites() {
     let env = auto_env("not_required", axum::http::StatusCode::CONFLICT).await;
@@ -506,7 +497,6 @@ async fn version_conflict_holds_and_never_overwrites() {
     assert!(env.holds_task().await);
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn parked_suspension_holds_as_suspended_until_successor_ack() {
     let env = auto_env("required", axum::http::StatusCode::OK).await;
@@ -554,7 +544,6 @@ async fn parked_suspension_holds_as_suspended_until_successor_ack() {
 /// MS1 review B1: a production-shaped offer (policy actor, no required checks,
 /// delivery not required) completes only on a Success report. A failed or an
 /// unproven (Unknown) run never completes the task or releases dependents.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn failed_or_unknown_report_never_completes_a_task_without_required_checks() {
     use aq_admission::transport::ProcessOutcome;
@@ -670,18 +659,15 @@ pub(crate) fn silent_git(socket: &std::path::Path) -> Arc<AtomicUsize> {
     count
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 struct PublishEnv {
     env: AutoEnv,
     delivery: aq_server::delivery::DeliveryService,
     socket: std::path::PathBuf,
     _git: tempfile::TempDir,
 }
-#[cfg(not(feature = "delivery_playbook"))]
 async fn publish_env() -> PublishEnv {
     publish_env_with(None).await
 }
-#[cfg(not(feature = "delivery_playbook"))]
 async fn publish_env_with(outcome: Option<aq_admission::transport::ProcessOutcome>) -> PublishEnv {
     let env = auto_env_with("required", axum::http::StatusCode::OK, true, outcome).await;
     let (checkpoint, validator) = (env.checkpoint.clone(), env.validator.clone());
@@ -736,7 +722,6 @@ pub(crate) fn ready_candidate(candidate: &str) -> Value {
         "conflicting_paths":[],"conflict_path_count":0,"conflict_paths_truncated":false}})
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn retained_result_publishes_then_completes_and_advances_source() {
     use aq_server::profiled_execution::settlement::publication;
@@ -810,7 +795,6 @@ async fn retained_result_publishes_then_completes_and_advances_source() {
 /// changing a file succeeds. Its retained checkpoint is the admitted base, so
 /// required delivery has nothing to publish: no candidate, no push, no
 /// delivery evidence, and the task completes.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn unchanged_source_completes_without_publication() {
     use aq_server::profiled_execution::settlement::publication;
@@ -872,7 +856,6 @@ async fn unchanged_source_completes_without_publication() {
 
 /// Review R1-M2: a Failed report whose agent said `Outcome: blocked` is reworked
 /// with the reason `agent_blocked`; any other failure stays `not_accepted`.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_blocked_agent_is_reworked_as_agent_blocked() {
     use aq_admission::transport::ProcessOutcome;
@@ -905,7 +888,6 @@ async fn a_blocked_agent_is_reworked_as_agent_blocked() {
 /// Review I-2: a worker report whose agent claimed changes (or copied back
 /// only files Git ignores) while the retained source is unchanged is refused
 /// for rework, never completed as `no_change`; a claim of none completes.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn claimed_changes_that_did_not_land_are_reworked() {
     for (conclusion, expected) in [
@@ -947,7 +929,6 @@ async fn claimed_changes_that_did_not_land_are_reworked() {
     }
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn moved_target_is_unpublished_rework_and_never_advances_source() {
     use aq_server::profiled_execution::settlement::publication;
@@ -1029,7 +1010,6 @@ pub(crate) async fn head_of(
     .unwrap()
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn non_success_or_cancelled_report_never_reaches_aq_git() {
     use aq_admission::transport::ProcessOutcome;
@@ -1080,7 +1060,6 @@ async fn non_success_or_cancelled_report_never_reaches_aq_git() {
     assert!(evidence_rows(&p.env).await.is_empty());
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn cancel_between_candidate_and_publish_is_never_published() {
     use aq_server::profiled_execution::settlement::publication;
@@ -1114,7 +1093,6 @@ async fn cancel_between_candidate_and_publish_is_never_published() {
     assert!(head_of(env).await.is_none());
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn cancel_during_publishing_is_recorded_as_already_publishing() {
     use aq_server::profiled_execution::settlement::publication;
@@ -1153,7 +1131,6 @@ async fn cancel_during_publishing_is_recorded_as_already_publishing() {
     assert_eq!(head_of(env).await.unwrap().oid, candidate);
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn ambiguous_or_foreign_presence_stays_held_without_a_source_head() {
     use aq_server::profiled_execution::settlement::publication;
@@ -1217,7 +1194,6 @@ async fn ambiguous_or_foreign_presence_stays_held_without_a_source_head() {
 /// receipt pinned by the report; a settled read-only AQ effect ledger), so the
 /// failed attempt becomes replaceable. It never completes the task, never
 /// releases the claim, and never touches a confirmed (Success) settlement.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceable() {
     use aq_admission::transport::ProcessOutcome;
@@ -1347,7 +1323,6 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
 
 /// The facts writer never acts on a confirmed (Success) settlement or on a
 /// report that is not finally reworked.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn replacement_facts_are_never_recorded_for_a_confirmed_result() {
     use aq_admission::transport::ProcessOutcome;
@@ -1389,6 +1364,153 @@ mod playbook {
         playbooks::domain::delivery_decisions::Settled,
         profiled_execution::settlement::{complete_by_playbook, return_by_playbook},
     };
+
+    async fn auto_env(delivery: &str, status: axum::http::StatusCode) -> AutoEnv {
+        let (f, _, report) = Box::pin(prepare_with_policy_checks(
+            true,
+            true,
+            None,
+            false,
+            Some(default_policy(delivery)),
+            true,
+        ))
+        .await;
+        finish_auto_env(f, report, status, true, true).await
+    }
+
+    #[tokio::test]
+    async fn two_projects_keep_distinct_result_paths_after_enrollment_changes() {
+        use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
+        let mut legacy = super::auto_env("not_required", axum::http::StatusCode::OK).await;
+        let lineage = aq_selection::TaskLineage {
+            project_id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            task_id: Uuid::new_v4(),
+        };
+        let mut f = common::profiled::fixture_on(
+            legacy.f.db.clone(),
+            Some((legacy.f.actor, lineage.clone())),
+        )
+        .await;
+        f.state.config = legacy.f.state.config.clone();
+        let (f, _, report) = Box::pin(prepare_on(
+            f,
+            true,
+            true,
+            None,
+            false,
+            Some(default_policy("not_required")),
+            true,
+        ))
+        .await;
+        let mut enrolled = finish_auto_env(f, report, axum::http::StatusCode::OK, true, true).await;
+        // An in-flight legacy attempt's project is now enabled. The project's
+        // earlier enrollment for the other attempt was removed.
+        let mut config = (*legacy.f.state.config).clone();
+        config.delivery = Some(aq_delivery::github::DeliveryConfig {
+            project_allowlist: [legacy.f.selection.lineage.project_id].into(),
+            git_http_socket: Some(
+                enrolled
+                    .f
+                    .state
+                    .source_retention
+                    .as_ref()
+                    .unwrap()
+                    .config
+                    .git_socket
+                    .clone(),
+            ),
+            ..Default::default()
+        });
+        let config = Arc::new(config);
+        legacy.f.state.config = config.clone();
+        enrolled.f.state.config = config;
+
+        let pool = legacy.f.db.pool().await;
+        let port = PgDelivery(pool.clone());
+        let pending = port.pending(None, 8).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].project_id, lineage.project_id);
+        assert_eq!(pending[0].result_id, enrolled.report.report_id);
+        assert!(
+            port.latest(legacy.f.selection.lineage.task_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            delivery_store::undecided(
+                &mut *pool.acquire().await.unwrap(),
+                legacy.report.binding.attempt_id
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            complete_by_playbook(&legacy.f.state, legacy.report.report_id)
+                .await
+                .is_err()
+        );
+        assert!(
+            settlement::settle_after_record(&enrolled.f.state, enrolled.report.report_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        legacy
+            .check(
+                legacy.source,
+                &legacy.checkpoint,
+                &legacy.validator,
+                "passed",
+            )
+            .await;
+        // Replaying the report drives the frozen legacy policy to completion.
+        results::record_pushed(
+            &legacy.f.state,
+            &context(&legacy.f).await,
+            &legacy.report,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            settlement_row(&legacy.f, legacy.report.report_id).await.0,
+            "confirmed"
+        );
+        assert_eq!(legacy.writes.load(Ordering::SeqCst), 1);
+        assert!(
+            result_facts(&legacy.f, legacy.report.report_id)
+                .await
+                .is_none()
+        );
+
+        // The enrolled attempt replays its original pushed facts after the
+        // config switch and waits for its own completion decision.
+        results::record_pushed(
+            &enrolled.f.state,
+            &context(&enrolled.f).await,
+            &enrolled.report,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            settlement_rows(&enrolled.f, enrolled.report.report_id).await,
+            0
+        );
+        assert_eq!(
+            result_facts(&enrolled.f, enrolled.report.report_id)
+                .await
+                .unwrap()["source"]["checkpoint"],
+            enrolled.checkpoint
+        );
+        assert_eq!(complete(&enrolled).await, Settled::Completed);
+        assert_eq!(enrolled.writes.load(Ordering::SeqCst), 1);
+        assert!(port.pending(None, 8).await.unwrap().is_empty());
+    }
 
     async fn complete(env: &AutoEnv) -> Settled {
         complete_by_playbook(&env.f.state, env.report.report_id)
@@ -1486,11 +1608,14 @@ mod playbook {
     #[tokio::test]
     async fn work_return_reworks_the_result_once_and_leaves_the_claim_to_the_replacement() {
         let env = auto_env("not_required", axum::http::StatusCode::OK).await;
-        assert_eq!(send_back(&env, "checks_failed").await, Settled::Returned);
+        assert_eq!(
+            send_back(&env, "delivery_unpublished").await,
+            Settled::Returned
+        );
         let row = settlement_row(&env.f, env.report.report_id).await;
         assert_eq!(
             (row.0.as_str(), row.1.as_deref()),
-            ("rework_required", Some("checks_failed"))
+            ("rework_required", Some("delivery_unpublished"))
         );
         let evidence: Value =
             sqlx::query_scalar("SELECT evidence FROM profiled_auto_settlements WHERE report_id=$1")
@@ -1505,6 +1630,15 @@ mod playbook {
         // No Graph write, and the claim stays until the replacement owner releases it.
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
         assert!(env.holds_task().await);
+        let mut db = env.f.db.pool().await.acquire().await.unwrap();
+        let task = env.f.selection.lineage.task_id;
+        assert!(
+            !aq_profiled_state::replacement_sql::delivery_unpublished(&mut db, task)
+                .await
+                .unwrap(),
+            "a playbook return does not trigger the legacy D1 hold"
+        );
+
         // The replacement facts the first call could not prove are swept later.
         let swept = settlement::reworked_without_facts(&env.f.state, None, 8).await;
         assert!(swept.unwrap().contains(&env.report.report_id));
@@ -1519,7 +1653,7 @@ mod playbook {
         let row = settlement_row(&env.f, env.report.report_id).await;
         assert_eq!(
             (row.0.as_str(), row.1.as_deref()),
-            ("rework_required", Some("checks_failed"))
+            ("rework_required", Some("delivery_unpublished"))
         );
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
     }
@@ -1645,16 +1779,18 @@ mod playbook {
                 "Changes: src/lib.rs; Checks: cargo test",
             ),
         ] {
-            let env = Box::pin(auto_env_source(
-                "not_required",
-                axum::http::StatusCode::OK,
-                false,
-                Some(outcome),
+            let (f, _, mut report) = Box::pin(prepare_with_policy_checks(
+                true,
+                true,
                 None,
-                changed,
-                Some(conclusion),
+                false,
+                Some(default_policy("not_required")),
+                false,
             ))
             .await;
+            report.outcome = outcome;
+            report.conclusion = Label::new(conclusion).unwrap();
+            let env = finish_auto_env(f, report, axum::http::StatusCode::OK, changed, true).await;
             let auth = context(&env.f).await;
             results::record(&env.f.state, &auth, &env.report)
                 .await

@@ -191,6 +191,7 @@ pub struct Assembly<'a> {
     pub source_operation: Uuid,
     pub logical_identity: &'a str,
     pub generation: u64,
+    pub enrolled: bool,
 }
 /// Re-derives the frozen confinement mode from the selection's placement facts
 /// and the role's execution profile.
@@ -220,6 +221,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         source_operation,
         logical_identity,
         generation,
+        enrolled,
     } = input;
     let selected: &ResolvedSelection = decision
         .outcome
@@ -304,18 +306,31 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             return Err(refused());
         }
     }
-    // D3: the default completion policy is settled by the policy actor.
-    #[cfg(not(feature = "delivery_playbook"))]
-    let review = configuration
-        .definition_bodies
-        .iter()
-        .find(|d| d.artifact() == &validation)
-        .map(|d| crate::profiled_execution::settlement::review_requirement(d.body()))
-        .ok_or_else(|| refused())?;
-    // Spec 0016 sections 7 and 11.2: nothing is chosen at offer time. The
-    // delivery playbook is the policy actor; it asks a person with `decision.request`.
+    let node = match selected.target {
+        aq_selection::ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
+        _ => return Err(refused()),
+    };
+    let attempt_id = Uuid::new_v5(
+        &source_operation,
+        &canonical(&(decision.decision_id, node, generation))?,
+    );
+    // The persisted grant and the review requirement are published together.
     #[cfg(feature = "delivery_playbook")]
-    let review = aq_admission::outcome::ReviewRequirement::PolicyActor;
+    let git = if enrolled {
+        Some(super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?)
+    } else {
+        None
+    };
+    let review = if enrolled {
+        aq_admission::outcome::ReviewRequirement::PolicyActor
+    } else {
+        configuration
+            .definition_bodies
+            .iter()
+            .find(|d| d.artifact() == &validation)
+            .map(|d| super::super::settlement::review_requirement(d.body()))
+            .ok_or_else(|| refused())?
+    };
     // Check every required actual body before writing any retained artifact.
     let definitions = unique
         .iter()
@@ -458,14 +473,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         return Err(refused());
     }
     set.entries.push((source_retention_id, source_retained));
-    let node = match selected.target {
-        aq_selection::ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
-        _ => return Err(refused()),
-    };
-    let attempt_id = Uuid::new_v5(
-        &source_operation,
-        &canonical(&(decision.decision_id, node, generation))?,
-    );
     let session = wire::SessionIdentity::Remote {
         node_id: node.0,
         boot_id: node.1,
@@ -659,8 +666,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         manifest,
         required_capabilities: required_caps,
     };
-    #[cfg(feature = "delivery_playbook")]
-    let git = super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?;
     let time = now(state)?;
     let deadline = [
         time.checked_add(30000).ok_or_else(|| refused())?,
