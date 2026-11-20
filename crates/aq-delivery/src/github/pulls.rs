@@ -296,7 +296,7 @@ fn record(reported: &mut BTreeMap<String, ChecksState>, name: &str, state: Check
         .or_insert(state);
 }
 /// With required names, only they count and a missing one is pending.
-/// Without, every reported check counts.
+/// Otherwise, every reported check counts and an empty report is pending.
 pub(super) fn evaluate(
     required: &[String],
     reported: &BTreeMap<String, ChecksState>,
@@ -321,7 +321,7 @@ pub(super) fn evaluate(
         .collect();
     let state = if !failed.is_empty() {
         ChecksState::Failed
-    } else if counted.iter().any(|(_, s)| *s == ChecksState::Pending) {
+    } else if counted.is_empty() || counted.iter().any(|(_, s)| *s == ChecksState::Pending) {
         ChecksState::Pending
     } else {
         ChecksState::Passed

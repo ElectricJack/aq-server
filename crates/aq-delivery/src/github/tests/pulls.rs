@@ -264,6 +264,11 @@ async fn checks_without_required_names_count_every_reported_check() {
         mock.reply(200, vec![], commit_statuses);
         app.checks(&repo(), 7, None).await.unwrap()
     };
+    let c = check(runs(&[]), statuses(&[])).await;
+    assert_eq!(c.state, ChecksState::Pending);
+    assert!(c.required.is_empty());
+    assert!(c.failed.is_empty());
+
     let c = check(
         runs(&[("a", "completed", Some("success")), ("b", "queued", None)]),
         statuses(&[]),
