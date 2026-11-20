@@ -164,10 +164,44 @@ pub async fn record_locked(
     Ok(())
 }
 
-/// The recorded grant of `attempt` while the attempt still holds its task on
-/// `node` and has recorded no result: once a result names the task ref's
-/// head, the attempt cannot move it. The `/v1/git/grants/<attempt>` route
-/// serves it.
+/// The frozen delivery selector, independent of the attempt's lifecycle.
+pub async fn exists<'e>(db: impl sqlx::PgExecutor<'e>, attempt: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM delivery_git_grants WHERE attempt_id=$1)")
+        .bind(attempt)
+        .fetch_one(db)
+        .await
+}
+
+pub enum Lookup {
+    Granted(GitGrant),
+    Absent,
+    WrongNode,
+}
+
+/// The stored grant and its node ownership, including stopped and settled attempts.
+pub async fn lookup(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Lookup> {
+    let row = sqlx::query(
+        "SELECT a.node_id,g.repository_id,g.base,g.task_ref,g.lease,g.update_from_main \
+         FROM execution_attempts a LEFT JOIN delivery_git_grants g USING(attempt_id) \
+         WHERE a.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(Lookup::Absent);
+    };
+    if row.get::<Uuid, _>("node_id") != node {
+        return Ok(Lookup::WrongNode);
+    }
+    Ok(match row.get::<Option<Uuid>, _>("repository_id") {
+        Some(repository) => Lookup::Granted(decode_grant(&row, repository)),
+        None => Lookup::Absent,
+    })
+}
+
+/// Smart HTTP authority expires when the attempt releases its hold or
+/// records a result. Discovery via `lookup` is independent of this fence.
 pub async fn live(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Option<GitGrant>> {
     let row = sqlx::query(
         "SELECT g.repository_id,g.base,g.task_ref,g.lease,g.update_from_main \
@@ -179,14 +213,18 @@ pub async fn live(pool: &PgPool, attempt: Uuid, node: Uuid) -> sqlx::Result<Opti
     .bind(node)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|row| GitGrant {
-        endpoint: endpoint(row.get("repository_id")),
-        repository_id: row.get("repository_id"),
+    Ok(row.map(|row| decode_grant(&row, row.get("repository_id"))))
+}
+
+fn decode_grant(row: &sqlx::postgres::PgRow, repository_id: Uuid) -> GitGrant {
+    GitGrant {
+        endpoint: endpoint(repository_id),
+        repository_id,
         base: row.get("base"),
         task_ref: row.get("task_ref"),
         lease: row.get("lease"),
         update_from_main: row.get("update_from_main"),
-    }))
+    }
 }
 
 /// What a result request says of the task branch (spec 0016 §5.2), beside

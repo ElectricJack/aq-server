@@ -6,6 +6,8 @@ pub mod daily_schedules;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
 #[cfg(feature = "delivery_playbook")]
+pub mod delivery_runs;
+#[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
 #[cfg(feature = "delivery_playbook")]
 pub mod host10;

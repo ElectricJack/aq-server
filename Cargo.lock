@@ -549,10 +549,12 @@ dependencies = [
 name = "aq-playbook-domain"
 version = "0.1.0"
 dependencies = [
+ "aq-delivery",
  "aq-internal-work",
  "aq-machine-control",
  "aq-playbook-host",
  "aq-playbooks-compiler",
+ "aq-role-settings",
  "aq-routing",
  "aq-session-protocol",
  "async-trait",
@@ -650,6 +652,7 @@ dependencies = [
 name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
+ "aq-admission 0.1.13",
  "aq-machine-control",
  "aq-profiles",
  "aq-selection",

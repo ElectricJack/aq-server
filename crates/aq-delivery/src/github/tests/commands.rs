@@ -119,9 +119,13 @@ impl FakeGit {
 /// The aq-git epic 0 operations, answered as a healthy central git would.
 fn healthy(request: &Value) -> Value {
     match request["operation"].as_str().unwrap() {
-        "repo.retain_ref" => json!({"ref": request["params"]["ref"], "head": sha('9'),
-            "retention_handle": Uuid::from_u128(5)}),
-        "ref.publish" => json!({"outcome": "applied", "head": sha('a')}),
+        "repo.retain_ref" => {
+            json!({"ref": request["params"]["ref"], "head": {"algorithm":"sha1","hex":sha('9')},
+            "retention_handle": Uuid::from_u128(5)})
+        }
+        "publish" => {
+            json!({"outcome": "applied", "target":request["params"]["target"], "old":request["params"]["expected_old"], "new":{"algorithm":"sha1","hex":sha('a')}})
+        }
         "ref.delete" => json!({"outcome": "deleted"}),
         other => panic!("unexpected aq-git operation {other}"),
     }
@@ -183,7 +187,7 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     let (delivery, _) = delivery(&git).await;
     let c = done(
         delivery
-            .branch_publish(Uuid::from_u128(2), &target(), TASK, None)
+            .branch_publish(Uuid::from_u128(2), &target(), TASK, None, Some(&sha('a')))
             .await,
     );
     assert_eq!(
@@ -192,29 +196,53 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     );
     let request = git.request(0);
     let branch = task_branch(TASK);
-    assert_eq!(request["operation"], "ref.publish");
+    assert_eq!(request["operation"], "publish");
     assert_eq!(
         request["params"],
-        json!({"ref": branch, "target": branch, "expected_old": "0".repeat(40)})
+        json!({"source_ref":branch, "target":branch, "expected_old":{"algorithm":"sha1","hex":"0".repeat(40)}, "expected_source":{"algorithm":"sha1","hex":sha('a')}})
     );
     // A later publication leases on the head the last one reached.
     let old = sha('1');
     done(
         delivery
-            .branch_publish(Uuid::from_u128(3), &target(), TASK, Some(&old))
+            .branch_publish(Uuid::from_u128(3), &target(), TASK, Some(&old), None)
             .await,
     );
-    assert_eq!(git.request(1)["params"]["expected_old"], old);
+    assert_eq!(git.request(1)["params"]["expected_old"]["hex"], old);
+    assert_eq!(git.request(1)["params"]["update"], "replace");
+}
+
+#[tokio::test]
+async fn publishing_a_recorded_result_checks_its_source_and_recovers_an_existing_remote_head() {
+    let git = FakeGit::start(|request| {
+        let source = &request["params"]["expected_source"];
+        match source["hex"].as_str() {
+            Some(hex) if hex == sha('a') => {
+                json!({"outcome":"already_present","observed_target":source})
+            }
+            Some(hex) if hex == sha('b') => json!({"error":{"code":"source_moved"}}),
+            _ => {
+                json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha('a')}})
+            }
+        }
+    });
+    let (delivery, _) = delivery(&git).await;
+    for (head, outcome) in [('a', "published"), ('b', "conflict"), ('c', "refused")] {
+        let step = delivery
+            .branch_publish(Uuid::new_v4(), &target(), TASK, None, Some(&sha(head)))
+            .await;
+        assert_eq!(done(step).outcome, outcome);
+    }
 }
 
 #[tokio::test]
 async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable_remote() {
-    let git = FakeGit::start(|r| match r["params"]["expected_old"].as_str() {
+    let git = FakeGit::start(|r| match r["params"]["expected_old"]["hex"].as_str() {
         Some(old) if old == "0".repeat(40) => {
             json!({"outcome": "rejected", "reason": "target_moved"})
         }
         Some(old) if old == sha('2') => {
-            json!({"error": {"code": "ref_not_found", "message": "no such ref"}})
+            json!({"error": {"code": "object_unavailable", "message": "no such ref"}})
         }
         _ => {
             json!({"error": {"code": "remote_unreachable", "message": "x", "retry": "safe_same_operation"}})
@@ -224,7 +252,7 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
     let publish = async |old: Option<&str>| {
         done(
             delivery
-                .branch_publish(Uuid::from_u128(4), &target(), TASK, old)
+                .branch_publish(Uuid::from_u128(4), &target(), TASK, old, None)
                 .await,
         )
     };
@@ -249,10 +277,12 @@ async fn aq_git_is_never_asked_to_publish_or_delete_outside_the_task_prefix() {
     let repo = target().git;
     for reference in ["refs/heads/main", "refs/tags/aq/x", "refs/heads/aq/../main"] {
         let published = port
-            .publish_ref(Uuid::from_u128(1), &repo, reference, None)
+            .publish_ref(Uuid::from_u128(1), &repo, reference, None, None)
             .await;
         assert_eq!(published.unwrap_err().code, "invalid_ref", "{reference}");
-        let deleted = port.delete_ref(Uuid::from_u128(1), &repo, reference).await;
+        let deleted = port
+            .delete_ref(Uuid::from_u128(1), &repo, reference, None)
+            .await;
         assert_eq!(deleted.unwrap_err().code, "invalid_ref", "{reference}");
     }
     assert!(git.operations().is_empty());
@@ -263,6 +293,7 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     let git = FakeGit::start(healthy);
     let (delivery, mock) = delivery(&git).await;
     mock.reply(200, vec![], json!([pull(7, json!({}))]));
+    mock.reply(200, vec![], pull(7, json!({})));
     let c = done(
         delivery
             .pull_request_open(&target(), TASK, "Task", "Report")
@@ -276,7 +307,7 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     assert_eq!(c.pull_request.unwrap().state, "open");
     assert_eq!(
         mock.seen()[1].query.as_deref(),
-        Some(format!("state=open&head=Acme%3Aaq%2F{TASK}&base=main").as_str())
+        Some(format!("state=all&head=Acme%3Aaq%2F{TASK}&base=main").as_str())
     );
     // None open: opened now.
     mock.reply(200, vec![], json!([]));
@@ -316,12 +347,10 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     );
 }
 
-/// One poll with a required list: the pull request (state), its mergeability,
-/// then the checks (pull request, protection requirements, runs, statuses).
-fn poll(mock: &Mock, state: Value, mergeable: Value, check_runs: Value) {
+/// One poll with a required list: the PR, then the PR and check information.
+fn poll(mock: &Mock, state: Value, checked: Value, check_runs: Value) {
     mock.reply(200, vec![], state);
-    mock.reply(200, vec![], mergeable);
-    mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(200, vec![], checked);
     mock.reply(200, vec![], json!([]));
     mock.reply(200, vec![], json!({"name": "main", "protected": false}));
     mock.reply(200, vec![], check_runs);
@@ -366,7 +395,6 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
     assert_eq!(p.observed.unwrap().checks_failed, ["unit"]);
 
     // A conflict is found before the checks are read.
-    mock.reply(200, vec![], open());
     mock.reply(
         200,
         vec![],
@@ -415,6 +443,222 @@ fn the_wait_is_bounded_by_the_longest_check_wait_setting() {
     assert_eq!(bounded_wait_ms(604_800_000, 3_600_000), 3_600_000);
 }
 
+async fn poll_result(delivery: &Delivery, pr: u64, head: &str) -> Option<Completion> {
+    delivery
+        .step(
+            Uuid::new_v4(),
+            "pull_request.await_checks",
+            &json!({
+                "pull_request": pr, "result_head": head,
+                "check_target": target(),
+                "required": ["check", "deployment"], "deadline_at_ms": 5_000
+            }),
+            &target(),
+            1_000,
+        )
+        .await
+        .unwrap()
+        .step
+        .map(done)
+}
+
+#[tokio::test]
+async fn two_independent_prs_repair_and_retest_the_second_after_the_first_lands() {
+    let git = FakeGit::start(|request| {
+        let mut reply = healthy(request);
+        match request["operation"].as_str().unwrap() {
+            "repo.retain_ref" => reply["head"]["hex"] = json!(sha('d')),
+            "publish" => reply["new"]["hex"] = json!(sha('e')),
+            _ => {}
+        }
+        reply
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let second_task = Uuid::from_u128(0x2345);
+    let second = |head, base, state| {
+        pull(
+            8,
+            json!({
+                "mergeable_state": state,
+                "head": {"ref": format!("aq/{second_task}"), "sha": sha(head)},
+                "base": {"ref": "main", "sha": sha(base)},
+            }),
+        )
+    };
+    let green = || {
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ])
+    };
+    let first = pull(7, json!({}));
+    let early_second = second('b', 'c', "clean");
+    poll(&mock, first.clone(), first.clone(), green());
+    assert_eq!(
+        poll_result(&delivery, 7, &sha('a')).await.unwrap().outcome,
+        "passed"
+    );
+    poll(&mock, early_second.clone(), early_second, green());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('b')).await.unwrap().outcome,
+        "passed"
+    );
+
+    mock.reply(200, vec![], first);
+    mock.reply(200, vec![], json!({"sha": sha('d'), "merged": true}));
+    let merge = async |task, pr, head| {
+        done(
+            delivery
+                .pull_request_merge(
+                    Uuid::new_v4(),
+                    &target(),
+                    task,
+                    pr,
+                    MergeMethod::Merge,
+                    &sha(head),
+                )
+                .await,
+        )
+    };
+    assert_eq!(merge(TASK, 7, 'a').await.outcome, "merged");
+
+    // The next poll and merge both request the existing update-from-main
+    // repair, even though this head's checks passed before the first merge.
+    let behind = second('b', 'd', "behind");
+    mock.reply(200, vec![], behind.clone());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('b')).await.unwrap().outcome,
+        "conflict"
+    );
+    mock.reply(200, vec![], behind);
+    assert_eq!(merge(second_task, 8, 'b').await.outcome, "conflict");
+    assert_eq!(
+        git.operations(),
+        ["ref.delete"],
+        "the second branch stays in place"
+    );
+
+    // Repair publishes a new head on the same task branch and PR. Results
+    // for the old head cannot let the repaired PR skip its new checks.
+    let sync = done(delivery.main_sync(Uuid::new_v4(), &target()).await);
+    assert_eq!(
+        (sync.outcome, sync.output),
+        ("synced", json!({"head": sha('d')}))
+    );
+    let publish = done(
+        delivery
+            .branch_publish(
+                Uuid::new_v4(),
+                &target(),
+                second_task,
+                Some(&sha('b')),
+                Some(&sha('e')),
+            )
+            .await,
+    );
+    assert_eq!(
+        (publish.outcome, publish.output),
+        ("published", json!({"head": sha('e')}))
+    );
+    let repaired = second('e', 'd', "clean");
+    mock.reply(200, vec![], repaired.clone());
+    assert!(poll_result(&delivery, 8, &sha('b')).await.is_none());
+    poll(&mock, repaired.clone(), repaired.clone(), runs(&[]));
+    assert!(poll_result(&delivery, 8, &sha('e')).await.is_none());
+    poll(&mock, repaired.clone(), repaired.clone(), green());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('e')).await.unwrap().outcome,
+        "passed"
+    );
+    mock.reply(200, vec![], repaired);
+    mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
+    assert_eq!(merge(second_task, 8, 'e').await.outcome, "merged");
+    assert_eq!(
+        git.operations(),
+        ["ref.delete", "repo.retain_ref", "publish", "ref.delete"]
+    );
+    assert_eq!(git.request(0)["params"]["ref"], task_branch(TASK));
+    assert_eq!(git.request(2)["params"]["target"], task_branch(second_task));
+    assert_eq!(git.request(2)["params"]["expected_old"]["hex"], sha('b'));
+    assert_eq!(git.request(2)["params"]["expected_source"]["hex"], sha('e'));
+    assert_eq!(git.request(2)["params"]["update"], "replace");
+    assert_eq!(git.request(3)["params"]["ref"], task_branch(second_task));
+    let requests = mock.seen();
+    let puts: Vec<_> = requests.iter().filter(|r| r.method == "PUT").collect();
+    assert_eq!(puts.len(), 2);
+    assert_eq!(puts[0].path, "/api/v3/repos/Acme/widgets/pulls/7/merge");
+    assert_eq!(puts[1].path, "/api/v3/repos/Acme/widgets/pulls/8/merge");
+    assert_eq!(puts[1].body["sha"], sha('e'));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r
+                .path
+                .ends_with(&format!("/commits/{}/check-runs", sha('e'))))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_check_poll_requires_a_frozen_head_and_tracked_base_for_a_behind_repair() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let mut old_target = target();
+    old_target.git.binding_generation -= 1;
+    let stale = json!({
+        "pull_request": 7, "result_head": sha('a'), "check_target": old_target,
+        "required": ["check", "deployment"], "deadline_at_ms": 5_000
+    });
+    for (now, outcome) in [(1_000, None), (5_000, Some("timeout"))] {
+        let run = delivery
+            .step(
+                Uuid::new_v4(),
+                "pull_request.await_checks",
+                &stale,
+                &target(),
+                now,
+            )
+            .await
+            .unwrap();
+        assert_eq!(run.step.map(|step| done(step).outcome), outcome);
+    }
+    assert!(mock.seen().is_empty());
+
+    let behind = || pull(7, json!({"mergeable_state": "behind"}));
+    mock.reply(200, vec![], behind());
+    assert!(poll_result(&delivery, 7, &sha('b')).await.is_none());
+    mock.reply(200, vec![], behind());
+    assert!(poll_of(&delivery, 1_000, 5_000).await.completion.is_none());
+
+    let current = pull(7, json!({}));
+    let retargeted = pull(
+        7,
+        json!({"mergeable_state": "behind", "base": {"ref": "other", "sha": sha('d')}}),
+    );
+    poll(&mock, current.clone(), retargeted, runs(&[]));
+    assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
+
+    let advanced = pull(7, json!({"base": {"ref": "main", "sha": sha('d')}}));
+    poll(
+        &mock,
+        current.clone(),
+        advanced,
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ]),
+    );
+    assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
+
+    poll(&mock, current, behind(), runs(&[]));
+    assert_eq!(
+        poll_result(&delivery, 7, &sha('a')).await.unwrap().outcome,
+        "conflict"
+    );
+    assert!(git.operations().is_empty());
+}
+
 #[tokio::test]
 async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
     let git = FakeGit::start(healthy);
@@ -446,7 +690,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
     assert_eq!(git.operations(), ["ref.delete"]);
     assert_eq!(
         git.request(0)["params"],
-        json!({"ref": task_branch(TASK), "remote": true, "local": true})
+        json!({"ref": task_branch(TASK), "remote": true, "expected_old": {"algorithm": "sha1", "hex": sha('a')}})
     );
 }
 
@@ -480,6 +724,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
         vec![],
         json!({"message": "Required review is missing"}),
     );
+    mock.reply(200, vec![], pull(7, json!({"mergeable_state": "blocked"})));
     assert_eq!(merge().await.outcome, "not_mergeable");
     mock.reply(
         200,
@@ -605,6 +850,89 @@ async fn merge_recovers_after_an_unknown_reply() {
 }
 
 #[tokio::test]
+async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge_write() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let target = target();
+    let merged = |head| {
+        pull(
+            7,
+            json!({
+                "state": "closed", "merged": true, "merge_commit_sha": sha('d'),
+                "head": {"ref": format!("aq/{TASK}"), "sha": sha(head)},
+            }),
+        )
+    };
+    let poll_merged = async || {
+        delivery
+            .step(
+                Uuid::from_u128(9),
+                "pull_request.await_checks",
+                &json!({
+                    "task": TASK, "pull_request": 7, "result_head": sha('a'),
+                    "required": ["check", "deployment"], "deadline_at_ms": 1000,
+                }),
+                &target,
+                1000,
+            )
+            .await
+            .unwrap()
+    };
+    let reconcile = async || {
+        done(
+            delivery
+                .pull_request_merge(
+                    Uuid::from_u128(10),
+                    &target,
+                    TASK,
+                    7,
+                    MergeMethod::Merge,
+                    &sha('a'),
+                )
+                .await,
+        )
+    };
+
+    mock.reply(200, vec![], merged('b'));
+    assert_eq!(done(poll_merged().await.step.unwrap()).outcome, "timeout");
+    mock.reply(200, vec![], merged('b'));
+    assert_eq!(reconcile().await.output["reason"], "head_changed");
+    assert!(git.operations().is_empty());
+
+    poll(
+        &mock,
+        merged('a'),
+        merged('a'),
+        runs(&[("check", "completed", Some("success"))]),
+    );
+    assert_eq!(done(poll_merged().await.step.unwrap()).outcome, "timeout");
+    assert!(git.operations().is_empty());
+
+    // The forge can report the merge on the second read, after another PR
+    // advances main. Green checks on the frozen result still permit cleanup.
+    let mut recovered = merged('a');
+    recovered["base"]["sha"] = json!(sha('e'));
+    poll(
+        &mock,
+        pull(7, json!({})),
+        recovered,
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ]),
+    );
+    let checked = poll_merged().await;
+    assert_eq!(done(checked.step.unwrap()).outcome, "passed");
+    assert_eq!(checked.observed.unwrap().state, "merged");
+    mock.reply(200, vec![], merged('a'));
+    assert_eq!(reconcile().await.outcome, "merged");
+
+    assert!(paths(&mock).iter().all(|(method, _)| method == "GET"));
+    assert_eq!(git.operations(), ["ref.delete"]);
+    assert_eq!(git.request(0)["params"]["expected_old"]["hex"], sha('a'));
+}
+
+#[tokio::test]
 async fn close_closes_the_pull_request_and_deletes_the_branch() {
     let git = FakeGit::start(healthy);
     let (delivery, mock) = delivery(&git).await;
@@ -655,7 +983,7 @@ async fn a_frozen_request_runs_as_the_command_it_was_accepted_for() {
         panic!("not done")
     };
     assert_eq!(c.outcome, "published");
-    assert_eq!(git.request(0)["params"]["expected_old"], sha('1'));
+    assert_eq!(git.request(0)["params"]["expected_old"]["hex"], sha('1'));
     // merge with no pull request: refused, nothing sent anywhere.
     let r = run(
         "pull_request.merge",

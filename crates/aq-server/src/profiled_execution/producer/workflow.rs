@@ -24,6 +24,7 @@ use aq_admission::{
     transport::{Poll, TransportDocument},
 };
 use aq_machine_control::holds;
+use aq_profiled_state::git_author::PollDelivery;
 use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
@@ -150,10 +151,18 @@ async fn reservation(
     state: &AppState,
     compiled: &compose::Compiled,
     operation: Uuid,
+    task: Uuid,
     observed: source::Observation,
 ) -> Result<source_exports::Reservation, AppError> {
     let project = compiled.frozen.project.binding.project_id;
     if let Some(old) = source_exports::recover_existing(state, operation, project).await? {
+        let token = match &old {
+            source_exports::Reservation::Pending(token)
+            | source_exports::Reservation::Verified {
+                reservation: token, ..
+            } => token,
+        };
+        source::require_base(state, task, &observed, token.request()).await?;
         return Ok(old);
     }
     // Original proposal remains Context. Final Source owner publication is a
@@ -293,27 +302,6 @@ fn frozen_commit<'a>(
         SourceSelection::NamedRef { .. } => Some(observed.admission.resolved_object.hex.as_str()),
     }
 }
-fn source_operation<T: serde::Serialize>(
-    project: Uuid,
-    task: &aq_admission::TaskRevision,
-    project_revision: u64,
-    generation: u64,
-    policy_ref: T,
-    frozen_commit: Option<&str>,
-) -> Result<Uuid, AppError> {
-    let key = match frozen_commit {
-        None => canonical(&(project, task, project_revision, generation, policy_ref))?,
-        Some(commit) => canonical(&(
-            project,
-            task,
-            project_revision,
-            generation,
-            policy_ref,
-            commit,
-        ))?,
-    };
-    Ok(Uuid::new_v5(&Uuid::from_bytes(*b"aq-native-export"), &key))
-}
 async fn first_eligible_task<F, Fut>(
     ready: &crate::agent_access::scheduling::ReadyPage,
     skipped: &std::collections::BTreeSet<Uuid>,
@@ -358,19 +346,22 @@ pub async fn poll(
     auth: &AuthenticatedNode,
     request: &Poll,
 ) -> Result<NativePollPage, AppError> {
-    poll_slot(state, auth, request, 1).await
+    poll_slot(state, auth, request, 1, false)
+        .await
+        .map(PollDelivery::into_native)
 }
-pub async fn poll_slot(
+pub(super) async fn poll_slot(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
     slot: u32,
-) -> Result<NativePollPage, AppError> {
+    supports_git_author: bool,
+) -> Result<PollDelivery, AppError> {
     TransportDocument::Poll(request.clone())
         .validate()
         .map_err(|_| AppError::BadRequest("invalid native poll".into()))?;
     let cancellations = super::super::cancellation::pending(state, auth, &request.identity).await?;
-    let page = NativePollPage {
+    let page = PollDelivery {
         schema_version: 1,
         operation_id: request.operation_id,
         identity: request.identity.clone(),
@@ -395,7 +386,15 @@ pub async fn poll_slot(
         let page = page.clone();
         async move {
             let _permit = permit;
-            let result = Box::pin(offers(&state, &auth, &request, page, slot)).await;
+            let result = Box::pin(offers(
+                &state,
+                &auth,
+                &request,
+                page,
+                slot,
+                supports_git_author,
+            ))
+            .await;
             if let Err(error) = &result {
                 tracing::warn!(node_id = %auth.id(), ?error, "background offer assembly refused");
             }
@@ -415,9 +414,10 @@ async fn offers(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
-    mut page: NativePollPage,
+    mut page: PollDelivery,
     slot: u32,
-) -> Result<NativePollPage, AppError> {
+    supports_git_author: bool,
+) -> Result<PollDelivery, AppError> {
     let (runtime, snapshot, modes) = on_heap(|| runtime(state, auth, request)).await?;
     if request.available.slots == 0 {
         return Ok(page);
@@ -426,7 +426,10 @@ async fn offers(
     if let Some(native) =
         on_heap(|| super::redelivery::existing(state, auth, request, slot)).await?
     {
-        page.server_time_ms = native.offered.clock.server_time_ms;
+        if native.git_author.is_some() && !supports_git_author {
+            return Ok(page);
+        }
+        page.server_time_ms = native.native.offered.clock.server_time_ms;
         page.offers.push(native);
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
@@ -572,7 +575,11 @@ async fn offers(
                     (c.revision.task_id, &c.node, class)
                 });
                 let role_held = crate::role_settings::held(state, &record.binding, nodes).await?;
-                let (revision, project) = (record.revision, policy.project_id);
+                let (revision, project, workspace) = (
+                    record.revision,
+                    policy.project_id,
+                    record.binding.graph_workspace_id,
+                );
                 let (placed, items, role_held) = (&placements, &ready.items, &role_held);
                 if let Some((task, assessment)) = on_heap(|| {
                     first_eligible_task(&ready, &skipped, |task| async move {
@@ -584,6 +591,15 @@ async fn offers(
                             return Ok(Assessment::Blocked("route_missing"));
                         }
                         let (pool, at) = (&state.store.pool, (state.clock)());
+                        // A worker's wire support is local to this poll.
+                        // Keep scanning without persisting a hold on the task.
+                        if !supports_git_author
+                            && super::task_git_author(state, pool, project, workspace, task)
+                                .await?
+                                .is_some()
+                        {
+                            return Ok(Assessment::Blocked("git_author_unsupported"));
+                        }
                         let seen = holds::attempts(pool, task).await;
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
@@ -633,6 +649,7 @@ async fn offers(
             skipped.insert(task.task_id);
             continue;
         };
+        let enrolled = super::super::delivery_enrolled(state, policy.project_id, task.task_id);
         let route = route.as_ref();
         let replacement = assessment.replacement().cloned();
         // R6: a successor's hold is recorded against the attempt count read before its refusal.
@@ -693,9 +710,8 @@ async fn offers(
             }
             compiled => compiled?,
         };
-        // An earlier refusal of this task's offer no longer describes it.
         if crate::role_settings::tables(state) {
-            aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
+            aq_role_settings::refusals::clear_after_compose(&state.store.pool, task.task_id).await;
         }
         super::observation::ReadProvenance::capture(
             &task,
@@ -703,7 +719,8 @@ async fn offers(
             &context,
             compiled.projection.artifact.digest.clone(),
             now(state)?,
-        )?;
+        )
+        .map_err(|_| refused())?;
         let original_ready_node = canonical(
             &ready
                 .items
@@ -753,14 +770,23 @@ async fn offers(
                         .await?
                     }
                     None => {
-                        on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
+                        on_heap(|| {
+                            source::observe_for_offer(
+                                state,
+                                &compiled.frozen,
+                                &policy_record,
+                                &context,
+                                enrolled,
+                            )
+                        })
+                        .await?
                     }
                 };
                 let frozen = match &handoff {
                     Some(base) => Some(base.oid.as_str()),
                     None => frozen_commit(&policy.source, &observed),
                 };
-                let operation = source_operation(
+                let operation = aq_delivery::offer_source::export_operation(
                     policy.project_id,
                     &task,
                     record.revision,
@@ -769,8 +795,11 @@ async fn offers(
                         .project_policy_ref(policy.project_id)
                         .map_err(|_| refused())?,
                     frozen,
-                )?;
-                let reserved = on_heap(|| reservation(state, &compiled, operation, observed));
+                    enrolled,
+                )
+                .map_err(|_| AppError::Internal)?;
+                let reserved =
+                    on_heap(|| reservation(state, &compiled, operation, task.task_id, observed));
                 Ok(match reserved.await? {
                     source_exports::Reservation::Pending(token) => {
                         let fact = on_heap(|| profiled_base::verify_export(state, &token)).await?;
@@ -791,6 +820,10 @@ async fn offers(
             }
             .await;
             match fresh {
+                Err(AppError::Conflict(reason)) if not_offered(&reason) => {
+                    skipped.insert(task.task_id);
+                    continue;
+                }
                 // Q1 (live acceptance D5): a refused handoff export skips the task.
                 // #116 I1, M1: a counted skip; held as `handoff_successor_stuck` once stuck.
                 Err(error @ AppError::Conflict(_)) if handoff.is_some() => {
@@ -860,19 +893,40 @@ async fn offers(
         if replacement.is_some() {
             holds::cleared(&state.store.pool, task.task_id).await;
         }
-        let source = if replacement.is_some() {
-            on_heap(|| {
-                source::observe_retained(state, &compiled.frozen, &policy_record, token.request())
-            })
-            .await?
-        } else {
-            on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
-        };
-        if source.admission.resolved_object.hex != token.request().base.hex
-            || source.admission.repository_binding_generation != token.request().binding_generation
-        {
-            return Err(refused());
+        let observed = async {
+            let source = if replacement.is_some() {
+                on_heap(|| {
+                    source::observe_retained(
+                        state,
+                        &compiled.frozen,
+                        &policy_record,
+                        token.request(),
+                    )
+                })
+                .await?
+            } else {
+                on_heap(|| {
+                    source::observe_for_offer(
+                        state,
+                        &compiled.frozen,
+                        &policy_record,
+                        &context,
+                        enrolled,
+                    )
+                })
+                .await?
+            };
+            source::require_base(state, task.task_id, &source, token.request()).await?;
+            Ok(source)
         }
+        .await;
+        let source = match observed {
+            Err(AppError::Conflict(reason)) if not_offered(&reason) => {
+                skipped.insert(task.task_id);
+                continue;
+            }
+            observed => observed?,
+        };
         let built = on_heap(|| {
             build::assemble(build::Assembly {
                 state,
@@ -886,6 +940,8 @@ async fn offers(
                 source_operation,
                 logical_identity: &token.request().logical_identity,
                 generation,
+                enrolled,
+                supports_git_author,
             })
         })
         .await?;
@@ -914,8 +970,18 @@ async fn offers(
                 .await?;
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         aq_machine_control::recent::forget(auth.id()).await;
-        let Some(offer) = offer else { return Ok(page) };
-        page.server_time_ms = offer.offered.clock.server_time_ms;
+        let offer = match offer {
+            publication::Outcome::Published(offer) => *offer,
+            publication::Outcome::Unavailable => return Ok(page),
+            publication::Outcome::NeedsGitAuthor => {
+                skipped.insert(task.task_id);
+                continue;
+            }
+        };
+        if crate::role_settings::tables(state) {
+            aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
+        }
+        page.server_time_ms = offer.native.offered.clock.server_time_ms;
         page.offers.push(offer);
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
@@ -1076,35 +1142,6 @@ mod tests {
         }
         assert_eq!(skipped.len(), MAX_SKIPPED);
     }
-    #[test]
-    fn named_ref_resolves_to_exact_commit_at_offer() {
-        let project = Uuid::from_u128(7);
-        let task = aq_admission::TaskRevision {
-            workspace_id: Uuid::from_u128(8),
-            task_id: Uuid::from_u128(9),
-            version: 1,
-            content_revision: 1,
-        };
-        let policy_ref = "policy";
-        let (a, b) = ("a".repeat(40), "b".repeat(40));
-        let key = |commit: Option<&str>| {
-            source_operation(project, &task, 3, 1, policy_ref, commit).unwrap()
-        };
-        // The commit resolved at offer time is part of the export identity:
-        // a moved ref is a new operation, never the old one following the ref.
-        assert_ne!(key(Some(&a)), key(Some(&b)));
-        assert_eq!(key(Some(&a)), key(Some(&a)));
-        assert_ne!(key(Some(&a)), key(None));
-        // Immutable policies keep their historical operation key.
-        assert_eq!(
-            key(None),
-            Uuid::new_v5(
-                &Uuid::from_bytes(*b"aq-native-export"),
-                &canonical(&(project, &task, 3_u64, 1_u64, policy_ref)).unwrap()
-            )
-        );
-    }
-
     #[tokio::test]
     async fn ready_selection_returns_empty_when_blocked_but_never_skips_owner_read_errors() {
         let ready = ready(2);

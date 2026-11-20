@@ -50,6 +50,15 @@ impl D {
         (self.port.known.lock().unwrap()).insert((task, latest.result_id));
         latest.result_id
     }
+    /// A replacement report from the same attempt, with its graph and Git facts unchanged.
+    pub(super) fn supersede_report(&self, task: Uuid) -> Uuid {
+        let mut latest = self.port.latest.lock().unwrap();
+        let latest = latest.get_mut(&task).unwrap();
+        latest.result_id = Uuid::new_v4();
+        (self.port.known.lock().unwrap()).insert((task, latest.result_id));
+        latest.result_id
+    }
+
     async fn decision(&self, result: Uuid) -> Option<Decision> {
         let sql = "SELECT decision,reason,detail,update_from_main FROM delivery_decisions WHERE result_id=$1";
         let query = sqlx::query_as(sql).bind(result);
@@ -69,6 +78,24 @@ impl D {
         let query = sqlx::query_scalar(sql).bind(body);
         query.fetch_one(&self.pool().await).await.unwrap()
     }
+}
+
+#[tokio::test]
+async fn the_delivery_binding_does_not_accept_manual_result_ids() {
+    let h = delivery(false).await;
+    let request = super::PrepareRequest {
+        request_id: Uuid::new_v4(),
+        grant_id: h.grant,
+        grant_revision: 1,
+        binding: "aq.delivery".into(),
+        expected_activation_revision: 1,
+        entry: "main".into(),
+        input: json!({}),
+    };
+    assert!(matches!(
+        h.service.prepare(h.f.actor, request).await,
+        Err(Error::Forbidden)
+    ));
 }
 
 #[tokio::test]
@@ -273,18 +300,18 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
     assert_eq!(h.returns(task).await, 1);
     assert_eq!(h.decision(p.result_id).await.unwrap().0, "returned");
     // A hold after a final decision changes nothing.
-    let late = h.run("hold-3", "work.hold", hold(task, p.result_id, "policy"));
-    assert_eq!(late.await, empty("held"));
+    let late = h.intent("hold-3", "work.hold", hold(task, p.result_id, "policy"));
+    assert!(matches!(h.try_run(&late).await, Err(Error::Conflict)));
     assert_eq!(h.decision(p.result_id).await.unwrap().0, "returned");
-    // A result that is not the latest is answered held and is not recorded.
+    // A stale result must never produce a held receipt.
     let (other, earlier) = h.stopped(h.scope.project_id, "success");
     h.next_result(other);
-    let stale = h.run(
+    let stale = h.intent(
         "hold-4",
         "work.hold",
         hold(other, earlier.result_id, "policy"),
     );
-    assert_eq!(stale.await, empty("held"));
+    assert!(matches!(h.try_run(&stale).await, Err(Error::Conflict)));
     assert_eq!(h.decision(earlier.result_id).await, None);
     // A task or result that does not exist is an invalid request.
     for input in [
@@ -294,6 +321,34 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
         let intent = h.intent(&format!("hold-{}", Uuid::new_v4()), "work.hold", input);
         assert!(matches!(h.try_run(&intent).await, Err(Error::Invalid)));
     }
+}
+
+#[tokio::test]
+async fn a_stale_hold_and_its_notification_cannot_act_on_a_same_head_replacement() {
+    let h = delivery(false).await;
+    let (task, original) = h.stopped(h.scope.project_id, "success");
+    let run = h.event_run(task).await;
+    let mut hold_intent = h.intent(
+        "event-hold",
+        "work.hold",
+        hold(task, original.result_id, "policy"),
+    );
+    hold_intent.run.clone_from(&run);
+    let mut notice = h.intent(
+        "event-notice",
+        "supervisor.notify",
+        json!({
+            "project": original.project_id, "identity": original.result_id, "text": "stale hold",
+        }),
+    );
+    notice.run = run;
+    assert!(matches!(h.try_run(&notice).await, Err(Error::Conflict)));
+    assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
+
+    h.supersede_report(task);
+    assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
+    assert!(matches!(h.try_run(&notice).await, Err(Error::Conflict)));
+    assert_eq!(h.messages("stale hold").await, 0);
 }
 
 #[tokio::test]

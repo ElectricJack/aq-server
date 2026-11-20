@@ -126,7 +126,7 @@ pub async fn submit_run<S: Server>(s: &S, id: i64) -> Result<()> {
             continue;
         }
         let previous = previous(pool, &run.source_id).await?;
-        let catalog = request::pinned_catalog(&now.record)?;
+        let catalog = s.catalog(&now.record)?;
         let files = request::workspace_files(
             &now.record,
             &now.markdown,
@@ -315,7 +315,7 @@ async fn saved<S: Server>(
     let previous: Option<Artifact> =
         (in_effect.as_ref()).and_then(|a| serde_json::from_value(a.artifact.clone()).ok());
     let case_files = serde_json::to_value(&cases).map_err(|_| Error::Corrupt)?;
-    let catalog = request::pinned_catalog(&now.record)?;
+    let catalog = s.catalog(&now.record)?;
     let inputs = save::Inputs {
         grant_capabilities: now.record.capabilities.clone(),
         record: now.record,

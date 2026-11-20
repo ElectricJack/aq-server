@@ -8,7 +8,7 @@
 //! save-time seal, and the engine's own announcement of a result. Synthetic:
 //! the Graph peer, and the server's record of results (a port with one pending
 //! result). The agent's work is not run: the artifact it would save is sealed
-//! here from a draft that reads the task, and installed through the server's
+//! here from a draft that reads and holds the result, and installed through the server's
 //! own deployer, as `authoring::completed` does after the checks.
 use crate::common::native_offer::setup;
 use aq_playbook_authoring::{
@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 const DOCUMENT: &str = "When a task has a result, read the task and settle its result.\n";
 const PATH: &str = "/api/settings/delivery-document";
-/// A playbook that reads the task its trigger names and ends.
+/// A playbook that reads the task its trigger names and holds that result.
 const READS_THE_TASK: &str = include_str!("fixtures/delivery_reads_the_task.draft.json");
 
 /// What the server records of results: one task stopped with a result.
@@ -256,25 +256,26 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
         .unwrap();
     assert_eq!(bound["artifact"], artifact.digest);
 
-    // (4) The engine announces the stopped result; a run of the artifact reads
-    // the task.
-    let sql = "SELECT count(*) FROM playbook_effects WHERE command_name='work.read' AND receipt->'subject'->>'id'=$1";
-    let mut reads = 0_i64;
+    // (4) The engine owns the event-to-run association. The effect can hold
+    // only the report named by that event, after the fan-out receipt is bound.
+    let sql = "SELECT count(*) FROM delivery_decisions WHERE task_id=$1 AND result_id=$2 AND decision='held'";
+    let mut holds = 0_i64;
     for _ in 0..300 {
         driver.quantum().await.unwrap();
-        reads = sqlx::query_scalar(sql)
-            .bind(lineage.task_id.to_string())
+        holds = sqlx::query_scalar(sql)
+            .bind(lineage.task_id)
+            .bind(pending.result_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-        if reads > 0 {
+        if holds > 0 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(
-        reads > 0,
-        "the activated playbook received aq.work.result_ready"
+        holds > 0,
+        "the activated playbook held the original aq.work.result_ready report"
     );
     driver.stop().await.unwrap();
 }

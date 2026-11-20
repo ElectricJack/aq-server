@@ -1911,12 +1911,57 @@ mod delivery {
                 .await
         }
         async fn run(&self, id: &str, name: &str, input: Value) -> HostResult {
-            let intent = self.intent(id, name, input);
+            let task = input["task"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok());
+            let mut intent = self.intent(id, name, input);
+            if DELIVERY_COMMANDS.contains(&name)
+                && let Some(task) =
+                    task.filter(|task| self.port.latest.lock().unwrap().contains_key(task))
+            {
+                intent.run = self.event_run(task).await;
+            }
             let result = self.try_run(&intent).await.unwrap();
             // Every answer is one the catalog declares.
             (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
             result
         }
+        async fn event_run(&self, task: Uuid) -> String {
+            self.activated().await;
+            self.asked().await;
+            let (_, id, event) = self
+                .service
+                .outbox(&self.runtime, 0, 16)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|(_, _, event)| {
+                    event.contract.name == "aq.work.result_ready"
+                        && event.payload["task_id"] == task.to_string()
+                })
+                .unwrap();
+            let key = digest(&(&event.producer, 0_u64, &event.event_id)).unwrap();
+            let run = format!("event-{key}");
+            self.service
+                .acknowledge_event(
+                    &self.runtime,
+                    id,
+                    aq_playbook_host::runner::EventDisposition {
+                        key,
+                        duplicate: false,
+                        destinations: 1,
+                    },
+                    false,
+                )
+                .await
+                .unwrap();
+            self.service
+                .record_delivery_runs(&self.runtime, id, &event, &json!([run]))
+                .await
+                .unwrap();
+            run
+        }
+
         /// Dispatches `intent` (a replay when it was dispatched before).
         async fn try_run(&self, intent: &Intent) -> Result<HostResult> {
             (self.service)
@@ -1950,7 +1995,7 @@ mod delivery {
         }
         /// An artifact is active on the delivery binding.
         async fn activated(&self) {
-            sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,1,'aq.delivery','sha256:delivery-1',1)")
+            sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,1,'aq.delivery','sha256:delivery-1',1) ON CONFLICT DO NOTHING")
                 .bind(self.service.namespace.namespace_id)
                 .execute(&self.pool().await)
                 .await
@@ -2263,6 +2308,8 @@ mod delivery {
         struct Fake {
             log: Mutex<Vec<String>>,
             checks: Mutex<(ChecksState, Vec<String>)>,
+            pr_state: Mutex<PullRequestState>,
+            mergeability: Mutex<Mergeability>,
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
         }
@@ -2286,6 +2333,7 @@ mod delivery {
                 _: &GitTarget,
                 reference: &str,
                 expected_old: Option<&str>,
+                _expected_source: Option<&str>,
             ) -> std::result::Result<RefPublication, GitFailure> {
                 let lease = expected_old.unwrap_or("absent");
                 self.log
@@ -2299,7 +2347,9 @@ mod delivery {
                 _: Uuid,
                 _: &GitTarget,
                 reference: &str,
+                expected_head: Option<&str>,
             ) -> std::result::Result<RefDeletion, GitFailure> {
+                assert_eq!(expected_head, Some(oid('a').as_str()));
                 self.log.lock().unwrap().push(format!("delete {reference}"));
                 if *self.delete_unavailable.lock().unwrap() {
                     return Err(GitFailure {
@@ -2316,7 +2366,10 @@ mod delivery {
                 number: 7,
                 url: "https://example.test/pr/7".into(),
                 head_sha: oid('a'),
+                base_branch: "main".into(),
+                base_sha: oid('b'),
                 state,
+                mergeability: Mergeability::Clean,
             }
         }
         #[async_trait::async_trait]
@@ -2330,19 +2383,22 @@ mod delivery {
                 _: &str,
             ) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push(format!("open {title}"));
-                Ok(pull(PullRequestState::Open))
+                Ok(pull(self.pr_state.lock().unwrap().clone()))
             }
             async fn pull_request(
                 &self,
                 _: &GitHubRepository,
                 _: u64,
             ) -> GitHubResult<PullRequest> {
-                Ok(pull(PullRequestState::Open))
+                Ok(PullRequest {
+                    mergeability: *self.mergeability.lock().unwrap(),
+                    ..pull(self.pr_state.lock().unwrap().clone())
+                })
             }
             async fn checks(
                 &self,
-                _: &GitHubRepository,
-                _: u64,
+                repo: &GitHubRepository,
+                pr: u64,
                 _: Option<&[String]>,
             ) -> GitHubResult<Checks> {
                 let (state, failed) = self.checks.lock().unwrap().clone();
@@ -2350,15 +2406,8 @@ mod delivery {
                     state,
                     failed,
                     required: vec![],
-                    head_sha: oid('a'),
+                    pull_request: self.pull_request(repo, pr).await?,
                 })
-            }
-            async fn mergeability(
-                &self,
-                _: &GitHubRepository,
-                _: u64,
-            ) -> GitHubResult<Mergeability> {
-                Ok(Mergeability::Clean)
             }
             async fn merge(
                 &self,
@@ -2422,6 +2471,8 @@ mod delivery {
             let fake = Arc::new(Fake {
                 log: Mutex::default(),
                 checks: Mutex::new((ChecksState::Pending, vec![])),
+                pr_state: Mutex::new(PullRequestState::Open),
+                mergeability: Mutex::new(Mergeability::Clean),
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
             });
@@ -2634,6 +2685,51 @@ mod delivery {
         }
 
         #[tokio::test]
+        async fn a_behind_check_returns_the_result_for_update_from_main_and_keeps_the_pr() {
+            let (h, fake) = harness().await;
+            let (task, pending) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "passed", json!([])).await;
+            *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+            let wait = h
+                .accepted(
+                    "pull_request.await_checks",
+                    json!({"task": task, "required": ["check", "deployment"], "deadline_ms": 600_000}),
+                )
+                .await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(
+                h.completions().await,
+                [(wait, json!({"outcome": "conflict", "output": {}}))]
+            );
+
+            // The policy's existing conflict path returns the current result.
+            *h.settle.answer.lock().unwrap() = Settled::Returned;
+            let returned = h
+                .run(
+                    "behind-repair",
+                    "work.return",
+                    json!({
+                        "task": task, "result_id": pending.result_id,
+                        "reason": "merge_conflict", "update_from_main": true
+                    }),
+                )
+                .await;
+            assert_eq!(returned.outcome, "returned");
+            let repair: bool = sqlx::query_scalar(
+                "SELECT update_from_main FROM delivery_decisions WHERE result_id=$1",
+            )
+            .bind(pending.result_id)
+            .fetch_one(&h.pool().await)
+            .await
+            .unwrap();
+            assert!(repair);
+            let facts = h.read(task).await.output["facts"].clone();
+            assert_eq!(facts["pull_request"]["number"], 7);
+            assert_eq!(facts["pull_request"]["state"], "open");
+            assert!(fake.log.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
         async fn merge_evidence_survives_cleanup_retry() {
             let (h, fake) = harness().await;
             let (task, result) = h.stopped(h.scope.project_id, "success");
@@ -2647,13 +2743,6 @@ mod delivery {
                 )
                 .await;
 
-            h.port
-                .latest
-                .lock()
-                .unwrap()
-                .get_mut(&task)
-                .unwrap()
-                .result_id = Uuid::new_v4();
             *fake.delete_unavailable.lock().unwrap() = true;
             assert_eq!(h.pass().await, 0);
             assert!(h.completions().await.is_empty());
@@ -2698,6 +2787,92 @@ mod delivery {
             assert_eq!(
                 *fake.log.lock().unwrap(),
                 [format!("merge merge {}", oid('a')), delete.clone(), delete]
+            );
+        }
+
+        #[tokio::test]
+        async fn stale_result_with_same_revision_and_head_never_publishes_or_merges() {
+            let (h, fake) = harness().await;
+            let (task, original) = h.stopped(h.scope.project_id, "success");
+            let input = json!({"task": task});
+            let run = h.event_run(task).await;
+            h.pull_request(task, "passed", json!([])).await;
+            let mut merge = h.intent(
+                "fenced-merge",
+                "pull_request.merge",
+                json!({
+                    "task": task, "method": "merge", "expected_head_sha": oid('a'),
+                }),
+            );
+            merge.run.clone_from(&run);
+            assert_eq!(h.try_run(&merge).await.unwrap().outcome, "accepted");
+            let mut before = h.intent("fenced-before", "branch.publish", input.clone());
+            before.run.clone_from(&run);
+            assert_eq!(h.try_run(&before).await.unwrap().outcome, "accepted");
+            assert_ne!(h.supersede_report(task), original.result_id);
+            assert_eq!(h.read(task).await.output["facts"]["head"], oid('a'));
+
+            let mut after = h.intent("fenced-after", "branch.publish", input);
+            after.run = run;
+            assert!(matches!(
+                h.try_run(&after).await,
+                Err(aq_server::playbooks::domain::Error::Conflict)
+            ));
+            assert_eq!(h.pass().await, 2);
+            let completions = h.completions().await;
+            assert_eq!(completions.len(), 2);
+            assert!(
+                completions
+                    .iter()
+                    .all(|(_, answer)| answer["outcome"] == "refused")
+            );
+            assert!(fake.log.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_tracked_closed_or_merged_pr_is_never_recreated() {
+            let (h, fake) = harness().await;
+            let (task, original) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "pending", json!([])).await;
+            let task_input = json!({"task": task});
+            *fake.pr_state.lock().unwrap() = PullRequestState::Closed;
+            h.accepted("branch.publish", task_input.clone()).await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.completions().await[0].1["outcome"], "refused");
+            let checks = json!({"task": task, "deadline_ms": 1000});
+            h.accepted("pull_request.await_checks", checks.clone())
+                .await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.completions().await[1].1["outcome"], "closed");
+            assert!(fake.log.lock().unwrap().is_empty());
+
+            *fake.pr_state.lock().unwrap() = PullRequestState::Merged;
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            h.accepted("branch.publish", task_input).await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.completions().await[2].1["outcome"], "published");
+            h.accepted("pull_request.await_checks", checks).await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.completions().await[3].1["outcome"], "passed");
+            h.accepted(
+                "pull_request.merge",
+                json!({
+                    "task": task, "method": "merge", "expected_head_sha": oid('a'),
+                }),
+            )
+            .await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.completions().await[4].1["outcome"], "merged");
+            let receipt: (i64, Uuid, String) = sqlx::query_as(
+                "SELECT pull_request,result_id,merge_sha FROM delivery_merge_evidence WHERE task_id=$1"
+            ).bind(task).fetch_one(&h.pool().await).await.unwrap();
+            assert_eq!(receipt, (7, original.result_id, oid('d')));
+            assert_eq!(
+                *fake.log.lock().unwrap(),
+                [
+                    format!("merge merge {}", oid('a')),
+                    format!("delete refs/heads/aq/{task}"),
+                ]
             );
         }
 

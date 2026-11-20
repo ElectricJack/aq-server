@@ -13,21 +13,12 @@
 //! and the facts it records are `aq_delivery::commands`; this module only does
 //! the operation bookkeeping and decides nothing about a result.
 use super::*;
-use aq_delivery::commands::{self as delivery, Accepting, Delivery, DeliveryTarget, GitTarget};
-use aq_playbook_domain::{delivery_store::Latest, review_domain::DELIVERY_COMMANDS};
-
-/// What the delivery commands need of the server besides the graph.
-#[async_trait::async_trait]
-pub trait DeliveryOps: Send + Sync {
-    /// Where a project's work is delivered, or `None` when the project is not
-    /// bound to a repository the server delivers to.
-    async fn target(&self, project: Uuid) -> Result<Option<DeliveryTarget>>;
-    /// The commands over the forge and central aq-git, or `None` when central
-    /// git is not configured.
-    async fn commands(&self) -> Option<Delivery>;
-    /// The title and the body of the task's pull request.
-    async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)>;
-}
+use aq_delivery::commands::{self as delivery, Delivery, DeliveryTarget, GitTarget};
+use aq_playbook_domain::{
+    delivery_runs::{self, DeliveryRuns},
+    review_domain::DELIVERY_COMMANDS,
+};
+pub use delivery_runs::DeliveryOps;
 
 /// Production port: the project bindings, the onboarding record, the
 /// configured GitHub App and the aq-git socket.
@@ -82,46 +73,31 @@ impl DeliveryOps for ServerDelivery {
     }
 }
 
-fn delivery_error(error: aq_delivery::DeliveryError) -> Error {
-    match error {
-        aq_delivery::DeliveryError::InvalidInput(_) => Error::Invalid,
-        _ => Error::Unknown,
-    }
-}
-
 impl Service {
-    /// The command's scope and latest task result, or the catalog refusal.
-    /// Tasks of other projects require `installation_routing`.
-    async fn delivery_scope(
-        &self,
-        name: &str,
-        input: &Value,
-    ) -> Result<std::result::Result<(String, Uuid, Uuid, Option<(Uuid, Latest)>), &'static str>>
-    {
-        let own = (self.namespace.workspace_id, self.namespace.project_id);
-        if name == "main.sync" {
-            let Ok(project) = Uuid::parse_str(text(input, "project")?) else {
-                return Ok(Err("unknown_project"));
-            };
-            if (project != own.1 && !self.installation_routing)
-                || self.ports()?.delivery_ops.target(project).await?.is_none()
-            {
-                return Ok(Err("unknown_project"));
-            }
-            return Ok(Ok((project.to_string(), project, own.0, None)));
-        }
-        let Ok(task) = Uuid::parse_str(text(input, "task")?) else {
-            return Ok(Err("unknown_task"));
-        };
-        Ok(match self.delivery.latest(task).await? {
-            Some(l) if l.project_id == own.1 || self.installation_routing => Ok((
-                task.to_string(),
-                l.project_id,
-                l.workspace_id,
-                Some((task, l)),
-            )),
-            _ => Err("unknown_task"),
+    fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
+        Ok(DeliveryRuns {
+            pool: &self.pool,
+            namespace: &self.namespace,
+            installation_routing: self.installation_routing,
+            results: self.delivery.as_ref(),
+            operations: self.ports()?.delivery_ops.as_ref(),
         })
+    }
+
+    /// Bind the engine's actual fan-out run IDs to the original sealed result event.
+    pub async fn record_delivery_runs(
+        &self,
+        owner: &RuntimeOwner,
+        id: Uuid,
+        event: &EventEnvelope,
+        runs: &Value,
+    ) -> Result<()> {
+        let mut tx = self.tx().await?;
+        let ns = self.namespace_locked(&mut tx).await?;
+        self.runtime(&ns, owner)?;
+        delivery_runs::record_origins(&mut tx, &self.namespace, id, event, runs).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Dispatches one of the six delivery commands.
@@ -141,71 +117,12 @@ impl Service {
             Stage::Pending(_) => return Err(Error::Unknown),
             Stage::Fresh => {}
         }
-        let (name, input) = (intent.command.name.as_str(), &intent.input);
-        let refused = |reason: &str| host_result("refused", json!({"reason": reason}));
-        let (subject_id, project, workspace, result) =
-            match self.delivery_scope(name, input).await? {
-                Ok(scope) => scope,
-                // `.await_checks` and `.close` have no refusal in the catalog:
-                // for a task the host does not know there is nothing to wait
-                // for or to close, which the operation completes as `closed`.
-                Err(_) if matches!(name, "pull_request.await_checks" | "pull_request.close") => {
-                    let ns = &self.namespace;
-                    let task = text(input, "task")?.to_owned();
-                    (task, ns.project_id, ns.workspace_id, None)
-                }
-                Err(reason) => {
-                    let result = refused(reason);
-                    return self
-                        .settle_fresh(tx, id, revision, intent, &identity, result)
-                        .await;
-                }
-            };
-        let (task, latest) = result
-            .as_ref()
-            .map(|(task, latest)| (*task, latest))
-            .unzip();
-        let text = match (name, task) {
-            ("pull_request.open", Some(task)) => Some(
-                self.ports()?
-                    .delivery_ops
-                    .pull_request_text(workspace, task)
-                    .await?,
-            ),
-            _ => None,
-        };
-        let longest_check_wait_ms = if name == "pull_request.await_checks" {
-            let (limits, _) = aq_role_settings::delivery_limits(&self.pool)
-                .await
-                .map_err(|_| Error::Unknown)?;
-            Some(limits.longest_check_wait_ms)
-        } else {
-            None
-        };
-        let accepting = Accepting {
-            command: name,
-            project,
-            task,
-            head: latest.map_or("", |record| record.head.as_str()),
-            subject: subject(&subject_id, 0),
-            text,
-            longest_check_wait_ms,
-            merge_target: if name == "pull_request.merge" {
-                self.ports()?.delivery_ops.target(project).await?
-            } else {
-                None
-            },
-            result_ids: latest.map(|record| (record.attempt_id, record.result_id)),
-        };
-        let request = match delivery::frozen_request(&self.pool, accepting, input, self.now()?)
-            .await
-            .map_err(delivery_error)?
-        {
-            Ok(request) => request,
-            Err(reason) => {
-                let result = refused(reason);
+        let runs = self.delivery_runs()?;
+        let prepared = match runs.prepare(&mut tx, intent, || self.now()).await? {
+            Ok(prepared) => prepared,
+            Err(answer) => {
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, result)
+                    .settle_fresh(tx, id, revision, intent, &identity, answer)
                     .await;
             }
         };
@@ -214,16 +131,7 @@ impl Service {
         let (outcome, output) = (&accepted.outcome, &accepted.output);
         self.record(&mut tx, id, revision, intent, &identity, outcome, output)
             .await?;
-        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,0,NULL,$7,'running',$8)")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(name)
-            .bind(&subject_id)
-            .bind(&request)
-            .bind(self.now()?)
-            .execute(&mut *tx)
+        runs.enqueue(&mut tx, operation, intent, prepared, self.now()?)
             .await?;
         self.commit_fresh(tx, id, intent).await?;
         Ok(accepted)
@@ -281,26 +189,15 @@ impl Service {
         if op.status != "running" {
             return Ok(true);
         }
-        let ports = self.ports()?;
-        let project = op.request["project"]
-            .as_str()
-            .and_then(|p| Uuid::parse_str(p).ok());
-        let target = ports
-            .delivery_ops
-            .target(project.ok_or(Error::Unknown)?)
+        let mut fence = self.tx().await?;
+        let completion = self
+            .delivery_runs()?
+            .step(&mut fence, operation, &op.command, &op.request, || {
+                self.now()
+            })
             .await?;
-        let commands = ports.delivery_ops.commands().await;
-        let (request, now) = (&op.request, self.now()?);
-        let step = delivery::run_step(
-            &self.pool,
-            commands.as_ref(),
-            target.as_ref(),
-            operation,
-            &op.command,
-            request,
-            now,
-        );
-        let Some(completion) = step.await.map_err(delivery_error)? else {
+        fence.commit().await?;
+        let Some(completion) = completion else {
             return Ok(false);
         };
         let result = host_result(completion.outcome, completion.output);

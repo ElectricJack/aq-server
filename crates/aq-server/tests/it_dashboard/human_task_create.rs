@@ -467,6 +467,12 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     status_schema(&unknown);
     assert_eq!(unknown["state"], "unknown");
     assert_eq!(unknown["effect"], "possible");
+    assert!(
+        aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let count = calls.load(Ordering::SeqCst);
     let lost_path = format!("/api/human/operations/{lost}");
     assert_eq!(
@@ -527,6 +533,22 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     status_schema(&recovered);
     assert_eq!(recovered["state"], "confirmed");
     assert_eq!(recovered["receipt"]["version"], "1");
+    let author = aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(author.name, "owner");
+    assert_eq!(author.email, "owner@localhost");
+    assert_eq!(
+        send(&app, &lost_path, None, "owner@localhost").await.1,
+        recovered
+    );
+    assert_eq!(
+        aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+            .await
+            .unwrap(),
+        Some(author)
+    );
     assert_eq!(calls.load(Ordering::SeqCst), count + 1);
     {
         let all = observed.lock().await;
@@ -942,6 +964,7 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     let picker = format!("/api/human/workers/{}/launch-projects", f.node.node_id);
     let list = send(&launch_app, &picker, None, "owner@localhost").await;
     assert_eq!(list.1["projects"].as_array().unwrap().len(), 1);
+    check_epic_retirement_registration(&f, &origin, config.graph_token_file.clone(), token).await;
     let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1}).to_string();
     let stopped = send(
         &launch_app,
@@ -982,4 +1005,133 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     server.abort();
     child.kill().await.unwrap();
     child.wait().await.unwrap();
+}
+
+async fn check_epic_retirement_registration(
+    f: &common::profiled::Fixture,
+    origin: &str,
+    token_file: std::path::PathBuf,
+    token: &str,
+) {
+    let mut state = f.state.clone();
+    state.agent_access = Some(Arc::new(
+        Runtime::new(&AgentAccessConfig {
+            graph_url: origin.into(),
+            graph_token_file: token_file,
+            mutation_actor_id: Some("local-admin".into()),
+            credential_ttl_ms: 120000,
+        })
+        .await
+        .unwrap(),
+    ));
+    let app = aq_server::build_admin_router(state.clone());
+    let project = f.selection.lineage.project_id;
+    let workspace = f.selection.lineage.workspace_id;
+    let [epic, approval, cleanup] = std::array::from_fn(|_| Uuid::new_v4());
+    let tasks = format!("/api/human/projects/{project}/tasks");
+    for id in [epic, approval, cleanup] {
+        let (_, result) = send(&app, &tasks, Some(&request(id, "1")), "owner@localhost").await;
+        assert_eq!(result["state"], "confirmed", "{result}");
+    }
+    let blocker = Uuid::new_v4();
+    let dependency = json!({"operation_id":blocker,"params":{"project_id":project,"task_id":cleanup,
+        "expected_version":"1","blocker_id":approval}});
+    let (_, linked) = send(
+        &app,
+        "/api/v1/commands/task.dependency.add",
+        Some(&dependency.to_string()),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(linked["data"]["disposition"], "confirmed", "{linked}");
+
+    let op = Uuid::new_v4();
+    let request = json!({"operation_id":op,"params":{"project_id":project,"epic_id":epic,
+        "expected_version":"1","generation":1,"repositories":{"Acme/service":"feature_a"},
+        "ordinary_default":false,"permanent_behavior":"Enable A in ordinary builds",
+        "adopt":{"approval":approval,"cleanup":cleanup}}});
+    let route = "/api/v1/commands/epic.retirement.register";
+    let denied = send(&app, route, Some(&request.to_string()), "viewer@localhost").await;
+    assert!(!denied.0.is_success(), "{denied:?}");
+    let mut invalid = request.clone();
+    invalid["params"]["choice"] = json!("approve");
+    let refused = send(&app, route, Some(&invalid.to_string()), "owner@localhost").await;
+    assert!(!refused.0.is_success(), "{refused:?}");
+
+    let (_, registered) = send(&app, route, Some(&request.to_string()), "owner@localhost").await;
+    assert_eq!(
+        registered["data"]["disposition"], "confirmed",
+        "{registered}"
+    );
+    let query = format!("/api/v1/operations/{op}");
+    let (_, replay) = send(
+        &aq_server::build_admin_router(state),
+        &query,
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(
+        registered["data"]["receipt_refs"],
+        replay["data"]["receipt_refs"]
+    );
+
+    let principal: Uuid =
+        sqlx::query_scalar("SELECT owner_id FROM dashboard_operations WHERE operation_id=$1")
+            .bind(op)
+            .fetch_one(&f.db.pool().await)
+            .await
+            .unwrap();
+    assert_eq!(principal, f.actor);
+    let client = reqwest::Client::new();
+    let registration = Uuid::new_v5(
+        &workspace,
+        format!("aq/epic-retirement/1/{project}/{epic}/1").as_bytes(),
+    );
+    for (id, kind) in [
+        (registration, "knowledge"),
+        (approval, "task"),
+        (cleanup, "task"),
+        (Uuid::new_v5(&registration, b"closure-gate"), "task"),
+    ] {
+        let graph: Value = client
+            .get(format!("{origin}/v1/workspaces/{workspace}/nodes/{id}"))
+            .bearer_auth(token)
+            .header("X-AQ-Graph-API-Version", "1")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(graph["kind"], kind, "{graph}");
+        if id == approval {
+            assert_eq!(graph["task_state"], "draft");
+            assert_eq!(graph["version"], 2);
+            assert_eq!(graph["verification"], "unverified");
+            assert!(
+                graph["metadata"]
+                    .get("aq:epic_feature_retirement")
+                    .is_none()
+            );
+            continue;
+        }
+        assert_eq!(graph["verification"], "verified", "{graph}");
+        let retirement = &graph["metadata"]["aq:epic_feature_retirement"];
+        if kind == "task" {
+            assert_eq!(graph["task_state"], "draft");
+            assert_eq!(retirement["registration"], json!(registration));
+        } else {
+            assert_eq!(graph["created_by"], "local-admin");
+            assert_eq!(
+                retirement["spec"]["owner_authority"]["principal_id"],
+                json!(principal)
+            );
+            assert_eq!(retirement["spec"]["approval"], json!(approval));
+            assert_eq!(retirement["spec"]["cleanup"], json!(cleanup));
+            assert!(retirement.get("approved").is_none());
+        }
+    }
 }

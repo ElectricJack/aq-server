@@ -946,6 +946,33 @@ async fn owner_creates_graph_with_metadata_and_retained_identity() {
         .lookup(request["operation_id"].as_str().unwrap().parse().unwrap())
         .await;
     assert_eq!(lookup["data"], receipt["data"]);
+    let pool = x.f.db.pool().await;
+    for task in [a, b] {
+        let author =
+            aq_human_work::task_git_author::lookup(&pool, x.project(), x.workspace(), task)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(author.email, "owner@localhost");
+        let response = aq_server::build_admin_router(x.f.state.clone())
+            .oneshot(
+                Request::get(format!("/api/human/projects/{}/tasks/{task}", x.project()))
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let reply: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            reply["data"]["requested_by"],
+            json!({"name":"owner","email":"owner@localhost"})
+        );
+        assert_eq!(reply["data"]["created_by"], "owner@localhost");
+    }
 }
 
 #[tokio::test]

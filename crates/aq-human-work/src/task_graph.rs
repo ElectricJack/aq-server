@@ -5,6 +5,19 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+/// Graph CAS guards assert an existing revision without changing a node.
+pub fn leading_guards(operations: &[Value]) -> usize {
+    operations
+        .iter()
+        .take_while(|op| {
+            op["op"] == "update_node"
+                && op["patch"]
+                    .as_object()
+                    .is_some_and(|patch| patch.is_empty())
+        })
+        .count()
+}
+
 #[derive(Clone, Copy)]
 pub enum Author {
     Agent { attempt: Uuid, task: Uuid },

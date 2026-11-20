@@ -27,5 +27,6 @@ mod replacement_lost;
 mod replacement_policy_limits;
 mod replacement_release;
 mod replacement_source;
+mod source_publication_evidence;
 mod source_retention;
 mod stopped_dispositions;

@@ -38,3 +38,5 @@ mod sealed_history_live;
 mod settlement_migration;
 mod store;
 mod task_holds_migration;
+
+mod task_git_authors;

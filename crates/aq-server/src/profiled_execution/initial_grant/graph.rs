@@ -52,7 +52,7 @@ impl Observation {
         {
             return Err(refused());
         }
-        self.provenance.validate_at(now)
+        self.provenance.validate_at(now).map_err(|_| refused())
     }
 }
 /// Compare authorized semantic content; observation time belongs to each read.
@@ -142,7 +142,8 @@ pub(super) async fn observe(
         &context,
         projection.artifact.digest,
         time,
-    )?;
+    )
+    .map_err(|_| refused())?;
     Ok(Observation {
         original_spec: input.spec.artifact().map_err(|_| refused())?.digest,
         original_context: input.spec.task_context.digest.clone(),

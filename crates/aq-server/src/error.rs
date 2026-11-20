@@ -31,6 +31,7 @@ pub enum AppError {
     InputDeadline,
     Conflict(String),
     DefinitionIdentityConflict,
+    RepositoryAdoptionUnavailable(&'static str),
     /// Fixed endpoint diagnostic; never includes database or terminal payloads.
     TerminalRelayFailure(&'static str),
     ExecutionCancelled,
@@ -55,7 +56,9 @@ impl AppError {
         match self {
             AppError::Unauthenticated(_) => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) | AppError::CsrfRejected(_) => StatusCode::FORBIDDEN,
-            AppError::IdentityUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::IdentityUnavailable(_) | AppError::RepositoryAdoptionUnavailable(_) => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::InputDeadline => StatusCode::UNPROCESSABLE_ENTITY,
@@ -99,6 +102,10 @@ impl AppError {
             AppError::TerminalRelayFailure(code) => (
                 *code,
                 "Terminal relay failed; retry the request and inspect server diagnostics if it persists".into(),
+            ),
+            AppError::RepositoryAdoptionUnavailable(source) => (
+                "repository_adoption_unavailable",
+                format!("{source} is unavailable"),
             ),
             AppError::ExecutionCancelled => (CONFLICT, "execution cancelled".into()),
             AppError::PayloadTooLarge(m) => (BAD_REQUEST, m.clone()),

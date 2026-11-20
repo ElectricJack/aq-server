@@ -7,24 +7,9 @@ use aq_playbook_authoring::{self as authoring, Error, Result, SourceKind, Source
 use serde_json::Value;
 use sqlx::types::Json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-/// The engine authored playbooks are installed in: empty until it is open.
-#[derive(Clone, Default)]
-pub struct Deployment(Arc<RwLock<Option<Arc<Driver>>>>);
-
-impl Deployment {
-    pub(crate) fn set(&self, driver: Arc<Driver>) {
-        if let Ok(mut slot) = self.0.write() {
-            *slot = Some(driver);
-        }
-    }
-    fn driver(&self) -> Result<Arc<Driver>> {
-        let driver = self.0.read().ok().and_then(|slot| slot.clone());
-        driver.ok_or_else(|| Error::Conflict("Playbooks are not running on this server".into()))
-    }
-}
+pub type Deployment = authoring::deploy::Deployment<Driver>;
 
 fn engine(e: crate::playbooks::domain::Error) -> Error {
     Error::Conflict(format!("The playbook engine refused: {e}"))
@@ -178,6 +163,19 @@ impl authoring::Deployer for AppState {
 impl authoring::Server for AppState {
     fn config(&self) -> authoring::Config {
         self.config.playbook_authoring.clone()
+    }
+    #[cfg(feature = "delivery_playbook")]
+    fn routing_host10(&self) -> Option<authoring::continuity::Target> {
+        let driver = self.internal_work.authoring().driver().ok()?;
+        let service = &driver.service;
+        service.profile.is_delivery().then(|| {
+            authoring::continuity::Target::new(
+                service.namespace.namespace_id,
+                service.namespace.generation,
+                service.installation_routing,
+                aq_playbook_domain::host10::ResultFacts::default().output(),
+            )
+        })
     }
     fn now_ms(&self) -> i64 {
         (self.clock)().timestamp_millis()

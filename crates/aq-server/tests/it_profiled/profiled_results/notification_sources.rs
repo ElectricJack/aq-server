@@ -41,8 +41,7 @@ async fn retained_failure_and_success_correction_open_and_resolve_task_episode()
     );
 }
 
-// Epic 0 (spec 0016 section 7): with `delivery_playbook` no default policy holds a result.
-#[cfg(not(feature = "delivery_playbook"))]
+// A legacy attempt can be held by the default policy on either server build.
 #[tokio::test]
 async fn successful_process_with_held_default_settlement_needs_task_attention() {
     let body =

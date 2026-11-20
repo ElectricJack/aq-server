@@ -35,10 +35,11 @@ pub struct Built {
     pub graph_profile: Value,
     pub work_kind: Option<String>,
     pub context: Value,
-    pub central_observation: Value,
+    pub read_provenance: super::observation::ReadProvenance,
     pub source: Observation,
     pub decision: Decision,
     pub deadline: u64,
+    pub supports_git_author: bool,
     /// Spec 0016 §5.2: recorded with the attempt and served by `/v1/git/grants`.
     #[cfg(feature = "delivery_playbook")]
     pub git: Option<aq_delivery::git_grant::GitGrant>,
@@ -191,6 +192,8 @@ pub struct Assembly<'a> {
     pub source_operation: Uuid,
     pub logical_identity: &'a str,
     pub generation: u64,
+    pub enrolled: bool,
+    pub supports_git_author: bool,
 }
 /// Re-derives the frozen confinement mode from the selection's placement facts
 /// and the role's execution profile.
@@ -220,6 +223,8 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         source_operation,
         logical_identity,
         generation,
+        enrolled,
+        supports_git_author,
     } = input;
     let selected: &ResolvedSelection = decision
         .outcome
@@ -304,18 +309,31 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             return Err(refused());
         }
     }
-    // D3: the default completion policy is settled by the policy actor.
-    #[cfg(not(feature = "delivery_playbook"))]
-    let review = configuration
-        .definition_bodies
-        .iter()
-        .find(|d| d.artifact() == &validation)
-        .map(|d| crate::profiled_execution::settlement::review_requirement(d.body()))
-        .ok_or_else(|| refused())?;
-    // Spec 0016 sections 7 and 11.2: nothing is chosen at offer time. The
-    // delivery playbook is the policy actor; it asks a person with `decision.request`.
+    let node = match selected.target {
+        aq_selection::ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
+        _ => return Err(refused()),
+    };
+    let attempt_id = Uuid::new_v5(
+        &source_operation,
+        &canonical(&(decision.decision_id, node, generation))?,
+    );
+    // The persisted grant and the review requirement are published together.
     #[cfg(feature = "delivery_playbook")]
-    let review = aq_admission::outcome::ReviewRequirement::PolicyActor;
+    let git = if enrolled {
+        Some(super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?)
+    } else {
+        None
+    };
+    let review = if enrolled {
+        aq_admission::outcome::ReviewRequirement::PolicyActor
+    } else {
+        configuration
+            .definition_bodies
+            .iter()
+            .find(|d| d.artifact() == &validation)
+            .map(|d| super::super::settlement::review_requirement(d.body()))
+            .ok_or_else(|| refused())?
+    };
     // Check every required actual body before writing any retained artifact.
     let definitions = unique
         .iter()
@@ -458,14 +476,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         return Err(refused());
     }
     set.entries.push((source_retention_id, source_retained));
-    let node = match selected.target {
-        aq_selection::ExecutionTarget::Worker { node_id, boot_id } => (node_id, boot_id),
-        _ => return Err(refused()),
-    };
-    let attempt_id = Uuid::new_v5(
-        &source_operation,
-        &canonical(&(decision.decision_id, node, generation))?,
-    );
     let session = wire::SessionIdentity::Remote {
         node_id: node.0,
         boot_id: node.1,
@@ -659,8 +669,6 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         manifest,
         required_capabilities: required_caps,
     };
-    #[cfg(feature = "delivery_playbook")]
-    let git = super::super::git_grant::offer(state, &source, task.task_id, attempt_id).await?;
     let time = now(state)?;
     let deadline = [
         time.checked_add(30000).ok_or_else(|| refused())?,
@@ -728,18 +736,14 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         effects: Effects::Unknown,
     };
     state_projection.validate().map_err(|_| refused())?;
-    let central_observation = super::observation::StoredOffer {
-        schema_version: 1,
-        read_provenance: super::observation::ReadProvenance::capture(
-            task,
-            ready,
-            context,
-            compiled.projection.artifact.digest.clone(),
-            time,
-        )?,
-        native_offer: native.clone(),
-    }
-    .value()?;
+    let read_provenance = super::observation::ReadProvenance::capture(
+        task,
+        ready,
+        context,
+        compiled.projection.artifact.digest.clone(),
+        time,
+    )
+    .map_err(|_| refused())?;
     Ok(Built {
         runtime: runtime.clone(),
         native,
@@ -749,10 +753,11 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         graph_profile: profile,
         work_kind: compiled.work_kind,
         context: compiled.projection.context,
-        central_observation,
+        read_provenance,
         source,
         decision,
         deadline,
+        supports_git_author,
         #[cfg(feature = "delivery_playbook")]
         git,
     })

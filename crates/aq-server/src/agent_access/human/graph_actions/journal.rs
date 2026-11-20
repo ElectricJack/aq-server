@@ -76,15 +76,7 @@ pub(super) async fn load(
         return Err(unavailable());
     }
     let operations = raw["operations"].as_array().ok_or_else(unavailable)?;
-    let guards = operations
-        .iter()
-        .take_while(|op| {
-            op["op"] == "update_node"
-                && op["patch"]
-                    .as_object()
-                    .is_some_and(|patch| patch.is_empty())
-        })
-        .count();
+    let guards = aq_human_work::task_graph::leading_guards(operations);
     Ok(Some(Intent {
         project: row.get("project_id"),
         revision: row.get::<i64, _>("project_revision") as u64,

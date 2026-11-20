@@ -9,11 +9,16 @@ use crate::dashboard_api::{
     contract::Scope,
     errors::ApiError,
 };
+use aq_human_work::knowledge_actions::{
+    ContentType, KnowledgeAuthor, KnowledgeCorrect, KnowledgeRestore, KnowledgeRetire,
+    KnowledgeVerify,
+};
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use schemars::JsonSchema;
 use std::collections::{BTreeMap, BTreeSet};
 mod journal;
+mod retirement;
 mod subtree;
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -71,6 +76,9 @@ pub(crate) trait GraphPayload:
         vec![]
     }
     fn operations(&self, current: &Current<'_>) -> ApiResult<Vec<Value>>;
+    fn retirement(&self) -> Option<&aq_human_work::epic_retirement::Register> {
+        None
+    }
     /// A routing kind writes through `routing` instead of a Graph patch.
     fn route_change(&self) -> Option<RouteChange> {
         None
@@ -248,24 +256,6 @@ impl GraphPayload for aq_human_work::Execution {
             json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"canceled"}}),
         ])
     }
-}
-
-#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ContentType {
-    Fact,
-    Decision,
-    Policy,
-    Procedure,
-    Incident,
-    Reference,
-    Note,
-}
-#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Verdict {
-    Verified,
-    Disputed,
 }
 
 macro_rules! common {
@@ -518,23 +508,6 @@ impl GraphPayload for DependencyRemove {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KnowledgeAuthor {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_project_revision: String,
-    #[schemars(length(min = 1, max = 512))]
-    pub title: String,
-    #[schemars(length(max = 32768))]
-    pub body: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 16))]
-    pub labels: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<ContentType>,
-}
 impl GraphPayload for KnowledgeAuthor {
     const KIND: &'static str = "knowledge.author";
     const GRANT: &'static str = aq_agent_grants::op::KNOWLEDGE_AUTHOR;
@@ -569,25 +542,6 @@ impl GraphPayload for KnowledgeAuthor {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KnowledgeCorrect {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 512))]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 32768))]
-    pub body: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 16))]
-    pub labels: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<ContentType>,
-}
 impl GraphPayload for KnowledgeCorrect {
     common!(
         "knowledge.correct",
@@ -616,18 +570,6 @@ impl GraphPayload for KnowledgeCorrect {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KnowledgeVerify {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    pub verification: Verdict,
-    /// Graph `Source` objects; each is validated against the pinned Graph schema.
-    #[schemars(length(min = 1, max = 64))]
-    pub evidence: Vec<serde_json::Map<String, Value>>,
-}
 impl GraphPayload for KnowledgeVerify {
     common!("knowledge.verify", "knowledge", "knowledge.verify");
     fn reason_required() -> bool {
@@ -647,18 +589,6 @@ impl GraphPayload for KnowledgeVerify {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KnowledgeRetire {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    #[schemars(length(min = 1, max = 4096))]
-    pub retirement_reason: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub successor_id: Option<Uuid>,
-}
 impl GraphPayload for KnowledgeRetire {
     common!("knowledge.retire", "knowledge", "knowledge.retire");
     fn valid(&self) -> bool {
@@ -679,18 +609,6 @@ impl GraphPayload for KnowledgeRetire {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KnowledgeRestore {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    #[schemars(range(min = 1))]
-    pub revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_lifecycle: Option<bool>,
-}
 impl GraphPayload for KnowledgeRestore {
     common!("knowledge.restore", "knowledge", "knowledge.restore");
     fn valid(&self) -> bool {
@@ -781,6 +699,8 @@ impl<P> GraphAction<P> {
 }
 
 pub(crate) fn register(state: &AppState, r: &mut Registry) {
+    r.register(GraphAction::<aq_human_work::epic_retirement::Register>::new(state))
+        .expect("epic retirement registration adapter");
     r.register(GraphAction::<super::enqueue::GraphCreate>::new(state))
         .expect("graph create adapter");
     r.register(GraphAction::<TaskDelete>::new(state))
@@ -826,6 +746,8 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("knowledge restore adapter");
 }
 pub(crate) fn schemas(r: &mut Registry) {
+    r.register_schema::<GraphAction<aq_human_work::epic_retirement::Register>>()
+        .expect("epic retirement registration schema");
     r.register_schema::<GraphAction<super::enqueue::GraphCreate>>()
         .expect("graph create schema");
     r.register_schema::<GraphAction<TaskDelete>>()
@@ -1214,7 +1136,9 @@ impl<P: GraphPayload> GraphAction<P> {
         if let Some(change) = payload.route_change() {
             return route(state, workspace, subject, expected, change).await;
         }
-        let mutations = if P::ACTIVATE_SUBTREE {
+        let mutations = if let Some(registration) = payload.retirement() {
+            retirement::plan(state, rt, workspace, user.id, &node, registration).await?
+        } else if P::ACTIVATE_SUBTREE {
             match subtree::plan(rt, workspace, subject, expected).await? {
                 Ok(operations) => operations,
                 Err(outcome) => return Ok(outcome),
@@ -1276,7 +1200,11 @@ impl<P: GraphPayload> GraphAction<P> {
         };
         Ok(match status.as_u16() {
             200..=299 if P::ACTIVATE_SUBTREE => subtree::confirmed(&raw, &operations),
-            200..=299 => confirmed(&raw, operations.len(), self.guards.len()),
+            200..=299 => confirmed(
+                &raw,
+                operations.len(),
+                aq_human_work::task_graph::leading_guards(&operations),
+            ),
             409 if P::ACTIVATE_SUBTREE && code(&raw) == Some("conflict") => {
                 Outcome::conflict(BTreeMap::new())
             }

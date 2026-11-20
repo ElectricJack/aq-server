@@ -5,18 +5,16 @@ use crate::{
     machine_api::mapped,
     worker_api::AuthenticatedNode,
 };
-use aq_admission::{
-    startup::NativeOffer,
-    transport::{DeliveryClock, Poll},
-};
+use aq_admission::transport::{DeliveryClock, Poll};
 use aq_machine_control::slots;
+use aq_profiled_state::git_author::OfferDelivery;
 use sqlx::Row;
 pub async fn existing(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
     slot: u32,
-) -> Result<Option<NativeOffer>, AppError> {
+) -> Result<Option<OfferDelivery>, AppError> {
     // Most polls have nothing to redeliver and share the node row with their
     // sibling slots. Loading an offer locks that row FOR UPDATE, and two slots
     // that each upgrade a shared lock wait for each other until one times out,
@@ -73,18 +71,19 @@ pub async fn existing(
     {
         return Err(refused());
     }
-    let mut offer = super::load_original_offer_locked(&mut tx, attempt).await?;
-    if offer.offered.lifecycle_binding.session != view.session
+    let mut offer =
+        super::super::native_offer::load_original_delivery_locked(&mut tx, attempt).await?;
+    let offered = &mut offer.native.offered;
+    if offered.lifecycle_binding.session != view.session
         || !matches!(view.session,aq_session_protocol::SessionIdentity::Remote{boot_id,..}if boot_id==request.identity.boot_id)
     {
         return Err(refused());
     }
     let time = now(state)?;
-    if time >= offer.offered.clock.expires_at_ms {
+    if time >= offered.clock.expires_at_ms {
         return Ok(None);
     }
-    offer.offered.clock =
-        DeliveryClock::new(time, offer.offered.clock.expires_at_ms).map_err(|_| refused())?;
+    offered.clock = DeliveryClock::new(time, offered.clock.expires_at_ms).map_err(|_| refused())?;
     offer.validate().map_err(|_| refused())?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
     Ok(Some(offer))

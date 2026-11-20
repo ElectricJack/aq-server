@@ -2,12 +2,22 @@
 
 Builds on [0016 Delivery by playbook](0016-delivery-by-playbook.md). The pilot uses one task branch and one PR into the project default branch. Multiple epics can share that branch. Graph records explicit prerequisites independently of the parent ticket.
 
+The [repository enrollment runbook](../operations/delivery-enrollment.md) covers the GitHub App, required checks, AQ bindings and the evidence to collect before widening a pilot.
+
+## Task creator and Git authorship
+
+When a person creates a task, AQ records the authenticated creator's account ID and snapshots the Git author name and email for that task. The default email is the creator's AQ account email. It becomes visible to anyone who can read the commit. People looking at the task can use the recorded creator to find the person who requested the work.
+
+AQ uses that snapshot for commits it creates for the task. A retry, repair or reassignment to another worker keeps the original author. A task submitted by a second person has its own author, including when both people are working in the same repository. The worker records its automation identity as Git committer. Publishing the branch preserves existing commit objects, and the GitHub App performs the PR and merge actions.
+
+For older tasks, AQ may recover the creator from its authenticated task-creation record. Work with no attributable person keeps the existing automation identity. Existing commits retain their recorded authors and SHAs.
+
 ## Result to merge
 
 1. On aq.work.result_ready, read the current attempt and result. The initial code policy holds an unsuccessful or unchanged result and notifies its supervisor once. A report-only project may author a different rule.
 2. Publish refs/heads/aq/<task-id> with its lease. Open or recover the same PR for that repository, task branch and default branch. Keep its identity through repair.
 3. Await required GitHub Actions checks for the current candidate, using repository protection and any extra checks named by the project. A protected check pinned to a GitHub App needs a report from that App. A named check that has not reported stays pending. When neither a check requirement nor any observed check exists, return pending until the deadline. For the pilot configure required checks, enforce the configured producer and require an up-to-date branch or equivalent GitHub enforcement of the tested combination. The App must respect that protection. A change in the target that invalidates checks requires revalidation.
-4. On red return the failed check names. On conflict return with update_from_main. Use the task branch for repair. After three returns hold and notify once. A 30-minute check timeout ends that run and permits a later result-ready observation. Unknown remote outcomes require reconciliation before retry. A closed unmerged PR or policy refusal holds with a reason visible to the supervisor.
+4. On red return the failed check names. On conflict or a confirmed GitHub behind state for the tracked PR, target branch and result head, return with `update_from_main` through the existing conflict outcome. If the merge request is declined after preflight, re-read the PR to verify a behind state. Keep the same task branch and PR through repair, and await the required checks for the repaired head. After three returns hold and notify once. A 30-minute check timeout ends that run and permits a later result-ready observation. Unknown remote outcomes require reconciliation before retry. A closed unmerged PR or policy refusal holds with a reason visible to the supervisor.
 5. Merge with the merge method and expected task head. Record repository, PR, task, attempt/result, expected head, target ref and actual merge commit from GitHub. Reconcile a lost reply against that same PR and head. Replaying cleanup must preserve the merge evidence. Delete the delivered task branch on origin and central aq-git, then settle through work.complete and the validated Graph receipt.
 
 ## Offer a dependent task

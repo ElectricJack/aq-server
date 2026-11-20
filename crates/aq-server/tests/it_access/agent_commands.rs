@@ -1807,6 +1807,21 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     )
     .await;
     install_task_project(&e, workspace.clone(), project.clone()).await;
+    let id = |value: &Value| value.as_str().unwrap().parse::<Uuid>().unwrap();
+    let (project_id, workspace_id, parent) = (id(&project), id(&workspace), id(&own));
+    sqlx::query(
+        "INSERT INTO task_git_authors
+        (source,operation_id,project_id,workspace_id,task_id,requester_id,name,email)
+        VALUES('human_graph',$1,$2,$3,$4,$5,'Original+Git','Original+Git@Example.Test')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(workspace_id)
+    .bind(parent)
+    .bind(Uuid::new_v4())
+    .execute(&e.pool)
+    .await
+    .unwrap();
     let batch = |count: usize, state, edges| {
         let tasks: Vec<_> = (0..count)
             .map(|n| {
@@ -1836,6 +1851,19 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     let (status, receipt) = command("task.graph.create", request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
     assert_eq!(receipt["data"]["disposition"], "confirmed", "{receipt}");
+    for task in request["params"]["tasks"].as_array().unwrap() {
+        let inherited = aq_human_work::task_git_author::lookup(
+            &e.pool,
+            project_id,
+            workspace_id,
+            id(&task["id"]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(inherited.name, "Original+Git");
+        assert_eq!(inherited.email, "Original+Git@Example.Test");
+    }
     let (status, collision) = send(&e.app, "/v1/agent/graph/commands", Some(&e.token), Some(json!({
         "api_version":1,"operation_id":receipt["data"]["operation_id"],"binding":e.binding,
         "reason":"A different operation cannot shadow a draft receipt",

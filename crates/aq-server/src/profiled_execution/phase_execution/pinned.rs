@@ -223,7 +223,7 @@ async fn load_for_locked(
     let stored: crate::profiled_execution::native_offer::observation::StoredOffer =
         serde_json::from_value(row.get("graph_task_observation")).map_err(|_| refused())?;
     if stored.read_provenance.context_response_digest != h.proposal.full_context_digest
-        || !same(&stored.native_offer, &h.proposal.original)?
+        || !same(&stored.native_offer.native, &h.proposal.original)?
     {
         return Err(refused());
     }

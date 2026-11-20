@@ -202,6 +202,11 @@ async fn a_report_is_recorded_only_when_its_task_ref_is_at_the_reported_head() {
     let attempt = report.binding.attempt_id;
     let live = aq_delivery::git_grant::live(&pool, attempt, auth.id()).await;
     assert_eq!(live.unwrap(), None);
+    use aq_delivery::git_grant::{Lookup, lookup};
+    assert!(matches!(
+        lookup(&pool, attempt, auth.id()).await.unwrap(),
+        Lookup::Granted(_)
+    ));
 }
 
 #[tokio::test]

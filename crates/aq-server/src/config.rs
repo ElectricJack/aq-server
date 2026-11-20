@@ -343,6 +343,13 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|reason| ("result_media".into(), reason.into()))?;
     }
+    #[cfg(feature = "delivery_playbook")]
+    if c.delivery.as_ref().is_some_and(|d| d.has_enrollment()) && c.source_retention.is_none() {
+        return invalid(
+            "delivery.project_allowlist",
+            "requires source_retention".into(),
+        );
+    }
     if let Some(settings) = &c.source_retention {
         settings
             .validate()

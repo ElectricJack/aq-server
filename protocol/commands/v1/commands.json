@@ -766,6 +766,40 @@
     },
     {
       "cli": [
+        "epic",
+        "retirement",
+        "register"
+      ],
+      "grant": "epic.retirement.register",
+      "kind": "mutation",
+      "name": "epic.retirement.register",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:3425f3b913bf09aa98439fd5180edf896208ade46da364b0b8604be2f9ea0d98",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.register"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "epic_id",
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Register an epic flag and adopt its blocked draft cleanup tasks",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
         "feedback",
         "link"
       ],
