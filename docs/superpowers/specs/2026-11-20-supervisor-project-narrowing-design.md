@@ -26,6 +26,8 @@ PR #220 gave every supervisor owner authority everywhere. The owner accepted tha
    - It is `POST /api/v1/actions` and the JSON body has `payload.project_id == p`, or `subject.type == "project"` with `subject.id == p`.
 
    The action body is read once (bounded by the existing 64 KiB command body limit) and forwarded unchanged. A request that names another project, or no project, is refused.
+
+   Two requests that name only `p` are refused anyway: `POST /api/projects/{p}` (`project.set`), which could repoint the binding at another project's Graph workspace or repository, and any action whose `kind` starts with `playbook.`, because playbook policy is global even when the namespace's project is `p`.
 2. **Restore the pre-#220 narrowing for project supervisors** wherever phase 1 removed it:
    - `SupervisorPrincipal::may_enqueue`, which covers `task.create`, `task.graph.create` and the graph actions;
    - `/v1/supervisor/projects` (`project.list`);
@@ -36,10 +38,12 @@ PR #220 gave every supervisor owner authority everywhere. The owner accepted tha
 
 ## What a project supervisor can and cannot do
 
-- **Can:** every owner command whose request names its project. That covers its tasks, comments, knowledge, task graph, routes and project settings (project show/set), plus its own `whoami`.
+- **Can:** every owner command whose request names its project. That covers its tasks, comments, knowledge, task graph, routes and project settings (`project.show`), its own sessions' messages and nudges (they carry `payload.project_id`, and the recipient is checked against the launch binding's project), plus its own `whoami`.
 - **Cannot:** requests that name no project or another project:
   - sessions, attempts, results, messages, questions, reviews and decisions;
   - workers, routing, playbooks, global settings, internal work, notifications and supervisors.
+
+  It also cannot replace its project binding (`project.set`) or send any playbook action, though both name its project.
 
   These remain global-supervisor powers. Messages and sessions for its own tasks are a possible later step.
 
