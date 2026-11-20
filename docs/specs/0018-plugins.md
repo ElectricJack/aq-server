@@ -108,7 +108,8 @@ namespace's engine thread for the duration of the call. Interactive command
 deadlines should be 10 to 15 seconds. Set outbound timeouts inside the plugin
 and return a declared retryable outcome when possible.
 
-On success, stdout carries one JSON object of up to 1 MiB.
+On success, stdout carries one JSON object of up to 1 MiB. It must include
+`outcome`, `output` and `events`. Use an empty array when there are no events.
 
 ```json
 {
@@ -131,7 +132,8 @@ ahead of AQ.
 AQ validates the entire response. The event contract names the payload fields
 used for the subject string, nonnegative integer revision and string
 correlation values. Use a dotted path such as `subject.id` for a nested property. Each retained event envelope is bounded to 64 KiB. AQ derives
-`event_id` from the digest of the intent ID and zero-based event index. The
+`event_id` as `sha256:<hex>` over the canonical UTF-8 JSON array containing
+the intent ID and the zero-based event index. The
 producer is `ext.<name>` for every version of the package. Plugins can only
 produce events declared in their own extension.
 

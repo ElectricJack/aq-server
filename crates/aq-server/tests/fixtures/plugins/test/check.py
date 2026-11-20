@@ -12,20 +12,11 @@ PRODUCER = "ext.test"
 PROTOCOL = "aq.plugin/1"
 
 
-def invoke(state, secret, mode, key, binding):
-    request = {
-        "protocol": PROTOCOL,
-        "command": f"{PRODUCER}.ping",
-        "input": {"mode": mode},
-        "idempotency_key": key,
-        "project_id": PROJECT,
-        "binding": binding,
-        "state_dir": str(state),
-        "secret_paths": {"plugins/test/secret": str(secret)},
-        "deadline_ms": 1000,
-    }
+def invoke(executable, request):
+    """Invoke any local executable with an aq.plugin/1 request object."""
+    state = Path(request["state_dir"])
     return subprocess.run(
-        [str(PACKAGE / "bin/test"), "invoke"],
+        [str(executable), "invoke"],
         input=json.dumps(request).encode(),
         capture_output=True,
         cwd=state,
@@ -55,8 +46,21 @@ def main():
         bindings.chmod(0o600)
         binding = tomllib.loads(bindings.read_text())["projects"][PROJECT]
 
-        first = invoke(state, secret, "normal", "fixture:normal", binding)
-        replay = invoke(state, secret, "normal", "fixture:normal", binding)
+        def call(mode):
+            return invoke(PACKAGE / "bin/test", {
+                "protocol": PROTOCOL,
+                "command": f"{PRODUCER}.ping",
+                "input": {"mode": mode},
+                "idempotency_key": f"fixture:{mode}",
+                "project_id": PROJECT,
+                "binding": binding,
+                "state_dir": str(state),
+                "secret_paths": {"plugins/test/secret": str(secret)},
+                "deadline_ms": 1000,
+            })
+
+        first = call("normal")
+        replay = call("normal")
         assert first.returncode == replay.returncode == 0
         assert first.stdout == replay.stdout
         assert json.loads(first.stdout) == {
@@ -68,20 +72,20 @@ def main():
             }],
         }
 
-        crash = invoke(state, secret, "crash", "fixture:crash", binding)
+        crash = call("crash")
         assert crash.returncode != 0
-        recovered = invoke(state, secret, "crash", "fixture:crash", binding)
+        recovered = call("crash")
         assert recovered.returncode == 0
         assert recovered.stdout == first.stdout
         assert recovered.stdout == (state / "fixture:crash.json").read_bytes()
 
         try:
-            invoke(state, secret, "timeout", "fixture:timeout", binding)
+            call("timeout")
         except subprocess.TimeoutExpired:
             pass
         else:
             raise AssertionError("first attempt should exceed the child deadline")
-        retry = invoke(state, secret, "timeout", "fixture:timeout", binding)
+        retry = call("timeout")
         assert retry.returncode == 0 and retry.stdout == first.stdout
 
     print("Protocol fixture passed invocation, environment, event payload, crash replay and timeout retry.")

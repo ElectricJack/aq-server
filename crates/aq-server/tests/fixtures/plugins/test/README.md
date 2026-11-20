@@ -12,9 +12,8 @@ The check runs the real executable with the protocol's cleared environment,
 vault secret path, project binding, writable state directory and a
 1,000 ms child budget from its 2,000 ms command contract. It checks the
 response and event payload, repeats a call byte for byte, and retries a crash
-and a timeout with their original keys. Use `invoke()` as a starting point
-for running another package, passing its executable, command, input,
-project binding and expected output.
+and a timeout with their original keys. Use `invoke(executable, request)` to run another package with
+its own command, input, project binding and secret paths.
 
 In AQ, the good event's dotted fields become subject `sample`, revision
 `5` and correlation `{"ref":"ready","subject.id":"sample"}`.
