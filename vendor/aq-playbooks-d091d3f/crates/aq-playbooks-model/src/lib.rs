@@ -1,7 +1,9 @@
 //! Versioned, bounded portable workflow format. See FORMAT.md for canonical rules.
 mod draft;
+mod extensions;
 pub mod schedules;
 pub use draft::{DraftSize, MAX_DRAFT_EXPANSION, MAX_DRAFT_EXPANSION_TOTAL, MAX_DRAFT_SCOPE};
+pub use extensions::CatalogExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

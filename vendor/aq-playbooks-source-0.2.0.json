@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "11966712e33c23f0325caff793125c17f88c3d0f",
-  "publication_profile": "exact standalone Git source archive; engine 0.2.0 with host catalog 2.3.0 (live state only, authoring tools); model, compiler, runner, postgres, simulation and CLI all 0.2.0; no registry publication",
-  "archive_format": "git archive --format=tar 1196671 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "05190cd57d8f66e60401f2c5b690e4f60b6b85c82220358c9884ea90c76cb47c",
-  "vendor_root": "vendor/aq-playbooks-1196671",
+  "source_revision": "d091d3f2b28de02f0b2b0311f707324624a99933",
+  "publication_profile": "Exact standalone Git source archive for aq-playbooks 0.2.0 with catalog extension validation and composition.",
+  "archive_format": "git archive --format=tar d091d3f Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "d43fb58079a4f0c841164426f9a32c635ed6f4eddd206a06808e79399d818983",
+  "vendor_root": "vendor/aq-playbooks-d091d3f",
   "files": [
     {
       "path": "Cargo.lock",
@@ -686,10 +686,16 @@
       "sha256": "4cb8eac82d90cc4e97b7797b2e7a993e3ba3a9be9e56fac58a4a6c0a605fbf5d"
     },
     {
+      "path": "crates/aq-playbooks-model/src/extensions.rs",
+      "mode": "100644",
+      "bytes": 8622,
+      "sha256": "b804325c4aba91505b901523bdc1e0607ee6521129bb6b25c38637fb7a2d0a90"
+    },
+    {
       "path": "crates/aq-playbooks-model/src/lib.rs",
       "mode": "100644",
-      "bytes": 145352,
-      "sha256": "daac243228a980d0c519ca153ba3af9ec9fa6751125f546aa277b7914424d50a"
+      "bytes": 145406,
+      "sha256": "bfc64401727edf31616ce30b6b41d16678845d83d4baf89d6015ae9648c9aa4e"
     },
     {
       "path": "crates/aq-playbooks-model/src/schedules.rs",
