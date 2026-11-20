@@ -728,6 +728,16 @@ fn execute<S: Storage>(
     request: Request,
     shared: &Shared,
 ) -> Result<Value, Error> {
+    if let Request::Activate { artifact, .. }
+    | Request::ActivateAt { artifact, .. }
+    | Request::ConfigureBinding { artifact, .. } = &request
+        && shared
+            .stale_artifacts
+            .get()
+            .is_some_and(|stale| stale.contains(artifact))
+    {
+        return Err(Error::Invalid);
+    }
     host.set_mode(match request {
         Request::Recover { .. } => HostMode::Reconcile,
         Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
@@ -811,13 +821,6 @@ fn execute<S: Storage>(
             artifact,
             authority,
         } => {
-            if shared
-                .stale_artifacts
-                .get()
-                .is_some_and(|stale| stale.contains(&artifact))
-            {
-                return Err(Error::Invalid);
-            }
             engine
                 .activate(&binding, &artifact, authority)
                 .map_err(engine_error)?;
