@@ -714,7 +714,11 @@ class Retirement:
         kind = value.get("kind")
         common = ("kind", "approval_revision", "evidence")
         if kind == "merge":
-            fields(value, (*common, "repository", "pull_request", "sha"))
+            fields(
+                value,
+                (*common, "repository", "pull_request", "sha"),
+                ("supersedes_merge",),
+            )
             url = urlsplit(nonempty(value["pull_request"], 2048))
             require(
                 url.scheme == "https"
@@ -727,6 +731,8 @@ class Retirement:
                 "pull_request": value["pull_request"],
                 "sha": sha(value["sha"]),
             }
+            if "supersedes_merge" in value:
+                data["supersedes_merge"] = uuid(value["supersedes_merge"])
         elif kind == "ordinary":
             fields(value, (*common, "repository", "sha", "passed", "flag_absent"))
             require(type(value["flag_absent"]) is bool, "flag_absent must be boolean")
@@ -790,8 +796,24 @@ class Retirement:
             repo = data["repository"]
             require(repo in state["repositories"], f"{repo} is not registered")
         if kind == "merge":
-            require(repo not in merges, f"A merge was already recorded for {repo}")
-            state = {**state, "merges": {**state["merges"], repo: anchor}}
+            require(
+                state["merges"].get(repo) == data.get("supersedes_merge"),
+                f"Merge for {repo} must supersede its current receipt from status",
+            )
+            require(
+                repo not in merges or merges[repo]["sha"] != data["sha"],
+                f"A repair merge for {repo} must have a different SHA",
+            )
+            state = {
+                **state,
+                "merges": {**state["merges"], repo: anchor},
+                "ordinary": {
+                    key: value
+                    for key, value in state["ordinary"].items()
+                    if key != repo
+                },
+                "integrated": None,
+            }
             commits = {repo: data["sha"]}
         elif kind == "ordinary":
             require(
@@ -918,6 +940,7 @@ class Retirement:
         return {
             **result,
             "status": "Approved · flag removal pending",
+            "merge_receipts": state["merges"],
             "outstanding": list(
                 self.outstanding(state, self.evidence_nodes(state), cleanup)
             ),

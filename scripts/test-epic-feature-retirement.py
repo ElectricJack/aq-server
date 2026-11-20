@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Two-epic acceptance of the spec 0020 owner CLI on disposable AQ Graph.
 
-Requires Docker and locally loaded aq-graph:graph01-225329cd6acf-pinned
-and postgres:17-bookworm images. Graph, authentication, persistent
-changesets and task readiness are real. Forge and test evidence are
-fixture attestations.
+Requires rustc, Docker and locally loaded aq-graph:graph01-225329cd6acf-pinned
+and postgres:17-bookworm images. Graph, authentication, persistent changesets,
+task readiness and compilation are real. Recorded evidence uses fixture identities.
 """
 
 from contextlib import ExitStack
@@ -76,7 +75,7 @@ class ScratchGraph:
     def cli(self, *args):
         result = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 str(Path(__file__).with_name("epic_feature_retirement.py")),
                 "--graph-origin",
                 self.origin,
@@ -220,17 +219,23 @@ def decision(number, choice, vetted):
     }
 
 
-def scratch_build(source, expected, **flags):
-    environment = {
-        **os.environ,
-        "feature_a": "0",
-        "feature_b": "0",
-        "FEATURE_CLIENT_A": "0",
-        **flags,
-    }
+def scratch_build(directory, source, expected, *flags):
+    fixture = directory / "feature_fixture.rs"
+    binary = directory / "feature_fixture"
+    fixture.write_text(source)
+    features = [arg for flag in flags for arg in ("--cfg", f'feature="{flag}"')]
+    build = subprocess.run(
+        ["rustc", str(fixture), "-o", str(binary), *features],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if expected is None:
+        assert build.returncode != 0 and "removed_feature" in build.stderr, build.stderr
+        return
+    assert build.returncode == 0, build.stderr
     result = subprocess.run(
-        [sys.executable, "-c", source],
-        env=environment,
+        [str(binary)],
         capture_output=True,
         text=True,
         timeout=5,
@@ -244,11 +249,17 @@ def scenario(scratch, directory):
     owner = Retirement(graph, APPROVER)
     spec_a = registration(graph, "A", {SERVICE: "feature_a"})
     spec_b = registration(graph, "B", {SERVICE: "feature_b"})
-    initial = 'import os; print(os.environ["feature_a"] + os.environ["feature_b"])'
-    for a_enabled, b_enabled in (("0", "0"), ("0", "1"), ("1", "0"), ("1", "1")):
-        scratch_build(
-            initial, a_enabled + b_enabled, feature_a=a_enabled, feature_b=b_enabled
-        )
+    initial = """fn main() {
+        println!("{}{}", cfg!(feature = "feature_a") as u8,
+                        cfg!(feature = "feature_b") as u8);
+    }"""
+    for expected, flags in (
+        ("00", ()),
+        ("01", ("feature_b",)),
+        ("10", ("feature_a",)),
+        ("11", ("feature_a", "feature_b")),
+    ):
+        scratch_build(directory, initial, expected, *flags)
 
     a, first = owner.register_record(spec_a)
     assert owner.status(a)["status"] == "Registration pending"
@@ -341,7 +352,13 @@ def scenario(scratch, directory):
             "evidence": proof(f"ordinary test {repo}"),
         }
 
-    service_sha, client_sha = "4" * 40, "5" * 40
+    service_sha, broken_client_sha, client_sha = "4" * 40, "5" * 40, "6" * 40
+    service_after = (
+        """fn main() { println!("1{}", cfg!(feature = "feature_b") as u8); }"""
+    )
+    assert "feature_a" not in service_after
+    scratch_build(directory, service_after, "10")
+    scratch_build(directory, service_after, "11", "feature_b")
     service_merge = merge(SERVICE, 1, service_sha)
     recorded = owner.evidence(a, service_merge)
     service_build = ordinary(SERVICE, service_sha, True)
@@ -367,16 +384,35 @@ def scenario(scratch, directory):
         "must match", lambda: owner.evidence(a, ordinary(CLIENT, client_sha, False))
     )
 
-    owner.evidence(a, merge(CLIENT, 3, client_sha))
-    owner.evidence(a, ordinary(CLIENT, client_sha, False))
+    broken_merge = merge(CLIENT, 3, broken_client_sha)
+    broken_merge_receipt = owner.evidence(a, broken_merge)
+    broken_client = """#[cfg(feature = "FEATURE_CLIENT_A")]
+    fn removed_feature() -> u8 { 1 }
+    fn main() { println!("{}", removed_feature()); }"""
+    scratch_build(directory, broken_client, None)
+    broken_build = ordinary(CLIENT, broken_client_sha, False)
+    broken_build_receipt = owner.evidence(a, broken_build)
     rejected("ordinary build or flag removal check failed", lambda: owner.close(a))
+    client_repair = merge(CLIENT, 4, client_sha)
+    rejected("must supersede", lambda: owner.evidence(a, client_repair))
+    client_repair["supersedes_merge"] = owner.status(a)["merge_receipts"][CLIENT]
+    rejected(
+        "must have a different SHA",
+        lambda: owner.evidence(a, {**client_repair, "sha": broken_client_sha}),
+    )
+    repaired_merge_receipt = owner.evidence(a, client_repair)
+    rejected(
+        "must supersede",
+        lambda: owner.evidence(a, {**client_repair, "sha": "7" * 40}),
+    )
+    assert owner.evidence(a, broken_merge) == broken_merge_receipt
+    assert owner.evidence(a, broken_build) == broken_build_receipt
+    assert owner.evidence(a, client_repair) == repaired_merge_receipt
+    rejected("ordinary build evidence pending", lambda: owner.close(a))
     client_build = ordinary(CLIENT, client_sha, True)
-    service_after = 'import os; print("1" + os.environ["feature_b"])'
-    client_after = 'print("1")'
-    assert "feature_a" not in service_after and "FEATURE_CLIENT_A" not in client_after
-    scratch_build(service_after, "10")
-    scratch_build(service_after, "11", feature_b="1")
-    scratch_build(client_after, "1")
+    client_after = 'fn main() { println!("1"); }'
+    assert "FEATURE_CLIENT_A" not in client_after
+    scratch_build(directory, client_after, "1")
     owner.evidence(a, client_build)
     integrated = {
         "kind": "integrated",
