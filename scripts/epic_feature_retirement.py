@@ -280,6 +280,14 @@ def trusted(node, owner, *, created=True):
     )
 
 
+def require_graph_owner(registration):
+    spec = registration["metadata"].get(META, {}).get("spec", {})
+    require(
+        "owner_authority" not in spec,
+        "This registration belongs to the AQ owner action journal. Use AQ owner operations.",
+    )
+
+
 class Retirement:
     def __init__(self, graph, owner):
         self.graph = graph
@@ -376,6 +384,7 @@ class Retirement:
         }
         current = self.graph.node(registration, missing=True, kind="knowledge")
         if current is not None:
+            require_graph_owner(current)
             trusted(current, self.owner)
             require(
                 current["metadata"][META]["spec"] == spec,
@@ -406,6 +415,7 @@ class Retirement:
             current = self.graph.node(registration, missing=True, kind="knowledge")
             if current is None:
                 raise
+            require_graph_owner(current)
             trusted(current, self.owner)
             require(
                 current["metadata"][META]["spec"] == spec,
@@ -416,6 +426,7 @@ class Retirement:
 
     def load(self, registration):
         node = self.graph.node(uuid(registration), kind="knowledge")
+        require_graph_owner(node)
         trusted(node, self.owner)
         state = node["metadata"].get(META)
         require(

@@ -4,6 +4,8 @@
 //!
 //! The all-project task list joins Graph's page to AQ's current owner and project bindings.
 pub mod attribution;
+pub mod epic_retirement;
+pub mod knowledge_actions;
 pub mod projection;
 pub mod subtree_activation;
 pub mod task_graph;

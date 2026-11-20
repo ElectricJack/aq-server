@@ -14,6 +14,9 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "decision.resolve" => {
             "Resolve a review decision: approve or reject its subject, with an optional comment"
         }
+        "epic.retirement.register" => {
+            "Register an epic flag and adopt its blocked draft cleanup tasks"
+        }
         "feedback.link" => "Link a result comment thread to an existing task",
         "feedback.task_create" => "Create a task from a result comment thread",
         "knowledge.author" => "Create an unverified knowledge record in a project",
