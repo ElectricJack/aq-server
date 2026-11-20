@@ -28,7 +28,7 @@ where
     O: FromRequestParts<S> + Into<Uuid> + Send + 'static,
     E: From<Error> + IntoResponse + 'static,
 {
-    Router::new()
+    let routes = Router::new()
         .route(
             "/api/playbooks/sources",
             get(list::<S, O, E>).post(register::<S, O, E>),
@@ -46,7 +46,29 @@ where
             "/api/playbooks/sources/{id}/rollback",
             post(rollback::<S, O, E>),
         )
-        .layer(DefaultBodyLimit::max(BODY_BYTES))
+        .layer(DefaultBodyLimit::max(BODY_BYTES));
+    #[cfg(feature = "delivery_playbook")]
+    let routes = routes.route(
+        "/api/playbooks/sources/routing/recompile",
+        post(recompile_routing::<S, O, E>),
+    );
+    routes
+}
+
+#[cfg(feature = "delivery_playbook")]
+async fn recompile_routing<S: Server, O: Into<Uuid>, E: From<Error>>(
+    State(s): State<S>,
+    owner: O,
+    Json(request): Json<crate::continuity::Recompile>,
+) -> Result<Json<Value>, E> {
+    let owner = owner.into();
+    let target = s.routing_host10().ok_or_else(|| {
+        Error::Conflict(
+            "Routing continuity requires an installation-routing Host10 namespace".into(),
+        )
+    })?;
+    crate::continuity::activate(&s, owner, target, request).await?;
+    Ok(Json(one(&s, crate::builtin::ROUTING).await?))
 }
 
 async fn one<S: Server>(s: &S, id: &str) -> Result<Value, Error> {

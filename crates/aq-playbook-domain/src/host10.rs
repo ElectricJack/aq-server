@@ -100,7 +100,7 @@ pub struct ResultFacts {
 }
 
 impl ResultFacts {
-    fn output(&self) -> Value {
+    pub fn output(&self) -> Value {
         json!({
             "outcome": truncate(&self.outcome, OUTCOME_BYTES),
             "changed": self.changed,
