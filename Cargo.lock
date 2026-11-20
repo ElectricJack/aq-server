@@ -1000,6 +1000,7 @@ dependencies = [
  "sqlx",
  "sqlx-postgres",
  "tokio",
+ "tower",
  "uuid",
 ]
 

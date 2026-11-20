@@ -28,7 +28,9 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[cfg(not(feature = "supervisor_full_access"))]
 mod admin;
+mod owner;
 
 #[derive(Clone)]
 struct Evidence;
@@ -1609,11 +1611,15 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
     assert_eq!(status, StatusCode::OK, "{projects}");
     assert_eq!(projects["projects"].as_array().unwrap().len(), 1);
     assert_eq!(projects["projects"][0]["id"], project.to_string());
-    let cross = format!(
-        "/v1/supervisor/read/api/human/projects/{}/tasks",
-        Uuid::new_v4()
-    );
-    assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    // The read nest exists only without supervisor_full_access.
+    #[cfg(not(feature = "supervisor_full_access"))]
+    {
+        let cross = format!(
+            "/v1/supervisor/read/api/human/projects/{}/tasks",
+            Uuid::new_v4()
+        );
+        assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    }
     f.answer(&p).await;
     f.assert_consumed(r.id).await;
     f.send().await;

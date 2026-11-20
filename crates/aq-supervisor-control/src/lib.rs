@@ -2,6 +2,8 @@
 pub mod admin;
 mod api;
 pub mod authority;
+#[cfg(feature = "supervisor_full_access")]
+pub mod owner;
 pub mod read;
 pub mod wire;
 pub use api::{Auth, Service};
@@ -9,6 +11,31 @@ pub use aq_manual_sessions::intelligence::resolve_stored;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 pub use wire::Conversation;
+/// The supervisor routes on the machine listener: `/v1/supervisor/projects`,
+/// and with supervisor_full_access the owner bridge to `owner_app`; without
+/// it, the read nest over `human` and the admin nest over `settings`.
+pub fn machine_routes<S: Clone + Send + Sync + 'static>(
+    human: axum::Router<S>,
+    settings: axum::Router<S>,
+    owner_app: Option<axum::Router>,
+    pool: sqlx::PgPool,
+    clock: read::Clock,
+) -> axum::Router<S> {
+    let projects = read::projects(pool.clone(), clock.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    {
+        let _ = (human, settings);
+        let bridge = owner_app.map(|app| owner::routes(app, pool, clock));
+        projects.merge(bridge.unwrap_or_default())
+    }
+    #[cfg(not(feature = "supervisor_full_access"))]
+    {
+        let _ = owner_app;
+        projects
+            .merge(read::routes(human, pool.clone(), clock.clone()))
+            .merge(admin::routes(settings, pool, clock))
+    }
+}
 /// Scope identity is immutable; the caller supplies owner authorization. These
 /// are the original global locks/counters, or the project's distinct locks.
 pub async fn definition(
