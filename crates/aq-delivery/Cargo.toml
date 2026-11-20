@@ -19,7 +19,7 @@ http-body-util = { workspace = true, optional = true }
 hyper = { version = "1", features = ["client", "http1", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 jsonwebtoken = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -35,7 +35,6 @@ uuid.workspace = true
 # Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
 delivery_playbook = [
     "dep:jsonwebtoken",
-    "dep:reqwest",
     "dep:aq-role-settings",
     "aq-role-settings/delivery_playbook",
     "dep:tracing",

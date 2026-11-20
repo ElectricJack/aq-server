@@ -40,23 +40,24 @@ pub async fn onboarded_target(
     project: Uuid,
     git: GitTarget,
 ) -> Result<Option<DeliveryTarget>, sqlx::Error> {
-    let state: Option<Value> = sqlx::query_scalar("SELECT state FROM repository_onboardings WHERE project_id=$1 AND repository_id=$2 AND step='bound' ORDER BY updated_at_ms DESC LIMIT 1")
-        .bind(project)
-        .bind(git.repository_id)
-        .fetch_optional(pool)
-        .await?;
-    let Some(state) = state else {
+    let Some(state) = crate::repository_onboarding::delivery_state(
+        pool,
+        project,
+        git.repository_id,
+        git.binding_generation,
+    )
+    .await?
+    else {
         return Ok(None);
     };
-    // An adopted row names the generation it verified; a rebinding since then
-    // makes it stale, and delivery must not use it.
-    if state["adopted"] == true && state["binding_generation"] != git.binding_generation {
-        return Ok(None);
-    }
     let github = &state["request"]["github"];
     let (Some(owner), Some(name), Some(branch)) = (
-        github["owner"].as_str(),
-        github["name"].as_str(),
+        github["owner"]
+            .as_str()
+            .filter(|s| crate::repository_onboarding::slug(s)),
+        github["name"]
+            .as_str()
+            .filter(|s| crate::repository_onboarding::slug(s)),
         state["default_branch"].as_str(),
     ) else {
         return Ok(None);

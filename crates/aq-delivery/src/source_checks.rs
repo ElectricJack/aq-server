@@ -59,11 +59,23 @@ impl SourceHead {
 /// `reference` at `generation`, as of `now`.
 pub fn resolve_ref(value: &Value, reference: &str, generation: u64, now: u64) -> Option<String> {
     let completed = value["completed_at_ms"].as_u64()?;
+    if completed > now || now - completed > 30_000 {
+        return None;
+    }
+    observed_ref(value, reference, generation).map(str::to_owned)
+}
+
+/// The retained SHA-1 observation of this exact ref and generation, without a
+/// freshness requirement. Adoption also checks the forge's current default.
+pub(crate) fn observed_ref<'a>(
+    value: &'a Value,
+    reference: &str,
+    generation: u64,
+) -> Option<&'a str> {
+    let completed = value["completed_at_ms"].as_u64()?;
     let started = value["started_at_ms"].as_u64()?;
     if started == 0
         || completed < started
-        || completed > now
-        || now - completed > 30000
         || value["binding_generation"] != generation
         || value["observation_id"]
             .as_str()
@@ -77,7 +89,7 @@ pub fn resolve_ref(value: &Value, reference: &str, generation: u64, now: u64) ->
         return None;
     }
     let hex = value["refs"][reference].as_str()?;
-    hex40(hex).then(|| hex.into())
+    hex40(hex).then_some(hex)
 }
 
 /// A `retention.inspect` reply proves `handle` is an exact, active, complete

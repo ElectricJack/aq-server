@@ -194,7 +194,7 @@ async fn adopt_repository(
     let (state, owner) = owner_state(vault, owner_email).await?;
     let out = aq_server::repository_onboarding::adopt(&state, owner, request)
         .await
-        .map_err(|e| anyhow::anyhow!("adoption refused: {e:?}"))?;
+        .map_err(|e| anyhow::anyhow!("adoption refused: {}", e.to_api_error().message))?;
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
