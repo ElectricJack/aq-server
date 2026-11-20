@@ -6,6 +6,7 @@ members = [
     "crates/aq-playbooks-postgres",
     "crates/aq-playbooks-cli",
     "crates/aq-playbooks-simulation",
+    "crates/aq-playbooks-plugin-conformance",
 ]
 resolver = "2"
 

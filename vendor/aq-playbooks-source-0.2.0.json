@@ -1,23 +1,23 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "4ec95d8f2805f2c8a458e068ae81e66ea19b83e0",
+  "source_revision": "c7443012c1e6902c2d6fa40ecff0402090f189b1",
   "publication_profile": "Exact aq-playbooks source for extension catalogs, plugin events, binding interval schedules, and host catalog 2.4.0.",
-  "archive_format": "git archive --format=tar 4ec95d8 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "cfddfdc5767ebedbcc19ef3fba23cdc4d400c772b5a6fcb97b20e63391c820ab",
-  "vendor_root": "vendor/aq-playbooks-4ec95d8",
+  "archive_format": "git archive --format=tar c744301 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "00ad95556fe6d140ab858382e8fc3024523438ab7e8f0f9764fc1689d7f89f92",
+  "vendor_root": "vendor/aq-playbooks-c744301",
   "files": [
     {
       "path": "Cargo.lock",
       "mode": "100644",
-      "bytes": 29890,
-      "sha256": "3de26241bc72637d0cd8cef9cd3c0a17fdd990486d472bafd4355c7b86748de6"
+      "bytes": 34776,
+      "sha256": "8a2c76bd9786087953288e9b5ad9d6e1f8c3a7f179152ccb206814a26579b003"
     },
     {
       "path": "Cargo.toml",
       "mode": "100644",
-      "bytes": 1297,
-      "sha256": "c3db74694d1d881ecf9f844f437c5dd4360b15fd3553e39ac4340a5165606daf"
+      "bytes": 1343,
+      "sha256": "31ac19d4140dd2d99c7df823ed8e61f7f154d2e40972af42f85246fca039dd48"
     },
     {
       "path": "contracts/aq-host-2.0.0/README.md",
@@ -388,8 +388,8 @@
     {
       "path": "crates/aq-playbooks-compiler/LANGUAGE.md",
       "mode": "100644",
-      "bytes": 26810,
-      "sha256": "066916ba7c6b7c4deb76e0390b4a5a6d7db3b6dbf1ec5c4e14ded07a2f2dc790"
+      "bytes": 27048,
+      "sha256": "89396fafe85ddb83a8a9bc495f58ee9895f1a31e30c21fba4ebc2c95eb48ad9e"
     },
     {
       "path": "crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment/CATALOG.md",
@@ -712,8 +712,8 @@
     {
       "path": "crates/aq-playbooks-compiler/tests/docs.rs",
       "mode": "100644",
-      "bytes": 29401,
-      "sha256": "fe86c19b41cae951b6a5bc70c0fad74e07c69120698147e388fbffa5be1e8495"
+      "bytes": 29426,
+      "sha256": "b794edc03d87ca6b82dced258fd66217d25e997049bb865f88da75dbd9b964bc"
     },
     {
       "path": "crates/aq-playbooks-compiler/tests/draft.rs",
@@ -792,6 +792,42 @@
       "mode": "100644",
       "bytes": 36130,
       "sha256": "506a497fd94ac303dd6912c9154462a140f4ed0d99b8949ec495325769682006"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/Cargo.toml",
+      "mode": "100644",
+      "bytes": 576,
+      "sha256": "d71b753fd71564d15a3fe0ab7d88a23cdd40a06f059c653492cfdeff10e12875"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/README.md",
+      "mode": "100644",
+      "bytes": 3948,
+      "sha256": "627a1b0d27d7e9982f3e81a4ef95dcad514b1655fe69cef5c45c583e9ef145fb"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/src/main.rs",
+      "mode": "100644",
+      "bytes": 8397,
+      "sha256": "ad74799e1da7e05f12b910db7e592bfecc9428e6ac31a9c768711261667cc21c"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/src/plugin.rs",
+      "mode": "100644",
+      "bytes": 15172,
+      "sha256": "c1b215a0da233b56006c6b64e9ff5e12b402b6876d81e6511bcc35b006bcab5b"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/tests/conformance.rs",
+      "mode": "100644",
+      "bytes": 8979,
+      "sha256": "879c80d89307dd4cce0c704efc9c59f19b5e8f44f77fc5d38348e4d95aa61cd3"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/tests/test-plugin.py",
+      "mode": "100644",
+      "bytes": 2703,
+      "sha256": "a9c6dd478b98228567ceb37880f4bf2a07b6d94a8345f82988c4c5bc082d35ef"
     },
     {
       "path": "crates/aq-playbooks-postgres/Cargo.toml",

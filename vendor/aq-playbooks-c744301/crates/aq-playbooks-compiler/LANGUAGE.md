@@ -404,7 +404,8 @@ have the same fields.
 
 Each diagnostic has `code`, `path` (`<file>:<place>`), and `message`. Fix
 the fault where `path` points. Codes marked "Host" come from the host's
-files (`record.json`, `catalog.json`, `facts.json`), never from a draft. Do
+files (`record.json`, `catalog.json`, `facts.json`, and optional
+`extensions.json`), never from a draft. Do
 not edit those files. Give up with
 `aq-playbooks unable --file <file> <reason>`, which names that file and no
 sentence of the document.
@@ -423,6 +424,12 @@ Host: `record.json` cannot be read.
 
 ### catalog_format
 Host: `catalog.json` cannot be read.
+
+### extensions_format
+The host's `extensions.json` cannot be read as a list of valid registrations.
+
+### catalog_extension
+The host's extension registrations conflict with the base catalog or one another.
 
 ### facts_format
 Host: `facts.json` cannot be read.

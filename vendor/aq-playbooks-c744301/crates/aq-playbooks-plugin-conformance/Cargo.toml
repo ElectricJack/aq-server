@@ -1,0 +1,24 @@
+[package]
+name = "aq-playbooks-plugin-conformance"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aq-plugin-conformance"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+aq-playbooks-model.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "time"] }
+toml = "0.8"
+uuid = { version = "1", features = ["serde"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
+[dev-dependencies]
+tempfile = "3"

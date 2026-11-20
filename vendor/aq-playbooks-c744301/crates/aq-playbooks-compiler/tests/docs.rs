@@ -21,12 +21,13 @@ const SOURCES: [&str; 4] = [
     include_str!("../src/lib.rs"),
 ];
 /// Codes built with `format!`, which the scan cannot read.
-const FORMATTED_CODES: [&str; 6] = [
+const FORMATTED_CODES: [&str; 7] = [
     "unknown_command",
     "unknown_event",
     "draft_format",
     "record_format",
     "catalog_format",
+    "extensions_format",
     "facts_format",
 ];
 const CLI_AUTHORING: &str = include_str!("../../aq-playbooks-cli/src/authoring.rs");
