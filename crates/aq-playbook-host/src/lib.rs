@@ -1060,8 +1060,8 @@ pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {
     })
 }
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
-    // Host catalog 2.2.0: the twelve commands of 2.0.0 and 2.1.0 plus four.
-    const COMMANDS: [&str; 16] = [
+    // Base host commands through catalog 2.4.0.
+    const COMMANDS: [&str; 17] = [
         "work.read",
         "work.route",
         "work.unroutable",
@@ -1069,6 +1069,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "context.read",
         "work.ensure",
         "work.change",
+        "work.activate",
         "judgment.request",
         "decision.request",
         "check.request",

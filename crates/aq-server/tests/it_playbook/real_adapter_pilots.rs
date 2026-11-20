@@ -886,6 +886,14 @@ fn host9_decisions_answer_through_owner_http() {
     common::on_large_stack(exercise_host9_decision_routes);
 }
 
+#[test]
+fn host11_opens_the_protected_engine_with_the_activation_catalog() {
+    common::on_large_stack(|| async {
+        let pilot = Pilot::new_in_profile(CatalogProfile::Host11).await;
+        pilot.driver().stop().await.unwrap();
+    });
+}
+
 async fn exercise_host9_decision_routes() {
     use axum::{
         body::{Body, to_bytes},
