@@ -61,6 +61,16 @@ pub trait DeliveryPort: Send + Sync {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
     /// The latest result of `task`, if it has one.
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Lock the event's attempt and verify its current result before an effect.
+    /// Fixture ports use the equivalent identity check against their own store.
+    async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
+        Ok(self.latest(event.task_id).await?.is_some_and(|latest| {
+            latest.project_id == event.project_id
+                && latest.attempt_id == event.attempt_id
+                && latest.result_id == event.result_id
+        }))
+    }
+
     /// Whether the server runs tasks of `project` (it has an execution binding).
     async fn bound(&self, project: Uuid) -> Result<bool>;
     /// Whether `result` is a result of `task`, its latest or an earlier one.
@@ -167,6 +177,30 @@ impl DeliveryPort for PgDelivery {
             head,
             base: base.unwrap_or_default(),
         }))
+    }
+
+    async fn lock_current(&self, db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
+        // The result writer holds this attempt lock before replacing its report head.
+        let held: Option<bool> = sqlx::query_scalar(
+            "SELECT a.holds_task FROM execution_attempts a JOIN profiled_launches l USING (attempt_id)
+             WHERE a.attempt_id=$1 AND a.task_id=$2
+             AND l.execution_spec#>>'{lifecycle,project_id}'=$3 FOR UPDATE OF a",
+        )
+        .bind(event.attempt_id)
+        .bind(event.task_id)
+        .bind(event.project_id.to_string())
+        .fetch_optional(&mut *db)
+        .await?;
+        if held != Some(true) {
+            return Ok(false);
+        }
+        let current: Option<Uuid> = sqlx::query_scalar(
+            "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
+        )
+        .bind(event.attempt_id)
+        .fetch_optional(db)
+        .await?;
+        Ok(current == Some(event.result_id))
     }
 
     async fn bound(&self, project: Uuid) -> Result<bool> {

@@ -89,12 +89,20 @@ pub trait GitPort: Send + Sync {
         reference: &str,
         expected_old: Option<&str>,
     ) -> Result<RefPublication, GitFailure>;
+    /// Reads the central task branch before publishing a recorded result.
+    async fn task_head(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<Option<String>, GitFailure>;
     /// Deletes `reference` on the remote and in the central pool (`ref.delete`).
+    /// The lease holds even when one side is already absent.
     async fn delete_ref(
         &self,
         operation: Uuid,
         repo: &GitTarget,
         reference: &str,
+        expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure>;
 }
 
@@ -294,19 +302,36 @@ impl GitPort for SocketGit {
         }
     }
 
+    async fn task_head(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<Option<String>, GitFailure> {
+        self.show_ref(repo, task_ref(reference)?).await
+    }
+
     async fn delete_ref(
         &self,
         operation: Uuid,
         repo: &GitTarget,
         reference: &str,
+        expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure> {
         let reference = task_ref(reference)?;
+        let lease = expected_head
+            .map(|hex| {
+                if hex.len() != 40 || !object_id(hex) {
+                    return Err(GitFailure::protocol());
+                }
+                Ok(json!({"algorithm": "sha1", "hex": hex}))
+            })
+            .transpose()?;
         let result = self
             .call(
                 operation,
                 "ref.delete",
                 repo,
-                json!({"ref": reference, "remote": true, "local": true}),
+                json!({"ref": reference, "remote": true, "expected_old": lease}),
             )
             .await?;
         match result["outcome"].as_str() {

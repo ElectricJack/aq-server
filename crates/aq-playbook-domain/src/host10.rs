@@ -175,7 +175,7 @@ pub fn result_ready_due(
 }
 
 /// The ids an `aq.work.result_ready` event carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ResultReady {
     pub task_id: Uuid,
     pub project_id: Uuid,

@@ -71,6 +71,7 @@ fn statuses(statuses: &[(&str, &str)]) -> Value {
 async fn open_or_find_returns_the_open_pull_request_for_the_head() {
     let (app, mock) = ready().await;
     mock.reply(200, vec![], json!([pull(7, json!({}))]));
+    mock.reply(200, vec![], pull(7, json!({})));
     let pr = app
         .open_or_find(&repo(), "refs/heads/aq/task-1", "main", "Task 1", "body")
         .await
@@ -79,13 +80,41 @@ async fn open_or_find_returns_the_open_pull_request_for_the_head() {
     assert_eq!(pr.url, "https://github.com/Acme/widgets/pull/7");
     assert_eq!(pr.head_sha, head());
     assert_eq!(pr.state, PullRequestState::Open);
-    assert_eq!(requests(&mock), [req("GET", "/pulls")]);
+    assert_eq!(
+        requests(&mock),
+        [req("GET", "/pulls"), req("GET", "/pulls/7")]
+    );
     let seen = mock.seen();
     assert_eq!(
         seen[1].query.as_deref(),
-        Some("state=open&head=Acme%3Aaq%2Ftask-1&base=main")
+        Some("state=all&head=Acme%3Aaq%2Ftask-1&base=main")
     );
     assert_eq!(seen[1].headers["authorization"], "Bearer ghs_pulls");
+}
+
+#[tokio::test]
+async fn a_closed_task_pr_is_reconciled_without_creating_a_replacement() {
+    for (merged, expected) in [
+        (false, PullRequestState::Closed),
+        (true, PullRequestState::Merged),
+    ] {
+        let (app, mock) = ready().await;
+        mock.reply(200, vec![], json!([pull(7, json!({"state": "closed"}))]));
+        mock.reply(
+            200,
+            vec![],
+            pull(7, json!({"state": "closed", "merged": merged})),
+        );
+        let pr = app
+            .open_or_find(&repo(), "aq/task-1", "main", "Task 1", "Report")
+            .await
+            .unwrap();
+        assert_eq!((pr.number, pr.state), (7, expected));
+        assert_eq!(
+            requests(&mock),
+            [req("GET", "/pulls"), req("GET", "/pulls/7")]
+        );
+    }
 }
 
 #[tokio::test]

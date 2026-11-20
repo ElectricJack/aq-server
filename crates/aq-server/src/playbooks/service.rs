@@ -894,6 +894,11 @@ impl Service {
         .map_err(|_| Error::Invalid)
     }
     pub async fn prepare(&self, actor: Uuid, request: PrepareRequest) -> Result<AdmissionStatus> {
+        #[cfg(feature = "delivery_playbook")]
+        if self.profile.is_delivery() && request.binding == super::domain::host10::DELIVERY_BINDING
+        {
+            return Err(Error::Forbidden);
+        }
         if actor != self.namespace.owner_user_id
             || request.request_id.is_nil()
             || request.grant_id.is_nil()
@@ -1164,10 +1169,12 @@ impl Service {
             return Err(Error::Conflict);
         }
         let old: Option<Value> = row.get("engine_receipt");
-        if old.is_some_and(|v| v != stable) {
+        if old.is_some_and(|v| {
+            v["key"] != stable["key"] || v["destinations"] != stable["destinations"]
+        }) {
             return Err(Error::Conflict);
         }
-        sqlx::query("UPDATE playbook_outbox SET status='engine_accepted',engine_receipt=$4,fanout_complete=fanout_complete OR $5 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND producer=$6").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(stable).bind(fanout_complete).bind(&producer).execute(&mut *tx).await?;
+        sqlx::query("UPDATE playbook_outbox SET status='engine_accepted',engine_receipt=COALESCE(engine_receipt,$4),fanout_complete=fanout_complete OR $5 WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 AND producer=$6").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).bind(stable).bind(fanout_complete).bind(&producer).execute(&mut *tx).await?;
         if producer == super::review_domain::GRAPH_PRODUCER {
             // The engine has durably accepted this exact event key; only now is
             // the graph outbox row delivered. The owner route keeps the row.

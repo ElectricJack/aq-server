@@ -757,7 +757,12 @@ fn execute<S: Storage>(
         Request::EventStatus { event_key } => {
             let snapshot = engine.snapshot().map_err(engine_error)?;
             let event = snapshot.events.get(&event_key).ok_or(Error::Invalid)?;
-            serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.iter().filter(|d|d.run.is_none()).count()})
+            let runs: Vec<_> = event
+                .destinations
+                .iter()
+                .filter_map(|d| d.run.as_deref())
+                .collect();
+            serde_json::json!({"destinations":event.destinations.len(),"pending":event.destinations.len() - runs.len(),"runs":runs})
         }
         Request::AdmitOnce {
             request,

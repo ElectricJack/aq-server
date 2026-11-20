@@ -1,5 +1,5 @@
 {
-  "purpose": "Read the task whose result is ready, and end",
+  "purpose": "Read the task whose result is ready and hold it",
   "entries": {
     "main": {
       "input": {
@@ -114,9 +114,27 @@
         }
       },
       "edges": {
-        "observed": "delivered",
-        "refused": "delivered"
+        "observed": "hold",
+        "refused": "failed"
       },
+      "on_error": "failed"
+    },
+    "hold": {
+      "op": {
+        "kind": "invoke",
+        "command": "work.hold",
+        "bind": "held_result",
+        "retry": null,
+        "input": {
+          "op": "object",
+          "fields": {
+            "task": {"op": "ref", "root": "input", "path": ["task"]},
+            "result_id": {"op": "ref", "root": "input", "path": ["result"]},
+            "reason": {"op": "literal", "value": "policy"}
+          }
+        }
+      },
+      "edges": {"held": "delivered"},
       "on_error": "failed"
     },
     "delivered": {

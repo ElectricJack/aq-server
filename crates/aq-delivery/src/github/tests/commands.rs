@@ -252,7 +252,9 @@ async fn aq_git_is_never_asked_to_publish_or_delete_outside_the_task_prefix() {
             .publish_ref(Uuid::from_u128(1), &repo, reference, None)
             .await;
         assert_eq!(published.unwrap_err().code, "invalid_ref", "{reference}");
-        let deleted = port.delete_ref(Uuid::from_u128(1), &repo, reference).await;
+        let deleted = port
+            .delete_ref(Uuid::from_u128(1), &repo, reference, None)
+            .await;
         assert_eq!(deleted.unwrap_err().code, "invalid_ref", "{reference}");
     }
     assert!(git.operations().is_empty());
@@ -263,6 +265,7 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     let git = FakeGit::start(healthy);
     let (delivery, mock) = delivery(&git).await;
     mock.reply(200, vec![], json!([pull(7, json!({}))]));
+    mock.reply(200, vec![], pull(7, json!({})));
     let c = done(
         delivery
             .pull_request_open(&target(), TASK, "Task", "Report")
@@ -276,7 +279,7 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     assert_eq!(c.pull_request.unwrap().state, "open");
     assert_eq!(
         mock.seen()[1].query.as_deref(),
-        Some(format!("state=open&head=Acme%3Aaq%2F{TASK}&base=main").as_str())
+        Some(format!("state=all&head=Acme%3Aaq%2F{TASK}&base=main").as_str())
     );
     // None open: opened now.
     mock.reply(200, vec![], json!([]));
@@ -446,7 +449,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
     assert_eq!(git.operations(), ["ref.delete"]);
     assert_eq!(
         git.request(0)["params"],
-        json!({"ref": task_branch(TASK), "remote": true, "local": true})
+        json!({"ref": task_branch(TASK), "remote": true, "expected_old": {"algorithm": "sha1", "hex": sha('a')}})
     );
 }
 
