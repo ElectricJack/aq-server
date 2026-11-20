@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
-"""Run with python3 scripts/test-epic-feature-retirement.py.
+"""Two-epic acceptance of the spec 0020 owner CLI on disposable AQ Graph.
 
 Requires Docker and locally loaded aq-graph:graph01-225329cd6acf-pinned
-and postgres:17-bookworm images. The script creates disposable containers
-and uses Graph's loopback HTTP API. It exercises Graph mutation receipts,
-readiness, verification authority and parent completion. Repository revisions,
-merge receipts and build results are fixture inputs. The checks in this
-script model the proposed retirement policy.
+and postgres:17-bookworm images. Graph, authentication, persistent
+changesets and task readiness are real. Forge and test evidence are
+fixture attestations.
 """
 
 from contextlib import ExitStack
+import hashlib
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import tempfile
 import time
-from urllib.error import HTTPError
-from urllib.request import ProxyHandler, Request, build_opener
-from uuid import uuid4, uuid5
+from urllib.error import URLError
+from urllib.request import urlopen
+from uuid import uuid4
 
+from epic_feature_retirement import (
+    META,
+    Graph,
+    Retirement,
+    RetirementError,
+    create,
+    patch,
+)
 
 GRAPH_IMAGE = "aq-graph:graph01-225329cd6acf-pinned"
 POSTGRES_IMAGE = "postgres:17-bookworm"
@@ -36,57 +44,56 @@ def docker(*args):
     return result.stdout.strip()
 
 
-class Graph:
-    def __init__(self, container, workspace, token):
+class ScratchGraph:
+    def __init__(self, container, workspace, token, token_file):
         self.container = container
-        self.workspace = workspace
-        self.token = token
-        self.http = build_opener(ProxyHandler({}))
+        self.token_file = token_file
+        self.graph = Graph("http://127.0.0.1", str(workspace), token)
         self.wait()
 
-    def request(self, path, body=None, *, expected=200, token=None, scoped=True):
-        prefix = f"/v1/workspaces/{self.workspace}" if scoped else ""
-        request = Request(
-            self.base + prefix + path,
-            data=None if body is None else json.dumps(body).encode(),
-            headers={
-                "Authorization": f"Bearer {token or self.token}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with self.http.open(request, timeout=10) as reply:
-                code, payload = reply.status, json.load(reply)
-        except HTTPError as reply:
-            code, payload = reply.code, json.load(reply)
-        assert code == expected, f"{path}: expected HTTP {expected}, got {code}: {payload}"
-        return payload
+    @property
+    def origin(self):
+        return self.graph.base.split("/v1/workspaces/", 1)[0]
 
     def wait(self):
         address = docker("port", self.container, "8741/tcp")
-        assert address.startswith("127.0.0.1:") and "\n" not in address, address
-        self.base = f"http://{address}"
+        assert address.startswith("127.0.0.1:") and "\n" not in address
+        self.graph.base = f"http://{address}/v1/workspaces/{self.graph.workspace}"
         for _ in range(100):
             try:
-                self.request("/health/ready", scoped=False)
-                return
-            except (OSError, AssertionError):
+                with urlopen(self.origin + "/health/ready", timeout=1):
+                    return
+            except (URLError, TimeoutError):
                 time.sleep(0.1)
-        raise RuntimeError(f"scratch Graph did not become ready: {docker('logs', self.container)}")
+        raise RuntimeError(
+            f"scratch Graph did not become ready: {docker('logs', self.container)}"
+        )
 
     def restart(self):
         docker("restart", self.container)
         self.wait()
 
-    def mutate(self, request, **options):
-        return self.request("/mutations", request, **options)
-
-    def node(self, node_id):
-        return self.request(f"/nodes/{node_id}")
-
-    def ready_cleanup(self, *epics):
-        ready = {node["id"] for node in self.request("/ready")["items"]}
-        return ready & {epic.cleanup for epic in epics}
+    def cli(self, *args):
+        result = subprocess.run(
+            [
+                "python3",
+                str(Path(__file__).with_name("epic_feature_retirement.py")),
+                "--graph-origin",
+                self.origin,
+                "--workspace",
+                self.graph.workspace,
+                "--owner",
+                APPROVER,
+                "--token-file",
+                str(self.token_file),
+                *map(str, args),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+        return json.loads(result.stdout)
 
 
 def start_graph(root, resources):
@@ -101,16 +108,27 @@ def start_graph(root, resources):
     docker("network", "create", network)
     resources.callback(docker, "network", "rm", network)
     docker(
-        "run", "-d", "--pull=never", "--name", pg, "--network", network,
-        "--tmpfs", "/var/lib/postgresql/data",
-        "-e", "POSTGRES_DB=scratch", "-e", f"POSTGRES_PASSWORD={password}",
+        "run",
+        "-d",
+        "--pull=never",
+        "--name",
+        pg,
+        "--network",
+        network,
+        "--tmpfs",
+        "/var/lib/postgresql/data",
+        "-e",
+        "POSTGRES_DB=scratch",
+        "-e",
+        f"POSTGRES_PASSWORD={password}",
         POSTGRES_IMAGE,
     )
     resources.callback(docker, "rm", "-fv", pg)
     for _ in range(100):
         result = subprocess.run(
             ["docker", "exec", pg, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         if result.returncode == 0:
             break
@@ -119,239 +137,333 @@ def start_graph(root, resources):
         raise RuntimeError("scratch PostgreSQL did not become ready")
 
     docker(
-        "run", "-d", "--pull=never", "--name", graph, "--network", network,
-        "--user", f"{os.getuid()}:{os.getgid()}", "-p", "127.0.0.1::8741",
-        "--mount", f"type=bind,src={token_file},dst=/run/graph-token,readonly",
-        "-e", f"DATABASE_URL=postgres://postgres:{password}@{pg}/scratch",
-        "-e", "AQ_GRAPH_BIND=0.0.0.0:8741",
-        "-e", f"AQ_GRAPH_BOOTSTRAP_WORKSPACE={workspace}",
-        "-e", f"AQ_GRAPH_BOOTSTRAP_ACTOR={APPROVER}",
-        "-e", "AQ_GRAPH_BOOTSTRAP_TOKEN_FILE=/run/graph-token",
+        "run",
+        "-d",
+        "--pull=never",
+        "--name",
+        graph,
+        "--network",
+        network,
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "-p",
+        "127.0.0.1::8741",
+        "--mount",
+        f"type=bind,src={token_file},dst=/run/graph-token,readonly",
+        "-e",
+        f"DATABASE_URL=postgres://postgres:{password}@{pg}/scratch",
+        "-e",
+        "AQ_GRAPH_BIND=0.0.0.0:8741",
+        "-e",
+        f"AQ_GRAPH_BOOTSTRAP_WORKSPACE={workspace}",
+        "-e",
+        f"AQ_GRAPH_BOOTSTRAP_ACTOR={APPROVER}",
+        "-e",
+        "AQ_GRAPH_BOOTSTRAP_TOKEN_FILE=/run/graph-token",
         GRAPH_IMAGE,
     )
     resources.callback(docker, "rm", "-fv", graph)
-    return Graph(graph, workspace, token)
+    return ScratchGraph(graph, workspace, token, token_file)
 
 
-def batch(key, *operations):
+def mutate(graph, *operations):
+    return graph.request(
+        "/mutations", {"idempotency_key": str(uuid4()), "operations": list(operations)}
+    )
+
+
+def rejected(message, operation):
+    try:
+        operation()
+    except RetirementError as error:
+        assert message in str(error), error
+        return
+    raise AssertionError(f"Operation was expected to refuse: {message}")
+
+
+def proof(description):
     return {
-        "idempotency_key": key,
-        "reason": "Spec 0020 scratch acceptance",
-        "operations": list(operations),
+        "artifact_id": str(uuid4()),
+        "sha256": hashlib.sha256(description.encode()).hexdigest(),
     }
 
 
-def create(node_id, title, kind="task", **fields):
-    if kind == "task":
-        fields["task_state"] = "active"
-    return {"op": "create_node", "id": node_id, "title": title, "kind": kind, **fields}
+def ready(graph, *tasks):
+    ids = {node["id"] for node in graph.request("/ready")["items"]}
+    return {task for task in tasks if task in ids}
 
 
-def update(node, **patch):
+SERVICE = "Acme/service"
+CLIENT = "Acme/client"
+
+
+def registration(graph, name, repositories, **extra):
+    epic = str(uuid4())
+    mutate(graph, create(epic, "task", f"Epic {name}", task_state="active"))
     return {
-        "op": "update_node",
-        "id": node["id"],
-        "expected_version": node["version"],
-        "patch": patch,
+        "epic_id": epic,
+        "project_id": graph.workspace,
+        "generation": 1,
+        "repositories": repositories,
+        "ordinary_default": False,
+        "permanent_behavior": f"Enable feature {name} in ordinary builds",
+        **extra,
     }
 
 
-def edge(source, target, edge_type):
-    return {"op": "add_edge", "source": source, "target": target, "edge_type": edge_type}
+def decision(number, choice, vetted):
+    return {
+        "revision": number,
+        "choice": choice,
+        "vetted": vetted,
+        "evidence": proof(f"vetted revision {number}"),
+    }
 
 
-class Epic:
-    def __init__(self, workspace, name, flags):
-        self.name = name
-        self.parent = str(uuid5(workspace, f"epic/{name}"))
-        self.registration = uuid5(workspace, f"{self.parent}/flag/1")
-        self.gate = self.id("approval")
-        self.cleanup = self.id("cleanup")
-        key = str(self.registration)
-        self.register = batch(
-            f"register/{key}",
-            create(key, f"Epic {name} flag", "knowledge", metadata={
-                "scratch:flag": {
-                    "epic": self.parent,
-                    "generation": 1,
-                    "project": str(workspace),
-                    "repositories": flags,
-                    "ordinary_default": False,
-                    "permanent_behavior": f"Enable feature {name} in ordinary builds",
-                },
-            }),
+def scratch_build(source, expected, **flags):
+    environment = {
+        **os.environ,
+        "feature_a": "0",
+        "feature_b": "0",
+        "FEATURE_CLIENT_A": "0",
+        **flags,
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+    assert result.stdout.strip() == expected
+
+
+def scenario(scratch, directory):
+    graph = scratch.graph
+    owner = Retirement(graph, APPROVER)
+    spec_a = registration(graph, "A", {SERVICE: "feature_a"})
+    spec_b = registration(graph, "B", {SERVICE: "feature_b"})
+    initial = 'import os; print(os.environ["feature_a"] + os.environ["feature_b"])'
+    for a_enabled, b_enabled in (("0", "0"), ("0", "1"), ("1", "0"), ("1", "1")):
+        scratch_build(
+            initial, a_enabled + b_enabled, feature_a=a_enabled, feature_b=b_enabled
         )
-        self.ensure = batch(
-            f"cleanup/{key}",
-            create(self.parent, f"Epic {name}"),
-            create(self.gate, f"Approve integrated feature {name}"),
-            create(self.cleanup, f"Retire flag for epic {name}",
-                   metadata={"scratch:registration": key}),
-            edge(self.gate, self.cleanup, "blocks"),
-            edge(self.parent, self.cleanup, "parent-child"),
-            edge(self.cleanup, key, "motivated_by"),
-        )
 
-    def id(self, part):
-        return str(uuid5(self.registration, part))
-
-    def decision(self, graph, revision, choice, vetted):
-        decision_id = self.id(f"decision/{revision}")
-        record = create(
-            decision_id, f"Epic {self.name} decision {revision}", "knowledge",
-            content_type="decision",
-            metadata={"scratch:decision": {
-                "registration": str(self.registration),
-                "revision": revision,
-                "choice": choice,
-                "vetted": vetted,
-            }},
-        )
-        verify = {
-            "op": "verify_node",
-            "id": decision_id,
-            "expected_version": 1,
-            "verification": "verified",
-            "evidence": [
-                {"kind": "git", "source_id": repo, "repository": repo,
-                 "commit": commit, "path": "src/main.rs"}
-                for repo, commit in vetted.items()
-            ],
+    a, first = owner.register_record(spec_a)
+    assert owner.status(a)["status"] == "Registration pending"
+    assert graph.node(owner.status(a)["cleanup"], missing=True) is None
+    scratch.restart()
+    file_a = directory / "a.json"
+    file_a.write_text(json.dumps(spec_a))
+    registered_a = scratch.cli("register", file_a)
+    assert registered_a["registered"] == first
+    assert scratch.cli("register", file_a) == registered_a
+    b = owner.register(spec_b)["registration"]
+    addon = {"repositories": {CLIENT: "FEATURE_CLIENT_A"}}
+    assert owner.amend(a, addon) == owner.amend(a, addon)
+    status_a, status_b = scratch.cli("status", a), owner.status(b)
+    cleanup_a, cleanup_b = status_a["cleanup"], status_b["cleanup"]
+    assert cleanup_a != cleanup_b
+    assert ready(graph, cleanup_a, cleanup_b) == set()
+    for status in (status_a, status_b):
+        tree = graph.request(f"/nodes/{status['epic_id']}/tree")
+        assert {child["node"]["id"] for child in tree["children"]} == {
+            status["cleanup"],
+            status["closure_gate"],
         }
-        operations = [record, verify]
-        if choice == "approve":
-            operations.append(update(
-                graph.node(self.gate), task_state="completed",
-                metadata={"scratch:decision": decision_id},
-            ))
-        return batch(f"decision/{decision_id}", *operations)
 
-    def check_cleanup(self, graph):
-        tree = graph.request(f"/nodes/{self.parent}/tree")
-        assert [child["node"]["id"] for child in tree["children"]] == [self.cleanup]
-        context = graph.request(f"/nodes/{self.cleanup}/context")
-        blockers = {
-            link["source"] for link in context["edges"]
-            if link["edge_type"] == "blocks" and link["target"] == self.cleanup
-        }
-        assert blockers == {self.gate}
+    rejected_revisions = {SERVICE: "1" * 40, CLIENT: "2" * 40}
+    request_changes = decision(1, "request_changes", rejected_revisions)
+    assert owner.decide(a, request_changes) == owner.decide(a, request_changes)
+    assert owner.status(a)["status"] == "Changes requested"
+    assert ready(graph, cleanup_a, cleanup_b) == set()
 
-    def record_evidence(self, graph, stage, evidence):
-        cleanup = graph.node(self.cleanup)
-        metadata = {**cleanup["metadata"], "scratch:evidence": evidence}
-        request = batch(f"{self.registration}/{stage}", update(cleanup, metadata=metadata))
-        return request, graph.mutate(request)
-
-    def close(self, graph):
-        gate = graph.node(self.gate)
-        if gate["task_state"] != "completed":
-            return "approval pending"
-        decision = graph.node(gate["metadata"]["scratch:decision"])
-        assert decision["verification"] == "verified"
-        assert decision["last_verified_by"] == APPROVER
-        assert decision["metadata"]["scratch:decision"]["choice"] == "approve"
-        assert decision["metadata"]["scratch:decision"]["registration"] == str(self.registration)
-
-        registration = graph.node(str(self.registration))["metadata"]["scratch:flag"]
-        cleanup = graph.node(self.cleanup)
-        evidence = cleanup["metadata"].get("scratch:evidence", {})
-        merges = evidence.get("merges", {})
-        for repo in registration["repositories"]:
-            if repo not in merges:
-                return f"{repo}: merge pending"
-        for repo in registration["repositories"]:
-            if evidence.get("ordinary", {}).get(repo) != merges[repo]["sha"]:
-                return f"{repo}: ordinary build pending"
-        revisions = {repo: merges[repo]["sha"] for repo in registration["repositories"]}
-        if evidence.get("integrated") != revisions:
-            return "integrated check pending"
-
-        request = batch(
-            f"close/{self.registration}",
-            update(cleanup, task_state="completed"),
-            update(graph.node(self.parent), task_state="completed"),
+    vetted = {**rejected_revisions, SERVICE: "3" * 40}
+    approval = decision(2, "approve", vetted)
+    writer_token, admin_token = secrets.token_hex(32), secrets.token_hex(32)
+    for actor, token, capability in [
+        ("scratch-writer", writer_token, "write"),
+        ("other-admin", admin_token, "admin"),
+    ]:
+        graph.request(
+            "/credentials",
+            {"actor_id": actor, "token": token, "capability": capability},
         )
-        return request, graph.mutate(request)
+    writer = Graph(scratch.origin, graph.workspace, writer_token)
+    admin = Graph(scratch.origin, graph.workspace, admin_token)
+    gate = graph.node(status_a["approval"])
+    rejected("HTTP 403", lambda: mutate(writer, patch(gate, task_state="completed")))
+    rejected(
+        "HTTP 403",
+        lambda: mutate(writer, patch(graph.node(cleanup_a), task_state="active")),
+    )
+    rejected("different actor", lambda: Retirement(admin, APPROVER).decide(a, approval))
+    rejected(
+        "different actor", lambda: Retirement(writer, APPROVER).decide(a, approval)
+    )
+    assert ready(graph, cleanup_a, cleanup_b) == set()
 
+    approved = owner.decide(a, approval)
+    assert owner.status(a)["status"] == "Approved · flag removal pending"
+    assert ready(graph, cleanup_a, cleanup_b) == {cleanup_a}
+    scratch.restart()
+    writer = Graph(scratch.origin, graph.workspace, writer_token)
+    assert owner.decide(a, approval) == approved
+    rejected(
+        "different committed content",
+        lambda: owner.decide(a, {**approval, "vetted": rejected_revisions}),
+    )
+    rejected(
+        "cannot change",
+        lambda: owner.amend(a, {"repositories": {"Acme/extra": "feature_a"}}),
+    )
+    assert ready(graph, cleanup_a, cleanup_b) == {cleanup_a}
 
-def scenario(graph):
-    a = Epic(graph.workspace, "A", {"service": "scratch_a", "client": "scratch_client_a"})
-    b = Epic(graph.workspace, "B", {"service": "scratch_b"})
+    def merge(repo, number, head):
+        return {
+            "kind": "merge",
+            "approval_revision": 2,
+            "repository": repo,
+            "pull_request": f"https://example.test/{repo}/pull/{number}",
+            "sha": head,
+            "evidence": proof(f"merge receipt {repo}/{number}"),
+        }
 
-    registration = graph.mutate(a.register)
-    graph.request(f"/nodes/{a.cleanup}", expected=404)
-    graph.restart()
-    assert graph.mutate(a.register) == registration
-    ensured = graph.mutate(a.ensure)
-    assert graph.mutate(a.ensure) == ensured
-    graph.mutate(b.register)
-    graph.mutate(b.ensure)
-    a.check_cleanup(graph)
-    b.check_cleanup(graph)
-    assert graph.ready_cleanup(a, b) == set()
-
-    rejected = {"service": "1" * 40, "client": "2" * 40}
-    graph.mutate(a.decision(graph, 1, "request_changes", rejected))
-    assert a.close(graph) == "approval pending"
-    assert graph.ready_cleanup(a, b) == set()
-
-    vetted = {**rejected, "service": "3" * 40}
-    approval = a.decision(graph, 2, "approve", vetted)
-    writer = secrets.token_hex(32)
-    graph.request("/credentials", {
-        "actor_id": "scratch-writer", "token": writer, "capability": "write",
-    })
-    graph.mutate(approval, token=writer, expected=403)
-    graph.request(f"/nodes/{a.id('decision/2')}", expected=404)
-    assert graph.ready_cleanup(a, b) == set()
-
-    approved = graph.mutate(approval)
-    gate = graph.node(a.gate)
-    assert graph.ready_cleanup(a, b) == {a.cleanup}
-    graph.restart()
-    assert graph.mutate(approval) == approved
-    assert graph.node(a.gate) == gate
-    assert graph.ready_cleanup(a, b) == {a.cleanup}
-    assert graph.node(a.id("decision/1"))["metadata"]["scratch:decision"]["vetted"] == rejected
-    assert graph.node(a.id("decision/2"))["metadata"]["scratch:decision"]["vetted"] == vetted
+    def ordinary(repo, head, passed):
+        return {
+            "kind": "ordinary",
+            "approval_revision": 2,
+            "repository": repo,
+            "sha": head,
+            "passed": passed,
+            "flag_absent": passed,
+            "evidence": proof(f"ordinary test {repo}"),
+        }
 
     service_sha, client_sha = "4" * 40, "5" * 40
-    merges = {"service": {"pr": "scratch/service/1", "sha": service_sha}}
-    first_request, first_receipt = a.record_evidence(graph, "first-merge", {"merges": merges})
-    assert a.close(graph) == "client: merge pending"
-    graph.mutate(batch("early-close", update(graph.node(a.parent), task_state="completed")),
-                 expected=409)
-    assert graph.node(a.parent)["task_state"] == "active"
+    service_merge = merge(SERVICE, 1, service_sha)
+    recorded = owner.evidence(a, service_merge)
+    service_build = ordinary(SERVICE, service_sha, True)
+    owner.evidence(a, service_build)
+    rejected(f"{CLIENT}: cleanup merge pending", lambda: owner.close(a))
 
-    merges = {**merges, "client": {"pr": "scratch/client/1", "sha": client_sha}}
-    a.record_evidence(graph, "second-merge", {"merges": merges})
-    assert a.close(graph).endswith(": ordinary build pending")
-    revisions = {"service": service_sha, "client": client_sha}
-    a.record_evidence(graph, "ordinary", {"merges": merges, "ordinary": revisions})
-    assert a.close(graph) == "integrated check pending"
-    a.record_evidence(graph, "stale-integrated", {
-        "merges": merges, "ordinary": revisions, "integrated": vetted,
-    })
-    assert a.close(graph) == "integrated check pending"
-    a.record_evidence(graph, "integrated", {
-        "merges": merges, "ordinary": revisions, "integrated": revisions,
-    })
-    closure, closed = a.close(graph)
-    graph.restart()
-    assert graph.mutate(closure) == closed
+    # Normal task settlement can complete the cleanup, but the protected
+    # closure gate keeps the epic open until the independent evidence arrives.
+    mutate(writer, patch(graph.node(cleanup_a), task_state="completed"))
+    rejected(
+        "HTTP 409",
+        lambda: mutate(
+            writer, patch(graph.node(spec_a["epic_id"]), task_state="completed")
+        ),
+    )
+    rejected(
+        "HTTP 403",
+        lambda: mutate(
+            writer, patch(graph.node(status_a["closure_gate"]), task_state="canceled")
+        ),
+    )
+    rejected(
+        "must match", lambda: owner.evidence(a, ordinary(CLIENT, client_sha, False))
+    )
 
-    # Recover the original partial receipt without altering the closed epic.
-    assert graph.mutate(first_request) == first_receipt
-    assert graph.node(a.parent)["task_state"] == "completed"
-    assert graph.node(a.cleanup)["task_state"] == "completed"
-    assert graph.node(b.parent)["task_state"] == "active"
-    assert graph.node(b.cleanup)["task_state"] == "active"
-    assert graph.ready_cleanup(a, b) == set()
-    print("PASS: registration and approval replayed, A closed after both repos, and B stayed blocked.")
+    owner.evidence(a, merge(CLIENT, 3, client_sha))
+    owner.evidence(a, ordinary(CLIENT, client_sha, False))
+    rejected("ordinary build or flag removal check failed", lambda: owner.close(a))
+    client_build = ordinary(CLIENT, client_sha, True)
+    service_after = 'import os; print("1" + os.environ["feature_b"])'
+    client_after = 'print("1")'
+    assert "feature_a" not in service_after and "FEATURE_CLIENT_A" not in client_after
+    scratch_build(service_after, "10")
+    scratch_build(service_after, "11", feature_b="1")
+    scratch_build(client_after, "1")
+    owner.evidence(a, client_build)
+    integrated = {
+        "kind": "integrated",
+        "approval_revision": 2,
+        "passed": False,
+        "revisions": {SERVICE: service_sha, CLIENT: client_sha},
+        "builds": {
+            SERVICE: service_build["evidence"],
+            CLIENT: client_build["evidence"],
+        },
+        "evidence": proof("integrated check before repair"),
+    }
+    rejected(
+        "cleanup merge SHAs",
+        lambda: owner.evidence(a, {**integrated, "revisions": vetted}),
+    )
+    owner.evidence(a, integrated)
+    rejected("Integrated acceptance failed", lambda: owner.close(a))
+    owner.evidence(
+        a,
+        {
+            **integrated,
+            "passed": True,
+            "evidence": proof("integrated check after repair"),
+        },
+    )
+
+    sibling = str(uuid4())
+    mutate(
+        graph,
+        create(sibling, "task", "Other required epic work", task_state="active"),
+        {
+            "op": "add_edge",
+            "edge_type": "parent-child",
+            "source": spec_a["epic_id"],
+            "target": sibling,
+        },
+    )
+    rejected(f"Epic task {sibling} is still open", lambda: owner.close(a))
+    mutate(writer, patch(graph.node(sibling), task_state="completed"))
+    closed = owner.close(a)
+    scratch.restart()
+    assert owner.close(a) == closed
+    assert owner.evidence(a, service_merge) == recorded
+    assert owner.register(spec_a) == registered_a
+    assert owner.status(a)["status"] == "Retired"
+    assert graph.node(spec_a["epic_id"])["task_state"] == "completed"
+    assert owner.status(b)["status"] == "Approval pending"
+    assert graph.node(cleanup_b)["task_state"] == "draft"
+    assert ready(graph, cleanup_a, cleanup_b) == set()
+
+    # Match the staged Epic 0 shape on disposable Graph. The existing IDs
+    # and existing prerequisite survive adoption and stay blocked.
+    old_gate, old_cleanup = str(uuid4()), str(uuid4())
+    mutate(
+        graph,
+        create(old_gate, "task", "Existing approval"),
+        create(old_cleanup, "task", "Existing cleanup"),
+        {
+            "op": "add_edge",
+            "edge_type": "blocks",
+            "source": old_gate,
+            "target": old_cleanup,
+        },
+    )
+    adopted = registration(
+        graph,
+        "adoption",
+        {SERVICE: "legacy_flag"},
+        adopt={"approval": old_gate, "cleanup": old_cleanup},
+    )
+    adopted_id = owner.register(adopted)["registration"]
+    state = owner.status(adopted_id)
+    assert (state["approval"], state["cleanup"]) == (old_gate, old_cleanup)
+    assert graph.node(old_cleanup)["metadata"][META]["registration"] == adopted_id
+    assert ready(graph, old_cleanup) == set()
+    print(
+        "PASS: two independent epics, atomic owner release, closure evidence, restart replay and blocked adoption"
+    )
 
 
 if __name__ == "__main__":
     if not __debug__:
         raise SystemExit("Run with Python assertions enabled.")
-    with tempfile.TemporaryDirectory(prefix="aq-epic-retirement-") as directory, ExitStack() as resources:
-        scenario(start_graph(Path(directory), resources))
+    with (
+        tempfile.TemporaryDirectory(prefix="aq-epic-retirement-") as tmp,
+        ExitStack() as resources,
+    ):
+        directory = Path(tmp)
+        scenario(start_graph(directory, resources), directory)

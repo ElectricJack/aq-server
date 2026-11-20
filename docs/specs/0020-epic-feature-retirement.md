@@ -24,3 +24,5 @@ The epic playbook can complete the epic only after the authorized approval, ever
 2. Finish and vet A while B is in progress. Reject A once, then approve its corrected integrated revision. Duplicate approval delivery after restart releases only A's task.
 3. Merge A's first cleanup PR in a two-repo epic. The epic remains open. Fail the second PR, repair it and verify the combined ordinary builds. A becomes the default, A's flag disappears, and B continues working both on and off.
 4. Implement registration and stable task identity first, then decision release and closure evidence, followed by CI inventory and dashboard status. Pilot retirement on a scratch flag before removing Epic 0's real fallback.
+
+The [owner runbook](../operations/epic-feature-retirement.md) describes the Graph-based pilot workflow and the interfaces deferred beyond it.
