@@ -166,11 +166,15 @@ impl<'a> Scope<'a> {
         Ok(value)
     }
 
-    fn require(&mut self, context: &Value, draft: bool) -> Checked<(Uuid, u32)> {
+    fn require(
+        &mut self,
+        context: &Value,
+        draft: bool,
+    ) -> std::result::Result<(Uuid, u32), Box<Refusal>> {
         let path = self
             .task_scope
             .path(context, draft)
-            .ok_or_else(|| self.denied())?;
+            .ok_or_else(|| Box::new(self.denied()))?;
         let relation = if path.depth == 0 && path.root == self.a.ids.task_id {
             Relation::Own
         } else {
@@ -190,7 +194,7 @@ impl<'a> Scope<'a> {
             &self.grant.operation,
             target,
         ) {
-            return Err(r);
+            return Err(Box::new(r));
         }
         for (task, version) in path.versions {
             if self
@@ -198,7 +202,7 @@ impl<'a> Scope<'a> {
                 .insert(task, version)
                 .is_some_and(|old| old != version)
             {
-                return Err(self.denied());
+                return Err(Box::new(self.denied()));
             }
         }
         Ok((path.root, path.depth))
@@ -218,7 +222,7 @@ impl<'a> Scope<'a> {
                 found
             } else {
                 let context = self.context(ancestor).await?;
-                let found = self.require(&context, false)?;
+                let found = self.require(&context, false).map_err(|refusal| *refusal)?;
                 parents.insert(ancestor, found);
                 found
             };
@@ -265,7 +269,7 @@ impl<'a> Scope<'a> {
     async fn edit(&mut self, request: &ActionRequest) -> Checked<()> {
         let task = request.subject.id.parse().map_err(|_| self.invalid())?;
         let context = self.context(task).await?;
-        self.require(&context, true)?;
+        self.require(&context, true).map_err(|refusal| *refusal)?;
         let blocker = match self.spec.name {
             "task.dependency.add" => {
                 Some(uuid(&request.payload["blocker_id"]).ok_or_else(|| self.invalid())?)
@@ -282,7 +286,7 @@ impl<'a> Scope<'a> {
         };
         if let Some(blocker) = blocker {
             let context = self.context(blocker).await?;
-            self.require(&context, true)?;
+            self.require(&context, true).map_err(|refusal| *refusal)?;
         }
         Ok(())
     }
@@ -375,7 +379,7 @@ async fn checked_action(
             }
             let parent = uuid(&request.payload["parent_id"]).ok_or_else(|| scope.denied())?;
             let context = scope.context(parent).await?;
-            let (root, depth) = scope.require(&context, false)?;
+            let (root, depth) = scope.require(&context, false).map_err(|refusal| *refusal)?;
             let depth = depth + 1;
             if scope.grant.limits.max_depth.is_some_and(|max| depth > max) {
                 return Err(scope.quota("max_depth"));
