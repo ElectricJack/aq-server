@@ -141,6 +141,96 @@
         {
           "properties": {
             "kind": {
+              "const": "epic.retirement.register"
+            },
+            "payload": {
+              "$defs": {
+                "Adopt": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "approval": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "cleanup": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "approval",
+                    "cleanup"
+                  ],
+                  "type": "object"
+                }
+              },
+              "$id": "urn:aq:dashboard-actions:1:epic.retirement.register:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "adopt": {
+                  "$ref": "#/$defs/Adopt"
+                },
+                "epic_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "generation": {
+                  "format": "int32",
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "ordinary_default": {
+                  "type": "boolean"
+                },
+                "permanent_behavior": {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "repositories": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "epic_id",
+                "expected_version",
+                "generation",
+                "repositories",
+                "ordinary_default",
+                "permanent_behavior",
+                "adopt"
+              ],
+              "title": "Register",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "feedback.link"
             },
             "payload": {
@@ -2759,6 +2849,24 @@
       "required": [
         "activated",
         "skipped"
+      ],
+      "type": "object"
+    },
+    "Adopt": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "cleanup": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval",
+        "cleanup"
       ],
       "type": "object"
     },
