@@ -347,12 +347,10 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     );
 }
 
-/// One poll with a required list: the pull request (state), its mergeability,
-/// then the checks (pull request, protection requirements, runs, statuses).
-fn poll(mock: &Mock, state: Value, mergeable: Value, check_runs: Value) {
+/// One poll with a required list: the PR, then the PR and check information.
+fn poll(mock: &Mock, state: Value, checked: Value, check_runs: Value) {
     mock.reply(200, vec![], state);
-    mock.reply(200, vec![], mergeable);
-    mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(200, vec![], checked);
     mock.reply(200, vec![], json!([]));
     mock.reply(200, vec![], json!({"name": "main", "protected": false}));
     mock.reply(200, vec![], check_runs);
@@ -397,7 +395,6 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
     assert_eq!(p.observed.unwrap().checks_failed, ["unit"]);
 
     // A conflict is found before the checks are read.
-    mock.reply(200, vec![], open());
     mock.reply(
         200,
         vec![],
@@ -444,6 +441,222 @@ async fn await_checks_completes_once_with_passed_failed_conflict_closed_or_timeo
 fn the_wait_is_bounded_by_the_longest_check_wait_setting() {
     assert_eq!(bounded_wait_ms(1_800_000, 3_600_000), 1_800_000);
     assert_eq!(bounded_wait_ms(604_800_000, 3_600_000), 3_600_000);
+}
+
+async fn poll_result(delivery: &Delivery, pr: u64, head: &str) -> Option<Completion> {
+    delivery
+        .step(
+            Uuid::new_v4(),
+            "pull_request.await_checks",
+            &json!({
+                "pull_request": pr, "result_head": head,
+                "check_target": target(),
+                "required": ["check", "deployment"], "deadline_at_ms": 5_000
+            }),
+            &target(),
+            1_000,
+        )
+        .await
+        .unwrap()
+        .step
+        .map(done)
+}
+
+#[tokio::test]
+async fn two_independent_prs_repair_and_retest_the_second_after_the_first_lands() {
+    let git = FakeGit::start(|request| {
+        let mut reply = healthy(request);
+        match request["operation"].as_str().unwrap() {
+            "repo.retain_ref" => reply["head"]["hex"] = json!(sha('d')),
+            "publish" => reply["new"]["hex"] = json!(sha('e')),
+            _ => {}
+        }
+        reply
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let second_task = Uuid::from_u128(0x2345);
+    let second = |head, base, state| {
+        pull(
+            8,
+            json!({
+                "mergeable_state": state,
+                "head": {"ref": format!("aq/{second_task}"), "sha": sha(head)},
+                "base": {"ref": "main", "sha": sha(base)},
+            }),
+        )
+    };
+    let green = || {
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ])
+    };
+    let first = pull(7, json!({}));
+    let early_second = second('b', 'c', "clean");
+    poll(&mock, first.clone(), first.clone(), green());
+    assert_eq!(
+        poll_result(&delivery, 7, &sha('a')).await.unwrap().outcome,
+        "passed"
+    );
+    poll(&mock, early_second.clone(), early_second, green());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('b')).await.unwrap().outcome,
+        "passed"
+    );
+
+    mock.reply(200, vec![], first);
+    mock.reply(200, vec![], json!({"sha": sha('d'), "merged": true}));
+    let merge = async |task, pr, head| {
+        done(
+            delivery
+                .pull_request_merge(
+                    Uuid::new_v4(),
+                    &target(),
+                    task,
+                    pr,
+                    MergeMethod::Merge,
+                    &sha(head),
+                )
+                .await,
+        )
+    };
+    assert_eq!(merge(TASK, 7, 'a').await.outcome, "merged");
+
+    // The next poll and merge both request the existing update-from-main
+    // repair, even though this head's checks passed before the first merge.
+    let behind = second('b', 'd', "behind");
+    mock.reply(200, vec![], behind.clone());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('b')).await.unwrap().outcome,
+        "conflict"
+    );
+    mock.reply(200, vec![], behind);
+    assert_eq!(merge(second_task, 8, 'b').await.outcome, "conflict");
+    assert_eq!(
+        git.operations(),
+        ["ref.delete"],
+        "the second branch stays in place"
+    );
+
+    // Repair publishes a new head on the same task branch and PR. Results
+    // for the old head cannot let the repaired PR skip its new checks.
+    let sync = done(delivery.main_sync(Uuid::new_v4(), &target()).await);
+    assert_eq!(
+        (sync.outcome, sync.output),
+        ("synced", json!({"head": sha('d')}))
+    );
+    let publish = done(
+        delivery
+            .branch_publish(
+                Uuid::new_v4(),
+                &target(),
+                second_task,
+                Some(&sha('b')),
+                Some(&sha('e')),
+            )
+            .await,
+    );
+    assert_eq!(
+        (publish.outcome, publish.output),
+        ("published", json!({"head": sha('e')}))
+    );
+    let repaired = second('e', 'd', "clean");
+    mock.reply(200, vec![], repaired.clone());
+    assert!(poll_result(&delivery, 8, &sha('b')).await.is_none());
+    poll(&mock, repaired.clone(), repaired.clone(), runs(&[]));
+    assert!(poll_result(&delivery, 8, &sha('e')).await.is_none());
+    poll(&mock, repaired.clone(), repaired.clone(), green());
+    assert_eq!(
+        poll_result(&delivery, 8, &sha('e')).await.unwrap().outcome,
+        "passed"
+    );
+    mock.reply(200, vec![], repaired);
+    mock.reply(200, vec![], json!({"sha": sha('f'), "merged": true}));
+    assert_eq!(merge(second_task, 8, 'e').await.outcome, "merged");
+    assert_eq!(
+        git.operations(),
+        ["ref.delete", "repo.retain_ref", "publish", "ref.delete"]
+    );
+    assert_eq!(git.request(0)["params"]["ref"], task_branch(TASK));
+    assert_eq!(git.request(2)["params"]["target"], task_branch(second_task));
+    assert_eq!(git.request(2)["params"]["expected_old"]["hex"], sha('b'));
+    assert_eq!(git.request(2)["params"]["expected_source"]["hex"], sha('e'));
+    assert_eq!(git.request(2)["params"]["update"], "replace");
+    assert_eq!(git.request(3)["params"]["ref"], task_branch(second_task));
+    let requests = mock.seen();
+    let puts: Vec<_> = requests.iter().filter(|r| r.method == "PUT").collect();
+    assert_eq!(puts.len(), 2);
+    assert_eq!(puts[0].path, "/api/v3/repos/Acme/widgets/pulls/7/merge");
+    assert_eq!(puts[1].path, "/api/v3/repos/Acme/widgets/pulls/8/merge");
+    assert_eq!(puts[1].body["sha"], sha('e'));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r
+                .path
+                .ends_with(&format!("/commits/{}/check-runs", sha('e'))))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_check_poll_requires_a_frozen_head_and_tracked_base_for_a_behind_repair() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let mut old_target = target();
+    old_target.git.binding_generation -= 1;
+    let stale = json!({
+        "pull_request": 7, "result_head": sha('a'), "check_target": old_target,
+        "required": ["check", "deployment"], "deadline_at_ms": 5_000
+    });
+    for (now, outcome) in [(1_000, None), (5_000, Some("timeout"))] {
+        let run = delivery
+            .step(
+                Uuid::new_v4(),
+                "pull_request.await_checks",
+                &stale,
+                &target(),
+                now,
+            )
+            .await
+            .unwrap();
+        assert_eq!(run.step.map(|step| done(step).outcome), outcome);
+    }
+    assert!(mock.seen().is_empty());
+
+    let behind = || pull(7, json!({"mergeable_state": "behind"}));
+    mock.reply(200, vec![], behind());
+    assert!(poll_result(&delivery, 7, &sha('b')).await.is_none());
+    mock.reply(200, vec![], behind());
+    assert!(poll_of(&delivery, 1_000, 5_000).await.completion.is_none());
+
+    let current = pull(7, json!({}));
+    let retargeted = pull(
+        7,
+        json!({"mergeable_state": "behind", "base": {"ref": "other", "sha": sha('d')}}),
+    );
+    poll(&mock, current.clone(), retargeted, runs(&[]));
+    assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
+
+    let advanced = pull(7, json!({"base": {"ref": "main", "sha": sha('d')}}));
+    poll(
+        &mock,
+        current.clone(),
+        advanced,
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ]),
+    );
+    assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
+
+    poll(&mock, current, behind(), runs(&[]));
+    assert_eq!(
+        poll_result(&delivery, 7, &sha('a')).await.unwrap().outcome,
+        "conflict"
+    );
+    assert!(git.operations().is_empty());
 }
 
 #[tokio::test]
@@ -511,6 +724,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
         vec![],
         json!({"message": "Required review is missing"}),
     );
+    mock.reply(200, vec![], pull(7, json!({"mergeable_state": "blocked"})));
     assert_eq!(merge().await.outcome, "not_mergeable");
     mock.reply(
         200,
@@ -649,7 +863,7 @@ async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge
             }),
         )
     };
-    let poll = async || {
+    let poll_merged = async || {
         delivery
             .step(
                 Uuid::from_u128(9),
@@ -680,28 +894,34 @@ async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge
     };
 
     mock.reply(200, vec![], merged('b'));
-    assert_eq!(done(poll().await.step.unwrap()).outcome, "timeout");
+    assert_eq!(done(poll_merged().await.step.unwrap()).outcome, "timeout");
     mock.reply(200, vec![], merged('b'));
     assert_eq!(reconcile().await.output["reason"], "head_changed");
     assert!(git.operations().is_empty());
 
-    let reply_checks = |check_runs| {
-        mock.reply(200, vec![], merged('a'));
-        mock.reply(200, vec![], merged('a'));
-        mock.reply(200, vec![], json!([]));
-        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
-        mock.reply(200, vec![], check_runs);
-        mock.reply(200, vec![], no_statuses());
-    };
-    reply_checks(runs(&[("check", "completed", Some("success"))]));
-    assert_eq!(done(poll().await.step.unwrap()).outcome, "timeout");
+    poll(
+        &mock,
+        merged('a'),
+        merged('a'),
+        runs(&[("check", "completed", Some("success"))]),
+    );
+    assert_eq!(done(poll_merged().await.step.unwrap()).outcome, "timeout");
     assert!(git.operations().is_empty());
 
-    reply_checks(runs(&[
-        ("check", "completed", Some("success")),
-        ("deployment", "completed", Some("success")),
-    ]));
-    let checked = poll().await;
+    // The forge can report the merge on the second read, after another PR
+    // advances main. Green checks on the frozen result still permit cleanup.
+    let mut recovered = merged('a');
+    recovered["base"]["sha"] = json!(sha('e'));
+    poll(
+        &mock,
+        pull(7, json!({})),
+        recovered,
+        runs(&[
+            ("check", "completed", Some("success")),
+            ("deployment", "completed", Some("success")),
+        ]),
+    );
+    let checked = poll_merged().await;
     assert_eq!(done(checked.step.unwrap()).outcome, "passed");
     assert_eq!(checked.observed.unwrap().state, "merged");
     mock.reply(200, vec![], merged('a'));

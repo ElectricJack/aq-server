@@ -212,7 +212,7 @@ async fn checks_require_what_rulesets_and_branch_protection_require() {
     );
     assert_eq!(checks.required, ["ci/test", "lint"]);
     assert!(checks.failed.is_empty());
-    assert_eq!(checks.head_sha, head());
+    assert_eq!(checks.pull_request.head_sha, head());
     let sha = head();
     assert_eq!(
         requests(&mock),
@@ -430,7 +430,12 @@ async fn mergeability_maps_github_lazy_state() {
             Mergeability::Conflict,
         ),
         (json!({"mergeable_state": "blocked"}), Mergeability::Blocked),
-        (json!({"mergeable_state": "behind"}), Mergeability::Blocked),
+        (json!({"mergeable_state": "draft"}), Mergeability::Blocked),
+        (json!({"mergeable_state": "behind"}), Mergeability::Behind),
+        (
+            json!({"mergeable": null, "mergeable_state": "behind"}),
+            Mergeability::Unknown,
+        ),
         (
             json!({"mergeable": null, "mergeable_state": "unknown"}),
             Mergeability::Unknown,
@@ -439,7 +444,7 @@ async fn mergeability_maps_github_lazy_state() {
     ] {
         mock.reply(200, vec![], pull(7, extra.clone()));
         assert_eq!(
-            app.mergeability(&repo(), 7).await.unwrap(),
+            app.pull_request(&repo(), 7).await.unwrap().mergeability,
             expected,
             "{extra}"
         );
@@ -560,6 +565,7 @@ async fn merge_outcomes_for_conflict_not_mergeable_closed_and_merged() {
         vec![],
         json!({"message": "Required status check \"ci\" is expected."}),
     );
+    mock.reply(200, vec![], pull(7, json!({"mergeable_state": "blocked"})));
     assert_eq!(
         merge().await,
         MergeOutcome::NotMergeable {
@@ -618,6 +624,94 @@ async fn merge_outcomes_for_conflict_not_mergeable_closed_and_merged() {
 }
 
 #[tokio::test]
+async fn a_declined_merge_repairs_only_a_confirmed_behind_head_on_the_tracked_base() {
+    let (app, mock) = ready().await;
+    let merge = async || {
+        app.merge(&repo(), 7, MergeMethod::Merge, &head(), "main")
+            .await
+            .unwrap()
+    };
+    let behind = json!({"mergeable_state": "behind"});
+    mock.reply(200, vec![], pull(7, behind.clone()));
+    assert_eq!(merge().await, MergeOutcome::Behind);
+    assert_eq!(requests(&mock), [req("GET", "/pulls/7")]);
+
+    for (status, body) in [
+        (405, json!({"message": "Merge cannot be performed"})),
+        (
+            200,
+            json!({"merged": false, "message": "Merge cannot be performed"}),
+        ),
+    ] {
+        let start = requests(&mock).len();
+        mock.reply(200, vec![], pull(7, json!({})));
+        mock.reply(status, vec![], body);
+        mock.reply(200, vec![], pull(7, behind.clone()));
+        assert_eq!(merge().await, MergeOutcome::Behind);
+        assert_eq!(
+            requests(&mock)[start..],
+            [
+                req("GET", "/pulls/7"),
+                req("PUT", "/pulls/7/merge"),
+                req("GET", "/pulls/7")
+            ]
+        );
+    }
+
+    for extra in [
+        json!({"mergeable_state": "blocked"}),
+        json!({"mergeable_state": "behind", "base": {"ref": "other", "sha": head()}}),
+        json!({"mergeable_state": "behind", "mergeable": null}),
+    ] {
+        mock.reply(200, vec![], pull(7, json!({})));
+        mock.reply(
+            405,
+            vec![],
+            json!({"message": "Required review is missing"}),
+        );
+        mock.reply(200, vec![], pull(7, extra));
+        assert_eq!(
+            merge().await,
+            MergeOutcome::NotMergeable {
+                message: "Required review is missing".into()
+            }
+        );
+    }
+
+    mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(405, vec![], json!({"message": "Merge cannot be performed"}));
+    mock.reply(
+        200,
+        vec![],
+        pull(
+            7,
+            json!({"mergeable_state": "behind", "head": {"ref": "aq/task", "sha": moved()}}),
+        ),
+    );
+    assert!(matches!(
+        merge().await,
+        MergeOutcome::Refused {
+            reason: MergeRefusal::HeadMoved,
+            ..
+        }
+    ));
+
+    mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(409, vec![], json!({"message": "The head has changed"}));
+    assert!(matches!(
+        merge().await,
+        MergeOutcome::Refused {
+            reason: MergeRefusal::HeadMoved,
+            ..
+        }
+    ));
+    assert_eq!(
+        requests(&mock).last().unwrap(),
+        &req("PUT", "/pulls/7/merge")
+    );
+}
+
+#[tokio::test]
 async fn close_patches_the_pull_request_state() {
     let (app, mock) = ready().await;
     mock.reply(200, vec![], pull(7, json!({"state": "closed"})));
@@ -664,7 +758,7 @@ async fn operations_refuse_an_invalid_repository_without_calls() {
         name: "../x".into(),
     };
     assert_eq!(
-        app.mergeability(&bad, 7).await.unwrap_err().code(),
+        app.pull_request(&bad, 7).await.unwrap_err().code(),
         "github_invalid_input"
     );
     assert_eq!(
