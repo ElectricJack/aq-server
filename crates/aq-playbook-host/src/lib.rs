@@ -3,7 +3,7 @@
 use aq_playbooks_model::{Artifact, CommandContract, EventEnvelope, Registry};
 use aq_playbooks_runner::{
     Authority, CancellationResult, DispatchResult, Engine, EngineConfig, Host, IndexQuery, Intent,
-    KeyedAdmissionRequest, Storage,
+    IntentStatus, KeyedAdmissionRequest, Storage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -412,8 +412,9 @@ impl Owner {
         })
         .await
     }
-    /// Explicit trusted host registration. Exact contracts are checked at install
-    /// and restart; callers must supply the actual owning AQ service adapters.
+    /// Explicit trusted host registration. Installation checks the full catalog.
+    /// Restart reopens pinned artifacts and marks stale extension contracts for
+    /// dispatch refusal. Callers supply the actual owning AQ service adapters.
     pub async fn start_registered<S, F, H, HF>(
         namespace: String,
         limits: Limits,
@@ -904,7 +905,22 @@ fn execute<S: Storage>(
         )
         .map_err(engine_error)?,
         Request::Tick { now_ms } => {
-            if shared.plugin_artifacts.load(Ordering::Acquire) {
+            if shared.plugin_artifacts.load(Ordering::Acquire)
+                && engine
+                    .snapshot()
+                    .map_err(engine_error)?
+                    .intents
+                    .values()
+                    .any(|intent| {
+                        intent.deadline_at_ms > now_ms
+                            && !intent.cancel_requested
+                            && matches!(
+                                intent.status,
+                                IntentStatus::Dispatched | IntentStatus::Unknown
+                            )
+                            && plugins::command_plugin(&intent.command.name).is_some()
+                    })
+            {
                 host.set_mode(HostMode::RetryPlugins);
                 let recovery = engine.recover(host, now_ms);
                 host.set_mode(HostMode::Dispatch);
@@ -1003,7 +1019,6 @@ fn remember_contracts(shared: &Shared, registry: &Registry) {
     if registry
         .commands
         .keys()
-        .chain(registry.events.keys())
         .any(|name| plugins::command_plugin(name).is_some())
     {
         shared.plugin_artifacts.store(true, Ordering::Release);
