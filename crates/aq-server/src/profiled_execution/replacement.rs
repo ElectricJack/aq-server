@@ -69,10 +69,8 @@ pub async fn assess_task_in(
     {
         return Ok(Assessment::Blocked("stall_quarantined"));
     }
-    // Epic 0 (spec 0016 section 7): compiled out with `delivery_playbook`. D1: a successor
-    // reuses the predecessor's immutable export, so a result refused because its publication
-    // was definitively not applied would recur; such a lineage needs a new source admission.
-    #[cfg(not(feature = "delivery_playbook"))]
+    // D1: replacing an attempt with the same immutable export repeats a failed
+    // legacy publication. That lineage needs a new source admission.
     if sql::delivery_unpublished(conn, task)
         .await
         .map_err(internal)?

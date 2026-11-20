@@ -127,7 +127,7 @@ impl Service {
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
         #[cfg(feature = "delivery_playbook")]
-        if name == "work.read" && self.profile.is_delivery() {
+        if name == "work.read" && self.profile.is_delivery() && intent.command.version == "2.3.0" {
             return self.read_delivery(tx, input).await;
         }
         let id = text(&input["subject"], "id")?;

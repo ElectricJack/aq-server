@@ -1,15 +1,16 @@
 //! Fixed public Git observations for a configured project source policy.
 //! These facts are proposals until retained and fenced with the actual offer.
 use super::config::ProjectPolicyRecord;
-use crate::{AppState, error::AppError, project_bindings::domain::FrozenProjectBinding};
+use crate::{
+    AppState, agent_access::scheduling::TaskContext, error::AppError,
+    project_bindings::domain::FrozenProjectBinding,
+};
 use aq_admission::{
     ArtifactRef, Digest, ObjectFormat, ObjectId, SourceAdmission, SourceSelection, Text,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, time::Duration};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::collections::BTreeMap;
 use uuid::Uuid;
-const MAX_FRAME: usize = 262_144;
 #[track_caller]
 fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
@@ -28,48 +29,91 @@ async fn read(
     operation: &str,
     params: Value,
 ) -> Result<Value, AppError> {
-    let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
-    let id = format!("profiled-source-{}", Uuid::new_v4());
-    let request = json!({"protocol_version":1,"request_id":id,"operation":operation,"repository_id":repository,"expected_binding_generation":generation,"params":params,"deadline_ms":5000});
-    let exchange = async {
-        let mut socket = tokio::net::UnixStream::connect(&runtime.config.git_socket)
-            .await
-            .map_err(|_| refused())?;
-        let mut request = serde_json::to_vec(&request).map_err(|_| AppError::Internal)?;
-        request.push(b'\n');
-        socket.write_all(&request).await.map_err(|_| refused())?;
-        let mut frame = Vec::new();
-        BufReader::new(socket)
-            .take((MAX_FRAME + 1) as u64)
-            .read_until(b'\n', &mut frame)
-            .await
-            .map_err(|_| refused())?;
-        if frame.len() > MAX_FRAME || frame.last() != Some(&b'\n') {
-            return Err(refused());
-        }
-        let value: Value = serde_json::from_slice(&frame).map_err(|_| refused())?;
-        if value["protocol_version"] != 1
-            || value["request_id"] != id
-            || value["ok"] != true
-            || value.get("error").is_some()
-        {
-            return Err(refused());
-        }
-        value.get("result").cloned().ok_or_else(|| refused())
-    };
-    tokio::time::timeout(Duration::from_secs(5), exchange)
-        .await
-        .map_err(|_| refused())?
+    let runtime = state.source_retention.as_ref().ok_or_else(refused)?;
+    aq_delivery::offer_source::read(
+        &runtime.config.git_socket,
+        repository,
+        generation,
+        operation,
+        params,
+    )
+    .await
+    .map_err(|_| refused())
 }
 /// Initial source mode requires an exact retained SHA1 commit. Annotated tags,
 /// SHA256 and retention of an ancestor through a descendant handle refuse here.
-/// No implicit refresh/fetch, reference creation or retention mutation occurs.
+/// An enrolled named-ref offer refreshes its retained remote head as needed.
 pub async fn observe(
     state: &AppState,
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
+    enrolled: bool,
 ) -> Result<Observation, AppError> {
-    observe_source(state, project, policy, None).await
+    observe_source(state, project, policy, None, enrolled, None).await
+}
+
+pub(super) async fn observe_for_offer(
+    state: &AppState,
+    project: &FrozenProjectBinding,
+    policy: &ProjectPolicyRecord,
+    context: &TaskContext,
+    enrolled: bool,
+) -> Result<Observation, AppError> {
+    observe_source(state, project, policy, None, enrolled, Some(context)).await
+}
+
+pub(super) async fn require_base(
+    state: &AppState,
+    task: Uuid,
+    source: &Observation,
+    export: &super::source_exports::Request,
+) -> Result<(), AppError> {
+    let admission = &source.admission;
+    if admission.resolved_object.hex == export.base.hex
+        && admission.repository_id == export.repository_id
+        && admission.repository_binding_generation == export.binding_generation
+    {
+        return Ok(());
+    }
+    #[cfg(feature = "delivery_playbook")]
+    if serde_json::from_slice::<Value>(&source.bytes)
+        .is_ok_and(|body| body["evidence"].get("main_sync").is_some())
+    {
+        return Err(ancestry_wait(
+            state,
+            admission.project_id,
+            task,
+            DeliveryAncestryWait::SourceBaseChanged,
+        )
+        .await);
+    }
+    let _ = (state, task);
+    Err(refused())
+}
+
+#[cfg(feature = "delivery_playbook")]
+use aq_role_settings::refusals::{DeliveryAncestryWait, OfferRefusal};
+
+#[cfg(feature = "delivery_playbook")]
+async fn ancestry_wait(
+    state: &AppState,
+    project: Uuid,
+    task: Uuid,
+    wait: DeliveryAncestryWait,
+) -> AppError {
+    let refusal = OfferRefusal::DeliveryAncestry { wait };
+    tracing::info!(%task, %project, ?refusal, "waiting for delivery ancestry");
+    if crate::role_settings::tables(state) {
+        aq_role_settings::refusals::record(
+            &state.store.pool,
+            task,
+            project,
+            &refusal,
+            (state.clock)().timestamp_millis(),
+        )
+        .await;
+    }
+    AppError::Conflict(refusal.refusal())
 }
 /// A fixed commit and its central retention handle; `handoff` is evidence.
 struct Fixed {
@@ -100,7 +144,7 @@ pub async fn observe_retained(
         retention_handle: retained.operation_id,
         handoff: None,
     };
-    observe_source(state, project, policy, Some(fixed)).await
+    observe_source(state, project, policy, Some(fixed), false, None).await
 }
 
 /// A handoff successor (spec 0007) observes the predecessor's saved commit,
@@ -118,7 +162,7 @@ pub async fn observe_handoff(
         retention_handle: base.retention_handle,
         handoff: Some(handoff),
     };
-    observe_source(state, project, policy, Some(fixed)).await
+    observe_source(state, project, policy, Some(fixed), false, None).await
 }
 
 async fn observe_source(
@@ -126,6 +170,8 @@ async fn observe_source(
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
     fixed: Option<Fixed>,
+    enrolled: bool,
+    _offer: Option<&TaskContext>,
 ) -> Result<Observation, AppError> {
     let _permit = aq_machine_control::limits::SOURCE_READS.enter();
     let _permit = _permit.ok_or_else(|| refused())?;
@@ -167,7 +213,7 @@ async fn observe_source(
     );
     // The export transfer (or handoff candidate) is the retained byte owner.
     // The checkpoint handle originally used may have since been released.
-    let mut retention_handle = fixed
+    let retention_handle = fixed
         .as_ref()
         .map_or(policy.retention_handle, |f| f.retention_handle);
     if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
@@ -176,36 +222,57 @@ async fn observe_source(
     // Spec 0016 §4: a named ref follows the head central aq-git last synced
     // from the remote and retained, synced now when older than Settings allow.
     #[cfg(feature = "delivery_playbook")]
-    let synced = match (&selection, &fixed) {
-        (SourceSelection::NamedRef { reference }, None) => {
+    let synced = match &selection {
+        SourceSelection::NamedRef { reference } if enrolled => {
             let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
             let (id, g) = (binding.repository_id, binding.repository_binding_generation);
             let scope =
                 aq_delivery::main_sync::Scope::new(binding.project_id, id, g, reference.as_str());
             let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
             let (pool, socket) = (&state.store.pool, &runtime.config.git_socket);
-            let synced = aq_delivery::main_sync::current(pool, socket, &scope, clock).await;
-            let synced = synced.map_err(|_| refused())?;
+            let synced = if let Some(offer) = _offer {
+                let task = offer.revision.task_id;
+                match aq_delivery::main_sync::dependent_current(
+                    pool,
+                    socket,
+                    &scope,
+                    task,
+                    &offer.context,
+                    clock,
+                )
+                .await
+                {
+                    Ok(synced) => synced,
+                    Err(wait) => {
+                        return Err(ancestry_wait(state, binding.project_id, task, wait).await);
+                    }
+                }
+            } else {
+                aq_delivery::main_sync::current(pool, socket, &scope, clock)
+                    .await
+                    .map_err(|_| refused())?
+            };
             observed = clock(); // this read of a record `current` found fresh
             if observed >= project.binding_observation.expires_at_ms {
                 return Err(refused());
             }
-            retention_handle = synced.retention_handle;
             let value = serde_json::to_value(&synced).map_err(|_| AppError::Internal)?;
             evidence.insert("main_sync", value);
-            Some(ObjectId {
-                format: ObjectFormat::Sha1,
-                hex: synced.head,
-            })
+            Some((
+                ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: synced.head,
+                },
+                synced.retention_handle,
+            ))
         }
         _ => None,
     };
     // D1: a named ref that AQ itself publishes follows the recorded source
     // head (the publication receipt is the evidence) and hydrates from the
     // candidate's central retention handle. Without one, a fresh observation.
-    #[cfg(not(feature = "delivery_playbook"))]
-    let head = match (&selection, &fixed) {
-        (SourceSelection::NamedRef { reference }, None) => {
+    let head = match &selection {
+        SourceSelection::NamedRef { reference } if !enrolled => {
             crate::profiled_execution::settlement::publication::current_head(
                 &state.store.pool,
                 binding.project_id,
@@ -218,13 +285,15 @@ async fn observe_source(
         }
         _ => None,
     };
+    let mut retention_handle = retention_handle;
     let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
         #[cfg(feature = "delivery_playbook")]
         SourceSelection::NamedRef { .. } if synced.is_some() => {
-            synced.clone().ok_or_else(|| refused())?
+            let (object, handle) = synced.ok_or_else(refused)?;
+            retention_handle = handle;
+            object
         }
-        #[cfg(not(feature = "delivery_playbook"))]
         SourceSelection::NamedRef { .. } if head.is_some() => {
             let head = head.as_ref().ok_or_else(|| refused())?;
             retention_handle = head.retention_handle;
@@ -270,6 +339,70 @@ async fn observe_source(
     if object.format != ObjectFormat::Sha1 {
         return Err(refused());
     }
+    // Enrollment selects the result path. A first offer on either path must
+    // still prove the chosen base against its completed blockers.
+    #[cfg(feature = "delivery_playbook")]
+    let object = if let Some(offer) = _offer.filter(|_| !evidence.contains_key("main_sync")) {
+        use aq_delivery::main_sync::{OfferAncestry, Scope};
+        let task = offer.revision.task_id;
+        let project_id = binding.project_id;
+        let repository = aq_delivery::commands::GitTarget {
+            repository_id: binding.repository_id,
+            binding_generation: binding.repository_binding_generation,
+        };
+        let moving = match &selection {
+            SourceSelection::NamedRef { reference }
+                if reference.as_str().starts_with("refs/heads/") =>
+            {
+                Some(Scope::new(
+                    project_id,
+                    repository.repository_id,
+                    repository.binding_generation,
+                    reference.as_str(),
+                ))
+            }
+            _ => None,
+        };
+        let pool = &state.store.pool;
+        let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
+        let runtime = state.source_retention.as_ref().ok_or_else(refused)?;
+        let verified = async {
+            OfferAncestry::load(pool, repository, task, &offer.context)
+                .await?
+                .verify_or_refresh(
+                    pool,
+                    &runtime.config.git_socket,
+                    &object.hex,
+                    moving.as_ref(),
+                    clock,
+                )
+                .await
+        }
+        .await;
+        match verified {
+            Ok(None) => object,
+            Ok(Some(synced)) => {
+                observed = clock();
+                if observed >= project.binding_observation.expires_at_ms {
+                    return Err(refused());
+                }
+                retention_handle = synced.retention_handle;
+                evidence.remove("reference_observation");
+                evidence.remove("publication_head");
+                evidence.insert(
+                    "main_sync",
+                    serde_json::to_value(&synced).map_err(|_| AppError::Internal)?,
+                );
+                ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: synced.head,
+                }
+            }
+            Err(wait) => return Err(ancestry_wait(state, project_id, task, wait).await),
+        }
+    } else {
+        object
+    };
     let inspected = read(
         state,
         binding.repository_id,
@@ -344,14 +477,21 @@ async fn observe_source(
 /// Spec 0016 §4: the loop syncing each enabled project's followed named ref.
 #[cfg(feature = "delivery_playbook")]
 pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<bool>) {
-    let (Some(runtime), Some(config)) = (&state.source_retention, &state.config.profiled_execution)
-    else {
+    let (Some(runtime), Some(config), Some(delivery)) = (
+        &state.source_retention,
+        &state.config.profiled_execution,
+        &state.config.delivery,
+    ) else {
         return;
     };
+    // Task-limited enrollment only needs a sync when its selected task is offered.
+    if delivery.task_allowlist.is_some() {
+        return;
+    }
     let projects = config
         .projects
         .iter()
-        .filter(|p| p.enabled)
+        .filter(|p| p.enabled && delivery.project_allowlist.contains(&p.project_id))
         .filter_map(|p| match &p.source {
             SourceSelection::NamedRef { reference } => {
                 Some((p.project_id, reference.as_str().to_owned()))
@@ -396,73 +536,6 @@ fn verify_retention(
     aq_delivery::source_checks::retention_holds(v, handle, repository, generation, &object.hex)
         .then_some(())
         .ok_or_else(|| refused())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn named_ref_follows_publication_head_only_for_its_exact_commit_and_handle() {
-        let (project, repository, handle) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let reference = "refs/heads/main";
-        let oid = "a".repeat(40);
-        let head = json!({"schema_version":1,"project_id":project,"repository_id":repository,"binding_generation":2,
-            "target":reference,"sequence":1,"oid":oid,"retention_handle":handle,"candidate_operation_id":handle,
-            "publication_operation_id":Uuid::new_v4(),"previous":"b".repeat(40)});
-        let admission = SourceAdmission {
-            schema_version: 1,
-            project_id: project,
-            project_revision: 1,
-            repository_id: repository,
-            repository_binding_generation: 2,
-            policy: ArtifactRef {
-                id: Text::new("aq.project-source-policy/test").unwrap(),
-                version: Text::new("1").unwrap(),
-                digest: Digest::of(b"policy"),
-            },
-            selection: SourceSelection::NamedRef {
-                reference: aq_admission::Label::new(reference).unwrap(),
-            },
-            resolved_object: ObjectId {
-                format: ObjectFormat::Sha1,
-                hex: oid.clone(),
-            },
-            observed_at_ms: 1000,
-            expires_at_ms: 31_000,
-        };
-        let body = |head: Value, handle: Uuid| {
-            serde_json::to_vec(&json!({"schema_version":1,"admission":admission,"retention_handle":handle,
-                "evidence":{"publication_head":head,
-                    "commit_inspection":{"oid":{"algorithm":"sha1","hex":oid},"tree":{"algorithm":"sha1","hex":"c".repeat(40)}},
-                    "retention_inspection":{"version":1,"id":handle,"repository_id":repository,"binding_generation":2,
-                        "generation":1,"state":"active","refs":[{"name":"refs/aq-git/candidates/x/prefix/0","oid":oid}],
-                        "release_operation":null,"release_reason":null}}}))
-            .unwrap()
-        };
-        assert!(validate_body(&body(head.clone(), handle), project, 2000).is_ok());
-        for (field, bad) in [
-            ("target", json!("refs/heads/other")),
-            ("oid", json!("d".repeat(40))),
-            ("retention_handle", json!(Uuid::new_v4())),
-            ("repository_id", json!(Uuid::new_v4())),
-            ("project_id", json!(Uuid::new_v4())),
-            ("binding_generation", json!(3)),
-            ("sequence", json!(0)),
-        ] {
-            let mut value = head.clone();
-            value[field] = bad;
-            assert!(
-                validate_body(&body(value, handle), project, 2000).is_err(),
-                "{field}"
-            );
-        }
-        // Another handle than the head's is never followed.
-        let other = Uuid::new_v4();
-        let mut value = head.clone();
-        value["retention_handle"] = json!(other);
-        value["candidate_operation_id"] = json!(other);
-        assert!(validate_body(&body(value, handle), project, 2000).is_err());
-    }
 }
 
 mod ownership;

@@ -52,6 +52,20 @@ enum Command {
         #[arg(long)]
         request: PathBuf,
     },
+    /// Adopt a seeded project for delivery: verify its current project binding,
+    /// central aq-git origin and GitHub's default branch, then record the
+    /// delivery target. The request JSON is the `POST /api/repositories/adopt`
+    /// body; re-running the same `operation_id` replays it. Prints the JSON.
+    AdoptRepository {
+        #[arg(long, env = "AQ_VAULT_DIR")]
+        vault: PathBuf,
+        /// Email of the owner the operation is recorded against.
+        #[arg(long)]
+        owner_email: String,
+        /// Request JSON file, or `-` for stdin.
+        #[arg(long)]
+        request: PathBuf,
+    },
     /// Import or replace a subscription login (C5b): stores the file as the
     /// newest version of a configured subscription-login credential. An
     /// operator upload always wins over node write-backs. Prints the version.
@@ -105,6 +119,11 @@ async fn main() {
             owner_email,
             request,
         } => onboard_repository(vault, &owner_email, &request).await,
+        Command::AdoptRepository {
+            vault,
+            owner_email,
+            request,
+        } => adopt_repository(vault, &owner_email, &request).await,
         Command::ImportLogin {
             vault,
             credential,
@@ -129,11 +148,7 @@ async fn serve(vault: PathBuf) -> anyhow::Result<()> {
     aq_server::run(config, store).await
 }
 
-async fn onboard_repository(
-    vault: PathBuf,
-    owner_email: &str,
-    request: &std::path::Path,
-) -> anyhow::Result<()> {
+fn read_request<T: serde::de::DeserializeOwned>(request: &std::path::Path) -> anyhow::Result<T> {
     use std::io::Read;
     let mut body = Vec::new();
     if request == std::path::Path::new("-") {
@@ -147,10 +162,47 @@ async fn onboard_repository(
             .read_to_end(&mut body)?;
     }
     if body.len() > 128 * 1024 {
-        bail!("onboarding request exceeds 128 KiB");
+        bail!("request exceeds 128 KiB");
     }
-    let request: aq_server::repository_onboarding::OnboardRequest =
-        serde_json::from_slice(&body).context("invalid onboarding request")?;
+    serde_json::from_slice(&body).context("invalid request")
+}
+
+async fn onboard_repository(
+    vault: PathBuf,
+    owner_email: &str,
+    request: &std::path::Path,
+) -> anyhow::Result<()> {
+    let request: aq_server::repository_onboarding::OnboardRequest = read_request(request)?;
+    let (state, owner) = owner_state(vault, owner_email).await?;
+    let out = aq_server::repository_onboarding::onboard(&state, owner, request)
+        .await
+        .map_err(|e| anyhow::anyhow!("onboarding refused: {e:?}"))?;
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    if out["disposition"] == "bound" {
+        Ok(())
+    } else {
+        std::process::exit(1)
+    }
+}
+
+async fn adopt_repository(
+    vault: PathBuf,
+    owner_email: &str,
+    request: &std::path::Path,
+) -> anyhow::Result<()> {
+    let request: aq_server::repository_onboarding::AdoptRequest = read_request(request)?;
+    let (state, owner) = owner_state(vault, owner_email).await?;
+    let out = aq_server::repository_onboarding::adopt(&state, owner, request)
+        .await
+        .map_err(|e| anyhow::anyhow!("adoption refused: {}", e.to_api_error().message))?;
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+async fn owner_state(
+    vault: PathBuf,
+    owner_email: &str,
+) -> anyhow::Result<(aq_server::AppState, uuid::Uuid)> {
     let (config, store) = connect(&vault).await?;
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -162,15 +214,7 @@ async fn onboard_repository(
     else {
         bail!("no owner with that email");
     };
-    let out = aq_server::repository_onboarding::onboard(&state, owner, request)
-        .await
-        .map_err(|e| anyhow::anyhow!("onboarding refused: {e:?}"))?;
-    println!("{}", serde_json::to_string_pretty(&out)?);
-    if out["disposition"] == "bound" {
-        Ok(())
-    } else {
-        std::process::exit(1)
-    }
+    Ok((state, owner))
 }
 
 async fn import_login(

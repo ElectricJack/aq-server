@@ -61,6 +61,16 @@ pub trait DeliveryPort: Send + Sync {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
     /// The latest result of `task`, if it has one.
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Lock the event's attempt and verify its current result before an effect.
+    /// Fixture ports use the equivalent identity check against their own store.
+    async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
+        Ok(self.latest(event.task_id).await?.is_some_and(|latest| {
+            latest.project_id == event.project_id
+                && latest.attempt_id == event.attempt_id
+                && latest.result_id == event.result_id
+        }))
+    }
+
     /// Whether the server runs tasks of `project` (it has an execution binding).
     async fn bound(&self, project: Uuid) -> Result<bool>;
     /// Whether `result` is a result of `task`, its latest or an earlier one.
@@ -77,6 +87,7 @@ impl DeliveryPort for PgDelivery {
             "SELECT a.task_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,a.attempt_id,h.report_id \
              FROM execution_attempts a \
+             JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id \
              JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id \
              JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
              JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
@@ -108,11 +119,12 @@ impl DeliveryPort for PgDelivery {
         let row = sqlx::query(
             "SELECT r.report_id,r.attempt_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,\
-             convert_from(r.report_bytes,'UTF8')::jsonb AS report \
+             convert_from(r.report_bytes,'UTF8')::jsonb AS report,g.attempt_id IS NOT NULL AS enrolled \
              FROM execution_attempts a \
              JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
              JOIN profiled_result_reports r ON r.report_id=h.report_id \
              JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
+             LEFT JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id \
              WHERE a.task_id=$1 \
              ORDER BY (convert_from(r.receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::bigint DESC,r.report_id DESC \
              LIMIT 1",
@@ -120,7 +132,9 @@ impl DeliveryPort for PgDelivery {
         .bind(task)
         .fetch_optional(&mut *conn)
         .await?;
-        let Some(row) = row else { return Ok(None) };
+        let Some(row) = row.filter(|r| r.get::<bool, _>("enrolled")) else {
+            return Ok(None);
+        };
         let (attempt, report): (Uuid, serde_json::Value) =
             (row.get("attempt_id"), row.get("report"));
         // Spec 0016 §5.1: the pushed task ref, confirmed at its head when the
@@ -169,6 +183,30 @@ impl DeliveryPort for PgDelivery {
         }))
     }
 
+    async fn lock_current(&self, db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
+        // The result writer holds this attempt lock before replacing its report head.
+        let held: Option<bool> = sqlx::query_scalar(
+            "SELECT a.holds_task FROM execution_attempts a JOIN profiled_launches l USING (attempt_id)
+             WHERE a.attempt_id=$1 AND a.task_id=$2
+             AND l.execution_spec#>>'{lifecycle,project_id}'=$3 FOR UPDATE OF a",
+        )
+        .bind(event.attempt_id)
+        .bind(event.task_id)
+        .bind(event.project_id.to_string())
+        .fetch_optional(&mut *db)
+        .await?;
+        if held != Some(true) {
+            return Ok(false);
+        }
+        let current: Option<Uuid> = sqlx::query_scalar(
+            "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
+        )
+        .bind(event.attempt_id)
+        .fetch_optional(db)
+        .await?;
+        Ok(current == Some(event.result_id))
+    }
+
     async fn bound(&self, project: Uuid) -> Result<bool> {
         Ok(sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE project_id=$1)",
@@ -181,7 +219,8 @@ impl DeliveryPort for PgDelivery {
     async fn has_result(&self, task: Uuid, result: Uuid) -> Result<bool> {
         Ok(sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM profiled_result_reports r \
-             JOIN execution_attempts a ON a.attempt_id=r.attempt_id WHERE r.report_id=$2 AND a.task_id=$1)",
+             JOIN execution_attempts a ON a.attempt_id=r.attempt_id \
+             JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id WHERE r.report_id=$2 AND a.task_id=$1)",
         )
         .bind(task)
         .bind(result)
@@ -296,7 +335,7 @@ pub async fn plan(
 /// `work.complete` or `work.return` settling it (the task read says it waits).
 pub async fn undecided(db: &mut PgConnection, attempt: Uuid) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT h.report_id FROM profiled_result_heads h WHERE h.attempt_id=$1 \
+        "SELECT h.report_id FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id) WHERE h.attempt_id=$1 \
          AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
          AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",

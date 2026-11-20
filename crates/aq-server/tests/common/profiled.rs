@@ -42,29 +42,40 @@ pub struct Fixture {
     pub time: Arc<AtomicI64>,
 }
 pub async fn fixture() -> Fixture {
-    let db = Arc::new(TestDb::create().await);
+    fixture_on(Arc::new(TestDb::create().await), None).await
+}
+
+pub async fn fixture_on(
+    db: Arc<TestDb>,
+    additional: Option<(Uuid, aq_selection::TaskLineage)>,
+) -> Fixture {
     let store = db.store().await;
     let actual = Utc.timestamp_millis_opt(NOW as i64).unwrap();
-    let owner = store
-        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", actual)
-        .await
-        .unwrap()
-        .unwrap();
+    let actor = match &additional {
+        Some((actor, _)) => *actor,
+        None => {
+            store
+                .bootstrap_owner("owner@localhost", "dev", "owner@localhost", actual)
+                .await
+                .unwrap()
+                .unwrap()
+                .id
+        }
+    };
     let credential = tokens::new_node_credential();
+    let enrollment = additional.as_ref().map_or_else(
+        || "profiled-fixture".to_owned(),
+        |(_, lineage)| format!("profiled-{}", lineage.project_id),
+    );
     store
-        .create_enrollment(
-            "profiled-fixture",
-            owner.id,
-            actual,
-            actual + Duration::minutes(5),
-        )
+        .create_enrollment(&enrollment, actor, actual, actual + Duration::minutes(5))
         .await
         .unwrap();
     let node = store
         .redeem_enrollment(
-            "profiled-fixture",
+            &enrollment,
             NewNode {
-                name: "profiled-fixture".into(),
+                name: enrollment.clone(),
                 credential_hash: tokens::verifier(&credential),
                 worker_version: "0.1.0".into(),
                 protocol_version: 1,
@@ -91,6 +102,10 @@ pub async fn fixture() -> Fixture {
     let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
     let mut input: aq_selection::SelectionInputs =
         serde_json::from_value(raw["inputs"].clone()).unwrap();
+    if let Some((_, lineage)) = additional {
+        input.project.lineage = lineage.clone();
+        input.budget.lineage = lineage;
+    }
     input.project.target = aq_selection::ExecutionTarget::Worker {
         node_id: node.id,
         boot_id: identity.boot_id,
@@ -150,7 +165,7 @@ enabled=true
         profiled: state_projection,
         selection: selected,
         decision: Uuid::new_v4(),
-        actor: owner.id,
+        actor,
         credential,
         time,
     }

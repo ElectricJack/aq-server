@@ -175,7 +175,6 @@ impl ProfiledState {
     }
 }
 pub mod claim;
-#[cfg(not(feature = "delivery_playbook"))]
 pub mod default_policy;
 pub mod fairness;
 pub mod replacement;

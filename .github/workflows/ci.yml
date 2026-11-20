@@ -234,7 +234,7 @@ jobs:
       - name: Delivery operations and delivery policy authoring
         run: cargo nextest run --locked --profile ci -p aq-delivery -p aq-playbook-authoring --lib --features delivery_playbook
       - name: Delivery document activation, result decisions and PR operations
-        run: cargo nextest run --locked --profile ci -p aq-server --features delivery_playbook --test it_playbook -E 'test(/^playbook_host9::delivery::/) | test(/^playbook_delivery_document::/)'
+        run: cargo nextest run --locked --profile ci -p aq-server --features delivery_playbook --test it_playbook -E 'test(/^playbook_host9::delivery::/) | test(/^playbook_delivery_document::/) | test(/^repository_onboarding::/)'
       - name: Recovery authority and reserved control capacity regressions
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features recovery-test-support --test it_server -E 'test(/^execution::/) | test(/^readiness::/)'
 

@@ -8,26 +8,25 @@
 //! a GitHub repository and optionally a vault credential profile; they never
 //! supply a URL, endpoint, token or command, and no secret is persisted.
 use crate::{
-    AppState,
-    authz::RequireOwner,
-    delivery::{PublicationMode, PublicationPolicy, WaitForChecks},
-    error::AppError,
+    AppState, authz::RequireOwner, delivery::PublicationPolicy, error::AppError,
     project_bindings::domain::ProjectBinding,
+};
+use aq_delivery::repository_onboarding::{
+    self as wire, Adoption, AdoptionError, Git, Github, Meta, Row, label, response, slug,
 };
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
     routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
-use sqlx::Row;
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use serde_json::{Value, json};
 use uuid::Uuid;
+pub use wire::{
+    AdoptRequest, CredentialKind, CredentialProfile, GithubRepository, OnboardRequest,
+    OnboardingConfig, PublicationRequest, Transport,
+};
 
 type Result<T> = std::result::Result<T, AppError>;
-const MAX_RESPONSE: u64 = 8 * 1024 * 1024;
 const RESERVED: [&str; 5] = [
     "project_id",
     "repository_id",
@@ -36,74 +35,11 @@ const RESERVED: [&str; 5] = [
     "publication",
 ];
 
-/// Vault `[onboarding]`. The API base and every credential are server-held.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OnboardingConfig {
-    #[serde(default = "default_api")]
-    pub github_api_url: String,
-    #[serde(default)]
-    pub credential_profiles: BTreeMap<String, CredentialProfile>,
-}
-fn default_api() -> String {
-    "https://api.github.com".into()
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CredentialProfile {
-    pub kind: CredentialKind,
-    /// Vault file holding the deploy key or fine-grained token. Only its
-    /// profile name ever leaves the vault; aq-git selects it by that name.
-    pub secret_file: PathBuf,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialKind {
-    SshDeployKey,
-    HttpsFineGrainedToken,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Transport {
-    Ssh,
-    Https,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GithubRepository {
-    pub owner: String,
-    pub name: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PublicationRequest {
-    pub mode: PublicationMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wait_for_checks: Option<WaitForChecks>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OnboardRequest {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    pub repository_id: Uuid,
-    pub github: GithubRepository,
-    pub transport: Transport,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential_profile: Option<String>,
-    /// Owner override; otherwise GitHub's `default_branch` is used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_branch: Option<String>,
-    pub publication: PublicationRequest,
-    /// Project binding fields other than the server-filled repository fields.
-    pub template: Map<String, Value>,
-}
-
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
         .route("/api/repositories/onboard", post(route))
         .route("/api/repositories/onboard/{operation_id}", get(show))
+        .route("/api/repositories/adopt", post(adopt_route))
         .layer(DefaultBodyLimit::max(128 * 1024))
 }
 async fn route(
@@ -118,8 +54,10 @@ async fn show(
     RequireOwner(_): RequireOwner,
     Path(operation_id): Path<Uuid>,
 ) -> Result<Json<Value>> {
-    let row = load(&state, operation_id)
-        .await?
+    let mut conn = state.store.pool.acquire().await.map_err(db)?;
+    let row = wire::load(&mut conn, operation_id)
+        .await
+        .map_err(db)?
         .ok_or_else(|| AppError::NotFound("onboarding operation not found".into()))?;
     Ok(Json(response(&row)))
 }
@@ -128,74 +66,6 @@ fn bad(reason: &str) -> AppError {
     AppError::BadRequest(reason.into())
 }
 use crate::error::db;
-fn slug(v: &str) -> bool {
-    !v.is_empty()
-        && v.len() <= 100
-        && v != "."
-        && v != ".."
-        && v.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-}
-fn label(v: &str) -> bool {
-    !v.is_empty()
-        && v.len() <= 128
-        && v.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_.@:".contains(&b))
-}
-
-struct Row_ {
-    actor: Uuid,
-    digest: String,
-    step: String,
-    state: Value,
-}
-async fn load(state: &AppState, operation_id: Uuid) -> Result<Option<Row_>> {
-    let row = sqlx::query(
-        "SELECT actor_id,request_digest,step,state FROM repository_onboardings WHERE operation_id=$1",
-    )
-    .bind(operation_id)
-    .fetch_optional(&state.store.pool)
-    .await
-    .map_err(db)?;
-    Ok(row.map(|r| Row_ {
-        actor: r.get(0),
-        digest: r.get(1),
-        step: r.get(2),
-        state: r.get(3),
-    }))
-}
-async fn save(state: &AppState, operation_id: Uuid, step: &str, value: &Value) -> Result<()> {
-    sqlx::query(
-        "UPDATE repository_onboardings SET step=$2,state=$3,updated_at_ms=$4 WHERE operation_id=$1 AND step NOT IN ('bound','refused')",
-    )
-    .bind(operation_id)
-    .bind(step)
-    .bind(value)
-    .bind((state.clock)().timestamp_millis())
-    .execute(&state.store.pool)
-    .await
-    .map_err(db)?;
-    Ok(())
-}
-fn response(row: &Row_) -> Value {
-    let s = &row.state;
-    let disposition = match row.step.as_str() {
-        "bound" => "bound",
-        "refused" => "refused",
-        _ => "incomplete",
-    };
-    let mut out = json!({"operation_id":s["request"]["operation_id"],"step":row.step,"disposition":disposition,
-        "project_id":s["request"]["project_id"],"repository_id":s["request"]["repository_id"],
-        "remote_url":s["remote_url"],"credential_profile":s["request"]["credential_profile"],
-        "default_branch":s["default_branch"],"repository_binding_generation":s["binding_generation"],"base":s["base"]});
-    for key in ["refusal", "error", "project"] {
-        if !s[key].is_null() {
-            out[key] = s[key].clone();
-        }
-    }
-    out
-}
-
 /// Deterministic aq-git operation id per onboarding step, so a resumed step is
 /// an aq-git idempotent retry rather than a second mutation.
 fn step_operation(operation_id: Uuid, step: &str) -> Uuid {
@@ -208,11 +78,6 @@ fn step_operation(operation_id: Uuid, step: &str) -> Uuid {
     uuid::Builder::from_random_bytes(bytes).into_uuid()
 }
 
-enum Git {
-    Ok(Value),
-    Refused { code: String, message: String },
-    Unavailable,
-}
 async fn aq_git(
     state: &AppState,
     operation_id: Uuid,
@@ -221,49 +86,32 @@ async fn aq_git(
     generation: u64,
     params: Value,
 ) -> Git {
-    let Some(rt) = &state.source_retention else {
-        return Git::Unavailable;
-    };
-    let request_id = operation_id.to_string();
-    let request = json!({"protocol_version":1,"request_id":request_id,"operation":operation,"repository_id":repository_id,
-        "operation_id":operation_id,"expected_binding_generation":generation,"params":params,"deadline_ms":30000});
-    let exchange = async {
-        let mut socket = tokio::net::UnixStream::connect(&rt.config.git_socket).await?;
-        let mut bytes = serde_json::to_vec(&request)?;
-        bytes.push(b'\n');
-        socket.write_all(&bytes).await?;
-        let mut frame = Vec::new();
-        BufReader::new(socket)
-            .take(MAX_RESPONSE + 1)
-            .read_until(b'\n', &mut frame)
-            .await?;
-        anyhow::ensure!(
-            frame.len() as u64 <= MAX_RESPONSE && frame.last() == Some(&b'\n'),
-            "invalid aq-git frame"
-        );
-        let v: Value = serde_json::from_slice(&frame)?;
-        anyhow::ensure!(
-            v["protocol_version"] == 1 && v["request_id"] == request_id.as_str(),
-            "aq-git response mismatch"
-        );
-        Ok::<_, anyhow::Error>(v)
-    };
-    match tokio::time::timeout(Duration::from_secs(35), exchange).await {
-        Ok(Ok(v)) if v["ok"] == true && v["result"].is_object() => Git::Ok(v["result"].clone()),
-        Ok(Ok(v)) if v["ok"] == false => match v["error"]["code"].as_str() {
-            Some(code) => Git::Refused {
-                code: code.into(),
-                message: v["error"]["message"]
-                    .as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(512)
-                    .collect(),
-            },
-            None => Git::Unavailable,
-        },
-        _ => Git::Unavailable,
-    }
+    wire::aq_git(
+        git_socket(state),
+        operation_id,
+        operation,
+        repository_id,
+        generation,
+        params,
+    )
+    .await
+}
+fn git_socket(state: &AppState) -> Option<&std::path::Path> {
+    state
+        .source_retention
+        .as_ref()
+        .map(|rt| rt.config.git_socket.as_path())
+}
+async fn save(state: &AppState, operation_id: Uuid, step: &str, value: &Value) -> Result<()> {
+    wire::save(
+        &state.store.pool,
+        operation_id,
+        step,
+        value,
+        (state.clock)().timestamp_millis(),
+    )
+    .await
+    .map_err(db)
 }
 
 fn refusal(code: &str, reason: &str, source: &str, message: &str) -> Value {
@@ -292,70 +140,6 @@ fn tree_refusal(entries: &[Value]) -> Option<(&'static str, String)> {
         }
     }
     None
-}
-
-struct Github<'a> {
-    config: &'a OnboardingConfig,
-    token: Option<String>,
-}
-enum Meta {
-    Branch { branch: String, signing: bool },
-    Unavailable(String),
-}
-impl Github<'_> {
-    async fn get(&self, path: &str) -> std::result::Result<Value, String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| "github client unavailable".to_string())?;
-        let mut request = client
-            .get(format!(
-                "{}{path}",
-                self.config.github_api_url.trim_end_matches('/')
-            ))
-            .header("accept", "application/vnd.github+json")
-            .header("user-agent", "aq-server-onboarding")
-            .header("x-github-api-version", "2022-11-28");
-        if let Some(token) = &self.token {
-            request = request.bearer_auth(token);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| "github metadata request failed".to_string())?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "github metadata returned {}",
-                response.status().as_u16()
-            ));
-        }
-        response
-            .json()
-            .await
-            .map_err(|_| "github metadata is not JSON".to_string())
-    }
-    async fn metadata(&self, repo: &GithubRepository, branch: Option<&str>) -> Meta {
-        let base = format!("/repos/{}/{}", repo.owner, repo.name);
-        let branch = match branch {
-            Some(b) => b.to_string(),
-            None => match self.get(&base).await {
-                Ok(v) => match v["default_branch"].as_str() {
-                    Some(b) if !b.is_empty() => b.to_string(),
-                    _ => return Meta::Unavailable("github reported no default branch".into()),
-                },
-                Err(e) => return Meta::Unavailable(e),
-            },
-        };
-        match self.get(&format!("{base}/rules/branches/{branch}")).await {
-            Ok(Value::Array(rules)) => Meta::Branch {
-                signing: rules.iter().any(|r| r["type"] == "required_signatures"),
-                branch,
-            },
-            Ok(_) => Meta::Unavailable("github branch rules are malformed".into()),
-            Err(e) => Meta::Unavailable(e),
-        }
-    }
 }
 
 fn validate(state: &AppState, r: &OnboardRequest) -> Result<(ProjectBinding, String)> {
@@ -446,40 +230,58 @@ pub async fn onboard(state: &AppState, actor: Uuid, request: OnboardRequest) -> 
         .map_err(|_| bad("invalid onboarding request"))?;
     // Serialise onboarding steps so a concurrent retry cannot race a step.
     let _gate = GATE.lock().await;
-    if let Some(row) = load(state, request.operation_id).await? {
-        if row.actor != actor || row.digest != digest {
-            return Err(AppError::Conflict(
-                "operation_id was used for a different onboarding request".into(),
-            ));
-        }
+    let mut tx = state.store.pool.begin().await.map_err(db)?;
+    // Coordinate intent creation with adoption's history check for seeded projects.
+    sqlx::query("SELECT project_id FROM project_execution_bindings WHERE project_id=$1 FOR UPDATE")
+        .bind(request.project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    let op = request.operation_id;
+    let row = wire::load(&mut tx, op).await.map_err(db)?;
+    if let Some(row) = &row {
+        check_operation(row, actor, &digest)?;
         if row.step == "bound" || row.step == "refused" {
-            return Ok(response(&row));
+            return Ok(response(row));
         }
     }
     let (_, remote_url) = validate(state, &request)?;
-    let now = (state.clock)().timestamp_millis();
-    sqlx::query(
-        "INSERT INTO repository_onboardings (operation_id,actor_id,request_digest,project_id,repository_id,step,state,created_at_ms,updated_at_ms)
-         VALUES ($1,$2,$3,$4,$5,'started',$6,$7,$7) ON CONFLICT (operation_id) DO NOTHING",
-    )
-    .bind(request.operation_id)
-    .bind(actor)
-    .bind(&digest)
-    .bind(request.project_id)
-    .bind(request.repository_id)
-    .bind(json!({"request":request,"remote_url":remote_url}))
-    .bind(now)
-    .execute(&state.store.pool)
-    .await
-    .map_err(db)?;
-    let mut row = load(state, request.operation_id)
-        .await?
-        .ok_or(AppError::Internal)?;
+    let mut row = match row {
+        Some(row) => row,
+        None => {
+            wire::start(
+                &mut tx,
+                actor,
+                &digest,
+                &request,
+                remote_url,
+                (state.clock)().timestamp_millis(),
+            )
+            .await
+            .map_err(db)?;
+            let row = wire::load(&mut tx, op)
+                .await
+                .map_err(db)?
+                .ok_or(AppError::Internal)?;
+            check_operation(&row, actor, &digest)?;
+            row
+        }
+    };
+    tx.commit().await.map_err(db)?;
     advance(state, actor, &request, &mut row).await?;
     Ok(response(&row))
 }
 
-async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Row_) -> Result<()> {
+fn check_operation(row: &Row, actor: Uuid, digest: &str) -> Result<()> {
+    if row.actor != actor || row.digest != digest {
+        return Err(AppError::Conflict(
+            "operation_id was used for a different onboarding request".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Row) -> Result<()> {
     let op = r.operation_id;
     let config = state.config.onboarding.as_ref().ok_or(AppError::Internal)?;
     let profile = r
@@ -745,4 +547,40 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
             _ => return Ok(()),
         }
     }
+}
+
+async fn adopt_route(
+    State(state): State<AppState>,
+    RequireOwner(actor): RequireOwner,
+    Json(request): Json<AdoptRequest>,
+) -> Result<Json<Value>> {
+    adopt(&state, actor.id, request).await.map(Json)
+}
+
+/// Shared owner entry point for the admin route and the local CLI.
+pub async fn adopt(state: &AppState, actor: Uuid, request: AdoptRequest) -> Result<Value> {
+    let digest = aq_profiles::digest(&json!({"kind":"repository.adopt","request":request}))
+        .map_err(|_| bad("invalid adoption request"))?;
+    Adoption {
+        pool: &state.store.pool,
+        socket: git_socket(state),
+        onboarding: state.config.onboarding.as_ref(),
+        #[cfg(feature = "delivery_playbook")]
+        github_app: state
+            .config
+            .delivery
+            .as_ref()
+            .and_then(|d| d.github.as_ref()),
+    }
+    .record(actor, digest, request, || {
+        (state.clock)().timestamp_millis()
+    })
+    .await
+    .map_err(|e| match e {
+        AdoptionError::Invalid(reason) => bad(reason),
+        AdoptionError::MissingProject => AppError::NotFound("project not found".into()),
+        AdoptionError::Conflict(reason) => AppError::Conflict(reason.into()),
+        AdoptionError::Unavailable(source) => AppError::RepositoryAdoptionUnavailable(source),
+        AdoptionError::Database(e) => db(e),
+    })
 }

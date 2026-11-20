@@ -378,16 +378,25 @@ impl GitHubAdapter for GitHubApp {
         }
         let s = Session::new(self, repo).await?;
         let head_filter = format!("{}:{head}", repo.owner);
-        let open: Vec<WirePull> = s
+        let found: Vec<WirePull> = s
             .call(
                 Method::GET,
                 "/pulls",
-                &[("state", "open"), ("head", &head_filter), ("base", base)],
+                &[("state", "all"), ("head", &head_filter), ("base", base)],
                 None,
             )
             .await?;
-        if let Some(found) = open.first() {
-            return found.pull();
+        match found.as_slice() {
+            [] => {}
+            [found] if found.head.name == head && found.base.name == base => {
+                // The detail endpoint distinguishes closed from merged.
+                return s.pull(found.number).await?.pull();
+            }
+            _ => {
+                return Err(GitHubApiError::Protocol(
+                    "could not identify the task branch's unique pull request".into(),
+                ));
+            }
         }
         let body = json!({"title": title, "head": head, "base": base, "body": body});
         let created: WirePull = s.call(Method::POST, "/pulls", &[], Some(&body)).await?;

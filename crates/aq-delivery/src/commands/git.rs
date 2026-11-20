@@ -2,7 +2,7 @@
 //! 4 and 6.2), as a port and its socket client.
 //!
 //! Wire shapes: `repo.retain_ref` and `ref.delete` follow aq-git's epic 0
-//! tasks (spec 0016 section 4 and task G3); `ref.publish` is the publication
+//! tasks (spec 0016 section 4 and task G3); `publish` is the publication
 //! of a retained ref under the binding's allowed prefix with a lease. They are
 //! sent in the same frame as every other aq-git operation
 //! (`protocol_version`, `request_id` = `operation_id`, `operation`,
@@ -88,13 +88,16 @@ pub trait GitPort: Send + Sync {
         repo: &GitTarget,
         reference: &str,
         expected_old: Option<&str>,
+        expected_source: Option<&str>,
     ) -> Result<RefPublication, GitFailure>;
     /// Deletes `reference` on the remote and in the central pool (`ref.delete`).
+    /// The lease holds even when one side is already absent.
     async fn delete_ref(
         &self,
         operation: Uuid,
         repo: &GitTarget,
         reference: &str,
+        expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure>;
 }
 
@@ -104,8 +107,12 @@ pub fn object_id(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn zero_id(like: usize) -> String {
-    "0".repeat(like)
+fn sha1(hex: &str) -> Result<Value, GitFailure> {
+    if hex.len() == 40 && object_id(hex) {
+        Ok(json!({"algorithm":"sha1","hex":hex}))
+    } else {
+        Err(GitFailure::protocol())
+    }
 }
 
 /// The aq-git socket (`SourceRetentionConfig::git_socket`).
@@ -190,10 +197,10 @@ impl SocketGit {
     }
 }
 
-fn head_of(result: &Value) -> Result<String, GitFailure> {
-    result["head"]
+fn sha1_hex(oid: &Value) -> Result<String, GitFailure> {
+    oid["hex"]
         .as_str()
-        .filter(|h| object_id(h))
+        .filter(|h| oid["algorithm"] == "sha1" && h.len() == 40 && object_id(h))
         .map(str::to_owned)
         .ok_or_else(GitFailure::protocol)
 }
@@ -231,8 +238,11 @@ impl GitPort for SocketGit {
                 json!({"ref": reference}),
             )
             .await?;
+        if result["ref"] != reference {
+            return Err(GitFailure::protocol());
+        }
         Ok(RetainedRef {
-            head: head_of(&result)?,
+            head: sha1_hex(&result["head"])?,
             retention_handle: result["retention_handle"]
                 .as_str()
                 .and_then(|h| Uuid::parse_str(h).ok())
@@ -246,40 +256,37 @@ impl GitPort for SocketGit {
         repo: &GitTarget,
         reference: &str,
         expected_old: Option<&str>,
+        expected_source: Option<&str>,
     ) -> Result<RefPublication, GitFailure> {
         let reference = task_ref(reference)?;
-        let old = match expected_old {
-            Some(old) if object_id(old) => old.to_owned(),
-            Some(_) => {
-                return Err(GitFailure {
-                    code: "invalid_lease".into(),
-                    message: "expected_old is not an object id".into(),
-                    transient: false,
-                });
+        let old = sha1(expected_old.unwrap_or("0000000000000000000000000000000000000000"))?;
+        let mut params = json!({"source_ref": reference, "target": reference, "expected_old": old});
+        // A repaired task can rebuild its branch from main. The remote update
+        // still requires the exact commit of the previous publication.
+        if expected_old.is_some() {
+            params["update"] = json!("replace");
+        }
+        if let Some(source) = expected_source {
+            params["expected_source"] = sha1(source)?;
+        }
+        let result = match self.call(operation, "publish", repo, params).await {
+            Ok(result) => result,
+            Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
+            Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
+                return Ok(RefPublication::Moved);
             }
-            None => zero_id(40),
-        };
-        let result = self
-            .call(
-                operation,
-                "ref.publish",
-                repo,
-                json!({"ref": reference, "target": reference, "expected_old": old}),
-            )
-            .await;
-        let result = match result {
-            Ok(r) => r,
-            Err(e) if e.code == "ref_not_found" => return Ok(RefPublication::NoRef),
             Err(e) => return Err(e),
         };
-        match result["outcome"].as_str() {
-            Some("applied" | "already_present") => Ok(RefPublication::Published {
-                head: head_of(&result)?,
-            }),
-            Some("rejected") => match result["reason"].as_str() {
-                Some("target_moved") => Ok(RefPublication::Moved),
-                Some("ref_not_found") => Ok(RefPublication::NoRef),
-                _ => Err(GitFailure {
+        let head = match result["outcome"].as_str() {
+            Some("applied") if result["target"] == reference && result["old"] == old => {
+                sha1_hex(&result["new"])?
+            }
+            Some("already_present") => sha1_hex(&result["observed_target"])?,
+            Some("rejected") if result["reason"] == "target_moved" => {
+                return Ok(RefPublication::Moved);
+            }
+            Some("rejected") => {
+                return Err(GitFailure {
                     code: "rejected".into(),
                     message: result["reason"]
                         .as_str()
@@ -288,10 +295,14 @@ impl GitPort for SocketGit {
                         .take(256)
                         .collect(),
                     transient: false,
-                }),
-            },
-            _ => Err(GitFailure::protocol()),
+                });
+            }
+            _ => return Err(GitFailure::protocol()),
+        };
+        if expected_source.is_some_and(|expected| head != expected) {
+            return Err(GitFailure::protocol());
         }
+        Ok(RefPublication::Published { head })
     }
 
     async fn delete_ref(
@@ -299,14 +310,23 @@ impl GitPort for SocketGit {
         operation: Uuid,
         repo: &GitTarget,
         reference: &str,
+        expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure> {
         let reference = task_ref(reference)?;
+        let lease = expected_head
+            .map(|hex| {
+                if hex.len() != 40 || !object_id(hex) {
+                    return Err(GitFailure::protocol());
+                }
+                Ok(json!({"algorithm": "sha1", "hex": hex}))
+            })
+            .transpose()?;
         let result = self
             .call(
                 operation,
                 "ref.delete",
                 repo,
-                json!({"ref": reference, "remote": true, "local": true}),
+                json!({"ref": reference, "remote": true, "expected_old": lease}),
             )
             .await?;
         match result["outcome"].as_str() {

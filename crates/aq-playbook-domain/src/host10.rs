@@ -100,7 +100,7 @@ pub struct ResultFacts {
 }
 
 impl ResultFacts {
-    fn output(&self) -> Value {
+    pub fn output(&self) -> Value {
         json!({
             "outcome": truncate(&self.outcome, OUTCOME_BYTES),
             "changed": self.changed,
@@ -175,7 +175,7 @@ pub fn result_ready_due(
 }
 
 /// The ids an `aq.work.result_ready` event carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ResultReady {
     pub task_id: Uuid,
     pub project_id: Uuid,
@@ -183,6 +183,14 @@ pub struct ResultReady {
     pub result_id: Uuid,
     /// The task's version.
     pub version: i64,
+}
+
+impl ResultReady {
+    /// Whether the command names this event's task and report.
+    pub fn names_result(&self, input: &Value) -> bool {
+        input["task"] == self.task_id.to_string()
+            && input["result_id"] == self.result_id.to_string()
+    }
 }
 
 /// The trusted `aq.work.result_ready` event.

@@ -299,6 +299,42 @@ A project with no active delivery playbook keeps its results waiting. The task
 shows "result ready, no delivery policy". This is not a fallback policy: no
 decision is made.
 
+### Shared-host enrollment
+
+`[delivery].project_allowlist` takes AQ project UUIDs and defaults to an
+empty list. Optional `[delivery].task_allowlist` narrows enrollment to the
+listed Graph task UUIDs within those projects. Omit it to enroll every task
+in the listed projects. Set it to `[]` to enroll none. Enrollment requires
+`git_http_socket` and source retention.
+
+The server chooses the mode before observing an offer's source. It follows
+the external head for an enrolled named-ref offer and uses the existing
+source policy for other offers. Project-wide enrollment also follows named
+refs in the background. An offer writes its Git grant in the same
+transaction as the attempt. Attempts with a stored grant use Git push
+evidence and delivery playbook settlement. Attempts without a grant
+continue to use bundle evidence and the review or default policy pinned by
+their offer. Keep the legacy source and validation policies available for
+other tasks in the pilot project. New replacement offers use the current
+allowlists. Keep a returned pilot enrolled while its successor needs the
+saved task branch, and keep Git HTTP and the Host10 delivery binding
+available while existing grants finish.
+
+On the worker listener, the node credential can read its attempt's stored
+grant at `GET /v1/git/grants/<attempt>`, including after a result or a
+restart. A 404 means the attempt has no grant. A 401, 403 or 5xx is an error
+for the worker to handle. Git smart HTTP independently requires a live
+attempt and closes access when a result is recorded.
+
+Host9 and Host10 use separate namespaces. Configure Host10 with a new
+namespace ID and name and keep `installation_routing = true` if the Host9
+binding routed the installation. Startup reinstalls the active authored
+routing artifact on `aq.routing` and issues its grant in the new namespace.
+Host10 serves the exact Host9 `work.read` contract for that artifact.
+If routing was installed through `[[playbooks.deployments]]`, carry its
+artifact, scope and `aq.routing` binding into the new namespace with a new
+grant ID. Pending Host9 runs stay in their original namespace.
+
 ## 8. The policy itself (E0.8–E0.9)
 
 - **Source:** a Markdown document, **Settings › Delivery**. It is authored and

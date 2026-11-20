@@ -37,6 +37,10 @@ pub async fn successor_base(
     if !aq_machine_control::has_format(&mut conn).await? {
         return Ok(None);
     }
+    // A grant-backed handoff leaves its saved work on the task branch.
+    if super::has_delivery_grant(&mut *conn, predecessor).await? {
+        return Ok(None);
+    }
     let Some(row) = aq_machine_control::handoff_of(&mut conn, predecessor).await? else {
         return Ok(None);
     };

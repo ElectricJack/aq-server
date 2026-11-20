@@ -10,6 +10,8 @@
 pub mod builtin;
 pub mod complete;
 pub mod config;
+#[cfg(feature = "delivery_playbook")]
+pub mod continuity;
 pub mod deploy;
 #[cfg(feature = "delivery_playbook")]
 pub mod document;

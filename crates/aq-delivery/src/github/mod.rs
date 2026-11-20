@@ -10,9 +10,10 @@ pub use auth::{AppCredentials, AppJwtClaims, InstallationToken};
 pub use client::{Auth, GitHubClient};
 
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
+use uuid::Uuid;
 
 /// Vault `[delivery]` (parsed by the server config). An absent
 /// `[delivery.github]` leaves the GitHub App adapter unavailable: building it
@@ -22,12 +23,34 @@ use std::time::Duration;
 pub struct DeliveryConfig {
     #[serde(default)]
     pub github: Option<GitHubAppConfig>,
+    /// Projects whose new offers carry a Git grant. Empty leaves all projects on D1/D3.
+    #[serde(default)]
+    pub project_allowlist: BTreeSet<Uuid>,
+    /// Optional intersection with Graph task IDs. None allows every task
+    /// in the listed projects. An empty list enrolls no tasks.
+    pub task_allowlist: Option<BTreeSet<Uuid>>,
     /// aq-git's git smart-HTTP socket (`aq-git serve --git-http-socket`).
-    /// Absent: offers carry no git grant and `/v1/git` answers 404.
+    /// Also needed for existing grants after a project is removed from the allowlist.
     #[serde(default)]
     pub git_http_socket: Option<PathBuf>,
 }
 impl DeliveryConfig {
+    pub fn enrolls(&self, project: Uuid, task: Uuid) -> bool {
+        self.project_allowlist.contains(&project)
+            && self
+                .task_allowlist
+                .as_ref()
+                .is_none_or(|tasks| tasks.contains(&task))
+    }
+
+    pub fn has_enrollment(&self) -> bool {
+        !self.project_allowlist.is_empty()
+            && self
+                .task_allowlist
+                .as_ref()
+                .is_none_or(|tasks| !tasks.is_empty())
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         self.github
             .as_ref()
@@ -47,6 +70,23 @@ pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         return Err(serde::de::Error::custom(
             "delivery.git_http_socket: must be an absolute path without `..`",
         ));
+    }
+    if let Some(c) = &config {
+        if c.project_allowlist.iter().any(Uuid::is_nil) {
+            return Err(serde::de::Error::custom(
+                "delivery.project_allowlist: project IDs must be non-nil",
+            ));
+        }
+        if c.task_allowlist.iter().flatten().any(Uuid::is_nil) {
+            return Err(serde::de::Error::custom(
+                "delivery.task_allowlist: Graph task IDs must be non-nil",
+            ));
+        }
+        if c.has_enrollment() && c.git_http_socket.is_none() {
+            return Err(serde::de::Error::custom(
+                "delivery.project_allowlist requires delivery.git_http_socket",
+            ));
+        }
     }
     if let Some(Err(reason)) = config.as_ref().map(DeliveryConfig::validate) {
         return Err(serde::de::Error::custom(format!(

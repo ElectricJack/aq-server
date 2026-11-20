@@ -14,7 +14,11 @@ use aq_delivery::git_grant::GitGrant;
 use aq_delivery::git_grant::fake::{FakeGitHttp, git};
 use aq_server::{store::NewNode, tokens};
 use chrono::{Duration, Utc};
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, atomic::Ordering},
+};
 use uuid::Uuid;
 
 /// `git -c http.extraHeader=<each header> args…`.
@@ -60,14 +64,25 @@ async fn other_node(c: &Case) -> String {
     redeemed.unwrap().unwrap();
     token
 }
-/// The offer of `c` with the server serving git through `fake`.
-async fn granted_offer(c: &mut Case, fake: &FakeGitHttp) -> (NativeOffer, GitGrant) {
+fn configure(
+    c: &mut Case,
+    fake: &FakeGitHttp,
+    projects: impl IntoIterator<Item = Uuid>,
+    task_allowlist: Option<BTreeSet<Uuid>>,
+) {
     let mut config = (*c.env.env.state.config).clone();
     config.delivery = Some(aq_delivery::github::DeliveryConfig {
         git_http_socket: Some(fake.socket.clone()),
+        project_allowlist: projects.into_iter().collect(),
+        task_allowlist,
         ..Default::default()
     });
     c.env.env.state.config = Arc::new(config);
+}
+
+/// The offer of `c` with the server serving git through `fake`.
+async fn granted_offer(c: &mut Case, fake: &FakeGitHttp) -> (NativeOffer, GitGrant) {
+    configure(c, fake, [c.env.lineage.project_id], None);
     let (status, body) = poll_offered(c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
@@ -189,7 +204,7 @@ async fn a_node_clones_and_pushes_only_its_attempts_task_ref_through_v1_git() {
     let other_token = other_node(&c).await;
     assert_eq!(
         get_grant(&c, &other_token, attempt).await.0,
-        404,
+        403,
         "another node's grant"
     );
     let other_node = format!("Authorization: Bearer {other_token}");
@@ -253,4 +268,113 @@ async fn a_node_clones_and_pushes_only_its_attempts_task_ref_through_v1_git() {
     saved.await.unwrap();
     refused(&force(target).await, "413");
     server.abort();
+}
+
+#[tokio::test]
+async fn one_task_in_two_projects_gets_delivery_and_all_three_offers_keep_their_mode() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("aq_refusal=debug,aq_server::profiled_execution=debug")
+        .finish();
+    let _trace = tracing::subscriber::set_default(subscriber);
+
+    use super::node_slots::{offered, register};
+    let lineage = aq_selection::TaskLineage {
+        project_id: Uuid::new_v4(),
+        workspace_id: Uuid::new_v4(),
+        task_id: Uuid::new_v4(),
+    };
+    let mut c = crate::common::native_offer::setup_projects(Some(lineage.clone())).await;
+    let primary = c.env.lineage.project_id;
+    let pilot = c.env.lineage.task_id;
+    let peer = c.second_task;
+    let repository = c.env.frozen.project.binding.repository_id;
+    let git_root = &c
+        .env
+        .env
+        .state
+        .source_retention
+        .as_ref()
+        .unwrap()
+        .config
+        .git_root;
+    let fake = FakeGitHttp::start(git_root, repository, "refs/heads/main").await;
+    // The task list cannot opt in a task outside the project list.
+    configure(
+        &mut c,
+        &fake,
+        [primary],
+        Some([pilot, lineage.task_id].into()),
+    );
+    c.mode.store(7, Ordering::SeqCst);
+    sqlx::query("UPDATE worker_settings SET max_agents=3 WHERE kind='node' AND id=$1")
+        .bind(c.env.env.node.to_string())
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    register(&c, 3, None).await;
+    let a = offered(&c, 1).await.offered.lifecycle_binding;
+    let second = offered(&c, 2).await.offered.lifecycle_binding;
+    let third = offered(&c, 3).await.offered.lifecycle_binding;
+    let (b, x) = if second.project_id == primary {
+        (&second, &third)
+    } else {
+        (&third, &second)
+    };
+    assert_eq!((a.project_id, a.task_id), (primary, pilot));
+    assert_eq!((b.project_id, b.task_id), (primary, peer));
+    assert_eq!(
+        (x.project_id, x.task_id),
+        (lineage.project_id, lineage.task_id)
+    );
+
+    let credential = c.env.env.credential.clone();
+    let original = get_grant(&c, &credential, a.attempt_id).await;
+    assert_eq!(original.0, 200);
+    assert_eq!(original.1["task_ref"], format!("refs/heads/aq/{pilot}"));
+    assert_eq!(get_grant(&c, &credential, b.attempt_id).await.0, 404);
+    assert_eq!(get_grant(&c, &credential, x.attempt_id).await.0, 404);
+    assert_eq!(get_grant(&c, "invalid", a.attempt_id).await.0, 401);
+
+    // The retained named-ref observation and outcome use the same selector.
+    let pool = &c.env.env.pool;
+    for (binding, expected_review, source_kind) in [
+        (&a, "policy_actor", "main_sync"),
+        (b, "human_owner", "reference_observation"),
+        (x, "human_owner", "reference_observation"),
+    ] {
+        let (outcome, source): (Vec<u8>, Vec<u8>) = sqlx::query_as(
+            "SELECT o.body,s.body FROM profiled_launches l
+             JOIN admission_artifacts o ON o.descriptor->'artifact'=l.execution_spec->'outcome_artifact'
+             JOIN admission_artifacts s ON s.descriptor->'artifact'=l.execution_spec->'source_artifact'
+             WHERE l.attempt_id=$1 LIMIT 1",
+        )
+        .bind(binding.attempt_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let decode = |bytes: &[u8]| serde_json::from_slice::<serde_json::Value>(bytes).unwrap();
+        assert_eq!(decode(&outcome)["review"], expected_review);
+        let source = decode(&source);
+        assert!(source["evidence"].get(source_kind).is_some(), "{source}");
+    }
+
+    // Rebuild the router with reversed enrollment, as after restarting with
+    // updated config. Redelivery and discovery still agree with the old rows.
+    configure(
+        &mut c,
+        &fake,
+        [primary, lineage.project_id],
+        Some([peer, lineage.task_id].into()),
+    );
+    c.env.env.state.store =
+        aq_server::store::Store::connect_with((*c.env.env.pool.connect_options()).clone())
+            .await
+            .unwrap();
+    for (slot, previous) in [(1, &a), (2, &second), (3, &third)] {
+        assert_eq!(offered(&c, slot).await.offered.lifecycle_binding, *previous);
+    }
+    assert_eq!(get_grant(&c, &credential, a.attempt_id).await, original);
+    assert_eq!(get_grant(&c, &credential, b.attempt_id).await.0, 404);
+    assert_eq!(get_grant(&c, &credential, x.attempt_id).await.0, 404);
 }

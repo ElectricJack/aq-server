@@ -130,7 +130,7 @@ pub async fn delivery_unpublished(
     if format(conn).await? < AUTO_SETTLEMENT_FORMAT {
         return Ok(false);
     }
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished')")
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements s JOIN execution_attempts a USING(attempt_id) WHERE a.task_id=$1 AND s.disposition='rework_required' AND s.reason='delivery_unpublished' AND s.evidence->>'decided_by' IS DISTINCT FROM 'playbook')")
         .bind(task)
         .fetch_one(&mut *conn)
         .await?)
