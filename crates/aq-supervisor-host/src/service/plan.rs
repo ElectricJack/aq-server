@@ -45,7 +45,7 @@ fn instructions(config: &ServiceConfig, control: &Control) -> String {
 fn instructions(config: &ServiceConfig, control: &Control) -> String {
     let scope = if let Some(project) = control.project {
         format!(
-            "You are the supervisor for project {} ({project}); focus there, but you may read and change any project.",
+            "You supervise only project {} ({project}); you hold the owner's powers inside it. The server refuses other projects and global administration.",
             control.label
         )
     } else {
@@ -373,7 +373,9 @@ mod tests {
                 project: Some(Uuid::new_v4()),
                 ..control.clone()
             };
-            assert!(instructions(&config, &scoped).contains("you may read and change any project"));
+            let text = instructions(&config, &scoped);
+            assert!(text.contains("you hold the owner's powers inside it"));
+            assert!(!text.contains("you may read and change any project"));
         }
         assert_eq!(
             candidate.swarm_profile.as_ref().unwrap()["profile_id"],

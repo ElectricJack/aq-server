@@ -93,12 +93,10 @@ pub struct SupervisorPrincipal {
 }
 impl SupervisorPrincipal {
     /// Whether this principal, journaling as `user`, may enqueue in `project`.
-    /// Full access drops the project narrowing.
     pub fn may_enqueue(&self, user: Uuid, project: Uuid) -> bool {
         user == self.session_id
             && self.scopes.iter().any(|s| s == "enqueue")
-            && (cfg!(feature = "supervisor_full_access")
-                || self.project_id.is_none_or(|id| id == project))
+            && self.project_id.is_none_or(|id| id == project)
     }
 }
 

@@ -469,13 +469,27 @@ impl Owner {
 }
 
 #[tokio::test]
-async fn project_supervisor_creates_a_task_in_another_project() {
+async fn project_supervisor_cannot_create_a_task_in_another_project() {
     let mut o = project_owner().await;
-    // Create in the second project, not the supervisor's own.
-    o.project = o.other;
     let (status, out) = o.direct("POST", "/api/v1/actions", Some(o.create())).await;
     assert_eq!(status, StatusCode::OK, "{out}");
-    assert_eq!(out["data"]["disposition"], "confirmed", "{out}");
+    // Another project is refused as invalid, as without full access.
+    o.project = o.other;
+    let (status, out) = o.direct("POST", "/api/v1/actions", Some(o.create())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+}
+
+#[tokio::test]
+async fn project_supervisor_operation_show_has_no_owner_fallback() {
+    let o = project_owner().await;
+    let (_, a) = o.draft();
+    let request = json!({"operation_id":a["operation_id"],"subject":a["subject"],
+        "expected_versions":a["expected_versions"],"params":a["payload"]});
+    let (status, sent) = o.command("task.activate", request).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let path = format!("/api/v1/operations/{}", a["operation_id"].as_str().unwrap());
+    let (status, shown) = o.direct("GET", &path, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{shown}");
 }
 
 #[tokio::test]

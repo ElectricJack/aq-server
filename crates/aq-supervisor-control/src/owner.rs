@@ -25,7 +25,8 @@ pub async fn approving_owner(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     p: &crate::authority::SupervisorPrincipal,
 ) -> Option<uuid::Uuid> {
-    if !p.scopes.iter().any(|s| s == "owner") {
+    // The owner journal fallback is for the global supervisor only.
+    if p.project_id.is_some() || !p.scopes.iter().any(|s| s == "owner") {
         return None;
     }
     crate::read::owner(tx, p.actor_id)
