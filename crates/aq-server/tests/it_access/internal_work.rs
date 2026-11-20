@@ -2672,14 +2672,19 @@ mod escalation {
             &json!({"kind": "system", "component": "internal_work"})
         );
         assert!(deliverable, "a supervisor turn may take the message");
+        let mount = if cfg!(feature = "supervisor_full_access") {
+            "owner"
+        } else {
+            "admin"
+        };
         for part in [
             &failed.to_string(),
             "Purpose: routing_classification",
             &format!("Affected item: task T-1 in project {project}"),
             "Reason: no_candidate: no candidate is configured for this purpose",
-            &format!("/v1/supervisor/admin/api/internal-work/runs/{failed}/retry"),
+            &format!("/v1/supervisor/{mount}/api/internal-work/runs/{failed}/retry"),
             "Settings",
-            &format!("/v1/supervisor/admin/api/internal-work/runs/{failed}/escalate"),
+            &format!("/v1/supervisor/{mount}/api/internal-work/runs/{failed}/escalate"),
         ] {
             assert!(body.contains(part), "{part:?} in {body}");
         }
