@@ -183,6 +183,12 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
     assert_eq!(event.revision, Some(5));
     assert_eq!(event.correlation["ref"], "ready");
     assert_eq!(event.correlation["subject.id"], "sample");
+    let retain_until: i64 =
+        sqlx::query_scalar("SELECT plugin_retain_until_ms FROM playbook_outbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retain_until, NOW as i64 + 3_600_000);
 }
 
 #[test]
