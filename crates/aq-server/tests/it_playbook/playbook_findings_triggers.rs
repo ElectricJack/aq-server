@@ -40,6 +40,9 @@ struct Env {
     scope: GrantScope,
 }
 async fn setup() -> Env {
+    setup_profile(CatalogProfile::Monitoring6).await
+}
+async fn setup_profile(profile: CatalogProfile) -> Env {
     let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
     let dir = tempfile::tempdir().unwrap();
@@ -57,20 +60,29 @@ async fn setup() -> Env {
         .unwrap(),
     );
     let l = &f.selection.lineage;
-    let s = Service::new_monitoring6(
-        &f.state,
-        Namespace {
-            namespace_id: Uuid::new_v4(),
-            generation: 1,
-            name: format!("d8-{}", Uuid::new_v4()),
-            workspace_id: l.workspace_id,
-            project_id: l.project_id,
-            owner_user_id: f.actor,
-        },
-        keys.clone(),
-        Arc::new(NoGraph),
-    )
-    .await
+    let ns = Namespace {
+        namespace_id: Uuid::new_v4(),
+        generation: 1,
+        name: format!("d8-{}", Uuid::new_v4()),
+        workspace_id: l.workspace_id,
+        project_id: l.project_id,
+        owner_user_id: f.actor,
+    };
+    let s = if profile == CatalogProfile::Monitoring6 {
+        Service::new_monitoring6(&f.state, ns, keys.clone(), Arc::new(NoGraph)).await
+    } else {
+        Service::new_host2(
+            &f.state,
+            ns,
+            keys.clone(),
+            profile,
+            Arc::new(NoGraph),
+            None,
+            None,
+            None,
+        )
+        .await
+    }
     .unwrap();
     s.initialize(f.actor).await.unwrap();
     let scope = GrantScope {
@@ -775,6 +787,264 @@ async fn monitoring_driver_delivers_schedule_and_restarts_without_another_root()
         1
     );
     driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn binding_intervals_coalesce_across_restart_and_deactivate_in_host9() {
+    use aq_playbook_host::model::schedules::BindingSchedule;
+    use aq_server::playbooks::driver::Driver;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use std::sync::atomic::Ordering;
+    use tower::ServiceExt;
+
+    let e = setup_profile(CatalogProfile::Host9).await;
+    e.s.retire_runtime(&e.owner).await.unwrap();
+    let start = || {
+        Driver::start(
+            e.s.clone(),
+            aq_playbook_host::Limits::default(),
+            protected_factory(&e),
+        )
+    };
+    let profile = CatalogProfile::Host9;
+    let signal = profile.registry().events["aq.signal.reported"].clone();
+    let a = artifact(signal.clone(), true);
+    let interval = BindingSchedule {
+        key: "test".into(),
+        every_ms: 30_000,
+    };
+    let clock = |elapsed_ms: i64| {
+        e.f.time
+            .store(common::profiled::NOW as i64 + elapsed_ms, Ordering::SeqCst);
+    };
+    let driver = start().await.unwrap();
+    driver.install(a.clone()).await.unwrap();
+    driver
+        .ensure_binding(
+            "scheduled".into(),
+            a.digest.clone(),
+            e.grant,
+            &e.scope,
+            std::slice::from_ref(&interval),
+        )
+        .await
+        .unwrap();
+    driver
+        .activate("passive".into(), a.digest.clone(), e.grant, 1)
+        .await
+        .unwrap();
+
+    for (elapsed, count) in [(29_999, 0), (30_000, 1), (60_000, 2), (90_000, 3)] {
+        clock(elapsed);
+        driver.quantum().await.unwrap();
+        assert_eq!(
+            driver
+                .inspect_runs(e.f.actor, Default::default())
+                .await
+                .unwrap()
+                .items
+                .len(),
+            count
+        );
+    }
+    driver.stop().await.unwrap();
+
+    clock(690_000);
+    let driver = start().await.unwrap();
+    driver
+        .ensure_binding(
+            "scheduled".into(),
+            a.digest.clone(),
+            e.grant,
+            &e.scope,
+            std::slice::from_ref(&interval),
+        )
+        .await
+        .unwrap();
+    driver.quantum().await.unwrap();
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        4
+    );
+
+    // A second binding may reuse the same reference without receiving the
+    // first binding's tick. The passive trigger continues to receive neither.
+    driver
+        .ensure_binding(
+            "second".into(),
+            a.digest.clone(),
+            e.grant,
+            &e.scope,
+            std::slice::from_ref(&interval),
+        )
+        .await
+        .unwrap();
+    clock(720_000);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        6
+    );
+
+    let driver = Arc::new(driver);
+    let admin =
+        aq_server::build_admin_router_with_playbooks(e.f.state.clone(), Some(driver.clone()));
+    let post = |action: &str, body: Value| {
+        admin.clone().oneshot(
+            Request::post(format!("/api/playbooks/bindings/scheduled/{action}"))
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
+    let active = driver.inspect_binding("scheduled".into()).await.unwrap();
+    let revision = active["revision"].as_u64().unwrap();
+    assert_eq!(
+        post("deactivate", json!({"revision": revision + 1}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT,
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            post("deactivate", json!({"revision": revision}))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK,
+        );
+    }
+
+    clock(750_000);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        7
+    );
+    assert_eq!(
+        post(
+            "activate",
+            json!({
+                "op_id": "reactivate-test",
+                "artifact": a.digest,
+                "grant_id": e.grant,
+                "grant_revision": 1
+            })
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::OK,
+    );
+    clock(779_999);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        7
+    );
+    clock(780_000);
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        9
+    );
+
+    let active = driver.inspect_binding("scheduled".into()).await.unwrap();
+    assert_eq!(
+        post("deactivate", json!({"revision": active["revision"]}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+    );
+    driver.stop().await.unwrap();
+
+    clock(810_000);
+    let driver = start().await.unwrap();
+    driver
+        .ensure_binding(
+            "scheduled".into(),
+            a.digest.clone(),
+            e.grant,
+            &e.scope,
+            std::slice::from_ref(&interval),
+        )
+        .await
+        .unwrap();
+    assert!(driver.inspect_binding("scheduled".into()).await.is_err());
+    driver.quantum().await.unwrap();
+    assert_eq!(
+        driver
+            .inspect_runs(e.f.actor, Default::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        10
+    );
+    driver.stop().await.unwrap();
+
+    let factory = protected_factory(&e);
+    let ns = e.s.namespace.engine_namespace();
+    tokio::task::spawn_blocking(move || {
+        let engine = Engine::new(factory().unwrap(), &ns, "interval-inspection").unwrap();
+        let state = engine.snapshot().unwrap();
+        let mut occurrences: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        for e in state.events.values() {
+            let event = &e.envelope;
+            assert_eq!(event.contract.name, signal.name);
+            assert_eq!(event.payload["reference"], "aq.schedule/test");
+            let subject = event.subject.clone().unwrap();
+            let occurrence = event.revision.unwrap();
+            assert_eq!(
+                event.payload["subject"],
+                json!({"id": subject, "revision": occurrence})
+            );
+            assert_eq!(e.destinations.len(), 1);
+            occurrences.entry(subject).or_default().push(occurrence);
+        }
+        let mut indexes = occurrences.into_values().collect::<Vec<_>>();
+        indexes
+            .iter_mut()
+            .for_each(|revisions| revisions.sort_unstable());
+        indexes.sort_unstable();
+        assert_eq!(indexes, [vec![0, 0, 1, 2, 22, 23], vec![0, 1, 2, 3]]);
+        engine.release().unwrap();
+    })
+    .await
+    .unwrap();
 }
 
 fn protected_factory(

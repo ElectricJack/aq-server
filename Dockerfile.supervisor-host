@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=aq-supervisor-host-release,sharing=locked,target=/build/target \
     find crates vendor protocol -type f -exec touch {} + \
     && cargo build --locked --release -p aq-supervisor-host --bins \
-    && cargo build --locked --release --manifest-path vendor/aq-playbooks-1196671/Cargo.toml \
+    && cargo build --locked --release --manifest-path vendor/aq-playbooks-c744301/Cargo.toml \
         --target-dir target/aq-playbooks -p aq-playbooks-cli --bin aq-playbooks \
     && mkdir /out && cp target/release/aq-supervisor-host target/release/aq-session-host \
         target/aq-playbooks/release/aq-playbooks /out/

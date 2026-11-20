@@ -1,0 +1,186 @@
+{
+  "cases": [
+    {
+      "contract": "work.activate",
+      "kind": "input",
+      "valid": true,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "input",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1"
+        }
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "outcome": "activated",
+      "valid": true,
+      "value": {
+        "activated": 4,
+        "skipped": 1
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "outcome": "activated",
+      "valid": false,
+      "value": {
+        "activated": -1,
+        "skipped": 1
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "stale_subject"
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "outcome": "approved",
+      "valid": true,
+      "value": {
+        "note": "",
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "outcome": "rejected",
+      "valid": true,
+      "value": {
+        "note": "Include café support.",
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "outcome": "rejected",
+      "valid": false,
+      "value": {
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "outcome": "expired",
+      "valid": true,
+      "value": {
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.decision.completed",
+      "kind": "event",
+      "valid": true,
+      "value": {
+        "outcome": "rejected",
+        "output": {
+          "note": "Include café support.",
+          "reference": "decision:1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "rejected",
+        "output": {
+          "note": "Include café support.",
+          "reference": "decision:1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    }
+  ],
+  "compatibility": {
+    "added_commands": {
+      "work.activate": "sha256:9404f3693ddcb33527ee4feceee9ba7ea8946637b30d39b861da5b260905ee6a"
+    },
+    "base": {
+      "fingerprint": "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a",
+      "registry_sha256": "sha256:f98e9d008524aa271664c5f5a0bd93abc2de23b732d50986be24a582f708b0a5",
+      "version": "2.2.0"
+    },
+    "changed_commands": {
+      "decision.request": "sha256:32e20b81f4c4551ed9ccff3df9639212bee7f24c52149cf3221514c10675824f",
+      "operation.get": "sha256:02de1eec619b8d9daf9da960ccce0324926325367722231ccfa16f61a31acfa4"
+    },
+    "changed_events": {
+      "aq.decision.completed": "sha256:362d79a3d5a6683061c1b3f12364eaeacbd4f9a57ca98e2e7787d7e9e5664879"
+    },
+    "unchanged_commands": {
+      "candidate.prepare": "sha256:c02ad326b7b35053945f217301c58b8485ed91645c66dbcf6f7291562a44e9c6",
+      "candidate.publish": "sha256:7a510d82b43b2b59b7f0906b4eff3823427ed7d088f793396bfce6d9348b5be5",
+      "check.request": "sha256:52e13a43e363bfd19e2e6a4c73535048685fc8dc4b25890ccdd0ffc0421bf183",
+      "context.read": "sha256:33681ea332d3d0b475fcfafe32bc3762d6037f035c9114dccf9b4f788302f6cd",
+      "findings.reconcile": "sha256:239802aecd6961c9a7ba93b0387cb2f872e42ddc4246e7901bae7219f19288d8",
+      "judgment.assess": "sha256:da4d7908c8943ade3905b9e573a7426fe36759321f6a287d5b97559ab868aa13",
+      "judgment.request": "sha256:fc7a12fca1b8af2c7ee1349a1569a711abe07120881a3ea4531da007fe6e39d9",
+      "message.send": "sha256:c75d3f9fceebbef2dc1f0c20ff2eda3a61aaf90cdc817d624fe349eb752eca6e",
+      "operation.cancel": "sha256:268e68958d3dadf6caae3a642ec3b8bfaf3869cbbc9f20873cb833af5c650810",
+      "work.change": "sha256:fb3d3ed7e0d6b2a108220e684bd871663d9ce184bd8d4d952d1d065cc1a7fadd",
+      "work.ensure": "sha256:0fcf486b0ad4b1e570ff5c7f5b688d15d675be5da8d0c961f83e59a68045ea16",
+      "work.read": "sha256:aa1f30e38dfcd9682099595dd055c46359f9df7a5b2b8f34e39e30528138ce91",
+      "work.route": "sha256:04216580f2f561bf1a6c776dbb98aff83f421072ff57392817a139fc74ab77ee",
+      "work.unroutable": "sha256:c8b7a70046269860789452d9c12b5d4979957eb9dc88cc9afdd74595d32f6793"
+    },
+    "unchanged_events": {
+      "aq.artifact.recorded": "sha256:10e31a719c1d30c2825ac39913777cf07533eaa4cfd46a355d6b6a761b7427a1",
+      "aq.check.completed": "sha256:057b68bf02f62ecf38f342ea07dfd1586ccd4e566ad0ab8ec93345c61fbfd23c",
+      "aq.check.receipted": "sha256:371660367e3f2c573132704de4ecb6291d284d08f3081da5c734d998532884ef",
+      "aq.integration.changed": "sha256:c0f20b58ee35f85af9868dd07e4c61b432de9fdd2fbfc2692e5b5b6d94a09e29",
+      "aq.judgment.assessed": "sha256:4f9c791d3aa443dd05c040061cdced74733d17403252b45ed706b21fba263b3e",
+      "aq.judgment.completed": "sha256:afb31ce80a7024fc875ced6451708798567c3cf54a98c1b3a05c8a64784f1979",
+      "aq.operation.updated": "sha256:36071ae1086d80e5fc5166df3f1300c3e6e1df08caf7d039572d8f4418965ee3",
+      "aq.signal.reported": "sha256:9d93528eb9ccf35cc71fed2072668145a25d7f7d9d8dbd567232eb67066811cd",
+      "aq.work.changed": "sha256:78aaaf08411f1d17e93e12feb21feab4bcfb6636e56738afd1305aa3c1074401",
+      "aq.work.route_needed": "sha256:681aa56ebbbe5183672cf227b82121a3747429c93c932b6d50e32cb4c63a973e"
+    }
+  }
+}

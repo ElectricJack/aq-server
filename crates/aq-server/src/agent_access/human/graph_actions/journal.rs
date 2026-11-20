@@ -9,7 +9,8 @@ pub(super) struct Intent {
     pub workspace: Uuid,
     pub service: Value,
     pub body: Vec<u8>,
-    pub operations: usize,
+    pub operations: Vec<Value>,
+    pub guards: usize,
 }
 
 pub(super) async fn retain(
@@ -74,6 +75,16 @@ pub(super) async fn load(
     {
         return Err(unavailable());
     }
+    let operations = raw["operations"].as_array().ok_or_else(unavailable)?;
+    let guards = operations
+        .iter()
+        .take_while(|op| {
+            op["op"] == "update_node"
+                && op["patch"]
+                    .as_object()
+                    .is_some_and(|patch| patch.is_empty())
+        })
+        .count();
     Ok(Some(Intent {
         project: row.get("project_id"),
         revision: row.get::<i64, _>("project_revision") as u64,
@@ -81,6 +92,7 @@ pub(super) async fn load(
         workspace: row.get("workspace_id"),
         service: row.get("service_identity"),
         body,
-        operations: raw["operations"].as_array().ok_or_else(unavailable)?.len(),
+        operations: operations.clone(),
+        guards,
     }))
 }

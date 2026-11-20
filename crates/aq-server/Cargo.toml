@@ -26,7 +26,7 @@ aq-login-store = { path = "../aq-login-store" }
 aq-profiled-state = { path = "../aq-profiled-state", version = "=0.1.0" }
 aq-task-thread = { path = "../aq-task-thread", version = "=0.1.0" }
 aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }
-aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0" }
+aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0", features = ["store"] }
 aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
 aq-task-comments = { path = "../aq-task-comments", version = "=0.1.0" }
 aq-human-cursor = { path = "../aq-human-cursor", version = "=0.1.0" }
@@ -97,7 +97,7 @@ uuid.workspace = true
 # Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
 delivery_playbook = ["aq-delivery/delivery_playbook", "aq-role-settings/delivery_playbook", "aq-playbook-domain/delivery_playbook", "aq-playbook-authoring/delivery_playbook", "aq-profiled-state/delivery_playbook", "aq-human-work/delivery_playbook"]
 # Spec 0017 (sandbox environments per project and per task), off by default.
-project_environments = ["aq-project-policy/project_environments", "aq-role-settings/project_environments", "aq-profiles/project_environments", "aq-selection/project_environments"]
+project_environments = ["aq-human-work/project_environments", "aq-project-policy/project_environments", "aq-role-settings/project_environments", "aq-profiles/project_environments", "aq-selection/project_environments"]
 test-support = ["aq-notifications/test-support", "aq-delivery/test-support"]
 # Instrumented disposable recovery fixture only; absent from release builds.
 recovery-test-support = ["test-support"]
@@ -107,7 +107,7 @@ futures-util = "0.3"
 tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["test-util"] }
 nix = { workspace = true, features = ["signal", "process"] }
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-1196671/crates/aq-playbooks-compiler", version = "=0.2.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-compiler", version = "=0.2.0" }
 aq-server = { path = ".", features = ["test-support"] }
 http-body-util.workspace = true
 rsa.workspace = true

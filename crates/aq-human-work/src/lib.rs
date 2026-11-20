@@ -3,6 +3,10 @@
 //! and hold reasons, and a change summary for each task history entry.
 //!
 //! The all-project task list joins Graph's page to AQ's current owner and project bindings.
+pub mod attribution;
+pub mod projection;
+pub mod subtree_activation;
+pub mod task_graph;
 pub mod task_list;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -850,7 +854,9 @@ mod tests {
 }
 
 mod execution;
-pub use execution::{Execution, TaskActivate, TaskComplete, TaskDelete, TaskReopen, TaskRetry};
+pub use execution::{
+    Execution, TaskActivate, TaskActivateSubtree, TaskComplete, TaskDelete, TaskReopen, TaskRetry,
+};
 
 mod downstream;
 pub use downstream::blocked_by;

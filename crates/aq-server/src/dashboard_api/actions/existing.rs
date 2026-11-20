@@ -127,6 +127,7 @@ pub(crate) fn disposition(disposition: Disposition) -> Outcome {
         affected_entities: vec![],
         current_versions: Default::default(),
         reason: None,
+        activation: None,
     }
 }
 pub(crate) fn failure(error: AppError) -> Outcome {

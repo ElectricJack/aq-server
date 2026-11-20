@@ -8,7 +8,8 @@ use crate::{
     protected_storage::{Keyring, Sealed},
 };
 use aq_playbook_host::{
-    model::{ContractRef, EventEnvelope, canonical_bytes},
+    model::{CommandContract, ContractRef, EventEnvelope, Registry, canonical_bytes},
+    plugins::{Plugins, command_plugin, extension_capability, extension_command},
     runner::{CancellationResult, Intent},
 };
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,9 @@ pub struct Service {
     pub(super) keys: Arc<Keyring>,
     clock: Clock,
     pub(crate) profile: CatalogProfile,
+    registry: Arc<Registry>,
+    pub(super) plugins: Arc<Plugins>,
+    pub(super) notifications: crate::notifications::persistence::Service,
     pub(super) reviews: Option<Arc<crate::reviews::Service>>,
     pub(super) host: Option<Arc<super::host_adapters::HostPorts>>,
     /// R1 (Host9): the routing commands serve any project on the router.
@@ -181,6 +185,34 @@ impl Service {
         }
         self
     }
+    pub fn with_plugins(mut self, plugins: Plugins) -> Self {
+        let (plugins, registry) = plugins.overlay(self.profile.registry());
+        self.registry = Arc::new(registry);
+        self.plugins = Arc::new(plugins);
+        self
+    }
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+    fn validate_new_scope(&self, scope: &GrantScope) -> Result<()> {
+        self.profile
+            .validate_scope_with_extensions(scope, |name| self.plugins.get(name).is_some())
+    }
+    pub(super) fn grant_authority(
+        &self,
+        id: Uuid,
+        revision: i64,
+        scope: &GrantScope,
+    ) -> Result<aq_playbook_host::runner::Authority> {
+        // Grants in storage were approved against the installed extensions at
+        // issuance. Keep their authority identity after plugin removal.
+        self.profile
+            .authority_with_extensions(id, revision, scope, |_| true)
+    }
+    pub(super) fn known_contract(&self, contract: &CommandContract) -> bool {
+        self.registry().commands.get(&contract.name) == Some(contract)
+            || extension_command(&contract.name, contract)
+    }
     /// Replaces the delivery port of a freshly built host service (tests).
     #[cfg(feature = "delivery_playbook")]
     pub fn with_delivery_ops(
@@ -262,6 +294,9 @@ impl Service {
             keys,
             clock: state.clock.clone(),
             profile,
+            registry: Arc::new(profile.registry()),
+            plugins: Arc::default(),
+            notifications: crate::notifications::api::service(state),
             reviews,
             host: None,
             installation_routing: false,
@@ -372,17 +407,9 @@ impl Service {
         }
         let mut tx = self.tx().await?;
         Self::owner(&mut tx, actor).await?;
-        let binding: Option<Value> = sqlx::query_scalar(
-            "SELECT binding FROM project_execution_bindings WHERE project_id=$1 FOR SHARE",
-        )
-        .bind(self.namespace.project_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if !binding.is_some_and(|b| {
-            b["enabled"] == true && b["graph_workspace_id"] == json!(self.namespace.workspace_id)
-        }) {
-            return Err(Error::Forbidden);
-        }
+        aq_playbook_domain::host_operations::Operations(&self.namespace)
+            .require_project_workspace(&mut *tx)
+            .await?;
         if self.profile == CatalogProfile::Mail1 {
             sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(namespace_id) DO NOTHING").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(&self.namespace.name).bind(self.namespace.workspace_id).bind(self.namespace.project_id).bind(actor).bind(digest(&self.profile.registry())?).bind(SOURCE).execute(&mut *tx).await?;
         } else {
@@ -441,7 +468,7 @@ impl Service {
         scope: GrantScope,
         expires: i64,
     ) -> Result<()> {
-        self.profile.validate_scope(&scope)?;
+        self.validate_new_scope(&scope)?;
         if actor != self.namespace.owner_user_id
             || id.is_nil()
             || scope.project_id != self.namespace.project_id
@@ -485,7 +512,7 @@ impl Service {
     /// behalf (spec 0013 ruling R2): written as the namespace owner, and it
     /// never expires. [`Self::grant`] keeps its 24 h cap.
     pub async fn source_grant(&self, id: Uuid, scope: GrantScope) -> Result<()> {
-        self.profile.validate_scope(&scope)?;
+        self.validate_new_scope(&scope)?;
         let (ns, actor) = (&self.namespace, self.namespace.owner_user_id);
         if id.is_nil() || scope.project_id != ns.project_id || scope.workspace_id != ns.workspace_id
         {
@@ -547,7 +574,7 @@ impl Service {
             return Err(Error::Forbidden);
         }
         let scope: GrantScope = serde_json::from_value(row.get("scope"))?;
-        self.profile.validate_scope(&scope)?;
+        self.grant_authority(id, revision, &scope)?;
         Ok(scope)
     }
     pub(super) fn intent_authority(
@@ -557,8 +584,8 @@ impl Service {
         revision: i64,
         scope: &GrantScope,
     ) -> Result<()> {
-        if intent.authority != self.profile.authority(id, revision, scope)?
-            || self.profile.registry().commands.get(&intent.command.name) != Some(&intent.command)
+        if intent.authority != self.grant_authority(id, revision, scope)?
+            || !self.known_contract(&intent.command)
             || !intent.command.capabilities.is_subset(&scope.capabilities)
         {
             return Err(Error::Forbidden);
@@ -574,14 +601,14 @@ impl Service {
         authority: &aq_playbook_host::runner::Authority,
         live: bool,
     ) -> Result<()> {
-        if self.profile.registry().commands.get(&contract.name) != Some(contract) {
+        if !self.known_contract(contract) {
             return Err(Error::Forbidden);
         }
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
         let scope = self.grant_locked(&mut tx, id, revision, live).await?;
-        if self.profile.authority(id, revision, &scope)? != *authority
+        if self.grant_authority(id, revision, &scope)? != *authority
             || !contract.capabilities.is_subset(&scope.capabilities)
         {
             return Err(Error::Forbidden);
@@ -603,7 +630,7 @@ impl Service {
         self.runtime(&ns, owner)?;
         let scope = self.grant_locked(&mut tx, id, revision, true).await?;
         self.check_expiry(&mut tx, id).await?;
-        let authority = self.profile.authority(id, revision, &scope)?;
+        let authority = self.grant_authority(id, revision, &scope)?;
         tx.commit().await?;
         Ok(authority)
     }
@@ -904,9 +931,7 @@ impl Service {
             expected_activation_revision: request.expected_activation_revision,
             entry: request.entry,
             input: request.input,
-            authority: self
-                .profile
-                .authority(request.grant_id, request.grant_revision, &scope)?,
+            authority: self.grant_authority(request.grant_id, request.grant_revision, &scope)?,
         };
         let bytes = canonical_bytes(&engine_request).map_err(|_| Error::Invalid)?;
         if bytes.len() > 65536 {
@@ -962,7 +987,7 @@ impl Service {
             .await?;
         if super::domain::digest(&request)? != digest
             || request.key != key
-            || request.authority != self.profile.authority(grant_id, revision, &scope)?
+            || request.authority != self.grant_authority(grant_id, revision, &scope)?
         {
             return Err(Error::Conflict);
         }
@@ -1074,12 +1099,22 @@ impl Service {
                 ));
                 break;
             };
+            let plugin_event: Option<String> = row.get("plugin_event_id");
+            let event_id = plugin_event
+                .as_deref()
+                .map_or_else(|| id.to_string(), str::to_owned);
             let event = (serde_json::from_slice::<EventEnvelope>(&bytes).ok()).filter(|event| {
                 super::domain::digest(event).is_ok_and(|d| d == digest)
-                    && event.event_id == id.to_string()
+                    && event.event_id == event_id
                     && event.producer == producer
-                    && aq_playbook_host::model::validate_event(event, &self.profile.registry())
-                        .is_ok()
+                    && if plugin_event.is_some() {
+                        // Sealed only after validation against the installed contract.
+                        // It may have been upgraded since this row was committed.
+                        extension_capability(&producer)
+                            .is_some_and(|name| command_plugin(&event.contract.name) == Some(name))
+                    } else {
+                        aq_playbook_host::model::validate_event(event, self.registry()).is_ok()
+                    }
             });
             let Some(event) = event else {
                 // A row whose event does not match its record is held, not
@@ -1107,21 +1142,20 @@ impl Service {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        let rows=sqlx::query("SELECT producer,engine_receipt FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 FOR UPDATE").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).fetch_all(&mut *tx).await?;
+        let rows=sqlx::query("SELECT producer,engine_receipt,plugin_event_id FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND event_id=$3 FOR UPDATE").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(id).fetch_all(&mut *tx).await?;
         let row = rows
             .into_iter()
             .find(|row| {
                 let producer: String = row.get("producer");
-                digest(&(&producer, 0_u64, id.to_string()))
+                let event_id: Option<String> = row.get("plugin_event_id");
+                digest(&(&producer, 0_u64, event_id.unwrap_or_else(|| id.to_string())))
                     .ok()
                     .is_some_and(|key| stable["key"] == key)
             })
             .ok_or(Error::Conflict)?;
         let producer: String = row.get("producer");
-        let expected = digest(&(&producer, 0_u64, id.to_string()))?;
-        if stable["key"] != expected
-            || !self
-                .profile
+        if extension_capability(&producer).is_none()
+            && !self
                 .registry()
                 .events
                 .values()
@@ -1682,7 +1716,7 @@ impl Service {
                 observed_at_ms: Some(at),
                 payload: json!({"outcome":payload["outcome"],"output":payload["output"]}),
             };
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
+            aq_playbook_host::model::validate_event(&event, self.registry())
                 .map_err(|_| Error::Invalid)?;
             let digest = digest(&event)?;
             let old:Option<String>=sqlx::query_scalar("SELECT event_digest FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND producer='aq.human.decisions@1' AND event_id=$3").bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(decision).fetch_optional(&mut *tx).await?;
@@ -1767,8 +1801,8 @@ impl Service {
             };
             // A bad source item (no task id, or not this contract) is queued
             // held `invalid`, so it is listed and later items are collected.
-            let registry = self.profile.registry();
-            let valid = aq_playbook_host::model::validate_event(&event, &registry).is_ok();
+            let registry = self.registry();
+            let valid = aq_playbook_host::model::validate_event(&event, registry).is_ok();
             let held = (task.is_none() || !valid).then_some("invalid");
             let status = if held.is_some() { "unknown" } else { "pending" };
             let digest = digest(&event)?;

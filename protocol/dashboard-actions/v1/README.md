@@ -231,6 +231,10 @@ subject revision and the single `expected_versions` entry (`task` or
   and permanently held. Follow-up work on such a task is a new task. Reopening
   a completed task blocks its dependents again; waits already satisfied by it
   are not undone.
+- `task.activate.subtree` makes draft descendants of a task active in one
+  version-guarded Graph mutation. The root is the versioned subject. A
+  confirmed operation includes `activation: {activated, skipped}`. A stale or
+  incomplete subtree changes no tasks.
 - `task.complete` is the owner closing an `active` task by hand, for work
   finished outside AQ. Settlement stays the way work that ran is completed.
   It requires the action's `reason` (non-blank), which Graph records on the

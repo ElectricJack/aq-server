@@ -23,17 +23,42 @@ pub(crate) async fn agent_caller(
     state: &AppState,
     headers: &HeaderMap,
 ) -> std::result::Result<AgentCaller, RefusalCode> {
-    let p = authenticate(state, headers)
+    let mut p = authenticate(state, headers)
         .await
         .map_err(|e| RefusalCode::from_agent_access(e.0))?;
+    let ids = ids(&p).map_err(|_| RefusalCode::Internal)?;
+    if let Some(policy) = work_policy(state, &p)
+        .await
+        .map_err(|_| RefusalCode::Internal)?
+    {
+        p.grants = policy.narrow(&p.grants);
+    }
     Ok(AgentCaller {
-        ids: ids(&p).map_err(|_| RefusalCode::Internal)?,
+        ids,
         grants: p.grants.clone(),
         binding: p.binding.clone(),
         principal: p,
     })
 }
 impl AgentCaller {
+    pub(crate) async fn recheck_locked(
+        &self,
+        state: &AppState,
+        headers: &HeaderMap,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> std::result::Result<u64, RefusalCode> {
+        let p = authenticate_locked(state, headers, tx)
+            .await
+            .map_err(|error| RefusalCode::from_agent_access(error.0))?;
+        if p.binding != self.binding
+            || p.version != self.principal.version
+            || p.revision != self.principal.revision
+        {
+            return Err(RefusalCode::SessionRevoked);
+        }
+        Ok(p.expires)
+    }
+
     /// `supervisor` is the current supervisor conversation, if one exists.
     pub(crate) fn whoami(&self, supervisor: Option<Uuid>) -> Value {
         let p = &self.principal;
@@ -54,6 +79,11 @@ impl AgentCaller {
     ) -> (Decision, Target) {
         use aq_agent_grants::Relation;
         let own = self.ids.task_id;
+        if aq_command_registry::is_draft_action(spec.name) {
+            params
+                .entry("project_id")
+                .or_insert_with(|| json!(self.ids.project_id));
+        }
         let me = aq_task_comments::Author::Agent {
             session_id: id(&self.binding, "session_id").unwrap_or_default(),
             attempt_id: self.ids.attempt_id,
@@ -81,11 +111,31 @@ impl AgentCaller {
 /// `task` relative to the attempt's task: a task an agent created under it
 /// (at the recorded depth), or any other task.
 pub(crate) async fn relation(state: &AppState, own: Uuid, task: Uuid) -> aq_agent_grants::Relation {
-    let depth: Option<i32> = sqlx::query_scalar("SELECT depth FROM agent_created_tasks WHERE task_id=$1 AND root_task_id=$2 AND depth IS NOT NULL")
-        .bind(task).bind(own).fetch_optional(&state.store.pool).await.ok().flatten();
+    let depth = aq_agent_grants::store::depth(&state.store.pool, own, task)
+        .await
+        .ok()
+        .flatten();
     depth.map_or(aq_agent_grants::Relation::Other, |d| {
         aq_agent_grants::Relation::Descendant(d as u32)
     })
+}
+pub(super) async fn work_policy(
+    state: &AppState,
+    p: &Principal,
+) -> Result<Option<aq_agent_grants::resolve::WorkKindGrants>> {
+    let ids = ids(p)?;
+    let policy = project_grants(state, ids.project_id);
+    if policy.by_work_kind.is_empty() {
+        return Ok(None);
+    }
+    let workspace = id(&p.binding, "workspace_id")?;
+    let node =
+        super::human::graph_actions::current(runtime(state)?, workspace, ids.task_id, "task")
+            .await
+            .map_err(|_| Error("overloaded"))?;
+    let work =
+        aq_agent_grants::store::ensured_work(&state.store.pool, &node, ids.project_id).await?;
+    Ok(policy.work_kind(work.as_ref().and_then(|work| work.kind.as_deref())))
 }
 /// The project's agent-grant policy (`ProjectPolicy.agent_grants`).
 pub(crate) fn project_grants(
@@ -127,8 +177,9 @@ pub(crate) async fn resolve_native(
     effective: &[(&str, &str)],
     project: Uuid,
     task: Uuid,
+    kind: Option<&str>,
 ) -> std::result::Result<GrantSet, sqlx::Error> {
-    use aq_agent_grants::resolve::{Permission, from_permissions, resolve};
+    use aq_agent_grants::resolve::{Permission, from_permissions, resolve_work};
     if !grant_tables(state) {
         return Ok(GrantSet::empty());
     }
@@ -139,14 +190,14 @@ pub(crate) async fn resolve_native(
             scope_reference: s,
         })
         .collect();
-    let creator: Option<Value> = sqlx::query_scalar("SELECT g.grants FROM agent_created_tasks c JOIN agent_launch_grants g USING(attempt_id) WHERE c.task_id=$1")
-        .bind(task).fetch_optional(&mut **tx).await?;
+    let creator = aq_agent_grants::store::creator(&mut **tx, task).await?;
     // A creator whose grants cannot be read holds none, so the child gets none.
     let creator = creator.map(|v| sealed(Some(v)).unwrap_or_default());
-    Ok(resolve(
+    Ok(resolve_work(
         &from_permissions(&perms, project),
         &project_grants(state, project),
         creator.as_ref(),
+        kind,
     ))
 }
 
@@ -171,7 +222,7 @@ pub(super) fn sealed(column: Option<Value>) -> Result<GrantSet> {
         GrantSet::new(serde_json::from_value(v)?).map_err(|_| Error("internal"))
     })
 }
-fn ids(p: &Principal) -> Result<AttemptIds> {
+pub(super) fn ids(p: &Principal) -> Result<AttemptIds> {
     Ok(AttemptIds {
         attempt_id: id(&p.binding, "attempt_id")?,
         task_id: id(&p.binding, "task_id")?,

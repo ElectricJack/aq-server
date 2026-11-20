@@ -26,7 +26,7 @@ pub struct ProjectPolicy {
     /// C4 placement preference/capability override; absent uses the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<super::placement::PlacementPolicy>,
-    /// Spec 0006 agent grants: a ceiling and owner additions for the project.
+    /// Agent grant ceilings, owner additions and draft authority by work kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_grants: Option<aq_agent_grants::resolve::ProjectGrants>,
 }

@@ -331,6 +331,11 @@ pub(super) async fn bootstrap(
             "Task activation requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.activate.subtree",
+            graph_mutation,
+            "Activating draft descendants requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.complete",
             graph_mutation,
             "Completing a task requires an owner account and configured Graph mutation identity",
@@ -389,6 +394,11 @@ pub(super) async fn bootstrap(
             "decisions.read",
             reviews,
             "Decision inspection requires an owner account and a mounted review owner",
+        ),
+        capability(
+            "playbooks.decisions",
+            a.owner && mounted.playbook_decisions,
+            "Playbook decisions require an owner account and a mounted host playbook namespace",
         ),
         capability(
             "decisions.resolve",

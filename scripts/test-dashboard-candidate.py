@@ -54,7 +54,9 @@ class DashboardCandidateTests(unittest.TestCase):
         target.mkdir()
         CHECK.extract(files, target)
         self.assertEqual(pin["dashboard_digest"], "sha256:" + CHECK.sha256((target / "dashboard-manifest.json").read_bytes()))
-        self.assertEqual(30, len(files))
+        extracted = {path.relative_to(target).as_posix(): path.read_bytes()
+                     for path in target.rglob("*") if path.is_file()}
+        self.assertEqual(files, extracted)
         with self.assertRaisesRegex(ValueError, "empty real directory"):
             CHECK.extract(files, target)
 

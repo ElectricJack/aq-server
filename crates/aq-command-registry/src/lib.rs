@@ -295,6 +295,15 @@ impl Registry {
                 command.supervisor = Some(Route::action());
             }
         }
+        for command in &mut commands {
+            if is_draft_action(command.name) {
+                command.agent = Some(Route::post(
+                    "/v1/agent/task-actions",
+                    Body::Action,
+                    Params::Action,
+                ));
+            }
+        }
         commands.sort_by(|a, b| a.name.cmp(b.name));
         for pair in commands.windows(2) {
             if pair[0].name == pair[1].name {
@@ -331,6 +340,18 @@ impl Registry {
         self.commands.iter().find(|c| c.name == name)
     }
 }
+/// Commands whose agent handler checks the live draft graph.
+pub fn is_draft_action(name: &str) -> bool {
+    matches!(
+        name,
+        "task.graph.create"
+            | "task.edit"
+            | "task.cancel"
+            | "task.dependency.add"
+            | "task.dependency.remove"
+    )
+}
+
 pub fn valid_name(name: &str) -> bool {
     name.len() <= 128
         && name.split('.').all(|part| {
@@ -819,7 +840,16 @@ pub fn authorize(
         let own = Grant::new("self", Scope::AttemptSelf);
         return (Decision::Allow(own), Target::OwnAttempt);
     };
-    let Ok(target) = agent_target(spec.target, params, holder, own_task, relation) else {
+    let draft_create = grants
+        .get(aq_agent_grants::op::TASK_CREATE_SUBTASK)
+        .is_some_and(|g| g.limits.draft_only);
+    let target_rule = if is_draft_action(spec.name) || (spec.name == "task.create" && draft_create)
+    {
+        TargetRule::OwnTask
+    } else {
+        spec.target
+    };
+    let Ok(target) = agent_target(target_rule, params, holder, own_task, relation) else {
         let r = Refusal::error(
             RefusalCode::InvalidRequest,
             spec.name,
@@ -828,6 +858,16 @@ pub fn authorize(
         return (Decision::Deny(r), Target::OwnAttempt);
     };
     let grant = required_grant(spec, &target).unwrap_or(grant);
+    if spec.name == "task.graph.create" && !draft_create {
+        return (
+            Decision::Deny(Refusal::grant_missing(
+                spec.name,
+                grant,
+                grants.related(grant),
+            )),
+            target,
+        );
+    }
     match aq_agent_grants::check(grants, holder, spec.name, grant, target) {
         Decision::Allow(g) => match within_limits(&g, &target) {
             Ok(()) => (Decision::Allow(g), target),
@@ -859,6 +899,9 @@ pub fn available(
         return Err(RefusalCode::OwnerOnly);
     }
     let g = grants.get(grant).ok_or(RefusalCode::GrantMissing)?;
+    if spec.name == "task.graph.create" && !g.limits.draft_only {
+        return Err(RefusalCode::GrantMissing);
+    }
     Ok(Some(g.scope.to_string()))
 }
 impl Registry {

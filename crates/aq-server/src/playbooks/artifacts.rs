@@ -13,7 +13,7 @@ pub struct DriverCatalog<'a> {
 }
 impl Catalog for DriverCatalog<'_> {
     fn registry(&self) -> Registry {
-        self.driver.service.profile.registry()
+        self.driver.service.registry().clone()
     }
     async fn install(&self, artifact: Artifact) -> Result<()> {
         self.driver.install(artifact).await

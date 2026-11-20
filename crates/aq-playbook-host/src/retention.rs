@@ -43,13 +43,13 @@ impl Retention {
 }
 
 /// `(table, statement)` in the order the drive takes them.
-pub const TABLES: [(&str, &str); 8] = [
+pub const TABLES: [(&str, &str); 9] = [
     // Settled events: accepted and fanned out. Producers dedupe on their own
     // source (graph and settlement rows are acknowledged with the engine
     // acceptance, decisions when copied, host-bridge events with their effect).
     (
         "playbook_outbox",
-        "DELETE FROM playbook_outbox WHERE (namespace_id,generation,producer,event_id) IN (SELECT namespace_id,generation,producer,event_id FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND status='engine_accepted' AND fanout_complete ORDER BY sequence DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
+        "DELETE FROM playbook_outbox WHERE (namespace_id,generation,producer,event_id) IN (SELECT namespace_id,generation,producer,event_id FROM (SELECT namespace_id,generation,producer,event_id,plugin_retain_until_ms FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND status='engine_accepted' AND fanout_complete ORDER BY sequence DESC OFFSET $3) candidates WHERE plugin_retain_until_ms IS NULL OR plugin_retain_until_ms<=$5 LIMIT $4) AND $5::bigint>0",
     ),
     // Accepted admissions, once their grant can no longer admit: a repeat of
     // a deleted request id is then refused (expired or revoked grant).
@@ -94,6 +94,10 @@ pub const TABLES: [(&str, &str); 8] = [
     (
         "playbook_finding_notifications",
         "DELETE FROM playbook_finding_notifications WHERE (namespace_id,generation,notification_id) IN (SELECT namespace_id,generation,notification_id FROM playbook_finding_notifications WHERE namespace_id=$1 AND generation=$2 AND submitted ORDER BY sequence DESC OFFSET $3 LIMIT $4) AND $5::bigint>0",
+    ),
+    (
+        "playbook_plugin_notifications",
+        "DELETE FROM playbook_plugin_notifications WHERE identity IN (SELECT identity FROM playbook_plugin_notifications WHERE namespace_id=$1 AND generation=$2 AND submitted AND created_at_ms<($5::bigint-86400000) ORDER BY created_at_ms DESC OFFSET $3 LIMIT $4)",
     ),
     // Cleared finding episodes (the finding is gone). An open episode is
     // work in progress and never matches. A finding that comes back after

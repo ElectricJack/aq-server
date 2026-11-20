@@ -168,6 +168,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "uuid",
 ]
 
@@ -320,6 +321,7 @@ version = "0.1.0"
 dependencies = [
  "aq-human-cursor",
  "aq-project-policy",
+ "aq-role-settings",
  "chrono",
  "schemars",
  "serde",
@@ -555,6 +557,7 @@ dependencies = [
  "aq-session-protocol",
  "async-trait",
  "axum",
+ "chrono",
  "hex",
  "schemars",
  "serde",
@@ -581,6 +584,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "toml",
+ "tracing",
  "uuid",
  "zeroize",
 ]

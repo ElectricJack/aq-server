@@ -17,7 +17,7 @@ def load(name):
     return json.loads((root / 'fixtures' / (name + '.json')).read_text())
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
-TYPED = ('task.graph.create', 'task.edit', 'task.activate', 'task.complete', 'task.reopen', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.role.set', 'task.route.set', 'task.route.clear', 'task.dependency.add',
+TYPED = ('task.graph.create', 'task.edit', 'task.activate', 'task.activate.subtree', 'task.complete', 'task.reopen', 'task.cancel', 'task.delete', 'task.retry', 'task.reprioritize', 'task.role.set', 'task.route.set', 'task.route.clear', 'task.dependency.add',
          'task.dependency.remove', 'knowledge.author', 'knowledge.correct', 'knowledge.verify',
          'knowledge.retire', 'knowledge.restore')
 def validate_task(task):

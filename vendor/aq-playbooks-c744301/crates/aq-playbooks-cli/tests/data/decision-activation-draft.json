@@ -1,0 +1,53 @@
+{
+  "entries": {
+    "main": {
+      "input": {"type": "null"},
+      "outcomes": {"activated": {"type": "null"}, "blocked": {"type": "null"}, "changes_requested": {"type": "string", "max_length": 2048}},
+      "start": "plan"
+    }
+  },
+  "triggers": [],
+  "steps": {
+    "plan": {
+      "op": {
+        "kind": "invoke", "command": "work.ensure", "bind": "planner",
+        "input": {"op": "literal", "value": {
+          "logical_key": "test-plan", "kind": "spec_ingestion", "context": "Plan this work.",
+          "lifetime": "independent", "visibility": "project", "subject": {"id": "parent-1", "revision": 1}
+        }}
+      },
+      "edges": {"ensured": "ask", "accepted": "blocked", "completed": "blocked", "refused": "blocked"}, "on_error": "blocked"
+    },
+    "ask": {
+      "op": {
+        "kind": "invoke", "command": "decision.request", "bind": "review",
+        "input": {"op": "object", "fields": {
+          "subject": {"op": "ref", "root": "planner", "path": ["subject"]},
+          "question": {"op": "literal", "value": "Approve the draft plan?"},
+          "choices": {"op": "literal", "value": ["approved", "rejected"]},
+          "responders": {"op": "literal", "value": ["user:1"]},
+          "expires_at_ms": {"op": "literal", "value": 86400000}
+        }}
+      },
+      "edges": {"accepted": "await", "approved": "blocked", "rejected": "blocked", "expired": "blocked", "cancelled": "blocked", "refused": "blocked"}, "on_error": "blocked"
+    },
+    "await": {
+      "op": {
+        "kind": "join", "members": [{"op": "ref", "root": "review", "path": []}], "member_keys": ["review"], "mode": "all",
+        "accepted_outcomes": ["approved", "rejected"], "deadline_ms": 60000, "remaining": "track", "bind": "answer"
+      },
+      "edges": {"completed": "choice", "no_match": "blocked", "timeout": "blocked"}, "on_error": "blocked"
+    },
+    "choice": {
+      "op": {"kind": "decide", "predicate": {"op": "eq", "left": {"op": "ref", "root": "answer", "path": ["review", "outcome"]}, "right": {"op": "literal", "value": "approved"}}},
+      "edges": {"true": "activate", "false": "revise", "unknown": "blocked"}, "on_error": "blocked"
+    },
+    "activate": {
+      "op": {"kind": "invoke", "command": "work.activate", "bind": "activation", "input": {"op": "object", "fields": {"subject": {"op": "ref", "root": "planner", "path": ["subject"]}}}},
+      "edges": {"activated": "done", "refused": "blocked"}, "on_error": "blocked"
+    },
+    "revise": {"op": {"kind": "return", "outcome": "changes_requested", "output": {"op": "ref", "root": "answer", "path": ["review", "output", "note"]}}, "edges": {}, "on_error": null},
+    "done": {"op": {"kind": "return", "outcome": "activated", "output": {"op": "literal", "value": null}}, "edges": {}, "on_error": null},
+    "blocked": {"op": {"kind": "return", "outcome": "blocked", "output": {"op": "literal", "value": null}}, "edges": {}, "on_error": null}
+  }
+}

@@ -1,23 +1,23 @@
 {
   "schema_version": 1,
   "source_repository": "aq-playbooks",
-  "source_revision": "11966712e33c23f0325caff793125c17f88c3d0f",
-  "publication_profile": "exact standalone Git source archive; engine 0.2.0 with host catalog 2.3.0 (live state only, authoring tools); model, compiler, runner, postgres, simulation and CLI all 0.2.0; no registry publication",
-  "archive_format": "git archive --format=tar 1196671 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
-  "archive_sha256": "05190cd57d8f66e60401f2c5b690e4f60b6b85c82220358c9884ea90c76cb47c",
-  "vendor_root": "vendor/aq-playbooks-1196671",
+  "source_revision": "c7443012c1e6902c2d6fa40ecff0402090f189b1",
+  "publication_profile": "Exact aq-playbooks source for extension catalogs, plugin events, binding interval schedules, and host catalog 2.4.0.",
+  "archive_format": "git archive --format=tar c744301 Cargo.toml Cargo.lock crates scripts contracts skills/aq-playbook-author docs/implementation/current-catalog-inspection-design.md docs/specs/0003-live-state-only.md docs/implementation/0003-live-state-only.md docs/implementation/0004-playbook-authoring.md docs/aq-host-integration.md",
+  "archive_sha256": "00ad95556fe6d140ab858382e8fc3024523438ab7e8f0f9764fc1689d7f89f92",
+  "vendor_root": "vendor/aq-playbooks-c744301",
   "files": [
     {
       "path": "Cargo.lock",
       "mode": "100644",
-      "bytes": 29890,
-      "sha256": "3de26241bc72637d0cd8cef9cd3c0a17fdd990486d472bafd4355c7b86748de6"
+      "bytes": 34776,
+      "sha256": "8a2c76bd9786087953288e9b5ad9d6e1f8c3a7f179152ccb206814a26579b003"
     },
     {
       "path": "Cargo.toml",
       "mode": "100644",
-      "bytes": 1297,
-      "sha256": "c3db74694d1d881ecf9f844f437c5dd4360b15fd3553e39ac4340a5165606daf"
+      "bytes": 1343,
+      "sha256": "31ac19d4140dd2d99c7df823ed8e61f7f154d2e40972af42f85246fca039dd48"
     },
     {
       "path": "contracts/aq-host-2.0.0/README.md",
@@ -158,6 +158,36 @@
       "sha256": "c49ee6d5de252cec3ccf3d42ba622e739da8c8b9cd2984c5ec70a4df70bbab17"
     },
     {
+      "path": "contracts/aq-host-2.4.0/README.md",
+      "mode": "100644",
+      "bytes": 748,
+      "sha256": "9fa56c49f6bb4d754a1b0bc9304161372b41edb244380c595809f94dbba5f543"
+    },
+    {
+      "path": "contracts/aq-host-2.4.0/fixtures.json",
+      "mode": "100644",
+      "bytes": 6073,
+      "sha256": "09ac52e6853735dee02accd687d55badd7ff8e1c47d89a021dc60f2f919f979c"
+    },
+    {
+      "path": "contracts/aq-host-2.4.0/manifest.json",
+      "mode": "100644",
+      "bytes": 901,
+      "sha256": "d8a17131223f6094ee7988f5ca7ca536c32a45c0c7b22a943813757b6f18de4a"
+    },
+    {
+      "path": "contracts/aq-host-2.4.0/notes.json",
+      "mode": "100644",
+      "bytes": 23898,
+      "sha256": "70f743f0f513fe7ea31372b758cff0ff9a0b5ff0b4281a9268e0996342b2b951"
+    },
+    {
+      "path": "contracts/aq-host-2.4.0/registry.json",
+      "mode": "100644",
+      "bytes": 282399,
+      "sha256": "2ca8bd0fc51cdf36a792d2302099572791b7a69c7447f29d3e0058c6d03c9ae2"
+    },
+    {
       "path": "contracts/aq-host/README.md",
       "mode": "100644",
       "bytes": 1808,
@@ -196,14 +226,14 @@
     {
       "path": "crates/aq-playbooks-cli/src/authoring.rs",
       "mode": "100644",
-      "bytes": 29837,
-      "sha256": "8c2f67c0aced4829a02e618dffac4592ba72a35a8517afab243830f10501b6ce"
+      "bytes": 30258,
+      "sha256": "a231cca40077d22e904c67f3e83d0b466132c514d5813f730f51af71f9ae3f60"
     },
     {
       "path": "crates/aq-playbooks-cli/src/catalog.rs",
       "mode": "100644",
-      "bytes": 4113,
-      "sha256": "039a4f378f072d915af6465e81e54c5e02d4b8cecb1c9e61359dd56fe5a9b2c8"
+      "bytes": 4622,
+      "sha256": "29240d0298eb451f5fbf9f8237d6ec62d5280b1d4b5f73fd6e306af9ee5b9607"
     },
     {
       "path": "crates/aq-playbooks-cli/src/configuration.rs",
@@ -220,8 +250,8 @@
     {
       "path": "crates/aq-playbooks-cli/src/main.rs",
       "mode": "100644",
-      "bytes": 24121,
-      "sha256": "6ea993c0e39ef6245cc0cb783c5471f2f330f2a933bc50057a026383742f563c"
+      "bytes": 24390,
+      "sha256": "4bbd728dee5262bf62a799784b89628fa9f734244cb83b59c2cdf15c89e6175e"
     },
     {
       "path": "crates/aq-playbooks-cli/tests/admin_cli.rs",
@@ -232,8 +262,8 @@
     {
       "path": "crates/aq-playbooks-cli/tests/authoring_cli.rs",
       "mode": "100644",
-      "bytes": 29002,
-      "sha256": "e954511b97d61ff7b49e95ddb447022b85dd3a0e9c9a1a084e041e816c45640e"
+      "bytes": 34511,
+      "sha256": "c166a12f178934163350fbc3adcf3b0e2f726ac100822c644df1d72dc91de499"
     },
     {
       "path": "crates/aq-playbooks-cli/tests/authoring_examples.rs",
@@ -266,6 +296,12 @@
       "sha256": "088052ba4ff2500053f084c5f21f547cccbb52d3d960185944b803bf7036e7c7"
     },
     {
+      "path": "crates/aq-playbooks-cli/tests/catalog_v2_4_contract.rs",
+      "mode": "100644",
+      "bytes": 15999,
+      "sha256": "0ef2fbde5b329133019268c82005c7eb3a72fd05952b7b50721bef05d2c1f5f7"
+    },
+    {
       "path": "crates/aq-playbooks-cli/tests/catalog_v2_contract.rs",
       "mode": "100644",
       "bytes": 8554,
@@ -278,10 +314,34 @@
       "sha256": "401f9ad6772b292e7c1d66199db4deef70052bef1d38380f47b00b3711f6d8cb"
     },
     {
+      "path": "crates/aq-playbooks-cli/tests/data/decision-activation-draft.json",
+      "mode": "100644",
+      "bytes": 2932,
+      "sha256": "05257219ee9be6be1f9c7c4430648c5e53a034f6e8daa25e7244a7dcf5c2f099"
+    },
+    {
       "path": "crates/aq-playbooks-cli/tests/data/routing_draft.json",
       "mode": "100644",
       "bytes": 48681,
       "sha256": "4bf5749f2065c092cefbbb84e79596aec763a1bf867793efd309329d1289eb4f"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/data/test-extension-case.json",
+      "mode": "100644",
+      "bytes": 511,
+      "sha256": "ef86341e5bda9c57a2b6efeff4343d7ce65076259fc0552fe9273d4c79745838"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/data/test-extension-draft.json",
+      "mode": "100644",
+      "bytes": 981,
+      "sha256": "eb6c9b50715ef7ea54d561b4ad877064113ce67ff3ddacb07b13aef5007d249b"
+    },
+    {
+      "path": "crates/aq-playbooks-cli/tests/data/test-extension.json",
+      "mode": "100644",
+      "bytes": 2471,
+      "sha256": "6633b15d6a09b7e369e964823b43eb76aaa5a86dcf86d2ce52b1b45f587a32ad"
     },
     {
       "path": "crates/aq-playbooks-cli/tests/host_pilots.rs",
@@ -328,8 +388,8 @@
     {
       "path": "crates/aq-playbooks-compiler/LANGUAGE.md",
       "mode": "100644",
-      "bytes": 26810,
-      "sha256": "066916ba7c6b7c4deb76e0390b4a5a6d7db3b6dbf1ec5c4e14ded07a2f2dc790"
+      "bytes": 27048,
+      "sha256": "89396fafe85ddb83a8a9bc495f58ee9895f1a31e30c21fba4ebc2c95eb48ad9e"
     },
     {
       "path": "crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment/CATALOG.md",
@@ -628,14 +688,14 @@
     {
       "path": "crates/aq-playbooks-compiler/src/docs.rs",
       "mode": "100644",
-      "bytes": 13943,
-      "sha256": "4ab67cbdb92b656c48deca575beb86931254e64aa1d2abe99c5141002a514ca7"
+      "bytes": 16658,
+      "sha256": "96d49976ce0a2b7cbb353969bb80bca645a397a15e1a27d8827316c61c209170"
     },
     {
       "path": "crates/aq-playbooks-compiler/src/draft.rs",
       "mode": "100644",
-      "bytes": 56784,
-      "sha256": "5cc8ef98fbb3b53b63682ce7d58c5abceaab06433530013f83e466493d931db4"
+      "bytes": 57858,
+      "sha256": "5fe1412d7883f5dd1e76f072ec045b260dcf975ac0e29bf0b3d5e9bcf71103cc"
     },
     {
       "path": "crates/aq-playbooks-compiler/src/lib.rs",
@@ -652,8 +712,8 @@
     {
       "path": "crates/aq-playbooks-compiler/tests/docs.rs",
       "mode": "100644",
-      "bytes": 29401,
-      "sha256": "fe86c19b41cae951b6a5bc70c0fad74e07c69120698147e388fbffa5be1e8495"
+      "bytes": 29426,
+      "sha256": "b794edc03d87ca6b82dced258fd66217d25e997049bb865f88da75dbd9b964bc"
     },
     {
       "path": "crates/aq-playbooks-compiler/tests/draft.rs",
@@ -686,16 +746,22 @@
       "sha256": "4cb8eac82d90cc4e97b7797b2e7a993e3ba3a9be9e56fac58a4a6c0a605fbf5d"
     },
     {
+      "path": "crates/aq-playbooks-model/src/extensions.rs",
+      "mode": "100644",
+      "bytes": 11368,
+      "sha256": "829143d986f8664e3af2ac453396098f8a9923a378043471be083cbdffb42988"
+    },
+    {
       "path": "crates/aq-playbooks-model/src/lib.rs",
       "mode": "100644",
-      "bytes": 145352,
-      "sha256": "daac243228a980d0c519ca153ba3af9ec9fa6751125f546aa277b7914424d50a"
+      "bytes": 145406,
+      "sha256": "bfc64401727edf31616ce30b6b41d16678845d83d4baf89d6015ae9648c9aa4e"
     },
     {
       "path": "crates/aq-playbooks-model/src/schedules.rs",
       "mode": "100644",
-      "bytes": 10570,
-      "sha256": "f29cfd23d9d8157a2e634610467986f7c2db00a17a5270ecb3598a8f46a059a3"
+      "bytes": 13376,
+      "sha256": "a9e7dea2f4ad2a4844c33fba59a1f697269fe8020c4beb790e0266abf63e98c6"
     },
     {
       "path": "crates/aq-playbooks-model/tests/async_answer.rs",
@@ -726,6 +792,42 @@
       "mode": "100644",
       "bytes": 36130,
       "sha256": "506a497fd94ac303dd6912c9154462a140f4ed0d99b8949ec495325769682006"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/Cargo.toml",
+      "mode": "100644",
+      "bytes": 576,
+      "sha256": "d71b753fd71564d15a3fe0ab7d88a23cdd40a06f059c653492cfdeff10e12875"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/README.md",
+      "mode": "100644",
+      "bytes": 3948,
+      "sha256": "627a1b0d27d7e9982f3e81a4ef95dcad514b1655fe69cef5c45c583e9ef145fb"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/src/main.rs",
+      "mode": "100644",
+      "bytes": 8397,
+      "sha256": "ad74799e1da7e05f12b910db7e592bfecc9428e6ac31a9c768711261667cc21c"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/src/plugin.rs",
+      "mode": "100644",
+      "bytes": 15172,
+      "sha256": "c1b215a0da233b56006c6b64e9ff5e12b402b6876d81e6511bcc35b006bcab5b"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/tests/conformance.rs",
+      "mode": "100644",
+      "bytes": 8979,
+      "sha256": "879c80d89307dd4cce0c704efc9c59f19b5e8f44f77fc5d38348e4d95aa61cd3"
+    },
+    {
+      "path": "crates/aq-playbooks-plugin-conformance/tests/test-plugin.py",
+      "mode": "100644",
+      "bytes": 2703,
+      "sha256": "a9c6dd478b98228567ceb37880f4bf2a07b6d94a8345f82988c4c5bc082d35ef"
     },
     {
       "path": "crates/aq-playbooks-postgres/Cargo.toml",
@@ -1018,8 +1120,8 @@
     {
       "path": "crates/aq-playbooks-runner/src/lib.rs",
       "mode": "100644",
-      "bytes": 151630,
-      "sha256": "776d0a941e106710327e96059a195f477f48bc981d5d6d886f5b059a853f9b3f"
+      "bytes": 151482,
+      "sha256": "69b4f11b0c93a4ab39c8fcc5a4dbd4175fc8b62bd6752da77e061a92a0a142e3"
     },
     {
       "path": "crates/aq-playbooks-runner/src/metrics.rs",
@@ -1030,8 +1132,14 @@
     {
       "path": "crates/aq-playbooks-runner/src/retention.rs",
       "mode": "100644",
-      "bytes": 111993,
-      "sha256": "c4ca28dca71f949e6d06a5435ec2b41b1aba8eaf3683f024f30a6a03837190c3"
+      "bytes": 112166,
+      "sha256": "abd372f1e66745b6a7e75190697eb5557ae0250e35bd857fa4741c5c51e28012"
+    },
+    {
+      "path": "crates/aq-playbooks-runner/src/schedules.rs",
+      "mode": "100644",
+      "bytes": 10094,
+      "sha256": "bc8618ace70d48a00d73fe52aeda89cb9a4d6286a68defc3e9e93a52c2427a64"
     },
     {
       "path": "crates/aq-playbooks-runner/src/storage.rs",
@@ -1108,8 +1216,8 @@
     {
       "path": "crates/aq-playbooks-simulation/src/cases.rs",
       "mode": "100644",
-      "bytes": 77123,
-      "sha256": "00a70ba965d0e9ad9be93ff77016de1e2ec5a48a8cb795c0a4645a9f1d68351e"
+      "bytes": 77161,
+      "sha256": "114609a7f63f5f7034d4f05dc6cd26d770f95d426be9cd798c6596b9e317e38a"
     },
     {
       "path": "crates/aq-playbooks-simulation/src/lib.rs",

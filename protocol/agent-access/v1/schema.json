@@ -2973,6 +2973,529 @@
         "commands"
       ]
     },
+    "DraftTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "parent_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "task_state": {
+          "const": "draft"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8-maxBytes": 512
+        },
+        "body": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32768,
+          "x-utf8-maxBytes": 32768
+        },
+        "acceptance_criteria": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192,
+          "x-utf8-maxBytes": 8192
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-utf8-maxBytes": 128
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8-maxBytes": 128
+        },
+        "task_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8-maxBytes": 128
+        }
+      },
+      "required": [
+        "id",
+        "parent_id",
+        "task_state",
+        "title"
+      ]
+    },
+    "DraftBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "source": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "target": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "target"
+      ]
+    },
+    "DraftGraphCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "expected_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DraftTask"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DraftBlock"
+          },
+          "minItems": 0,
+          "maxItems": 98
+        }
+      },
+      "required": [
+        "operation_id",
+        "project_id",
+        "expected_version",
+        "tasks"
+      ]
+    },
+    "DraftTaskEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "expected_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8-maxBytes": 512
+        },
+        "body": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32768,
+          "x-utf8-maxBytes": 32768
+        },
+        "acceptance_criteria": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192,
+          "x-utf8-maxBytes": 8192
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-utf8-maxBytes": 128
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "story_points": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "project_id",
+        "expected_version"
+      ],
+      "minProperties": 4
+    },
+    "DraftDependencyAdd": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "expected_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        },
+        "blocker_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        }
+      },
+      "required": [
+        "operation_id",
+        "project_id",
+        "expected_version",
+        "blocker_id"
+      ]
+    },
+    "DraftDependencyRemove": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "expected_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        },
+        "edge_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "edge_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        }
+      },
+      "required": [
+        "operation_id",
+        "project_id",
+        "expected_version",
+        "edge_id",
+        "edge_version"
+      ]
+    },
+    "DraftTaskCancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "expected_version": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        }
+      },
+      "required": [
+        "operation_id",
+        "project_id",
+        "expected_version"
+      ]
+    },
+    "DraftActionSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "project",
+            "task"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "x-int64-token": true
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "revision"
+      ]
+    },
+    "DraftTaskActionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f-]{36}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "kind": {
+          "enum": [
+            "task.graph.create",
+            "task.edit",
+            "task.cancel",
+            "task.dependency.add",
+            "task.dependency.remove"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/DraftActionSubject"
+        },
+        "expected_versions": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8-maxBytes": 1024
+        },
+        "payload": {}
+      },
+      "required": [
+        "operation_id",
+        "kind",
+        "subject",
+        "expected_versions",
+        "payload"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "task.graph.create"
+            },
+            "payload": {
+              "$ref": "#/$defs/DraftGraphCreate"
+            },
+            "subject": {
+              "properties": {
+                "type": {
+                  "const": "project"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "task.edit"
+            },
+            "payload": {
+              "$ref": "#/$defs/DraftTaskEdit"
+            },
+            "subject": {
+              "properties": {
+                "type": {
+                  "const": "task"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "task.cancel"
+            },
+            "payload": {
+              "$ref": "#/$defs/DraftTaskCancel"
+            },
+            "subject": {
+              "properties": {
+                "type": {
+                  "const": "task"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "task.dependency.add"
+            },
+            "payload": {
+              "$ref": "#/$defs/DraftDependencyAdd"
+            },
+            "subject": {
+              "properties": {
+                "type": {
+                  "const": "task"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "task.dependency.remove"
+            },
+            "payload": {
+              "$ref": "#/$defs/DraftDependencyRemove"
+            },
+            "subject": {
+              "properties": {
+                "type": {
+                  "const": "task"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "SubjectVersion": {
       "type": "object",
       "additionalProperties": false,
@@ -3834,6 +4357,9 @@
     },
     {
       "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/DraftTaskActionRequest"
     }
   ]
 }

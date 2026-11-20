@@ -442,6 +442,71 @@ class CommandRequest(TypedDict):
     reason: str
     commands: list[GraphCommand]
 
+class DraftTask(TypedDict):
+    id: str
+    parent_id: str
+    task_state: Literal['draft']
+    title: str
+    body: NotRequired[str]
+    acceptance_criteria: NotRequired[str]
+    labels: NotRequired[list[str]]
+    priority: NotRequired[int]
+    role: NotRequired[str]
+    task_type: NotRequired[str]
+
+class DraftBlock(TypedDict):
+    id: str
+    source: str
+    target: str
+
+class DraftGraphCreate(TypedDict):
+    operation_id: str
+    project_id: str
+    expected_version: str
+    tasks: list[DraftTask]
+    edges: NotRequired[list[DraftBlock]]
+
+class DraftTaskEdit(TypedDict):
+    operation_id: str
+    project_id: str
+    expected_version: str
+    title: NotRequired[str]
+    body: NotRequired[str]
+    acceptance_criteria: NotRequired[str]
+    labels: NotRequired[list[str]]
+    story_points: NotRequired[Union[int, None]]
+
+class DraftDependencyAdd(TypedDict):
+    operation_id: str
+    project_id: str
+    expected_version: str
+    blocker_id: str
+
+class DraftDependencyRemove(TypedDict):
+    operation_id: str
+    project_id: str
+    expected_version: str
+    edge_id: str
+    edge_version: str
+
+class DraftTaskCancel(TypedDict):
+    operation_id: str
+    project_id: str
+    expected_version: str
+
+class DraftActionSubject(TypedDict):
+    type: Literal['project', 'task']
+    id: str
+    revision: str
+
+class DraftTaskActionRequest(TypedDict):
+    operation_id: str
+    kind: Literal['task.graph.create', 'task.edit', 'task.cancel', 'task.dependency.add', 'task.dependency.remove']
+    subject: DraftActionSubject
+    expected_versions: Any
+    reason: NotRequired[str]
+    payload: Any
+
 class SubjectVersion(TypedDict):
     kind: Literal['node', 'edge']
     id: str

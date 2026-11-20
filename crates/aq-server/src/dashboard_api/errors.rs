@@ -115,6 +115,9 @@ impl ApiError {
         self.body.operation_id = Some(id);
         self
     }
+    pub(crate) fn code(&self) -> &str {
+        &self.body.code
+    }
     pub fn status(&self) -> StatusCode {
         self.status
     }

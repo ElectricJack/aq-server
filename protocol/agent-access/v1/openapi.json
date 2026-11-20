@@ -2297,9 +2297,9 @@
         }
       }
     },
-    "/v1/agent/operations/{operation_id}": {
-      "get": {
-        "operationId": "agentOperationGet",
+    "/v1/agent/task-actions": {
+      "post": {
+        "operationId": "agentDraftTaskAction",
         "security": [
           {
             "AgentSessionBearer": []
@@ -2311,7 +2311,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OperationStatus"
+                  "$ref": "../../dashboard-actions/v1/schema.json#/$defs/Envelope"
                 }
               }
             },
@@ -2335,7 +2335,294 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OperationStatus"
+                  "$ref": "../../dashboard-actions/v1/schema.json#/$defs/Envelope"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured refusal or uncertainty; never imply mutation success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-AQ-Agent-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftTaskActionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent/operations/{operation_id}": {
+      "get": {
+        "operationId": "agentOperationGet",
+        "security": [
+          {
+            "AgentSessionBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contract response; effect is explicit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OperationStatus"
+                    },
+                    {
+                      "$ref": "../../dashboard-actions/v1/schema.json#/$defs/Envelope"
+                    }
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "X-AQ-Agent-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Contract response; effect is explicit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OperationStatus"
+                    },
+                    {
+                      "$ref": "../../dashboard-actions/v1/schema.json#/$defs/Envelope"
+                    }
+                  ]
                 }
               }
             },
@@ -6078,6 +6365,529 @@
           "binding",
           "reason",
           "commands"
+        ]
+      },
+      "DraftTask": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "parent_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "task_state": {
+            "const": "draft"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8-maxBytes": 512
+          },
+          "body": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768,
+            "x-utf8-maxBytes": 32768
+          },
+          "acceptance_criteria": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 8192,
+            "x-utf8-maxBytes": 8192
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "x-utf8-maxBytes": 128
+            },
+            "minItems": 0,
+            "maxItems": 16,
+            "uniqueItems": true
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-utf8-maxBytes": 128
+          },
+          "task_type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-utf8-maxBytes": 128
+          }
+        },
+        "required": [
+          "id",
+          "parent_id",
+          "task_state",
+          "title"
+        ]
+      },
+      "DraftBlock": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "source": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "target": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target"
+        ]
+      },
+      "DraftGraphCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftTask"
+            },
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftBlock"
+            },
+            "minItems": 0,
+            "maxItems": 98
+          }
+        },
+        "required": [
+          "operation_id",
+          "project_id",
+          "expected_version",
+          "tasks"
+        ]
+      },
+      "DraftTaskEdit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8-maxBytes": 512
+          },
+          "body": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768,
+            "x-utf8-maxBytes": 32768
+          },
+          "acceptance_criteria": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 8192,
+            "x-utf8-maxBytes": 8192
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "x-utf8-maxBytes": 128
+            },
+            "minItems": 0,
+            "maxItems": 16,
+            "uniqueItems": true
+          },
+          "story_points": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "project_id",
+          "expected_version"
+        ],
+        "minProperties": 4
+      },
+      "DraftDependencyAdd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          },
+          "blocker_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          }
+        },
+        "required": [
+          "operation_id",
+          "project_id",
+          "expected_version",
+          "blocker_id"
+        ]
+      },
+      "DraftDependencyRemove": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          },
+          "edge_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "edge_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          }
+        },
+        "required": [
+          "operation_id",
+          "project_id",
+          "expected_version",
+          "edge_id",
+          "edge_version"
+        ]
+      },
+      "DraftTaskCancel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          }
+        },
+        "required": [
+          "operation_id",
+          "project_id",
+          "expected_version"
+        ]
+      },
+      "DraftActionSubject": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": [
+              "project",
+              "task"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "x-int64-token": true
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "revision"
+        ]
+      },
+      "DraftTaskActionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f-]{36}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "kind": {
+            "enum": [
+              "task.graph.create",
+              "task.edit",
+              "task.cancel",
+              "task.dependency.add",
+              "task.dependency.remove"
+            ]
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DraftActionSubject"
+          },
+          "expected_versions": {
+            "type": "object",
+            "maxProperties": 32,
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "x-int64-token": true
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "x-utf8-maxBytes": 1024
+          },
+          "payload": {}
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "subject",
+          "expected_versions",
+          "payload"
+        ],
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "task.graph.create"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftGraphCreate"
+              },
+              "subject": {
+                "properties": {
+                  "type": {
+                    "const": "project"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "task.edit"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftTaskEdit"
+              },
+              "subject": {
+                "properties": {
+                  "type": {
+                    "const": "task"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "task.cancel"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftTaskCancel"
+              },
+              "subject": {
+                "properties": {
+                  "type": {
+                    "const": "task"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "task.dependency.add"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftDependencyAdd"
+              },
+              "subject": {
+                "properties": {
+                  "type": {
+                    "const": "task"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "task.dependency.remove"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/DraftDependencyRemove"
+              },
+              "subject": {
+                "properties": {
+                  "type": {
+                    "const": "task"
+                  }
+                }
+              }
+            }
+          }
         ]
       },
       "SubjectVersion": {

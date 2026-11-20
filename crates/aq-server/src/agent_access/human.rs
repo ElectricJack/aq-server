@@ -17,7 +17,7 @@ use crate::{
     project_bindings::{self, domain::ProjectRecord},
     store::User,
 };
-use aq_human_work::{buckets, count, task_list};
+use aq_human_work::task_list;
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, Request, State},
@@ -300,64 +300,22 @@ fn work_error(error: task_list::Error) -> AppError {
         task_list::Error::Unavailable => unavailable(),
     }
 }
-/// QA N-04: Graph attributes every AQ write to the one configured mutation
-/// identity. Show the AQ account whose operation created (operation ID = node
-/// ID) or last verified the record instead; other attributions are unchanged.
-async fn attribute(state: &AppState, r: &ReadRuntime, data: &mut Value) -> Result<()> {
-    fn records<'a>(v: &'a mut Value, out: &mut Vec<&'a mut serde_json::Map<String, Value>>) {
-        match v {
-            Value::Array(items) => items.iter_mut().for_each(|i| records(i, out)),
-            Value::Object(o) => {
-                if o.contains_key("created_by") && o.get("id").is_some_and(Value::is_string) {
-                    out.push(o)
-                } else {
-                    o.values_mut().for_each(|i| records(i, out))
-                }
-            }
-            _ => {}
-        }
-    }
-    let Some(service) = state
-        .agent_access
-        .as_deref()
-        .and_then(|rt| rt.mutation_actor.clone())
-    else {
-        return Ok(());
-    };
-    let mut found = Vec::new();
-    records(data, &mut found);
-    let by_service =
-        |o: &serde_json::Map<String, Value>, k: &str| o.get(k) == Some(&json!(service));
-    found.retain(|o| by_service(o, "created_by") || by_service(o, "last_verified_by"));
-    let ids: Vec<Uuid> = found
-        .iter()
-        .filter_map(|o| o["id"].as_str()?.parse().ok())
-        .collect();
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let rows: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as("SELECT n.id,(SELECT u.email FROM users u WHERE u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.operation_id=n.id),(SELECT h.actor_id FROM human_graph_operations h WHERE h.operation_id=n.id))),(SELECT u.email FROM dashboard_operations d JOIN users u ON u.id=d.owner_id WHERE d.kind='knowledge.verify' AND d.disposition IN ('confirmed','unknown') AND d.response->'subject_refs'->0->>'id'=n.id::text ORDER BY d.updated_at DESC LIMIT 1) FROM unnest($1::uuid[]) AS n(id)")
-        .bind(&ids).fetch_all(&r.pool).await.map_err(|_| unavailable())?;
-    for o in found {
-        let row = rows.iter().find(|row| o["id"] == json!(row.0));
-        for (key, human) in [
-            ("created_by", row.and_then(|r| r.1.as_ref())),
-            ("last_verified_by", row.and_then(|r| r.2.as_ref())),
-        ] {
-            if let Some(email) = human.filter(|_| by_service(o, key)) {
-                o.insert(key.into(), json!(email));
-            }
-        }
-    }
-    Ok(())
-}
 async fn finish(
     state: &AppState,
     r: &ReadRuntime,
     a: Access,
     mut data: Value,
 ) -> Result<Json<Envelope>> {
-    attribute(state, r, &mut data).await?;
+    aq_human_work::attribution::records(
+        &r.pool,
+        state
+            .agent_access
+            .as_ref()
+            .and_then(|rt| rt.mutation_actor.as_deref()),
+        &mut data,
+    )
+    .await
+    .map_err(|_| unavailable())?;
     fence_records(r, &a.actor, std::slice::from_ref(&a.record)).await?;
     let now = stamp(state);
     if now < a.requested || now - a.requested >= 5000 {
@@ -382,7 +340,12 @@ async fn finish(
     Ok(Json(reply))
 }
 impl Runtime {
-    async fn human_get(&self, path: &str, query: &[(String, String)], max: usize) -> Result<Value> {
+    pub(super) async fn human_get(
+        &self,
+        path: &str,
+        query: &[(String, String)],
+        max: usize,
+    ) -> Result<Value> {
         let request = self
             .client
             .get(self.url.join(path).map_err(|_| invalid())?)
@@ -442,57 +405,7 @@ fn node(raw: &Value, workspace: Uuid, kind: &str) -> Result<Value> {
     {
         return Err(unavailable());
     }
-    let mut output = serde_json::Map::new();
-    for key in [
-        "id",
-        "kind",
-        "title",
-        "body",
-        "acceptance_criteria",
-        "labels",
-        "task_state",
-        "verification",
-        "content_type",
-        "retired",
-        "deleted",
-        "created_at",
-        "updated_at",
-        "created_by",
-        "provenance",
-        "last_verified_by",
-        "last_verified_at",
-        "retirement_reason",
-        "valid_from",
-        "valid_until",
-        "review_at",
-        "successor_id",
-        "summary",
-    ] {
-        output.insert(key.into(), raw[key].clone());
-    }
-    for key in ["version", "content_revision", "summary_of_revision"] {
-        output.insert(
-            key.into(),
-            if raw[key].is_null() && key == "summary_of_revision" {
-                Value::Null
-            } else {
-                json!(
-                    raw[key]
-                        .as_u64()
-                        .filter(|n| *n > 0)
-                        .ok_or_else(unavailable)?
-                        .to_string()
-                )
-            },
-        );
-    }
-    if kind == "task" {
-        output.insert(
-            "story_points".into(),
-            json!(aq_human_work::story_points(raw)),
-        );
-    }
-    Ok(Value::Object(output))
+    aq_human_work::projection::node(raw, kind).ok_or_else(unavailable)
 }
 async fn list(
     state: &AppState,
@@ -722,6 +635,30 @@ async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
     }
     Ok(raw)
 }
+
+pub(crate) async fn decision_subject(
+    state: &AppState,
+    actor: User,
+    scope: &aq_playbook_domain::Namespace,
+    task: Option<Uuid>,
+) -> Option<(Uuid, Option<Vec<Uuid>>)> {
+    let task = task?;
+    let runtime = ReadRuntime::new(state);
+    let a = access(state, &runtime, actor, scope.project_id)
+        .await
+        .ok()?;
+    let workspace = scope.workspace_id;
+    if a.record.binding.graph_workspace_id != workspace || !a.record.binding.enabled {
+        return None;
+    }
+    let raw = context(state, workspace, task).await.ok()?;
+    node(&raw["node"], workspace, "task").ok()?;
+    fence_records(&runtime, &a.actor, &[a.record]).await.ok()?;
+    Some((
+        task,
+        aq_playbook_domain::host_operations::produced_knowledge(&raw, task),
+    ))
+}
 /// Parent of `id` from a present `parent-child` edge (source is the parent).
 fn parent(raw: &Value, w: Uuid, id: Uuid) -> Result<Value> {
     let Some(edge) = raw["edges"].as_array().into_iter().flatten().find(|e| {
@@ -760,69 +697,12 @@ async fn graph(
     let raw = context(&s, w, id).await?;
     let role =
         |p: &mut Value, n: &Value| crate::role_settings::show(p, n, &a.record.binding.default_role);
-    let mut root = node(&raw["node"], w, "task")?;
-    role(&mut root, &raw["node"]);
-    let upstream_truncated = raw["truncated"].as_bool().ok_or_else(unavailable)?;
-    let mut truncated = upstream_truncated;
-    let mut nodes = vec![root];
-    let mut ids = std::collections::BTreeSet::from([id.to_string()]);
-    let mut hidden = std::collections::BTreeSet::new();
-    let mut hidden_tasks = buckets();
-    let mut hidden_other = 0u64;
-    for value in raw["nodes"].as_array().ok_or_else(unavailable)? {
-        let vid = value["id"].as_str().ok_or_else(unavailable)?.to_owned();
-        if ids.contains(&vid) || hidden.contains(&vid) {
-            continue;
-        }
-        if value["kind"] != "task" || value["deleted"] != false {
-            truncated = true;
-            hidden.insert(vid);
-            hidden_other += 1;
-            continue;
-        }
-        if nodes.len() > usize::from(limit) {
-            truncated = true;
-            hidden.insert(vid);
-            count(&mut hidden_tasks, &value["task_state"]);
-            continue;
-        }
-        let mut n = node(value, w, "task")?;
-        role(&mut n, value);
-        ids.insert(vid);
-        nodes.push(n)
-    }
-    let mut edges = Vec::new();
-    let mut hidden_edges = 0u64;
-    for edge in raw["edges"].as_array().ok_or_else(unavailable)? {
-        if edges.len() >= 256
-            || edge["deleted"] != false
-            || !ids.contains(edge["source"].as_str().ok_or_else(unavailable)?)
-            || !ids.contains(edge["target"].as_str().ok_or_else(unavailable)?)
-        {
-            truncated = true;
-            hidden_edges += 1;
-            continue;
-        }
-        edges.push(aq_human_work::edge(edge).ok_or_else(unavailable)?);
-    }
-    let hidden_task_count: u64 = hidden_tasks.values().filter_map(Value::as_u64).sum();
-    let shown = (nodes.len() - 1) as u64;
-    let expansion = if hidden_task_count > 0 && u64::from(limit) < 63 {
-        json!({"limit": (shown + hidden_task_count).min(63).to_string()})
-    } else {
-        Value::Null
-    };
     let parent = parent(&raw, w, id)?;
-    finish(
-        &s,
-        &r,
-        a,
-        json!({"root_id":id,"parent":parent,"nodes":nodes,"edges":edges,"truncated":truncated,
-            "omitted":{"tasks":hidden_task_count.to_string(),
-                "tasks_by_state":aq_human_work::decimal(hidden_tasks),
-                "other_nodes":hidden_other.to_string(),"edges":hidden_edges.to_string(),
-                "exact":!upstream_truncated},
-            "expansion":expansion}),
-    )
-    .await
+    let data = aq_human_work::projection::neighborhood(&raw, id, parent, limit, |raw| {
+        let mut value = node(raw, w, "task").ok()?;
+        role(&mut value, raw);
+        Some(value)
+    })
+    .ok_or_else(unavailable)?;
+    finish(&s, &r, a, data).await
 }

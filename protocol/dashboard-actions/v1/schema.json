@@ -1490,6 +1490,44 @@
         {
           "properties": {
             "kind": {
+              "const": "task.activate.subtree"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:task.activate.subtree:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "`task.activate.subtree`: make the root task's draft descendants schedulable.",
+              "properties": {
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "expected_version"
+              ],
+              "title": "TaskActivateSubtree",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "task.cancel"
             },
             "payload": {
@@ -2704,6 +2742,26 @@
       ],
       "type": "string"
     },
+    "ActivationCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "activated": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activated",
+        "skipped"
+      ],
+      "type": "object"
+    },
     "Anchor": {
       "oneOf": [
         {
@@ -3169,6 +3227,17 @@
     "Operation": {
       "additionalProperties": false,
       "properties": {
+        "activation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActivationCounts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Counts for a confirmed `task.activate.subtree` operation."
+        },
         "affected_entities": {
           "items": {
             "$ref": "#/$defs/EntityRef"

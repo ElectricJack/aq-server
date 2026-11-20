@@ -45,6 +45,7 @@ pub(crate) struct MountedOwners {
     /// F5 owner question inbox (`/api/questions/decisions`).
     pub(crate) questions: bool,
     pub(crate) playbook_owner: Option<Uuid>,
+    pub(crate) playbook_decisions: bool,
     pub(crate) playbook_loaded_definitions: bool,
     pub(crate) playbook_catalog: Option<aq_playbook_host::CatalogSupport>,
 }

@@ -330,6 +330,7 @@ impl From<StoredOutcome> for Outcome {
             affected_entities: v.affected_entities,
             current_versions: Default::default(),
             reason: None,
+            activation: None,
         }
     }
 }

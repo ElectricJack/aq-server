@@ -1,0 +1,75 @@
+{
+  "name": "test",
+  "registry": {
+    "commands": {
+      "ext.test.echo": {
+        "name": "ext.test.echo",
+        "version": "1.0.0",
+        "input": {
+          "type": "object",
+          "properties": {"text": {"type": "string", "max_length": 128}},
+          "required": ["text"]
+        },
+        "outcomes": {
+          "echoed": {"type": "object", "properties": {"text": {"type": "string", "max_length": 128}}, "required": ["text"]},
+          "refused": {"type": "object", "properties": {"reason": {"type": "string", "max_length": 128}}, "required": ["reason"]}
+        },
+        "capabilities": ["ext.test"],
+        "scopes": ["project"],
+        "effect": "observation",
+        "recovery": "keyed_idempotent",
+        "asynchronous": null,
+        "cancellation": false,
+        "public_result_fields": [],
+        "sensitive_input_fields": [],
+        "max_payload_bytes": 1024,
+        "deadline_ms": 10000
+      }
+    },
+    "events": {
+      "ext.test.pinged": {
+        "name": "ext.test.pinged",
+        "version": "1.0.0",
+        "payload": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string", "max_length": 128},
+                "revision": {"type": "integer", "minimum": 0, "maximum": 1000}
+              },
+              "required": ["id", "revision"]
+            },
+            "request": {"type": "string", "max_length": 128},
+            "text": {"type": "string", "max_length": 128}
+          },
+          "required": ["request", "subject", "text"]
+        },
+        "trusted_producers": ["ext.test"],
+        "scopes": ["project"],
+        "correlation_fields": ["request"],
+        "subject_field": "subject.id",
+        "revision_field": "subject.revision",
+        "max_payload_bytes": 1024,
+        "retention_ms": 60000
+      }
+    }
+  },
+  "notes": {
+    "commands": {
+      "ext.test.echo": {
+        "purpose": "Echoes text from a test playbook.",
+        "input": {"text": "Text to echo."},
+        "outcomes": {"echoed": "Returns the original text.", "refused": "The call was refused."}
+      }
+    },
+    "events": {
+      "ext.test.pinged": {
+        "purpose": "Reports a test ping.",
+        "sent": "After the test plugin observes a ping.",
+        "payload": {"request": "Ping request identifier.", "subject": "The pinged subject.", "text": "The text in the ping."}
+      }
+    }
+  }
+}

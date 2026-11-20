@@ -221,7 +221,13 @@ impl Runtime {
             .await
         }
         .step("opening the bridge service")?;
-        let mut service = service;
+        let settings = &state.config.server;
+        let plugins = aq_playbook_host::plugins::Plugins::discover(
+            &settings.plugins_dir,
+            &settings.state_root,
+            &settings.vault_dir,
+        );
+        let mut service = service.with_plugins(plugins);
         service.installation_routing = config.installation_routing;
         let initialized = service.initialize(config.namespace.owner_user_id).await;
         if initialized.is_err() {
@@ -275,6 +281,12 @@ impl Runtime {
         );
         let bootstrap = async {
             for deployment in &config.deployments {
+                if !aq_playbook_host::plugins_match(
+                    service.registry(), &deployment.artifact.content.registry,
+                ) {
+                    tracing::warn!(binding = %deployment.binding, "plugin contract mismatch; playbook deployment refused");
+                    continue;
+                }
                 service
                     .grant(
                         config.namespace.owner_user_id,
@@ -294,6 +306,7 @@ impl Runtime {
                         deployment.artifact.digest.clone(),
                         deployment.grant_id,
                         &deployment.scope,
+                        &deployment.schedules,
                     )
                     .await
                     .step("activating a deployment binding")?;

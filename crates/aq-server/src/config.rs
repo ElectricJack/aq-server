@@ -97,9 +97,23 @@ pub enum Environment {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+    #[serde(default = "default_plugins_dir")]
+    pub plugins_dir: PathBuf,
+    #[serde(default = "default_state_root")]
+    pub state_root: PathBuf,
+    #[serde(skip)]
+    pub(crate) vault_dir: PathBuf,
     pub admin_bind: SocketAddr,
     pub worker_bind: SocketAddr,
     pub public_origin: String,
+}
+
+fn default_plugins_dir() -> PathBuf {
+    aq_playbook_host::plugins::DEFAULT_PLUGINS_DIR.into()
+}
+
+fn default_state_root() -> PathBuf {
+    aq_playbook_host::plugins::DEFAULT_STATE_ROOT.into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,11 +211,12 @@ pub fn load(vault_dir: &Path) -> Result<Config, ConfigError> {
         let (key, reason) = (key.to_string(), reason.to_string());
         return Err(ConfigError::Invalid { path, key, reason });
     }
-    let config: Config = toml::from_str(&text).map_err(|e| ConfigError::Parse {
+    let mut config: Config = toml::from_str(&text).map_err(|e| ConfigError::Parse {
         path: path.clone(),
         message: e.to_string(),
     })?;
     validate(&config).map_err(|(key, reason)| ConfigError::Invalid { path, key, reason })?;
+    config.server.vault_dir = vault_dir.to_path_buf();
     Ok(config)
 }
 
@@ -410,6 +425,9 @@ mod tests {
             format_version: 1,
             environment: env,
             server: ServerConfig {
+                plugins_dir: default_plugins_dir(),
+                state_root: default_state_root(),
+                vault_dir: PathBuf::new(),
                 admin_bind: "127.0.0.1:8080".parse().unwrap(),
                 worker_bind: "127.0.0.1:8081".parse().unwrap(),
                 public_origin: "https://x".into(),
