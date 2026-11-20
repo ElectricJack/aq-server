@@ -165,7 +165,12 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     let host9 = CatalogProfile::Host9;
     assert_eq!(host9.namespace_refusal(1, None), None);
     assert_eq!(host9.namespace_refusal(1, Some((9, 1))), None);
-    for (number, name) in [(2, "human_review_v2"), (6, "monitoring_v6"), (8, "host_v8")] {
+    for (number, name) in [
+        (2, "human_review_v2"),
+        (6, "monitoring_v6"),
+        (8, "host_v8"),
+        (11, "host_v11"),
+    ] {
         assert_eq!(
             CatalogProfile::from_number(number).unwrap().config_name(),
             name
@@ -179,7 +184,7 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     }
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
-    assert_eq!(CatalogProfile::from_number(11), None);
+    assert_eq!(CatalogProfile::from_number(12), None);
 }
 
 // ------------------------------------------------------------------------
@@ -1222,7 +1227,7 @@ mod adapters {
         use aq_playbooks_compiler::draft;
         use aq_server::playbooks::driver::Driver;
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/aq-playbooks-1196671/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
+            .join("../../vendor/aq-playbooks-c744301/crates/aq-playbooks-compiler/authoring-examples/escalate-on-judgment");
         let workspace = draft::Workspace::read(&example).unwrap();
         let artifact = draft::seal(&workspace).unwrap();
         let h = host(true, Some(Arc::new(LowRisk))).await;

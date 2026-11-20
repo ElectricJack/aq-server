@@ -1005,7 +1005,9 @@ async fn generated_help_needs_no_request() {
             .unwrap(),
     );
     assert!(
-        cancel.contains("owner only") && cancel.contains("--subject TYPE:ID"),
+        cancel.contains("task.cancel (mutation, needs task.cancel)")
+            && cancel.contains("--task-id")
+            && cancel.contains("--subject TYPE:ID"),
         "{cancel}"
     );
     assert!(

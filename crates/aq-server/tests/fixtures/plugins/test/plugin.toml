@@ -1,0 +1,8 @@
+name = "test"
+version = "1.0.0"
+protocol = "aq.plugin/1"
+exe = "bin/test"
+contracts = "contracts/registry.json"
+notes = "contracts/notes.json"
+secrets = ["plugins/test/secret"]
+bindings = "plugins/test/bindings.toml"

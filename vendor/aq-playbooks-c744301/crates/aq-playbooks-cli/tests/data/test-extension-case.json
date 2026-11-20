@@ -1,0 +1,12 @@
+{
+  "name": "Ping echoes text",
+  "situation": "A test plugin event starts a playbook that calls the plugin.",
+  "start": {
+    "kind": "event",
+    "event": "ext.test.pinged",
+    "payload": {"request": "ping-1", "subject": {"id": "task-1", "revision": 3}, "text": "hello"},
+    "correlation": {"request": "ping-1"}
+  },
+  "returns": {"ext.test.echo": [{"outcome": "echoed", "output": {"text": "hello"}}]},
+  "expect": {"outcome": "done", "calls": [{"command": "ext.test.echo", "input": {"text": "hello"}}]}
+}

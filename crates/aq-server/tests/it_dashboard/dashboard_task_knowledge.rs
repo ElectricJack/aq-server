@@ -35,6 +35,7 @@ pub(crate) struct Graph {
     timeout_after_commit: Arc<AtomicBool>,
     committed: Arc<tokio::sync::Notify>,
     history: Arc<Mutex<Option<Value>>>,
+    tree: Arc<Mutex<Option<Value>>>,
 }
 fn graph_response(status: u16, body: &Value) -> Response {
     Response::builder()
@@ -67,7 +68,33 @@ async fn mutate(State(g): State<Graph>, headers: HeaderMap, bytes: Bytes) -> Res
         );
         return graph_response(200, receipt);
     }
-    let (status, mut reply) = g.reply.lock().unwrap().clone().expect("configured reply");
+    let (status, mut reply) = g.reply.lock().unwrap().clone().unwrap_or_else(|| {
+        assert!(g.tree.lock().unwrap().is_some(), "configured reply");
+        // Stage every result without storing any changes until all expected
+        // versions pass, as Graph does in its mutation transaction.
+        let nodes = g.nodes.lock().unwrap();
+        let mut results = Vec::new();
+        for op in body["operations"].as_array().unwrap() {
+            let id: Uuid = op["id"].as_str().unwrap().parse().unwrap();
+            let mut node = nodes[&id].clone();
+            assert_eq!(op["op"], "update_node");
+            if node["version"] != op["expected_version"] {
+                return (
+                    409,
+                    json!({"error":{"code":"conflict","message":"stale version"}}),
+                );
+            }
+            if op["patch"] == json!({"task_state":"active"}) {
+                assert_eq!(node["task_state"], "draft");
+                node["task_state"] = json!("active");
+                node["version"] = json!(node["version"].as_u64().unwrap() + 1);
+            } else {
+                assert_eq!(op["patch"], json!({}));
+            }
+            results.push(node);
+        }
+        (200, change_set(results))
+    });
     if status == 200 {
         // Model public Graph create defaults and echo the admitted create fields.
         // Native task.create validates every returned task field against intent.
@@ -115,6 +142,13 @@ async fn mutate(State(g): State<Graph>, headers: HeaderMap, bytes: Bytes) -> Res
     graph_response(status, &reply)
 }
 
+async fn read_tree(State(g): State<Graph>) -> Response {
+    graph_response(
+        200,
+        g.tree.lock().unwrap().as_ref().expect("subtree fixture"),
+    )
+}
+
 async fn read_history(State(g): State<Graph>) -> Response {
     let page = g.history.lock().unwrap().clone();
     graph_response(200, &page.unwrap_or(json!({"items":[],"next_cursor":null})))
@@ -156,6 +190,7 @@ pub(crate) async fn graph_runtime(
     let app = Router::new()
         .route("/v1/workspaces/{w}/nodes/{id}", get(read_node))
         .route("/v1/workspaces/{w}/nodes/{id}/history", get(read_history))
+        .route("/v1/workspaces/{w}/nodes/{id}/tree", get(read_tree))
         .route("/v1/workspaces/{w}/mutations", post(mutate))
         .with_state(graph.clone());
     let server = tokio::spawn(async move {
@@ -2171,4 +2206,99 @@ async fn task_needs_set_sets_and_clears_needs_and_is_refused_after_a_grant() {
         assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
     }
     assert_eq!(x.posts().len(), 2, "a refused change never reaches Graph");
+}
+
+#[tokio::test]
+async fn subtree_activation_activates_four_and_skips_active_branch() {
+    let x = setup().await;
+    let fixture = activation_fixture(&x);
+    let (_, body) = x.act(&fixture.request).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    assert_eq!(
+        body["data"]["activation"],
+        json!({"activated":4,"skipped":1})
+    );
+    assert_eq!(
+        body["data"]["affected_entities"].as_array().unwrap().len(),
+        4
+    );
+    for draft in fixture.drafts {
+        let live = &x.graph.nodes.lock().unwrap()[&draft];
+        assert_eq!(live["task_state"], "active");
+        assert_eq!(live["version"], 6);
+    }
+    let (_, replay) = x.act(&fixture.request).await;
+    assert_eq!(replay["data"], body["data"]);
+    let nodes = x.graph.nodes.lock().unwrap();
+    assert_eq!(nodes[&fixture.root]["task_state"], "draft");
+    assert_eq!(nodes[&fixture.root]["version"], 3);
+    assert_eq!(nodes[&fixture.branch]["task_state"], "active");
+    assert_eq!(nodes[&fixture.branch]["version"], 2);
+    let posts = x.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0]["operations"].as_array().unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn subtree_activation_conflict_leaves_every_draft_unchanged() {
+    let x = setup().await;
+    let fixture = activation_fixture(&x);
+    // Changing a nested non-draft parent's links bumps its version before
+    // Graph accepts the batch. All the planned draft changes must roll back.
+    x.graph
+        .nodes
+        .lock()
+        .unwrap()
+        .get_mut(&fixture.branch)
+        .unwrap()["version"] = json!(3);
+    let (_, body) = x.act(&fixture.request).await;
+    assert_eq!(body["data"]["disposition"], "conflict", "{body}");
+    assert_eq!(x.posts().len(), 1);
+    for draft in fixture.drafts {
+        let live = &x.graph.nodes.lock().unwrap()[&draft];
+        assert_eq!(live["task_state"], "draft");
+        assert_eq!(live["version"], 5);
+    }
+}
+
+struct ActivationFixture {
+    root: Uuid,
+    branch: Uuid,
+    drafts: [Uuid; 4],
+    request: Value,
+}
+
+fn activation_fixture(x: &Fixture) -> ActivationFixture {
+    let root = Uuid::new_v4();
+    let branch = Uuid::new_v4();
+    let drafts = std::array::from_fn(|_| Uuid::new_v4());
+    let task = |id, state, version| {
+        let mut value = node(id, x.workspace(), "task", version);
+        value["task_state"] = json!(state);
+        x.put(value.clone());
+        value
+    };
+    let tree = |task: Value, children: Vec<Value>| json!({"node":task,"children":children,"truncated":false});
+    let draft = |id| tree(task(id, "draft", 5), vec![]);
+    *x.graph.tree.lock().unwrap() = Some(tree(
+        task(root, "draft", 3),
+        vec![
+            tree(task(branch, "active", 2), vec![draft(drafts[0])]),
+            draft(drafts[1]),
+            draft(drafts[2]),
+            draft(drafts[3]),
+        ],
+    ));
+    ActivationFixture {
+        root,
+        branch,
+        drafts,
+        request: action(
+            "task.activate.subtree",
+            "task",
+            root,
+            "3",
+            json!({"operation_id":Uuid::new_v4(),"project_id":x.project(),"expected_version":"3"}),
+        ),
+    }
 }

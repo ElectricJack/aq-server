@@ -1,0 +1,59 @@
+#!/usr/bin/python3
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+assert sys.argv[1:] == ["invoke"]
+call = json.load(sys.stdin)
+key = call["idempotency_key"]
+mode = call["input"]["mode"]
+state = Path(call["state_dir"])
+assert Path.cwd() == state
+assert Path(call["secret_paths"]["plugins/test/secret"]).is_file()
+assert Path(os.environ["TMPDIR"]).is_dir()
+with (state / "calls").open("a") as log:
+    log.write(json.dumps(call) + "\n")
+
+marker = state / (key + ".attempted")
+cached = state / (key + ".json")
+if cached.exists():
+    sys.stdout.buffer.write(cached.read_bytes())
+    sys.exit(0)
+
+if mode == "timeout" and not marker.exists():
+    marker.touch()
+    time.sleep(10)
+if mode == "nonzero":
+    sys.exit(2)
+if mode == "bad_json":
+    print("not JSON")
+    sys.exit(0)
+
+event = {
+    "name": "ext.test.pinged",
+    "payload": {"ref": "ready", "subject": {"id": "sample", "revision": 5}},
+}
+environment = sorted(
+    entry.split(b"=", 1)[0].decode()
+    for entry in Path("/proc/self/environ").read_bytes().split(b"\0")
+    if entry
+)
+result = {
+    "outcome": "ok",
+    "output": {"environment": environment},
+    "events": [event],
+}
+if mode == "wrong_outcome":
+    result["outcome"] = "unregistered"
+if mode == "wrong_output":
+    result["output"] = []
+if mode == "invalid_event":
+    result["events"].append({"name": event["name"], "payload": {}})
+if mode == "host_event":
+    result["events"].append({"name": "aq.work.changed", "payload": event["payload"]})
+cached.write_bytes(json.dumps(result, separators=(",", ":")).encode("utf-8"))
+if mode == "crash":
+    os._exit(3)
+sys.stdout.buffer.write(cached.read_bytes())

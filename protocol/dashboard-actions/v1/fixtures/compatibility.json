@@ -95,12 +95,12 @@
         {
           "name": "dashboard-read",
           "version": "dashboard-read-1",
-          "digest": "sha256:acd558f891b9e5b7ebafdc490412fb07d23d5b4a3ed80c592399b9e3354b4648"
+          "digest": "sha256:19f69ca55957a2ca21b95a803cb71d54d60d28c91f811bfd6c043c159147d4ff"
         },
         {
           "name": "dashboard-actions",
           "version": "dashboard-actions-1",
-          "digest": "sha256:09d5ef5672208d32777e7f33e98557627d064e8cb3ca2944d244d40397ae6beb"
+          "digest": "sha256:d078d64c0c76a8ec5578a86c7e93e1816fa396732dc84b223af73e736d87d78c"
         }
       ],
       "default_scope": {

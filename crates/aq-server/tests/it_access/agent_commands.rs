@@ -2,7 +2,7 @@
 //! agent reaches its commands through `/api/v1/commands` with the same
 //! grants, refusals and audit as the `/v1/agent/*` routes; the owner reaches
 //! the same handlers as the REST routes.
-use crate::messaging::{send, setup_graph, setup_graph_with, setup_with};
+use crate::messaging::{send, setup_graph, setup_graph_with, setup_graph_with_attempt, setup_with};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use std::sync::{
@@ -1084,6 +1084,21 @@ async fn task_children_reads_parent_child_edges_for_a_native_profile() {
     graph.abort();
 }
 
+#[derive(Clone)]
+struct DraftFixture {
+    // (node id, state, metadata) plus the pre-existing edges
+    nodes: Vec<(Value, &'static str, Value)>,
+    edges: Vec<Value>,
+    pause: Arc<Mutex<Option<ScopePause>>>,
+}
+
+#[derive(Clone)]
+struct ScopePause {
+    task: Value,
+    started: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
+}
+
 /// A Graph standing in for aq-graph's node read and mutation routes: tasks
 /// are served with `aq:project_id` (unless `bare`), and a mutation commits
 /// the posted operations, recording each body.
@@ -1092,6 +1107,7 @@ async fn creating_graph(
     project: Value,
     bare: Arc<AtomicBool>,
     posted: Arc<Mutex<Vec<Value>>>,
+    draft: Option<DraftFixture>,
 ) -> (String, tokio::task::JoinHandle<()>) {
     let node = move |id: &Value, title: &str, metadata: Value| {
         json!({"id":id,"workspace_id":workspace,"kind":"task","version":1,"content_revision":1,"title":title,
@@ -1104,16 +1120,34 @@ async fn creating_graph(
     };
     let app = axum::Router::new().fallback(
         move |method: axum::http::Method, uri: axum::http::Uri, body: axum::body::Bytes| {
-            let (node, project, bare, posted) =
-                (node.clone(), project.clone(), bare.clone(), posted.clone());
+            let (make_node, project, bare, posted, draft) =
+                (node.clone(), project.clone(), bare.clone(), posted.clone(), draft.clone());
             async move {
                 let path = uri.path().to_owned();
+                let node = |id: &Value, title: &str, metadata: Value| {
+                    if let Some((_, state, meta)) = draft.as_ref().and_then(|f| f.nodes.iter().find(|n| n.0 == *id)) {
+                        let mut value = make_node(id, title, meta.clone());
+                        value["task_state"] = json!(state);
+                        value
+                    } else {
+                        make_node(id, title, metadata)
+                    }
+                };
                 let reply = if method == axum::http::Method::POST && path.ends_with("/mutations") {
                     let request: Value = serde_json::from_slice(&body).unwrap();
                     posted.lock().unwrap().push(request.clone());
                     let results: Vec<Value> = request["operations"].as_array().unwrap().iter().map(|op| {
                         if op["op"] == "create_node" {
-                            node(&op["id"], op["title"].as_str().unwrap(), op["metadata"].clone())
+                            let mut result = node(&op["id"], op["title"].as_str().unwrap(), op["metadata"].clone());
+                            result["task_state"] = op["task_state"].clone();
+                            result
+                        } else if op["op"] == "update_node" {
+                            node(&op["id"], op["patch"]["title"].as_str().unwrap_or("Draft fixture"), json!({"aq:project_id":project}))
+                        } else if op["op"] == "remove_edge" {
+                            let mut edge = draft.as_ref().unwrap().edges.iter().find(|edge| edge["id"] == op["id"]).unwrap().clone();
+                            edge["deleted"] = json!(true);
+                            edge["version"] = json!(2);
+                            edge
                         } else {
                             json!({"id":op["id"],"workspace_id":node(&op["id"],"x",json!({}))["workspace_id"],
                                 "source":op["source"],"target":op["target"],"edge_type":op["edge_type"],
@@ -1122,6 +1156,18 @@ async fn creating_graph(
                         }
                     }).collect();
                     json!({"change_set_id":Uuid::new_v4(),"results":results})
+                } else if let Some(path) = path.strip_suffix("/context") {
+                    let id = json!(path.rsplit('/').next().unwrap());
+                    let root = node(&id, "Draft fixture", json!({"aq:project_id":project}));
+                    let fixture = draft.as_ref().unwrap();
+                    let pause = fixture.pause.lock().unwrap().take_if(|p| p.task == id);
+                    if let Some(pause) = pause {
+                        pause.started.notify_one();
+                        pause.resume.notified().await;
+                    }
+                    let nodes: Vec<_> = fixture.nodes.iter().filter(|n| n.0 != id)
+                        .map(|n| node(&n.0, "Draft fixture", json!({}))).collect();
+                    json!({"node":root,"nodes":nodes,"edges":fixture.edges,"pinned_revisions":[],"truncated":false})
                 } else {
                     let id = json!(path.rsplit('/').next().unwrap());
                     let metadata = if bare.load(Ordering::SeqCst) {
@@ -1164,6 +1210,7 @@ async fn agent_creates_a_subtask_end_to_end() {
         project.clone(),
         bare.clone(),
         posted.clone(),
+        None,
     )
     .await;
     let e = setup_graph_with(
@@ -1178,21 +1225,7 @@ async fn agent_creates_a_subtask_end_to_end() {
     .await;
     let attempt = Uuid::parse_str(e.binding["attempt_id"].as_str().unwrap()).unwrap();
     let own = e.binding["task_id"].clone();
-    let observed = json!({"repository_id":Uuid::from_u128(2),"graph_workspace_id":workspace,
-        "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured",
-        "repository":"verified","graph":"verified","repository_generation":1,"observed_at_ms":1,"expires_at_ms":i64::MAX});
-    let binding = json!({"schema_version":1,"project_id":project,"name":"Agent channel fixture","enabled":true,
-        "repository_id":Uuid::from_u128(2),"repository_binding_generation":1,
-        "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured",
-        "graph_workspace_id":workspace,"allowed_node_ids":[],
-        "allowed_worker_groups":[],"allowed_environments":[],
-        "policy":{"identity":"project-policy","revision":"1","digest":"b".repeat(64)},"context":[],
-        "ceilings":{"permissions":[],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,
-            "cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,
-            "require_hard_cost_enforcement":false}});
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,$3)")
-        .bind(Uuid::parse_str(project.as_str().unwrap()).unwrap()).bind(&binding).bind(&observed)
-        .execute(&e.pool).await.unwrap();
+    install_task_project(&e, workspace, project.clone()).await;
     let create = |params: Value| {
         let (app, token) = (e.app.clone(), e.token.clone());
         async move {
@@ -1662,4 +1695,405 @@ async fn agent_lists_and_shows_only_its_own_waits() {
         audit_rows(&e, "wait.show").await,
         vec![("allow".into(), None), ("allow".into(), None)]
     );
+}
+
+async fn install_task_project(e: &crate::messaging::Env, workspace: Value, project: Value) {
+    let observed = json!({"repository_id":Uuid::from_u128(2),"graph_workspace_id":workspace,
+        "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured",
+        "repository":"verified","graph":"verified","repository_generation":1,"observed_at_ms":1,"expires_at_ms":i64::MAX});
+    let binding = json!({"schema_version":1,"project_id":project,"name":"Agent channel fixture","enabled":true,
+        "repository_id":Uuid::from_u128(2),"repository_binding_generation":1,
+        "repository_adapter_reference":"aq.git.configured","graph_adapter_reference":"aq.graph.configured",
+        "graph_workspace_id":workspace,"allowed_node_ids":[],
+        "allowed_worker_groups":[],"allowed_environments":[],
+        "policy":{"identity":"project-policy","revision":"1","digest":"b".repeat(64)},"context":[],
+        "ceilings":{"permissions":[],"context_bytes":8192,"wall_time_ms":60000,"memory_bytes":268435456,
+            "cpu_millis":60000,"process_limit":8,"cost_limit_microunits":null,"currency":null,
+            "require_hard_cost_enforcement":false}});
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,$3)")
+        .bind(Uuid::parse_str(project.as_str().unwrap()).unwrap()).bind(&binding).bind(&observed)
+        .execute(&e.pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/agent-access/v1/fixtures/base.json"
+    ))
+    .unwrap();
+    let base = &fixture["context"]["binding"];
+    let (workspace, project, own) = (
+        base["workspace_id"].clone(),
+        base["project_id"].clone(),
+        base["task_id"].clone(),
+    );
+    let (namespace, planner, draft, sibling, outside, active, foreign) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    let meta = json!({"aq:project_id":project});
+    // The host's retained motivation must take precedence over the Graph stamp.
+    let own_meta = json!({"aq:project_id":project,"aq:playbook_namespace":namespace,
+        "aq:logical_key":"test-review","aq:work_kind":"investigation",
+        "aq:subject":{"id":outside,"revision":1}});
+    let edge = |source, target, kind| {
+        json!({"id":Uuid::new_v4(),"source":source,"target":target,
+        "edge_type":kind,"source_revision":null,"target_revision":null,"description":null,
+        "workspace_id":workspace,"version":1,"deleted":false,"created_at":"2026-11-07T00:00:00Z"})
+    };
+    let foreign_blocker = edge(outside, draft, "blocks");
+    let unrelated_edge = edge(draft, sibling, "blocks");
+    let pause = Arc::new(Mutex::new(None));
+    let graph_fixture = DraftFixture {
+        pause: pause.clone(),
+        nodes: vec![
+            (own.clone(), "active", own_meta),
+            (json!(planner), "active", meta.clone()),
+            (json!(draft), "draft", meta.clone()),
+            (json!(sibling), "draft", meta.clone()),
+            (json!(outside), "draft", meta.clone()),
+            (json!(active), "active", meta),
+            (
+                json!(foreign),
+                "draft",
+                json!({"aq:project_id":Uuid::new_v4()}),
+            ),
+        ],
+        edges: vec![
+            edge(planner, draft, "parent-child"),
+            edge(planner, sibling, "parent-child"),
+            edge(planner, active, "parent-child"),
+            edge(planner, foreign, "parent-child"),
+            foreign_blocker.clone(),
+            unrelated_edge.clone(),
+        ],
+    };
+    let posted = Arc::new(Mutex::new(Vec::new()));
+    let (url, graph) = creating_graph(
+        workspace.clone(),
+        project.clone(),
+        Arc::new(AtomicBool::new(false)),
+        posted.clone(),
+        Some(graph_fixture),
+    )
+    .await;
+    let policy = serde_json::from_value(json!({"by_work_kind":{
+        "investigation":{"max_created_tasks":0},
+        "spec_ingestion":{"max_created_tasks":30},
+        "fidelity_review":{"max_created_tasks":10,"edit_drafts":true}
+    }}))
+    .unwrap();
+    let grants = |kind| {
+        serde_json::to_value(aq_agent_grants::resolve::resolve_work(
+            &[],
+            &policy,
+            None,
+            Some(kind),
+        ))
+        .unwrap()
+    };
+    let attempt = Uuid::new_v4();
+    let e = setup_graph_with_attempt(
+        Some(grants("spec_ingestion")),
+        &url,
+        Some("dev-service"),
+        Some(attempt),
+        |_, _| {},
+    )
+    .await;
+    install_task_project(&e, workspace.clone(), project.clone()).await;
+    let batch = |count: usize, state, edges| {
+        let tasks: Vec<_> = (0..count)
+            .map(|n| {
+                json!({"id":Uuid::new_v4(),"parent_id":own,
+            "title":format!("Draft task {n}"),"task_state":state,"labels":["test"]})
+            })
+            .collect();
+        let blocks: Vec<_> = (0..edges)
+            .map(|n: usize| {
+                json!({"id":Uuid::new_v4(),"source":tasks[n]["id"],
+            "target":tasks[n+1]["id"]})
+            })
+            .collect();
+        json!({"operation_id":Uuid::new_v4(),"params":{"expected_version":"1","tasks":tasks,"edges":blocks}})
+    };
+    let command = |name: &str, body: Value| {
+        let (app, token, path) = (
+            e.app.clone(),
+            e.token.clone(),
+            format!("/api/v1/commands/{name}"),
+        );
+        async move { send(&app, &path, Some(&token), Some(body)).await }
+    };
+    let denied = command("task.graph.create", batch(1, "active", 0)).await;
+    assert_eq!(denied.0, StatusCode::FORBIDDEN, "{}", denied.1);
+    let request = batch(12, "draft", 3);
+    let (status, receipt) = command("task.graph.create", request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt["data"]["disposition"], "confirmed", "{receipt}");
+    let (status, collision) = send(&e.app, "/v1/agent/graph/commands", Some(&e.token), Some(json!({
+        "api_version":1,"operation_id":receipt["data"]["operation_id"],"binding":e.binding,
+        "reason":"A different operation cannot shadow a draft receipt",
+        "commands":[{"kind":"create_finding","id":Uuid::new_v4(),"title":"Collision","body":"","labels":[],"content_type":"note"}]
+    }))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{collision}");
+    let (_, replay) = command("task.graph.create", request).await;
+    assert_eq!(replay["data"], receipt["data"]);
+    let (_, filled) = command("task.graph.create", batch(18, "draft", 0)).await;
+    assert_eq!(filled["data"]["disposition"], "confirmed", "{filled}");
+    let (status, over) = command(
+        "task.create",
+        json!({"params":{"operation_id":Uuid::new_v4(),"parent_id":"self","title":"Task 31"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{over}");
+    assert_eq!(over["code"], "quota_exceeded", "{over}");
+    {
+        let writes = posted.lock().unwrap();
+        assert_eq!(
+            writes.len(),
+            2,
+            "Replay and refused batches never dispatch."
+        );
+        let ops = writes[0]["operations"].as_array().unwrap();
+        assert_eq!(
+            ops.iter()
+                .filter(|op| op["op"] == "create_node" && op["task_state"] == "draft")
+                .count(),
+            12
+        );
+        assert_eq!(
+            ops.iter().filter(|op| op["edge_type"] == "blocks").count(),
+            3
+        );
+    }
+
+    let root = own.as_str().unwrap().parse::<Uuid>().unwrap();
+    sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms)
+                 VALUES($1,$2,$3,$4,$4,1,$5,0)")
+        .bind(outside).bind(attempt).bind(project.as_str().unwrap().parse::<Uuid>().unwrap())
+        .bind(root).bind(Uuid::new_v4()).execute(&e.pool).await.unwrap();
+    // A conflicting or pending create can reserve an existing UUID, but
+    // only a confirmed draft creation contributes subtree authority.
+    assert_eq!(
+        aq_agent_grants::store::depth(&e.pool, root, outside)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        aq_agent_grants::store::creator(&e.pool, outside)
+            .await
+            .unwrap(),
+        None
+    );
+    let set_grants = |kind| {
+        let (pool, grants) = (e.pool.clone(), grants(kind));
+        async move {
+            sqlx::query("UPDATE agent_launch_grants SET grants=$2 WHERE attempt_id=$1")
+                .bind(attempt)
+                .bind(grants)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+    set_grants("investigation").await;
+    let (status, refused) = command(
+        "task.create",
+        json!({"params":{"operation_id":Uuid::new_v4(),"parent_id":"self","title":"No create"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "grant_missing");
+
+    set_grants("fidelity_review").await;
+    let change = |task| {
+        json!({"operation_id":Uuid::new_v4(),
+        "params":{"task_id":task,"expected_version":"1","title":"Reviewer edit"}})
+    };
+    let (status, fake) = command("task.edit", change(draft)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "Forged metadata: {fake}");
+    let project_id: Uuid = project.as_str().unwrap().parse().unwrap();
+    let workspace_id: Uuid = workspace.as_str().unwrap().parse().unwrap();
+    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest)
+                 SELECT $1,1,'test-draft-namespace',$2,$3,id,repeat('a',64),repeat('b',64) FROM users LIMIT 1")
+        .bind(namespace).bind(workspace_id).bind(project_id).execute(&e.pool).await.unwrap();
+    sqlx::query("INSERT INTO playbook_work_keys(namespace_id,generation,logical_key,task_id,request_digest,created_at_ms)
+                 VALUES ($1,1,'test-review',$2,repeat('c',64),1)")
+        .bind(namespace).bind(own.as_str().unwrap().parse::<Uuid>().unwrap()).execute(&e.pool).await.unwrap();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,created_at_ms)
+                 VALUES($1,$2,1,'test-review-intent','work.ensure',$3,1,$4,'running',1)")
+        .bind(Uuid::new_v4()).bind(namespace).bind(own.as_str().unwrap())
+        .bind(json!({"kind":"fidelity_review","motivation":{"id":planner,"revision":1}}))
+        .execute(&e.pool).await.unwrap();
+    let (status, edit) = command("task.edit", change(draft)).await;
+    assert_eq!(status, StatusCode::OK, "{edit}");
+    assert_eq!(edit["data"]["disposition"], "confirmed", "{edit}");
+    for (name, request) in [
+        ("task.edit", change(outside)),
+        ("task.edit", change(active)),
+        ("task.edit", change(foreign)),
+        (
+            "task.dependency.add",
+            json!({"operation_id":Uuid::new_v4(),"params":{"task_id":draft,"expected_version":"1","blocker_id":outside}}),
+        ),
+        (
+            "task.dependency.remove",
+            json!({"operation_id":Uuid::new_v4(),"params":{"task_id":draft,"expected_version":"1","edge_id":foreign_blocker["id"],"edge_version":"1"}}),
+        ),
+        (
+            "task.dependency.remove",
+            json!({"operation_id":Uuid::new_v4(),"params":{"task_id":draft,"expected_version":"1","edge_id":unrelated_edge["id"],"edge_version":"1"}}),
+        ),
+    ] {
+        let (status, body) = command(name, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+        assert_eq!(body["code"], "scope_denied", "{body}");
+    }
+    let (status, dependency) = command(
+        "task.dependency.add",
+        json!({"operation_id":Uuid::new_v4(),
+        "params":{"task_id":draft,"expected_version":"1","blocker_id":sibling}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dependency}");
+    assert_eq!(dependency["data"]["disposition"], "confirmed");
+    let (status, lookup) = command(
+        "operation.show",
+        json!({"params":{
+        "operation_id":dependency["data"]["operation_id"]}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{lookup}");
+    assert_eq!(lookup["data"], dependency["data"]);
+    {
+        let writes = posted.lock().unwrap();
+        let patch = writes.last().unwrap()["operations"].as_array().unwrap();
+        for id in [draft, sibling, planner] {
+            assert!(
+                patch.iter().any(|op| op["op"] == "update_node"
+                    && op["id"] == json!(id)
+                    && op["patch"] == json!({})),
+                "Missing version guard for {id}: {patch:?}"
+            );
+        }
+    }
+    let (status, removed) = command("task.dependency.remove", json!({"operation_id":Uuid::new_v4(),
+        "params":{"task_id":sibling,"expected_version":"1","edge_id":unrelated_edge["id"],"edge_version":"1"}})).await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["data"]["disposition"], "confirmed");
+    let (status, cancelled) = command(
+        "task.cancel",
+        json!({"operation_id":Uuid::new_v4(),
+        "params":{"task_id":sibling,"expected_version":"1"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["data"]["disposition"], "confirmed");
+    // This synthetic fixture reuses a session for each policy. Give the
+    // reviewer an empty creation ledger before testing its own admission.
+    sqlx::query("DELETE FROM agent_created_tasks WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let malformed = Uuid::new_v4();
+    let (status, invalid) = command(
+        "task.create",
+        json!({"params":{
+            "operation_id":malformed,"parent_id":"self","title":"  "
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{invalid}");
+    let reserved: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(reserved, 0, "invalid requests cannot reserve a task");
+
+    let (operation, task) = (Uuid::new_v4(), Uuid::new_v4());
+    let compete = |parent: Uuid| {
+        command(
+            "task.graph.create",
+            json!({"operation_id":operation,
+        "params":{"expected_version":"1","tasks":[{"id":task,"parent_id":parent,"title":"Competing draft","task_state":"draft"}]}}),
+        )
+    };
+    let (own_side, subject_side) = tokio::join!(compete(root), compete(planner));
+    let (winner, parent, loser) = if own_side.0 == StatusCode::OK {
+        (own_side.1, root, subject_side.0)
+    } else {
+        (subject_side.1, planner, own_side.0)
+    };
+    assert_eq!(winner["data"]["disposition"], "confirmed", "{winner}");
+    assert_eq!(loser, StatusCode::CONFLICT);
+    let saved: (Uuid, Uuid) =
+        sqlx::query_as("SELECT parent_id,root_task_id FROM agent_created_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        saved,
+        (parent, parent),
+        "Only the journal-winning parent can confer authority"
+    );
+    let last = posted.lock().unwrap().last().unwrap().clone();
+    assert!(
+        last["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["edge_type"] == "parent-child"
+                && op["target"] == json!(task)
+                && op["source"] == json!(parent))
+    );
+
+    let pending = ScopePause {
+        task: json!(draft),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: Arc::new(tokio::sync::Notify::new()),
+    };
+    *pause.lock().unwrap() = Some(pending.clone());
+    let expiring = change(draft);
+    let expiration = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            pending.started.notified(),
+        )
+        .await
+        .unwrap();
+        e.time.fetch_add(20_000, Ordering::SeqCst);
+        pending.resume.notify_one();
+    };
+    let ((status, expired), ()) = tokio::join!(command("task.edit", expiring.clone()), expiration);
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{expired}");
+    assert_eq!(expired["code"], "session_expired");
+    let journaled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM dashboard_operations WHERE operation_id=$1)",
+    )
+    .bind(
+        expiring["operation_id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap(),
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(
+        !journaled,
+        "Expired credential cannot admit or dispatch an action"
+    );
+    graph.abort();
 }

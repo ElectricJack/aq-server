@@ -17,6 +17,7 @@ pub(crate) async fn startup_input(
     state: &AppState,
     project: Uuid,
     task: Uuid,
+    kind: Option<&str>,
 ) -> Option<StartupInput> {
     let pool = &state.store.pool;
     let max = thread::MAX_ITEMS as u16;
@@ -35,13 +36,13 @@ pub(crate) async fn startup_input(
         .bind(project).bind(task).bind(max as i64).fetch_all(pool).await.ok()?;
     let mail: Vec<(Value, String, i64)> = sqlx::query_as("SELECT sender,body,created_at_ms FROM mailbox_messages m WHERE recipient->>'kind'='task' AND recipient->>'project_id'=$1 AND recipient->>'task_id'=$2 AND NOT EXISTS(SELECT 1 FROM mailbox_receipts r WHERE r.message_id=m.message_id AND r.disposition='read') ORDER BY created_at_ms DESC LIMIT $3")
         .bind(project.to_string()).bind(task.to_string()).bind(max as i64).fetch_all(pool).await.ok()?;
-    let creator: Option<Value> = sqlx::query_scalar("SELECT g.grants FROM agent_created_tasks c JOIN agent_launch_grants g USING(attempt_id) WHERE c.task_id=$1")
-        .bind(task).fetch_optional(pool).await.ok()?;
+    let creator = aq_agent_grants::store::creator(pool, task).await.ok()?;
     let creator = creator.map(|v| grant_check::sealed(Some(v)).unwrap_or_default());
-    let grants = aq_agent_grants::resolve::resolve(
+    let grants = aq_agent_grants::resolve::resolve_work(
         &[],
         &grant_check::project_grants(state, project),
         creator.as_ref(),
+        kind,
     );
     let t = thread::Thread {
         comments: comments

@@ -8,8 +8,11 @@ use std::fmt;
 use uuid::Uuid;
 
 pub mod budget;
+pub mod draft_scope;
 pub mod refusal;
 pub mod resolve;
+#[cfg(feature = "store")]
+pub mod store;
 pub use refusal::{CODES, Refusal, RefusalCode};
 
 /// The operations a grant can name (§6.2). Owner-only operations are listed
@@ -19,6 +22,7 @@ pub mod op {
     pub const TASK_CREATE_SUBTASK: &str = "task.create.subtask";
     pub const TASK_CREATE_PROJECT: &str = "task.create.project";
     pub const TASK_EDIT: &str = "task.edit";
+    pub const TASK_CANCEL: &str = "task.cancel";
     pub const COMMENT_READ: &str = "comment.read";
     pub const COMMENT_WRITE: &str = "comment.write";
     pub const KNOWLEDGE_READ: &str = "knowledge.read";
@@ -33,11 +37,12 @@ pub mod op {
     pub const MESSAGE_ACK: &str = "message.ack";
     pub const RESULT_READ: &str = "result.read";
     /// Every grantable operation, in the order the spec lists them.
-    pub const ALL: [&str; 17] = [
+    pub const ALL: [&str; 18] = [
         TASK_READ,
         TASK_CREATE_SUBTASK,
         TASK_CREATE_PROJECT,
         TASK_EDIT,
+        TASK_CANCEL,
         COMMENT_READ,
         COMMENT_WRITE,
         KNOWLEDGE_READ,
@@ -159,10 +164,13 @@ pub struct Limits {
     /// Depth below the attempt's task a created task may sit at (1 = child).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<u32>,
+    /// Only draft tasks may be created with this grant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub draft_only: bool,
 }
 impl Limits {
     pub fn is_empty(&self) -> bool {
-        self.max_created_tasks.is_none() && self.max_depth.is_none()
+        self.max_created_tasks.is_none() && self.max_depth.is_none() && !self.draft_only
     }
     /// The tighter of two limit sets.
     pub fn meet(self, other: Limits) -> Limits {
@@ -175,6 +183,7 @@ impl Limits {
         Limits {
             max_created_tasks: min(self.max_created_tasks, other.max_created_tasks),
             max_depth: min(self.max_depth, other.max_depth),
+            draft_only: self.draft_only || other.draft_only,
         }
     }
 }
@@ -288,6 +297,11 @@ impl GrantSet {
             let Some(c) = ceiling.get(&g.operation) else {
                 continue;
             };
+            // A draft-only ceiling cannot grant batch access to a caller
+            // whose underlying grant allows only the legacy create route.
+            if !g.limits.draft_only && c.limits.draft_only {
+                continue;
+            }
             let scope = if g.scope.within(c.scope) {
                 g.scope
             } else if c.scope.within(g.scope) {

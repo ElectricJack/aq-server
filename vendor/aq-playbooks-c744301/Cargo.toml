@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/aq-playbooks-model",
+    "crates/aq-playbooks-compiler",
+    "crates/aq-playbooks-runner",
+    "crates/aq-playbooks-postgres",
+    "crates/aq-playbooks-cli",
+    "crates/aq-playbooks-simulation",
+    "crates/aq-playbooks-plugin-conformance",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
+aq-playbooks-model = { path = "crates/aq-playbooks-model", version = "=0.2.0" }
+aq-playbooks-compiler = { path = "crates/aq-playbooks-compiler", version = "=0.2.0" }
+aq-playbooks-runner = { path = "crates/aq-playbooks-runner", version = "=0.2.0" }
+aq-playbooks-postgres = { path = "crates/aq-playbooks-postgres", version = "=0.2.0" }
+aq-playbooks-simulation = { path = "crates/aq-playbooks-simulation", version = "=0.2.0" }
+
+# Bound target/ growth in AQ slots: keep file:line backtraces for workspace
+# code, drop dependency debuginfo, and skip incremental state. `cargo test`
+# inherits this profile.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"

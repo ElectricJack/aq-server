@@ -9,6 +9,7 @@
 //! key, then the final row and its outbox event commit together. Reconcile
 //! only reads a retained final row and never performs an effect.
 use super::{domain::*, service::*};
+use aq_playbook_domain::work_mutations::{work_change_body, work_ensure_body};
 pub use aq_playbook_domain::{
     host_values::*,
     review_domain::{HOST5_COMMANDS, HOST7_COMMANDS},
@@ -17,11 +18,12 @@ use aq_playbook_host::{
     model::{ContractRef, EventEnvelope, canonical_bytes},
     runner::Intent,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sqlx::{PgConnection, PgExecutor, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod activate;
 mod assess;
 #[cfg(feature = "delivery_playbook")]
 mod delivery_commands;
@@ -64,6 +66,10 @@ pub struct HostPorts {
 #[async_trait::async_trait]
 pub trait WorkGraph: Send + Sync {
     async fn node(&self, workspace: Uuid, id: Uuid) -> Result<Option<Value>>;
+    /// A versioned read of the task's structural descendants.
+    async fn activation_tree(&self, _workspace: Uuid, _id: Uuid) -> Result<Value> {
+        Err(Error::Unknown)
+    }
     /// Returns the HTTP status and the decoded body.
     async fn mutate(&self, workspace: Uuid, body: Value) -> Result<(u16, Value)>;
 }
@@ -77,6 +83,15 @@ impl WorkGraph for GatewayGraph {
         tokio::time::timeout(
             GRAPH_CALL,
             crate::agent_access::settlement_node(&self.0, workspace, id),
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        .map_err(|_| Error::Unknown)
+    }
+    async fn activation_tree(&self, workspace: Uuid, task: Uuid) -> Result<Value> {
+        tokio::time::timeout(
+            GRAPH_CALL,
+            crate::agent_access::activation_tree(&self.0, workspace, task),
         )
         .await
         .map_err(|_| Error::Unknown)?
@@ -103,9 +118,11 @@ impl WorkGraph for GatewayGraph {
 
 #[path = "findings.rs"]
 mod findings;
+mod plugins;
 
 const ATTEMPT_REF: &str = "aq.execution.attempt/";
 const PENDING: &str = "pending";
+const PLUGIN_COMPLETED: &str = "plugin_completed";
 
 enum Stage {
     Retained(HostResult),
@@ -131,6 +148,10 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         match intent.command.name.as_str() {
+            name if aq_playbook_host::plugins::command_plugin(name).is_some() => {
+                self.plugin_dispatch(owner, id, revision, intent, true)
+                    .await
+            }
             "findings.reconcile" => self.findings_reconcile(owner, id, revision, intent).await,
             "work.read" | "work.route" | "work.unroutable" => {
                 self.work_routing(owner, id, revision, intent).await
@@ -138,6 +159,9 @@ impl Service {
             "context.read" => self.context_read(owner, id, revision, intent).await,
             "work.ensure" => self.work_ensure(owner, id, revision, intent).await,
             "work.change" => self.work_change(owner, id, revision, intent).await,
+            super::review_domain::WORK_ACTIVATE => {
+                self.work_activate(owner, id, revision, intent).await
+            }
             #[cfg(feature = "delivery_playbook")]
             "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
             #[cfg(feature = "delivery_playbook")]
@@ -192,17 +216,10 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
-        self.ports()?;
-        let commands: &[&str] = if self.profile.has_routing() {
-            self.profile.commands()
-        } else if self.profile.is_host2() {
-            &HOST7_COMMANDS
-        } else {
-            &HOST5_COMMANDS
-        };
-        if !commands.contains(&intent.command.name.as_str())
-            || self.profile.registry().commands.get(&intent.command.name) != Some(&intent.command)
-        {
+        if aq_playbook_host::plugins::command_plugin(&intent.command.name).is_none() {
+            self.ports()?;
+        }
+        if !self.known_contract(&intent.command) {
             return Err(Error::Invalid);
         }
         intent
@@ -244,6 +261,8 @@ impl Service {
             let receipt: Value = row.get("receipt");
             let stage = if status == PENDING {
                 Stage::Pending(receipt)
+            } else if status == PLUGIN_COMPLETED {
+                Stage::Retained(serde_json::from_value(receipt)?)
             } else {
                 Stage::Retained(HostResult {
                     outcome: status,
@@ -297,7 +316,7 @@ impl Service {
         status: &str,
         receipt: &Value,
     ) -> Result<()> {
-        if status != PENDING {
+        if status != PENDING && status != PLUGIN_COMPLETED {
             self.validated(intent, status, receipt)?;
         }
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
@@ -374,7 +393,7 @@ impl Service {
         subject: &Value,
         payload: Value,
     ) -> Result<()> {
-        let registry = self.profile.registry();
+        let registry = self.registry();
         let c = registry.events.get(contract).ok_or(Error::Invalid)?;
         let at = self.now()?;
         // `aq.delivery.completed` names no subject or revision: the join
@@ -409,21 +428,35 @@ impl Service {
             observed_at_ms: Some(at),
             payload,
         };
-        aq_playbook_host::model::validate_event(&event, &registry).map_err(|_| Error::Invalid)?;
-        let event_digest = digest(&event)?;
-        let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
-        let aad = self.aad("aq.playbooks.outbox", event_id, &event_digest)?;
+        aq_playbook_host::model::validate_event(&event, registry).map_err(|_| Error::Invalid)?;
+        self.seal_outbox(tx, event_id, &event, at, None).await
+    }
+
+    pub(super) async fn seal_outbox(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row_id: Uuid,
+        event: &EventEnvelope,
+        at: i64,
+        retention: Option<i64>,
+    ) -> Result<()> {
+        let event_digest = digest(event)?;
+        let bytes = canonical_bytes(event).map_err(|_| Error::Invalid)?;
+        let aad = self.aad("aq.playbooks.outbox", row_id, &event_digest)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')")
+        sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,plugin_event_id,plugin_retain_until_ms) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12)")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
-            .bind(event_id)
+            .bind(&event.producer)
+            .bind(row_id)
             .bind(event_digest)
             .bind(sealed.version as i32)
             .bind(sealed.key_id)
             .bind(sealed.nonce)
             .bind(sealed.ciphertext)
             .bind(at)
+            .bind(retention.map(|_| &event.event_id))
+            .bind(retention)
             .execute(&mut **tx)
             .await?;
         Ok(())
@@ -634,7 +667,7 @@ impl Service {
                         .settle_fresh(tx, id, revision, intent, &identity, result)
                         .await;
                 }
-                let plan = json!({"task": task, "body": self.create_body(task, input)?});
+                let plan = json!({"task": task, "body": work_ensure_body(self.namespace.namespace_id, self.namespace.project_id, task, input)?});
                 self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
                     .await?;
                 self.commit_fresh(tx, id, intent).await?;
@@ -667,51 +700,6 @@ impl Service {
             },
         )
         .await
-    }
-
-    fn create_body(&self, task: Uuid, input: &Value) -> Result<Value> {
-        let kind = text(input, "kind")?;
-        let key = text(input, "logical_key")?;
-        let mut title = format!("{kind}: {key}");
-        if title.len() > 512 {
-            let mut end = 512;
-            while !title.is_char_boundary(end) {
-                end -= 1;
-            }
-            title.truncate(end);
-        }
-        let mut operations = vec![json!({
-            "op": "create_node",
-            "id": task,
-            "kind": "task",
-            "title": title,
-            "body": text(input, "context")?,
-            "task_state": "active",
-            "metadata": {
-                "aq:playbook_namespace": self.namespace.namespace_id,
-                "aq:project_id": self.namespace.project_id,
-                "aq:logical_key": key,
-                "aq:work_kind": kind,
-                "aq:lifetime": text(input, "lifetime")?,
-                "aq:visibility": text(input, "visibility")?,
-                "aq:subject": input["subject"],
-            },
-        })];
-        if let Ok(target) = Uuid::parse_str(text(&input["subject"], "id")?) {
-            let revision = input["subject"]["revision"].as_i64().unwrap_or(0);
-            operations.push(json!({
-                "op": "add_edge",
-                "source": task,
-                "target": target,
-                "edge_type": "motivated_by",
-                "target_revision": if revision >= 1 { json!(revision) } else { Value::Null },
-            }));
-        }
-        Ok(json!({
-            "idempotency_key": format!("aq-playbook-ensure-{task}"),
-            "reason": null,
-            "operations": operations,
-        }))
     }
 
     // ---------------------------------------------------------------- work.change
@@ -771,7 +759,15 @@ impl Service {
                         .settle_fresh(tx, id, revision, intent, &identity, result)
                         .await;
                 }
-                let Some(body) = self.change_body(task, current, &node, input)? else {
+                let Some(body) = work_change_body(
+                    self.namespace.namespace_id,
+                    self.namespace.generation,
+                    task,
+                    current,
+                    &node,
+                    input,
+                )?
+                else {
                     return self
                         .settle_fresh(tx, id, revision, intent, &identity, refused(subject_id))
                         .await;
@@ -813,92 +809,6 @@ impl Service {
             },
         )
         .await
-    }
-
-    /// Closed variants only. Lifecycle (`task_state`) is never patched.
-    /// Returns None when the variant value is not admissible.
-    fn change_body(
-        &self,
-        task: Uuid,
-        expected: i64,
-        node: &Value,
-        input: &Value,
-    ) -> Result<Option<Value>> {
-        let value = text(input, "value")?;
-        let hold_id = input["hold_id"].as_str();
-        let mut metadata: Map<String, Value> =
-            node["metadata"].as_object().cloned().unwrap_or_default();
-        let mut patch = Map::new();
-        let mut extra = vec![];
-        match text(input, "variant")? {
-            "requirements" => {
-                patch.insert("acceptance_criteria".into(), json!(value));
-            }
-            "priority" => {
-                let Ok(priority) = value.trim().parse::<i64>() else {
-                    return Ok(None);
-                };
-                metadata.insert("aq:priority".into(), json!(priority));
-            }
-            "execution_constraints" => {
-                metadata.insert("aq:execution_constraints".into(), json!(value));
-            }
-            "hold" => {
-                let Some(hold) = hold_id.filter(|h| !h.is_empty()) else {
-                    return Ok(None);
-                };
-                if metadata.contains_key("aq:hold") {
-                    return Ok(None);
-                }
-                metadata.insert("aq:hold".into(), json!({"hold_id": hold, "reason": value}));
-            }
-            "release_hold" => {
-                let Some(hold) = hold_id else {
-                    return Ok(None);
-                };
-                if metadata.get("aq:hold").and_then(|h| h["hold_id"].as_str()) != Some(hold) {
-                    return Ok(None);
-                }
-                metadata.remove("aq:hold");
-            }
-            "dependencies" => {
-                let Ok(blocker) = Uuid::parse_str(value.trim()) else {
-                    return Ok(None);
-                };
-                if blocker == task {
-                    return Ok(None);
-                }
-                let mut deps: Vec<Value> = metadata
-                    .get("aq:dependencies")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                if !deps.contains(&json!(blocker)) {
-                    deps.push(json!(blocker));
-                    extra.push(json!({"op": "add_edge", "source": blocker, "target": task, "edge_type": "blocks"}));
-                }
-                metadata.insert("aq:dependencies".into(), Value::Array(deps));
-            }
-            _ => return Ok(None),
-        }
-        if !patch.contains_key("acceptance_criteria") {
-            patch.insert("metadata".into(), Value::Object(metadata));
-        }
-        let mut operations = vec![
-            json!({"op": "update_node", "id": task, "expected_version": expected, "patch": patch}),
-        ];
-        operations.extend(extra);
-        let key = stable_id(
-            "aq.playbook.work.change.key",
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            &digest(&(task, expected, input))?,
-        )?;
-        Ok(Some(json!({
-            "idempotency_key": format!("aq-playbook-change-{key}"),
-            "reason": null,
-            "operations": operations,
-        })))
     }
 
     // ---------------------------------------------------------------- operation.cancel

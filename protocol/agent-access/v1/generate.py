@@ -213,6 +213,33 @@ def definitions():
     union('GraphCommand', ['FindingCommand', 'CorrectionCommand', 'RelationshipCommand', 'RemoveRelationshipCommand', 'DecompositionCommand'])
     obj('CommandRequest', {'api_version': API, 'operation_id': UUID, 'binding': ref('Binding'), 'reason': text(4096, 1),
                            'commands': array(ref('GraphCommand'), 16, 1)})
+    task_action_fields = {'operation_id': UUID, 'project_id': UUID, 'expected_version': VERSION}
+    task_content = {'title': text(512, 1), 'body': text(32768), 'acceptance_criteria': text(8192),
+                    'labels': array(text(128, 1), 16, unique=True)}
+    obj('DraftTask', {'id': UUID, 'parent_id': UUID, 'task_state': const('draft'), **task_content,
+                      'priority': integer(300, 1), 'role': text(128, 1), 'task_type': text(128, 1)},
+        optional=('body', 'acceptance_criteria', 'labels', 'priority', 'role', 'task_type'))
+    obj('DraftBlock', {'id': UUID, 'source': UUID, 'target': UUID})
+    obj('DraftGraphCreate', {**task_action_fields, 'tasks': array(ref('DraftTask'), 50, 1),
+                             'edges': array(ref('DraftBlock'), 98)}, optional=('edges',))
+    obj('DraftTaskEdit', {**task_action_fields, **task_content, 'story_points': nullable(integer(1000, 1))},
+        optional=(*task_content, 'story_points'), minProperties=4)
+    obj('DraftDependencyAdd', {**task_action_fields, 'blocker_id': UUID})
+    obj('DraftDependencyRemove', {**task_action_fields, 'edge_id': UUID, 'edge_version': VERSION})
+    obj('DraftTaskCancel', task_action_fields)
+    obj('DraftActionSubject', {'type': {'enum': ['project', 'task']}, 'id': UUID, 'revision': VERSION})
+    draft_actions = {'task.graph.create': 'DraftGraphCreate', 'task.edit': 'DraftTaskEdit',
+                     'task.cancel': 'DraftTaskCancel', 'task.dependency.add': 'DraftDependencyAdd',
+                     'task.dependency.remove': 'DraftDependencyRemove'}
+    obj('DraftTaskActionRequest', {
+        'operation_id': UUID, 'kind': {'enum': list(draft_actions)}, 'subject': ref('DraftActionSubject'),
+        'expected_versions': {'type': 'object', 'maxProperties': 32, 'additionalProperties': VERSION},
+        'reason': text(1024, 1), 'payload': {},
+    }, optional=('reason',), oneOf=[
+        {'properties': {'kind': const(kind), 'payload': ref(payload),
+                        'subject': {'properties': {'type': const('project' if kind == 'task.graph.create' else 'task')}}}}
+        for kind, payload in draft_actions.items()
+    ])
     obj('SubjectVersion', {'kind': {'enum': ['node', 'edge']}, 'id': UUID, 'version': VERSION, 'content_revision': nullable(VERSION)})
     obj('MutationReceipt', {'kind': const('graph_mutation'), 'workspace_id': UUID, 'change_set_id': UUID,
                             'versions': array(ref('SubjectVersion'), 100), 'affected_record_ids': array(UUID, 64, unique=True), 'task_completion': const(False)})
@@ -258,7 +285,7 @@ def schema():
     return {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': SCHEMA_ID,
             'title': 'AQ scoped agent graph access v1', '$defs': definitions(),
             'oneOf': [ref(x) for x in ['ContextResponse', 'ReadRequest', 'ReadResponse', 'CommandRequest', 'OperationStatus',
-                                      'RecoveryRequest', 'RecoveryResponse', 'ErrorResponse']]}
+                                      'RecoveryRequest', 'RecoveryResponse', 'ErrorResponse', 'DraftTaskActionRequest']]}
 
 
 def openapi(document):
@@ -289,6 +316,16 @@ def openapi(document):
                                    'description': 'respond-async commits admission without starting dispatch; identical replay without this header may dispatch.',
                                    'schema': {'type': 'string', 'enum': ['respond-async']}})
     lookup = route('agentOperationGet', 'OperationStatus', statuses=['200', '202', '409', '422'])
+    action_envelope = {'$ref': '../../dashboard-actions/v1/schema.json#/$defs/Envelope'}
+    action_content = {'application/json': {'schema': action_envelope}}
+    draft = route('agentDraftTaskAction', 'DraftTaskActionRequest', 'DraftTaskActionRequest',
+                  statuses=['200', '202'])
+    # Task actions share the dashboard action operation journal.
+    for code in ['200', '202']:
+        draft['responses'][code]['content'] = action_content
+        lookup['responses'][code]['content']['application/json']['schema'] = {
+            'oneOf': [{'$ref': '#/components/schemas/OperationStatus'}, action_envelope],
+        }
     lookup['parameters'].append({'name': 'operation_id', 'in': 'path', 'required': True, 'schema': UUID})
     return {'openapi': '3.1.0', 'info': {'title': 'AQ agent graph access', 'version': '1.0.0',
              'description': 'Versioned public agent routes. See owning implementation evidence for qualified behavior; no raw graph proxy or playbook Host API.'},
@@ -301,6 +338,7 @@ def openapi(document):
                       '/v2/worker/messages/poll': {'post': route('workerMessagePoll', 'MessageNodeBatch', 'MessageNodePoll', node=True)},
                       '/v2/worker/messages/ack': {'post': route('workerMessageAck', 'MessageNodeAckReceipt', 'MessageNodeAck', node=True)},
                       '/v1/agent/graph/commands': {'post': commands},
+                      '/v1/agent/task-actions': {'post': draft},
                       '/v1/agent/operations/{operation_id}': {'get': lookup},
                       '/v2/worker/agent-operations/query': {'post': route('workerAgentOperationQuery', 'RecoveryResponse', 'RecoveryRequest', node=True)},
                       '/v2/worker/agent-operations/retry': {'post': route('workerAgentOperationRetry', 'RecoveryResponse', 'RecoveryRetry', node=True)}},

@@ -5491,13 +5491,72 @@
     {
       "cli": [
         "task",
+        "activate",
+        "subtree"
+      ],
+      "grant": "task.activate.subtree",
+      "kind": "mutation",
+      "name": "task.activate.subtree",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:665ae5de5abc0294647d38678a45578331701831f9ed23a49e796c816b183722",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.activate.subtree"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Make a task’s draft descendants schedulable",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "cancel"
       ],
       "grant": "task.cancel",
       "kind": "mutation",
       "name": "task.cancel",
-      "owner_only": true,
+      "owner_only": false,
       "principals": {
+        "agent": {
+          "body": "action_request",
+          "params_digest": "sha256:55723a165d16dea35f9d25531eee4f0a92a7378923f60428a7ee2d15ca7cadfa",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.cancel"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/task-actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
         "owner": {
           "body": "action_request",
           "params_digest": "sha256:55723a165d16dea35f9d25531eee4f0a92a7378923f60428a7ee2d15ca7cadfa",
@@ -6027,6 +6086,27 @@
       "name": "task.dependency.add",
       "owner_only": false,
       "principals": {
+        "agent": {
+          "body": "action_request",
+          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/task-actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
         "owner": {
           "body": "action_request",
           "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
@@ -6086,6 +6166,27 @@
       "name": "task.dependency.remove",
       "owner_only": false,
       "principals": {
+        "agent": {
+          "body": "action_request",
+          "params_digest": "sha256:ed5733a89bb4d8b2ad31a36901dab9eab2d0777152555e4280e6e9ee8f99712d",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.remove"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/task-actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
         "owner": {
           "body": "action_request",
           "params_digest": "sha256:ed5733a89bb4d8b2ad31a36901dab9eab2d0777152555e4280e6e9ee8f99712d",
@@ -6144,6 +6245,27 @@
       "name": "task.edit",
       "owner_only": false,
       "principals": {
+        "agent": {
+          "body": "action_request",
+          "params_digest": "sha256:dd1dc767d3c1911cbc128fadbc93cbca2e12d43170c050b8fe647d125c99db0d",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.edit"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/task-actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        },
         "owner": {
           "body": "action_request",
           "params_digest": "sha256:dd1dc767d3c1911cbc128fadbc93cbca2e12d43170c050b8fe647d125c99db0d",
@@ -6203,6 +6325,23 @@
       "name": "task.graph.create",
       "owner_only": false,
       "principals": {
+        "agent": {
+          "body": "action_request",
+          "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.graph.create"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/task-actions"
+          },
+          "subject": {
+            "id_param": "project_id",
+            "revision_param": "expected_version",
+            "type": "project",
+            "version_key": "project"
+          }
+        },
         "owner": {
           "body": "action_request",
           "params_digest": "sha256:3c856ea8a6f061baad99e1526329faf299c77ca402db97d96651a4de361ecea3",

@@ -226,8 +226,14 @@ pub async fn publish(
         .map(|p| (p.operation.as_str(), p.resource.as_str()))
         .collect();
     let (project, task) = (m.bindings.project_id, m.bindings.task_id);
-    let grants =
-        crate::agent_access::grant_check::resolve_native(&mut tx, state, &effective, project, task);
+    let grants = crate::agent_access::grant_check::resolve_native(
+        &mut tx,
+        state,
+        &effective,
+        project,
+        task,
+        built.work_kind.as_deref(),
+    );
     let grants = grants.await.map_err(db)?;
     on_heap(|| {
         crate::agent_access::native_binding::seal_locked(

@@ -11,6 +11,7 @@
         "task.create.subtask",
         "task.create.project",
         "task.edit",
+        "task.cancel",
         "comment.read",
         "comment.write",
         "knowledge.read",
@@ -47,6 +48,10 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 4294967295
+        },
+        "draft_only": {
+          "type": "boolean",
+          "description": "Creation is limited to drafts in the attempt's scope subtree."
         }
       }
     },

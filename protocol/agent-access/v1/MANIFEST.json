@@ -3,15 +3,15 @@
   "major": 1,
   "status": "Finite daemon gateway implemented and locally qualified; full product/harness integration and production client qualification remain pending. No release/deployment claim.",
   "inventory_algorithm": "SHA256 of canonical sorted JSON map of relative paths to SHA256 and byte size; excludes MANIFEST.json and Python caches",
-  "inventory_sha256": "66faac2daa9bfa458a7298791811a2e3b9fd217568f6582ca417b7b0562aa5af",
+  "inventory_sha256": "f775bfab3706e018479b498fce72b5fca0e8149874245deb3c8ead4fc8c328c1",
   "files": {
     ".gitignore": {
       "sha256": "e99f6ee4eb88882ea6589ecb717e10a41401763241b246b6821bc091cfe2227e",
       "bytes": 20
     },
     "v1/README.md": {
-      "sha256": "fa2160f6a5efdf96fe800f664f9bf9cce30987ed26a781381f64bf25eab7177a",
-      "bytes": 18408
+      "sha256": "bbca8f765656d3ad3e778a2bb9df23fbb258980c59657465ab08a3fd2c36ba1d",
+      "bytes": 19282
     },
     "v1/build_fixtures.py": {
       "sha256": "2eb4d5405a0de6d79b10e636e086f39de1a82f8dd666c3ef711ca9bf85f7df69",
@@ -26,8 +26,8 @@
       "bytes": 2416
     },
     "v1/client_types.py": {
-      "sha256": "e52854499000097d4c3074a184c72cfd827bdf9eb21e52602e2f93f558c50737",
-      "bytes": 16316
+      "sha256": "ab908e90ea003410709fd58fea30091c117abff65e25022b64ce67778a606d8b",
+      "bytes": 17912
     },
     "v1/conformance_model.py": {
       "sha256": "c7748743977da091aad30de642db61ace1aed66d9db54d927748ac9673adc505",
@@ -78,24 +78,24 @@
       "bytes": 58424
     },
     "v1/generate.py": {
-      "sha256": "ea2defabc9b5b8335ad9b6249bbd464ebeeff0f08d4010a1619be691bb5453fc",
-      "bytes": 28228
+      "sha256": "8ba6faa07823f0f4e515a2ef20eb37c2a34c01cfdd0c0e0ef0af2d8367907177",
+      "bytes": 31106
     },
     "v1/openapi.json": {
-      "sha256": "9f47bf10869cdcbea1916590574dcaaa1e6d39c77b83db34b3a42cbbc0001a3d",
-      "bytes": 185259
+      "sha256": "15283e41729c074e1791f2f5d13a4aa5f84cb11c82af9ab9a4e34aec8e84e1f7",
+      "bytes": 207381
     },
     "v1/requirements-dev.txt": {
       "sha256": "e5d8aad6444e49bf2726aa35af230a27c9e754aa5e539bbd85f96aae54b4a878",
       "bytes": 235
     },
     "v1/schema.json": {
-      "sha256": "4b96d88fb9910fa78de29045da8a529b757758b0f6796416c19c481d4965d16a",
-      "bytes": 87751
+      "sha256": "a60c144cfd9ab909192d7de15b957d4388cc6ebea02608508e1868ee3b8671c9",
+      "bytes": 100501
     },
     "v1/test_conformance.py": {
-      "sha256": "4ba30f41c020c5c5d73d42fe3c5690c4b73842fddd9825437dfa63a743e80035",
-      "bytes": 29426
+      "sha256": "e33ef1d2e21a0c7738b3eeb1c5d6f3f55c2e58b934336646f7f8af084d62c1b0",
+      "bytes": 29492
     },
     "v1/upstream/aq-graph-api.md": {
       "sha256": "64f916198677872f732599e3dcd51beffb889165240687b3a2f25e3ee687c59e",

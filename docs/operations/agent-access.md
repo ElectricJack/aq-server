@@ -71,3 +71,45 @@ Response limits cover the full serialized ContextResponse and issuance envelope,
 including profile/binding/credential metadata. Provision reserves maximum
 credential-version widths; issuance checks its response before committing any
 new verifier. Upstream responses must carry `X-AQ-Graph-API-Version: 1`.
+
+## Playbook draft-task access
+
+Configure draft access by the `kind` passed to `work.ensure`. The following
+settings belong to a project's entry in `profiled_execution.projects`.
+
+```toml
+[profiled_execution.projects.agent_grants.by_work_kind.investigation]
+max_created_tasks = 0
+
+[profiled_execution.projects.agent_grants.by_work_kind.spec_ingestion]
+max_created_tasks = 30
+
+[profiled_execution.projects.agent_grants.by_work_kind.fidelity_review]
+max_created_tasks = 10
+edit_drafts = true
+```
+
+The limit counts tasks per attempt across `task.create` and
+`task.graph.create`. A zero limit removes task creation grants. The
+project-wide grant ceiling and creator inheritance also apply. Kinds without
+an entry use the usual grants, including the default limit of five tasks.
+
+Draft creation requires a parent in the attempt's own task subtree or in the
+subtree rooted at the task subject recorded by `work.ensure`. For
+`task.graph.create`, supply `expected_version` with the project revision
+and a `tasks` array. Each task specifies a new UUID, `title`, `parent_id`,
+`task_state: "draft"` and optional labels. A task may use another new task in
+the same batch as its parent. The optional `edges` array takes edge UUIDs,
+`source` and `target`. Each edge means that the source blocks the target,
+and both must be tasks in the batch. The batch is applied atomically.
+
+With `edit_drafts = true`, the attempt can call `task.edit`,
+`task.dependency.add`, `task.dependency.remove` and `task.cancel` on drafts
+in that scope. Both endpoints of a dependency must be in-scope drafts. Supply
+the current task `expected_version`, plus `blocker_id` for adding a
+dependency or `edge_id` and `edge_version` for removing one.
+
+Use `aq commands` to see the attempt's available commands. Invoke the task
+actions through `aq run <command>` or the equivalent `aq task …` commands.
+When delivery is uncertain, use `aq operation show <operation_id>` with the
+original ID.

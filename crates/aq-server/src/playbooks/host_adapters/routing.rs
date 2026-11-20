@@ -309,6 +309,16 @@ impl Service {
         Ok(())
     }
 
+    pub(crate) async fn binding_deactivated(&self, binding: &str) -> Result<()> {
+        sqlx::query("DELETE FROM playbook_engine_bindings WHERE namespace_id=$1 AND generation=$2 AND binding=$3")
+            .bind(self.namespace.namespace_id)
+            .bind(self.namespace.generation)
+            .bind(binding)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Records why the task is not asked about again (`not_offered`,
     /// `unroutable`) for this task version, routing artifact and offers, and
     /// raises it (W6), once for this outcome at this task version.

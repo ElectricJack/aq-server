@@ -14,34 +14,13 @@
 //! host never fabricates a receipt: every passed/failed disposition comes from
 //! an executor-reported exit, and an absent port is a typed refusal.
 use super::*;
+use aq_playbook_domain::host_operations::{DecisionRequest, DecisionView, Operation, Operations};
 use aq_playbook_host::runner::CancellationResult;
 
 pub use aq_playbook_domain::host_requests::*;
 
 fn pin(value: &Value) -> Result<ArtifactPin> {
     serde_json::from_value(value.clone()).map_err(|_| Error::Invalid)
-}
-
-/// One accepted judgment whose provider request runs off the dispatch path.
-struct JudgmentJob {
-    operation: Uuid,
-    command: String,
-    intent_id: String,
-    reference: String,
-    subject: Value,
-    credential_profile: String,
-    prompt_digest: String,
-    context_digest: String,
-    request: JudgmentRequest,
-}
-
-/// Completed outcome and output of one retained host operation.
-pub(super) struct Operation {
-    pub(super) command: String,
-    pub(super) intent_id: String,
-    pub(super) request: Value,
-    pub(super) status: String,
-    pub(super) output: Option<Value>,
 }
 
 impl Service {
@@ -88,19 +67,17 @@ impl Service {
             &accepted.output,
         )
         .await?;
-        let subject = &intent.input["subject"];
-        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10)")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(&intent.command.name)
-            .bind(text(subject, "id")?)
-            .bind(revision_of(subject)?)
-            .bind(check)
-            .bind(request)
-            .bind(self.now()?)
-            .execute(&mut *tx)
+        Operations(&self.namespace)
+            .record(
+                &mut tx,
+                operation,
+                &intent.id,
+                &intent.command.name,
+                &intent.input["subject"],
+                check,
+                request,
+                self.now()?,
+            )
             .await?;
         self.commit_fresh(tx, id, intent).await?;
         Ok(accepted)
@@ -111,19 +88,7 @@ impl Service {
         db: impl PgExecutor<'_>,
         id: Uuid,
     ) -> Result<Option<Operation>> {
-        let row = sqlx::query("SELECT command_name,intent_id,request,status,output FROM playbook_host_operations WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3")
-            .bind(id)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .fetch_optional(db)
-            .await?;
-        Ok(row.map(|row| Operation {
-            command: row.get("command_name"),
-            intent_id: row.get("intent_id"),
-            request: row.get("request"),
-            status: row.get("status"),
-            output: row.get("output"),
-        }))
+        Operations(&self.namespace).load(db, id).await
     }
 
     /// Completes a running operation exactly once: the retained completion and
@@ -136,10 +101,27 @@ impl Service {
         intent_id: &str,
         result: HostResult,
     ) -> Result<HostResult> {
+        let mut tx = self.tx().await?;
+        self.namespace_locked(&mut tx).await?;
+        let result = self
+            .retain_completion(&mut tx, operation, command, intent_id, result, None)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn retain_completion(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        operation: Uuid,
+        command: &str,
+        intent_id: &str,
+        result: HostResult,
+        note: Option<&str>,
+    ) -> Result<HostResult> {
         let (_, contract) = self.completion_contract(command)?;
         let payload = json!({"outcome": result.outcome, "output": result.output});
-        self.profile
-            .registry()
+        self.registry()
             .commands
             .get(command)
             .and_then(|c| c.asynchronous.as_ref())
@@ -147,33 +129,15 @@ impl Service {
             .completion
             .validate(&payload)
             .map_err(|_| Error::Unknown)?;
-        let mut tx = self.tx().await?;
-        self.namespace_locked(&mut tx).await?;
-        let updated = sqlx::query("UPDATE playbook_host_operations SET status=$4,output=$5,completed_at_ms=$6 WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND status='running'")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&result.outcome)
-            .bind(&result.output)
-            .bind(self.now()?)
-            .execute(&mut *tx)
+        if !Operations(&self.namespace)
+            .complete(tx, operation, &result, self.now()?, note)
             .await?
-            .rows_affected();
-        if updated == 0 {
-            let row = sqlx::query("SELECT status,output FROM playbook_host_operations WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3")
-                .bind(operation)
-                .bind(self.namespace.namespace_id)
-                .bind(self.namespace.generation)
-                .fetch_optional(&mut *tx)
+        {
+            return self
+                .load_operation(&mut **tx, operation)
                 .await?
-                .ok_or(Error::Unknown)?;
-            tx.commit().await?;
-            return Ok(HostResult {
-                outcome: row.get("status"),
-                output: row
-                    .get::<Option<Value>, _>("output")
-                    .ok_or(Error::Unknown)?,
-            });
+                .ok_or(Error::Unknown)?
+                .retained();
         }
         let event_id = stable_id(
             &format!("aq.playbook.{command}.completion"),
@@ -182,7 +146,7 @@ impl Service {
             intent_id,
         )?;
         self.seal_event(
-            &mut tx,
+            tx,
             contract,
             event_id,
             operation,
@@ -191,7 +155,6 @@ impl Service {
             payload,
         )
         .await?;
-        tx.commit().await?;
         Ok(result)
     }
 
@@ -212,18 +175,18 @@ impl Service {
         let request = json!({"kind": text(&intent.input, "kind")?,
             "reference": work["reference"], "subject": subject,
             "motivation": intent.input["subject"]});
-        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,created_at_ms) VALUES($1,$2,$3,$4,'work.ensure',$5,$6,NULL,$7,'running',$8)")
-            .bind(self.operation(intent)?)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(text(subject, "id")?)
-            .bind(revision_of(subject)?)
-            .bind(request)
-            .bind(self.now()?)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
+        Operations(&self.namespace)
+            .record(
+                tx,
+                self.operation(intent)?,
+                &intent.id,
+                "work.ensure",
+                subject,
+                None,
+                &request,
+                self.now()?,
+            )
+            .await
     }
 
     /// Reads the tracked work node and, once terminal, completes the
@@ -237,10 +200,7 @@ impl Service {
             return Err(Error::Invalid);
         }
         if op.status != "running" {
-            return Ok(Some(HostResult {
-                outcome: op.status,
-                output: op.output.ok_or(Error::Unknown)?,
-            }));
+            return op.retained().map(Some);
         }
         let task =
             Uuid::parse_str(text(&op.request["subject"], "id")?).map_err(|_| Error::Unknown)?;
@@ -275,13 +235,8 @@ impl Service {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        let now = self.now()?;
-        let operations: Vec<Uuid> = sqlx::query_scalar("UPDATE playbook_host_operations SET observed_at_ms=$4 WHERE operation_id IN (SELECT operation_id FROM playbook_host_operations WHERE namespace_id=$1 AND generation=$2 AND command_name='work.ensure' AND status='running' ORDER BY COALESCE(observed_at_ms,created_at_ms),operation_id LIMIT $3) RETURNING operation_id")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(limit as i64)
-            .bind(now)
-            .fetch_all(&mut *tx)
+        let operations = Operations(&self.namespace)
+            .observe_work(&mut tx, limit, self.now()?)
             .await?;
         tx.commit().await?;
         let mut completed = 0;
@@ -446,62 +401,12 @@ impl Service {
             return Ok(None);
         };
         if op.status != "running" {
-            return Ok(Some(HostResult {
-                outcome: op.status,
-                output: op.output.ok_or(Error::Unknown)?,
-            }));
+            return op.retained().map(Some);
         }
         let checks = self.ports()?.checks.as_ref().ok_or(Error::Unknown)?;
-        let r = &op.request;
-        let base = |outcome: &str, disposition: &str, receipt: Value| HostResult {
-            outcome: outcome.into(),
-            output: json!({"check": r["check"], "disposition": disposition, "receipt": receipt,
-                "reference": format!("check-receipt:{operation}"), "source": r["source"], "subject": r["subject"]}),
-        };
-        let result = match checks.observe(operation).await? {
-            CheckObservation::Running => return Ok(None),
-            CheckObservation::NotFound => {
-                if self.now()? < r["deadline_at_ms"].as_i64().ok_or(Error::Unknown)? {
-                    return Ok(None);
-                }
-                base("infrastructure_failure", "unknown", Value::Null)
-            }
-            CheckObservation::Finished(run) => {
-                let (code, stop) = match run.stop {
-                    CheckStop::Exited(code) => (json!(code), "exited"),
-                    CheckStop::Signalled => (Value::Null, "signalled"),
-                    CheckStop::TimedOut => (Value::Null, "timed_out"),
-                    CheckStop::Cancelled => (Value::Null, "cancelled"),
-                    CheckStop::Lost => (Value::Null, "lost"),
-                };
-                let exit = json!({"code": code, "stop": stop});
-                let artifacts = serde_json::to_value(&run.result_artifacts)?;
-                let receipt_digest = digest(&(
-                    "aq.check.receipt",
-                    &r["subject"],
-                    &r["check"],
-                    &r["source"],
-                    CHECK_EXECUTION_PROFILE,
-                    &run.executor_version,
-                    &run.inputs_digest,
-                    &artifacts,
-                    &exit,
-                ))?;
-                let receipt = json!({"digest": receipt_digest, "executor_version": run.executor_version,
-                    "inputs_digest": run.inputs_digest, "result_artifacts": artifacts, "exit": exit});
-                // Missing input or an uncertain stop is never passed.
-                match (&run.stop, run.inputs_complete) {
-                    (CheckStop::Exited(0), true) => base("passed", "passed", receipt),
-                    (CheckStop::Exited(_), true) => base("failed", "failed", receipt),
-                    (CheckStop::TimedOut, _) => {
-                        base("infrastructure_failure", "timed_out", receipt)
-                    }
-                    (CheckStop::Cancelled, _) => {
-                        base("infrastructure_failure", "cancelled", receipt)
-                    }
-                    _ => base("infrastructure_failure", "unknown", receipt),
-                }
-            }
+        let observed = checks.observe(operation).await?;
+        let Some(result) = check_completion(operation, &op.request, observed, self.now()?)? else {
+            return Ok(None);
         };
         self.complete_operation(operation, &op.command, &op.intent_id, result)
             .await
@@ -746,68 +651,13 @@ impl Service {
         provider: Arc<dyn JudgmentProvider>,
         job: JudgmentJob,
     ) -> Result<HostResult> {
-        let JudgmentJob {
-            operation,
-            command,
-            intent_id,
-            reference,
-            subject,
-            credential_profile,
-            prompt_digest,
-            context_digest,
-            request,
-        } = job;
         let reply = tokio::time::timeout(
-            Duration::from_millis(request.deadline_ms),
-            provider.complete(&request),
+            Duration::from_millis(job.request.deadline_ms),
+            provider.complete(&job.request),
         )
         .await;
-        let refusal = |provenance: Value, reason: &str| HostResult {
-            outcome: "refused".into(),
-            output: json!({"provenance": provenance, "reason": reason, "reference": reference, "subject": subject}),
-        };
-        let provenance = |reply: &JudgmentReply, output: Value| {
-            json!({"provider": reply.provider, "model": reply.model,
-                "credential_profile": credential_profile, "prompt_digest": prompt_digest,
-                "context_digest": context_digest, "output_digest": output,
-                "usage": {"input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
-                    "cost_microunits": reply.cost_microunits}})
-        };
-        let failed = |reason: &str| HostResult {
-            outcome: "failed".into(),
-            output: json!({"provenance": null, "reason": reason, "reference": reference, "subject": subject}),
-        };
-        let result = match reply {
-            Err(_) => refusal(Value::Null, "deadline_exceeded"),
-            Ok(Err(ProviderFailure::Error)) => failed("provider_error"),
-            Ok(Err(ProviderFailure::Unavailable)) => failed("provider_unavailable"),
-            Ok(Ok(reply)) => {
-                if reply.input_tokens > request.max_input_tokens
-                    || reply.output_tokens > request.max_output_tokens
-                    || reply.cost_microunits > request.max_cost_microunits
-                {
-                    refusal(provenance(&reply, Value::Null), "budget_exceeded")
-                } else if !request.choices.contains(&reply.choice)
-                    || reply.rationale.len() as u64 > request.rationale_max_bytes
-                    || reply.provider.is_empty()
-                    || reply.provider.len() > 128
-                    || reply.model.is_empty()
-                    || reply.model.len() > 256
-                {
-                    refusal(Value::Null, "invalid_output")
-                } else {
-                    let output_digest =
-                        digest(&("aq.judgment.output", &reply.choice, &reply.rationale))?;
-                    HostResult {
-                        outcome: "assessed".into(),
-                        output: json!({"choice": reply.choice, "rationale": reply.rationale,
-                            "provenance": provenance(&reply, json!(output_digest)),
-                            "reference": reference, "subject": subject}),
-                    }
-                }
-            }
-        };
-        self.complete_operation(operation, &command, &intent_id, result)
+        let result = job.completion(reply.ok())?;
+        self.complete_operation(job.operation, &job.command, &job.intent_id, result)
             .await
     }
 
@@ -835,119 +685,160 @@ impl Service {
             Stage::Pending(_) => return Err(Error::Conflict),
             Stage::Fresh => {}
         }
-        let input = &intent.input;
-        let subject = &input["subject"];
-        let strings = |field: &str| -> Option<Vec<String>> {
-            serde_json::from_value::<Vec<String>>(input[field].clone()).ok()
-        };
-        let (choices, responders) = (strings("choices"), strings("responders"));
-        let question = text(input, "question")?;
-        let expires = input["expires_at_ms"].as_i64().unwrap_or(0);
-        let distinct = |v: &Vec<String>| {
-            !v.is_empty() && v.iter().collect::<std::collections::BTreeSet<_>>().len() == v.len()
-        };
-        let valid = match (&choices, &responders) {
-            (Some(c), Some(r)) => {
-                distinct(c)
-                    && distinct(r)
-                    && c.iter().all(|c| DECISION_OUTCOMES.contains(&c.as_str()))
-                    && r.iter().all(|r| responder(r).is_some())
-                    && !question.trim().is_empty()
-                    && expires > self.now()?
-            }
-            _ => false,
-        };
-        if !valid {
+        let now = self.now()?;
+        let decision = serde_json::from_value::<DecisionRequest>(intent.input.clone());
+        if !decision.is_ok_and(|request| request.valid(now)) {
             let result = HostResult {
                 outcome: "refused".into(),
-                output: json!({"reference": format!("decision:{operation}"), "subject": subject}),
+                output: json!({"reference": format!("decision:{operation}"), "subject": intent.input["subject"]}),
             };
             return self
                 .settle_fresh(tx, id, revision, intent, &identity, result)
                 .await;
         }
-        let record = json!({"subject": subject, "question": question, "choices": choices,
-            "responders": responders, "expires_at_ms": expires});
-        self.record_operation(tx, id, revision, intent, &identity, None, &record)
+        self.record_operation(tx, id, revision, intent, &identity, None, &intent.input)
             .await
     }
 
-    /// Expires a running decision once its expiry has passed.
     async fn observe_decision(
         &self,
         operation: Uuid,
         op: &Operation,
     ) -> Result<Option<HostResult>> {
-        let expires = op.request["expires_at_ms"].as_i64().ok_or(Error::Unknown)?;
-        if self.now()? < expires {
+        let request: DecisionRequest = serde_json::from_value(op.request.clone())?;
+        if self.now()? < request.expires_at_ms {
             return Ok(None);
         }
-        let output =
-            json!({"reference": format!("decision:{operation}"), "subject": op.request["subject"]});
         self.complete_operation(
             operation,
             &op.command,
             &op.intent_id,
             HostResult {
                 outcome: "expired".into(),
-                output,
+                output: request.output(operation),
             },
         )
         .await
         .map(Some)
     }
 
-    /// Trusted human answer to a running Host7/Host8 decision: `actor` must be a
-    /// listed responder (`user:<id>`) and `choice` one of the offered
-    /// choices. Completes exactly once; a later answer returns the retained
-    /// completion. Not a worker route.
+    pub(in crate::playbooks) async fn decisions(
+        &self,
+        actor: Uuid,
+        handle: Option<Uuid>,
+    ) -> Result<Vec<DecisionView>> {
+        let ops = Operations(&self.namespace);
+        let mut tx = self.tx().await?;
+        Self::owner(&mut tx, actor).await?;
+        ops.require_project_workspace(&mut *tx).await?;
+        let views = ops.decisions(&mut *tx, self.now()?, handle).await?;
+        tx.commit().await?;
+        Ok(views)
+    }
+
+    /// Accept one answer from a listed responder and retain its completion.
+    /// An answer retry returns the original outcome.
     pub async fn answer_decision(
         &self,
         actor: Uuid,
         handle: Uuid,
         choice: &str,
+        note: Option<&str>,
     ) -> Result<HostResult> {
-        if !self.profile.is_host2() {
-            return Err(Error::Forbidden);
-        }
-        let Some(op) = self.load_operation(&self.pool, handle).await? else {
-            return Err(Error::Forbidden);
-        };
-        if op.command != "decision.request" {
+        let ops = Operations(&self.namespace);
+        ops.require_project_workspace(&self.pool).await?;
+        let op = self
+            .load_operation(&self.pool, handle)
+            .await?
+            .filter(|op| self.profile.is_host2() && op.command == "decision.request")
+            .ok_or(Error::Forbidden)?;
+        let request: DecisionRequest = serde_json::from_value(op.request.clone())?;
+        if !request.permits(actor) {
             return Err(Error::Forbidden);
         }
         if op.status != "running" {
-            return Ok(HostResult {
-                outcome: op.status,
-                output: op.output.ok_or(Error::Unknown)?,
-            });
+            return op.retained();
         }
-        if let Some(expired) = self.observe_decision(handle, &op).await? {
-            return Ok(expired);
+        if self.now()? >= request.expires_at_ms {
+            return Err(Error::Conflict);
         }
-        let listed = |field: &str, wanted: &str| {
-            op.request[field]
-                .as_array()
-                .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(wanted)))
-        };
-        if !listed("responders", &format!("user:{actor}")) {
-            return Err(Error::Forbidden);
-        }
-        if !listed("choices", choice) {
+        if !request.choices.iter().any(|c| c == choice)
+            || note.is_some_and(|s| {
+                s.len() > 2048
+                    || (!s.trim().is_empty() && aq_task_comments::validate_body(s).is_err())
+                    || s.contains('\0')
+            })
+        {
             return Err(Error::Invalid);
         }
-        let output =
-            json!({"reference": format!("decision:{handle}"), "subject": op.request["subject"]});
-        self.complete_operation(
-            handle,
-            &op.command,
-            &op.intent_id,
-            HostResult {
-                outcome: choice.into(),
-                output,
-            },
-        )
-        .await
+        let task = match (request.subject_id(), note.filter(|s| !s.trim().is_empty())) {
+            (Some(id), Some(body))
+                if self
+                    .ports()?
+                    .graph
+                    .node(self.namespace.workspace_id, id)
+                    .await?
+                    .is_some_and(|node| node["kind"] == "task" && node["deleted"] != true) =>
+            {
+                Some((id, body))
+            }
+            _ => None,
+        };
+        let mut tx = self.tx().await?;
+        Self::owner(&mut tx, actor).await?;
+        ops.require_project_workspace(&mut *tx).await?;
+        self.namespace_locked(&mut tx).await?;
+        let current = self
+            .load_operation(&mut *tx, handle)
+            .await?
+            .ok_or(Error::Forbidden)?;
+        if current.status != "running" {
+            return current.retained();
+        }
+        let now = self.now()?;
+        if now >= request.expires_at_ms {
+            return Err(Error::Conflict);
+        }
+        let mut output = request.output(handle);
+        if self.profile == super::super::review_domain::CatalogProfile::Host11 {
+            output["note"] = json!(note.unwrap_or_default());
+        }
+        let result = self
+            .retain_completion(
+                &mut tx,
+                handle,
+                &op.command,
+                &op.intent_id,
+                HostResult {
+                    outcome: choice.into(),
+                    output,
+                },
+                note,
+            )
+            .await?;
+        if let Some((task_id, body)) = task {
+            let id = stable_id(
+                "aq.playbook.decision.comment",
+                self.namespace.namespace_id,
+                self.namespace.generation,
+                &op.intent_id,
+            )?;
+            aq_task_comments::add_in_tx(
+                &mut tx,
+                id,
+                aq_task_comments::Thread {
+                    project_id: self.namespace.project_id,
+                    task_id,
+                },
+                &aq_task_comments::Author::Owner { user_id: actor },
+                body,
+                chrono::DateTime::from_timestamp_millis(now).ok_or(Error::Unknown)?,
+            )
+            .await
+            .map_err(|_| Error::Unknown)?;
+        }
+        tx.commit().await?;
+        Ok(result)
     }
 
     // ------------------------------------------------------------ operation.get

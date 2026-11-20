@@ -89,6 +89,7 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
     Some(match kind {
         // agent_access/human/graph_actions.rs::admit; task_execution.rs
         "task.activate"
+        | "task.activate.subtree"
         | "task.complete"
         | "task.reopen"
         | "task.cancel"

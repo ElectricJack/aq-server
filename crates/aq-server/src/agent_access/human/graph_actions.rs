@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use std::collections::{BTreeMap, BTreeSet};
 mod journal;
+mod subtree;
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
 
@@ -37,6 +38,7 @@ pub(crate) trait GraphPayload:
     const TARGET: aq_command_registry::TargetRule = aq_command_registry::TargetRule::Subject;
     /// Subject entity type, which is also the Graph node kind ("project" for author).
     const ENTITY: &'static str;
+    const ACTIVATE_SUBTREE: bool = false;
     fn operation_id(&self) -> Uuid;
     fn project_id(&self) -> Uuid;
     fn expected(&self) -> &str;
@@ -153,9 +155,9 @@ impl GraphPayload for aq_human_work::TaskActivate {
         if c.node["task_state"] != "draft" {
             return Err(ApiError::invalid());
         }
-        Ok(vec![
-            json!({"op":"update_node","id":c.subject,"expected_version":c.version,"patch":{"task_state":"active"}}),
-        ])
+        Ok(vec![aq_human_work::subtree_activation::activate_task(
+            c.subject, c.version,
+        )])
     }
 }
 impl GraphPayload for aq_human_work::TaskComplete {
@@ -708,6 +710,8 @@ pub(crate) struct GraphAction<P> {
     supervisor: Option<super::super::supervisor_conversation::reply::SupervisorPrincipal>,
     /// `(attempt, task, project)` of an agent creating under its own grants.
     agent: Option<(Uuid, Uuid, Uuid)>,
+    guards: BTreeMap<Uuid, u64>,
+    agent_workspace: Option<Uuid>,
     payload: std::marker::PhantomData<P>,
 }
 impl<P> GraphAction<P> {
@@ -721,9 +725,18 @@ impl<P> GraphAction<P> {
     }
     /// An agent's create; the command surface and the agent route have
     /// checked its grant, scope and quota.
-    pub(crate) fn for_agent(state: &AppState, attempt: Uuid, task: Uuid, project: Uuid) -> Self {
+    pub(crate) fn for_agent(
+        state: &AppState,
+        attempt: Uuid,
+        task: Uuid,
+        project: Uuid,
+        guards: BTreeMap<Uuid, u64>,
+        workspace: Option<Uuid>,
+    ) -> Self {
         let mut adapter = Self::new(state);
         adapter.agent = Some((attempt, task, project));
+        adapter.guards = guards;
+        adapter.agent_workspace = workspace;
         adapter
     }
     fn machine(&self) -> bool {
@@ -745,6 +758,9 @@ impl<P> GraphAction<P> {
             }
             let record = project_bindings::current(state, project).await?;
             if record.binding.graph_workspace_id.is_nil()
+                || self
+                    .agent_workspace
+                    .is_some_and(|workspace| workspace != record.binding.graph_workspace_id)
                 || record.binding.graph_adapter_reference != "aq.graph.configured"
             {
                 return Err(unavailable());
@@ -761,6 +777,8 @@ impl<P> GraphAction<P> {
             runtime: Arc::new(ReadRuntime::new(state)),
             supervisor: None,
             agent: None,
+            guards: BTreeMap::new(),
+            agent_workspace: None,
             payload: std::marker::PhantomData,
         }
     }
@@ -775,6 +793,10 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("task cancel adapter");
     r.register(GraphAction::<aq_human_work::TaskActivate>::new(state))
         .expect("task activate adapter");
+    r.register(GraphAction::<aq_human_work::TaskActivateSubtree>::new(
+        state,
+    ))
+    .expect("subtree activation adapter");
     r.register(GraphAction::<aq_human_work::TaskReopen>::new(state))
         .expect("task reopen adapter");
     r.register(GraphAction::<aq_human_work::TaskComplete>::new(state))
@@ -816,6 +838,8 @@ pub(crate) fn schemas(r: &mut Registry) {
         .expect("task cancel schema");
     r.register_schema::<GraphAction<aq_human_work::TaskActivate>>()
         .expect("task activate schema");
+    r.register_schema::<GraphAction<aq_human_work::TaskActivateSubtree>>()
+        .expect("subtree activation schema");
     r.register_schema::<GraphAction<aq_human_work::TaskReopen>>()
         .expect("task reopen schema");
     r.register_schema::<GraphAction<aq_human_work::TaskComplete>>()
@@ -932,7 +956,7 @@ pub(crate) async fn current(rt: &Runtime, workspace: Uuid, id: Uuid, kind: &str)
 fn stale(entity: &str, version: u64) -> Outcome {
     Outcome::conflict(BTreeMap::from([(entity.into(), version.to_string())]))
 }
-fn confirmed(raw: &Value, operations: usize) -> Outcome {
+fn confirmed(raw: &Value, operations: usize, guards: usize) -> Outcome {
     if !super::super::settlement_response_valid(raw) {
         return Outcome::unknown();
     }
@@ -940,7 +964,7 @@ fn confirmed(raw: &Value, operations: usize) -> Outcome {
         return Outcome::unknown();
     };
     let mut affected = Vec::with_capacity(results.len());
-    for r in results {
+    for r in results.iter().skip(guards) {
         let (Some(id), Some(v)) = (r["id"].as_str(), r["version"].as_u64()) else {
             return Outcome::unknown();
         };
@@ -1003,8 +1027,11 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
             .await?;
         } else if request.operation_id != payload.operation_id()
             || version(payload.expected()).is_none()
-            || existing::subject(request, P::ENTITY, P::ENTITY, payload.expected())?
-                != payload.project_id()
+            || (P::ENTITY == "project"
+                && existing::subject(request, P::ENTITY, P::ENTITY, payload.expected())?
+                    != payload.project_id())
+            || (P::ENTITY != "project"
+                && existing::subject(request, P::ENTITY, P::ENTITY, payload.expected()).is_err())
         {
             return Err(ApiError::invalid());
         }
@@ -1016,7 +1043,7 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
         {
             return Err(ApiError::invalid());
         }
-        if self.machine() || P::KIND == "task.graph.create" {
+        if (self.machine() || P::KIND == "task.graph.create") && self.guards.is_empty() {
             let record = self
                 .project(state, user, payload.project_id())
                 .await
@@ -1053,8 +1080,8 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
             .map_err(ApiError::from)?;
         if operation.is_some_and(|op| {
             op.subject_refs.len() != 1
-                || op.subject_refs[0].entity_type != "project"
-                || op.subject_refs[0].id != project_id.to_string()
+                || op.subject_refs[0].entity_type != P::ENTITY
+                || (P::ENTITY == "project" && op.subject_refs[0].id != project_id.to_string())
         }) {
             return Err(ApiError::invalid());
         }
@@ -1100,7 +1127,13 @@ impl<P: GraphPayload> ActionKind for GraphAction<P> {
         )
         .await;
         Ok(Some(match posted {
-            Ok(Ok((status, raw))) if status.is_success() => confirmed(&raw, intent.operations),
+            Ok(Ok((status, raw))) if status.is_success() => {
+                if P::ACTIVATE_SUBTREE {
+                    subtree::confirmed(&raw, &intent.operations)
+                } else {
+                    confirmed(&raw, intent.operations.len(), intent.guards)
+                }
+            }
             // A new authorization/conflict/transport failure cannot disprove
             // an earlier commit. Only its original receipt settles the effect.
             _ => Outcome::unknown(),
@@ -1185,17 +1218,24 @@ impl<P: GraphPayload> GraphAction<P> {
         if let Some(change) = payload.route_change() {
             return route(state, workspace, subject, expected, change).await;
         }
-        let operations = payload
-            .operations(&Current {
-                subject,
-                actor: user.id,
-                supervisor_actor: self.supervisor.as_ref().map(|p| p.actor_id),
-                agent: self.agent.map(|(a, t, _)| (a, t)),
-                project,
-                version: live,
-                node: &node,
-            })
-            .map_err(|_| invalid())?;
+        let mutations = if P::ACTIVATE_SUBTREE {
+            match subtree::plan(rt, workspace, subject, expected).await? {
+                Ok(operations) => operations,
+                Err(outcome) => return Ok(outcome),
+            }
+        } else {
+            payload
+                .operations(&Current {
+                    subject,
+                    actor: user.id,
+                    supervisor_actor: self.supervisor.as_ref().map(|p| p.actor_id),
+                    agent: self.agent.map(|(a, t, _)| (a, t)),
+                    project,
+                    version: live,
+                    node: &node,
+                })
+                .map_err(|_| invalid())?
+        };
         if P::never_attempted() || P::not_held() {
             let attempted: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM execution_attempts WHERE task_id=$1 AND ($2 OR holds_task))",
@@ -1212,6 +1252,9 @@ impl<P: GraphPayload> GraphAction<P> {
         if P::never_granted() && crate::role_settings::granted(&state.store.pool, subject).await? {
             return Ok(existing::disposition(Disposition::Rejected));
         }
+        let operations: Vec<_> = self.guards.iter().map(|(id, version)| {
+            json!({"op":"update_node","id":id,"expected_version":version,"patch":{}})
+        }).chain(mutations).collect();
         let id = payload.operation_id();
         let reason = request
             .reason
@@ -1236,7 +1279,11 @@ impl<P: GraphPayload> GraphAction<P> {
             return Ok(Outcome::unknown());
         };
         Ok(match status.as_u16() {
-            200..=299 => confirmed(&raw, operations.len()),
+            200..=299 if P::ACTIVATE_SUBTREE => subtree::confirmed(&raw, &operations),
+            200..=299 => confirmed(&raw, operations.len(), self.guards.len()),
+            409 if P::ACTIVATE_SUBTREE && code(&raw) == Some("conflict") => {
+                Outcome::conflict(BTreeMap::new())
+            }
             409 if code(&raw) == Some("conflict") => {
                 if P::ENTITY == "project" {
                     existing::disposition(Disposition::Conflict)

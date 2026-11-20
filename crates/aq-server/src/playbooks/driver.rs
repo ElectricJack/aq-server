@@ -4,6 +4,7 @@ use super::{domain::*, service::*};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
     model::{CommandContract, EventEnvelope},
+    plugins::{command_plugin, extension_capability},
     runner::{
         Authority, CancellationResult, DispatchResult, EventDisposition, Host, Intent,
         KeyedAdmissionDisposition, KeyedAdmissionReceipt, Storage,
@@ -61,9 +62,15 @@ impl DomainHost for MailHost {
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }
+    fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
+        self.dispatch_adapter(intent, false)
+    }
 }
 impl Host for MailHost {
     fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
+        if self.mode == HostMode::RetryPlugins && command_plugin(&contract.name).is_none() {
+            return false;
+        }
         let Ok((id, revision)) = grant_actor(authority) else {
             return false;
         };
@@ -80,38 +87,7 @@ impl Host for MailHost {
     }
     fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
         if self.host_command(intent) {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Rejected {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            let result = self.handle.block_on(self.service.host_dispatch(
-                &self.runtime,
-                id,
-                revision,
-                intent,
-            ));
-            // D11 GATE-05 fixture: the AQ effect and its final row committed,
-            // then the reply is lost before the runner records it.
-            #[cfg(feature = "test-support")]
-            if result.is_ok()
-                && let Ok(mut armed) = self.lose_host_reply.lock()
-                && armed.as_deref() == Some(intent.command.name.as_str())
-            {
-                *armed = None;
-                return DispatchResult::Unknown {
-                    reason: "synthetic lost host reply after owner commit".into(),
-                };
-            }
-            return match result {
-                Ok(result) => host_result(result),
-                Err(Error::Unknown) => DispatchResult::Unknown {
-                    reason: "host effect outcome unknown; retained lookup required".into(),
-                },
-                Err(error) => DispatchResult::Rejected {
-                    reason: error.to_string(),
-                },
-            };
+            return self.dispatch_adapter(intent, true);
         }
         if intent.command.name == "decision.request" {
             let Ok((id, revision)) = grant_actor(&intent.authority) else {
@@ -209,7 +185,7 @@ impl Host for MailHost {
                 .handle
                 .block_on(self.service.host_retained(id, revision, intent))
             {
-                Ok(Some(result)) => host_result(result),
+                Ok(Some(result)) => host_result(result, intent),
                 _ => DispatchResult::Unknown {
                     reason: "no retained host result; no new effect admitted".into(),
                 },
@@ -274,19 +250,57 @@ impl Host for MailHost {
     }
 }
 impl MailHost {
-    /// Host-adapter commands of the pinned profile (5: D4 catalog 1.0.0;
-    /// 7: AQ host catalog 2.0.0, which also owns operation.get).
+    fn dispatch_adapter(&mut self, intent: &Intent, plugin_available: bool) -> DispatchResult {
+        let Ok((id, revision)) = grant_actor(&intent.authority) else {
+            return DispatchResult::Rejected {
+                reason: "grant binding refused".into(),
+            };
+        };
+        let result = self.handle.block_on(async {
+            if plugin_available {
+                self.service
+                    .host_dispatch(&self.runtime, id, revision, intent)
+                    .await
+            } else {
+                self.service
+                    .plugin_dispatch(&self.runtime, id, revision, intent, false)
+                    .await
+            }
+        });
+        // D11 GATE-05 fixture: the AQ effect and its final row committed,
+        // then the reply is lost before the runner records it.
+        #[cfg(feature = "test-support")]
+        if result.is_ok()
+            && let Ok(mut armed) = self.lose_host_reply.lock()
+            && armed.as_deref() == Some(intent.command.name.as_str())
+        {
+            *armed = None;
+            return DispatchResult::Unknown {
+                reason: "synthetic lost host reply after owner commit".into(),
+            };
+        }
+        match result {
+            Ok(result) => host_result(result, intent),
+            Err(Error::Unknown) => DispatchResult::Unknown {
+                reason: "host effect outcome unknown; retained lookup required".into(),
+            },
+            Err(error) => DispatchResult::Rejected {
+                reason: error.to_string(),
+            },
+        }
+    }
+    /// Legacy review and mailbox profiles own their base adapters separately.
     fn host_command(&self, intent: &Intent) -> bool {
-        let name = intent.command.name.as_str();
-        super::host_adapters::HOST5_COMMANDS.contains(&name)
-            || (self.service.profile.is_host2()
-                && super::host_adapters::HOST7_COMMANDS.contains(&name))
-            || self.service.profile.commands().contains(&name)
+        let name = &intent.command.name;
+        command_plugin(name).is_some()
+            || (self.service.profile.is_host()
+                && self.service.registry().commands.contains_key(name))
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
-fn host_result(result: super::host_adapters::HostResult) -> DispatchResult {
-    if result.outcome == "accepted"
+fn host_result(result: super::host_adapters::HostResult, intent: &Intent) -> DispatchResult {
+    if command_plugin(&intent.command.name).is_none()
+        && result.outcome == "accepted"
         && let Some(handle) = result.output["handle"].as_str()
     {
         return DispatchResult::Accepted {
@@ -322,6 +336,8 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    /// Order binding mutations with their bridge projections.
+    binding_gate: tokio::sync::Mutex<()>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
     pub(super) deadline: Duration,
     tick_deadline: Duration,
@@ -338,11 +354,6 @@ pub struct Driver {
     graph_consumer: std::sync::atomic::AtomicBool,
     settlement_consumer: std::sync::atomic::AtomicBool,
     schedule_consumer: std::sync::atomic::AtomicBool,
-    /// Host7 (D11): event contracts (name, fingerprint) some installed
-    /// artifact declares. The engine refuses any other contract, so a Host7
-    /// bridge event nothing consumes (aq.work.changed after an accepted
-    /// work.ensure, aq.integration.changed, ...) would wedge the outbox page.
-    declared_events: Mutex<std::collections::BTreeSet<(String, String)>>,
     #[cfg(feature = "test-support")]
     lose_decision_reply: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "test-support")]
@@ -397,7 +408,7 @@ impl Driver {
         let owner = Owner::start_registered(
             namespace,
             limits,
-            service.profile.registry(),
+            service.registry().clone(),
             guarded_factory,
             move |acquired| {
                 if acquired.namespace != expected_namespace {
@@ -437,6 +448,7 @@ impl Driver {
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            binding_gate: tokio::sync::Mutex::new(()),
             deadline,
             tick_deadline,
             retention,
@@ -447,7 +459,6 @@ impl Driver {
             graph_consumer: std::sync::atomic::AtomicBool::new(false),
             settlement_consumer: std::sync::atomic::AtomicBool::new(false),
             schedule_consumer: std::sync::atomic::AtomicBool::new(false),
-            declared_events: Mutex::default(),
             #[cfg(feature = "test-support")]
             lose_decision_reply,
             #[cfg(feature = "test-support")]
@@ -485,20 +496,8 @@ impl Driver {
         let schedule_consumer = self.service.profile
             == super::review_domain::CatalogProfile::Monitoring6
             && artifact.content.registry.events.get("aq.signal.reported")
-                == self
-                    .service
-                    .profile
-                    .registry()
-                    .events
-                    .get("aq.signal.reported");
+                == self.service.registry().events.get("aq.signal.reported");
         let registered = artifact.clone();
-        let declared: Vec<(String, String)> = artifact
-            .content
-            .registry
-            .events
-            .values()
-            .filter_map(|e| Some((e.name.clone(), e.fingerprint().ok()?)))
-            .collect();
         self.owner
             .call(
                 Request::Install {
@@ -515,10 +514,6 @@ impl Driver {
                 "playbook definition registry write failed; definition view unavailable"
             );
         }
-        self.declared_events
-            .lock()
-            .map_err(|_| Error::Unknown)?
-            .extend(declared);
         if schedule_consumer {
             self.schedule_consumer
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -540,21 +535,26 @@ impl Driver {
         grant: Uuid,
         revision: i64,
     ) -> Result<serde_json::Value> {
+        let _guard = self.binding_gate.lock().await;
         let active_authority = self
             .service
             .active_authority(&self.runtime, grant, revision)
             .await?;
         self.owner
             .call(
-                Request::Activate {
+                Request::ActivateAt {
                     binding: binding.clone(),
                     artifact,
                     authority: active_authority,
+                    now_ms: self.service_clock(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| match error {
+                aq_playbook_host::Error::Invalid => Error::Invalid,
+                other => host_error(other),
+            })?;
         let current = Request::Binding {
             binding: binding.clone(),
         };
@@ -669,8 +669,8 @@ impl Driver {
             .complete_health_scan(&self.runtime, observation, evaluation, complete)
             .await
     }
-    /// At most two admissions and events, 64 destinations/event, and one
-    /// eight-transition tick. Overlap refuses without growing a waiter queue.
+    /// At most two admissions, outbox events and interval occurrences each,
+    /// plus one eight-transition tick. Overlap refuses without a waiter queue.
     pub async fn quantum(&self) -> Result<serde_json::Value> {
         let mut partial = Partial::default();
         let result = self.quantum_with(&mut partial).await;
@@ -765,6 +765,20 @@ impl Driver {
                 .collect_work_completions(&self.runtime, 2)
                 .await,
         );
+        if self.service.profile.is_host() {
+            partial.defer(
+                "collecting interval events",
+                self.owner
+                    .call(
+                        Request::CollectIntervalEvents {
+                            now_ms: self.service_clock(),
+                        },
+                        self.deadline,
+                    )
+                    .await
+                    .map_err(host_error),
+            );
+        }
         if self.service.profile == super::review_domain::CatalogProfile::Monitoring6
             && self
                 .schedule_consumer
@@ -784,19 +798,15 @@ impl Driver {
         }
         for (sequence, id, event, accepted) in &page {
             if !accepted
-                && self.service.profile.is_host2()
+                && (self.service.profile.is_host2()
+                    || extension_capability(&event.producer).is_some())
                 && !self
-                    .declared_events
-                    .lock()
-                    .map_err(|_| Error::Unknown)?
-                    .contains(&(
-                        event.contract.name.clone(),
-                        event.contract.fingerprint.clone(),
-                    ))
+                    .owner
+                    .declares_event(&event.contract.name, &event.contract.fingerprint)
             {
                 // No installed artifact consumes this contract: retire it
                 // with zero destinations instead of wedging the page.
-                let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+                let key = digest(&(&event.producer, 0_u64, &event.event_id))?;
                 let receipt = EventDisposition {
                     key,
                     duplicate: false,
@@ -833,6 +843,12 @@ impl Driver {
         let tick = ticked.await.map_err(host_error);
         partial.defer("ticking runs", tick.clone());
         let tick = tick?;
+        if self.owner.has_plugin_artifacts() {
+            partial.defer(
+                "sending plugin notifications",
+                self.service.flush_plugin_notices(&self.runtime).await,
+            );
+        }
         if self.service.profile.has_findings() {
             partial.defer(
                 "sending finding notifications",
@@ -880,7 +896,7 @@ impl Driver {
                 .acknowledge_event(&self.runtime, id, receipt, false)
                 .await?;
         }
-        let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+        let key = digest(&(&event.producer, 0_u64, &event.event_id))?;
         let fanout = Request::Fanout {
             event_key: key.clone(),
             limit: 64,
@@ -965,40 +981,76 @@ impl Driver {
         };
         Ok(matches!(status, "completed" | "failed" | "cancelled"))
     }
-    /// Startup replay never changes an existing activation or renews authority.
-    pub(crate) async fn ensure_binding(
+    /// Startup reconciliation preserves the current activation and its
+    /// unfinished interval cursors when the configured binding is unchanged.
+    pub async fn ensure_binding(
         &self,
         binding: String,
         artifact: String,
         grant: Uuid,
         scope: &super::domain::GrantScope,
+        schedules: &[aq_playbook_host::model::schedules::BindingSchedule],
     ) -> Result<()> {
-        let expected = self.service.profile.authority(grant, 1, scope)?;
-        match self
+        let _guard = self.binding_gate.lock().await;
+        let authority = self.service.grant_authority(grant, 1, scope)?;
+        let may_activate = match self.service.active_authority(&self.runtime, grant, 1).await {
+            Ok(current) if current == authority => true,
+            Ok(_) => return Err(Error::Conflict),
+            Err(Error::Forbidden) => false,
+            Err(error) => return Err(error),
+        };
+        let interval_event = if schedules.is_empty() {
+            None
+        } else {
+            Some(self.service.interval_event()?.ok_or(Error::Invalid)?)
+        };
+        let active = self
             .owner
             .call(
-                Request::Binding {
+                Request::ConfigureBinding {
                     binding: binding.clone(),
+                    artifact: artifact.clone(),
+                    authority,
+                    may_activate,
+                    schedules: schedules.to_vec(),
+                    interval_event,
+                    now_ms: self.service_clock(),
                 },
                 self.deadline,
             )
             .await
-        {
-            Ok(value) => {
-                let old: aq_playbook_host::runner::Activation = serde_json::from_value(value)?;
-                if old.artifact != artifact || old.authority != expected {
-                    return Err(Error::Conflict);
-                }
-                // Active since an earlier start: recorded all the same.
-                self.service.binding_activated(&binding, &artifact).await
-            }
-            Err(aq_playbook_host::Error::Invalid) => {
-                self.activate(binding, artifact, grant, 1).await?;
-                Ok(())
-            }
-            Err(_) => Err(Error::Unknown),
+            .map_err(host_error)?;
+        match active.as_bool() {
+            Some(true) => self.service.binding_activated(&binding, &artifact).await,
+            Some(false) => self.service.binding_deactivated(&binding).await,
+            None => Err(Error::Unknown),
         }
     }
+
+    pub async fn deactivate_binding(&self, binding: String, revision: u64) -> Result<()> {
+        if binding.is_empty() || binding.len() > 128 || binding.contains('\0') || revision == 0 {
+            return Err(Error::Invalid);
+        }
+        let _guard = self.binding_gate.lock().await;
+        let result = self
+            .owner
+            .call(
+                Request::DeactivateBinding {
+                    binding: binding.clone(),
+                    revision,
+                    now_ms: self.service_clock(),
+                },
+                self.deadline,
+            )
+            .await
+            .map_err(host_error)?;
+        match result.as_bool() {
+            Some(true) => self.service.binding_deactivated(&binding).await,
+            Some(false) => Err(Error::Conflict),
+            None => Err(Error::Unknown),
+        }
+    }
+
     /// D9: the binding's active artifact digest; `None` if never activated.
     pub(crate) async fn binding_artifact(&self, binding: String) -> Result<Option<String>> {
         match self

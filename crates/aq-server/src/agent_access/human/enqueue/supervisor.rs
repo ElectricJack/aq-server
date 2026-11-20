@@ -15,6 +15,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
+use schemars::JsonSchema;
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
 
@@ -224,7 +225,7 @@ async fn create(
         crate::agent_access::scheduling::parse::parse(&bytes).map_err(|_| ApiError::invalid())?,
     )
     .map_err(|_| ApiError::invalid())?;
-    let op = actions::submit_scoped(&state, &registry(&state, p)?, &user, request).await?;
+    let op = actions::submit_scoped(&state, &registry(&state, p)?, &user, request, None).await?;
     let response = actions::response(&state, op);
     tx.commit().await?;
     Ok((actions::operation_status(&response.data), Json(response)))
@@ -243,37 +244,115 @@ async fn lookup(
     tx.commit().await?;
     Ok(Json(response))
 }
-/// An agent's single-task create (spec 0006 phase 2), journaled under the
-/// attempt's own identity. Its grant, scope and quota are already checked.
-pub(crate) async fn agent_create(
+/// Agent actions use an attempt-private journal and a fixed adapter set.
+fn agent_registry(
+    state: &AppState,
+    ids: aq_agent_grants::AttemptIds,
+    guards: std::collections::BTreeMap<Uuid, u64>,
+    workspace: Option<Uuid>,
+) -> ApiResult<Registry> {
+    use super::super::graph_actions::{DependencyAdd, DependencyRemove, TaskEdit};
+    let mut registry = Registry::default();
+    let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
+    macro_rules! adapter {
+        ($payload:ty) => {
+            GraphAction::<$payload>::for_agent(
+                state,
+                attempt,
+                task,
+                project,
+                guards.clone(),
+                workspace,
+            )
+        };
+    }
+    registry.register(Single(adapter!(SingleGraph)))?;
+    registry.register(adapter!(GraphCreate))?;
+    registry.register(adapter!(TaskEdit))?;
+    registry.register(adapter!(DependencyAdd))?;
+    registry.register(adapter!(DependencyRemove))?;
+    registry.register(adapter!(aq_human_work::Execution))?;
+    Ok(registry)
+}
+
+async fn agent_user(state: &AppState, ids: aq_agent_grants::AttemptIds) -> ApiResult<User> {
+    let collision: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
+        .bind(ids.attempt_id)
+        .fetch_one(&state.store.pool)
+        .await?;
+    if collision {
+        return Err(ApiError::for_status(StatusCode::FORBIDDEN));
+    }
+    Ok(User {
+        id: ids.attempt_id,
+        email: String::new(),
+        role: crate::store::Role::Viewer,
+        issuer: None,
+        subject: None,
+    })
+}
+
+fn agent_response(state: &AppState, op: actions::Operation) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let response = actions::response(state, op);
+    (
+        actions::operation_status(&response.data),
+        [
+            ("X-AQ-Agent-API-Version", "1"),
+            ("Cache-Control", "no-store"),
+        ],
+        Json(response),
+    )
+        .into_response()
+}
+
+pub(crate) async fn agent_lookup(
+    state: &AppState,
+    ids: aq_agent_grants::AttemptIds,
+    operation: Uuid,
+) -> ApiResult<axum::response::Response> {
+    let registry = agent_registry(state, ids, Default::default(), None)?;
+    let op =
+        actions::lookup_scoped(state, &registry, &agent_user(state, ids).await?, operation).await?;
+    Ok(agent_response(state, op))
+}
+
+pub(crate) async fn agent_replay(
+    state: &AppState,
+    ids: aq_agent_grants::AttemptIds,
+    request: &ActionRequest,
+) -> ApiResult<Option<axum::response::Response>> {
+    let registry = agent_registry(state, ids, Default::default(), None)?;
+    let scope = Scope::Project {
+        project_id: ids.project_id,
+    };
+    actions::replay_scoped(
+        state,
+        &registry,
+        &agent_user(state, ids).await?,
+        request,
+        &scope,
+    )
+    .await
+    .map(|op| op.map(|op| agent_response(state, op)))
+}
+
+pub(crate) async fn agent_action(
     state: &AppState,
     ids: aq_agent_grants::AttemptIds,
     request: ActionRequest,
-) -> std::result::Result<axum::response::Response, ApiError> {
-    use axum::response::IntoResponse;
-    let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
-    let run = async {
-        let collision: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
-            .bind(attempt)
-            .fetch_one(&state.store.pool)
-            .await?;
-        if collision {
-            return Err(ApiError::for_status(StatusCode::FORBIDDEN));
-        }
-        let mut r = Registry::default();
-        r.register(Single(GraphAction::<SingleGraph>::for_agent(
-            state, attempt, task, project,
-        )))?;
-        let user = User {
-            id: attempt,
-            email: String::new(),
-            role: crate::store::Role::Viewer,
-            issuer: None,
-            subject: None,
-        };
-        let op = actions::submit_scoped(state, &r, &user, request).await?;
-        ApiResult::Ok(actions::response(state, op))
-    };
-    run.await
-        .map(|response| (actions::operation_status(&response.data), Json(response)).into_response())
+    guards: std::collections::BTreeMap<Uuid, u64>,
+    workspace: Option<Uuid>,
+    admission: actions::AgentAdmission<'_>,
+) -> ApiResult<axum::response::Response> {
+    let registry = agent_registry(state, ids, guards, workspace)?;
+    let op = actions::submit_scoped(
+        state,
+        &registry,
+        &agent_user(state, ids).await?,
+        request,
+        Some(admission),
+    )
+    .await?;
+    Ok(agent_response(state, op))
 }

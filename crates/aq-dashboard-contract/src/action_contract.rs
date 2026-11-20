@@ -50,6 +50,12 @@ pub enum Recovery {
     RefreshAndReview,
     None,
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ActivationCounts {
+    pub activated: u32,
+    pub skipped: u32,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Operation {
@@ -79,6 +85,9 @@ pub struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-z][a-z0-9_]*$"))]
     pub reason: Option<String>,
+    /// Counts for a confirmed `task.activate.subtree` operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation: Option<ActivationCounts>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum ActionVersion {
@@ -153,6 +162,7 @@ pub struct Outcome {
     pub current_versions: BTreeMap<String, String>,
     /// Rejection only: the reason code the operation records (see [`Operation::reason`]).
     pub reason: Option<&'static str>,
+    pub activation: Option<ActivationCounts>,
 }
 impl Outcome {
     pub fn unknown() -> Self {
@@ -162,6 +172,7 @@ impl Outcome {
             affected_entities: vec![],
             current_versions: BTreeMap::new(),
             reason: None,
+            activation: None,
         }
     }
     pub fn conflict(current_versions: BTreeMap<String, String>) -> Self {
@@ -171,6 +182,7 @@ impl Outcome {
             affected_entities: vec![],
             current_versions,
             reason: None,
+            activation: None,
         }
     }
     /// A definite refusal that changed nothing, with its reason code.
@@ -188,6 +200,7 @@ impl Outcome {
             affected_entities,
             current_versions: BTreeMap::new(),
             reason: None,
+            activation: None,
         }
     }
 }

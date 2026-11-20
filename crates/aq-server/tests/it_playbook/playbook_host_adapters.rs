@@ -29,6 +29,7 @@ struct FakeGraph {
     nodes: Mutex<BTreeMap<Uuid, Value>>,
     replies: Mutex<BTreeMap<String, Replay>>,
     mutations: Mutex<usize>,
+    tree: Mutex<Option<Value>>,
 }
 impl FakeGraph {
     fn mutations(&self) -> usize {
@@ -48,6 +49,9 @@ impl FakeGraph {
 impl WorkGraph for FakeGraph {
     async fn node(&self, _: Uuid, id: Uuid) -> Result<Option<Value>> {
         Ok(self.nodes.lock().unwrap().get(&id).cloned())
+    }
+    async fn activation_tree(&self, _: Uuid, _: Uuid) -> Result<Value> {
+        self.tree.lock().unwrap().clone().ok_or(Error::Unknown)
     }
     async fn mutate(&self, _: Uuid, body: Value) -> Result<(u16, Value)> {
         let key = body["idempotency_key"].as_str().unwrap().to_string();
@@ -82,14 +86,21 @@ impl WorkGraph for FakeGraph {
                     if node["version"] != op["expected_version"] {
                         return Ok((409, json!({})));
                     }
-                    assert!(
-                        op["patch"].get("task_state").is_none(),
-                        "no lifecycle shortcut"
-                    );
-                    for (k, v) in op["patch"].as_object().unwrap() {
+                    let patch = op["patch"].as_object().unwrap();
+                    if let Some(state) = patch.get("task_state") {
+                        assert!(
+                            key.starts_with("aq-playbook-activate-"),
+                            "no lifecycle shortcut"
+                        );
+                        assert_eq!(node["task_state"], "draft");
+                        assert_eq!(state, "active");
+                    }
+                    for (k, v) in patch {
                         node[k] = v.clone();
                     }
-                    node["version"] = json!(node["version"].as_i64().unwrap() + 1);
+                    if !patch.is_empty() {
+                        node["version"] = json!(node["version"].as_i64().unwrap() + 1);
+                    }
                     results.push(node.clone());
                 }
                 "add_edge" => results.push(op.clone()),
@@ -111,6 +122,7 @@ impl WorkGraph for FakeGraph {
 
 struct Host {
     service: Service,
+    profile: CatalogProfile,
     runtime: RuntimeOwner,
     grant: Uuid,
     scope: GrantScope,
@@ -118,6 +130,15 @@ struct Host {
     graph: Arc<FakeGraph>,
 }
 async fn host(state: &aq_server::AppState, actor: Uuid, workspace: Uuid, project: Uuid) -> Host {
+    host_with_profile(state, actor, workspace, project, CatalogProfile::Host5).await
+}
+async fn host_with_profile(
+    state: &aq_server::AppState,
+    actor: Uuid,
+    workspace: Uuid,
+    project: Uuid,
+    profile: CatalogProfile,
+) -> Host {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("key");
     std::fs::write(&path, [9_u8; 32]).unwrap();
@@ -131,24 +152,33 @@ async fn host(state: &aq_server::AppState, actor: Uuid, workspace: Uuid, project
     })
     .unwrap();
     let graph = Arc::new(FakeGraph::default());
-    let service = Service::new_host5(
-        state,
-        Namespace {
-            namespace_id: Uuid::new_v4(),
-            generation: 1,
-            name: format!("fixture-{}", Uuid::new_v4()),
-            workspace_id: workspace,
-            project_id: project,
-            owner_user_id: actor,
-        },
-        Arc::new(keys),
-        graph.clone(),
-    )
-    .await
+    let namespace = Namespace {
+        namespace_id: Uuid::new_v4(),
+        generation: 1,
+        name: format!("fixture-{}", Uuid::new_v4()),
+        workspace_id: workspace,
+        project_id: project,
+        owner_user_id: actor,
+    };
+    let service = if profile == CatalogProfile::Host5 {
+        Service::new_host5(state, namespace, Arc::new(keys), graph.clone()).await
+    } else {
+        Service::new_host2(
+            state,
+            namespace,
+            Arc::new(keys),
+            profile,
+            graph.clone(),
+            None,
+            None,
+            None,
+        )
+        .await
+    }
     .unwrap();
     service.initialize(actor).await.unwrap();
     let now = (state.clock)().timestamp_millis();
-    let scope = GrantScope {
+    let mut scope = GrantScope {
         workspace_id: workspace,
         project_id: project,
         recipients: vec![],
@@ -162,6 +192,11 @@ async fn host(state: &aq_server::AppState, actor: Uuid, workspace: Uuid, project
             .map(String::from),
         ),
     };
+    if profile == CatalogProfile::Host11 {
+        scope
+            .capabilities
+            .extend(["work.activate", "decision.request", "operation.get"].map(String::from));
+    }
     let grant = Uuid::new_v4();
     service
         .grant(actor, grant, scope.clone(), now + 10_000)
@@ -170,6 +205,7 @@ async fn host(state: &aq_server::AppState, actor: Uuid, workspace: Uuid, project
     let runtime = service.adopt_runtime(Uuid::new_v4(), 0).await.unwrap();
     Host {
         service,
+        profile,
         runtime,
         grant,
         scope,
@@ -185,12 +221,10 @@ impl Host {
             step: name.replace('.', "-"),
             invocation: 1,
             deadline_at_ms: self.now + 5000,
-            command: CatalogProfile::Host5.registry().commands[name].clone(),
+            command: self.profile.registry().commands[name].clone(),
             input_digest: digest(&input).unwrap(),
             input,
-            authority: CatalogProfile::Host5
-                .authority(self.grant, 1, &self.scope)
-                .unwrap(),
+            authority: self.profile.authority(self.grant, 1, &self.scope).unwrap(),
             status: IntentStatus::Dispatched,
             cancel_requested: false,
             cancel_dispatched: false,
@@ -225,6 +259,94 @@ async fn outbox(pool: &sqlx::PgPool, namespace: Uuid) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn host11_activates_only_subtrees_of_ensured_tasks_and_retains_counts() {
+    let f = common::profiled::fixture().await;
+    common::profiled::insert(&f).await;
+    let lineage = &f.selection.lineage;
+    let h = host_with_profile(
+        &f.state,
+        f.actor,
+        lineage.workspace_id,
+        lineage.project_id,
+        CatalogProfile::Host11,
+    )
+    .await;
+    let activate = |intent, id, revision| {
+        h.intent(
+            intent,
+            "work.activate",
+            json!({"subject":{"id":id,"revision":revision}}),
+        )
+    };
+    let foreign = h
+        .run(&activate("foreign", Uuid::new_v4(), 1))
+        .await
+        .unwrap();
+    assert_eq!(foreign.outcome, "refused");
+    assert_eq!(foreign.output["reason"], "not_ensured");
+    assert_eq!(h.graph.mutations(), 0);
+    let ensured = h
+        .run(&h.intent("ensure", "work.ensure", ensure_input("planner", "context")))
+        .await
+        .unwrap();
+    assert_eq!(ensured.outcome, "accepted");
+    let (task, root) = {
+        let nodes = h.graph.nodes.lock().unwrap();
+        let (task, root) = nodes.first_key_value().unwrap();
+        (*task, root.clone())
+    };
+    let child = Uuid::new_v4();
+    let mut root = root;
+    root["workspace_id"] = json!(lineage.workspace_id);
+    root["deleted"] = json!(false);
+    let draft = json!({"id":child,"workspace_id":lineage.workspace_id,
+        "kind":"task","deleted":false,"task_state":"draft","version":4});
+    h.graph.nodes.lock().unwrap().insert(child, draft.clone());
+    *h.graph.tree.lock().unwrap() = Some(json!({"node":root,"children":[
+        {"node":draft,"children":[],"truncated":false}
+    ],"truncated":false}));
+    let intent = activate("activate", task, 1);
+    let result = h.run(&intent).await.unwrap();
+    assert_eq!(result.outcome, "activated");
+    assert_eq!(result.output, json!({"activated":1,"skipped":0}));
+    assert_eq!(h.graph.version(child), 5);
+    assert_eq!(h.graph.version(task), 1);
+    assert_eq!(h.graph.mutations(), 2);
+    assert_eq!(h.run(&intent).await.unwrap(), result);
+    assert_eq!(h.graph.mutations(), 2);
+
+    let decision = h
+        .run(&h.intent(
+            "decision",
+            "decision.request",
+            json!({"subject":{"id":task,"revision":1}, "question":"Is the plan ready?",
+                "choices":["approved","rejected"], "responders":[format!("user:{}", f.actor)],
+                "expires_at_ms":h.now + 4000}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(decision.outcome, "accepted");
+    let handle = serde_json::from_value(decision.output["handle"].clone()).unwrap();
+    let note = "Add the rollback steps.";
+    let answer = h
+        .service
+        .answer_decision(f.actor, handle, "rejected", Some(note))
+        .await
+        .unwrap();
+    assert_eq!(answer.outcome, "rejected");
+    assert_eq!(answer.output["note"], note);
+    let retained = h
+        .run(&h.intent("read-decision", "operation.get", json!({"handle": handle})))
+        .await
+        .unwrap();
+    assert_eq!(retained.outcome, "completed");
+    assert_eq!(
+        retained.output,
+        json!({"outcome":"rejected","output":answer.output})
+    );
 }
 
 #[tokio::test]

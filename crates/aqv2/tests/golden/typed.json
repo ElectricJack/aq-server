@@ -937,7 +937,9 @@
             "task": "4"
           },
           "operation_id": "<new-1>",
-          "params": {},
+          "params": {
+            "operation_id": "<new-1>"
+          },
           "reason": "duplicate",
           "subject": {
             "id": "00000000-0000-4000-8000-0000000000b1",

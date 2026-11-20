@@ -170,10 +170,16 @@ async fn command(
         return Err(Error("session_revoked"));
     }
     // Cross-attempt UUID reuse and same-attempt concurrent admission are fenced.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(format!("agent-operation:{op}"))
-        .execute(&mut *tx)
-        .await?;
+    aq_agent_grants::store::lock_operation(&mut tx, op).await?;
+    let typed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM dashboard_operations WHERE operation_id=$1)",
+    )
+    .bind(op)
+    .fetch_one(&mut *tx)
+    .await?;
+    if typed {
+        return Err(Error("id_conflict"));
+    }
     let existing = sqlx::query(
         "SELECT attempt_id,payload_digest,status FROM agent_graph_operations WHERE operation_id=$1",
     )
@@ -229,11 +235,31 @@ async fn agent_get(
 ) -> Result<Response> {
     let mut tx = state.store.pool.begin().await?;
     let p = authenticate_locked(&state, &headers, &mut tx).await?;
-    let row = sqlx::query("SELECT * FROM agent_graph_operations WHERE operation_id=$1")
-        .bind(op)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error("operation_unknown"))?;
+    let attempt = id(&p.binding, "attempt_id")?;
+    let row =
+        sqlx::query("SELECT * FROM agent_graph_operations WHERE operation_id=$1 AND attempt_id=$2")
+            .bind(op)
+            .bind(attempt)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(row) = row else {
+        let ids = grant_check::ids(&p)?;
+        tx.commit().await?;
+        return super::human::enqueue::supervisor::agent_lookup(&state, ids, op)
+            .await
+            .map_err(|e| {
+                if e.status() == StatusCode::NOT_FOUND {
+                    Error("operation_unknown")
+                } else {
+                    Error("internal")
+                }
+            });
+    };
+    let shadowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dashboard_operations WHERE operation_id=$1 AND principal_id=$2)")
+        .bind(op).bind(attempt).fetch_one(&mut *tx).await?;
+    if shadowed {
+        return Err(Error("id_conflict"));
+    }
     owns(&p, &row)?;
     let body: Value = row.get("status");
     if p.expires <= now(&state) {

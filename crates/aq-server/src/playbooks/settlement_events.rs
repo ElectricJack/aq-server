@@ -47,7 +47,7 @@ impl Service {
                 observed_at_ms: Some(at),
                 payload: row.get("outbox"),
             };
-            aq_playbook_host::model::validate_event(&event, &self.profile.registry())
+            aq_playbook_host::model::validate_event(&event, self.registry())
                 .map_err(|_| Error::Invalid)?;
             let digest = digest(&event)?;
             let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;

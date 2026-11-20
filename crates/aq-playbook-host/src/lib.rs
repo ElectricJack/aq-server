@@ -3,14 +3,14 @@
 use aq_playbooks_model::{Artifact, CommandContract, EventEnvelope, Registry};
 use aq_playbooks_runner::{
     Authority, CancellationResult, DispatchResult, Engine, EngineConfig, Host, IndexQuery, Intent,
-    KeyedAdmissionRequest, Storage,
+    IntentStatus, KeyedAdmissionRequest, Storage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{
-        Arc, Condvar, Mutex, Weak,
+        Arc, Condvar, Mutex, OnceLock, RwLock, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 pub mod drive;
 pub mod engine_retention;
+pub mod plugins;
 pub mod protected;
 pub mod retention;
 pub use aq_playbooks_model as model;
@@ -30,6 +31,7 @@ pub use postgres as postgres_client;
 pub enum HostMode {
     Dispatch,
     Reconcile,
+    RetryPlugins,
     Cancel,
 }
 /// Recovery mode authorizes historical lookup only; implementations must never
@@ -44,6 +46,11 @@ pub struct AcquiredOwner {
 
 pub trait DomainHost: Host {
     fn set_mode(&mut self, mode: HostMode);
+    fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
+        DispatchResult::Unknown {
+            reason: "plugin contract is unavailable".into(),
+        }
+    }
 }
 pub use aq_playbooks_runner::MemoryStorage;
 
@@ -139,6 +146,29 @@ pub enum Request {
         artifact: String,
         authority: Authority,
     },
+    ActivateAt {
+        binding: String,
+        artifact: String,
+        authority: Authority,
+        now_ms: i64,
+    },
+    ConfigureBinding {
+        binding: String,
+        artifact: String,
+        authority: Authority,
+        may_activate: bool,
+        schedules: Vec<model::schedules::BindingSchedule>,
+        interval_event: Option<model::ContractRef>,
+        now_ms: i64,
+    },
+    DeactivateBinding {
+        binding: String,
+        revision: u64,
+        now_ms: i64,
+    },
+    CollectIntervalEvents {
+        now_ms: i64,
+    },
     Admit {
         binding: String,
         entry: String,
@@ -203,7 +233,10 @@ impl Request {
     fn control(&self) -> bool {
         matches!(
             self,
-            Self::Cancel { .. } | Self::CancelEffects { .. } | Self::Stop
+            Self::Cancel { .. }
+                | Self::CancelEffects { .. }
+                | Self::DeactivateBinding { .. }
+                | Self::Stop
         )
     }
     fn validate(&self) -> Result<(), Error> {
@@ -238,7 +271,29 @@ impl Request {
                 binding,
                 artifact,
                 authority: a,
+            }
+            | Self::ActivateAt {
+                binding,
+                artifact,
+                authority: a,
+                ..
             } => valid(binding) && valid(artifact) && authority(a),
+            Self::ConfigureBinding {
+                binding,
+                artifact,
+                authority: a,
+                schedules,
+                ..
+            } => {
+                valid(binding)
+                    && valid(artifact)
+                    && authority(a)
+                    && model::schedules::BindingSchedule::validate_all(schedules).is_ok()
+            }
+            Self::DeactivateBinding {
+                binding, revision, ..
+            } => valid(binding) && *revision > 0,
+            Self::CollectIntervalEvents { .. } => true,
             Self::Admit {
                 binding,
                 entry,
@@ -285,6 +340,9 @@ struct Shared {
     clients: AtomicUsize,
     limits: Limits,
     registry: Registry,
+    declared_events: RwLock<BTreeSet<(String, String)>>,
+    plugin_artifacts: AtomicBool,
+    stale_artifacts: OnceLock<BTreeSet<String>>,
     catalog_supported: AtomicBool,
 }
 impl Shared {
@@ -354,8 +412,9 @@ impl Owner {
         })
         .await
     }
-    /// Explicit trusted host registration. Exact contracts are checked at install
-    /// and restart; callers must supply the actual owning AQ service adapters.
+    /// Explicit trusted host registration. Installation checks the full catalog.
+    /// Restart reopens pinned artifacts and marks stale extension contracts for
+    /// dispatch refusal. Callers supply the actual owning AQ service adapters.
     pub async fn start_registered<S, F, H, HF>(
         namespace: String,
         limits: Limits,
@@ -380,6 +439,9 @@ impl Owner {
             clients: AtomicUsize::new(1),
             limits,
             registry,
+            declared_events: RwLock::default(),
+            plugin_artifacts: AtomicBool::default(),
+            stale_artifacts: OnceLock::default(),
             catalog_supported: AtomicBool::new(false),
         });
         let owner = Self {
@@ -399,11 +461,19 @@ impl Owner {
                     if state
                         .artifacts
                         .values()
-                        .any(|a| !accepts(&shared.registry, &a.content.registry))
+                        .any(|a| !accepts_base(&shared.registry, &a.content.registry))
                     {
                         let _ = engine.release();
                         return Err(Error::Invalid);
                     }
+                    let mut stale_artifacts = BTreeSet::new();
+                    for (digest, artifact) in &state.artifacts {
+                        remember_contracts(&shared, &artifact.content.registry);
+                        if !plugins_match(&shared.registry, &artifact.content.registry) {
+                            stale_artifacts.insert(digest.clone());
+                        }
+                    }
+                    let _ = shared.stale_artifacts.set(stale_artifacts);
                     if let Some(policy) = shared
                         .limits
                         .engine_retention
@@ -486,7 +556,7 @@ impl Owner {
                             let result = if stop {
                                 engine.release().map(|_| Value::Null).map_err(engine_error)
                             } else {
-                                execute(&engine, &mut host, request, shared.limits.transitions)
+                                execute(&engine, &mut host, request, &shared)
                             };
                             // A size failure after a commit is unknown, never 'not applied'.
                             let result = result.and_then(|v| {
@@ -529,6 +599,16 @@ impl Owner {
             .map_err(|_| Error::Thread)?;
         ready_rx.await.map_err(|_| Error::Stopped)??;
         Ok(owner)
+    }
+    pub fn has_plugin_artifacts(&self) -> bool {
+        self.shared.plugin_artifacts.load(Ordering::Acquire)
+    }
+    pub fn declares_event(&self, name: &str, fingerprint: &str) -> bool {
+        self.shared
+            .declared_events
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&(name.to_owned(), fingerprint.to_owned()))
     }
     /// A timeout does not cancel admitted work or relinquish namespace ownership.
     /// Callers must reconcile effects; blindly resubmitting Admit can duplicate runs.
@@ -646,8 +726,18 @@ fn execute<S: Storage>(
     engine: &Engine<S>,
     host: &mut impl DomainHost,
     request: Request,
-    transitions: usize,
+    shared: &Shared,
 ) -> Result<Value, Error> {
+    if let Request::Activate { artifact, .. }
+    | Request::ActivateAt { artifact, .. }
+    | Request::ConfigureBinding { artifact, .. } = &request
+        && shared
+            .stale_artifacts
+            .get()
+            .is_some_and(|stale| stale.contains(artifact))
+    {
+        return Err(Error::Invalid);
+    }
     host.set_mode(match request {
         Request::Recover { .. } => HostMode::Reconcile,
         Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
@@ -721,7 +811,9 @@ fn execute<S: Storage>(
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
         }
         Request::Install { artifact } => {
+            let registry = artifact.content.registry.clone();
             engine.install(*artifact).map_err(engine_error)?;
+            remember_contracts(shared, &registry);
             Value::Null
         }
         Request::Activate {
@@ -733,6 +825,70 @@ fn execute<S: Storage>(
                 .activate(&binding, &artifact, authority)
                 .map_err(engine_error)?;
             Value::Null
+        }
+        Request::ActivateAt {
+            binding,
+            artifact,
+            authority,
+            now_ms,
+        } => {
+            engine
+                .activate_at(&binding, &artifact, authority, now_ms)
+                .map_err(runner_error)?;
+            Value::Null
+        }
+        Request::ConfigureBinding {
+            binding,
+            artifact,
+            authority,
+            may_activate,
+            schedules,
+            interval_event,
+            now_ms,
+        } => Value::Bool(
+            engine
+                .configure_binding(
+                    &binding,
+                    &artifact,
+                    authority,
+                    may_activate,
+                    &schedules,
+                    interval_event,
+                    now_ms,
+                )
+                .map_err(runner_error)?,
+        ),
+        Request::DeactivateBinding {
+            binding,
+            revision,
+            now_ms,
+        } => Value::Bool(
+            engine
+                .deactivate_binding(&binding, revision, now_ms)
+                .map_err(runner_error)?,
+        ),
+        Request::CollectIntervalEvents { now_ms } => {
+            let count = engine
+                .collect_interval_events(now_ms, 2, |schedule, contract, occurrence| {
+                    EventEnvelope {
+                        producer: "aq.host.bridge@1".into(),
+                        event_id: occurrence.id.clone(),
+                        contract,
+                        scope: occurrence.scope,
+                        correlation: [("operation".into(), occurrence.id)].into(),
+                        subject: Some(occurrence.schedule_id.clone()),
+                        revision: Some(occurrence.index),
+                        causation: None,
+                        occurred_at_ms: Some(occurrence.scheduled_at_ms),
+                        observed_at_ms: Some(now_ms),
+                        payload: serde_json::json!({
+                            "outcome": "reported", "reference": schedule.reference(),
+                            "subject": {"id": occurrence.schedule_id, "revision": occurrence.index}
+                        }),
+                    }
+                })
+                .map_err(runner_error)?;
+            serde_json::json!(count)
         }
         Request::Admit {
             binding,
@@ -752,7 +908,36 @@ fn execute<S: Storage>(
         )
         .map_err(engine_error)?,
         Request::Tick { now_ms } => {
-            serde_json::json!({"transitions": engine.drive(host, now_ms, transitions).map_err(engine_error)?})
+            if shared.plugin_artifacts.load(Ordering::Acquire)
+                && engine
+                    .snapshot()
+                    .map_err(engine_error)?
+                    .intents
+                    .values()
+                    .any(|intent| {
+                        intent.deadline_at_ms > now_ms
+                            && !intent.cancel_requested
+                            && matches!(
+                                intent.status,
+                                IntentStatus::Dispatched | IntentStatus::Unknown
+                            )
+                            && plugins::command_plugin(&intent.command.name).is_some()
+                    })
+            {
+                host.set_mode(HostMode::RetryPlugins);
+                let recovery = engine.recover(host, now_ms);
+                host.set_mode(HostMode::Dispatch);
+                recovery.map_err(engine_error)?;
+            }
+            let mut guarded = PluginCatalogHost {
+                engine,
+                host,
+                stale_artifacts: shared
+                    .stale_artifacts
+                    .get()
+                    .filter(|stale| !stale.is_empty()),
+            };
+            serde_json::json!({"transitions": engine.drive(&mut guarded, now_ms, shared.limits.transitions).map_err(engine_error)?})
         }
         Request::Cancel { run, now_ms } => {
             engine.cancel(&run, now_ms).map_err(engine_error)?;
@@ -764,6 +949,54 @@ fn execute<S: Storage>(
         Request::Stop => Value::Null,
     };
     Ok(value)
+}
+
+/// Run-local pins remain available to the owner even after an extension
+/// changes. Unknown lookup results must never authorize a new plugin call.
+struct PluginCatalogHost<'a, S: Storage, H> {
+    engine: &'a Engine<S>,
+    host: &'a mut H,
+    stale_artifacts: Option<&'a BTreeSet<String>>,
+}
+
+impl<S: Storage, H: DomainHost> Host for PluginCatalogHost<'_, S, H> {
+    fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
+        self.host.authorize(authority, contract)
+    }
+
+    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
+        if let Some(stale) = self.stale_artifacts
+            && plugins::command_plugin(&intent.command.name).is_some()
+        {
+            let Ok(state) = self.engine.snapshot() else {
+                return DispatchResult::Unknown {
+                    reason: "cannot read plugin artifact pins".into(),
+                };
+            };
+            let Some(run) = state.runs.get(&intent.run) else {
+                return DispatchResult::Unknown {
+                    reason: "cannot read plugin run".into(),
+                };
+            };
+            if stale.contains(&run.artifact)
+                || state
+                    .runs
+                    .get(&run.root)
+                    .is_some_and(|root| stale.contains(&root.artifact))
+            {
+                return self.host.dispatch_unavailable_plugin(intent);
+            }
+        }
+        self.host.dispatch(intent)
+    }
+
+    fn reconcile(&mut self, intent: &Intent) -> DispatchResult {
+        self.host.reconcile(intent)
+    }
+
+    fn cancel(&mut self, intent: &Intent) -> CancellationResult {
+        self.host.cancel(intent)
+    }
 }
 
 // Count through a capped writer rather than allocating an unbounded serialized
@@ -785,19 +1018,50 @@ fn bounded_json(value: &impl Serialize, limit: usize) -> bool {
     serde_json::to_writer(Counter(limit), value).is_ok()
 }
 
-fn accepts(registry: &Registry, artifact: &Registry) -> bool {
-    artifact
+fn remember_contracts(shared: &Shared, registry: &Registry) {
+    if registry
         .commands
-        .iter()
-        .all(|(name, contract)| registry.commands.get(name) == Some(contract))
-        && artifact
-            .events
-            .iter()
-            .all(|(name, contract)| registry.events.get(name) == Some(contract))
+        .keys()
+        .any(|name| plugins::command_plugin(name).is_some())
+    {
+        shared.plugin_artifacts.store(true, Ordering::Release);
+    }
+    shared
+        .declared_events
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(
+            registry
+                .events
+                .values()
+                .filter_map(|contract| Some((contract.name.clone(), contract.fingerprint().ok()?))),
+        );
+}
+
+fn accepts(registry: &Registry, artifact: &Registry) -> bool {
+    accepts_base(registry, artifact) && plugins_match(registry, artifact)
+}
+
+// Existing runs keep their pinned extension contracts across plugin upgrades
+// or removal. Only base-profile changes prevent reopening a namespace.
+fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
+    artifact.commands.iter().all(|(name, contract)| {
+        plugins::extension_command(name, contract) || registry.commands.get(name) == Some(contract)
+    }) && artifact.events.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_some() || registry.events.get(name) == Some(contract)
+    })
+}
+
+pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {
+    artifact.commands.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_none() || registry.commands.get(name) == Some(contract)
+    }) && artifact.events.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_none() || registry.events.get(name) == Some(contract)
+    })
 }
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
-    // Host catalog 2.2.0: the twelve commands of 2.0.0 and 2.1.0 plus four.
-    const COMMANDS: [&str; 16] = [
+    // Base host commands through catalog 2.4.0.
+    const COMMANDS: [&str; 17] = [
         "work.read",
         "work.route",
         "work.unroutable",
@@ -805,6 +1069,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "context.read",
         "work.ensure",
         "work.change",
+        "work.activate",
         "judgment.request",
         "decision.request",
         "check.request",
@@ -831,11 +1096,21 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
     ];
     let delivery = cfg!(feature = "delivery_playbook");
     let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
-    if registry.commands.len() > COMMANDS.len() + if delivery { DELIVERY.len() } else { 0 }
-        || registry.events.len() > 16
-        || !bounded_json(registry, 262_144)
+    let base_event_count = registry
+        .events
+        .keys()
+        .filter(|name| plugins::command_plugin(name).is_none())
+        .count();
+    let has_extensions = registry
+        .commands
+        .keys()
+        .any(|name| plugins::command_plugin(name).is_some())
+        || registry.events.len() != base_event_count;
+    let byte_limit = if has_extensions { 1_048_576 } else { 262_144 };
+    if base_event_count > 16
+        || !bounded_json(registry, byte_limit)
         || registry.commands.iter().any(|(name, c)| {
-            !admitted(name)
+            (!admitted(name) && !plugins::extension_command(name, c))
                 || name != &c.name
                 || !matches!(
                     c.recovery,

@@ -40,6 +40,7 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "supervisor.message.send" => "Send a message to the supervisor conversation",
         "swarm.availability.set" => "Turn the owner's availability switch on or off",
         "task.activate" => "Make a draft task schedulable",
+        "task.activate.subtree" => "Make a task’s draft descendants schedulable",
         "task.cancel" => "Cancel a task and stop any attempt holding it",
         "task.complete" => "Close an active task by hand, with a reason, when no attempt holds it",
         "task.delete" => "Delete a task and its relationships; its history is kept",

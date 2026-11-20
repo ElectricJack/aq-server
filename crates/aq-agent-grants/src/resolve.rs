@@ -12,6 +12,7 @@
 //!    creating attempt's grants, so a child never holds more than its creator.
 use super::{Grant, GrantSet, Limits, Scope, op};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// Owner decision 1: an agent creates at most 5 tasks per attempt, at most
@@ -31,6 +32,7 @@ pub fn default_coding() -> GrantSet {
         g(op::TASK_CREATE_SUBTASK, TaskSubtree).limited(Limits {
             max_created_tasks: Some(DEFAULT_MAX_CREATED_TASKS),
             max_depth: Some(DEFAULT_MAX_DEPTH),
+            draft_only: false,
         }),
         g(op::COMMENT_WRITE, TaskSubtree),
         g(op::KNOWLEDGE_AUTHOR, ProjectSelf),
@@ -58,14 +60,36 @@ pub struct ProjectGrants {
     /// Owner additions for the project, such as `task.create.project`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub add: Vec<Grant>,
+    /// Draft task authority for work created by a playbook.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_work_kind: BTreeMap<String, WorkKindGrants>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkKindGrants {
+    pub max_created_tasks: u32,
+    #[serde(default)]
+    pub edit_drafts: bool,
 }
 impl ProjectGrants {
     pub fn validate(&self) -> Result<(), super::InvalidGrant> {
         if let Some(c) = &self.ceiling {
             GrantSet::new(c.clone())?;
         }
+        if self
+            .by_work_kind
+            .keys()
+            .any(|kind| kind.trim().is_empty() || kind.len() > 128)
+        {
+            return Err(super::InvalidGrant("invalid work kind".into()));
+        }
         GrantSet::new(self.add.clone()).map(|_| ())
     }
+    pub fn work_kind(&self, kind: Option<&str>) -> Option<WorkKindGrants> {
+        self.by_work_kind.get(kind?).copied()
+    }
+
     pub fn ceiling(&self) -> Option<GrantSet> {
         self.ceiling.clone().and_then(|c| GrantSet::new(c).ok())
     }
@@ -116,8 +140,59 @@ fn merge(set: &mut Vec<Grant>, g: Grant) {
     }
 }
 
+impl WorkKindGrants {
+    fn apply(self, mut grants: Vec<Grant>, sealing: bool) -> Vec<Grant> {
+        let creation = matches!(self.max_created_tasks, 1..);
+        let editing = |g: &Grant| matches!(g.operation.as_str(), op::TASK_EDIT | op::TASK_CANCEL);
+        grants.retain(|g| match g.operation.as_str() {
+            op::TASK_CREATE_PROJECT => false,
+            op::TASK_CREATE_SUBTASK => creation && (sealing || g.limits.draft_only),
+            _ => !editing(g) || self.edit_drafts,
+        });
+        for grant in &mut grants {
+            if grant.operation == op::TASK_CREATE_SUBTASK {
+                grant.scope = Scope::TaskSubtree;
+                if sealing {
+                    grant.limits.max_created_tasks = Some(self.max_created_tasks);
+                }
+                grant.limits = grant.limits.meet(Limits {
+                    max_created_tasks: Some(self.max_created_tasks),
+                    max_depth: Some(DEFAULT_MAX_DEPTH),
+                    draft_only: true,
+                });
+            } else if editing(grant) {
+                grant.scope = Scope::TaskSubtree;
+            }
+        }
+        if sealing && self.edit_drafts {
+            for operation in [op::TASK_EDIT, op::TASK_CANCEL] {
+                if !grants.iter().any(|grant| grant.operation == operation) {
+                    grants.push(Grant::new(operation, Scope::TaskSubtree));
+                }
+            }
+        }
+        grants
+    }
+
+    /// A policy change can reduce a live attempt's task authority.
+    pub fn narrow(self, sealed: &GrantSet) -> GrantSet {
+        let requested =
+            GrantSet::new(self.apply(sealed.grants().to_vec(), false)).unwrap_or_default();
+        sealed.intersect(&requested)
+    }
+}
+
 /// The sealed grant set for one attempt.
 pub fn resolve(profile: &[Grant], project: &ProjectGrants, creator: Option<&GrantSet>) -> GrantSet {
+    resolve_work(profile, project, creator, None)
+}
+
+pub fn resolve_work(
+    profile: &[Grant],
+    project: &ProjectGrants,
+    creator: Option<&GrantSet>,
+    kind: Option<&str>,
+) -> GrantSet {
     let mut requested = default_coding().grants().to_vec();
     for g in profile.iter().chain(&project.add) {
         match requested.iter_mut().find(|x| x.operation == g.operation) {
@@ -132,6 +207,9 @@ pub fn resolve(profile: &[Grant], project: &ProjectGrants, creator: Option<&Gran
             Some(_) => {}
             None => requested.push(g.clone()),
         }
+    }
+    if let Some(policy) = project.work_kind(kind) {
+        requested = policy.apply(requested, true);
     }
     let mut set = GrantSet::new(requested).unwrap_or_default();
     if let Some(ceiling) = project.ceiling() {

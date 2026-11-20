@@ -1,6 +1,7 @@
 //! Online attempt credentials, scoped graph reads, durable graph intent and mail.
 mod agent_tasks;
 mod contract;
+mod draft_tasks;
 pub(crate) mod grant_check;
 mod graph;
 pub mod human;
@@ -78,6 +79,37 @@ pub(crate) async fn settlement_node(
             "Graph node read unavailable".into(),
         )),
     }
+}
+
+/// Read a versioned snapshot of the same structural tree shown in Work.
+pub(crate) async fn activation_tree(
+    rt: &Runtime,
+    workspace: Uuid,
+    root: Uuid,
+) -> std::result::Result<Value, crate::error::AppError> {
+    let raw = rt
+        .human_get(
+            &format!("/v1/workspaces/{workspace}/nodes/{root}/tree"),
+            &[
+                ("depth".into(), "5".into()),
+                (
+                    "limit".into(),
+                    (aq_human_work::subtree_activation::MAX_NODES + 1).to_string(),
+                ),
+                ("max_bytes".into(), "1000000".into()),
+            ],
+            1_000_000,
+        )
+        .await
+        .map_err(|_| {
+            crate::error::AppError::UpdatesUnavailable("Graph subtree unavailable".into())
+        })?;
+    if !contract::upstream_valid("Tree", &raw) {
+        return Err(crate::error::AppError::UpdatesUnavailable(
+            "Invalid Graph subtree".into(),
+        ));
+    }
+    Ok(raw)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -671,7 +703,12 @@ async fn authenticate_locked(
         p.created = records.into_iter().map(|id| json!(id)).collect();
     }
     if p.grants.reads_subtree() {
-        let tasks: Vec<Uuid> = sqlx::query_scalar("SELECT task_id FROM agent_created_tasks WHERE root_task_id=$1 AND project_id=$2 ORDER BY task_id LIMIT 256").bind(id(&p.binding, "task_id")?).bind(id(&p.binding, "project_id")?).fetch_all(&mut **tx).await?;
+        let tasks = aq_agent_grants::store::subtree(
+            &mut **tx,
+            id(&p.binding, "task_id")?,
+            id(&p.binding, "project_id")?,
+        )
+        .await?;
         p.subtree = tasks.into_iter().map(|id| json!(id)).collect();
     }
     Ok(p)

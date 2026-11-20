@@ -34,7 +34,7 @@ fn scopes_round_trip_and_refuse_aliases() {
 #[test]
 fn grant_sets_refuse_owner_only_unknown_and_duplicates() {
     assert!(GrantSet::new(vec![Grant::new("question.answer", Scope::ProjectSelf)]).is_err());
-    assert!(GrantSet::new(vec![Grant::new("task.cancel", Scope::ProjectSelf)]).is_err());
+    assert!(GrantSet::new(vec![Grant::new("task.activate", Scope::ProjectSelf)]).is_err());
     assert!(
         GrantSet::new(vec![
             Grant::new(op::TASK_READ, Scope::ProjectSelf),
@@ -151,6 +151,7 @@ fn intersection_never_widens() {
         Grant::new(op::TASK_CREATE_SUBTASK, Scope::TaskSubtree).limited(Limits {
             max_created_tasks: Some(5),
             max_depth: Some(2),
+            draft_only: false,
         }),
         Grant::new(op::COMMENT_WRITE, Scope::TaskSelf),
     ])
@@ -159,6 +160,7 @@ fn intersection_never_widens() {
         Grant::new(op::TASK_CREATE_SUBTASK, Scope::ProjectSelf).limited(Limits {
             max_created_tasks: Some(9),
             max_depth: None,
+            draft_only: false,
         }),
         Grant::new(op::COMMENT_WRITE, Scope::ProjectSelf),
         Grant::new(op::TASK_CREATE_PROJECT, Scope::ProjectSelf),
@@ -303,6 +305,7 @@ fn resolution_applies_profile_ceiling_additions_and_inheritance() {
     // The owner adds top-level creation for this project.
     let widened = ProjectGrants {
         ceiling: None,
+        by_work_kind: Default::default(),
         add: vec![Grant::new(op::TASK_CREATE_PROJECT, Scope::ProjectSelf)],
     };
     let w = resolve(&profile, &widened, None);
@@ -315,9 +318,11 @@ fn resolution_applies_profile_ceiling_additions_and_inheritance() {
             Grant::new(op::TASK_CREATE_SUBTASK, Scope::TaskSubtree).limited(Limits {
                 max_created_tasks: Some(1),
                 max_depth: None,
+                draft_only: false,
             }),
         ]),
         add: vec![],
+        by_work_kind: Default::default(),
     };
     let n = resolve(&profile, &narrow, None);
     assert_eq!(n.grants().len(), 3);
@@ -326,7 +331,8 @@ fn resolution_applies_profile_ceiling_additions_and_inheritance() {
         n.get(op::TASK_CREATE_SUBTASK).unwrap().limits,
         Limits {
             max_created_tasks: Some(1),
-            max_depth: Some(2)
+            max_depth: Some(2),
+            draft_only: false
         }
     );
     // A child of an agent never exceeds its creator, even with an addition.
@@ -400,4 +406,68 @@ fn parent_child_edges_follow_the_task_read_scope() {
         ));
     }
     assert!(set("task:subtree").reads_subtree() && !set("task:self").reads_subtree());
+}
+
+#[test]
+fn work_kind_policies_set_draft_grants_without_changing_coding_defaults() {
+    use super::resolve::{ProjectGrants, default_coding, resolve_work};
+    let policies: ProjectGrants = serde_json::from_value(serde_json::json!({"by_work_kind":{
+        "investigation":{"max_created_tasks":0},
+        "spec_ingestion":{"max_created_tasks":30},
+        "fidelity_review":{"max_created_tasks":10,"edit_drafts":true}
+    }, "add":[{"operation":"task.create.project","scope":"project:self"}]}))
+    .unwrap();
+    policies.validate().unwrap();
+    let grants = |kind| resolve_work(&[], &policies, None, Some(kind));
+    let investigator = grants("investigation");
+    assert!(investigator.get(op::KNOWLEDGE_AUTHOR).is_some());
+    assert!(investigator.get(op::TASK_CREATE_SUBTASK).is_none());
+    assert!(investigator.get(op::TASK_CREATE_PROJECT).is_none());
+    for (kind, max) in [("spec_ingestion", 30), ("fidelity_review", 10)] {
+        let set = grants(kind);
+        let creation = set.get(op::TASK_CREATE_SUBTASK).unwrap();
+        assert!(creation.limits.draft_only);
+        assert_eq!(creation.limits.max_created_tasks, Some(max));
+        assert_eq!(creation.scope, Scope::TaskSubtree);
+        assert!(set.get(op::TASK_CREATE_PROJECT).is_none());
+        assert_eq!(set.get(op::TASK_EDIT).is_some(), kind == "fidelity_review");
+        assert_eq!(
+            set.get(op::TASK_CANCEL).is_some(),
+            kind == "fidelity_review"
+        );
+    }
+    let child = resolve_work(
+        &[],
+        &policies,
+        Some(&grants("spec_ingestion")),
+        Some("coding"),
+    );
+    assert!(child.get(op::TASK_CREATE_SUBTASK).is_none());
+    let other = grants("coding");
+    assert_eq!(
+        other.get(op::TASK_CREATE_SUBTASK),
+        default_coding().get(op::TASK_CREATE_SUBTASK)
+    );
+    assert!(other.get(op::TASK_CREATE_PROJECT).is_some());
+    let narrowed = policies
+        .work_kind(Some("fidelity_review"))
+        .unwrap()
+        .narrow(&grants("spec_ingestion"));
+    assert_eq!(
+        narrowed
+            .get(op::TASK_CREATE_SUBTASK)
+            .unwrap()
+            .limits
+            .max_created_tasks,
+        Some(10)
+    );
+    assert!(narrowed.get(op::TASK_EDIT).is_none());
+    assert!(
+        policies
+            .work_kind(Some("spec_ingestion"))
+            .unwrap()
+            .narrow(&other)
+            .get(op::TASK_CREATE_SUBTASK)
+            .is_none()
+    );
 }

@@ -1,0 +1,117 @@
+{
+  "commands": {
+    "ext.test.ping": {
+      "name": "ext.test.ping",
+      "version": "1.0.0",
+      "input": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "max_length": 32
+          }
+        }
+      },
+      "outcomes": {
+        "ok": {
+          "type": "object",
+          "required": [
+            "environment"
+          ],
+          "properties": {
+            "environment": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_length": 64
+              },
+              "max_items": 8
+            }
+          }
+        },
+        "refused": {
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "max_length": 64
+            }
+          }
+        }
+      },
+      "capabilities": [
+        "ext.test"
+      ],
+      "scopes": [
+        "project"
+      ],
+      "effect": "mutation",
+      "recovery": "keyed_idempotent",
+      "asynchronous": null,
+      "cancellation": false,
+      "public_result_fields": [
+        "environment"
+      ],
+      "sensitive_input_fields": [],
+      "max_payload_bytes": 8192,
+      "deadline_ms": 2000
+    }
+  },
+  "events": {
+    "ext.test.pinged": {
+      "name": "ext.test.pinged",
+      "version": "1.0.0",
+      "payload": {
+        "type": "object",
+        "required": [
+          "ref",
+          "subject"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "max_length": 32
+          },
+          "subject": {
+            "type": "object",
+            "required": [
+              "id",
+              "revision"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "max_length": 32
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        }
+      },
+      "trusted_producers": [
+        "ext.test"
+      ],
+      "scopes": [
+        "project"
+      ],
+      "correlation_fields": [
+        "ref",
+        "subject.id"
+      ],
+      "subject_field": "subject.id",
+      "revision_field": "subject.revision",
+      "max_payload_bytes": 1024,
+      "retention_ms": 3600000
+    }
+  }
+}

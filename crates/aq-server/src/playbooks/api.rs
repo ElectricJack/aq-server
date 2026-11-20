@@ -23,7 +23,10 @@ struct Budget {
 }
 async fn gate(State(budget): State<Arc<Budget>>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
-    let control = path.ends_with("/revoke") || path.ends_with("/cancel") || path.ends_with("/stop");
+    let control = path.ends_with("/revoke")
+        || path.ends_with("/cancel")
+        || path.ends_with("/stop")
+        || path.ends_with("/deactivate");
     let budget = if control {
         &budget.control
     } else {
@@ -37,6 +40,12 @@ async fn gate(State(budget): State<Arc<Budget>>, request: Request, next: Next) -
 pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
     Router::new()
         .route("/api/playbooks/status", get(status))
+        .route("/api/playbooks/decisions", get(decisions))
+        .route("/api/playbooks/decisions/{handle}", get(decision))
+        .route(
+            "/api/playbooks/decisions/{handle}/answer",
+            post(answer_decision),
+        )
         .route("/api/playbooks/bindings/{id}", get(binding))
         .route("/api/playbooks/grants", post(grant))
         .route("/api/playbooks/grants/{id}/revoke", post(revoke))
@@ -76,6 +85,73 @@ fn owner(driver: &Driver, id: Uuid) -> Result<()> {
     }
     Ok(())
 }
+
+async fn decisions(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        json!({"decisions": d.service.decisions(user.id, None).await?}),
+    ))
+}
+
+async fn decision(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    State(state): State<AppState>,
+    Path(handle): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let decision = d
+        .service
+        .decisions(user.id, Some(handle))
+        .await?
+        .pop()
+        .ok_or(Error::Forbidden)?;
+    let (task, documents) = crate::agent_access::human::decision_subject(
+        &state,
+        user,
+        &decision.namespace,
+        decision.request.subject_id(),
+    )
+    .await
+    .map(|(task, documents)| (Some(task), documents))
+    .unwrap_or_default();
+    let mut view = serde_json::to_value(decision)?;
+    view["subject_task_id"] = json!(task);
+    view["produced_knowledge_ids"] = json!(documents);
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecisionAnswer {
+    choice: String,
+    note: Option<String>,
+}
+
+async fn answer_decision(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    Path(handle): Path<Uuid>,
+    Json(r): Json<DecisionAnswer>,
+) -> Result<Response> {
+    match d
+        .service
+        .answer_decision(user.id, handle, &r.choice, r.note.as_deref())
+        .await
+    {
+        Ok(answer) if answer.outcome != "expired" => {
+            Ok(Json(json!({"outcome": answer.outcome, "output": answer.output})).into_response())
+        }
+        Ok(_) | Err(Error::Conflict) => Err(Error::Conflict),
+        Err(Error::Forbidden) => Ok((
+            StatusCode::FORBIDDEN,
+            Json(json!({"code":"playbook_scope_refused"})),
+        )
+            .into_response()),
+        Err(err) => Err(err),
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
@@ -91,7 +167,7 @@ async fn status(
     Extension(d): Extension<Arc<Driver>>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
-    let registry = d.service.profile.registry();
+    let registry = d.service.registry();
     let held = d.service.held_events().await?;
     Ok(Json(
         json!({"namespace":d.service.namespace,"held_events":held,"catalog_digest":digest(&registry)?,"registered_commands":registry.commands.keys().collect::<Vec<_>>(),"automatic_driver":d.automatic_state()!="manual","automatic_driver_state":d.automatic_state(),"automatic_driver_reason":d.drive_reason(),"synchronous_calls_interruptible":false}),
@@ -268,6 +344,10 @@ fn artifact_routes() -> Router<AppState> {
             post(activate_binding),
         )
         .route(
+            "/api/playbooks/bindings/{id}/deactivate",
+            post(deactivate_binding),
+        )
+        .route(
             "/api/playbooks/bindings/{id}/rollback",
             post(rollback_binding),
         )
@@ -325,7 +405,7 @@ async fn validate_artifact(
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
     let bytes = artifacts::bytes_of(&r.artifact)?;
-    let artifact = artifacts::validate(&d.service.profile.registry(), &bytes)?;
+    let artifact = artifacts::validate(d.service.registry(), &bytes)?;
     Ok(Json(artifacts::summary(&artifact)))
 }
 async fn install_artifact(
@@ -360,6 +440,21 @@ async fn activate_binding(
     Ok(Json(
         artifacts::activate(&catalog, &ledger(&d), &r.op_id, &id, &r.artifact).await?,
     ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeactivateBody {
+    revision: u64,
+}
+async fn deactivate_binding(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    Path(id): Path<String>,
+    Json(r): Json<DeactivateBody>,
+) -> Result<Json<Value>> {
+    owner(&d, user.id)?;
+    d.deactivate_binding(id, r.revision).await?;
+    Ok(Json(json!({"deactivated": true})))
 }
 async fn rollback_binding(
     RequireOwner(user): RequireOwner,
