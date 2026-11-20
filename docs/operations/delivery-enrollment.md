@@ -22,6 +22,17 @@ Qualify the routing and delivery policies together against the target catalog. E
 
 Scope the pilot policy and its host enrollment to the same project and task IDs. Verify the sealed artifact digest, its capability grant, the grant's lifetime and its active binding before making the task ready. A grant issued for a short rehearsal needs an enduring owner-approved replacement before unattended operation.
 
+In the server vault, add the project UUID and first task UUID to the delivery configuration. Supply the actual private socket shared with central aq-git.
+
+```toml
+[delivery]
+git_http_socket = "/run/aq-git/git-http.sock"
+project_allowlist = ["<project UUID>"]
+task_allowlist = ["<first task UUID>"]
+```
+
+The lists intersect when both are present. An empty project list disables new delivery attempts installation-wide. An empty task list also disables new delivery attempts. Omitting the task list opts listed projects into delivery for all their new tasks. An attempt keeps the route recorded with its grant through worker restart and subsequent enrollment changes.
+
 Watch AQ publish the task branch, open or recover the PR, observe all required checks on the candidate SHA and merge under branch protection. Compare GitHub's actual merge commit to AQ's persisted merge evidence. Verify the remote and central task refs are gone, and Graph has acknowledged completion. A manual merge cannot exercise these steps. For the first dependent task, verify that the retained checkout includes the recorded merge. Exercise repair on a failed check and reconciliation after a lost merge reply on an isolated stack.
 
 Expand the project enrollment only after these checks pass. When pausing a rollout, stop handing new attempts to the delivery path and reconcile the attempts that already hold grants. Preserve their PRs, merge evidence and routing binding during recovery.
