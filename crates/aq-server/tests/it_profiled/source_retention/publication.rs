@@ -74,6 +74,7 @@ impl GitHubAdapter for FakeGitHub {
         _: u64,
         _: MergeMethod,
         _: &str,
+        _: &str,
     ) -> GitHubResult<MergeOutcome> {
         self.call()
     }

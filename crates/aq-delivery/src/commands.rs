@@ -36,14 +36,14 @@ const FAILED_NAMES: usize = 64;
 const NAME_BYTES: usize = 256;
 
 /// A repository in central aq-git (its binding's id and generation).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct GitTarget {
     pub repository_id: Uuid,
     pub binding_generation: u64,
 }
 
 /// Where a project's work is delivered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DeliveryTarget {
     pub git: GitTarget,
     pub github: GitHubRepository,
@@ -134,6 +134,11 @@ pub enum Step {
     /// playbook could be told about has happened). Call again, with the same
     /// operation id, later.
     Retry(String),
+}
+
+enum MergeAttempt {
+    Confirmed(String),
+    Unconfirmed(Step),
 }
 
 /// The commands, over a forge adapter and aq-git.
@@ -314,31 +319,42 @@ impl Delivery {
         method: MergeMethod,
         expected_head_sha: &str,
     ) -> Step {
+        if let MergeAttempt::Unconfirmed(step) = self
+            .merge_on_github(target, pr, method, expected_head_sha)
+            .await
+        {
+            return step;
+        }
+        self.finish_merge(operation, target, task, pr).await
+    }
+
+    async fn merge_on_github(
+        &self,
+        target: &DeliveryTarget,
+        pr: u64,
+        method: MergeMethod,
+        expected_head: &str,
+    ) -> MergeAttempt {
+        let done = |completion| MergeAttempt::Unconfirmed(Step::Done(completion));
         let merged = self
             .github
-            .merge(&target.github, pr, method, expected_head_sha)
+            .merge(
+                &target.github,
+                pr,
+                method,
+                expected_head,
+                &target.default_branch,
+            )
             .await;
-        let done = Step::Done;
         match merged {
-            Ok(MergeOutcome::Merged { .. }) => {
-                if let Err(e) = self
-                    .git
-                    .delete_ref(operation, &target.git, &task_branch(task))
-                    .await
-                {
-                    return Step::Retry(format!("the merged branch is not deleted yet: {e}"));
-                }
-                done(
-                    Completion::new("merged", json!({})).with(PullRequestObserved {
-                        number: pr,
-                        url: None,
-                        state: "merged",
-                        mergeable: "unknown",
-                        checks_state: "passed",
-                        checks_failed: vec![],
-                    }),
-                )
+            Ok(MergeOutcome::Merged { sha })
+                if object_id(&sha) && sha.bytes().any(|b| b != b'0') =>
+            {
+                MergeAttempt::Confirmed(sha)
             }
+            Ok(MergeOutcome::Merged { .. }) => MergeAttempt::Unconfirmed(Step::Retry(
+                "GitHub did not report a valid merge SHA".into(),
+            )),
             Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
@@ -349,8 +365,45 @@ impl Delivery {
                 MergeRefusal::Invalid => Completion::new("not_mergeable", json!({})),
             }),
             Err(GitHubApiError::NotFound) => done(Completion::refused("no_pull_request")),
+            // On replay the adapter reads the PR and checks its head before any PUT.
+            Err(
+                error @ (GitHubApiError::Transport(_)
+                | GitHubApiError::Protocol(_)
+                | GitHubApiError::Status {
+                    status: 500..=599, ..
+                }),
+            ) => MergeAttempt::Unconfirmed(Step::Retry(format!(
+                "recheck the pull request: {}",
+                error.code()
+            ))),
             Err(_) => done(Completion::refused("unreachable")),
         }
+    }
+
+    async fn finish_merge(
+        &self,
+        operation: Uuid,
+        target: &DeliveryTarget,
+        task: Uuid,
+        pr: u64,
+    ) -> Step {
+        if let Err(e) = self
+            .git
+            .delete_ref(operation, &target.git, &task_branch(task))
+            .await
+        {
+            return Step::Retry(format!("the merged branch is not deleted yet: {e}"));
+        }
+        Step::Done(
+            Completion::new("merged", json!({})).with(PullRequestObserved {
+                number: pr,
+                url: None,
+                state: "merged",
+                mergeable: "unknown",
+                checks_state: "passed",
+                checks_failed: vec![],
+            }),
+        )
     }
 
     /// `pull_request.close`: closes the pull request without merging it and
@@ -421,6 +474,14 @@ pub fn without_delivery(command: &str) -> Option<Step> {
     }
 }
 
+fn merge_method(method: &str) -> MergeMethod {
+    match method {
+        "squash" => MergeMethod::Squash,
+        "rebase" => MergeMethod::Rebase,
+        _ => MergeMethod::Merge,
+    }
+}
+
 impl Delivery {
     /// One step of `command` from the request the host froze when it accepted
     /// it: `task`, `pull_request`, `expected_old`, `title`, `body`, `method`,
@@ -458,11 +519,7 @@ impl Delivery {
                     .await,
             ),
             ("pull_request.merge", Some(task)) => {
-                let method = match text("method")? {
-                    "squash" => MergeMethod::Squash,
-                    "rebase" => MergeMethod::Rebase,
-                    _ => MergeMethod::Merge,
-                };
+                let method = merge_method(text("method")?);
                 done(match pr {
                     Some(pr) => {
                         self.pull_request_merge(

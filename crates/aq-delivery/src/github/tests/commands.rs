@@ -317,11 +317,13 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
 }
 
 /// One poll with a required list: the pull request (state), its mergeability,
-/// then the checks (pull request, check runs, statuses).
+/// then the checks (pull request, protection requirements, runs, statuses).
 fn poll(mock: &Mock, state: Value, mergeable: Value, check_runs: Value) {
     mock.reply(200, vec![], state);
     mock.reply(200, vec![], mergeable);
     mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(200, vec![], json!([]));
+    mock.reply(200, vec![], json!({"name": "main", "protected": false}));
     mock.reply(200, vec![], check_runs);
     mock.reply(200, vec![], no_statuses());
 }
@@ -495,7 +497,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
         (c.outcome, c.output),
         ("refused", json!({"reason": "no_pull_request"}))
     );
-    mock.reply(503, vec![], json!({"message": "down"}));
+    mock.reply(403, vec![], json!({"message": "forbidden"}));
     let c = merge().await;
     assert_eq!(
         (c.outcome, c.output),
@@ -553,6 +555,53 @@ async fn a_merged_pull_request_whose_branch_is_not_deleted_yet_is_retried_not_re
     );
     let puts = paths(&mock).into_iter().filter(|(m, _)| m == "PUT").count();
     assert_eq!(puts, 1, "merged once");
+}
+
+#[tokio::test]
+async fn merge_recovers_after_an_unknown_reply() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let merge = async || {
+        delivery
+            .pull_request_merge(
+                Uuid::from_u128(6),
+                &target(),
+                TASK,
+                7,
+                MergeMethod::Merge,
+                &sha('a'),
+            )
+            .await
+    };
+    mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(503, vec![], json!({"message": "reply lost"}));
+    assert!(matches!(merge().await, Step::Retry(_)));
+    assert!(git.operations().is_empty());
+
+    mock.reply(
+        200,
+        vec![],
+        pull(
+            7,
+            json!({
+                "state": "closed", "merged": true, "merge_commit_sha": sha('d')
+            }),
+        ),
+    );
+    let completion = done(merge().await);
+    assert_eq!(
+        (completion.outcome, completion.output),
+        ("merged", json!({}))
+    );
+    assert_eq!(
+        paths(&mock),
+        [
+            ("GET".into(), "/pulls/7".into()),
+            ("PUT".into(), "/pulls/7/merge".into()),
+            ("GET".into(), "/pulls/7".into()),
+        ]
+    );
+    assert_eq!(git.operations(), ["ref.delete"]);
 }
 
 #[tokio::test]

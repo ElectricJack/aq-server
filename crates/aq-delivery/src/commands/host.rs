@@ -6,7 +6,7 @@
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
     Completion, Delivery, DeliveryTarget, GitTarget, PullRequestObserved, SocketGit, Step,
-    bounded_text, bounded_wait_ms, without_delivery, without_target,
+    bounded_text, bounded_wait_ms, merge_method, without_delivery, without_target,
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};
@@ -109,6 +109,9 @@ pub struct Accepting<'a> {
     /// `pull_request.await_checks`: Settings
     /// `delivery-limits.longest_check_wait_ms`.
     pub longest_check_wait_ms: Option<u64>,
+    /// `pull_request.merge`: the resolved target and latest attempt/result.
+    pub merge_target: Option<DeliveryTarget>,
+    pub result_ids: Option<(Uuid, Uuid)>,
 }
 
 /// The request the host freezes when it accepts a command from the playbook's
@@ -164,6 +167,14 @@ pub async fn frozen_request(
             request["pull_request"] = json!(number(open));
             request["method"] = input["method"].clone();
             request["expected_head_sha"] = input["expected_head_sha"].clone();
+            request["merge_target"] = serde_json::to_value(accepting.merge_target)?;
+            if request["expected_head_sha"].as_str() != Some(accepting.head) {
+                return Ok(Err("head_changed"));
+            }
+            if let Some((attempt, result)) = accepting.result_ids {
+                request["attempt_id"] = json!(attempt);
+                request["result_id"] = json!(result);
+            }
         }
         "pull_request.close" => request["pull_request"] = json!(known.as_ref().map(number)),
         "pull_request.await_checks" => {
@@ -219,18 +230,25 @@ pub async fn run_step(
     request: &Value,
     now_ms: i64,
 ) -> Result<Option<Completion>, DeliveryError> {
-    let uuid = |field: &str| {
-        request[field]
-            .as_str()
-            .and_then(|v| Uuid::parse_str(v).ok())
-    };
-    let project = uuid("project").ok_or(DeliveryError::InvalidInput("project"))?;
-    let task = uuid("task");
-    // `None`: nothing decided yet.
-    let step = match (target, delivery) {
-        (None, _) => Some(without_target(command)),
-        (Some(_), None) => without_delivery(command),
-        (Some(target), Some(delivery)) => {
+    let project = request_uuid(request, "project").ok_or(DeliveryError::InvalidInput("project"))?;
+    let task = request_uuid(request, "task");
+    let step = match (command, target, delivery) {
+        ("pull_request.merge", target, delivery) => {
+            let task = task.ok_or(DeliveryError::InvalidInput("task"))?;
+            run_merge_step(
+                pool,
+                delivery,
+                target,
+                operation,
+                (project, task),
+                request,
+                now_ms,
+            )
+            .await?
+        }
+        (_, None, _) => Some(without_target(command)),
+        (_, Some(_), None) => without_delivery(command),
+        (_, Some(target), Some(delivery)) => {
             let run = delivery
                 .step(operation, command, request, target, now_ms)
                 .await
@@ -262,6 +280,97 @@ pub async fn run_step(
         record_main_head(pool, project, head, now_ms).await?;
     }
     Ok(Some(completion))
+}
+
+fn request_uuid(request: &Value, field: &str) -> Option<Uuid> {
+    request[field]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+}
+
+async fn run_merge_step(
+    pool: &PgPool,
+    delivery: Option<&Delivery>,
+    target: Option<&DeliveryTarget>,
+    operation: Uuid,
+    (project, task): (Uuid, Uuid),
+    request: &Value,
+    now_ms: i64,
+) -> Result<Option<Step>, DeliveryError> {
+    const MERGE: &str = "pull_request.merge";
+    let Some(pr) = request["pull_request"].as_u64() else {
+        return Ok(Some(Step::Done(Completion::refused("no_pull_request"))));
+    };
+    let retained: Option<(Value, String)> = sqlx::query_as(
+        "SELECT target,merge_sha FROM delivery_merge_evidence WHERE operation_id=$1",
+    )
+    .bind(operation)
+    .fetch_optional(pool)
+    .await?;
+    let current = serde_json::to_value(target)?;
+    if request.get("merge_target") == Some(&Value::Null) {
+        return Ok(Some(without_target(MERGE)));
+    }
+    // Keep cleanup tied to the repository that merged, including old intents.
+    let frozen = retained
+        .as_ref()
+        .map(|(target, _)| target)
+        .or(request.get("merge_target"));
+    if frozen.is_some_and(|target| target != &current) {
+        return Ok(None);
+    }
+    let Some(target) = target else {
+        return Ok(Some(without_target(MERGE)));
+    };
+    let Some(delivery) = delivery else {
+        return Ok(if retained.is_some() {
+            None
+        } else {
+            without_delivery(MERGE)
+        });
+    };
+    if retained.is_none() {
+        let method = request["method"]
+            .as_str()
+            .ok_or(DeliveryError::InvalidInput("method"))?;
+        let head = request["expected_head_sha"]
+            .as_str()
+            .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?;
+        let sha = match delivery
+            .merge_on_github(target, pr, merge_method(method), head)
+            .await
+        {
+            super::MergeAttempt::Confirmed(sha) => sha,
+            super::MergeAttempt::Unconfirmed(step) => return Ok(Some(step)),
+        };
+        let number = i64::try_from(pr).map_err(|_| DeliveryError::InvalidInput("number"))?;
+        // Commit the merge before the separately retryable branch deletion.
+        let inserted = sqlx::query(
+            "INSERT INTO delivery_merge_evidence(\
+             operation_id,project_id,task_id,attempt_id,result_id,pull_request,target,\
+             target_ref,expected_head_sha,merge_sha,observed_at_ms) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(operation_id) DO NOTHING",
+        )
+        .bind(operation)
+        .bind(project)
+        .bind(task)
+        .bind(request_uuid(request, "attempt_id"))
+        .bind(request_uuid(request, "result_id"))
+        .bind(number)
+        .bind(&current)
+        .bind(target.main_ref())
+        .bind(head)
+        .bind(sha)
+        .bind(now_ms)
+        .execute(pool)
+        .await?;
+        if inserted.rows_affected() == 0 {
+            return Ok(None);
+        }
+    }
+    Ok(Some(
+        delivery.finish_merge(operation, target, task, pr).await,
+    ))
 }
 
 /// The pull request as the last command left it (`work.read`
