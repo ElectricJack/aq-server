@@ -17,6 +17,8 @@ fn actions() -> serde_json::Value {
 /// `project_environments` the generated one adds `task.needs.set` and
 /// `needs` (checked by [`the_project_environments_contract_adds_needs`]).
 #[cfg(not(feature = "project_environments"))]
+// commands.json documents the default build.
+#[cfg(not(feature = "supervisor_full_access"))]
 #[test]
 fn commands_json_is_generated_from_the_registry() {
     let path =

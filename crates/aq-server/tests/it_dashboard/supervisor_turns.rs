@@ -1607,10 +1607,26 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
             (status, serde_json::from_slice::<Value>(&bytes).unwrap())
         }
     };
+    // Another project: narrowed away without full access, listed with it.
+    let other = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Other\",\"enabled\":true}',1,'{}')").bind(other).execute(&f.pool).await.unwrap();
     let (status, projects) = read("/v1/supervisor/projects".into()).await;
     assert_eq!(status, StatusCode::OK, "{projects}");
-    assert_eq!(projects["projects"].as_array().unwrap().len(), 1);
-    assert_eq!(projects["projects"][0]["id"], project.to_string());
+    let ids: Vec<&str> = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    let (project, other) = (project.to_string(), other.to_string());
+    if cfg!(feature = "supervisor_full_access") {
+        assert!(
+            ids.contains(&project.as_str()) && ids.contains(&other.as_str()),
+            "{ids:?}"
+        );
+    } else {
+        assert_eq!(ids, [project.as_str()]);
+    }
     // The read nest exists only without supervisor_full_access.
     #[cfg(not(feature = "supervisor_full_access"))]
     {

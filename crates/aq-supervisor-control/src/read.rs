@@ -135,7 +135,11 @@ pub fn projects<S: Clone + Send + Sync + 'static>(
         let pool = pool.clone();
         async move {
             let permit = auth(headers).await?;
-            let rows:Vec<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',project_id,'revision',revision::text,'name',binding->>'name','enabled',binding->'enabled') FROM project_execution_bindings WHERE $1::uuid IS NULL OR project_id=$1 ORDER BY project_id LIMIT 256").bind(permit.project).fetch_all(&pool).await?;
+            // With full access no supervisor is narrowed to its project.
+            let project = permit
+                .project
+                .filter(|_| !cfg!(feature = "supervisor_full_access"));
+            let rows:Vec<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',project_id,'revision',revision::text,'name',binding->>'name','enabled',binding->'enabled') FROM project_execution_bindings WHERE $1::uuid IS NULL OR project_id=$1 ORDER BY project_id LIMIT 256").bind(project).fetch_all(&pool).await?;
             Ok::<_, Error>(axum::Json(serde_json::json!({"projects":rows})))
         }
     });

@@ -643,6 +643,7 @@ fn every_owner_command_has_a_supervisor_route() {
         "task.route.clear",
         "task.dependency.add",
         "task.dependency.remove",
+        "project.list",
     ];
     let r = Registry::new(&actions()).unwrap();
     for c in r.commands() {
