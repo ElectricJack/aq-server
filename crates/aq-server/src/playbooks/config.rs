@@ -138,6 +138,8 @@ enum Profile {
     #[cfg(feature = "delivery_playbook")]
     #[serde(rename = "host_v10")]
     Host10,
+    #[serde(rename = "host_v11")]
+    Host11,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -243,6 +245,7 @@ impl Configuration {
             Profile::Host9 => CatalogProfile::Host9,
             #[cfg(feature = "delivery_playbook")]
             Profile::Host10 => CatalogProfile::Host10,
+            Profile::Host11 => CatalogProfile::Host11,
         };
         if self.installation_routing && !profile.has_routing() {
             return Err("playbook installation_routing requires the host_v9 profile");

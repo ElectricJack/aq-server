@@ -79,17 +79,24 @@ pub fn operations(
     Ok(operations)
 }
 
-/// Verify that Graph confirmed exactly this batch and return the activated
-/// records. Empty patches must return the same version they checked.
-pub fn activated<'a>(operations: &[Value], results: &'a Value) -> Option<Vec<&'a Value>> {
+pub struct Receipt<'a> {
+    pub activated: Vec<&'a Value>,
+    pub skipped: usize,
+}
+
+/// Verify that Graph confirmed exactly this batch. Empty patches return the
+/// same version they checked. The first operation guards the root.
+pub fn receipt<'a>(operations: &[Value], results: &'a Value) -> Option<Receipt<'a>> {
     let results = results["results"].as_array()?;
-    if results.len() != operations.len() {
+    if results.is_empty() || results.len() != operations.len() {
         return None;
     }
     let mut activated = Vec::new();
     for (op, result) in operations.iter().zip(results) {
         let changes_state = op["patch"]["task_state"] == "active";
-        let revision = op["expected_version"].as_u64()? + u64::from(changes_state);
+        let revision = op["expected_version"]
+            .as_u64()?
+            .checked_add(u64::from(changes_state))?;
         if result["id"] != op["id"]
             || result["kind"] != "task"
             || result["version"] != revision
@@ -101,5 +108,8 @@ pub fn activated<'a>(operations: &[Value], results: &'a Value) -> Option<Vec<&'a
             activated.push(result);
         }
     }
-    Some(activated)
+    Some(Receipt {
+        skipped: results.len().checked_sub(activated.len() + 1)?,
+        activated,
+    })
 }

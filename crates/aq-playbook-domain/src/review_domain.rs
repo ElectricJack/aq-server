@@ -40,6 +40,8 @@ pub enum CatalogProfile {
     /// with the cargo feature `delivery_playbook`.
     #[cfg(feature = "delivery_playbook")]
     Host10,
+    /// AQ host catalog 2.4.0: Host9 plus decision notes and draft-subtree activation.
+    Host11,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
 pub const HOST9_FINGERPRINT: &str =
@@ -219,6 +221,32 @@ fn host10_registry() -> Registry {
         })
         .clone()
 }
+pub const HOST11_VERSION: &str = "2.4.0";
+pub const HOST11_FINGERPRINT: &str =
+    "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac";
+
+fn host11_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.4.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.4.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST11_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST11_FINGERPRINT),
+                "vendored AQ host catalog 2.4.0 fingerprint",
+            );
+            registry
+        })
+        .clone()
+}
+
+pub const WORK_ACTIVATE: &str = "work.activate";
+
 pub const HOST8_VERSION: &str = "2.1.0";
 pub const HOST8_FINGERPRINT: &str =
     "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716";
@@ -319,6 +347,7 @@ impl CatalogProfile {
             Self::Host9 => 9,
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => 10,
+            Self::Host11 => 11,
         }
     }
     /// Catalog 2.3.0 (Epic 0): always false without the feature
@@ -336,13 +365,13 @@ impl CatalogProfile {
     /// Catalog 2.2.0 and later: `work.read`, `work.route`, `work.unroutable`,
     /// `judgment.assess` and the event `aq.work.route_needed`.
     pub fn has_routing(self) -> bool {
-        self == Self::Host9 || self.is_delivery()
+        matches!(self, Self::Host9 | Self::Host11) || self.is_delivery()
     }
     /// Catalog 2.x host profiles (Host7 = 2.0.0, Host8 = 2.1.0, Host9 =
     /// 2.2.0): the asynchronous judgment/check, integration and
     /// operation.get adapters.
     pub fn is_host2(self) -> bool {
-        matches!(self, Self::Host7 | Self::Host8 | Self::Host9) || self.is_delivery()
+        matches!(self, Self::Host7 | Self::Host8) || self.has_routing()
     }
     /// Any vendored host catalog profile (1.0.0 and later) or Monitoring6:
     /// the profiles the host adapters serve.
@@ -352,7 +381,7 @@ impl CatalogProfile {
     /// Catalog 2.1.0 and later: `candidate.prepare` outputs the prepared
     /// source that `check.request` must name.
     pub fn has_prepared_source(self) -> bool {
-        matches!(self, Self::Host8 | Self::Host9) || self.is_delivery()
+        self == Self::Host8 || self.has_routing()
     }
     /// D8 findings: Monitoring6 and every catalog 2.x profile.
     pub fn has_findings(self) -> bool {
@@ -373,6 +402,7 @@ impl CatalogProfile {
             Self::Host7,
             Self::Host8,
             Self::Host9,
+            Self::Host11,
         ]
         .into_iter()
         .chain(delivery)
@@ -392,6 +422,7 @@ impl CatalogProfile {
             Self::Host9 => "host_v9",
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => "host_v10",
+            Self::Host11 => "host_v11",
         }
     }
     /// Why a configured namespace cannot open over the stored row
@@ -420,6 +451,13 @@ impl CatalogProfile {
     pub fn commands(self) -> &'static [&'static str] {
         match self {
             Self::Host9 => &HOST9_COMMANDS,
+            Self::Host11 => {
+                static COMMANDS: std::sync::LazyLock<Vec<&'static str>> =
+                    std::sync::LazyLock::new(|| {
+                        [HOST9_COMMANDS.as_slice(), &[WORK_ACTIVATE]].concat()
+                    });
+                &COMMANDS
+            }
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => &HOST10_COMMANDS,
             _ => &[],
@@ -447,6 +485,9 @@ impl CatalogProfile {
         }
         if self == Self::Host9 {
             return host9_registry();
+        }
+        if self == Self::Host11 {
+            return host11_registry();
         }
         #[cfg(feature = "delivery_playbook")]
         if self == Self::Host10 {
@@ -512,6 +553,9 @@ impl CatalogProfile {
             };
             if self == Self::Monitoring6 {
                 allowed.insert("findings.reconcile".into());
+            }
+            if self == Self::Host11 {
+                allowed.insert(WORK_ACTIVATE.into());
             }
             #[cfg(feature = "delivery_playbook")]
             if self.is_delivery() {

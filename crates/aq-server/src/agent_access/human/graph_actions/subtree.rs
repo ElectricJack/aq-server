@@ -47,10 +47,11 @@ pub(super) fn confirmed(raw: &Value, operations: &[Value]) -> Outcome {
     if !crate::agent_access::settlement_response_valid(raw) {
         return Outcome::unknown();
     }
-    let Some(activated) = subtree_activation::activated(operations, raw) else {
+    let Some(receipt) = subtree_activation::receipt(operations, raw) else {
         return Outcome::unknown();
     };
-    let affected = activated
+    let affected = receipt
+        .activated
         .iter()
         .map(|node| {
             existing::entity(
@@ -69,8 +70,8 @@ pub(super) fn confirmed(raw: &Value, operations: &[Value]) -> Outcome {
         affected,
     );
     outcome.activation = Some(ActivationCounts {
-        activated: activated.len() as u32,
-        skipped: (operations.len() - 1 - activated.len()) as u32,
+        activated: receipt.activated.len() as u32,
+        skipped: receipt.skipped as u32,
     });
     outcome
 }

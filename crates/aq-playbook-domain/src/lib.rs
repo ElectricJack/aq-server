@@ -17,6 +17,7 @@ pub mod inspection;
 pub mod playbook_view;
 pub mod review_domain;
 mod step_inspection;
+pub mod work_mutations;
 use aq_playbook_host::{
     model::*,
     runner::{Authority, Intent},
