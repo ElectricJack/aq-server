@@ -3,6 +3,10 @@ name = "aq-supervisor-control"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+[features]
+# Supervisors get full access (owner scope and registry); off by default.
+supervisor_full_access = []
+
 [dependencies]
 axum.workspace = true
 chrono.workspace = true

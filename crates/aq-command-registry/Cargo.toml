@@ -5,6 +5,10 @@ edition.workspace = true
 publish = false
 description = "The AQ command registry (spec 0006 §4): command specs, per-principal dispatch, discovery, commands.json and the route classification"
 
+[features]
+# Supervisors get full access (owner scope and registry); off by default.
+supervisor_full_access = []
+
 [dependencies]
 aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0" }
 serde.workspace = true

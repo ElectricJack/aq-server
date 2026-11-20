@@ -34,6 +34,7 @@ chrono.workspace = true
 # A non-root test identity for the native runs (no uid drop, no chown).
 # Enabled only by this crate's own dev-dependency below.
 test-support = []
+supervisor_full_access = ["aq-server/supervisor_full_access"]
 
 [dev-dependencies]
 aq-supervisor-host = { path = ".", features = ["test-support"] }

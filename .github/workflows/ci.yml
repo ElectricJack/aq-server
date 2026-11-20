@@ -233,6 +233,10 @@ jobs:
         run: cargo nextest run -p aq-updater --locked --no-fail-fast --profile ci --features test-verifier
       - name: Recovery authority and reserved control capacity regressions
         run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features recovery-test-support --test it_server -E 'test(/^execution::/) | test(/^readiness::/)'
+      - name: Supervisor full-access command registry
+        run: cargo nextest run -p aq-command-registry --locked --profile ci --features supervisor_full_access
+      - name: Supervisor full-access turns
+        run: cargo nextest run -p aq-server --locked --no-fail-fast --profile ci --features supervisor_full_access --test it_dashboard -E 'test(/^supervisor_turns::/)'
 
   # nextest does not run doctests.
   tests-doc:
