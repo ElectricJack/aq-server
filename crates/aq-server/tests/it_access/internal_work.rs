@@ -2595,7 +2595,7 @@ mod escalation {
     }
 
     #[tokio::test]
-    async fn failed_run_with_escalate_messages_the_project_supervisor_once() {
+    async fn failed_run_with_escalate_messages_a_supervisor_once() {
         let db = TestDb::create().await;
         let pool = migrated(&db).await;
         let project = Uuid::new_v4();
@@ -2651,8 +2651,12 @@ mod escalation {
                 rows
             }
         };
+        // Under full access the runs routes name no project, so the global
+        // supervisor is told about both runs.
+        let full = cfg!(feature = "supervisor_full_access");
+        let (told, others) = if full { (global, 2) } else { (scoped, 1) };
         tokio::time::timeout(Duration::from_secs(10), async {
-            while mail(scoped).await.is_empty() || mail(global).await.is_empty() {
+            while mail(told).await.is_empty() || mail(global).await.len() < others {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
@@ -2663,10 +2667,15 @@ mod escalation {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         drop(stop);
-        let scoped_mail = mail(scoped).await;
-        assert_eq!(scoped_mail.len(), 1, "{scoped_mail:?}");
-        assert_eq!(mail(global).await.len(), 1);
-        let (sender, body, deliverable) = &scoped_mail[0];
+        assert_eq!(mail(scoped).await.len(), usize::from(!full));
+        assert_eq!(mail(global).await.len(), others);
+        let told_mail = mail(told).await;
+        let Some((sender, body, deliverable)) = told_mail
+            .iter()
+            .find(|(_, body, _)| body.contains(&failed.to_string()))
+        else {
+            panic!("{told_mail:?}")
+        };
         assert_eq!(
             sender,
             &json!({"kind": "system", "component": "internal_work"})
