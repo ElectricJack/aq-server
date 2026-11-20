@@ -255,8 +255,16 @@ async fn actual_git_publishes_only_the_submitted_commit_and_cleans_both_refs() {
         .await
         .is_empty()
     );
-    f.process.kill().await.unwrap();
-    f.process.wait().await.unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(f.process.id().unwrap() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let status = tokio::time::timeout(std::time::Duration::from_secs(10), f.process.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
 }
 
 async fn setup_actual() -> Actual {
