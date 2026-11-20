@@ -1,0 +1,401 @@
+{
+  "about": "What the host says about each contract of catalog 2.2.0, for an authoring agent. Rendered into CATALOG.md for the commands and events a source may use (aq_playbooks_compiler::docs::catalog). An empty string means the catalog does not say. Kept beside registry.json so that the registry, and every fingerprint, stays unchanged.",
+  "commands": {
+    "candidate.prepare": {
+      "input": {
+        "base": "The revision the candidate is prepared on.",
+        "sources": "The revisions to integrate, at most 100."
+      },
+      "notes": [],
+      "outcomes": {
+        "conflict": "The sources do not apply to the base.",
+        "prepared": "The candidate is prepared. `source` is the object to pass to `check.request`.",
+        "refused": "The host would not prepare it."
+      },
+      "purpose": "Prepares an integration candidate from a base and source revisions, and returns the immutable source object it prepared."
+    },
+    "candidate.publish": {
+      "input": {
+        "candidate": "The candidate to publish.",
+        "destination": "Where to publish it, at the revision expected there.",
+        "evidence": "The evidence the publication rests on, at most 100."
+      },
+      "notes": [
+        "Publication is reconciled by the host's receipt, not replayed by identity."
+      ],
+      "outcomes": {
+        "conflict": "The destination moved.",
+        "published": "It is published.",
+        "refused": "The host would not publish it."
+      },
+      "purpose": "Publishes a prepared candidate to a destination, with the evidence for it."
+    },
+    "check.request": {
+      "input": {
+        "check": "The registered check and its validator; it must be one the work requires.",
+        "source": "The immutable source object to check, as `candidate.prepare` returned it.",
+        "subject": "The work the check is for."
+      },
+      "notes": [
+        "It can be cancelled with `operation.cancel`."
+      ],
+      "outcomes": {
+        "accepted": "The check is queued; the edge binds `{handle}`. Join the handle to read the answer.",
+        "failed": "The check ran and failed.",
+        "infrastructure_failure": "The check could not run to an end (cancelled, timed out or unknown).",
+        "passed": "The check ran and passed.",
+        "refused": "The host would not run it; `reason` says why."
+      },
+      "purpose": "Runs a registered check on an immutable source object. It answers later, on `aq.check.receipted`."
+    },
+    "context.read": {
+      "input": {
+        "page": "",
+        "snapshot": "",
+        "subject": "What to read about.",
+        "view": "Which view."
+      },
+      "notes": [
+        "The output carries no facts of its own beyond the fields shown."
+      ],
+      "outcomes": {
+        "expired": "",
+        "incomplete": "",
+        "observed": "",
+        "refused": ""
+      },
+      "purpose": "Reads one page of one view of a subject's context."
+    },
+    "decision.request": {
+      "input": {
+        "choices": "The choices, at most 100.",
+        "expires_at_ms": "When the request expires.",
+        "question": "The question, in words the people asked will read.",
+        "responders": "Who may answer, at most 100.",
+        "subject": "What the decision is about, at an exact revision."
+      },
+      "notes": [
+        "The host checks who answers; nothing in the request can answer it."
+      ],
+      "outcomes": {
+        "accepted": "The request is open; the edge binds `{handle}`. Join the handle to read the answer.",
+        "approved": "It was approved. `note` is the responder's note and may be empty.",
+        "cancelled": "The request was cancelled.",
+        "expired": "Nobody answered in time.",
+        "refused": "The host would not ask.",
+        "rejected": "It was rejected. `note` is the responder's note and may be empty."
+      },
+      "purpose": "Asks people to decide. It answers later, on `aq.decision.completed`."
+    },
+    "findings.reconcile": {
+      "input": {
+        "evaluation": "",
+        "findings": "The findings, at most 100.",
+        "observation": "",
+        "partition": "",
+        "reminder_ms": ""
+      },
+      "notes": [],
+      "outcomes": {
+        "conflict": "",
+        "reconciled": "They are recorded.",
+        "refused": ""
+      },
+      "purpose": "Records the findings of an observation against the ones already known."
+    },
+    "judgment.assess": {
+      "input": {
+        "budget": "`deadline_ms` (1000 to 600000), how long the host may take; `max_output_tokens`. 120000 ms and 2048 tokens are plenty for a classification. The host must refuse a budget above its caps with `budget_exceeded`.",
+        "context": "`items`: at most 16 `{label, text}` the model sees, such as a task's title and description.",
+        "fields": "Today the host has no adapter for this command, and what it does with no fields is not decided: include at least one field. One entry per labelled question: `{id, description, choices}`, at most 16, with up to 64 choices of at most 128 bytes. Include a choice such as `unknown` when the document says what to do if it cannot be told.",
+        "flags": "Yes/no questions: `{id, description}`, at most 32. The model says which hold.",
+        "question": "What to judge, in the document's own words, with its definitions.",
+        "rationale_max_bytes": "How long the model's explanation may be, 0 to 4096.",
+        "subject": "The subject being judged. Use the `subject` a read returned."
+      },
+      "notes": [
+        "The host must give every accepted judgment exactly one final answer, at the latest `failed` with `deadline_exceeded` when the host's own deadline passes. The join's deadline only decides when the run stops waiting.",
+        "Write a fallback that reads nothing of the answer on every way the judgment can fail: the join's `no_match`, `timeout` and `on_error`, and the invoke's own outcome edges besides `accepted`.",
+        "When a yes to a flag would make the work cost more, anchor it in the flag's description and the question, for example: \"Most tasks do not need this. Answer yes only if you can name what is unusually hard.\"",
+        "Never invoke `operation.get` on its handle: read the answer through the join."
+      ],
+      "outcomes": {
+        "accepted": "The question is queued; the edge binds `{handle}`. Join the handle under a key, accepting only `assessed`.",
+        "assessed": "`labels` has exactly one label per field, in field order (`labels.0` answers `fields[0]`), each one of that field's choices; `flags` lists the flags that hold, each once; `rationale`; `reference` identifies the judgment. Read these only on the join's `completed` edge.",
+        "failed": "No usable answer: `indeterminate`, `provider_error`, `provider_unavailable` or `deadline_exceeded`. Take the fallback the document gives.",
+        "refused": "The request was not run. The host must refuse it with `invalid_request` (over 65536 bytes, duplicate field ids, a field without choices) or `budget_exceeded`. It can come at once, on the invoke's own `refused` edge, or through the join. Take the fallback the document gives."
+      },
+      "purpose": "Asks a model several labelled questions about a subject at once. It answers later, on `aq.judgment.assessed`."
+    },
+    "judgment.request": {
+      "input": {
+        "budget": "`deadline_ms` (1000 to 600000), token and cost bounds.",
+        "context": "`text`, at most 32768 bytes, and up to 32 immutable artifacts.",
+        "output": "`choices`, at most 64, and `rationale_max_bytes`.",
+        "question": "What to judge.",
+        "subject": "The subject being judged."
+      },
+      "notes": [
+        "It cannot be cancelled. A judgment never stands in for a person's decision or for a check that ran."
+      ],
+      "outcomes": {
+        "accepted": "The question is queued; the edge binds `{handle}`. Join the handle accepting only `assessed`.",
+        "assessed": "`choice` is one of the requested choices, with `rationale` and `provenance`.",
+        "failed": "`provider_error`, `provider_unavailable` or `indeterminate`.",
+        "refused": "`budget_exceeded`, `deadline_exceeded`, `invalid_output`, `invalid_request`, `no_permitted_profile` or `stale_subject`."
+      },
+      "purpose": "Asks a model one question with a single choice as the answer. It answers later, on `aq.judgment.completed`."
+    },
+    "message.send": {
+      "input": {
+        "body": "The text, exactly as sent. A playbook cannot build text: use the document's own words, and ask when the document gives none. Today the host refuses an empty body, more than 1600 UTF-16 code units, or control characters other than newline and tab.",
+        "identity": "What the message is. Today the host derives the message from it: a second send with the same identity and the same body is answered `queued` again and sends nothing new; with a different body it is refused. So one identity is sent at most once, whatever the runs do. Use a value that names what the document says may be sent only once, such as a task's `reference` from `work.read` (one per task version). Today the host refuses an identity that is blank, longer than 512 bytes, or holds control characters.",
+        "recipient": "Who gets it. Take it from the facts, never from words of the document. Today the host delivers only to the namespace owner (`user:<id>`) and refuses any other recipient.",
+        "visibility": "Who may see it. Today the host accepts only `project`."
+      },
+      "notes": [],
+      "outcomes": {
+        "queued": "The message is queued for delivery. Whether it was delivered or read is not reported.",
+        "refused": "Nothing was sent. Today the host refuses a recipient or visibility it does not serve, a body out of bounds, or an identity already used with a different body."
+      },
+      "purpose": "Sends one message to a person."
+    },
+    "operation.cancel": {
+      "input": {
+        "handle": "The operation's handle, from the `accepted` edge."
+      },
+      "notes": [],
+      "outcomes": {
+        "accepted": "The cancellation was admitted; the operation may still finish.",
+        "cancelled": "The operation is cancelled.",
+        "indeterminate": "The host cannot tell.",
+        "refused": "The host would not cancel it.",
+        "too_late": "The operation had already finished."
+      },
+      "purpose": "Asks the host to cancel an operation a playbook started."
+    },
+    "operation.get": {
+      "input": {
+        "handle": "The operation's handle, from the `accepted` edge."
+      },
+      "notes": [
+        "It is the reconciliation command of the asynchronous commands, which the tool adds by itself. A playbook reads an answer through a join, not through this command; it does not carry `judgment.assess` answers."
+      ],
+      "outcomes": {
+        "cancelled": "It was cancelled.",
+        "completed": "It finished; `outcome` and `output` are its answer.",
+        "failed": "",
+        "indeterminate": "The host cannot tell.",
+        "refused": "",
+        "running": "It has not finished."
+      },
+      "purpose": "Reads the state of an operation a playbook started."
+    },
+    "work.activate": {
+      "input": {
+        "subject": "The namespace's ensured task at an exact revision."
+      },
+      "outcomes": {
+        "activated": "The draft descendants were activated atomically. `activated` counts the tasks changed and `skipped` counts the descendants already outside draft state.",
+        "refused": "The host declined the activation and changed no descendants. `reason` describes the refusal."
+      },
+      "purpose": "Activates draft descendants of a task the namespace ensured."
+    },
+    "work.change": {
+      "input": {
+        "hold_id": "",
+        "subject": "The work, at the revision the playbook expects.",
+        "value": "",
+        "variant": "Which property: `dependencies`, `execution_constraints`, `hold`, `priority`, `release_hold` or `requirements`."
+      },
+      "notes": [],
+      "outcomes": {
+        "changed": "It is changed. Today the host then sends `aq.work.changed` with outcome `changed`.",
+        "conflict": "The work moved on from the revision given.",
+        "refused": "The host would not change it."
+      },
+      "purpose": "Changes one property of a piece of work."
+    },
+    "work.ensure": {
+      "input": {
+        "context": "",
+        "kind": "The kind of work.",
+        "lifetime": "`independent` (the work lives on its own) or `owned` (the playbook waits for its result).",
+        "logical_key": "",
+        "subject": "",
+        "visibility": ""
+      },
+      "notes": [],
+      "outcomes": {
+        "accepted": "Owned work was admitted; the edge binds `{handle}`. Join the handle to read its result.",
+        "completed": "The result of owned work, with its `disposition`.",
+        "ensured": "Independent work was admitted. Today the host returns `ensured` from `work.ensure`, and then sends `aq.work.changed` with outcome `ensured`, both when the call created the task and when the task already existed (same logical key). `ensured` means the task exists now, not that it was created; the host does not say which. A document that starts on a task being created cannot be told apart from one that starts on a task being ensured again: ask the owner whether that difference matters.",
+        "refused": "The host would not admit it."
+      },
+      "purpose": "Makes sure a piece of work exists, by a logical key. It may also answer later, on `aq.operation.updated`, with the result of work the playbook owns."
+    },
+    "work.read": {
+      "input": {
+        "subject": "The task's `{id, revision}`. Today the host reads the task as it is now, whatever revision is given."
+      },
+      "notes": [
+        "Today the host answers only for a task in a project on the automatic router. If the document expects to read tasks of any project, ask the owner.",
+        "`facts`, all always present: `kind` (the kind whoever filed the task gave, such as `bugfix`, or `\"\"`; a claim, not a classification); `title` (at most 512 bytes); `description` (at most 8192 bytes); `origin` (`owner`, `agent`, `supervisor`, `playbook` or `unknown`: who filed it); `level_hint` (the level whoever filed it asked for, or `\"\"`); `charged_failures` (earlier attempts that failed for a real reason and were charged to the task: escalate on this, and only this); `ended_attempts` (earlier attempts that ended for any reason, outages included: never escalate on it); `route` (`none`, `router` or `owner`: who set the current route).",
+        "`facts` does not hold: who owns or is assigned the task, its priority or urgency, its status (open, finished, cancelled), when it was created or last changed, its project, labels or tags, or provider load. A document that tests any of these cannot be followed with this command: ask the owner. Never stand another field in for it."
+      ],
+      "outcomes": {
+        "observed": "`subject` carries the task's current revision: pass this subject on, not the trigger's, so that a later write to a changed task is refused as stale. `reference` is `<id>@<revision>` of the task as read (one value per task version). `facts` holds what a document can test (below).",
+        "refused": "The host refuses with `unknown_task` (there is no such task) or `not_on_router` (the task's project is not routed automatically). End the run: nothing is wrong with the playbook."
+      },
+      "purpose": "Reads the facts of a task as it is now."
+    },
+    "work.route": {
+      "input": {
+        "classification": "The judgment the route rests on, `{reference, fields, labels, flags, rationale}` copied from an `assessed` answer, or `null`.",
+        "harnesses": "The harnesses that may take the task, at most 8; empty means any.",
+        "hold": "`true` only for a sentence that tells some work to wait for a particular agent rather than go elsewhere. Otherwise `false`.",
+        "level": "One of `definitions.levels` (a parent `simple`, `standard`, `complex` or `deep` and an effort `low`, `medium`, `high` or `max`, such as `standard-high`). If the document names a level the facts do not offer, ask; never round it.",
+        "prefer": "Harnesses to try first, in order; empty means no preference.",
+        "providers": "The providers that may serve it, at most 8; empty means any.",
+        "reasons": "Why, at most 16 `{code, detail?}`: every choice that set, raised, lowered or relaxed the level and every limit on who may take the task. `detail` is a fixed sentence of at most 256 bytes, best the document's own. A playbook cannot build text: write one reason per situation and select them with `lookup` or `filter`.",
+        "subject": "The task, at the revision the playbook decided on: the `subject` from `work.read`."
+      },
+      "notes": [
+        "Today the host intersects `harnesses`, `providers` and `prefer` with what Settings offers at the level and drops the rest, so write the lists the document implies without filtering them yourself. Never decide from `definitions.offers` that nothing can take a task: write the route and let the host refuse it.",
+        "If the owner chose the route (`facts.route` is `owner`), end without writing one.",
+        "These sentences need no step; today the host does them: holding a task until something can take it, raising a task nothing could ever take, when a route is needed, never choosing by priority or load, which model a harness runs, which failures count (`charged_failures`), and recording the decision on the task.",
+        "The worked example `escalate-on-judgment` reads, judges, looks the route up, writes it, and has a fallback route on every way the judgment fails."
+      ],
+      "outcomes": {
+        "refused": "Nothing was written; end. `not_offered`: nothing at that level (or in a non-empty list) is offered, and the host raises the task itself; never try a route the document does not give. `owner_route`, `not_on_router`, `unknown_task`: end.",
+        "routed": "The route is written, with the lists as the host kept them. End.",
+        "stale": "The task changed after the read; nothing was written. End: the host asks again for the new version."
+      },
+      "purpose": "Writes who may take a task, at which level."
+    },
+    "work.unroutable": {
+      "input": {
+        "reasons": "Why, with the same codes as `work.route`; usually `policy` with the document's sentence. At least one.",
+        "subject": "The task: the `subject` from `work.read`."
+      },
+      "notes": [
+        "Use it only where the document itself allows nobody for a task. For a task Settings cannot serve, write the route and let `work.route` refuse it."
+      ],
+      "outcomes": {
+        "recorded": "The task is left unrouted and raised for the owner. End.",
+        "refused": "`no_reasons`, `owner_route`, `not_on_router` or `unknown_task`. End.",
+        "stale": "The task changed after the read. End: the host asks again."
+      },
+      "purpose": "Says that the document allows nobody to take a task."
+    }
+  },
+  "events": {
+    "aq.artifact.recorded": {
+      "notes": [],
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "purpose": "An artifact was recorded.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner."
+    },
+    "aq.check.completed": {
+      "notes": [],
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "purpose": "A check finished (catalog 1.0.0's meaning; not the completion of `check.request`).",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner."
+    },
+    "aq.check.receipted": {
+      "notes": [],
+      "payload": {
+        "outcome": "The check's outcome.",
+        "output": "That outcome's output."
+      },
+      "purpose": "The answer to `check.request`.",
+      "sent": "Only as the answer to a `check.request` a playbook made. Join the handle; do not start a playbook on it."
+    },
+    "aq.decision.completed": {
+      "notes": [],
+      "payload": {
+        "outcome": "The decision.",
+        "output": "The decision output. Approved and rejected decisions include the responder's `note` of up to 2048 UTF-8 bytes."
+      },
+      "purpose": "The answer to `decision.request`.",
+      "sent": "Only as the answer to a `decision.request` a playbook made. Join the handle; do not start a playbook on it."
+    },
+    "aq.integration.changed": {
+      "notes": [],
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "purpose": "An integration candidate changed.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner."
+    },
+    "aq.judgment.assessed": {
+      "notes": [],
+      "payload": {
+        "outcome": "`assessed`, `failed` or `refused`.",
+        "output": "That outcome's output."
+      },
+      "purpose": "The answer to `judgment.assess`.",
+      "sent": "Only as the answer to a `judgment.assess` a playbook made. Join the handle, which types the answer per outcome; do not wait on this event or start a playbook on it."
+    },
+    "aq.judgment.completed": {
+      "notes": [],
+      "payload": {
+        "outcome": "`assessed`, `failed` or `refused`.",
+        "output": "That outcome's output."
+      },
+      "purpose": "The answer to `judgment.request`.",
+      "sent": "Only as the answer to a `judgment.request` a playbook made. Join the handle; do not start a playbook on it."
+    },
+    "aq.operation.updated": {
+      "notes": [],
+      "payload": {
+        "outcome": "`completed` or `refused`.",
+        "output": "The work's result, with its `disposition`."
+      },
+      "purpose": "The result of owned work from `work.ensure`.",
+      "sent": "Only as the answer to a `work.ensure` a playbook made. Join the handle; do not start a playbook on it."
+    },
+    "aq.signal.reported": {
+      "notes": [],
+      "payload": {
+        "outcome": "",
+        "reference": "",
+        "subject": ""
+      },
+      "purpose": "A signal was reported.",
+      "sent": "Not stated for this host. Do not start a playbook on it without asking the owner."
+    },
+    "aq.work.changed": {
+      "notes": [
+        "Its correlation field `operation` is the identity of the call that caused it."
+      ],
+      "payload": {
+        "outcome": "What the call did: `ensured` (the task exists now, whether or not the call created it) or `changed`.",
+        "reference": "The work's reference.",
+        "subject": "The work's `{id, revision}`."
+      },
+      "purpose": "A piece of work was ensured or changed.",
+      "sent": "Today the host sends it only as the effect of `work.ensure` (outcome `ensured`) or `work.change` (outcome `changed`) called by a playbook in the same namespace, any playbook. Never when a person creates, edits, finishes or cancels a task. `completed` and `cancelled` are in its schema, but today the host does not send them."
+    },
+    "aq.work.route_needed": {
+      "notes": [
+        "A trigger has no guard, so every emission starts a run."
+      ],
+      "payload": {
+        "subject": "The task's `{id, revision}`. Start the run with it as input."
+      },
+      "purpose": "A task needs a route.",
+      "sent": "Today the host sends it on its own: for a ready task in a project on the automatic router that has no route; at once when the task changes to a new version, or is retried or reopened; again for the same version at most every two minutes while it stays unrouted, but not while a run started for that version is unfinished. After `not_offered` it is not sent again until the task, the active playbook or Settings changes; after `work.unroutable`, until the task or the active playbook changes."
+    }
+  }
+}

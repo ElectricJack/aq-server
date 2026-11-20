@@ -14,10 +14,12 @@ pub mod transition;
 pub use inspection::{InspectionKind, InspectionPage, InspectionQuery};
 pub mod indexes;
 pub mod retention;
+mod schedules;
 use aq_playbooks_model::*;
 pub use indexes::{EffectQueueKind, IndexItem, IndexPage, IndexQuery, RuntimeIndexes};
 pub use lazy::{LazyMap, LazySeq, LazySet};
 pub use retention::{GcReport, RetentionPolicy, RetentionState};
+pub use schedules::{BindingSchedules, DeactivatedBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -632,6 +634,10 @@ pub struct State {
     pub indexes: RuntimeIndexes,
     pub artifacts: BTreeMap<String, Artifact>,
     pub bindings: BTreeMap<String, Activation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub binding_schedules: BTreeMap<String, BindingSchedules>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deactivated_bindings: BTreeMap<String, DeactivatedBinding>,
     pub catalog_revision: u64,
     pub runs: LazyMap<String, Run>,
     pub receipts: LazySeq<Receipt>,
@@ -972,33 +978,28 @@ impl<S: Storage> Engine<S> {
         host_ms: Option<i64>,
     ) -> Result<()> {
         self.transaction_at(host_ms, |s| {
-            let a = s
-                .artifacts
-                .get(artifact)
-                .ok_or_else(|| Error::NotFound(artifact.into()))?;
-            check_authority(a, &authority)?;
-            s.catalog_revision += 1;
-            let controls = s
-                .bindings
-                .get(binding)
-                .map(|activation| activation.controls.clone())
-                .unwrap_or_default();
-            if !controls.execution_enabled {
-                s.execution_denied.insert(artifact.into());
+            activate_binding(s, binding, artifact, authority, now_ms)?;
+            if let Some(configuration) = s
+                .deactivated_bindings
+                .remove(binding)
+                .and_then(|d| d.configuration)
+            {
+                let activation = &s.bindings[binding];
+                schedules::check_event(
+                    &s.artifacts[artifact],
+                    &activation.authority.scope,
+                    &configuration.event,
+                )?;
+                let registered = BindingSchedules::register(
+                    configuration,
+                    &self.namespace,
+                    binding,
+                    activation,
+                    now_ms,
+                    None,
+                )?;
+                s.binding_schedules.insert(binding.into(), registered);
             }
-            s.bindings.insert(
-                binding.into(),
-                Activation {
-                    artifact: artifact.into(),
-                    authority,
-                    revision: s.catalog_revision,
-                    controls,
-                },
-            );
-            s.catalog_history
-                .insert(s.catalog_revision, s.bindings.clone());
-            s.catalog_history_at_ms.insert(s.catalog_revision, now_ms);
-            indexes::index_activation(s, binding)?;
             Ok(())
         })
     }
@@ -1129,272 +1130,19 @@ impl<S: Storage> Engine<S> {
     ) -> Result<Option<EventDisposition>> {
         let event = event.clone();
         self.transaction_at(Some(now_ms), |s| {
-            if s.retention
-                .producer_epochs
-                .get(authenticated_producer)
-                .copied()
-                .unwrap_or(0)
-                != epoch
-            {
-                return Err(Error::Refused(
-                    "producer replay epoch retired; explicit new replay identity required".into(),
-                ));
-            }
-            let key = digest(&(authenticated_producer, epoch, &event.event_id))?;
-            if let Some(tombstone) = s.retention.event_tombstones.get(&key) {
-                if tombstone.digest != digest(&event)? {
-                    return Err(Error::Conflict(
-                        "expired event identity reused with changed content".into(),
-                    ));
-                }
-                return Err(Error::Refused(
-                    "event replay horizon expired; explicit new replay identity required".into(),
-                ));
-            }
-            let content = digest(&event)?;
-            if event.producer != authenticated_producer {
-                return Err(Error::Refused("forged producer identity".into()));
-            }
-            if let Some(old) = s.events.get(&key) {
-                // Past its window and held by nothing: it leaves first and
-                // is then new. A held one is still remembered, so it is
-                // answered as inside its window (SC-9).
-                let start = retention::window_start(s, now_ms);
-                if retention::event_droppable(s, &key, start)? {
-                    // Not remembered any more: a stale request is refused
-                    // before this commit forgets the expired event.
-                    refuse_stale(
-                        s,
-                        requested_at_ms,
-                        || retention::contract_event_window(s, &event.contract),
-                        now_ms,
-                    )?;
-                    retention::forget_event(s, &key)?;
-                    return Ok(None);
-                }
-                if old.digest != content {
-                    return Err(Error::Conflict(
-                        "event identity reused with changed content".into(),
-                    ));
-                }
-                return Ok(Some(EventDisposition {
-                    key,
-                    duplicate: true,
-                    destinations: old.destinations.len(),
-                }));
-            }
-            let contract = find_event(s, &event.contract)?;
-            if !contract.trusted_producers.contains(authenticated_producer)
-                || !contract.scopes.contains(&event.scope)
-            {
-                return Err(Error::Refused("event producer or scope".into()));
-            }
-            let window_ms = s
-                .retention
-                .policy
-                .event_replay_ms
-                .max(contract.retention_ms);
-            refuse_stale(s, requested_at_ms, || window_ms, now_ms)?;
-            validate_event(
-                &event,
-                &Registry {
-                    commands: BTreeMap::new(),
-                    events: BTreeMap::from([(contract.name.clone(), contract.clone())]),
-                },
-            )?;
-            if !s.protection_available
-                && (!contract.sensitive_payload_fields.is_empty()
-                    || s.artifacts.values().any(|artifact| {
-                        artifact
-                            .content
-                            .registry
-                            .events
-                            .get(&contract.name)
-                            .is_some_and(|event_contract| event_contract == &contract)
-                            && artifact.content.registry.commands.values().any(|command| {
-                                !command.sensitive_output_fields.is_empty()
-                                    && command.asynchronous.as_ref().is_some_and(|asynchronous| {
-                                        asynchronous.completion_event == contract.name
-                                    })
-                            })
-                    }))
-            {
-                return Err(Error::Refused(
-                    "protected-value storage unavailable for event payload".into(),
-                ));
-            }
-            let mut destinations = vec![];
-            let mut blockers = vec![];
-            let candidates = s
-                .indexes
-                .triggers
-                .get(&indexes::trigger_key(&event.contract, &event.scope)?)
-                .cloned()
-                .unwrap_or_default();
-            for binding in candidates {
-                let activation = &s.bindings[&binding];
-                let a = &s.artifacts[&activation.artifact];
-                if activation.authority.scope != event.scope {
-                    continue;
-                }
-                for trigger in &a.content.playbook.triggers {
-                    if trigger.event != event.contract {
-                        continue;
-                    }
-                    let mut ctx = EvalContext::new();
-                    ctx.insert("event".into(), EvalValue::Known(event.payload.clone()));
-                    // The first sequence number this acceptance assigns (the
-                    // event's own, or its first blocked-destination
-                    // receipt's) keeps the run ids of an event accepted again
-                    // after its window apart (SC-7). Stored destinations keep
-                    // their keys, so existing run ids are unchanged.
-                    let destination_key = digest(&(
-                        &key,
-                        s.sequence + 1,
-                        &binding,
-                        activation.revision,
-                        &trigger.id,
-                    ))?;
-                    let input = match known_expr(&trigger.input, &ctx).and_then(|input| {
-                        a.content.playbook.entries[&trigger.entry]
-                            .input
-                            .validate(&input)?;
-                        check_bytes(&input, a.content.playbook.limits.max_payload_bytes)?;
-                        Ok(input)
-                    }) {
-                        Ok(input) => input,
-                        Err(error) => {
-                            blockers.push((destination_key.clone(), "input", error.to_string()));
-                            Value::Null
-                        }
-                    };
-                    let deps = match resolve(s, &a.digest, &activation.authority) {
-                        Ok(deps) => deps,
-                        Err(error) => {
-                            blockers.push((
-                                destination_key.clone(),
-                                "dependency",
-                                error.to_string(),
-                            ));
-                            BTreeMap::new()
-                        }
-                    };
-                    ensure_admission_protection(s, &a.digest, &deps, s.catalog_revision)?;
-                    destinations.push(Destination {
-                        key: destination_key,
-                        artifact: a.digest.clone(),
-                        entry: trigger.entry.clone(),
-                        input,
-                        authority: activation.authority.clone(),
-                        dependencies: deps,
-                        run: None,
-                    });
-                }
-            }
-            let count = destinations.len();
-            for (destination, blocked_kind, reason) in blockers {
-                receipt(
-                    s,
-                    &format!("event:{key}"),
-                    "admission",
-                    now_ms,
-                    "destination_blocked",
-                    json!({"destination":destination,"blocked_kind":blocked_kind,"reason":reason}),
-                );
-            }
-            s.sequence += 1;
-            let sequence = s.sequence;
-            s.replay_touched.events.insert(key.clone());
-            s.events.insert(
-                key.clone(),
-                AcceptedEvent {
-                    key: key.clone(),
-                    envelope: event,
-                    digest: content,
-                    accepted_at_ms: now_ms,
-                    sequence,
-                    catalog_revision: s.catalog_revision,
-                    destinations,
-                },
-            );
-            s.retention.event_epochs.insert(key.clone(), epoch);
-            // From the later of host time and clock; a clock already near the
-            // end of time saturates rather than refusing the event.
-            let expires_at_ms = deadline(now_ms, window_ms)?.max(
-                retention::window_start(s, now_ms)
-                    .saturating_add(i64::try_from(window_ms).unwrap_or(i64::MAX)),
-            );
-            s.retention
-                .event_expires_at_ms
-                .insert(key.clone(), expires_at_ms);
-            retention::window_insert(
+            accept_event(
                 s,
-                expires_at_ms,
-                format!("{}{key}", retention::WINDOW_EVENT),
-            );
-            indexes::index_event(s, &key)?;
-            Ok(Some(EventDisposition {
-                key,
-                duplicate: false,
-                destinations: count,
-            }))
+                authenticated_producer,
+                event,
+                epoch,
+                requested_at_ms,
+                now_ms,
+                None,
+            )
         })
     }
     pub fn fanout(&self, event_key: &str, limit: usize, now_ms: i64) -> Result<usize> {
-        self.transaction_at(Some(now_ms), |s| {
-            let mut event = s
-                .events
-                .get(event_key)
-                .ok_or_else(|| Error::NotFound(event_key.into()))?
-                .clone();
-            let mut count = 0;
-            for d in event.destinations.iter_mut().filter(|d| d.run.is_none()) {
-                if count >= limit {
-                    break;
-                }
-                // An unresolved input belongs to the frozen event/proposal. A
-                // later activation cannot repair or reinterpret it.
-                if s.receipts.iter().any(|receipt| {
-                    receipt.kind == "destination_blocked"
-                        && receipt.detail.get("destination").and_then(Value::as_str) == Some(&d.key)
-                        && receipt.detail.get("blocked_kind").and_then(Value::as_str)
-                            == Some("input")
-                }) {
-                    continue;
-                }
-                // Missing immutable bytes may be installed later. Resolution
-                // still uses the accepted exact artifact, never current bindings.
-                if d.dependencies.is_empty() {
-                    let Ok(dependencies) =
-                        resolve_at(s, &d.artifact, &d.authority, event.catalog_revision)
-                    else {
-                        continue;
-                    };
-                    d.dependencies = dependencies;
-                }
-                let id = format!("event-{}", d.key);
-                admit_run(
-                    s,
-                    id.clone(),
-                    id.clone(),
-                    None,
-                    None,
-                    &d.artifact,
-                    &d.entry,
-                    d.input.clone(),
-                    d.authority.clone(),
-                    d.dependencies.clone(),
-                    0,
-                    now_ms,
-                )?;
-                s.runs.get_mut(&id).unwrap().catalog_revision = event.catalog_revision;
-                d.run = Some(id);
-                count += 1;
-            }
-            s.events.insert(event_key.into(), event);
-            s.replay_touched.events.insert(event_key.into());
-            Ok(count)
-        })
+        self.transaction_at(Some(now_ms), |s| fanout_event(s, event_key, limit, now_ms))
     }
     /// Persist dispatch state before handing anything to a host. Crashes here leave
     /// a recoverable ambiguity rather than an apparently safe fresh invocation.
@@ -2075,6 +1823,321 @@ fn known_expr(expr: &Expr, ctx: &EvalContext) -> Result<Value> {
         EvalValue::Unknown(r) => Err(Error::Refused(format!("expression unknown: {r}"))),
     }
 }
+fn activate_binding(
+    s: &mut State,
+    binding: &str,
+    artifact: &str,
+    authority: Authority,
+    now_ms: i64,
+) -> Result<()> {
+    let a = s
+        .artifacts
+        .get(artifact)
+        .ok_or_else(|| Error::NotFound(artifact.into()))?;
+    check_authority(a, &authority)?;
+    if let Some(schedules) = s.binding_schedules.get(binding) {
+        schedules::check_event(a, &authority.scope, &schedules.configuration.event)?;
+    }
+    s.catalog_revision += 1;
+    let controls = s
+        .bindings
+        .get(binding)
+        .map(|activation| activation.controls.clone())
+        .unwrap_or_default();
+    if !controls.execution_enabled {
+        s.execution_denied.insert(artifact.into());
+    }
+    s.bindings.insert(
+        binding.into(),
+        Activation {
+            artifact: artifact.into(),
+            authority,
+            revision: s.catalog_revision,
+            controls,
+        },
+    );
+    record_binding_change(s, binding, now_ms)
+}
+
+fn record_binding_change(s: &mut State, binding: &str, now_ms: i64) -> Result<()> {
+    s.catalog_history
+        .insert(s.catalog_revision, s.bindings.clone());
+    s.catalog_history_at_ms.insert(s.catalog_revision, now_ms);
+    indexes::index_activation(s, binding)
+}
+
+fn accept_event(
+    s: &mut State,
+    authenticated_producer: &str,
+    event: EventEnvelope,
+    epoch: u64,
+    requested_at_ms: Option<i64>,
+    now_ms: i64,
+    target: Option<&str>,
+) -> Result<Option<EventDisposition>> {
+    if s.retention
+        .producer_epochs
+        .get(authenticated_producer)
+        .copied()
+        .unwrap_or(0)
+        != epoch
+    {
+        return Err(Error::Refused(
+            "producer replay epoch retired; explicit new replay identity required".into(),
+        ));
+    }
+    let key = digest(&(authenticated_producer, epoch, &event.event_id))?;
+    if let Some(tombstone) = s.retention.event_tombstones.get(&key) {
+        if tombstone.digest != digest(&event)? {
+            return Err(Error::Conflict(
+                "expired event identity reused with changed content".into(),
+            ));
+        }
+        return Err(Error::Refused(
+            "event replay horizon expired; explicit new replay identity required".into(),
+        ));
+    }
+    let content = digest(&event)?;
+    if event.producer != authenticated_producer {
+        return Err(Error::Refused("forged producer identity".into()));
+    }
+    if let Some(old) = s.events.get(&key) {
+        // Past its window and held by nothing: it leaves first and
+        // is then new. A held one is still remembered, so it is
+        // answered as inside its window (SC-9).
+        let start = retention::window_start(s, now_ms);
+        if retention::event_droppable(s, &key, start)? {
+            // Not remembered any more: a stale request is refused
+            // before this commit forgets the expired event.
+            refuse_stale(
+                s,
+                requested_at_ms,
+                || retention::contract_event_window(s, &event.contract),
+                now_ms,
+            )?;
+            retention::forget_event(s, &key)?;
+            return Ok(None);
+        }
+        if old.digest != content {
+            return Err(Error::Conflict(
+                "event identity reused with changed content".into(),
+            ));
+        }
+        return Ok(Some(EventDisposition {
+            key,
+            duplicate: true,
+            destinations: old.destinations.len(),
+        }));
+    }
+    let contract = find_event(s, &event.contract)?;
+    if !contract.trusted_producers.contains(authenticated_producer)
+        || !contract.scopes.contains(&event.scope)
+    {
+        return Err(Error::Refused("event producer or scope".into()));
+    }
+    let window_ms = s
+        .retention
+        .policy
+        .event_replay_ms
+        .max(contract.retention_ms);
+    refuse_stale(s, requested_at_ms, || window_ms, now_ms)?;
+    validate_event(
+        &event,
+        &Registry {
+            commands: BTreeMap::new(),
+            events: BTreeMap::from([(contract.name.clone(), contract.clone())]),
+        },
+    )?;
+    if !s.protection_available
+        && (!contract.sensitive_payload_fields.is_empty()
+            || s.artifacts.values().any(|artifact| {
+                artifact
+                    .content
+                    .registry
+                    .events
+                    .get(&contract.name)
+                    .is_some_and(|event_contract| event_contract == &contract)
+                    && artifact.content.registry.commands.values().any(|command| {
+                        !command.sensitive_output_fields.is_empty()
+                            && command.asynchronous.as_ref().is_some_and(|asynchronous| {
+                                asynchronous.completion_event == contract.name
+                            })
+                    })
+            }))
+    {
+        return Err(Error::Refused(
+            "protected-value storage unavailable for event payload".into(),
+        ));
+    }
+    let mut destinations = vec![];
+    let mut blockers = vec![];
+    let candidates = s
+        .indexes
+        .triggers
+        .get(&indexes::trigger_key(&event.contract, &event.scope)?)
+        .cloned()
+        .unwrap_or_default();
+    for binding in candidates
+        .into_iter()
+        .filter(|b| target.is_none_or(|target| b == target))
+    {
+        let activation = &s.bindings[&binding];
+        let a = &s.artifacts[&activation.artifact];
+        if activation.authority.scope != event.scope {
+            continue;
+        }
+        for trigger in &a.content.playbook.triggers {
+            if trigger.event != event.contract {
+                continue;
+            }
+            let mut ctx = EvalContext::new();
+            ctx.insert("event".into(), EvalValue::Known(event.payload.clone()));
+            // The first sequence number this acceptance assigns (the
+            // event's own, or its first blocked-destination
+            // receipt's) keeps the run ids of an event accepted again
+            // after its window apart (SC-7). Stored destinations keep
+            // their keys, so existing run ids are unchanged.
+            let destination_key = digest(&(
+                &key,
+                s.sequence + 1,
+                &binding,
+                activation.revision,
+                &trigger.id,
+            ))?;
+            let input = match known_expr(&trigger.input, &ctx).and_then(|input| {
+                a.content.playbook.entries[&trigger.entry]
+                    .input
+                    .validate(&input)?;
+                check_bytes(&input, a.content.playbook.limits.max_payload_bytes)?;
+                Ok(input)
+            }) {
+                Ok(input) => input,
+                Err(error) => {
+                    blockers.push((destination_key.clone(), "input", error.to_string()));
+                    Value::Null
+                }
+            };
+            let deps = match resolve(s, &a.digest, &activation.authority) {
+                Ok(deps) => deps,
+                Err(error) => {
+                    blockers.push((destination_key.clone(), "dependency", error.to_string()));
+                    BTreeMap::new()
+                }
+            };
+            ensure_admission_protection(s, &a.digest, &deps, s.catalog_revision)?;
+            destinations.push(Destination {
+                key: destination_key,
+                artifact: a.digest.clone(),
+                entry: trigger.entry.clone(),
+                input,
+                authority: activation.authority.clone(),
+                dependencies: deps,
+                run: None,
+            });
+        }
+    }
+    let count = destinations.len();
+    for (destination, blocked_kind, reason) in blockers {
+        receipt(
+            s,
+            &format!("event:{key}"),
+            "admission",
+            now_ms,
+            "destination_blocked",
+            json!({"destination":destination,"blocked_kind":blocked_kind,"reason":reason}),
+        );
+    }
+    s.sequence += 1;
+    let sequence = s.sequence;
+    s.replay_touched.events.insert(key.clone());
+    s.events.insert(
+        key.clone(),
+        AcceptedEvent {
+            key: key.clone(),
+            envelope: event,
+            digest: content,
+            accepted_at_ms: now_ms,
+            sequence,
+            catalog_revision: s.catalog_revision,
+            destinations,
+        },
+    );
+    s.retention.event_epochs.insert(key.clone(), epoch);
+    // From the later of host time and clock; a clock already near the
+    // end of time saturates rather than refusing the event.
+    let expires_at_ms = deadline(now_ms, window_ms)?.max(
+        retention::window_start(s, now_ms)
+            .saturating_add(i64::try_from(window_ms).unwrap_or(i64::MAX)),
+    );
+    s.retention
+        .event_expires_at_ms
+        .insert(key.clone(), expires_at_ms);
+    retention::window_insert(
+        s,
+        expires_at_ms,
+        format!("{}{key}", retention::WINDOW_EVENT),
+    );
+    indexes::index_event(s, &key)?;
+    Ok(Some(EventDisposition {
+        key,
+        duplicate: false,
+        destinations: count,
+    }))
+}
+
+fn fanout_event(s: &mut State, event_key: &str, limit: usize, now_ms: i64) -> Result<usize> {
+    let mut event = s
+        .events
+        .get(event_key)
+        .ok_or_else(|| Error::NotFound(event_key.into()))?
+        .clone();
+    let mut count = 0;
+    for d in event.destinations.iter_mut().filter(|d| d.run.is_none()) {
+        if count >= limit {
+            break;
+        }
+        // An unresolved input belongs to the frozen event/proposal. A
+        // later activation cannot repair or reinterpret it.
+        if s.receipts.iter().any(|receipt| {
+            receipt.kind == "destination_blocked"
+                && receipt.detail.get("destination").and_then(Value::as_str) == Some(&d.key)
+                && receipt.detail.get("blocked_kind").and_then(Value::as_str) == Some("input")
+        }) {
+            continue;
+        }
+        // Missing immutable bytes may be installed later. Resolution
+        // still uses the accepted exact artifact, never current bindings.
+        if d.dependencies.is_empty() {
+            let Ok(dependencies) = resolve_at(s, &d.artifact, &d.authority, event.catalog_revision)
+            else {
+                continue;
+            };
+            d.dependencies = dependencies;
+        }
+        let id = format!("event-{}", d.key);
+        admit_run(
+            s,
+            id.clone(),
+            id.clone(),
+            None,
+            None,
+            &d.artifact,
+            &d.entry,
+            d.input.clone(),
+            d.authority.clone(),
+            d.dependencies.clone(),
+            0,
+            now_ms,
+        )?;
+        s.runs.get_mut(&id).unwrap().catalog_revision = event.catalog_revision;
+        d.run = Some(id);
+        count += 1;
+    }
+    s.events.insert(event_key.into(), event);
+    s.replay_touched.events.insert(event_key.into());
+    Ok(count)
+}
+
 fn find_event(s: &State, reference: &ContractRef) -> Result<EventContract> {
     for a in s.artifacts.values() {
         if let Some(c) = a.content.registry.events.get(&reference.name)

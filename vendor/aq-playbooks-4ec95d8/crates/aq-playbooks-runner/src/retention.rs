@@ -559,6 +559,8 @@ pub(crate) fn check_licensed_header(
         recovery_requests,
         artifacts,
         bindings,
+        binding_schedules,
+        deactivated_bindings,
         catalog_revision,
     } = previous;
     let RetentionState {
@@ -599,6 +601,8 @@ pub(crate) fn check_licensed_header(
         && *authority_revocations == n.authority_revocations
         && same(catalog_history, &n.catalog_history)
         && same(bindings, &n.bindings)
+        && same(binding_schedules, &n.binding_schedules)
+        && *deactivated_bindings == n.deactivated_bindings
         && same(recovery_requests, &n.recovery_requests)
         && same(artifacts, &n.artifacts);
     if unchanged {

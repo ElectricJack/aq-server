@@ -349,14 +349,8 @@ fn choose<T: Serialize>(
                 object.insert("notes".into(), notes.clone());
                 return print(&described);
             }
-            let pinned = aq_playbooks_compiler::docs::catalog_registry();
-            let same = match kind {
-                "commands" => pinned.commands.get(&name).map(serde_json::to_value),
-                _ => pinned.events.get(&name).map(serde_json::to_value),
-            };
-            if let (Some(Ok(pinned)), Some(notes)) =
-                (same, aq_playbooks_compiler::docs::notes(kind, &name))
-                && pinned == described
+            if let Some(notes) =
+                aq_playbooks_compiler::docs::published_notes(kind, &name, &described)
                 && let Some(object) = described.as_object_mut()
             {
                 object.insert("notes".into(), notes);

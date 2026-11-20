@@ -10,9 +10,9 @@ delivery_playbook = ["aq-playbooks-compiler/delivery_playbook"]
 
 [dependencies]
 aq-internal-work = { path = "../aq-internal-work" }
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playbooks-compiler", version = "=0.2.0" }
-aq-playbooks-model = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playbooks-model", version = "=0.2.0" }
-aq-playbooks-simulation = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playbooks-simulation", version = "=0.2.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-4ec95d8/crates/aq-playbooks-compiler", version = "=0.2.0" }
+aq-playbooks-model = { path = "../../vendor/aq-playbooks-4ec95d8/crates/aq-playbooks-model", version = "=0.2.0" }
+aq-playbooks-simulation = { path = "../../vendor/aq-playbooks-4ec95d8/crates/aq-playbooks-simulation", version = "=0.2.0" }
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true

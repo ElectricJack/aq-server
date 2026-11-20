@@ -58,6 +58,31 @@ pub const CATALOG_2_3_REGISTRY: &str =
 #[cfg(feature = "delivery_playbook")]
 pub const CATALOG_2_3_NOTES: &str = include_str!("../../../contracts/aq-host-2.3.0/notes.json");
 
+/// Catalog 2.4.0, the host profile with decision notes and subtree activation.
+pub const CATALOG_2_4_REGISTRY: &str =
+    include_str!("../../../contracts/aq-host-2.4.0/registry.json");
+pub const CATALOG_2_4_NOTES: &str = include_str!("../../../contracts/aq-host-2.4.0/notes.json");
+
+/// Authoring notes for a registration that matches a published host contract.
+pub fn published_notes(kind: &str, name: &str, contract: &Value) -> Option<Value> {
+    for (registry, notes) in [
+        (CATALOG_REGISTRY, CATALOG_NOTES),
+        (CATALOG_2_4_REGISTRY, CATALOG_2_4_NOTES),
+    ] {
+        let registry: Registry =
+            serde_json::from_str(registry).expect("the published catalog parses");
+        let published = match kind {
+            "commands" => registry.commands.get(name).map(serde_json::to_value),
+            "events" => registry.events.get(name).map(serde_json::to_value),
+            _ => None,
+        };
+        if published.and_then(Result::ok).as_ref() == Some(contract) {
+            return notes_in(notes, kind, name);
+        }
+    }
+    None
+}
+
 /// [`catalog`] for catalog 2.3.0 and its notes.
 #[cfg(feature = "delivery_playbook")]
 pub fn catalog_2_3(

@@ -15,8 +15,7 @@ impl Service {
         Ok(())
     }
     pub(super) fn interval_event(&self) -> Result<Option<ContractRef>> {
-        self.profile
-            .registry()
+        self.registry()
             .events
             .get("aq.signal.reported")
             .map(|event| {

@@ -1,0 +1,44 @@
+{
+  "commands_added": [
+    "work.activate"
+  ],
+  "commands_changed": [
+    "decision.request",
+    "operation.get"
+  ],
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "events_changed": [
+    "aq.decision.completed"
+  ],
+  "fingerprint": "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac",
+  "supersedes": {
+    "fingerprint": "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a",
+    "version": "2.2.0"
+  },
+  "version": "2.4.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

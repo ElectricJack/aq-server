@@ -76,3 +76,12 @@ mod tests {
         assert!(r.commands["context.read"].input.validate(&value).is_ok());
     }
 }
+
+/// Host catalog 2.4.0 builds on 2.2.0 with decision notes and activation of
+/// draft descendants of work that the playbook namespace ensured.
+pub const VERSION_2_4: &str = "2.4.0";
+pub const REGISTRY_2_4_JSON: &str = include_str!("../../../contracts/aq-host-2.4.0/registry.json");
+pub const MANIFEST_2_4_JSON: &str = include_str!("../../../contracts/aq-host-2.4.0/manifest.json");
+pub fn catalog_v2_4() -> Registry {
+    serde_json::from_str(REGISTRY_2_4_JSON).expect("published AQ host registry 2.4.0")
+}

@@ -6,6 +6,64 @@
 use crate::{Hash, ModelError, digest};
 use serde::{Deserialize, Serialize};
 
+pub const MIN_BINDING_INTERVAL_MS: u64 = 30_000;
+const MAX_INTERVAL_MS: u64 = i64::MAX as u64;
+
+/// Operator-owned declaration on a binding. No schedule is part of the
+/// playbook source or the compiled artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingSchedule {
+    pub key: String,
+    pub every_ms: u64,
+}
+
+impl BindingSchedule {
+    pub fn validate_all(schedules: &[Self]) -> Result<(), ModelError> {
+        use std::collections::BTreeSet;
+
+        let mut keys = BTreeSet::new();
+        if schedules.len() > 128
+            || schedules.iter().any(|s| {
+                !crate::valid_name(&s.key)
+                    || !(MIN_BINDING_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&s.every_ms)
+                    || !keys.insert(s.key.as_str())
+            })
+        {
+            return Err(ModelError::Invalid(
+                "invalid binding interval schedules".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn reference(&self) -> String {
+        format!("aq.schedule/{}", self.key)
+    }
+
+    pub fn register(
+        &self,
+        id: String,
+        scope: String,
+        revision: String,
+        now_ms: i64,
+    ) -> Result<FixedIntervalSchedule, ModelError> {
+        Self::validate_all(std::slice::from_ref(self))?;
+        let start_at_ms = now_ms
+            .checked_add(self.every_ms as i64)
+            .ok_or_else(|| ModelError::Invalid("first schedule occurrence overflows".into()))?;
+        Ok(FixedIntervalSchedule {
+            id,
+            scope,
+            revision,
+            start_at_ms,
+            interval_ms: self.every_ms,
+            grace_ms: 0,
+            misfire: MisfirePolicy::CoalesceOnce,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MisfirePolicy {
@@ -66,7 +124,7 @@ impl FixedIntervalSchedule {
             || self.revision.is_empty()
             || self.revision.len() > 128
             || self.interval_ms == 0
-            || self.interval_ms > 31_536_000_000
+            || self.interval_ms > MAX_INTERVAL_MS
             || self.grace_ms >= self.interval_ms
             || matches!(self.misfire, MisfirePolicy::BoundedCatchUp { max_occurrences } if max_occurrences == 0 || max_occurrences > 1024)
         {
@@ -134,7 +192,7 @@ impl FixedIntervalSchedule {
             .ok_or_else(|| ModelError::Invalid("schedule index exhausted".into()))?;
         match self.misfire {
             MisfirePolicy::Skip => {
-                let at = self.at(last)?;
+                let at = self.scheduled_at_ms(last)?;
                 if now_ms.saturating_sub(at) as u64 <= self.grace_ms {
                     plan.occurrences.push(self.occurrence(
                         last,
@@ -177,7 +235,7 @@ impl FixedIntervalSchedule {
         }
         Ok(plan)
     }
-    fn at(&self, index: u64) -> Result<i64, ModelError> {
+    pub fn scheduled_at_ms(&self, index: u64) -> Result<i64, ModelError> {
         i64::try_from(
             i128::from(self.start_at_ms) + i128::from(index) * i128::from(self.interval_ms),
         )
@@ -191,7 +249,7 @@ impl FixedIntervalSchedule {
         now: i64,
         fingerprint: &str,
     ) -> Result<ScheduleOccurrence, ModelError> {
-        let at = self.at(index)?;
+        let at = self.scheduled_at_ms(index)?;
         Ok(ScheduleOccurrence {
             id: digest(&(fingerprint, index))?,
             schedule_id: self.id.clone(),
@@ -218,6 +276,35 @@ mod tests {
             grace_ms: 5,
             misfire,
         }
+    }
+    #[test]
+    fn binding_declarations_validate_and_wait_one_interval() {
+        let declaration = BindingSchedule {
+            key: "test".into(),
+            every_ms: MIN_BINDING_INTERVAL_MS,
+        };
+        assert_eq!(declaration.reference(), "aq.schedule/test");
+        assert!(
+            BindingSchedule::validate_all(&[declaration.clone(), declaration.clone()]).is_err()
+        );
+        assert!(
+            BindingSchedule::validate_all(&[BindingSchedule {
+                every_ms: MIN_BINDING_INTERVAL_MS - 1,
+                ..declaration.clone()
+            }])
+            .is_err()
+        );
+        let registered = declaration
+            .register("id".into(), "project".into(), "revision".into(), 1)
+            .unwrap();
+        assert_eq!(registered.start_at_ms, 30_001);
+        assert!(
+            registered
+                .plan(&registered.cursor().unwrap(), 30_000, 1)
+                .unwrap()
+                .occurrences
+                .is_empty()
+        );
     }
     #[test]
     fn skip_records_missed_work_and_emits_only_timely_latest() {
