@@ -5,9 +5,13 @@ edition.workspace = true
 publish = false
 description = "Agent grant vocabulary, scopes, scope checks and the structured refusal shape (spec 0006 §6)"
 
+[features]
+store = ["dep:sqlx"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 uuid.workspace = true
+sqlx = { workspace = true, optional = true }

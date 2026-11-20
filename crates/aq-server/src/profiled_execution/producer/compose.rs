@@ -164,9 +164,13 @@ pub async fn compile(
         return Err(refused());
     }
     let task = String::from_utf8(projection.bytes.clone()).map_err(|_| refused())?;
-    let thread =
-        crate::agent_access::task_thread::startup_input(state, project, context.revision.task_id)
-            .await;
+    let thread = crate::agent_access::task_thread::startup_input(
+        state,
+        project,
+        context.revision.task_id,
+        crate::agent_access::grant_check::work_kind(&context.context["node"], project),
+    )
+    .await;
     let thread_identity = thread.as_ref().map(|input| input.identity.clone());
     let thread = thread.map(|input| input.text);
     let limit = execution

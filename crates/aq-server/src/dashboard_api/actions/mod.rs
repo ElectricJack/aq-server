@@ -232,6 +232,32 @@ pub(crate) async fn lookup_scoped(
         .await
         .map_err(neutral_lookup)
 }
+/// Resolve an exact replay before checking permissions against changed Graph facts.
+pub(crate) async fn replay_scoped(
+    state: &AppState,
+    registry: &Registry,
+    user: &User,
+    request: &ActionRequest,
+    scope: &Scope,
+) -> Result<Option<Operation>, ApiError> {
+    request.validate()?;
+    let Some(existing) =
+        journal::lookup_for_authorization(&state.store.pool, user.id, request.operation_id).await?
+    else {
+        return Ok(None);
+    };
+    if existing.kind != request.kind || existing.scope != *scope {
+        return Err(ApiError::for_status(StatusCode::CONFLICT));
+    }
+    if let Some(op) = existing.operation
+        && canonical_digest(request, scope)? != op.request_digest
+    {
+        return Err(ApiError::for_status(StatusCode::CONFLICT));
+    }
+    lookup_scoped(state, registry, user, request.operation_id)
+        .await
+        .map(Some)
+}
 pub(crate) async fn submit_legacy(
     state: &AppState,
     registry: &Registry,

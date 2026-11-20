@@ -1,6 +1,7 @@
 //! Online attempt credentials, scoped graph reads, durable graph intent and mail.
 mod agent_tasks;
 mod contract;
+mod draft_tasks;
 pub(crate) mod grant_check;
 mod graph;
 pub mod human;

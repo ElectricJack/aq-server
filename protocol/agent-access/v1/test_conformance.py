@@ -44,7 +44,8 @@ class Conformance(unittest.TestCase):
         self.assertIn('commands', module.CommandRequest.__annotations__)
         Draft202012Validator.check_schema(SCHEMA)
         openapi = json.loads((ROOT / 'openapi.json').read_text())
-        self.assertEqual(len(openapi['paths']), 12)
+        self.assertEqual(len(openapi['paths']), 13)
+        self.assertIn('/v1/agent/task-actions', openapi['paths'])
         for path in ['/v1/agent/messages/send', '/v1/agent/messages/inbox', '/v1/agent/messages/ack', '/v1/agent/messages/body', '/v2/worker/messages/poll', '/v2/worker/messages/ack']:
             self.assertIn(path, openapi['paths'])
         self.assertEqual(openapi['paths']['/v2/worker/agent-operations/query']['post']['security'], [{'NodeRecoveryBearer': []}])

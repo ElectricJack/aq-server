@@ -10,7 +10,12 @@ use aq_agent_grants::{AuditEntry, Decision, Refusal, RefusalCode, Relation, Targ
 use aq_command_registry::agent_task::AgentTask as Body;
 
 pub(super) fn machine_routes() -> Router<AppState> {
-    Router::new().route("/v1/agent/tasks", post(create))
+    Router::new()
+        .route(
+            "/v1/agent/task-actions",
+            post(super::draft_tasks::submit).layer(axum::extract::DefaultBodyLimit::max(65536)),
+        )
+        .route("/v1/agent/tasks", post(create))
 }
 fn internal<E>(_: E) -> Refusal {
     Refusal::error(
@@ -103,6 +108,25 @@ async fn admit(
         audit(state, &entry(&Decision::Deny(r.clone()))).await;
         return Err(r);
     }
+    if held.limits.draft_only {
+        let mut task = b.action(
+            project,
+            own,
+            &match &b.expected_project_revision {
+                Some(r) => r.clone(),
+                None => crate::project_bindings::current(state, project)
+                    .await
+                    .map_err(internal)?
+                    .revision
+                    .to_string(),
+            },
+        );
+        if b.task_state.is_none() {
+            task["payload"]["task_state"] = json!("draft");
+        }
+        let request = serde_json::from_value(task).map_err(internal)?;
+        return super::draft_tasks::admit(state, a, spec, request, request_id).await;
+    }
     let parent = b.parent(own);
     // Reserve the create against the quota; a replay of the same operation
     // finds its own row and is not counted again.
@@ -153,7 +177,9 @@ async fn admit(
             "The task is malformed.",
         )
     })?;
-    match super::human::enqueue::supervisor::agent_create(state, a.ids, request).await {
+    match super::human::enqueue::supervisor::agent_action(state, a.ids, request, Default::default())
+        .await
+    {
         Err(e) if e.status() == axum::http::StatusCode::FORBIDDEN => {
             let r = Refusal::parent_outside_project(spec.name, grant, a.grants.related(grant));
             audit(state, &entry(&Decision::Deny(r.clone()))).await;

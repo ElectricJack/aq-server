@@ -23,11 +23,23 @@ pub(crate) async fn agent_caller(
     state: &AppState,
     headers: &HeaderMap,
 ) -> std::result::Result<AgentCaller, RefusalCode> {
-    let p = authenticate(state, headers)
+    let mut p = authenticate(state, headers)
         .await
         .map_err(|e| RefusalCode::from_agent_access(e.0))?;
+    let ids = ids(&p).map_err(|_| RefusalCode::Internal)?;
+    let policy = project_grants(state, ids.project_id);
+    if !policy.by_work_kind.is_empty() {
+        let workspace = id(&p.binding, "workspace_id").map_err(|_| RefusalCode::Internal)?;
+        let rt = runtime(state).map_err(|_| RefusalCode::Internal)?;
+        let node = super::human::graph_actions::current(rt, workspace, ids.task_id, "task")
+            .await
+            .map_err(|_| RefusalCode::Internal)?;
+        if let Some(kind) = policy.work_kind(work_kind(&node, ids.project_id)) {
+            p.grants = kind.narrow(&p.grants);
+        }
+    }
     Ok(AgentCaller {
-        ids: ids(&p).map_err(|_| RefusalCode::Internal)?,
+        ids,
         grants: p.grants.clone(),
         binding: p.binding.clone(),
         principal: p,
@@ -54,6 +66,11 @@ impl AgentCaller {
     ) -> (Decision, Target) {
         use aq_agent_grants::Relation;
         let own = self.ids.task_id;
+        if aq_command_registry::is_draft_action(spec.name) {
+            params
+                .entry("project_id")
+                .or_insert_with(|| json!(self.ids.project_id));
+        }
         let me = aq_task_comments::Author::Agent {
             session_id: id(&self.binding, "session_id").unwrap_or_default(),
             attempt_id: self.ids.attempt_id,
@@ -86,6 +103,19 @@ pub(crate) async fn relation(state: &AppState, own: Uuid, task: Uuid) -> aq_agen
     depth.map_or(aq_agent_grants::Relation::Other, |d| {
         aq_agent_grants::Relation::Descendant(d as u32)
     })
+}
+/// Only the work host writes these task metadata fields.
+pub(crate) fn work_kind(node: &Value, project: Uuid) -> Option<&str> {
+    let metadata = &node["metadata"];
+    if metadata["aq:project_id"] != json!(project)
+        || metadata["aq:playbook_namespace"]
+            .as_str()
+            .and_then(|id| id.parse::<Uuid>().ok())
+            .is_none()
+    {
+        return None;
+    }
+    metadata["aq:work_kind"].as_str()
 }
 /// The project's agent-grant policy (`ProjectPolicy.agent_grants`).
 pub(crate) fn project_grants(
@@ -127,8 +157,9 @@ pub(crate) async fn resolve_native(
     effective: &[(&str, &str)],
     project: Uuid,
     task: Uuid,
+    kind: Option<&str>,
 ) -> std::result::Result<GrantSet, sqlx::Error> {
-    use aq_agent_grants::resolve::{Permission, from_permissions, resolve};
+    use aq_agent_grants::resolve::{Permission, from_permissions, resolve_work};
     if !grant_tables(state) {
         return Ok(GrantSet::empty());
     }
@@ -143,10 +174,11 @@ pub(crate) async fn resolve_native(
         .bind(task).fetch_optional(&mut **tx).await?;
     // A creator whose grants cannot be read holds none, so the child gets none.
     let creator = creator.map(|v| sealed(Some(v)).unwrap_or_default());
-    Ok(resolve(
+    Ok(resolve_work(
         &from_permissions(&perms, project),
         &project_grants(state, project),
         creator.as_ref(),
+        kind,
     ))
 }
 
@@ -171,7 +203,7 @@ pub(super) fn sealed(column: Option<Value>) -> Result<GrantSet> {
         GrantSet::new(serde_json::from_value(v)?).map_err(|_| Error("internal"))
     })
 }
-fn ids(p: &Principal) -> Result<AttemptIds> {
+pub(super) fn ids(p: &Principal) -> Result<AttemptIds> {
     Ok(AttemptIds {
         attempt_id: id(&p.binding, "attempt_id")?,
         task_id: id(&p.binding, "task_id")?,

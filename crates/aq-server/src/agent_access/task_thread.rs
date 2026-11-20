@@ -17,6 +17,7 @@ pub(crate) async fn startup_input(
     state: &AppState,
     project: Uuid,
     task: Uuid,
+    kind: Option<&str>,
 ) -> Option<StartupInput> {
     let pool = &state.store.pool;
     let max = thread::MAX_ITEMS as u16;
@@ -38,10 +39,11 @@ pub(crate) async fn startup_input(
     let creator: Option<Value> = sqlx::query_scalar("SELECT g.grants FROM agent_created_tasks c JOIN agent_launch_grants g USING(attempt_id) WHERE c.task_id=$1")
         .bind(task).fetch_optional(pool).await.ok()?;
     let creator = creator.map(|v| grant_check::sealed(Some(v)).unwrap_or_default());
-    let grants = aq_agent_grants::resolve::resolve(
+    let grants = aq_agent_grants::resolve::resolve_work(
         &[],
         &grant_check::project_grants(state, project),
         creator.as_ref(),
+        kind,
     );
     let t = thread::Thread {
         comments: comments

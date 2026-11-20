@@ -26,7 +26,7 @@ aq-login-store = { path = "../aq-login-store" }
 aq-profiled-state = { path = "../aq-profiled-state", version = "=0.1.0" }
 aq-task-thread = { path = "../aq-task-thread", version = "=0.1.0" }
 aq-stall-ladder = { path = "../aq-stall-ladder", version = "=0.1.0" }
-aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0" }
+aq-agent-grants = { path = "../aq-agent-grants", version = "=0.1.0", features = ["store"] }
 aq-dashboard-contract = { path = "../aq-dashboard-contract", version = "=0.1.0" }
 aq-task-comments = { path = "../aq-task-comments", version = "=0.1.0" }
 aq-human-cursor = { path = "../aq-human-cursor", version = "=0.1.0" }

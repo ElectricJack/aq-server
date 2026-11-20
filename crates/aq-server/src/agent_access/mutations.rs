@@ -232,8 +232,20 @@ async fn agent_get(
     let row = sqlx::query("SELECT * FROM agent_graph_operations WHERE operation_id=$1")
         .bind(op)
         .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(Error("operation_unknown"))?;
+        .await?;
+    let Some(row) = row else {
+        let ids = grant_check::ids(&p)?;
+        tx.commit().await?;
+        return super::human::enqueue::supervisor::agent_lookup(&state, ids, op)
+            .await
+            .map_err(|e| {
+                if e.status() == StatusCode::NOT_FOUND {
+                    Error("operation_unknown")
+                } else {
+                    Error("internal")
+                }
+            });
+    };
     owns(&p, &row)?;
     let body: Value = row.get("status");
     if p.expires <= now(&state) {
