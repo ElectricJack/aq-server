@@ -15,5 +15,25 @@
     "context_refs": 16,
     "attachments": 4,
     "history_page": 16
+  },
+  "attachments": {
+    "media_types": [
+      "text/plain",
+      "text/markdown",
+      "text/csv",
+      "application/json",
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp"
+    ],
+    "max_file_bytes": 1048576,
+    "max_files_per_message": 4,
+    "max_staged_files": 16,
+    "max_staged_bytes": 16777216,
+    "staged_ttl_ms": 86400000,
+    "max_name_bytes": 255
   }
 }

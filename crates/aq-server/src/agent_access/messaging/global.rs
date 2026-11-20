@@ -130,7 +130,12 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/human/conversations/{conversation}/attachments/{attachment}",
             get(attachments::download)
                 .put(attachments::upload)
+                .delete(attachments::unstage)
                 .layer(DefaultBodyLimit::max(attachments::MAX_SIZE)),
+        )
+        .route(
+            "/api/human/conversations/{conversation}/attachments/{attachment}/metadata",
+            get(attachments::metadata),
         )
         .layer(DefaultBodyLimit::max(131072))
         .layer(Extension(service.clone()))

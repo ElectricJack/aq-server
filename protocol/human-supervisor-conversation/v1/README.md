@@ -68,41 +68,124 @@ new operations while history, lookup and exact replay remain available.
 
 ## Owner attachments (agile-vault-27)
 
-Owners upload a file first, then reference it from a Create.
+Owners upload a file first, then reference it from a Create. All owner routes
+below require the current Owner (as above) and the normal CSRF header on PUT
+and DELETE. `{id}` is the conversation and `{attachment}` a client-minted
+non-nil UUID; a nil or malformed UUID is 400 `bad_request` and an unknown
+conversation is 404 `not_found`.
 
-- PUT `/api/human/conversations/{id}/attachments/{attachment}?name=<urlencoded>`
-  with the raw bytes as the body. `attachment` is a client-minted non-nil UUID.
-  `Content-Type` must be exactly one of `text/plain`, `text/markdown`,
-  `text/csv`, `application/json`, `application/pdf`, `image/png`,
-  `image/jpeg`, `image/gif` or `image/webp` (no parameters). Bodies are 1 to
-  1048576 bytes (413 above). Text types must be UTF-8 without NUL, JSON must
-  parse, and binary types must start with their format's signature. `name` is
-  one path segment of at most 255 UTF-8 bytes. 201 returns a staged
-  `$defs/AttachmentUpload`; an identical retry (same owner, conversation,
-  name, type and bytes) returns 200 with the current state; any other reuse
-  of the id is 409.
+### Capability discovery
+
+Discovery carries `attachments` (`$defs/AttachmentCapability`, example
+`discovery.example.json`): the accepted `media_types` and the limits the
+server enforces: `max_file_bytes` (1048576), `max_files_per_message` (4, equal
+to `limits.attachments`), `max_staged_files` (16) and `max_staged_bytes`
+(16777216) per conversation, `staged_ttl_ms` (86400000) and `max_name_bytes`
+(255). These values are the same constants the routes enforce; they are not
+configurable in this release, and a future configuration may only lower them,
+never above the 1 MiB body limit or the 4-file Create bound. Clients size and
+filter uploads from this object, not from hard-coded values. When the object
+is absent or `limits.attachments` is 0, the server has no owner attachments:
+hide the upload control (see Release prerequisites).
+
+### Media types
+
+`Content-Type` must be exactly one of these (no parameters; anything else is
+415 `attachment_media_type_unsupported`), and the bytes must be a readable file
+of that type (else 400 `attachment_unreadable`):
+
+| Content-Type | Typical extension | Content check |
+| --- | --- | --- |
+| `text/plain` | `.txt` | UTF-8, no NUL |
+| `text/markdown` | `.md`, `.markdown` | UTF-8, no NUL |
+| `text/csv` | `.csv` | UTF-8, no NUL |
+| `application/json` | `.json` | UTF-8 JSON that parses |
+| `application/pdf` | `.pdf` | starts `%PDF-`, `%%EOF` in the last 1024 bytes |
+| `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | `.docx` | a ZIP whose central directory lists `[Content_Types].xml` and `word/document.xml` |
+| `image/png`, `image/jpeg`, `image/gif`, `image/webp` | | format signature |
+
+Legacy `.doc` (`application/msword`), HTML and other types are refused.
+Browsers often report an empty type for `.md`; clients map the extension to
+the table above before uploading. Content is not converted, rendered or
+inflated by the server.
+
+### Routes
+
+| Method and path | Success | Refusals |
+| --- | --- | --- |
+| PUT `/api/human/conversations/{id}/attachments/{attachment}?name=<urlencoded>`, raw bytes as body | 201 `AttachmentUpload` (staged); 200 with the current state for an identical retry (same owner, conversation, name, type and bytes, also after it was attached) | 415 `attachment_media_type_unsupported`, 413 `attachment_too_large` (body above `max_file_bytes`), 400 `attachment_name_invalid`, 400 `attachment_unreadable` (empty or failing its content check), 409 `attachment_id_conflict` (the id holds another upload), 503 `attachment_capacity_exhausted` (staged quota) |
+| GET `/api/human/conversations/{id}/attachments/{attachment}/metadata` | 200 `AttachmentUpload` | 404 `attachment_not_found` |
+| GET `/api/human/conversations/{id}/attachments/{attachment}` | 200 the exact bytes | 404 `attachment_not_found` |
+| DELETE `/api/human/conversations/{id}/attachments/{attachment}` | 204, empty body: the staged upload is gone | 404 `attachment_not_found`, 409 `attachment_bound` |
+
+Refusals listed here have the body `$defs/AttachmentError`
+(`{"error": code, "message": text}`, example `attachment-error.example.json`),
+the same shape as other AQ errors. Authentication, CSRF and availability
+failures keep their generic codes (401, 403, 503 `identity_unavailable`).
+
+- `name` is one path segment: 1 to 255 UTF-8 bytes, no control characters,
+  `/` or `\`, no leading or trailing whitespace, not `.` or `..`. A missing
+  `name` is `attachment_name_invalid`.
+- Read visibility (metadata and content): a staged file only for its uploader,
+  in its conversation, until it expires; an attached file for any current
+  owner, for as long as its message is retained (also across server
+  restarts). Everything else, including another owner's staged file, another
+  conversation's file and an expired or deleted file, is the same 404
+  `attachment_not_found`, so ids do not leak.
+- Content downloads are `Content-Disposition: attachment` (RFC 5987 file
+  name) with the stored `Content-Type`, `X-Content-Type-Options: nosniff`, CSP
+  `sandbox; default-src 'none'`, `Cache-Control: no-store` and
+  `x-aq-content-digest` (the `digest`). Clients verify the digest.
+- DELETE (unstage) removes only the caller's own unexpired staged upload. A
+  bound file is never deleted by an owner route (409 `attachment_bound`); it
+  is removed with its message. A retried DELETE after a lost 204 is 404; both
+  mean the file is gone. The id may then be reused for a new upload.
 - Staged uploads expire 24h after `created_at_ms` and are then purged. At most
-  16 staged files (16 MiB) per conversation; more is refused as maintenance
-  until a staged file is attached or expires.
+  16 staged files (16 MiB) per conversation; more is 503
+  `attachment_capacity_exhausted` until a staged file is attached, deleted or
+  expires.
+
+### Binding from a Create
+
 - A Create lists `{id, digest}` for up to 4 staged uploads of the same owner
-  and conversation. If any ref is missing, expired, already attached, someone
-  else's, or pinned to a different digest, the operation is a retained
-  `not_queued` receipt with reason `attachment_unavailable` and nothing is
-  bound. A queued message binds every file in order; bound files count
-  against the 64 MiB retention reservation and live exactly as long as the
-  owner message.
-- GET the same path downloads the bytes (staged: uploader only; attached: any
-  current owner) as `Content-Disposition: attachment` with `nosniff`, a
-  sandbox CSP and `x-aq-content-digest`.
+  and conversation. If any ref is missing, expired, deleted, already attached,
+  someone else's, or pinned to a different digest (a stale ref), the operation
+  is a retained `not_queued` receipt with reason `attachment_unavailable` and
+  nothing is bound. A queued message binds every file in order; bound files
+  count against the 64 MiB retention reservation and live exactly as long as
+  the owner message.
 - The central supervisor downloads a bound file with
   GET `/v1/supervisor/conversation/attachments/{attachment}` and its
   `messaging`-scoped credential, only after the message was dispatched to it.
   Its turn text carries one line per file:
   `[attachment {id} name {JSON string} {media_type} {size} bytes {digest}]`.
 
+### Release prerequisites
+
+Servers that advertise `limits.attachments: 0` (and no `attachments` object)
+run a release from before agile-vault-27 and have none of these routes. Before
+a dashboard enables uploads against a server:
+
+1. The server runs a release that contains migrations 76
+   (`global_supervisor_attachments`) and 163 (DOCX). Both apply automatically at
+   startup and need no owner configuration. Migration 163 only widens a CHECK
+   constraint, so rows written by older releases stay valid; a server without
+   163 refuses DOCX uploads and does not list DOCX in `media_types`.
+2. Discovery returns the `attachments` object. Gate the upload control on
+   that object and on `supervisor.message.enqueue@1`, never on the release
+   number, and take types and limits from it.
+3. Attachment bytes are stored in PostgreSQL, so database backups grow by at
+   most 16 MiB of staged files per conversation plus bound files within the
+   64 MiB retention reservation. No new secret, volume or configuration key is
+   needed.
+4. Pin the schema digest below in the dashboard and re-check it on upgrade.
+
+This document does not deploy anything; releasing follows the normal release
+and owner review process.
+
 ## Supervisor History attachments (additive, for G8)
 
-Published schema digest: `sha256:412069f36c814496fb7c1d336b6342c8773c4fd4da54a12908c2c8c6c8c927ae`
+Published schema digest: `sha256:dc7a2bfec7da19afa7cf0ce8636a09920d90ef84911d8540b09edc2f19add6e7`
 (also in `schema.sha256`; `supervisor_turns` fails if the two diverge). Pin it.
 
 A supervisor `SupervisorItem` may carry `attachments` (0–4 items, schema

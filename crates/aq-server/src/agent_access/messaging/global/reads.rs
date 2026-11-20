@@ -35,6 +35,7 @@ async fn discover(service: Arc<Service>, user: User, id: Option<Uuid>) -> Result
             attachments: attachments::MAX_ATTACHMENTS as u8,
             history_page: 16,
         },
+        attachments: aq_supervisor_control::attachments::capability(),
     }))
 }
 #[derive(Deserialize)]

@@ -4,26 +4,16 @@
 //! `Create` by id and digest. Binding pins the row to the owner message, so
 //! its retention is the message's retention (`ON DELETE CASCADE`).
 use super::*;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use aq_supervisor_control::attachments::{
+    MAX_STAGED_BYTES, MAX_STAGED_FILES, Refusal, STAGED_TTL_MS, allowed, content_valid,
+    digest_valid, name_valid, serve,
+};
+use axum::extract::rejection::BytesRejection;
+use axum::http::{HeaderMap, StatusCode, header};
 use sqlx::Row as _;
-pub(super) const MAX_ATTACHMENTS: usize = 4;
-pub(super) const MAX_SIZE: usize = 1 << 20;
-const MAX_STAGED: i64 = 16;
-const MAX_STAGED_BYTES: i64 = 16 << 20;
-pub(super) const STAGED_TTL_MS: i64 = 24 * 60 * 60 * 1000;
-const TEXT: [&str; 4] = [
-    "text/plain",
-    "text/markdown",
-    "text/csv",
-    "application/json",
-];
-const BINARY: [(&str, &[&[u8]]); 5] = [
-    ("application/pdf", &[b"%PDF-"]),
-    ("image/png", &[b"\x89PNG\r\n\x1a\n"]),
-    ("image/jpeg", &[b"\xff\xd8\xff"]),
-    ("image/gif", &[b"GIF87a", b"GIF89a"]),
-    ("image/webp", &[b"RIFF"]),
-];
+pub(super) use aq_supervisor_control::attachments::{
+    MAX_FILE_BYTES as MAX_SIZE, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
+};
 const COLUMNS: &str = "attachment_id,conversation_id,uploader_id,name,media_type,size_bytes,digest,created_at_ms,message_id";
 
 /// A pinned reference from `Create.attachments` to a staged upload.
@@ -33,13 +23,6 @@ pub(super) struct AttachmentRef {
     pub(super) id: Uuid,
     #[schemars(regex(pattern = "^sha256:[0-9a-f]{64}$"))]
     pub(super) digest: String,
-}
-pub(super) fn digest_valid(s: &str) -> bool {
-    s.strip_prefix("sha256:").is_some_and(|h| {
-        h.len() == 64
-            && h.bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
 }
 pub(super) fn refs_valid(refs: &[AttachmentRef]) -> bool {
     refs.len() <= MAX_ATTACHMENTS
@@ -92,33 +75,6 @@ pub(super) fn stored(raw: Option<Value>) -> Result<Vec<Descriptor>> {
 }
 /// Per-message descriptors ordered by binding ordinal, for a row aliased `m`.
 pub(super) const DESCRIPTORS: &str = "(SELECT jsonb_agg(jsonb_build_object('id',a.attachment_id,'name',a.name,'media_type',a.media_type,'size_bytes',a.size_bytes,'digest',a.digest) ORDER BY a.ordinal) FROM global_supervisor_attachments a WHERE a.message_id=m.message_id)";
-fn allowed(media_type: &str) -> bool {
-    TEXT.contains(&media_type) || BINARY.iter().any(|(t, _)| *t == media_type)
-}
-fn name_valid(name: &str) -> bool {
-    (1..=255).contains(&name.len())
-        && name.trim() == name
-        && name != "."
-        && name != ".."
-        && !name
-            .chars()
-            .any(|c| c.is_control() || c == '/' || c == '\\')
-}
-fn content_valid(media_type: &str, bytes: &[u8]) -> bool {
-    if TEXT.contains(&media_type) {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return false;
-        };
-        return !text.contains('\0')
-            && (media_type != "application/json"
-                || serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok());
-    }
-    BINARY.iter().any(|(t, magic)| {
-        *t == media_type
-            && magic.iter().any(|m| bytes.starts_with(m))
-            && (media_type != "image/webp" || bytes.get(8..12) == Some(b"WEBP"))
-    })
-}
 #[derive(Serialize)]
 pub(super) struct Upload {
     #[serde(flatten)]
@@ -182,9 +138,34 @@ impl Row {
                 || (self.uploader_id == user && self.created_at_ms > at - STAGED_TTL_MS))
     }
 }
+/// Owner routes answer with a typed [`Refusal`] or the shared [`AppError`].
+pub(super) enum Refused {
+    App(AppError),
+    File(Refusal),
+}
+impl From<AppError> for Refused {
+    fn from(e: AppError) -> Self {
+        Self::App(e)
+    }
+}
+impl From<Refusal> for Refused {
+    fn from(r: Refusal) -> Self {
+        Self::File(r)
+    }
+}
+impl IntoResponse for Refused {
+    fn into_response(self) -> Response {
+        match self {
+            Self::App(e) => e.into_response(),
+            Self::File(r) => r.into_response(),
+        }
+    }
+}
+type Reply = std::result::Result<Response, Refused>;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct UploadQuery {
+    #[serde(default)]
     name: String,
 }
 /// `PUT .../attachments/{attachment}?name=`: stage one file. Idempotent for an
@@ -196,26 +177,29 @@ pub(super) async fn upload(
     Path((id, attachment)): Path<(Uuid, Uuid)>,
     Query(query): Query<UploadQuery>,
     headers: HeaderMap,
-    bytes: Bytes,
-) -> Result<Response> {
+    bytes: std::result::Result<Bytes, BytesRejection>,
+) -> Reply {
     let media_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .filter(|t| allowed(t))
-        .ok_or_else(invalid)?
+        .ok_or(Refusal::MediaTypeUnsupported)?
         .to_owned();
+    let bytes = bytes.map_err(|r| match r.status() {
+        StatusCode::PAYLOAD_TOO_LARGE => Refused::File(Refusal::TooLarge),
+        _ => Refused::App(invalid()),
+    })?;
     if bytes.len() > MAX_SIZE {
-        return Err(AppError::PayloadTooLarge(
-            "attachment exceeds 1048576 bytes".into(),
-        ));
+        return Err(Refusal::TooLarge.into());
     }
-    if id.is_nil()
-        || attachment.is_nil()
-        || bytes.is_empty()
-        || !name_valid(&query.name)
-        || !content_valid(&media_type, &bytes)
-    {
-        return Err(invalid());
+    if id.is_nil() || attachment.is_nil() {
+        return Err(invalid().into());
+    }
+    if !name_valid(&query.name) {
+        return Err(Refusal::NameInvalid.into());
+    }
+    if !content_valid(&media_type, &bytes) {
+        return Err(Refusal::Unreadable.into());
     }
     let descriptor = Descriptor {
         id: attachment,
@@ -245,7 +229,7 @@ pub(super) async fn upload(
     if let Some(row) = existing {
         let row = Row::decode(row)?;
         if row.uploader_id != user.id || row.conversation_id != id || row.descriptor != descriptor {
-            return Err(conflict());
+            return Err(Refusal::IdConflict.into());
         }
         tx.commit().await.map_err(db)?;
         return Ok((StatusCode::OK, Json(row.upload())).into_response());
@@ -255,10 +239,8 @@ pub(super) async fn upload(
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-    if count >= MAX_STAGED || total + descriptor.size_bytes as i64 > MAX_STAGED_BYTES {
-        return Err(AppError::Maintenance(
-            "staged supervisor attachment capacity exhausted".into(),
-        ));
+    if count >= MAX_STAGED_FILES || total + descriptor.size_bytes as i64 > MAX_STAGED_BYTES {
+        return Err(Refusal::CapacityExhausted.into());
     }
     sqlx::query("INSERT INTO global_supervisor_attachments(attachment_id,conversation_id,uploader_id,name,media_type,size_bytes,digest,content,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
         .bind(attachment)
@@ -285,46 +267,21 @@ pub(super) async fn upload(
 }
 /// Bytes are served as an inert download whatever their declared type.
 fn content(row: Row, bytes: Vec<u8>) -> Result<Response> {
-    if hash(&bytes) != row.descriptor.digest {
-        return Err(unavailable());
-    }
-    let encoded: String = row
-        .descriptor
-        .name
-        .bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect();
-    let value = |s: &str| HeaderValue::from_str(s).map_err(|_| unavailable());
-    let mut response = bytes.into_response();
-    let h = response.headers_mut();
-    h.insert(header::CONTENT_TYPE, value(&row.descriptor.media_type)?);
-    h.insert(
-        header::CONTENT_DISPOSITION,
-        value(&format!("attachment; filename*=UTF-8''{encoded}"))?,
-    );
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("sandbox; default-src 'none'"),
-    );
-    h.insert("x-aq-content-digest", value(&row.descriptor.digest)?);
-    Ok(response)
+    let d = row.descriptor;
+    let ok = hash(&bytes) == d.digest;
+    ok.then(|| serve(&d.name, &d.media_type, &d.digest, bytes))
+        .flatten()
+        .ok_or_else(unavailable)
 }
+/// One stored file; `bytes` false reads the metadata only (empty content).
 async fn fetch(
     tx: &mut Transaction<'_, Postgres>,
     attachment: Uuid,
+    bytes: bool,
 ) -> Result<Option<(Row, Vec<u8>)>> {
+    let content = ["''::bytea AS content", "content"][bytes as usize];
     let row = sqlx::query(&format!(
-        "SELECT {COLUMNS},content FROM global_supervisor_attachments WHERE attachment_id=$1"
+        "SELECT {COLUMNS},{content} FROM global_supervisor_attachments WHERE attachment_id=$1"
     ))
     .bind(attachment)
     .fetch_optional(&mut **tx)
@@ -336,26 +293,82 @@ async fn fetch(
     })
     .transpose()
 }
+/// A file the current owner may read: a staged upload of their own that has
+/// not expired, or a file bound to a message of this conversation.
+async fn readable(
+    state: &AppState,
+    service: &Service,
+    user: &User,
+    (id, attachment): (Uuid, Uuid),
+    bytes: bool,
+) -> std::result::Result<(Row, Vec<u8>), Refused> {
+    if id.is_nil() || attachment.is_nil() {
+        return Err(invalid().into());
+    }
+    let at = i64::try_from(stamp(state)?).map_err(|_| unavailable())?;
+    let mut tx = service.tx().await?;
+    owner(&mut tx, user).await?;
+    definition(&mut tx, Some(id), false).await?;
+    let file = fetch(&mut tx, attachment, bytes)
+        .await?
+        .filter(|(r, _)| r.visible(user.id, id, at))
+        .ok_or(Refusal::NotFound)?;
+    tx.commit().await.map_err(db)?;
+    Ok(file)
+}
 /// `GET .../attachments/{attachment}`: owner download.
 pub(super) async fn download(
     State(state): State<AppState>,
     Extension(service): Extension<Arc<Service>>,
     RequireOwner(user): RequireOwner,
+    Path(ids): Path<(Uuid, Uuid)>,
+) -> Reply {
+    let (row, bytes) = readable(&state, &service, &user, ids, true).await?;
+    Ok(content(row, bytes)?)
+}
+/// `GET .../attachments/{attachment}/metadata`: the `AttachmentUpload` state.
+pub(super) async fn metadata(
+    State(state): State<AppState>,
+    Extension(service): Extension<Arc<Service>>,
+    RequireOwner(user): RequireOwner,
+    Path(ids): Path<(Uuid, Uuid)>,
+) -> Reply {
+    let (row, _) = readable(&state, &service, &user, ids, false).await?;
+    Ok(Json(row.upload()).into_response())
+}
+/// `DELETE .../attachments/{attachment}`: the uploader withdraws a staged file.
+/// A bound file is never deleted here; it lives as long as its message.
+pub(super) async fn unstage(
+    State(state): State<AppState>,
+    Extension(service): Extension<Arc<Service>>,
+    RequireOwner(user): RequireOwner,
     Path((id, attachment)): Path<(Uuid, Uuid)>,
-) -> Result<Response> {
+) -> Reply {
     if id.is_nil() || attachment.is_nil() {
-        return Err(invalid());
+        return Err(invalid().into());
     }
     let at = i64::try_from(stamp(&state)?).map_err(|_| unavailable())?;
     let mut tx = service.tx().await?;
     owner(&mut tx, &user).await?;
-    definition(&mut tx, Some(id), false).await?;
-    let (row, bytes) = fetch(&mut tx, attachment)
-        .await?
-        .filter(|(r, _)| r.visible(user.id, id, at))
-        .ok_or_else(missing)?;
+    definition(&mut tx, Some(id), true).await?;
+    // The row lock re-checks `message_id` against a concurrent Create's claim.
+    let deleted = sqlx::query("DELETE FROM global_supervisor_attachments WHERE attachment_id=$1 AND conversation_id=$2 AND uploader_id=$3 AND message_id IS NULL AND created_at_ms>$4")
+        .bind(attachment)
+        .bind(id)
+        .bind(user.id)
+        .bind(at - STAGED_TTL_MS)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?
+        .rows_affected();
+    if deleted == 0 {
+        let bound = fetch(&mut tx, attachment, false)
+            .await?
+            .is_some_and(|(r, _)| r.message_id.is_some() && r.visible(user.id, id, at));
+        return Err([Refusal::NotFound, Refusal::Bound][bound as usize].into());
+    }
     tx.commit().await.map_err(db)?;
-    content(row, bytes)
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 /// `GET /v1/supervisor/conversation/attachments/{attachment}`: the central
 /// supervisor reads a bound file only when its message was dispatched to it.
@@ -383,7 +396,7 @@ pub(super) async fn supervisor_download(
     if !dispatched {
         return Err(missing());
     }
-    let (row, bytes) = fetch(&mut tx, attachment).await?.ok_or_else(missing)?;
+    let (row, bytes) = fetch(&mut tx, attachment, true).await?.ok_or_else(missing)?;
     tx.commit().await.map_err(db)?;
     content(row, bytes)
 }
@@ -435,39 +448,4 @@ pub(super) async fn bind(
             .map_err(db)?;
     }
     Ok(())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn content_checks_follow_the_declared_type() {
-        assert!(content_valid("text/plain", b"hello"));
-        assert!(!content_valid("text/plain", b"\xff\xfe"));
-        assert!(!content_valid("text/plain", b"a\0b"));
-        assert!(content_valid("application/json", br#"{"a":1}"#));
-        assert!(!content_valid("application/json", b"{"));
-        assert!(content_valid("image/png", b"\x89PNG\r\n\x1a\nrest"));
-        assert!(!content_valid("image/png", b"GIF89a"));
-        assert!(content_valid("image/webp", b"RIFF\0\0\0\0WEBPVP8 "));
-        assert!(!content_valid("image/webp", b"RIFF\0\0\0\0WAVEfmt "));
-        assert!(!allowed("text/html"));
-        assert!(!allowed("text/plain; charset=utf-8"));
-    }
-    #[test]
-    fn names_are_single_safe_path_segments() {
-        assert!(name_valid("notes v2.md"));
-        for bad in [
-            "",
-            " a",
-            "a ",
-            ".",
-            "..",
-            "a/b",
-            "a\\b",
-            "a\nb",
-            &"x".repeat(256),
-        ] {
-            assert!(!name_valid(bad), "{bad:?}");
-        }
-    }
 }
