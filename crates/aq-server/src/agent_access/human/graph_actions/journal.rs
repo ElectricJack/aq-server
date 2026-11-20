@@ -9,7 +9,7 @@ pub(super) struct Intent {
     pub workspace: Uuid,
     pub service: Value,
     pub body: Vec<u8>,
-    pub operations: usize,
+    pub operations: Vec<Value>,
 }
 
 pub(super) async fn retain(
@@ -81,6 +81,9 @@ pub(super) async fn load(
         workspace: row.get("workspace_id"),
         service: row.get("service_identity"),
         body,
-        operations: raw["operations"].as_array().ok_or_else(unavailable)?.len(),
+        operations: raw["operations"]
+            .as_array()
+            .ok_or_else(unavailable)?
+            .clone(),
     }))
 }

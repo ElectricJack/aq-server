@@ -5491,6 +5491,44 @@
     {
       "cli": [
         "task",
+        "activate",
+        "subtree"
+      ],
+      "grant": "task.activate.subtree",
+      "kind": "mutation",
+      "name": "task.activate.subtree",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:665ae5de5abc0294647d38678a45578331701831f9ed23a49e796c816b183722",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.activate.subtree"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "task_id",
+            "id_param_schema": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "revision_param": "expected_version",
+            "type": "task",
+            "version_key": "task"
+          }
+        }
+      },
+      "summary": "Make a task’s draft descendants schedulable",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "task",
         "cancel"
       ],
       "grant": "task.cancel",

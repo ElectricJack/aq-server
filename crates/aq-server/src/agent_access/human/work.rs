@@ -257,7 +257,16 @@ pub(super) async fn history(
         None => None,
     };
     let changes = aq_human_work::changes(rows, id, prior.as_ref());
-    let actors = actors(&s, &r, id, rows).await?;
+    let actors = aq_human_work::attribution::history(
+        &r.pool,
+        s.agent_access
+            .as_ref()
+            .and_then(|rt| rt.mutation_actor.as_deref()),
+        id,
+        rows,
+    )
+    .await
+    .map_err(|_| unavailable())?;
     let items: Vec<Value> = rows
         .iter()
         .zip(changes.into_iter().zip(actors))
@@ -313,44 +322,6 @@ pub(super) async fn history(
             "attempts":attempts,"attempts_truncated":attempts_truncated}),
     )
     .await
-}
-
-/// QA P1-07: Graph names AQ's one mutation identity as every AQ write's actor.
-/// An entry in a change set that an owner's journalled operation confirmed
-/// (dashboard action or task create), or the creation of a task an owner's
-/// operation created (#97), names that owner's email instead.
-async fn actors(s: &AppState, r: &ReadRuntime, task: Uuid, rows: &[Value]) -> Result<Vec<Value>> {
-    let mut out: Vec<Value> = rows.iter().map(|h| h["actor_id"].clone()).collect();
-    let Some(service) = s
-        .agent_access
-        .as_deref()
-        .and_then(|rt| rt.mutation_actor.clone())
-    else {
-        return Ok(out);
-    };
-    let ours = |h: &Value| h["actor_id"] == json!(service);
-    let sets: Vec<Uuid> = rows
-        .iter()
-        .filter(|h| ours(h))
-        .filter_map(|h| h["change_set_id"].as_str()?.parse().ok())
-        .collect();
-    if sets.is_empty() {
-        return Ok(out);
-    }
-    let found: Vec<(Option<Uuid>, String)> = sqlx::query_as("SELECT c.cs,u.email FROM unnest($1::uuid[]) AS c(cs) JOIN users u ON u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.disposition='confirmed' AND d.response->'receipt_refs' @> jsonb_build_array(jsonb_build_object('type','graph_change_set','id',c.cs::text)) LIMIT 1),(SELECT h.actor_id FROM human_graph_operations h WHERE h.raw_receipt->>'change_set_id'=c.cs::text LIMIT 1)) UNION ALL SELECT NULL,u.email FROM users u WHERE u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.operation_id=$2),(SELECT h.actor_id FROM human_graph_operations h WHERE h.operation_id=$2))")
-        .bind(&sets).bind(task).fetch_all(&r.pool).await.map_err(|_| unavailable())?;
-    for (h, actor) in rows.iter().zip(out.iter_mut()).filter(|(h, _)| ours(h)) {
-        let set = found
-            .iter()
-            .find(|f| f.0.is_some() && h["change_set_id"] == json!(f.0));
-        let created = found
-            .iter()
-            .find(|f| f.0.is_none() && h["operation"] == "created" && h["category"] != "edge");
-        if let Some((_, email)) = set.or(created) {
-            *actor = json!(email);
-        }
-    }
-    Ok(out)
 }
 
 /// `GET .../tasks/{node}/summary`: completion counts over the task's bounded

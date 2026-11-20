@@ -320,12 +320,17 @@ async fn finish(
         && outcome.reason.is_none_or(|r| {
             outcome.disposition == Disposition::Rejected && aq_machine_control::holds::valid_code(r)
         })
+        && outcome.activation.is_none_or(|counts| {
+            outcome.disposition == Disposition::Confirmed
+                && counts.activated as usize == outcome.affected_entities.len()
+        })
     {
         completed.disposition = outcome.disposition;
         completed.receipt_refs = outcome.receipt_refs;
         completed.affected_entities = outcome.affected_entities;
         completed.current_versions = outcome.current_versions;
         completed.reason = outcome.reason.map(str::to_owned);
+        completed.activation = outcome.activation;
     } else {
         completed.disposition = Disposition::Unknown;
     }
@@ -334,6 +339,7 @@ async fn finish(
         && completed.affected_entities == original.affected_entities
         && completed.current_versions == original.current_versions
         && completed.reason == original.reason
+        && completed.activation == original.activation
     {
         return Ok(original);
     }

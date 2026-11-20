@@ -80,6 +80,37 @@ pub(crate) async fn settlement_node(
     }
 }
 
+/// Read a versioned snapshot of the same structural tree shown in Work.
+pub(crate) async fn activation_tree(
+    rt: &Runtime,
+    workspace: Uuid,
+    root: Uuid,
+) -> std::result::Result<Value, crate::error::AppError> {
+    let raw = rt
+        .human_get(
+            &format!("/v1/workspaces/{workspace}/nodes/{root}/tree"),
+            &[
+                ("depth".into(), "5".into()),
+                (
+                    "limit".into(),
+                    (aq_human_work::subtree_activation::MAX_NODES + 1).to_string(),
+                ),
+                ("max_bytes".into(), "1000000".into()),
+            ],
+            1_000_000,
+        )
+        .await
+        .map_err(|_| {
+            crate::error::AppError::UpdatesUnavailable("Graph subtree unavailable".into())
+        })?;
+    if !contract::upstream_valid("Tree", &raw) {
+        return Err(crate::error::AppError::UpdatesUnavailable(
+            "Invalid Graph subtree".into(),
+        ));
+    }
+    Ok(raw)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentAccessConfig {

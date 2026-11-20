@@ -331,6 +331,11 @@ pub(super) async fn bootstrap(
             "Task activation requires an owner account and configured Graph mutation identity",
         ),
         capability(
+            "tasks.activate.subtree",
+            graph_mutation,
+            "Activating draft descendants requires an owner account and configured Graph mutation identity",
+        ),
+        capability(
             "tasks.complete",
             graph_mutation,
             "Completing a task requires an owner account and configured Graph mutation identity",

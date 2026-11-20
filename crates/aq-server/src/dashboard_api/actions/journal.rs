@@ -112,6 +112,7 @@ pub(super) async fn admit(
         recovery: Recovery::LookupOriginal,
         current_versions: Default::default(),
         reason: None,
+        activation: None,
     };
     let response = serde_json::to_value(&operation).map_err(|_| ApiError::unavailable())?;
     let mut tx = transaction(pool).await?;
