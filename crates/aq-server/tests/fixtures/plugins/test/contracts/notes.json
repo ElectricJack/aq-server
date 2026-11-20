@@ -1,0 +1,23 @@
+{
+  "commands": {
+    "ext.test.ping": {
+      "purpose": "Test the plugin host transport.",
+      "input": {
+        "mode": "Fixture behavior."
+      },
+      "outcomes": {
+        "ok": "Successful invocation.",
+        "refused": "Host refused the invocation."
+      }
+    }
+  },
+  "events": {
+    "ext.test.pinged": {
+      "purpose": "Test plugin event matching.",
+      "payload": {
+        "ref": "Correlation value.",
+        "subject": "Subject identity and revision."
+      }
+    }
+  }
+}
