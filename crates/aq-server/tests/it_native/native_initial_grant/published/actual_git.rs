@@ -221,7 +221,13 @@ async fn actual_git_publishes_only_the_submitted_commit_and_cleans_both_refs() {
     assert_eq!(git(&f.seed, &["rev-parse", &reference]).await, f.base);
     assert_eq!(
         git_port
-            .publish_ref(Uuid::new_v4(), &target, &reference, None, Some(&f.base))
+            .publish_ref(
+                Uuid::new_v4(),
+                &target,
+                &reference,
+                Some(&f.base),
+                Some(&f.base)
+            )
             .await
             .unwrap(),
         expected
