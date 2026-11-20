@@ -472,8 +472,35 @@ impl CatalogProfile {
         registry
     }
     pub fn validate_scope(self, scope: &crate::GrantScope) -> Result<()> {
+        self.validate_scope_with_extensions(scope, |_| false)
+    }
+    pub fn validate_scope_with_extensions(
+        self,
+        scope: &crate::GrantScope,
+        installed: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        let mut base_capabilities = scope.capabilities.clone();
+        base_capabilities.retain(|capability| {
+            !aq_playbook_host::plugins::extension_capability(capability).is_some_and(&installed)
+        });
+        let has_extensions = base_capabilities != scope.capabilities;
+        if has_extensions
+            && (scope.workspace_id.is_nil()
+                || scope.project_id.is_nil()
+                || aq_playbook_host::model::canonical_bytes(scope)
+                    .map_err(|_| Error::Invalid)?
+                    .len()
+                    > 32768)
+        {
+            return Err(Error::Invalid);
+        }
+        if has_extensions && base_capabilities.is_empty() && scope.recipients.is_empty() {
+            return Ok(());
+        }
         if self == Self::Mail1 {
-            return scope.validate();
+            let mut base = scope.clone();
+            base.capabilities = base_capabilities;
+            return base.validate();
         }
         if self.is_host() {
             let mut allowed: BTreeSet<String> = if self.has_routing() {
@@ -494,7 +521,7 @@ impl CatalogProfile {
                 || scope.project_id.is_nil()
                 || !scope.recipients.is_empty()
                 || scope.capabilities.is_empty()
-                || !scope.capabilities.is_subset(&allowed)
+                || !base_capabilities.is_subset(&allowed)
                 || aq_playbook_host::model::canonical_bytes(scope)
                     .map_err(|_| Error::Invalid)?
                     .len()
@@ -512,7 +539,7 @@ impl CatalogProfile {
             "decision.request".into(),
             "operation.get".into(),
         ]);
-        if scope.capabilities.is_empty() || !scope.capabilities.is_subset(&allowed) {
+        if scope.capabilities.is_empty() || !base_capabilities.is_subset(&allowed) {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -523,7 +550,16 @@ impl CatalogProfile {
         revision: i64,
         scope: &crate::GrantScope,
     ) -> Result<Authority> {
-        self.validate_scope(scope)?;
+        self.authority_with_extensions(id, revision, scope, |_| false)
+    }
+    pub fn authority_with_extensions(
+        self,
+        id: Uuid,
+        revision: i64,
+        scope: &crate::GrantScope,
+        installed: impl Fn(&str) -> bool,
+    ) -> Result<Authority> {
+        self.validate_scope_with_extensions(scope, installed)?;
         let mut authority = crate::authority(id, revision);
         authority.capabilities = scope.capabilities.clone();
         Ok(authority)

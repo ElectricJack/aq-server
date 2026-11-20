@@ -8,9 +8,9 @@ use aq_playbooks_runner::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{
-        Arc, Condvar, Mutex, Weak,
+        Arc, Condvar, Mutex, RwLock, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 pub mod drive;
 pub mod engine_retention;
+pub mod plugins;
 pub mod protected;
 pub mod retention;
 pub use aq_playbooks_model as model;
@@ -30,6 +31,7 @@ pub use postgres as postgres_client;
 pub enum HostMode {
     Dispatch,
     Reconcile,
+    RetryPlugins,
     Cancel,
 }
 /// Recovery mode authorizes historical lookup only; implementations must never
@@ -285,6 +287,8 @@ struct Shared {
     clients: AtomicUsize,
     limits: Limits,
     registry: Registry,
+    declared_events: RwLock<BTreeSet<(String, String)>>,
+    plugin_artifacts: AtomicBool,
     catalog_supported: AtomicBool,
 }
 impl Shared {
@@ -380,6 +384,8 @@ impl Owner {
             clients: AtomicUsize::new(1),
             limits,
             registry,
+            declared_events: RwLock::default(),
+            plugin_artifacts: AtomicBool::default(),
             catalog_supported: AtomicBool::new(false),
         });
         let owner = Self {
@@ -399,10 +405,13 @@ impl Owner {
                     if state
                         .artifacts
                         .values()
-                        .any(|a| !accepts(&shared.registry, &a.content.registry))
+                        .any(|a| !accepts_base(&shared.registry, &a.content.registry))
                     {
                         let _ = engine.release();
                         return Err(Error::Invalid);
+                    }
+                    for artifact in state.artifacts.values() {
+                        remember_contracts(&shared, &artifact.content.registry);
                     }
                     if let Some(policy) = shared
                         .limits
@@ -486,7 +495,7 @@ impl Owner {
                             let result = if stop {
                                 engine.release().map(|_| Value::Null).map_err(engine_error)
                             } else {
-                                execute(&engine, &mut host, request, shared.limits.transitions)
+                                execute(&engine, &mut host, request, &shared)
                             };
                             // A size failure after a commit is unknown, never 'not applied'.
                             let result = result.and_then(|v| {
@@ -529,6 +538,16 @@ impl Owner {
             .map_err(|_| Error::Thread)?;
         ready_rx.await.map_err(|_| Error::Stopped)??;
         Ok(owner)
+    }
+    pub fn has_plugin_artifacts(&self) -> bool {
+        self.shared.plugin_artifacts.load(Ordering::Acquire)
+    }
+    pub fn declares_event(&self, name: &str, fingerprint: &str) -> bool {
+        self.shared
+            .declared_events
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&(name.to_owned(), fingerprint.to_owned()))
     }
     /// A timeout does not cancel admitted work or relinquish namespace ownership.
     /// Callers must reconcile effects; blindly resubmitting Admit can duplicate runs.
@@ -646,7 +665,7 @@ fn execute<S: Storage>(
     engine: &Engine<S>,
     host: &mut impl DomainHost,
     request: Request,
-    transitions: usize,
+    shared: &Shared,
 ) -> Result<Value, Error> {
     host.set_mode(match request {
         Request::Recover { .. } => HostMode::Reconcile,
@@ -721,7 +740,9 @@ fn execute<S: Storage>(
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
         }
         Request::Install { artifact } => {
+            let registry = artifact.content.registry.clone();
             engine.install(*artifact).map_err(engine_error)?;
+            remember_contracts(shared, &registry);
             Value::Null
         }
         Request::Activate {
@@ -729,6 +750,13 @@ fn execute<S: Storage>(
             artifact,
             authority,
         } => {
+            if shared.plugin_artifacts.load(Ordering::Acquire) {
+                let snapshot = engine.snapshot().map_err(engine_error)?;
+                let definition = snapshot.artifacts.get(&artifact).ok_or(Error::Invalid)?;
+                if !plugins_match(&shared.registry, &definition.content.registry) {
+                    return Err(Error::Invalid);
+                }
+            }
             engine
                 .activate(&binding, &artifact, authority)
                 .map_err(engine_error)?;
@@ -752,7 +780,13 @@ fn execute<S: Storage>(
         )
         .map_err(engine_error)?,
         Request::Tick { now_ms } => {
-            serde_json::json!({"transitions": engine.drive(host, now_ms, transitions).map_err(engine_error)?})
+            if shared.plugin_artifacts.load(Ordering::Acquire) {
+                host.set_mode(HostMode::RetryPlugins);
+                let recovery = engine.recover(host, now_ms);
+                host.set_mode(HostMode::Dispatch);
+                recovery.map_err(engine_error)?;
+            }
+            serde_json::json!({"transitions": engine.drive(host, now_ms, shared.limits.transitions).map_err(engine_error)?})
         }
         Request::Cancel { run, now_ms } => {
             engine.cancel(&run, now_ms).map_err(engine_error)?;
@@ -785,15 +819,47 @@ fn bounded_json(value: &impl Serialize, limit: usize) -> bool {
     serde_json::to_writer(Counter(limit), value).is_ok()
 }
 
-fn accepts(registry: &Registry, artifact: &Registry) -> bool {
-    artifact
+fn remember_contracts(shared: &Shared, registry: &Registry) {
+    if registry
         .commands
-        .iter()
-        .all(|(name, contract)| registry.commands.get(name) == Some(contract))
-        && artifact
-            .events
-            .iter()
-            .all(|(name, contract)| registry.events.get(name) == Some(contract))
+        .keys()
+        .chain(registry.events.keys())
+        .any(|name| plugins::command_plugin(name).is_some())
+    {
+        shared.plugin_artifacts.store(true, Ordering::Release);
+    }
+    shared
+        .declared_events
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(
+            registry
+                .events
+                .values()
+                .filter_map(|contract| Some((contract.name.clone(), contract.fingerprint().ok()?))),
+        );
+}
+
+fn accepts(registry: &Registry, artifact: &Registry) -> bool {
+    accepts_base(registry, artifact) && plugins_match(registry, artifact)
+}
+
+// Existing runs keep their pinned extension contracts across plugin upgrades
+// or removal. Only base-profile changes prevent reopening a namespace.
+fn accepts_base(registry: &Registry, artifact: &Registry) -> bool {
+    artifact.commands.iter().all(|(name, contract)| {
+        plugins::extension_command(name, contract) || registry.commands.get(name) == Some(contract)
+    }) && artifact.events.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_some() || registry.events.get(name) == Some(contract)
+    })
+}
+
+pub fn plugins_match(registry: &Registry, artifact: &Registry) -> bool {
+    artifact.commands.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_none() || registry.commands.get(name) == Some(contract)
+    }) && artifact.events.iter().all(|(name, contract)| {
+        plugins::command_plugin(name).is_none() || registry.events.get(name) == Some(contract)
+    })
 }
 fn validate_registry(registry: &Registry) -> Result<(), Error> {
     // Host catalog 2.2.0: the twelve commands of 2.0.0 and 2.1.0 plus four.
@@ -831,11 +897,9 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
     ];
     let delivery = cfg!(feature = "delivery_playbook");
     let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
-    if registry.commands.len() > COMMANDS.len() + if delivery { DELIVERY.len() } else { 0 }
-        || registry.events.len() > 16
-        || !bounded_json(registry, 262_144)
+    if !bounded_json(registry, 1_048_576)
         || registry.commands.iter().any(|(name, c)| {
-            !admitted(name)
+            (!admitted(name) && !plugins::extension_command(name, c))
                 || name != &c.name
                 || !matches!(
                     c.recovery,

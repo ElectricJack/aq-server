@@ -121,8 +121,7 @@ impl Service {
     ) -> Result<HostResult> {
         let (_, contract) = self.completion_contract(command)?;
         let payload = json!({"outcome": result.outcome, "output": result.output});
-        self.profile
-            .registry()
+        self.registry()
             .commands
             .get(command)
             .and_then(|c| c.asynchronous.as_ref())

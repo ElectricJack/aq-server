@@ -362,7 +362,7 @@ impl Configuration {
                 return Err("invalid playbook deployment binding");
             }
             profile
-                .validate_scope(&d.scope)
+                .validate_scope_with_extensions(&d.scope, |_| true)
                 .map_err(|_| "invalid playbook deployment scope")?;
             let raw = private(&d.artifact_file, 245760)?;
             total += raw.len();

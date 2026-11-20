@@ -4,6 +4,7 @@ use super::{domain::*, service::*};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
     model::{CommandContract, EventEnvelope},
+    plugins::{command_plugin, extension_capability},
     runner::{
         Authority, CancellationResult, DispatchResult, EventDisposition, Host, Intent,
         KeyedAdmissionDisposition, KeyedAdmissionReceipt, Storage,
@@ -64,6 +65,9 @@ impl DomainHost for MailHost {
 }
 impl Host for MailHost {
     fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
+        if self.mode == HostMode::RetryPlugins && command_plugin(&contract.name).is_none() {
+            return false;
+        }
         let Ok((id, revision)) = grant_actor(authority) else {
             return false;
         };
@@ -104,7 +108,7 @@ impl Host for MailHost {
                 };
             }
             return match result {
-                Ok(result) => host_result(result),
+                Ok(result) => host_result(result, intent),
                 Err(Error::Unknown) => DispatchResult::Unknown {
                     reason: "host effect outcome unknown; retained lookup required".into(),
                 },
@@ -209,7 +213,7 @@ impl Host for MailHost {
                 .handle
                 .block_on(self.service.host_retained(id, revision, intent))
             {
-                Ok(Some(result)) => host_result(result),
+                Ok(Some(result)) => host_result(result, intent),
                 _ => DispatchResult::Unknown {
                     reason: "no retained host result; no new effect admitted".into(),
                 },
@@ -278,15 +282,17 @@ impl MailHost {
     /// 7: AQ host catalog 2.0.0, which also owns operation.get).
     fn host_command(&self, intent: &Intent) -> bool {
         let name = intent.command.name.as_str();
-        super::host_adapters::HOST5_COMMANDS.contains(&name)
+        command_plugin(name).is_some()
+            || super::host_adapters::HOST5_COMMANDS.contains(&name)
             || (self.service.profile.is_host2()
                 && super::host_adapters::HOST7_COMMANDS.contains(&name))
             || self.service.profile.commands().contains(&name)
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
-fn host_result(result: super::host_adapters::HostResult) -> DispatchResult {
-    if result.outcome == "accepted"
+fn host_result(result: super::host_adapters::HostResult, intent: &Intent) -> DispatchResult {
+    if command_plugin(&intent.command.name).is_none()
+        && result.outcome == "accepted"
         && let Some(handle) = result.output["handle"].as_str()
     {
         return DispatchResult::Accepted {
@@ -338,11 +344,6 @@ pub struct Driver {
     graph_consumer: std::sync::atomic::AtomicBool,
     settlement_consumer: std::sync::atomic::AtomicBool,
     schedule_consumer: std::sync::atomic::AtomicBool,
-    /// Host7 (D11): event contracts (name, fingerprint) some installed
-    /// artifact declares. The engine refuses any other contract, so a Host7
-    /// bridge event nothing consumes (aq.work.changed after an accepted
-    /// work.ensure, aq.integration.changed, ...) would wedge the outbox page.
-    declared_events: Mutex<std::collections::BTreeSet<(String, String)>>,
     #[cfg(feature = "test-support")]
     lose_decision_reply: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "test-support")]
@@ -397,7 +398,7 @@ impl Driver {
         let owner = Owner::start_registered(
             namespace,
             limits,
-            service.profile.registry(),
+            service.registry().clone(),
             guarded_factory,
             move |acquired| {
                 if acquired.namespace != expected_namespace {
@@ -447,7 +448,6 @@ impl Driver {
             graph_consumer: std::sync::atomic::AtomicBool::new(false),
             settlement_consumer: std::sync::atomic::AtomicBool::new(false),
             schedule_consumer: std::sync::atomic::AtomicBool::new(false),
-            declared_events: Mutex::default(),
             #[cfg(feature = "test-support")]
             lose_decision_reply,
             #[cfg(feature = "test-support")]
@@ -485,20 +485,8 @@ impl Driver {
         let schedule_consumer = self.service.profile
             == super::review_domain::CatalogProfile::Monitoring6
             && artifact.content.registry.events.get("aq.signal.reported")
-                == self
-                    .service
-                    .profile
-                    .registry()
-                    .events
-                    .get("aq.signal.reported");
+                == self.service.registry().events.get("aq.signal.reported");
         let registered = artifact.clone();
-        let declared: Vec<(String, String)> = artifact
-            .content
-            .registry
-            .events
-            .values()
-            .filter_map(|e| Some((e.name.clone(), e.fingerprint().ok()?)))
-            .collect();
         self.owner
             .call(
                 Request::Install {
@@ -515,10 +503,6 @@ impl Driver {
                 "playbook definition registry write failed; definition view unavailable"
             );
         }
-        self.declared_events
-            .lock()
-            .map_err(|_| Error::Unknown)?
-            .extend(declared);
         if schedule_consumer {
             self.schedule_consumer
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -554,7 +538,10 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| match error {
+                aq_playbook_host::Error::Invalid => Error::Invalid,
+                other => host_error(other),
+            })?;
         let current = Request::Binding {
             binding: binding.clone(),
         };
@@ -784,19 +771,15 @@ impl Driver {
         }
         for (sequence, id, event, accepted) in &page {
             if !accepted
-                && self.service.profile.is_host2()
+                && (self.service.profile.is_host2()
+                    || extension_capability(&event.producer).is_some())
                 && !self
-                    .declared_events
-                    .lock()
-                    .map_err(|_| Error::Unknown)?
-                    .contains(&(
-                        event.contract.name.clone(),
-                        event.contract.fingerprint.clone(),
-                    ))
+                    .owner
+                    .declares_event(&event.contract.name, &event.contract.fingerprint)
             {
                 // No installed artifact consumes this contract: retire it
                 // with zero destinations instead of wedging the page.
-                let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+                let key = digest(&(&event.producer, 0_u64, &event.event_id))?;
                 let receipt = EventDisposition {
                     key,
                     duplicate: false,
@@ -833,6 +816,12 @@ impl Driver {
         let tick = ticked.await.map_err(host_error);
         partial.defer("ticking runs", tick.clone());
         let tick = tick?;
+        if self.owner.has_plugin_artifacts() {
+            partial.defer(
+                "sending plugin notifications",
+                self.service.flush_plugin_notices(&self.runtime).await,
+            );
+        }
         if self.service.profile.has_findings() {
             partial.defer(
                 "sending finding notifications",
@@ -880,7 +869,7 @@ impl Driver {
                 .acknowledge_event(&self.runtime, id, receipt, false)
                 .await?;
         }
-        let key = digest(&(&event.producer, 0_u64, id.to_string()))?;
+        let key = digest(&(&event.producer, 0_u64, &event.event_id))?;
         let fanout = Request::Fanout {
             event_key: key.clone(),
             limit: 64,
@@ -973,7 +962,7 @@ impl Driver {
         grant: Uuid,
         scope: &super::domain::GrantScope,
     ) -> Result<()> {
-        let expected = self.service.profile.authority(grant, 1, scope)?;
+        let expected = self.service.grant_authority(grant, 1, scope)?;
         match self
             .owner
             .call(

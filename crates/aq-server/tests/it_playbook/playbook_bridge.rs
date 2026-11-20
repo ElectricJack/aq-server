@@ -2691,3 +2691,6 @@ async fn a_repeat_of_a_deleted_operation_is_not_executed_twice() {
             .unwrap();
     assert_eq!(pending, 0);
 }
+
+#[path = "playbook_plugins.rs"]
+mod plugins;

@@ -13,13 +13,15 @@ aq-playbooks-model = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playb
 aq-playbooks-runner = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playbooks-runner", version = "=0.2.0" }
 aq-playbooks-postgres = { path = "../../vendor/aq-playbooks-9d84a6f/crates/aq-playbooks-postgres", version = "=0.2.0" }
 postgres = "0.19"
-nix.workspace = true
+nix = { workspace = true, features = ["process", "signal"] }
 hex.workspace = true
 zeroize = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

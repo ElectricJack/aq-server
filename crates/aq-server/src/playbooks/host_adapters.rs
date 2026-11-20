@@ -103,9 +103,11 @@ impl WorkGraph for GatewayGraph {
 
 #[path = "findings.rs"]
 mod findings;
+mod plugins;
 
 const ATTEMPT_REF: &str = "aq.execution.attempt/";
 const PENDING: &str = "pending";
+const PLUGIN_COMPLETED: &str = "plugin_completed";
 
 enum Stage {
     Retained(HostResult),
@@ -131,6 +133,9 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         match intent.command.name.as_str() {
+            name if aq_playbook_host::plugins::command_plugin(name).is_some() => {
+                self.plugin_dispatch(owner, id, revision, intent).await
+            }
             "findings.reconcile" => self.findings_reconcile(owner, id, revision, intent).await,
             "work.read" | "work.route" | "work.unroutable" => {
                 self.work_routing(owner, id, revision, intent).await
@@ -192,17 +197,21 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<(Transaction<'_, Postgres>, Option<Stage>, String)> {
-        self.ports()?;
-        let commands: &[&str] = if self.profile.has_routing() {
-            self.profile.commands()
-        } else if self.profile.is_host2() {
-            &HOST7_COMMANDS
-        } else {
-            &HOST5_COMMANDS
-        };
-        if !commands.contains(&intent.command.name.as_str())
-            || self.profile.registry().commands.get(&intent.command.name) != Some(&intent.command)
-        {
+        let name = intent.command.name.as_str();
+        if aq_playbook_host::plugins::command_plugin(name).is_none() {
+            self.ports()?;
+            let commands: &[&str] = if self.profile.has_routing() {
+                self.profile.commands()
+            } else if self.profile.is_host2() {
+                &HOST7_COMMANDS
+            } else {
+                &HOST5_COMMANDS
+            };
+            if !commands.contains(&name) {
+                return Err(Error::Invalid);
+            }
+        }
+        if !self.known_contract(&intent.command) {
             return Err(Error::Invalid);
         }
         intent
@@ -244,6 +253,8 @@ impl Service {
             let receipt: Value = row.get("receipt");
             let stage = if status == PENDING {
                 Stage::Pending(receipt)
+            } else if status == PLUGIN_COMPLETED {
+                Stage::Retained(serde_json::from_value(receipt)?)
             } else {
                 Stage::Retained(HostResult {
                     outcome: status,
@@ -297,7 +308,7 @@ impl Service {
         status: &str,
         receipt: &Value,
     ) -> Result<()> {
-        if status != PENDING {
+        if status != PENDING && status != PLUGIN_COMPLETED {
             self.validated(intent, status, receipt)?;
         }
         sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
@@ -374,7 +385,7 @@ impl Service {
         subject: &Value,
         payload: Value,
     ) -> Result<()> {
-        let registry = self.profile.registry();
+        let registry = self.registry();
         let c = registry.events.get(contract).ok_or(Error::Invalid)?;
         let at = self.now()?;
         // `aq.delivery.completed` names no subject or revision: the join
@@ -409,21 +420,35 @@ impl Service {
             observed_at_ms: Some(at),
             payload,
         };
-        aq_playbook_host::model::validate_event(&event, &registry).map_err(|_| Error::Invalid)?;
-        let event_digest = digest(&event)?;
-        let bytes = canonical_bytes(&event).map_err(|_| Error::Invalid)?;
-        let aad = self.aad("aq.playbooks.outbox", event_id, &event_digest)?;
+        aq_playbook_host::model::validate_event(&event, registry).map_err(|_| Error::Invalid)?;
+        self.seal_outbox(tx, event_id, &event, at, None).await
+    }
+
+    async fn seal_outbox(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row_id: Uuid,
+        event: &EventEnvelope,
+        at: i64,
+        retention: Option<i64>,
+    ) -> Result<()> {
+        let event_digest = digest(event)?;
+        let bytes = canonical_bytes(event).map_err(|_| Error::Invalid)?;
+        let aad = self.aad("aq.playbooks.outbox", row_id, &event_digest)?;
         let sealed = self.keys.seal(&aad, &bytes).map_err(|_| Error::Unknown)?;
-        sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status) VALUES($1,$2,'aq.host.bridge@1',0,$3,$4,$5,$6,$7,$8,$9,'pending')")
+        sqlx::query("INSERT INTO playbook_outbox(namespace_id,generation,producer,epoch,event_id,event_digest,sealed_version,key_id,nonce,ciphertext,created_at_ms,status,plugin_event_id,plugin_retain_until_ms) VALUES($1,$2,$3,0,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12)")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
-            .bind(event_id)
+            .bind(&event.producer)
+            .bind(row_id)
             .bind(event_digest)
             .bind(sealed.version as i32)
             .bind(sealed.key_id)
             .bind(sealed.nonce)
             .bind(sealed.ciphertext)
             .bind(at)
+            .bind(retention.map(|_| &event.event_id))
+            .bind(retention)
             .execute(&mut **tx)
             .await?;
         Ok(())

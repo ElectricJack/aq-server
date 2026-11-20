@@ -164,7 +164,7 @@ async fn status(
     Extension(d): Extension<Arc<Driver>>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
-    let registry = d.service.profile.registry();
+    let registry = d.service.registry();
     let held = d.service.held_events().await?;
     Ok(Json(
         json!({"namespace":d.service.namespace,"held_events":held,"catalog_digest":digest(&registry)?,"registered_commands":registry.commands.keys().collect::<Vec<_>>(),"automatic_driver":d.automatic_state()!="manual","automatic_driver_state":d.automatic_state(),"automatic_driver_reason":d.drive_reason(),"synchronous_calls_interruptible":false}),
@@ -398,7 +398,7 @@ async fn validate_artifact(
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
     let bytes = artifacts::bytes_of(&r.artifact)?;
-    let artifact = artifacts::validate(&d.service.profile.registry(), &bytes)?;
+    let artifact = artifacts::validate(d.service.registry(), &bytes)?;
     Ok(Json(artifacts::summary(&artifact)))
 }
 async fn install_artifact(

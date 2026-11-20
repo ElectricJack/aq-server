@@ -2,11 +2,12 @@
 //! outcome, subjects and handles, input checks and the completion of a
 //! tracked work node. No I/O.
 use crate::{Error, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// A catalog outcome and its schema-validated output.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HostResult {
     pub outcome: String,
     pub output: Value,

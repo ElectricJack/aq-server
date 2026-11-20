@@ -162,7 +162,7 @@ impl Service {
                     self.namespace.generation,
                     &key,
                 )?;
-                let contract = self.profile.registry().events["aq.signal.reported"].clone();
+                let contract = self.registry().events["aq.signal.reported"].clone();
                 let event = EventEnvelope {
                     producer: "aq.host.bridge@1".into(),
                     event_id: id.to_string(),
@@ -232,7 +232,7 @@ impl Service {
             )),
             false => None,
         };
-        let contract = self.profile.registry().events["aq.work.route_needed"].clone();
+        let contract = self.registry().events["aq.work.route_needed"].clone();
         let mut count = 0;
         for row in rows {
             let (task, version): (Uuid, i64) = (row.get("task_id"), row.get("wanted_version"));
@@ -319,7 +319,7 @@ impl Service {
             bounds,
         )
         .await?;
-        let contract = self.profile.registry().events["aq.work.result_ready"].clone();
+        let contract = self.registry().events["aq.work.result_ready"].clone();
         let mut count = 0;
         for d in due {
             let Some(node) = host
@@ -356,7 +356,7 @@ impl Service {
         id: Uuid,
         event: &EventEnvelope,
     ) -> Result<()> {
-        aq_playbook_host::model::validate_event(event, &self.profile.registry())
+        aq_playbook_host::model::validate_event(event, self.registry())
             .map_err(|_| Error::Invalid)?;
         let hash = digest(event)?;
         let bytes = canonical_bytes(event).map_err(|_| Error::Invalid)?;
