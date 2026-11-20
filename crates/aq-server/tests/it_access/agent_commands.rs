@@ -1089,6 +1089,14 @@ struct DraftFixture {
     // (node id, state, metadata) plus the pre-existing edges
     nodes: Vec<(Value, &'static str, Value)>,
     edges: Vec<Value>,
+    pause: Arc<Mutex<Option<ScopePause>>>,
+}
+
+#[derive(Clone)]
+struct ScopePause {
+    task: Value,
+    started: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
 }
 
 /// A Graph standing in for aq-graph's node read and mutation routes: tasks
@@ -1152,6 +1160,11 @@ async fn creating_graph(
                     let id = json!(path.rsplit('/').next().unwrap());
                     let root = node(&id, "Draft fixture", json!({"aq:project_id":project}));
                     let fixture = draft.as_ref().unwrap();
+                    let pause = fixture.pause.lock().unwrap().take_if(|p| p.task == id);
+                    if let Some(pause) = pause {
+                        pause.started.notify_one();
+                        pause.resume.notified().await;
+                    }
                     let nodes: Vec<_> = fixture.nodes.iter().filter(|n| n.0 != id)
                         .map(|n| node(&n.0, "Draft fixture", json!({}))).collect();
                     json!({"node":root,"nodes":nodes,"edges":fixture.edges,"pinned_revisions":[],"truncated":false})
@@ -1724,9 +1737,10 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
         Uuid::new_v4(),
     );
     let meta = json!({"aq:project_id":project});
+    // The host's retained motivation must take precedence over the Graph stamp.
     let own_meta = json!({"aq:project_id":project,"aq:playbook_namespace":namespace,
-        "aq:logical_key":"test-review","aq:work_kind":"fidelity_review",
-        "aq:subject":{"id":planner,"revision":1}});
+        "aq:logical_key":"test-review","aq:work_kind":"investigation",
+        "aq:subject":{"id":outside,"revision":1}});
     let edge = |source, target, kind| {
         json!({"id":Uuid::new_v4(),"source":source,"target":target,
         "edge_type":kind,"source_revision":null,"target_revision":null,"description":null,
@@ -1734,7 +1748,9 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     };
     let foreign_blocker = edge(outside, draft, "blocks");
     let unrelated_edge = edge(draft, sibling, "blocks");
+    let pause = Arc::new(Mutex::new(None));
     let graph_fixture = DraftFixture {
+        pause: pause.clone(),
         nodes: vec![
             (own.clone(), "active", own_meta),
             (json!(planner), "active", meta.clone()),
@@ -1818,6 +1834,12 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     let (status, receipt) = command("task.graph.create", request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
     assert_eq!(receipt["data"]["disposition"], "confirmed", "{receipt}");
+    let (status, collision) = send(&e.app, "/v1/agent/graph/commands", Some(&e.token), Some(json!({
+        "api_version":1,"operation_id":receipt["data"]["operation_id"],"binding":e.binding,
+        "reason":"A different operation cannot shadow a draft receipt",
+        "commands":[{"kind":"create_finding","id":Uuid::new_v4(),"title":"Collision","body":"","labels":[],"content_type":"note"}]
+    }))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{collision}");
     let (_, replay) = command("task.graph.create", request).await;
     assert_eq!(replay["data"], receipt["data"]);
     let (_, filled) = command("task.graph.create", batch(18, "draft", 0)).await;
@@ -1904,6 +1926,11 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     sqlx::query("INSERT INTO playbook_work_keys(namespace_id,generation,logical_key,task_id,request_digest,created_at_ms)
                  VALUES ($1,1,'test-review',$2,repeat('c',64),1)")
         .bind(namespace).bind(own.as_str().unwrap().parse::<Uuid>().unwrap()).execute(&e.pool).await.unwrap();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,created_at_ms)
+                 VALUES($1,$2,1,'test-review-intent','work.ensure',$3,1,$4,'running',1)")
+        .bind(Uuid::new_v4()).bind(namespace).bind(own.as_str().unwrap())
+        .bind(json!({"kind":"fidelity_review","motivation":{"id":planner,"revision":1}}))
+        .execute(&e.pool).await.unwrap();
     let (status, edit) = command("task.edit", change(draft)).await;
     assert_eq!(status, StatusCode::OK, "{edit}");
     assert_eq!(edit["data"]["disposition"], "confirmed", "{edit}");
@@ -1967,5 +1994,104 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
     assert_eq!(cancelled["data"]["disposition"], "confirmed");
+    // This synthetic fixture reuses a session for each policy. Give the
+    // reviewer an empty creation ledger before testing its own admission.
+    sqlx::query("DELETE FROM agent_created_tasks WHERE attempt_id=$1")
+        .bind(attempt)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let malformed = Uuid::new_v4();
+    let (status, invalid) = command(
+        "task.create",
+        json!({"params":{
+            "operation_id":malformed,"parent_id":"self","title":"  "
+        }}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{invalid}");
+    let reserved: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(reserved, 0, "invalid requests cannot reserve a task");
+
+    let (operation, task) = (Uuid::new_v4(), Uuid::new_v4());
+    let compete = |parent: Uuid| {
+        command(
+            "task.graph.create",
+            json!({"operation_id":operation,
+        "params":{"expected_version":"1","tasks":[{"id":task,"parent_id":parent,"title":"Competing draft","task_state":"draft"}]}}),
+        )
+    };
+    let (own_side, subject_side) = tokio::join!(compete(root), compete(planner));
+    let (winner, parent, loser) = if own_side.0 == StatusCode::OK {
+        (own_side.1, root, subject_side.0)
+    } else {
+        (subject_side.1, planner, own_side.0)
+    };
+    assert_eq!(winner["data"]["disposition"], "confirmed", "{winner}");
+    assert_eq!(loser, StatusCode::CONFLICT);
+    let saved: (Uuid, Uuid) =
+        sqlx::query_as("SELECT parent_id,root_task_id FROM agent_created_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        saved,
+        (parent, parent),
+        "Only the journal-winning parent can confer authority"
+    );
+    let last = posted.lock().unwrap().last().unwrap().clone();
+    assert!(
+        last["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["edge_type"] == "parent-child"
+                && op["target"] == json!(task)
+                && op["source"] == json!(parent))
+    );
+
+    let pending = ScopePause {
+        task: json!(draft),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: Arc::new(tokio::sync::Notify::new()),
+    };
+    *pause.lock().unwrap() = Some(pending.clone());
+    let expiring = change(draft);
+    let expiration = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            pending.started.notified(),
+        )
+        .await
+        .unwrap();
+        e.time.fetch_add(20_000, Ordering::SeqCst);
+        pending.resume.notify_one();
+    };
+    let ((status, expired), ()) = tokio::join!(command("task.edit", expiring.clone()), expiration);
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{expired}");
+    assert_eq!(expired["code"], "session_expired");
+    let journaled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM dashboard_operations WHERE operation_id=$1)",
+    )
+    .bind(
+        expiring["operation_id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap(),
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert!(
+        !journaled,
+        "Expired credential cannot admit or dispatch an action"
+    );
     graph.abort();
 }

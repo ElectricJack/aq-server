@@ -2,11 +2,11 @@
 use super::grant_check::{AgentCaller, DISPATCHED, audit};
 use super::human::{enqueue, graph_actions};
 use super::*;
-use crate::dashboard_api::actions::ActionRequest;
+use crate::dashboard_api::actions::{ActionRequest, AgentAdmission};
 use aq_agent_grants::{
     AuditEntry, Decision, Grant, Holder, Refusal, RefusalCode, Relation, Target,
     draft_scope::{MAX_ANCESTRY, TaskScope, uuid},
-    store::{Reservation, ReserveError},
+    store::{DraftReservation, Reservation},
 };
 use aq_command_registry::CommandSpec;
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,7 +39,7 @@ pub(super) async fn submit(
             );
         }
     };
-    match admit(&state, &a, spec, request, request_id).await {
+    match admit(&state, &a, &headers, spec, request, request_id).await {
         Ok(r) => r,
         Err(r) => grant_check::refused(&headers, r, request_id),
     }
@@ -92,10 +92,11 @@ impl<'a> Scope<'a> {
         let own = graph_actions::current(rt, workspace, a.ids.task_id, "task")
             .await
             .map_err(|_| error_for_unavailable(spec))?;
-        let subject = grant_check::verified_work_metadata(state, &own, a.ids.project_id)
-            .await
-            .map_err(|_| error_for_unavailable(spec))?
-            .and_then(|metadata| uuid(&metadata["aq:subject"]["id"]));
+        let subject =
+            aq_agent_grants::store::ensured_work(&state.store.pool, &own, a.ids.project_id)
+                .await
+                .map_err(|_| error_for_unavailable(spec))?
+                .and_then(|work| work.subject);
         let version = own["version"]
             .as_u64()
             .ok_or_else(|| error_for_unavailable(spec))?;
@@ -203,23 +204,6 @@ impl<'a> Scope<'a> {
         Ok((path.root, path.depth))
     }
 
-    async fn reserve(&self, operation: Uuid, tasks: Vec<Reservation>) -> Checked<()> {
-        aq_agent_grants::store::reserve(
-            &self.state.store.pool,
-            self.a.ids,
-            operation,
-            tasks,
-            self.grant.limits.max_created_tasks,
-            now(self.state) as i64,
-        )
-        .await
-        .map_err(|error| match error {
-            ReserveError::QuotaExceeded => self.quota("max_created_tasks"),
-            ReserveError::Conflict => self.invalid(),
-            ReserveError::Store(_) => error_for_unavailable(self.spec),
-        })
-    }
-
     async fn graph(&mut self, graph: &enqueue::GraphCreate) -> Checked<Vec<Reservation>> {
         use aq_human_work::task_graph::DraftBatchError;
         let drafts = graph.draft_tasks().map_err(|e| match e {
@@ -307,10 +291,26 @@ impl<'a> Scope<'a> {
 pub(super) async fn admit(
     state: &AppState,
     a: &AgentCaller,
+    headers: &HeaderMap,
     spec: &CommandSpec,
     request: ActionRequest,
     request_id: Uuid,
 ) -> Checked<Response> {
+    let _permit = if DISPATCHED.try_with(|_| ()).is_err() {
+        Some(
+            aq_agent_grants::budget::shared()
+                .acquire(a.ids.attempt_id, true, now(state))
+                .map_err(|_| {
+                    error(
+                        spec,
+                        RefusalCode::Overloaded,
+                        "Attempt mutation budget exhausted",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let (decision, target) = a.authorize(state, spec, &mut serde_json::Map::new()).await;
     let grant = spec.grant.unwrap_or_default();
     let entry = |d: &Decision| AuditEntry::agent(a.ids, spec.name, grant, target, d, request_id);
@@ -321,7 +321,7 @@ pub(super) async fn admit(
         Decision::Allow(held) => held,
         Decision::Deny(r) => return Err(r),
     };
-    let result = checked_action(state, a, spec, held, request).await;
+    let result = checked_action(state, a, headers, spec, held, request).await;
     if let Err(refusal) = &result {
         audit(state, &entry(&Decision::Deny(refusal.clone()))).await;
     }
@@ -331,6 +331,7 @@ pub(super) async fn admit(
 async fn checked_action(
     state: &AppState,
     a: &AgentCaller,
+    headers: &HeaderMap,
     spec: &CommandSpec,
     grant: Grant,
     request: ActionRequest,
@@ -351,7 +352,7 @@ async fn checked_action(
         Ok(None) => {}
         Err(e) => return Ok(e.into_response()),
     }
-    match spec.name {
+    let tasks = match spec.name {
         "task.graph.create" => {
             let graph =
                 serde_json::from_value(request.payload.clone()).map_err(|_| scope.invalid())?;
@@ -366,7 +367,7 @@ async fn checked_action(
             if graph.tasks.len() * 2 + graph.edges.len() + scope.guards.len() > 100 {
                 return Err(scope.invalid());
             }
-            scope.reserve(request.operation_id, rows).await?;
+            Some(rows)
         }
         "task.create" => {
             if request.payload["task_state"] != "draft" {
@@ -382,27 +383,38 @@ async fn checked_action(
             if scope.grant.scope == aq_agent_grants::Scope::TaskSelf {
                 return Err(scope.denied());
             }
-            scope
-                .reserve(
-                    request.operation_id,
-                    vec![Reservation {
-                        task: request.operation_id,
-                        parent,
-                        root,
-                        depth,
-                    }],
-                )
-                .await?;
+            Some(vec![Reservation {
+                task: request.operation_id,
+                parent,
+                root,
+                depth,
+            }])
         }
-        _ => scope.edit(&request).await?,
-    }
-    Ok(enqueue::supervisor::agent_action(
+        _ => {
+            scope.edit(&request).await?;
+            None
+        }
+    };
+    let reservation = tasks.map(|tasks| DraftReservation {
+        ids: a.ids,
+        tasks,
+        ceiling: scope.grant.limits.max_created_tasks,
+    });
+    let result = enqueue::supervisor::agent_action(
         state,
         a.ids,
         request,
-        scope.guards,
+        std::mem::take(&mut scope.guards),
         Some(scope.task_scope.workspace),
+        AgentAdmission {
+            caller: a,
+            headers,
+            reservation,
+        },
     )
-    .await
-    .unwrap_or_else(IntoResponse::into_response))
+    .await;
+    match result {
+        Err(error) if error.code() == "quota_exceeded" => Err(scope.quota("max_created_tasks")),
+        response => Ok(response.unwrap_or_else(IntoResponse::into_response)),
+    }
 }

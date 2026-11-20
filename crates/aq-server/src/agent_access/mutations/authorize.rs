@@ -170,6 +170,23 @@ pub(super) async fn prepare(
         }
         facts.insert(id, raw);
     }
+    let task_writes = proposal > 0
+        || commands.iter().any(|c| match c["kind"].as_str() {
+            Some("correct_record") => facts
+                .get(c["id"].as_str().unwrap())
+                .is_some_and(|n| n["kind"] == "task"),
+            Some("remove_relationship") => true,
+            _ => false,
+        });
+    let restricted = task_writes
+        && (p
+            .grants
+            .get(aq_agent_grants::op::TASK_CREATE_SUBTASK)
+            .is_some_and(|g| g.limits.draft_only)
+            || grant_check::work_policy(state, p).await?.is_some());
+    if restricted && proposal > 0 {
+        return Err(Error("scope_denied"));
+    }
     // Author/protection observations authorize only the exact observed version.
     // A caller-chosen future CAS token must never turn a stale guard into a write.
     for c in commands {
@@ -221,6 +238,9 @@ pub(super) async fn prepare(
                 if let Some(n) = facts.get(key)
                     && n["kind"] == "task"
                 {
+                    if restricted {
+                        return Err(Error("scope_denied"));
+                    }
                     cap(p, "write.task_content")?;
                 }
                 operations.push(json!({"op":"update_node","id":c["id"],"expected_version":version(&c["expected_version"])?,"patch":c["patch"]}));
@@ -253,7 +273,8 @@ pub(super) async fn prepare(
                 } else {
                     c["edge_type"].clone()
                 };
-                if !list(&p.profile["write_scope"], "relationship_types")?.contains(&edge_type)
+                if (restricted && matches!(edge_type.as_str(), Some("blocks" | "parent-child")))
+                    || !list(&p.profile["write_scope"], "relationship_types")?.contains(&edge_type)
                     || !list(&p.profile["read_scope"], "edge_types")?.contains(&edge_type)
                 {
                     return Err(Error("scope_denied"));

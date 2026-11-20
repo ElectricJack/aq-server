@@ -165,15 +165,11 @@ pub async fn compile(
         return Err(refused());
     }
     let task = String::from_utf8(projection.bytes.clone()).map_err(|_| refused())?;
-    let work_kind = crate::agent_access::grant_check::verified_work_metadata(
-        state,
-        &context.context["node"],
-        project,
-    )
-    .await
-    .map_err(crate::error::db)?
-    .and_then(|metadata| metadata["aq:work_kind"].as_str())
-    .map(str::to_owned);
+    let work_kind =
+        aq_agent_grants::store::ensured_work(&state.store.pool, &context.context["node"], project)
+            .await
+            .map_err(crate::error::db)?
+            .and_then(|work| work.kind);
     let thread = crate::agent_access::task_thread::startup_input(
         state,
         project,

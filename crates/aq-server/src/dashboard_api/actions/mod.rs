@@ -6,10 +6,11 @@ pub(crate) mod json;
 mod registry;
 use super::{DashboardUser, contract::Scope, errors::ApiError};
 use crate::{AppState, store::User};
+use aq_agent_grants::store::DraftReservation;
 use axum::{
     Extension, Json, Router,
     extract::{DefaultBodyLimit, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 pub use contract::*;
@@ -53,10 +54,16 @@ impl AdmissionReceipt {
         Some((operation_status(&value.data), Json(value)).into_response())
     }
 }
-#[derive(Clone, Copy)]
-enum RequestOrigin {
+pub(crate) struct AgentAdmission<'a> {
+    pub caller: &'a crate::agent_access::grant_check::AgentCaller,
+    pub headers: &'a HeaderMap,
+    pub reservation: Option<DraftReservation>,
+}
+
+enum RequestOrigin<'a> {
     Union,
     Legacy,
+    Agent(AgentAdmission<'a>),
 }
 
 pub(crate) fn operation_status(operation: &Operation) -> StatusCode {
@@ -128,12 +135,13 @@ async fn get_operation(
             // Import metadata only. The admission dispatch flag is intentionally ignored:
             // the native owner already owns any effect under this immutable ID.
             let (operation, _) = journal::admit(
-                &state.store.pool,
+                &state,
                 user.id,
                 &request,
                 scope.clone(),
                 digest,
                 created,
+                None,
             )
             .await?;
             journal::Lookup {
@@ -208,8 +216,10 @@ pub(crate) async fn submit_scoped(
     registry: &Registry,
     user: &User,
     request: ActionRequest,
+    admission: Option<AgentAdmission<'_>>,
 ) -> Result<Operation, ApiError> {
-    submit_observed(state, registry, user, request, None, RequestOrigin::Union).await
+    let origin = admission.map_or(RequestOrigin::Union, RequestOrigin::Agent);
+    submit_observed(state, registry, user, request, None, origin).await
 }
 pub(crate) async fn lookup_scoped(
     state: &AppState,
@@ -272,12 +282,14 @@ async fn submit_observed(
     user: &User,
     request: ActionRequest,
     receipt: Option<&AdmissionReceipt>,
-    origin: RequestOrigin,
+    origin: RequestOrigin<'_>,
 ) -> Result<Operation, ApiError> {
-    match origin {
-        RequestOrigin::Union => request.validate()?,
+    let legacy = matches!(origin, RequestOrigin::Legacy);
+    if legacy {
         // Native supervisor bodies allow JSON escaping within the shipped 128 KiB envelope.
-        RequestOrigin::Legacy => request.validate_with_limit(131072)?,
+        request.validate_with_limit(131072)?;
+    } else {
+        request.validate()?;
     }
     let adapter = registry.get(&request.kind)?;
     let scope = tokio::time::timeout(
@@ -288,12 +300,16 @@ async fn submit_observed(
     .map_err(|_| ApiError::unavailable())??;
     let digest = canonical_digest(&request, &scope)?;
     let (original, dispatch) = journal::admit(
-        &state.store.pool,
+        state,
         user.id,
         &request,
         scope,
         digest,
         (state.clock)(),
+        match origin {
+            RequestOrigin::Agent(admission) => Some(admission),
+            _ => None,
+        },
     )
     .await?;
     if let Some(receipt) = receipt {
@@ -310,7 +326,7 @@ async fn submit_observed(
     .await
     .unwrap_or_else(|_| Outcome::unknown());
     let completed = finish(state, user, original, outcome).await?;
-    if matches!(origin, RequestOrigin::Union) {
+    if !legacy {
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
             adapter.authorize_lookup(state, user, &completed.scope, Some(&completed)),

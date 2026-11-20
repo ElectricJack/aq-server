@@ -1,6 +1,7 @@
 //! Atomic per-attempt reservations shared by single and batched draft creation.
 use super::AttemptIds;
-use sqlx::PgPool;
+use serde_json::{Value, json};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 pub struct Reservation {
@@ -8,6 +9,12 @@ pub struct Reservation {
     pub parent: Uuid,
     pub root: Uuid,
     pub depth: u32,
+}
+
+pub struct DraftReservation {
+    pub ids: AttemptIds,
+    pub tasks: Vec<Reservation>,
+    pub ceiling: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -22,36 +29,34 @@ impl From<sqlx::Error> for ReserveError {
     }
 }
 
-pub async fn reserve(
-    pool: &PgPool,
-    ids: AttemptIds,
+pub async fn lock_operation(
+    tx: &mut Transaction<'_, Postgres>,
     operation: Uuid,
-    tasks: Vec<Reservation>,
-    ceiling: Option<u32>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!("agent-operation:{operation}"))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Reserve within the caller's canonical operation admission transaction.
+pub async fn reserve(
+    tx: &mut Transaction<'_, Postgres>,
+    operation: Uuid,
+    reservation: DraftReservation,
     created_at_ms: i64,
 ) -> Result<(), ReserveError> {
-    let mut tx = pool.begin().await?;
+    let DraftReservation {
+        ids,
+        mut tasks,
+        ceiling,
+    } = reservation;
     // Use the same lock as the legacy single-task creation quota.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
         .bind(ids.attempt_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    let saved: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT task_id FROM agent_created_tasks WHERE attempt_id=$1 AND operation_id=$2 ORDER BY task_id",
-    )
-    .bind(ids.attempt_id)
-    .bind(operation)
-    .fetch_all(&mut *tx)
-    .await?;
-    if !saved.is_empty() {
-        let mut requested: Vec<_> = tasks.iter().map(|r| r.task).collect();
-        requested.sort_unstable();
-        return if saved == requested {
-            Ok(())
-        } else {
-            Err(ReserveError::Conflict)
-        };
-    }
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM agent_created_tasks c WHERE c.attempt_id=$1 AND NOT EXISTS (
             SELECT 1 FROM dashboard_operations d
@@ -59,21 +64,21 @@ pub async fn reserve(
               AND d.kind IN ('task.create','task.graph.create') AND d.disposition IN ('conflict','rejected')
         )")
             .bind(ids.attempt_id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
     if count + tasks.len() as i64 > ceiling.map_or(i64::MAX, i64::from) {
         return Err(ReserveError::QuotaExceeded);
     }
+    tasks.sort_unstable_by_key(|row| row.task);
     for row in tasks {
         let inserted = sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING")
             .bind(row.task).bind(ids.attempt_id).bind(ids.project_id).bind(row.parent).bind(row.root)
             .bind(row.depth as i32).bind(operation).bind(created_at_ms)
-            .execute(&mut *tx).await?;
+            .execute(&mut **tx).await?;
         if inserted.rows_affected() != 1 {
             return Err(ReserveError::Conflict);
         }
     }
-    tx.commit().await?;
     Ok(())
 }
 
@@ -130,4 +135,51 @@ pub async fn creator<'e>(
         .bind(task)
         .fetch_optional(executor)
         .await
+}
+
+pub struct EnsuredWork {
+    pub kind: Option<String>,
+    pub subject: Option<Uuid>,
+}
+
+/// Resolve a work task's kind and motivation from the host's retained request.
+/// Synchronous profiles retain the identity key and the stamped Graph node.
+pub async fn ensured_work(
+    pool: &PgPool,
+    node: &Value,
+    project: Uuid,
+) -> Result<Option<EnsuredWork>, sqlx::Error> {
+    use super::draft_scope::uuid;
+    let metadata = &node["metadata"];
+    if metadata["aq:project_id"] != json!(project) {
+        return Ok(None);
+    }
+    let (Some(task), Some(workspace), Some(namespace), Some(key)) = (
+        uuid(&node["id"]),
+        uuid(&node["workspace_id"]),
+        uuid(&metadata["aq:playbook_namespace"]),
+        metadata["aq:logical_key"].as_str(),
+    ) else {
+        return Ok(None);
+    };
+    let found: Option<Option<Value>> = sqlx::query_scalar(
+        "SELECT h.request FROM playbook_work_keys k JOIN playbook_namespaces n USING(namespace_id,generation)
+         LEFT JOIN LATERAL (
+            SELECT request FROM playbook_host_operations
+            WHERE namespace_id=k.namespace_id AND generation=k.generation
+              AND command_name='work.ensure' AND subject_id=k.task_id::text
+            ORDER BY created_at_ms,operation_id LIMIT 1
+         ) h ON true
+         WHERE k.namespace_id=$1 AND k.logical_key=$2 AND k.task_id=$3 AND n.project_id=$4 AND n.workspace_id=$5",
+    ).bind(namespace).bind(key).bind(task).bind(project).bind(workspace).fetch_optional(pool).await?;
+    Ok(found.map(|request| {
+        let (kind, subject) = match &request {
+            Some(request) => (&request["kind"], &request["motivation"]["id"]),
+            None => (&metadata["aq:work_kind"], &metadata["aq:subject"]["id"]),
+        };
+        EnsuredWork {
+            kind: kind.as_str().map(str::to_owned),
+            subject: uuid(subject),
+        }
+    }))
 }

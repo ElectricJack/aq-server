@@ -438,12 +438,13 @@ async fn admitted_but_interrupted_operation_remains_pending_without_redispatch()
     let request = request("ok");
     let digest = canonical_digest(&request, &Scope::AllAuthorized).unwrap();
     let (original, dispatch) = journal::admit(
-        &state.store.pool,
+        &state,
         user.id,
         &request,
         Scope::AllAuthorized,
         digest,
         (state.clock)(),
+        None,
     )
     .await
     .unwrap();

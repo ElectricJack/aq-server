@@ -225,7 +225,7 @@ async fn create(
         crate::agent_access::scheduling::parse::parse(&bytes).map_err(|_| ApiError::invalid())?,
     )
     .map_err(|_| ApiError::invalid())?;
-    let op = actions::submit_scoped(&state, &registry(&state, p)?, &user, request).await?;
+    let op = actions::submit_scoped(&state, &registry(&state, p)?, &user, request, None).await?;
     let response = actions::response(&state, op);
     tx.commit().await?;
     Ok((actions::operation_status(&response.data), Json(response)))
@@ -343,9 +343,16 @@ pub(crate) async fn agent_action(
     request: ActionRequest,
     guards: std::collections::BTreeMap<Uuid, u64>,
     workspace: Option<Uuid>,
+    admission: actions::AgentAdmission<'_>,
 ) -> ApiResult<axum::response::Response> {
     let registry = agent_registry(state, ids, guards, workspace)?;
-    let op =
-        actions::submit_scoped(state, &registry, &agent_user(state, ids).await?, request).await?;
+    let op = actions::submit_scoped(
+        state,
+        &registry,
+        &agent_user(state, ids).await?,
+        request,
+        Some(admission),
+    )
+    .await?;
     Ok(agent_response(state, op))
 }

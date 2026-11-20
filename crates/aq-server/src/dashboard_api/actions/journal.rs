@@ -1,6 +1,7 @@
 //! Durable operation identity and retained responses. No effects are performed
 //! inside a journal transaction, and a duplicate admission never dispatches.
 use super::*;
+use aq_agent_grants::store::{self as grant_store, ReserveError};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
@@ -91,12 +92,13 @@ pub(in crate::dashboard_api) async fn lookup(
     retained(&row, principal)
 }
 pub(super) async fn admit(
-    pool: &PgPool,
+    state: &AppState,
     principal: Uuid,
     request: &ActionRequest,
     scope: Scope,
     digest: String,
     now: DateTime<Utc>,
+    admission: Option<AgentAdmission<'_>>,
 ) -> Result<(Operation, bool), ApiError> {
     let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let operation = Operation {
@@ -115,10 +117,57 @@ pub(super) async fn admit(
         activation: None,
     };
     let response = serde_json::to_value(&operation).map_err(|_| ApiError::unavailable())?;
-    let mut tx = transaction(pool).await?;
+    let mut tx = transaction(&state.store.pool).await?;
+    let expires = if let Some(admission) = &admission {
+        let expires = admission
+            .caller
+            .recheck_locked(state, admission.headers, &mut tx)
+            .await
+            .map_err(agent_error)?;
+        grant_store::lock_operation(&mut tx, request.operation_id).await?;
+        let legacy: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agent_graph_operations WHERE operation_id=$1)",
+        )
+        .bind(request.operation_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if legacy {
+            return Err(ApiError::for_status(StatusCode::CONFLICT));
+        }
+        Some(expires)
+    } else {
+        None
+    };
     let inserted=sqlx::query("INSERT INTO dashboard_operations(operation_id,principal_id,kind,scope,request_digest,disposition,response,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING")
         .bind(request.operation_id).bind(principal).bind(&request.kind).bind(serde_json::json!(scope)).bind(&digest).bind(response).bind(now).execute(&mut *tx).await?.rows_affected()==1;
     if inserted {
+        if let Some(reservation) = admission.and_then(|a| a.reservation) {
+            if principal != reservation.ids.attempt_id
+                || scope
+                    != (Scope::Project {
+                        project_id: reservation.ids.project_id,
+                    })
+            {
+                return Err(ApiError::invalid());
+            }
+            grant_store::reserve(
+                &mut tx,
+                request.operation_id,
+                reservation,
+                now.timestamp_millis(),
+            )
+            .await
+            .map_err(|err| match err {
+                ReserveError::QuotaExceeded => {
+                    agent_error(aq_agent_grants::RefusalCode::QuotaExceeded)
+                }
+                ReserveError::Conflict => ApiError::for_status(StatusCode::CONFLICT),
+                ReserveError::Store(error) => ApiError::from(error),
+            })?;
+        }
+        if expires.is_some_and(|expires| expires <= crate::execution::api::now(state)) {
+            return Err(agent_error(aq_agent_grants::RefusalCode::SessionExpired));
+        }
         // An ambiguous commit is never a dispatch license. Caller retains the
         // original ID and queries again; a committed row remains Pending.
         tx.commit()
@@ -136,6 +185,11 @@ pub(super) async fn admit(
     }
     Ok((retained(&row, principal)?, false))
 }
+fn agent_error(code: aq_agent_grants::RefusalCode) -> ApiError {
+    let status = StatusCode::from_u16(code.status()).unwrap_or(StatusCode::FORBIDDEN);
+    ApiError::new(status, code.as_str(), "Agent action admission refused")
+}
+
 pub(super) async fn finish(
     pool: &PgPool,
     principal: Uuid,

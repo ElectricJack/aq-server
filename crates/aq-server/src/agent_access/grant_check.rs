@@ -27,19 +27,11 @@ pub(crate) async fn agent_caller(
         .await
         .map_err(|e| RefusalCode::from_agent_access(e.0))?;
     let ids = ids(&p).map_err(|_| RefusalCode::Internal)?;
-    let policy = project_grants(state, ids.project_id);
-    if !policy.by_work_kind.is_empty() {
-        let workspace = id(&p.binding, "workspace_id").map_err(|_| RefusalCode::Internal)?;
-        let rt = runtime(state).map_err(|_| RefusalCode::Internal)?;
-        let node = super::human::graph_actions::current(rt, workspace, ids.task_id, "task")
-            .await
-            .map_err(|_| RefusalCode::Internal)?;
-        let metadata = verified_work_metadata(state, &node, ids.project_id)
-            .await
-            .map_err(|_| RefusalCode::Internal)?;
-        if let Some(policy) = policy.work_kind(metadata.and_then(|m| m["aq:work_kind"].as_str())) {
-            p.grants = policy.narrow(&p.grants);
-        }
+    if let Some(policy) = work_policy(state, &p)
+        .await
+        .map_err(|_| RefusalCode::Internal)?
+    {
+        p.grants = policy.narrow(&p.grants);
     }
     Ok(AgentCaller {
         ids,
@@ -49,6 +41,24 @@ pub(crate) async fn agent_caller(
     })
 }
 impl AgentCaller {
+    pub(crate) async fn recheck_locked(
+        &self,
+        state: &AppState,
+        headers: &HeaderMap,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> std::result::Result<u64, RefusalCode> {
+        let p = authenticate_locked(state, headers, tx)
+            .await
+            .map_err(|error| RefusalCode::from_agent_access(error.0))?;
+        if p.binding != self.binding
+            || p.version != self.principal.version
+            || p.revision != self.principal.revision
+        {
+            return Err(RefusalCode::SessionRevoked);
+        }
+        Ok(p.expires)
+    }
+
     /// `supervisor` is the current supervisor conversation, if one exists.
     pub(crate) fn whoami(&self, supervisor: Option<Uuid>) -> Value {
         let p = &self.principal;
@@ -109,31 +119,23 @@ pub(crate) async fn relation(state: &AppState, own: Uuid, task: Uuid) -> aq_agen
         aq_agent_grants::Relation::Descendant(d as u32)
     })
 }
-/// Trust work metadata only for a task registered by the work host.
-pub(crate) async fn verified_work_metadata<'a>(
+pub(super) async fn work_policy(
     state: &AppState,
-    node: &'a Value,
-    project: Uuid,
-) -> std::result::Result<Option<&'a Value>, sqlx::Error> {
-    use aq_agent_grants::draft_scope::uuid;
-    let metadata = &node["metadata"];
-    if metadata["aq:project_id"] != json!(project) {
+    p: &Principal,
+) -> Result<Option<aq_agent_grants::resolve::WorkKindGrants>> {
+    let ids = ids(p)?;
+    let policy = project_grants(state, ids.project_id);
+    if policy.by_work_kind.is_empty() {
         return Ok(None);
     }
-    let (Some(task), Some(workspace), Some(namespace), Some(key)) = (
-        uuid(&node["id"]),
-        uuid(&node["workspace_id"]),
-        uuid(&metadata["aq:playbook_namespace"]),
-        metadata["aq:logical_key"].as_str(),
-    ) else {
-        return Ok(None);
-    };
-    let ensured: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM playbook_work_keys k JOIN playbook_namespaces n USING(namespace_id,generation)
-         WHERE k.namespace_id=$1 AND k.logical_key=$2 AND k.task_id=$3 AND n.project_id=$4 AND n.workspace_id=$5)",
-    ).bind(namespace).bind(key).bind(task).bind(project).bind(workspace)
-        .fetch_one(&state.store.pool).await?;
-    Ok(ensured.then_some(metadata))
+    let workspace = id(&p.binding, "workspace_id")?;
+    let node =
+        super::human::graph_actions::current(runtime(state)?, workspace, ids.task_id, "task")
+            .await
+            .map_err(|_| Error("overloaded"))?;
+    let work =
+        aq_agent_grants::store::ensured_work(&state.store.pool, &node, ids.project_id).await?;
+    Ok(policy.work_kind(work.as_ref().and_then(|work| work.kind.as_deref())))
 }
 /// The project's agent-grant policy (`ProjectPolicy.agent_grants`).
 pub(crate) fn project_grants(
