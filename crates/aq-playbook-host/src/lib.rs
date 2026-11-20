@@ -141,6 +141,23 @@ pub enum Request {
         artifact: String,
         authority: Authority,
     },
+    ConfigureBinding {
+        binding: String,
+        artifact: String,
+        authority: Authority,
+        may_activate: bool,
+        schedules: Vec<model::schedules::BindingSchedule>,
+        interval_event: Option<model::ContractRef>,
+        now_ms: i64,
+    },
+    DeactivateBinding {
+        binding: String,
+        revision: u64,
+        now_ms: i64,
+    },
+    CollectIntervalEvents {
+        now_ms: i64,
+    },
     Admit {
         binding: String,
         entry: String,
@@ -205,7 +222,10 @@ impl Request {
     fn control(&self) -> bool {
         matches!(
             self,
-            Self::Cancel { .. } | Self::CancelEffects { .. } | Self::Stop
+            Self::Cancel { .. }
+                | Self::CancelEffects { .. }
+                | Self::DeactivateBinding { .. }
+                | Self::Stop
         )
     }
     fn validate(&self) -> Result<(), Error> {
@@ -241,6 +261,22 @@ impl Request {
                 artifact,
                 authority: a,
             } => valid(binding) && valid(artifact) && authority(a),
+            Self::ConfigureBinding {
+                binding,
+                artifact,
+                authority: a,
+                schedules,
+                ..
+            } => {
+                valid(binding)
+                    && valid(artifact)
+                    && authority(a)
+                    && model::schedules::BindingSchedule::validate_all(schedules).is_ok()
+            }
+            Self::DeactivateBinding {
+                binding, revision, ..
+            } => valid(binding) && *revision > 0,
+            Self::CollectIntervalEvents { .. } => true,
             Self::Admit {
                 binding,
                 entry,
@@ -761,6 +797,59 @@ fn execute<S: Storage>(
                 .activate(&binding, &artifact, authority)
                 .map_err(engine_error)?;
             Value::Null
+        }
+        Request::ConfigureBinding {
+            binding,
+            artifact,
+            authority,
+            may_activate,
+            schedules,
+            interval_event,
+            now_ms,
+        } => Value::Bool(
+            engine
+                .configure_binding(
+                    &binding,
+                    &artifact,
+                    authority,
+                    may_activate,
+                    &schedules,
+                    interval_event,
+                    now_ms,
+                )
+                .map_err(runner_error)?,
+        ),
+        Request::DeactivateBinding {
+            binding,
+            revision,
+            now_ms,
+        } => Value::Bool(
+            engine
+                .deactivate_binding(&binding, revision, now_ms)
+                .map_err(runner_error)?,
+        ),
+        Request::CollectIntervalEvents { now_ms } => {
+            let count = engine
+                .collect_interval_events(now_ms, 2, |schedule, contract, occurrence| {
+                    EventEnvelope {
+                        producer: "aq.host.bridge@1".into(),
+                        event_id: occurrence.id.clone(),
+                        contract,
+                        scope: occurrence.scope,
+                        correlation: [("operation".into(), occurrence.id)].into(),
+                        subject: Some(occurrence.schedule_id.clone()),
+                        revision: Some(occurrence.index),
+                        causation: None,
+                        occurred_at_ms: Some(occurrence.scheduled_at_ms),
+                        observed_at_ms: Some(now_ms),
+                        payload: serde_json::json!({
+                            "outcome": "reported", "reference": schedule.reference(),
+                            "subject": {"id": occurrence.schedule_id, "revision": occurrence.index}
+                        }),
+                    }
+                })
+                .map_err(runner_error)?;
+            serde_json::json!(count)
         }
         Request::Admit {
             binding,

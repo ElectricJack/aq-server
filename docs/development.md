@@ -508,6 +508,35 @@ workflows, cutting a release, and installing and running the host updater
 references; missing ones are pulled). The release workflow uses this to smoke
 test the exact pushed digests.
 
+## Playbook binding intervals
+
+Add `schedules` beside `binding` in a `[[playbooks.deployments]]` entry.
+
+```toml
+schedules = [{ key = "test", every_ms = 30000 }]
+```
+
+Keys are unique within each binding. Another binding can use the same key.
+The namespace, binding, and key together identify the schedule subject. The
+artifact declares an `aq.signal.reported` trigger and its playbook checks
+`event.reference == "aq.schedule/test"`. Each occurrence starts triggers
+only on the owning binding. Its first `subject.revision` is zero and the
+revision advances with the scheduled intervals.
+
+The driver polls at least twice as often as the shortest configured interval.
+The first occurrence is due one interval after registration. After
+an interruption the driver emits the latest missed occurrence and resumes
+the original cadence. Keeping a declaration across restart preserves its
+cursor. Changing its interval restarts that schedule's cadence.
+
+The namespace owner can deactivate a binding with
+`POST /api/playbooks/bindings/{id}/deactivate` and
+`{"revision": 1}`, substituting the revision returned by
+`GET /api/playbooks/bindings/{id}`. Deactivation removes its schedules and
+blocks new starts on that binding, including across restart. Already started
+runs retain their activation. The existing activate endpoint can reactivate
+the binding, and startup reconciles the declarations of an active binding.
+
 ## Production notes
 
 `compose.yaml` is the production shape: no published ports, a read-only vault

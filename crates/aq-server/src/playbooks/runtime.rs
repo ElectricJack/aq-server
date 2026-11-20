@@ -306,6 +306,7 @@ impl Runtime {
                         deployment.artifact.digest.clone(),
                         deployment.grant_id,
                         &deployment.scope,
+                        &deployment.schedules,
                     )
                     .await
                     .step("activating a deployment binding")?;

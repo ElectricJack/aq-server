@@ -23,7 +23,10 @@ struct Budget {
 }
 async fn gate(State(budget): State<Arc<Budget>>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
-    let control = path.ends_with("/revoke") || path.ends_with("/cancel") || path.ends_with("/stop");
+    let control = path.ends_with("/revoke")
+        || path.ends_with("/cancel")
+        || path.ends_with("/stop")
+        || path.ends_with("/deactivate");
     let budget = if control {
         &budget.control
     } else {
@@ -341,6 +344,10 @@ fn artifact_routes() -> Router<AppState> {
             post(activate_binding),
         )
         .route(
+            "/api/playbooks/bindings/{id}/deactivate",
+            post(deactivate_binding),
+        )
+        .route(
             "/api/playbooks/bindings/{id}/rollback",
             post(rollback_binding),
         )
@@ -433,6 +440,21 @@ async fn activate_binding(
     Ok(Json(
         artifacts::activate(&catalog, &ledger(&d), &r.op_id, &id, &r.artifact).await?,
     ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeactivateBody {
+    revision: u64,
+}
+async fn deactivate_binding(
+    RequireOwner(user): RequireOwner,
+    Extension(d): Extension<Arc<Driver>>,
+    Path(id): Path<String>,
+    Json(r): Json<DeactivateBody>,
+) -> Result<Json<Value>> {
+    owner(&d, user.id)?;
+    d.deactivate_binding(id, r.revision).await?;
+    Ok(Json(json!({"deactivated": true})))
 }
 async fn rollback_binding(
     RequireOwner(user): RequireOwner,

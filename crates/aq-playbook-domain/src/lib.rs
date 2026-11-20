@@ -2,6 +2,7 @@
 pub mod artifacts;
 pub mod catalog_view;
 pub mod coding;
+pub mod daily_schedules;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
 #[cfg(feature = "delivery_playbook")]

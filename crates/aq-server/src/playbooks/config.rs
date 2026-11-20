@@ -1,6 +1,7 @@
 //! Explicit local owner configuration. No default activation or TCP fallback.
 use super::{domain::GrantScope, review_domain::CatalogProfile, service::Namespace};
 use crate::protected_storage::{Keyring, ProtectionConfig};
+use aq_playbook_host::model::schedules::BindingSchedule;
 use aq_playbook_host::{
     model::Artifact,
     postgres_client::{
@@ -143,6 +144,8 @@ enum Profile {
 struct DeploymentInput {
     artifact_file: PathBuf,
     binding: String,
+    #[serde(default)]
+    schedules: Vec<BindingSchedule>,
     grant_id: Uuid,
     scope: GrantScope,
     expires_at_ms: i64,
@@ -150,6 +153,7 @@ struct DeploymentInput {
 pub(crate) struct Deployment {
     pub artifact: Artifact,
     pub binding: String,
+    pub schedules: Vec<BindingSchedule>,
     pub grant_id: Uuid,
     pub scope: GrantScope,
     pub expires_at_ms: i64,
@@ -361,6 +365,8 @@ impl Configuration {
             {
                 return Err("invalid playbook deployment binding");
             }
+            BindingSchedule::validate_all(&d.schedules)
+                .map_err(|_| "invalid playbook deployment schedules")?;
             profile
                 .validate_scope_with_extensions(&d.scope, |_| true)
                 .map_err(|_| "invalid playbook deployment scope")?;
@@ -377,11 +383,19 @@ impl Configuration {
             deployments.push(Deployment {
                 artifact,
                 binding: d.binding,
+                schedules: d.schedules,
                 grant_id: d.grant_id,
                 scope: d.scope,
                 expires_at_ms: d.expires_at_ms,
             });
         }
+        // Poll faster than configured intervals so a slow general-purpose
+        // drive setting does not turn every interval into catch-up.
+        let drive_interval_ms = deployments
+            .iter()
+            .flat_map(|d| &d.schedules)
+            .map(|schedule| schedule.every_ms / 2)
+            .fold(self.drive_interval_ms, u64::min);
         let loaded = Loaded {
             namespace: self.namespace,
             keys,
@@ -391,7 +405,7 @@ impl Configuration {
             directory_path,
             socket_owner_uid: self.socket_owner_uid,
             port,
-            interval: Duration::from_millis(self.drive_interval_ms),
+            interval: Duration::from_millis(drive_interval_ms),
             timeouts: self.engine_timeouts,
             retention: self.retention,
             engine_retention: self.engine_retention,
