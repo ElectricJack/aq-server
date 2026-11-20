@@ -125,6 +125,11 @@ pub struct CheckPoll {
     pub observed: Option<PullRequestObserved>,
 }
 
+struct CheckHead<'a> {
+    sha: &'a str,
+    target_is_frozen: bool,
+}
+
 /// One attempt at a command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -289,7 +294,7 @@ impl Delivery {
         required: Option<&[String]>,
         now_ms: i64,
         deadline_at_ms: i64,
-        expected_head: Option<&str>,
+        expected_head: Option<CheckHead<'_>>,
     ) -> CheckPoll {
         let repo = &target.github;
         let observed = self.github.pull_request(repo, pr).await.ok();
@@ -314,27 +319,63 @@ impl Delivery {
             {
                 break 'decide Some(Completion::closed());
             }
-            if expected_head.is_some_and(|head| p.head_sha != head) {
+            let head = expected_head
+                .as_ref()
+                .map_or(p.head_sha.as_str(), |head| head.sha);
+            let repair_behind = expected_head
+                .as_ref()
+                .is_some_and(|head| head.target_is_frozen);
+            if p.number != pr || p.base_branch != target.default_branch || p.head_sha != head {
                 break 'decide None;
             }
-            if p.state == PullRequestState::Open
-                && let Ok(Mergeability::Conflict) = self.github.mergeability(repo, pr).await
-            {
-                if let Some(s) = seen.as_mut() {
-                    s.mergeable = "conflicting";
+            if p.state == PullRequestState::Open {
+                if let Some(repair) = check_repair(p.mergeability, repair_behind, &mut seen) {
+                    break 'decide Some(repair);
                 }
-                break 'decide Some(Completion::new("conflict", json!({})));
+                if p.mergeability == Mergeability::Behind {
+                    break 'decide None;
+                }
             }
             let Ok(checks) = self.github.checks(repo, pr, required).await else {
                 break 'decide None;
             };
-            if expected_head.is_some_and(|head| checks.head_sha != head) {
+            let checked = &checks.pull_request;
+            if checked.number != pr
+                || checked.base_branch != target.default_branch
+                || checked.head_sha != head
+            {
                 break 'decide None;
             }
-            // A red or unattributed already-merged PR cannot authorize completion
-            // or send the result for a repair against a PR that cannot be updated.
-            if p.state == PullRequestState::Merged && checks.state != ChecksState::Passed {
-                break 'decide None;
+            match checked.state {
+                PullRequestState::Closed => break 'decide Some(Completion::closed()),
+                PullRequestState::Merged if expected_head.is_none() => {
+                    break 'decide Some(Completion::closed());
+                }
+                // An already-merged PR needs green checks for the exact result
+                // head before recovery. Its base may have moved again since merge.
+                PullRequestState::Merged if checks.state != ChecksState::Passed => {
+                    break 'decide None;
+                }
+                PullRequestState::Merged => {
+                    if let Some(s) = seen.as_mut() {
+                        s.state = "merged";
+                    }
+                }
+                PullRequestState::Open if p.state == PullRequestState::Merged => {
+                    break 'decide None;
+                }
+                PullRequestState::Open => {
+                    if let Some(repair) =
+                        check_repair(checked.mergeability, repair_behind, &mut seen)
+                    {
+                        break 'decide Some(repair);
+                    }
+                    if checked.base_sha != p.base_sha
+                        || checked.mergeability == Mergeability::Behind
+                    {
+                        break 'decide None;
+                    }
+                }
             }
             if let Some(s) = seen.as_mut() {
                 s.checks_failed = checks
@@ -417,7 +458,9 @@ impl Delivery {
             Ok(MergeOutcome::Merged { .. }) => MergeAttempt::Unconfirmed(Step::Retry(
                 "GitHub did not report a valid merge SHA".into(),
             )),
-            Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
+            Ok(MergeOutcome::Conflict | MergeOutcome::Behind) => {
+                done(Completion::new("conflict", json!({})))
+            }
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
             }
@@ -501,7 +544,10 @@ impl Delivery {
                 number: pr,
                 url: String::new(),
                 head_sha: String::new(),
+                base_branch: target.default_branch.clone(),
+                base_sha: String::new(),
                 state: PullRequestState::Closed,
+                mergeability: Mergeability::Blocked,
             },
             Err(e) => return Step::Retry(format!("the forge did not close it: {}", e.code())),
         };
@@ -662,6 +708,16 @@ impl Delivery {
                             .collect()
                     });
                 let deadline = request["deadline_at_ms"].as_i64()?;
+                let frozen_target = request.get("check_target");
+                if let Some(frozen) = frozen_target
+                    && *frozen != serde_json::to_value(target).ok()?
+                {
+                    return Some(Run {
+                        step: (now_ms >= deadline)
+                            .then(|| Step::Done(Completion::new("timeout", json!({})))),
+                        observed: None,
+                    });
+                }
                 let poll = self
                     .check_result_head(
                         target,
@@ -669,7 +725,10 @@ impl Delivery {
                         required.as_deref(),
                         now_ms,
                         deadline,
-                        text("result_head"),
+                        text("result_head").map(|sha| CheckHead {
+                            sha,
+                            target_is_frozen: frozen_target.is_some(),
+                        }),
                     )
                     .await;
                 Some(Run {
@@ -680,6 +739,25 @@ impl Delivery {
             _ => None,
         }
     }
+}
+
+/// Catalog 2.3.0's conflict outcome already returns the result for an update
+/// from main. A behind repair requires both a frozen head and delivery target.
+fn check_repair(
+    mergeability: Mergeability,
+    repair_behind: bool,
+    observed: &mut Option<PullRequestObserved>,
+) -> Option<Completion> {
+    match mergeability {
+        Mergeability::Conflict => {
+            if let Some(seen) = observed {
+                seen.mergeable = "conflicting";
+            }
+        }
+        Mergeability::Behind if repair_behind => {}
+        _ => return None,
+    }
+    Some(Completion::new("conflict", json!({})))
 }
 
 /// `text` cut to at most `bytes` bytes at a character boundary.

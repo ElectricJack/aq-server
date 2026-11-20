@@ -8,7 +8,7 @@ Publish the task branch, then open or find its pull request against the default 
 
 - When checks pass, merge using a merge commit and the task head read for this result. Complete the task after the host confirms that merge. If the host is still reconciling the operation, wait for its outcome.
 - When checks fail and the task has fewer than three returns, send it back with reason `checks_failed` and the failing check names. Resume from the task branch.
-- When the PR conflicts with the target and the task has fewer than three returns, send it back with reason `merge_conflict` and request an update from main.
+- When the PR conflicts with the target or GitHub confirms that its tracked result head is behind the target, the delivery commands report the conflict outcome. Below three returns, send it back with reason `merge_conflict` and request an update from main. Keep the task branch and the existing PR, and await checks on the repaired head.
 - On either failure after three returns, hold the task with reason `returns_exhausted` and notify the supervisor.
 - On a check timeout, end the run. The next result-ready observation rechecks the same work. A timeout consumes no repair attempt.
 - On a publish lease conflict, closed unmerged PR or refused merge, hold the result with the applicable reason and notify the supervisor. Include the operation outcome in that message. A refused or uncertain operation cannot authorize completion.

@@ -115,8 +115,9 @@ pub struct Accepting<'a> {
     /// `pull_request.await_checks`: Settings
     /// `delivery-limits.longest_check_wait_ms`.
     pub longest_check_wait_ms: Option<u64>,
-    /// `pull_request.merge`: the resolved target and latest attempt/result.
-    pub merge_target: Option<DeliveryTarget>,
+    /// Check and merge operations pin the resolved target at acceptance.
+    pub target: Option<DeliveryTarget>,
+    /// The latest attempt/result for merge evidence.
     pub result_ids: Option<(Uuid, Uuid)>,
 }
 
@@ -179,7 +180,7 @@ pub async fn frozen_request(
             request["pull_request"] = json!(number(open));
             request["method"] = input["method"].clone();
             request["expected_head_sha"] = input["expected_head_sha"].clone();
-            request["merge_target"] = serde_json::to_value(accepting.merge_target)?;
+            request["merge_target"] = serde_json::to_value(accepting.target)?;
             if request["expected_head_sha"].as_str() != Some(accepting.head) {
                 return Ok(Err("head_changed"));
             }
@@ -195,6 +196,7 @@ pub async fn frozen_request(
         "pull_request.await_checks" => {
             request["pull_request"] = json!(known.as_ref().map(number));
             request["result_head"] = json!(accepting.head);
+            request["check_target"] = serde_json::to_value(accepting.target)?;
             let longest = accepting
                 .longest_check_wait_ms
                 .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;

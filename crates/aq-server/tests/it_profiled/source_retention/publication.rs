@@ -3,7 +3,7 @@ use super::delivery::{candidate, context, peer, ready, response_peer, retain, se
 use super::*;
 #[cfg(feature = "delivery_playbook")]
 use aq_server::delivery::{
-    BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, Mergeability, PullRequest,
+    BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, PullRequest,
     github::{GitHubApiError, GitHubResult},
 };
 #[cfg(not(feature = "delivery_playbook"))]
@@ -63,9 +63,6 @@ impl GitHubAdapter for FakeGitHub {
         _: u64,
         _: Option<&[String]>,
     ) -> GitHubResult<Checks> {
-        self.call()
-    }
-    async fn mergeability(&self, _: &GitHubRepository, _: u64) -> GitHubResult<Mergeability> {
         self.call()
     }
     async fn merge(
