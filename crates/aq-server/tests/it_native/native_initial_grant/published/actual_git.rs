@@ -68,6 +68,10 @@ struct Unpublished {
     base: String,
 }
 async fn setup_actual_unpublished() -> Unpublished {
+    setup_actual_with_prefix(false).await
+}
+
+async fn setup_actual_with_prefix(task_prefix: bool) -> Unpublished {
     let mut case = native_offer::setup().await;
     let dir = case.env.env._dir.path();
     let seed = dir.join("actual-seed");
@@ -104,7 +108,11 @@ async fn setup_actual_unpublished() -> Unpublished {
     }
     assert!(socket.exists());
     let repo = case.env.frozen.project.binding.repository_id;
-    rpc(&socket,repo,"repo.register",json!({"identity":"native-real-git-fixture","mode":"central","remote_url":seed,"allow_file_transport":true,"allowed_refs":["refs/heads/main"],"allowed_targets":["refs/heads/main"]})).await;
+    let mut binding = json!({"identity":"native-real-git-fixture","mode":"central","remote_url":seed,"allow_file_transport":true,"allowed_refs":["refs/heads/main"],"allowed_targets":["refs/heads/main"]});
+    if task_prefix {
+        binding["allowed_target_prefixes"] = json!(["refs/heads/aq/"]);
+    }
+    rpc(&socket, repo, "repo.register", binding).await;
     rpc(&socket, repo, "repo.sync", json!({})).await;
     let oid = json!({"algorithm":"sha1","hex":base});
     let workspace = rpc(&socket, repo, "workspace.create", json!({"base":oid})).await;
@@ -150,6 +158,101 @@ async fn setup_actual_unpublished() -> Unpublished {
         base,
     }
 }
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+#[ignore = "qualification requires a delivery-enabled aq-git with source leases"]
+async fn actual_git_publishes_only_the_submitted_commit_and_cleans_both_refs() {
+    use aq_delivery::commands::{
+        GitPort, GitTarget, RefDeletion, RefPublication, SocketGit, task_branch,
+    };
+    let mut f = setup_actual_with_prefix(true).await;
+    let target = GitTarget {
+        repository_id: f.case.env.frozen.project.binding.repository_id,
+        binding_generation: 1,
+    };
+    let git_port = SocketGit::new(&f.socket);
+    let retained = git_port
+        .retain_ref(Uuid::new_v4(), &target, "refs/heads/main")
+        .await
+        .unwrap();
+    assert_eq!(retained.head, f.base);
+    let reference = task_branch(Uuid::new_v4());
+    // Seed the fixture's central branch as if the worker had pushed the result.
+    let pool = f
+        .case
+        .env
+        .env
+        ._dir
+        .path()
+        .join("actual-git/repositories")
+        .join(target.repository_id.to_string())
+        .join("objects.git");
+    git(&pool, &["update-ref", &reference, &f.base]).await;
+    let mismatch = git_port
+        .publish_ref(
+            Uuid::new_v4(),
+            &target,
+            &reference,
+            None,
+            Some(&"1".repeat(40)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch, RefPublication::Moved);
+    assert!(
+        git(
+            &f.seed,
+            &["for-each-ref", "--format=%(objectname)", &reference]
+        )
+        .await
+        .is_empty()
+    );
+    let op = Uuid::new_v4();
+    let expected = RefPublication::Published {
+        head: f.base.clone(),
+    };
+    assert_eq!(
+        git_port
+            .publish_ref(op, &target, &reference, None, Some(&f.base))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(git(&f.seed, &["rev-parse", &reference]).await, f.base);
+    assert_eq!(
+        git_port
+            .publish_ref(Uuid::new_v4(), &target, &reference, None, Some(&f.base))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        git_port
+            .delete_ref(Uuid::new_v4(), &target, &reference, Some(&f.base))
+            .await
+            .unwrap(),
+        RefDeletion::Deleted
+    );
+    assert_eq!(
+        git_port
+            .publish_ref(op, &target, &reference, None, Some(&f.base))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(git_port.show_ref(&target, &reference).await.unwrap(), None);
+    assert!(
+        git(
+            &f.seed,
+            &["for-each-ref", "--format=%(objectname)", &reference]
+        )
+        .await
+        .is_empty()
+    );
+    f.process.kill().await.unwrap();
+    f.process.wait().await.unwrap();
+}
+
 async fn setup_actual() -> Actual {
     let Unpublished {
         case,
