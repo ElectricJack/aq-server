@@ -135,9 +135,8 @@ pub(super) async fn publish(
     );
     // Confirmation can land during assembly. Fence it inside publication
     // before recording a task or slot claim.
-    let git_author = aq_human_work::task_git_author::lookup(&mut *tx, project, workspace, task)
-        .await
-        .map_err(db)?
+    let git_author = super::task_git_author(state, &mut *tx, project, workspace, task)
+        .await?
         .map(|author| GitAuthor {
             name: author.name,
             email: author.email,

@@ -594,12 +594,9 @@ async fn offers(
                         // A worker's wire support is local to this poll.
                         // Keep scanning without persisting a hold on the task.
                         if !supports_git_author
-                            && aq_human_work::task_git_author::lookup(
-                                pool, project, workspace, task,
-                            )
-                            .await
-                            .map_err(db)?
-                            .is_some()
+                            && super::task_git_author(state, pool, project, workspace, task)
+                                .await?
+                                .is_some()
                         {
                             return Ok(Assessment::Blocked("git_author_unsupported"));
                         }

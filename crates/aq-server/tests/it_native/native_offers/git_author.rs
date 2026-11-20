@@ -272,6 +272,31 @@ async fn publication_rechecks_author_confirmed_after_candidate_selection() {
 }
 
 #[tokio::test]
+async fn malformed_legacy_author_leaves_a_valid_unauthored_offer() {
+    let case = setup().await;
+    let lineage = &case.env.lineage;
+    snapshot(
+        &case,
+        lineage.project_id,
+        lineage.workspace_id,
+        lineage.task_id,
+        true,
+    )
+    .await;
+    sqlx::query("UPDATE task_git_authors SET name=$1,email=$2 WHERE task_id=$3")
+        .bind("Old<Account@")
+        .bind("Old<Account@@example.test")
+        .bind(lineage.task_id)
+        .execute(&case.env.env.pool)
+        .await
+        .unwrap();
+    let original = offer(&case, &[VERSION]).await;
+    assert!(original["body"]["offers"][0].get("git_author").is_none());
+    let legacy = offer(&case, &[]).await;
+    assert!(legacy["body"]["offers"][0].get("git_author").is_none());
+}
+
+#[tokio::test]
 async fn absent_author_ignores_other_scopes_and_unconfirmed_or_graph_input() {
     let case = setup().await;
     let lineage = &case.env.lineage;
