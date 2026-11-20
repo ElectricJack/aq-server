@@ -16,7 +16,7 @@ ALTER TABLE playbook_effects ADD CHECK (
     )
 );
 ALTER TABLE playbook_effects DROP CONSTRAINT playbook_effects_status_check;
-ALTER TABLE playbook_effects ADD CHECK (
+ALTER TABLE playbook_effects ADD CONSTRAINT playbook_effects_status_check CHECK (
     (status = 'plugin_completed' AND command_name ~ '^ext\.')
     OR (status = 'activated' AND command_name = 'work.activate')
     OR (command_name !~ '^ext\.' AND status IN (
