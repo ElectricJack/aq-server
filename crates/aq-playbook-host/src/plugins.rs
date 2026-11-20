@@ -1,5 +1,5 @@
 //! Operator-installed exec plugins for the playbook host.
-use crate::model::{CommandContract, ContractRef, EventEnvelope, Recovery, Registry, Schema};
+use crate::model::{CatalogExtension, CommandContract, ContractRef, EventEnvelope, Registry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -27,11 +27,12 @@ pub struct Plugins(BTreeMap<String, Plugin>);
 
 #[derive(Clone, Debug)]
 pub struct Plugin {
-    registry: Registry,
+    extension: CatalogExtension,
     exe: PathBuf,
     state_dir: PathBuf,
     secrets: BTreeMap<String, PathBuf>,
     bindings: Option<PathBuf>,
+    vault: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -70,28 +71,15 @@ pub fn extension_command(name: &str, command: &CommandContract) -> bool {
     let Some(plugin) = command_plugin(name) else {
         return false;
     };
-    let Some(Schema::Object {
-        properties,
-        required,
-    }) = command.outcomes.get("refused")
-    else {
-        return false;
-    };
-    name == command.name
-        && command.recovery == Recovery::KeyedIdempotent
-        && command.scopes.len() == 1
-        && command.scopes.contains("project")
-        && command.capabilities.len() == 1
-        && command.capabilities.contains(&format!("ext.{plugin}"))
-        && command.asynchronous.is_none()
-        && !command.cancellation
-        && command.deadline_ms >= 2
-        && command.max_payload_bytes > 0
-        && required.len() == 1
-        && required.contains("reason")
-        && properties.len() == 1
-        && matches!(properties.get("reason"), Some(Schema::String { max_length, values })
-            if values.is_empty() && *max_length >= "invalid_plugin_response".len())
+    CatalogExtension::new(
+        plugin,
+        Registry {
+            commands: BTreeMap::from([(name.to_owned(), command.clone())]),
+            ..Default::default()
+        },
+        serde_json::json!({}),
+    )
+    .is_ok()
 }
 
 impl Plugins {
@@ -137,24 +125,20 @@ impl Plugins {
         self.0.get(name)
     }
 
-    pub fn overlay(&self, mut registry: Registry) -> Registry {
-        // Extensions own disjoint prefixes. Preserve an existing base contract
-        // if a future base catalog needs to reserve an extension name.
-        for plugin in self.0.values() {
-            for (name, contract) in &plugin.registry.commands {
-                registry
-                    .commands
-                    .entry(name.clone())
-                    .or_insert_with(|| contract.clone());
+    pub fn overlay(mut self, mut registry: Registry) -> (Self, Registry) {
+        self.0.retain(|name, plugin| {
+            match registry.with_extensions(std::slice::from_ref(&plugin.extension)) {
+                Ok(composed) => {
+                    registry = composed;
+                    true
+                }
+                Err(error) => {
+                    tracing::warn!(plugin = %name, %error, "playbook plugin overlay refused");
+                    false
+                }
             }
-            for (name, contract) in &plugin.registry.events {
-                registry
-                    .events
-                    .entry(name.clone())
-                    .or_insert_with(|| contract.clone());
-            }
-        }
-        registry
+        });
+        (self, registry)
     }
 }
 
@@ -197,35 +181,12 @@ impl Plugin {
             .and_then(|p| fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or("invalid plugin registry")?;
-        let _: Value = file(&manifest.notes)
+        let notes: Value = file(&manifest.notes)
             .and_then(|p| fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or("invalid plugin notes")?;
-        let prefix = format!("ext.{name}.");
-        if registry.commands.iter().any(|(name, contract)| {
-            !name.starts_with(&prefix)
-                || !extension_command(name, contract)
-                || contract.input.validate_definition().is_err()
-                || contract
-                    .outcomes
-                    .values()
-                    .any(|s| s.validate_definition().is_err())
-        }) || registry.events.iter().any(|(event, contract)| {
-            event != &contract.name
-                || !event.starts_with(&prefix)
-                || contract.trusted_producers.len() != 1
-                || !contract
-                    .trusted_producers
-                    .contains(prefix.trim_end_matches('.'))
-                || !contract.scopes.contains("project")
-                || contract.subject_field.is_none()
-                || contract.revision_field.is_none()
-                || contract.max_payload_bytes == 0
-                || contract.retention_ms == 0
-                || contract.payload.validate_definition().is_err()
-        }) {
-            return Err("invalid plugin contracts");
-        }
+        let extension =
+            CatalogExtension::new(name, registry, notes).map_err(|_| "invalid plugin contracts")?;
         let vault = vault
             .canonicalize()
             .map_err(|_| "plugin vault unavailable")?;
@@ -246,7 +207,7 @@ impl Plugin {
         }) {
             return Err("invalid plugin bindings path");
         }
-        let bindings = manifest.bindings.map(|path| vault.join(path));
+        let bindings = manifest.bindings;
         let state_dir = state_root.join(name);
         fs::create_dir_all(state_dir.join("tmp")).map_err(|_| "plugin state unavailable")?;
         let state_dir = state_dir
@@ -254,31 +215,35 @@ impl Plugin {
             .map_err(|_| "plugin state unavailable")?;
         Ok((
             Self {
-                registry,
+                extension,
                 exe,
                 state_dir,
                 secrets,
                 bindings,
+                vault,
             },
             manifest.version,
         ))
     }
 
     pub fn registry(&self) -> &Registry {
-        &self.registry
+        self.extension.registry()
     }
 
     fn binding(&self, project_id: Uuid) -> Option<toml::Table> {
         let Some(path) = &self.bindings else {
             return Some(toml::Table::new());
         };
-        let text = match fs::read_to_string(path) {
-            Ok(text) if private_file(path) => text,
+        let resolved = match self.vault.join(path).canonicalize() {
+            Ok(resolved) if resolved.starts_with(&self.vault) && private_file(&resolved) => {
+                resolved
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Some(toml::Table::new());
             }
             _ => return None,
         };
+        let text = fs::read_to_string(resolved).ok()?;
         let table: toml::Table = text.parse().ok()?;
         let Some(projects) = table.get("projects") else {
             return Some(toml::Table::new());
@@ -382,7 +347,7 @@ impl Plugin {
         event: ProducedEvent,
         now_ms: i64,
     ) -> Option<EventEnvelope> {
-        let contract = self.registry.events.get(&event.name)?;
+        let contract = self.registry().events.get(&event.name)?;
         let field = |path: &str| {
             path.split('.')
                 .try_fold(&event.payload, |value, key| value.get(key))
@@ -413,7 +378,7 @@ impl Plugin {
             observed_at_ms: Some(now_ms),
             payload: event.payload,
         };
-        crate::model::validate_event(&envelope, &self.registry).ok()?;
+        crate::model::validate_event(&envelope, self.registry()).ok()?;
         Some(envelope)
     }
 }

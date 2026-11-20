@@ -49,7 +49,7 @@ pub const TABLES: [(&str, &str); 9] = [
     // acceptance, decisions when copied, host-bridge events with their effect).
     (
         "playbook_outbox",
-        "DELETE FROM playbook_outbox WHERE (namespace_id,generation,producer,event_id) IN (SELECT namespace_id,generation,producer,event_id FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND status='engine_accepted' AND fanout_complete ORDER BY sequence DESC OFFSET $3 LIMIT $4) AND (plugin_retain_until_ms IS NULL OR plugin_retain_until_ms<=$5) AND $5::bigint>0",
+        "DELETE FROM playbook_outbox WHERE (namespace_id,generation,producer,event_id) IN (SELECT namespace_id,generation,producer,event_id FROM (SELECT namespace_id,generation,producer,event_id,plugin_retain_until_ms FROM playbook_outbox WHERE namespace_id=$1 AND generation=$2 AND status='engine_accepted' AND fanout_complete ORDER BY sequence DESC OFFSET $3) candidates WHERE plugin_retain_until_ms IS NULL OR plugin_retain_until_ms<=$5 LIMIT $4) AND $5::bigint>0",
     ),
     // Accepted admissions, once their grant can no longer admit: a repeat of
     // a deleted request id is then refused (expired or revoked grant).

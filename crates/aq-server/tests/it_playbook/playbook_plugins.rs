@@ -89,11 +89,22 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
         &format!("[projects.{project}]\nmode='first'\n"),
     );
     let crashed = plugin_intent(&e, &service, grant, "crash");
-    let dispatch = |intent| service.host_dispatch(&e.runtime, grant, 1, intent);
-    assert_eq!(dispatch(&crashed).await, Err(Error::Unknown));
+    assert_eq!(
+        service.host_dispatch(&e.runtime, grant, 1, &crashed).await,
+        Err(Error::Unknown)
+    );
     assert_eq!(count(&e, "playbook_effects").await, 0);
-    let replay = dispatch(&crashed).await.unwrap();
-    assert_eq!(dispatch(&crashed).await.unwrap(), replay);
+    let replay = service
+        .host_dispatch(&e.runtime, grant, 1, &crashed)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .host_dispatch(&e.runtime, grant, 1, &crashed)
+            .await
+            .unwrap(),
+        replay
+    );
     assert_eq!(replay.outcome, "ok");
     assert_eq!(
         replay.output["environment"],
@@ -113,7 +124,10 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
     );
     for mode in ["nonzero", "bad_json"] {
         let intent = plugin_intent(&e, &service, grant, mode);
-        assert_eq!(dispatch(&intent).await, Err(Error::Unknown));
+        assert_eq!(
+            service.host_dispatch(&e.runtime, grant, 1, &intent).await,
+            Err(Error::Unknown)
+        );
     }
     assert_eq!(
         files.calls()[2]["binding"],
@@ -126,7 +140,10 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
         "host_event",
     ] {
         let intent = plugin_intent(&e, &service, grant, mode);
-        let result = dispatch(&intent).await.unwrap();
+        let result = service
+            .host_dispatch(&e.runtime, grant, 1, &intent)
+            .await
+            .unwrap();
         assert_eq!(result.outcome, "refused");
         assert_eq!(result.output, json!({"reason":"invalid_plugin_response"}));
     }

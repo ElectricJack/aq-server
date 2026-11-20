@@ -897,7 +897,19 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
     ];
     let delivery = cfg!(feature = "delivery_playbook");
     let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
-    if !bounded_json(registry, 1_048_576)
+    let base_event_count = registry
+        .events
+        .keys()
+        .filter(|name| plugins::command_plugin(name).is_none())
+        .count();
+    let has_extensions = registry
+        .commands
+        .keys()
+        .any(|name| plugins::command_plugin(name).is_some())
+        || registry.events.len() != base_event_count;
+    let byte_limit = if has_extensions { 1_048_576 } else { 262_144 };
+    if base_event_count > 16
+        || !bounded_json(registry, byte_limit)
         || registry.commands.iter().any(|(name, c)| {
             (!admitted(name) && !plugins::extension_command(name, c))
                 || name != &c.name

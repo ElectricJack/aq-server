@@ -186,7 +186,8 @@ impl Service {
         self
     }
     pub fn with_plugins(mut self, plugins: Plugins) -> Self {
-        self.registry = Arc::new(plugins.overlay(self.profile.registry()));
+        let (plugins, registry) = plugins.overlay(self.profile.registry());
+        self.registry = Arc::new(registry);
         self.plugins = Arc::new(plugins);
         self
     }
