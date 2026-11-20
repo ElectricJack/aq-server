@@ -26,6 +26,9 @@ pub use catalog::catalog;
 pub use queries::QueryParam;
 pub use subjects::{Id as SubjectId, SubjectRule, subject as subject_rule};
 pub use summaries::{PLACEHOLDER_SUMMARY, action_summary};
+/// aq-supervisor-control's owner bridge mount (`owner::PREFIX`), duplicated
+/// to avoid the dependency; aq-server's tests assert the two agree.
+pub const OWNER_PREFIX: &str = "/v1/supervisor/owner";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -302,6 +305,20 @@ impl Registry {
                     Body::Action,
                     Params::Action,
                 ));
+            }
+        }
+        // Every other owner command reaches supervisors through the owner
+        // bridge. The leak is bounded: the registry is built once per process.
+        #[cfg(feature = "supervisor_full_access")]
+        for c in &mut commands {
+            if let (Some(owner), None) = (c.owner, c.supervisor)
+                && owner.body != Body::Local
+            {
+                let path = format!("{OWNER_PREFIX}{}", owner.path);
+                c.supervisor = Some(Route {
+                    path: Box::leak(path.into_boxed_str()),
+                    ..owner
+                });
             }
         }
         commands.sort_by(|a, b| a.name.cmp(b.name));

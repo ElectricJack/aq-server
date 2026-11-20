@@ -1,5 +1,8 @@
 //! F1b credentials authorize only creation, with a session-private journal.
-use super::super::graph_actions::GraphAction;
+use super::super::graph_actions::{
+    DependencyAdd, DependencyRemove, GraphAction, TaskEdit, TaskReprioritize, TaskRoleSet,
+    TaskRouteClear, TaskRouteSet,
+};
 use super::*;
 use crate::agent_access::supervisor_conversation::reply::{
     SupervisorPrincipal, authenticate_in_transaction,
@@ -132,34 +135,20 @@ impl ActionKind for Single {
 }
 fn registry(state: &AppState, p: SupervisorPrincipal) -> ApiResult<Registry> {
     let mut r = Registry::default();
-    r.register(GraphAction::<GraphCreate>::for_supervisor(state, p.clone()))?;
-    r.register(Single(GraphAction::<SingleGraph>::for_supervisor(
-        state,
-        p.clone(),
-    )))?;
-    use super::super::graph_actions::{
-        DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRoleSet, TaskRouteClear,
-        TaskRouteSet,
-    };
-    r.register(GraphAction::<TaskRoleSet>::for_supervisor(state, p.clone()))?;
-    r.register(GraphAction::<TaskEdit>::for_supervisor(state, p.clone()))?;
-    r.register(GraphAction::<TaskReprioritize>::for_supervisor(
-        state,
-        p.clone(),
-    ))?;
-    r.register(GraphAction::<TaskRouteSet>::for_supervisor(
-        state,
-        p.clone(),
-    ))?;
-    r.register(GraphAction::<TaskRouteClear>::for_supervisor(
-        state,
-        p.clone(),
-    ))?;
-    r.register(GraphAction::<DependencyAdd>::for_supervisor(
-        state,
-        p.clone(),
-    ))?;
-    r.register(GraphAction::<DependencyRemove>::for_supervisor(state, p))?;
+    macro_rules! adapter {
+        ($payload:ty) => {
+            GraphAction::<$payload>::for_supervisor(state, p.clone())
+        };
+    }
+    r.register(adapter!(GraphCreate))?;
+    r.register(Single(adapter!(SingleGraph)))?;
+    r.register(adapter!(TaskRoleSet))?;
+    r.register(adapter!(TaskEdit))?;
+    r.register(adapter!(TaskReprioritize))?;
+    r.register(adapter!(TaskRouteSet))?;
+    r.register(adapter!(TaskRouteClear))?;
+    r.register(adapter!(DependencyAdd))?;
+    r.register(adapter!(DependencyRemove))?;
     Ok(r)
 }
 pub(crate) fn routes() -> Router<AppState> {
@@ -239,8 +228,20 @@ async fn lookup(
     let p = principal(&state, &mut tx, &headers).await?;
     let user = journal_user(&p);
     let Path(id) = path.map_err(|_| ApiError::invalid())?;
-    let op = actions::lookup_scoped(&state, &registry(&state, p)?, &user, id).await?;
-    let response = actions::response(&state, op);
+    let op = actions::lookup_scoped(&state, &registry(&state, p.clone())?, &user, id).await;
+    #[cfg(feature = "supervisor_full_access")]
+    let op = match (
+        op,
+        aq_supervisor_control::owner::approving_owner(&mut tx, &p).await,
+    ) {
+        // Commands sent through the owner bridge are in the approving owner's journal.
+        (Err(e), Some(owner)) if e.status() == StatusCode::NOT_FOUND => {
+            let found = actions::journal::lookup_for_authorization(&state.store.pool, owner, id);
+            found.await?.and_then(|lookup| lookup.operation).ok_or(e)
+        }
+        (op, _) => op,
+    };
+    let response = actions::response(&state, op?);
     tx.commit().await?;
     Ok(Json(response))
 }
@@ -251,7 +252,6 @@ fn agent_registry(
     guards: std::collections::BTreeMap<Uuid, u64>,
     workspace: Option<Uuid>,
 ) -> ApiResult<Registry> {
-    use super::super::graph_actions::{DependencyAdd, DependencyRemove, TaskEdit};
     let mut registry = Registry::default();
     let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
     macro_rules! adapter {

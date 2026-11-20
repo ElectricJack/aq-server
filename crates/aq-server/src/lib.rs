@@ -365,7 +365,12 @@ pub fn build_admin_router_with_optional_owners(
 
 /// Machine routes plus `/healthz`. No human routes are mounted here.
 pub fn build_worker_router(state: AppState) -> Router {
-    build_worker_router_inner(state, None)
+    build_worker_router_inner(state, None, None)
+}
+/// Machine routes plus the owner bridge, which forwards to `owner_app`.
+#[cfg(feature = "supervisor_full_access")]
+pub fn build_worker_router_with_owner_app(state: AppState, owner_app: Router) -> Router {
+    build_worker_router_inner(state, None, Some(owner_app))
 }
 /// Candidate recovery owner is absent unless a trusted caller explicitly
 /// installs and injects a historical verifier policy. This is not activation
@@ -374,11 +379,12 @@ pub fn build_worker_router_with_closure_policy(
     state: AppState,
     policy: Arc<profiled_execution::closure::policy::InstalledPolicy>,
 ) -> Router {
-    build_worker_router_inner(state, Some(policy))
+    build_worker_router_inner(state, Some(policy), None)
 }
 fn build_worker_router_inner(
     state: AppState,
     policy: Option<Arc<profiled_execution::closure::policy::InstalledPolicy>>,
+    owner_app: Option<Router>,
 ) -> Router {
     let closure = match policy {
         Some(policy) => profiled_execution::closure::api::routes(state.clone(), policy),
@@ -424,7 +430,7 @@ fn build_worker_router_inner(
             &state,
         ))
         .merge(agent_access::human::enqueue::supervisor::routes())
-        .merge(manual_agents::supervisor_nests(&state))
+        .merge(manual_agents::supervisor_nests(&state, owner_app))
         .merge(source_retention::machine_routes(state.clone()))
         .merge(lifecycle_artifacts::routes(state.clone()))
         .merge(execution_permits::routes(state.clone()))
@@ -556,7 +562,7 @@ async fn run_with_listeners_and_dashboard(
             rx.clone(),
         ),
     };
-    let worker_app = build_worker_router(state);
+    let worker_app = build_worker_router_inner(state, None, Some(admin_app.clone()));
     let serving = tokio::try_join!(
         async {
             axum::serve(

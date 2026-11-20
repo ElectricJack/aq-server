@@ -26,6 +26,45 @@ fn pin(config: &ServiceConfig, name: &str, value: &Value) -> Result<ArtifactRef>
         digest,
     })
 }
+#[cfg(not(feature = "supervisor_full_access"))]
+fn instructions(config: &ServiceConfig, control: &Control) -> String {
+    let scope = if let Some(project) = control.project {
+        format!(
+            "You supervise only project {} ({project}). The server restricts your commands to that project. Do not attempt to read or change other projects.",
+            control.label
+        )
+    } else {
+        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers.".into()
+    };
+    format!(
+        "{scope}\nYou manage AQ work through authenticated tools. This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.\nUse /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{\"params\":{{\"project_id\":\"UUID\"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request; never invent success or replay a replacement.\nCreate draft tasks for proposals and QA, and active tasks only when the owner asks for execution. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion. Workers should report completion/blockers to supervisor conversation {} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.\nYour final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy, alter host services, credentials, pools or owner-only configuration. Respect configured human review gates.\n",
+        config.conversation_id
+    )
+}
+#[cfg(feature = "supervisor_full_access")]
+fn instructions(config: &ServiceConfig, control: &Control) -> String {
+    let scope = if let Some(project) = control.project {
+        format!(
+            "You supervise only project {} ({project}); you hold the owner's powers inside it. The server refuses other projects and global administration.",
+            control.label
+        )
+    } else {
+        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers.".into()
+    };
+    format!(
+        r#"{scope}
+You manage AQ work through authenticated tools and hold the owner's powers: every owner command is available to you.
+Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
+Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify with dashboard.swarm, session.list and attempt.show rather than assuming a worker started.
+This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
+Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
+Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
+Respect human review gates unless the owner has delegated that review to you.
+Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
+"#,
+        conversation = config.conversation_id
+    )
+}
 pub(super) fn assemble(
     config: &ServiceConfig,
     control: &Control,
@@ -47,18 +86,7 @@ pub(super) fn assemble(
             && ["low", "medium", "high"].contains(&effort),
         "installed central Codex settings are unavailable"
     );
-    let scope = if let Some(project) = control.project {
-        format!(
-            "You supervise only project {} ({project}). The server restricts your commands to that project. Do not attempt to read or change other projects.",
-            control.label
-        )
-    } else {
-        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers.".into()
-    };
-    let instructions = format!(
-        "{scope}\nYou manage AQ work through authenticated tools. This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.\nUse /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{\"params\":{{\"project_id\":\"UUID\"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request; never invent success or replay a replacement.\nCreate draft tasks for proposals and QA, and active tasks only when the owner asks for execution. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion. Workers should report completion/blockers to supervisor conversation {} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.\nYour final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy, alter host services, credentials, pools or owner-only configuration. Respect configured human review gates.\n",
-        config.conversation_id
-    );
+    let instructions = instructions(config, control);
     let agent = pin(
         config,
         "supervisor-agent",
@@ -324,6 +352,31 @@ mod tests {
         )
         .unwrap();
         candidate.host.digest().unwrap();
+        #[cfg(feature = "supervisor_full_access")]
+        {
+            let text = instructions(&config, &control);
+            for want in [
+                "Create tasks active unless the owner asks for a draft",
+                "every owner command is available to you",
+                "Do not merge, deploy or alter host services or credentials.",
+                "resend it to recheck an owner command",
+            ] {
+                assert!(text.contains(want), "{want}");
+            }
+            for gone in [
+                "Create draft tasks for proposals",
+                "owner-only configuration",
+            ] {
+                assert!(!text.contains(gone), "{gone}");
+            }
+            let scoped = Control {
+                project: Some(Uuid::new_v4()),
+                ..control.clone()
+            };
+            let text = instructions(&config, &scoped);
+            assert!(text.contains("you hold the owner's powers inside it"));
+            assert!(!text.contains("you may read and change any project"));
+        }
         assert_eq!(
             candidate.swarm_profile.as_ref().unwrap()["profile_id"],
             "engineering"

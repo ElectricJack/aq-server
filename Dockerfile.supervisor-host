@@ -12,13 +12,18 @@ RUN mkdir /pinned && tar -xzf vendor/aq-session-host-0.1.7-source.tar.gz -C /pin
     && diff -r /pinned/crates/aq-codex-mapper/src vendor/aq-codex-mapper-0.1.1/src \
     && diff -r /pinned/crates/aq-responses-transport/src vendor/aq-responses-transport-0.1.0/src
 ENV CARGO_BUILD_JOBS=2
+# Build with the server's feature set: the binary embeds its command registry.
+ARG AQ_DELIVERY_PLAYBOOK=false
+# Optional cargo features for aq-supervisor-host, e.g. supervisor_full_access.
+ARG CARGO_FEATURES=""
 # The target cache is shared by every build of this Dockerfile on the host
 # (other branches and worktrees). Touch the path-crate sources in the same
 # step as the build so cargo's mtime check never reuses another tree's build.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=aq-supervisor-host-release,sharing=locked,target=/build/target \
     find crates vendor protocol -type f -exec touch {} + \
-    && cargo build --locked --release -p aq-supervisor-host --bins \
+    && case "$AQ_DELIVERY_PLAYBOOK" in true) set -- --features delivery_playbook;; false) set --;; *) echo "AQ_DELIVERY_PLAYBOOK must be true or false" >&2; exit 1;; esac \
+    && cargo build --locked --release -p aq-supervisor-host --bins "$@" ${CARGO_FEATURES:+--features $CARGO_FEATURES} \
     && cargo build --locked --release --manifest-path vendor/aq-playbooks-c744301/Cargo.toml \
         --target-dir target/aq-playbooks -p aq-playbooks-cli --bin aq-playbooks \
     && mkdir /out && cp target/release/aq-supervisor-host target/release/aq-session-host \

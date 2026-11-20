@@ -32,12 +32,12 @@ fn retained(row: &sqlx::postgres::PgRow, principal: Uuid) -> Result<Operation, A
     }
     serde_json::from_value(row.try_get("response")?).map_err(|_| ApiError::unavailable())
 }
-pub(super) struct Lookup {
+pub(crate) struct Lookup {
     pub kind: String,
     pub scope: Scope,
     pub operation: Option<Operation>,
 }
-pub(super) async fn lookup_for_authorization(
+pub(crate) async fn lookup_for_authorization(
     pool: &PgPool,
     principal: Uuid,
     id: Uuid,
