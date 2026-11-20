@@ -68,5 +68,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
             response
         }
     });
-    axum::Router::new().route(&format!("{PREFIX}/{{*rest}}"), bridge)
+    // A literal path: the route review scans sources for `.route("…"`.
+    axum::Router::new().route("/v1/supervisor/owner/{*rest}", bridge)
 }
