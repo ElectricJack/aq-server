@@ -2,9 +2,7 @@
 //! the saved commit, and owner/service handoffs are not charged to the lineage
 //! budgets. Synthetic SQL owners and a synthetic central aq-git peer; no
 //! provider and no real Git export.
-#[cfg(not(feature = "delivery_playbook"))]
 use crate::profiled_results::auto_settlement56::{auto_env_source, evidence_rows, head_of};
-#[cfg(not(feature = "delivery_playbook"))]
 use crate::profiled_results::auto_settlement56::{git_peer, ready_candidate};
 use crate::{
     common::{self, profiled::NOW, source_exports::setup},
@@ -101,10 +99,7 @@ fn export_request(base: &str, handle: Uuid) -> source_exports::Request {
     .unwrap()
 }
 
-// The successor's base from the predecessor's bundle receipt: without
-// `delivery_playbook`. With it, the successor starts from the task branch
-// head, its grant's lease (spec 0016 §5.2).
-#[cfg(not(feature = "delivery_playbook"))]
+// The successor's base from a legacy predecessor's bundle receipt.
 #[tokio::test]
 async fn handoff_successor_starts_from_saved_commit() {
     let h = handed(Some("owner_stop")).await;
@@ -242,10 +237,7 @@ async fn plain_failure_successor_keeps_predecessor_export() {
     );
 }
 
-// The successor's base from the predecessor's bundle receipt: without
-// `delivery_playbook`. With it, the successor starts from the task branch
-// head, its grant's lease (spec 0016 §5.2).
-#[cfg(not(feature = "delivery_playbook"))]
+// The successor's base from a legacy predecessor's bundle receipt.
 #[tokio::test]
 async fn handoff_poll_retry_replays_candidate_and_single_comment() {
     let h = handed(Some("service_stop")).await;
@@ -483,7 +475,6 @@ async fn exempt_handoffs_are_capped_at_five_per_lineage() {
     panic!("the last owner stop leaves `max_attempts` charged attempts");
 }
 
-#[cfg(not(feature = "delivery_playbook"))]
 /// A Success report of a handoff successor that changed nothing itself: its
 /// retained checkpoint is its admitted base, the predecessor's saved commit
 /// (handoff candidate). The predecessor attempt, its handoff row and the
@@ -576,7 +567,6 @@ async fn quiet_successor(
 /// Review C-1: "no change" is judged against the lineage's original base. A
 /// successor that only verified its predecessor's saved edits is delivered:
 /// the candidate is built on the lineage base and published over it.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_quiet_handoff_successor_publishes_the_predecessors_edits() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -612,7 +602,6 @@ async fn a_quiet_handoff_successor_publishes_the_predecessors_edits() {
 
 /// No edits anywhere in the lineage (the predecessor's saved commit is the
 /// lineage base): the successor settles `no_change` and nothing is sent.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_lineage_without_edits_settles_no_change() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -631,7 +620,6 @@ async fn a_lineage_without_edits_settles_no_change() {
 
 /// Review R1-M4: two handoffs (C2 on C1 on B0) resolve to B0, so the quiet
 /// third attempt publishes over B0.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_two_hop_handoff_chain_publishes_over_the_first_base() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};
@@ -661,7 +649,6 @@ async fn a_two_hop_handoff_chain_publishes_over_the_first_base() {
 
 /// Review R1-M1: a lineage longer than the hop bound is held visibly, never
 /// settled against an intermediate commit.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn a_lineage_past_the_hop_bound_is_held() {
     use aq_server::profiled_execution::settlement::{AutoDisposition, publication};

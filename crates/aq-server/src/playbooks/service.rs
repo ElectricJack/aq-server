@@ -210,7 +210,7 @@ impl Service {
             .authority_with_extensions(id, revision, scope, |_| true)
     }
     pub(super) fn known_contract(&self, contract: &CommandContract) -> bool {
-        self.registry().commands.get(&contract.name) == Some(contract)
+        aq_playbook_host::accepts_command(self.registry(), contract)
             || extension_command(&contract.name, contract)
     }
     /// Replaces the delivery port of a freshly built host service (tests).

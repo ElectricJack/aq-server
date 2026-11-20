@@ -1,7 +1,6 @@
 //! Pure default completion policy (moved out of the aq-server lib). Every
 //! fact is server-owned evidence; the worker's report outcome or conclusion
-//! is never sufficient on its own. Epic 0 (spec 0016 section 7): compiled
-//! out with the cargo feature `delivery_playbook`.
+//! is never sufficient on its own.
 use serde::{Deserialize, Serialize};
 
 pub const KIND: &str = "aq.default-completion.v1";

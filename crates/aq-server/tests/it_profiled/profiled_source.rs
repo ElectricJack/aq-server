@@ -16,7 +16,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 // With `delivery_playbook` a named ref never reads `repo.observation` or the
 // configured handle (spec 0016 §4); the test below covers that path.
-#[cfg(not(feature = "delivery_playbook"))]
 #[tokio::test]
 async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_retention() {
     use aq_admission::Digest;
@@ -131,14 +130,20 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
             reader.get_mut().write_all(&reply).await.unwrap();
         }
     });
-    let observed = source::observe(&f.state, &frozen, &policy).await.unwrap();
+    let observed = source::observe(&f.state, &frozen, &policy, false)
+        .await
+        .unwrap();
     assert_eq!(observed.admission.observed_at_ms, NOW - 100);
     assert_eq!(observed.admission.expires_at_ms, NOW - 100 + 30000);
     assert_eq!(observed.artifact.digest, Digest::of(&observed.bytes));
     assert_eq!(observed.retention_handle, handle);
     assert_eq!(requests.lock().await.len(), 3);
     released.store(true, Ordering::SeqCst);
-    assert!(source::observe(&f.state, &frozen, &policy).await.is_err());
+    assert!(
+        source::observe(&f.state, &frozen, &policy, false)
+            .await
+            .is_err()
+    );
     task.abort();
 }
 
@@ -307,7 +312,9 @@ async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
     assert_eq!((first.head.as_str(), first.synced_at_ms), (a.as_str(), NOW));
 
     // An offer within the freshness window starts from that record.
-    let observed = source::observe(&f.state, &frozen, &policy).await.unwrap();
+    let observed = source::observe(&f.state, &frozen, &policy, true)
+        .await
+        .unwrap();
     assert_eq!(observed.admission.resolved_object.hex, a);
     assert_eq!(observed.retention_handle, first.retention_handle);
     assert_eq!(syncs(), 1, "a fresh record needs no inline sync");
@@ -328,7 +335,9 @@ async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
         .await
         .unwrap();
     f.time.store((NOW + 1500) as i64, Ordering::SeqCst);
-    let moved = source::observe(&f.state, &frozen, &policy).await.unwrap();
+    let moved = source::observe(&f.state, &frozen, &policy, true)
+        .await
+        .unwrap();
     assert_eq!(syncs(), 2, "a stale record syncs inline before offering");
     assert_eq!(moved.admission.resolved_object.hex, c);
     assert_eq!(moved.admission.observed_at_ms, NOW + 1500);
@@ -363,7 +372,9 @@ async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
     assert!(source::validate_body(&forged, project_id, NOW + 1500).is_err());
 
     // While fresh again, the next offer reuses the new record.
-    let again = source::observe(&f.state, &frozen, &policy).await.unwrap();
+    let again = source::observe(&f.state, &frozen, &policy, true)
+        .await
+        .unwrap();
     assert_eq!(syncs(), 2);
     assert_eq!(again.retention_handle, moved.retention_handle);
     peer.abort();

@@ -58,6 +58,11 @@ pub async fn setup_actual(
     selection::setup_actual(input).await
 }
 pub async fn setup() -> Case {
+    Box::pin(setup_projects(None)).await
+}
+
+/// Add one project with its own Graph workspace and task, sharing the fixture repository.
+pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Case {
     let mut env = selection::selection_fixture().await;
     let pool = env.env.pool.clone();
     // This lane intentionally installs the frozen guard explicitly. Ordered
@@ -86,6 +91,13 @@ pub async fn setup() -> Case {
     second["id"] = json!(second_task);
     second["title"] = json!("Second synthetic native task");
     second["metadata"] = json!({"aq:priority": -1});
+    let other = additional.as_ref().map(|lineage| {
+        let mut node = node.clone();
+        node["id"] = json!(lineage.task_id);
+        node["workspace_id"] = json!(lineage.workspace_id);
+        node["title"] = json!("Additional project's native task");
+        (format!("/v1/workspaces/{}/", lineage.workspace_id), node)
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let peer_mode = mode.clone();
@@ -110,12 +122,22 @@ pub async fn setup() -> Case {
     });
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
+        let other = other.clone();
         node["metadata"] = peer_metadata.lock().unwrap().clone();
         let second = second.clone();
         let mode = peer_mode.load(Ordering::SeqCst);
         let entered = peer_entered.clone();
         let resume = peer_resume.clone();
         async move {
+            if let Some((prefix, node)) = other.filter(|(prefix, _)| uri.path().starts_with(prefix)) {
+                let path = uri.path().strip_prefix(&prefix).unwrap();
+                let value = match path {
+                    "ready" | "nodes" => json!({"items":[node],"next_cursor":null}),
+                    path if path.ends_with("/context") => json!({"node":node,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false}),
+                    _ => node,
+                };
+                return ([("X-AQ-Graph-API-Version", "1")], axum::Json(value));
+            }
             if mode == 6 && uri.path().ends_with("/ready") {
                 // Exact external-observation boundary; normal fixtures never arm
                 // this mode. Permits prevent lost notifications in race tests.
@@ -255,6 +277,50 @@ pub async fn setup() -> Case {
         }
     }
     config.intelligence = Some(Arc::new(intelligence.load().unwrap()));
+    let mut projects = vec![ProjectPolicy {
+        project_id: env.lineage.project_id,
+        enabled: true,
+        priority: 0,
+        source: aq_admission::SourceSelection::Immutable {
+            object: aq_admission::ObjectId {
+                format: aq_admission::ObjectFormat::Sha1,
+                hex: "a".repeat(40),
+            },
+        },
+        retention_handle: handle,
+        placement: None,
+        agent_grants: None,
+    }];
+    if let Some(lineage) = additional {
+        projects[0].source = aq_admission::SourceSelection::NamedRef {
+            reference: aq_admission::Label::new("refs/heads/main").unwrap(),
+        };
+        let mut binding = env.env.body.clone();
+        binding["project_id"] = json!(lineage.project_id);
+        binding["graph_workspace_id"] = json!(lineage.workspace_id);
+        binding["name"] = json!("Additional native project");
+        let prior_scope = format!("project:{}", env.lineage.project_id);
+        let scope = format!("project:{}", lineage.project_id);
+        for permission in binding["ceilings"]["permissions"].as_array_mut().unwrap() {
+            if permission["scope_reference"] == prior_scope {
+                permission["scope_reference"] = json!(scope);
+            }
+        }
+
+        let (status, body) = selection::call(
+            &env.env.app,
+            &format!("/api/projects/{}", lineage.project_id),
+            Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"binding":binding})),
+            "owner@localhost",
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        projects.push(ProjectPolicy {
+            project_id: lineage.project_id,
+            priority: -1,
+            ..projects[0].clone()
+        });
+    }
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
@@ -267,20 +333,7 @@ pub async fn setup() -> Case {
                 version: 1,
             }),
         }],
-        projects: vec![ProjectPolicy {
-            project_id: env.lineage.project_id,
-            enabled: true,
-            priority: 0,
-            source: aq_admission::SourceSelection::Immutable {
-                object: aq_admission::ObjectId {
-                    format: aq_admission::ObjectFormat::Sha1,
-                    hex: "a".repeat(40),
-                },
-            },
-            retention_handle: handle,
-            placement: None,
-            agent_grants: None,
-        }],
+        projects,
         definition_bodies: definitions,
     }));
     env.env.state.config = Arc::new(config);
@@ -340,6 +393,8 @@ pub async fn setup() -> Case {
         let mut reader=BufReader::new(stream);let mut line=vec![];reader.read_until(b'\n',&mut line).await.unwrap();let r:Value=serde_json::from_slice(&line).unwrap();
         let result=match r["operation"].as_str().unwrap(){
             "repo.show"=>json!({"repository_id":repository,"binding_generation":1,"identity":"synthetic-native-repository","mode":"central","object_format":"sha1"}),
+            "repo.retain_ref"=>json!({"ref":r["params"]["ref"],"head":{"algorithm":"sha1","hex":"a".repeat(40)},"retention_handle":handle,"synced_at_ms":export_clock.load(Ordering::SeqCst)}),
+            "repo.observation"=>{let at=export_clock.load(Ordering::SeqCst);json!({"observation_id":Uuid::new_v4(),"started_at_ms":at-1,"completed_at_ms":at,"binding_generation":1,"covered_refs":["refs/heads/main"],"last_refresh_error":null,"refs":{"refs/heads/main":"a".repeat(40)}})},
             "inspect"=>{let hex=if r["params"]["oid"]["hex"]==HANDOFF_CANDIDATE{HANDOFF_CANDIDATE.to_owned()}else{"a".repeat(40)};json!({"oid":{"algorithm":"sha1","hex":hex},"tree":{"algorithm":"sha1","hex":"b".repeat(40)}})},
             "retention.inspect"=>{let id=r["params"]["handle_id"].as_str().unwrap();if id==handle.to_string(){json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":1,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/synthetic","oid":"a".repeat(40)}],"release_operation":null,"release_reason":null})}else if let Some((true,oid))=retained.lock().unwrap().get(id).cloned(){json!({"version":1,"id":id,"repository_id":repository,"binding_generation":1,"generation":1,"state":"active","refs":[{"name":format!("refs/aq-git/candidates/{id}/prefix/0"),"oid":oid}],"release_operation":null,"release_reason":null})}else{let oid=retained.lock().unwrap().get(id).map_or_else(||"a".repeat(40),|(_,oid)|oid.clone());json!({"version":1,"id":id,"repository_id":repository,"binding_generation":1,"generation":1,"resource":"transfer","refs":[{"name":format!("refs/aq-git/transfers/{id}"),"oid":oid}],"state":"active","dependencies":[],"release_operation":null,"release_reason":null})}},
             "artifact.export"=>{if export_mode.load(Ordering::SeqCst)==9 {export_clock.fetch_add(16000,Ordering::SeqCst);}let op=r["operation_id"].as_str().unwrap();retained.lock().unwrap().insert(op.to_owned(),(false,r["params"]["base"]["hex"].as_str().unwrap().to_owned()));let dir=root.join("artifacts").join(op);std::fs::create_dir_all(&dir).unwrap();let bundle=b"synthetic bytes, not a qualified Git bundle";let manifest=json!({"format_version":1,"repository_id":repository,"repository_identity":"synthetic-native-repository","binding_generation":1,"transfer_id":op,"object_format":"sha1","base":r["params"]["base"],"source":r["params"]["source"],"prerequisites":[],"bundle_size":bundle.len(),"bundle_sha256":Digest::of(bundle),"producer_installation_id":producer,"reference_only":false,"caller_correlation":r["params"]["caller_correlation"]});std::fs::write(dir.join("objects.bundle"),bundle).unwrap();std::fs::write(dir.join("manifest.json"),serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();json!({"artifact_handle":op,"retention_handle":op,"manifest":manifest})},

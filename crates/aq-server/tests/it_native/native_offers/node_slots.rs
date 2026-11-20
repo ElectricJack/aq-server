@@ -15,7 +15,7 @@ async fn auth(c: &Case) -> aq_server::worker_api::AuthenticatedNode {
         .await
         .unwrap()
 }
-async fn register(c: &Case, slots: u32, boot: Option<Uuid>) -> Register {
+pub(super) async fn register(c: &Case, slots: u32, boot: Option<Uuid>) -> Register {
     let raw: Value = sqlx::query_scalar(
         "SELECT state#>'{native,request}' FROM execution_nodes WHERE node_id=$1",
     )
@@ -60,7 +60,7 @@ async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
 /// runner) continues in the background, further polls of the slot return an empty
 /// page until it finishes, and a later poll redelivers the published offer. A
 /// fixed number of back-to-back polls therefore cannot wait for it.
-async fn offered(c: &Case, slot: u32) -> NativeOffer {
+pub(super) async fn offered(c: &Case, slot: u32) -> NativeOffer {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let mut offers = poll_slot(c, slot).await;

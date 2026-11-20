@@ -51,18 +51,21 @@ pub async fn setup_fixture(
         features: vec![Feature::DurableHostJournalV1, Feature::HostStopEvidenceV1],
     };
     let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: request.qualification.clone(),
-            capabilities: vec![],
-            features: registered.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
+    let profiled = config.profiled_execution.get_or_insert_with(|| {
+        Arc::new(ProfiledConfig {
+            definition_bodies: vec![],
+            revision: 1,
+            qualified_runtimes: vec![QualifiedRuntime {
+                runtime: request.runtime.clone(),
+                qualification: request.qualification.clone(),
+                capabilities: vec![],
+                features: registered.features.clone(),
+                material_delivery: None,
+            }],
+            projects: vec![],
+        })
+    });
+    let configuration_revision = profiled.revision;
     f.state.config = Arc::new(config);
     aq_server::profiled_execution::policies::install(&f.state)
         .await
@@ -72,7 +75,7 @@ pub async fn setup_fixture(
         semantic_digest: registration::semantic_digest(&registered).unwrap(),
         request: registered,
         qualification: request.qualification.clone(),
-        configuration_revision: 1,
+        configuration_revision,
         registered_at_ms: NOW,
     };
     let pool = f.db.pool().await;

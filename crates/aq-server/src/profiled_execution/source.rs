@@ -42,13 +42,14 @@ async fn read(
 }
 /// Initial source mode requires an exact retained SHA1 commit. Annotated tags,
 /// SHA256 and retention of an ancestor through a descendant handle refuse here.
-/// No implicit refresh/fetch, reference creation or retention mutation occurs.
+/// An enrolled named-ref offer refreshes its retained remote head as needed.
 pub async fn observe(
     state: &AppState,
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
+    enrolled: bool,
 ) -> Result<Observation, AppError> {
-    observe_source(state, project, policy, None, None).await
+    observe_source(state, project, policy, None, enrolled, None).await
 }
 
 pub(super) async fn observe_for_offer(
@@ -56,8 +57,9 @@ pub(super) async fn observe_for_offer(
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
     context: &TaskContext,
+    enrolled: bool,
 ) -> Result<Observation, AppError> {
-    observe_source(state, project, policy, None, Some(context)).await
+    observe_source(state, project, policy, None, enrolled, Some(context)).await
 }
 
 pub(super) async fn require_base(
@@ -142,7 +144,7 @@ pub async fn observe_retained(
         retention_handle: retained.operation_id,
         handoff: None,
     };
-    observe_source(state, project, policy, Some(fixed), None).await
+    observe_source(state, project, policy, Some(fixed), false, None).await
 }
 
 /// A handoff successor (spec 0007) observes the predecessor's saved commit,
@@ -160,7 +162,7 @@ pub async fn observe_handoff(
         retention_handle: base.retention_handle,
         handoff: Some(handoff),
     };
-    observe_source(state, project, policy, Some(fixed), None).await
+    observe_source(state, project, policy, Some(fixed), false, None).await
 }
 
 async fn observe_source(
@@ -168,6 +170,7 @@ async fn observe_source(
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
     fixed: Option<Fixed>,
+    enrolled: bool,
     _offer: Option<&TaskContext>,
 ) -> Result<Observation, AppError> {
     let _permit = aq_machine_control::limits::SOURCE_READS.enter();
@@ -210,7 +213,7 @@ async fn observe_source(
     );
     // The export transfer (or handoff candidate) is the retained byte owner.
     // The checkpoint handle originally used may have since been released.
-    let mut retention_handle = fixed
+    let retention_handle = fixed
         .as_ref()
         .map_or(policy.retention_handle, |f| f.retention_handle);
     if let Some(handoff) = fixed.as_ref().and_then(|f| f.handoff.clone()) {
@@ -219,8 +222,8 @@ async fn observe_source(
     // Spec 0016 §4: a named ref follows the head central aq-git last synced
     // from the remote and retained, synced now when older than Settings allow.
     #[cfg(feature = "delivery_playbook")]
-    let synced = match (&selection, &fixed) {
-        (SourceSelection::NamedRef { reference }, None) => {
+    let synced = match &selection {
+        SourceSelection::NamedRef { reference } if enrolled => {
             let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
             let (id, g) = (binding.repository_id, binding.repository_binding_generation);
             let scope =
@@ -253,22 +256,23 @@ async fn observe_source(
             if observed >= project.binding_observation.expires_at_ms {
                 return Err(refused());
             }
-            retention_handle = synced.retention_handle;
             let value = serde_json::to_value(&synced).map_err(|_| AppError::Internal)?;
             evidence.insert("main_sync", value);
-            Some(ObjectId {
-                format: ObjectFormat::Sha1,
-                hex: synced.head,
-            })
+            Some((
+                ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: synced.head,
+                },
+                synced.retention_handle,
+            ))
         }
         _ => None,
     };
     // D1: a named ref that AQ itself publishes follows the recorded source
     // head (the publication receipt is the evidence) and hydrates from the
     // candidate's central retention handle. Without one, a fresh observation.
-    #[cfg(not(feature = "delivery_playbook"))]
-    let head = match (&selection, &fixed) {
-        (SourceSelection::NamedRef { reference }, None) => {
+    let head = match &selection {
+        SourceSelection::NamedRef { reference } if !enrolled => {
             crate::profiled_execution::settlement::publication::current_head(
                 &state.store.pool,
                 binding.project_id,
@@ -281,13 +285,15 @@ async fn observe_source(
         }
         _ => None,
     };
+    let mut retention_handle = retention_handle;
     let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
         #[cfg(feature = "delivery_playbook")]
         SourceSelection::NamedRef { .. } if synced.is_some() => {
-            synced.clone().ok_or_else(|| refused())?
+            let (object, handle) = synced.ok_or_else(refused)?;
+            retention_handle = handle;
+            object
         }
-        #[cfg(not(feature = "delivery_playbook"))]
         SourceSelection::NamedRef { .. } if head.is_some() => {
             let head = head.as_ref().ok_or_else(|| refused())?;
             retention_handle = head.retention_handle;
@@ -407,14 +413,21 @@ async fn observe_source(
 /// Spec 0016 §4: the loop syncing each enabled project's followed named ref.
 #[cfg(feature = "delivery_playbook")]
 pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<bool>) {
-    let (Some(runtime), Some(config)) = (&state.source_retention, &state.config.profiled_execution)
-    else {
+    let (Some(runtime), Some(config), Some(delivery)) = (
+        &state.source_retention,
+        &state.config.profiled_execution,
+        &state.config.delivery,
+    ) else {
         return;
     };
+    // Task-limited enrollment only needs a sync when its selected task is offered.
+    if delivery.task_allowlist.is_some() {
+        return;
+    }
     let projects = config
         .projects
         .iter()
-        .filter(|p| p.enabled)
+        .filter(|p| p.enabled && delivery.project_allowlist.contains(&p.project_id))
         .filter_map(|p| match &p.source {
             SourceSelection::NamedRef { reference } => {
                 Some((p.project_id, reference.as_str().to_owned()))

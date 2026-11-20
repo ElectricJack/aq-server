@@ -301,6 +301,41 @@ fn frozen_commit<'a>(
         SourceSelection::NamedRef { .. } => Some(observed.admission.resolved_object.hex.as_str()),
     }
 }
+fn source_operation<T: serde::Serialize>(
+    project: Uuid,
+    task: &aq_admission::TaskRevision,
+    project_revision: u64,
+    generation: u64,
+    policy_ref: T,
+    frozen_commit: Option<&str>,
+    enrolled: bool,
+) -> Result<Uuid, AppError> {
+    // Keep historical bundle retries addressable. An enrolled offer uses
+    // its own namespace so it cannot recover a legacy pre-export reservation.
+    if !enrolled {
+        return aq_delivery::offer_source::export_operation(
+            project,
+            task,
+            project_revision,
+            generation,
+            policy_ref,
+            frozen_commit,
+        )
+        .map_err(|_| AppError::Internal);
+    }
+    let key = match frozen_commit {
+        None => canonical(&(project, task, project_revision, generation, policy_ref))?,
+        Some(commit) => canonical(&(
+            project,
+            task,
+            project_revision,
+            generation,
+            policy_ref,
+            commit,
+        ))?,
+    };
+    Ok(Uuid::new_v5(&Uuid::from_bytes(*b"aq-delivery-base"), &key))
+}
 async fn first_eligible_task<F, Fut>(
     ready: &crate::agent_access::scheduling::ReadyPage,
     skipped: &std::collections::BTreeSet<Uuid>,
@@ -620,6 +655,7 @@ async fn offers(
             skipped.insert(task.task_id);
             continue;
         };
+        let enrolled = super::super::delivery_enrolled(state, policy.project_id, task.task_id);
         let route = route.as_ref();
         let replacement = assessment.replacement().cloned();
         // R6: a successor's hold is recorded against the attempt count read before its refusal.
@@ -745,6 +781,7 @@ async fn offers(
                                 &compiled.frozen,
                                 &policy_record,
                                 &context,
+                                enrolled,
                             )
                         })
                         .await?
@@ -754,7 +791,7 @@ async fn offers(
                     Some(base) => Some(base.oid.as_str()),
                     None => frozen_commit(&policy.source, &observed),
                 };
-                let operation = aq_delivery::offer_source::export_operation(
+                let operation = source_operation(
                     policy.project_id,
                     &task,
                     record.revision,
@@ -763,8 +800,8 @@ async fn offers(
                         .project_policy_ref(policy.project_id)
                         .map_err(|_| refused())?,
                     frozen,
-                )
-                .map_err(|_| AppError::Internal)?;
+                    enrolled,
+                )?;
                 let reserved =
                     on_heap(|| reservation(state, &compiled, operation, task.task_id, observed));
                 Ok(match reserved.await? {
@@ -873,7 +910,13 @@ async fn offers(
                 .await?
             } else {
                 on_heap(|| {
-                    source::observe_for_offer(state, &compiled.frozen, &policy_record, &context)
+                    source::observe_for_offer(
+                        state,
+                        &compiled.frozen,
+                        &policy_record,
+                        &context,
+                        enrolled,
+                    )
                 })
                 .await?
             };
@@ -901,6 +944,7 @@ async fn offers(
                 source_operation,
                 logical_identity: &token.request().logical_identity,
                 generation,
+                enrolled,
             })
         })
         .await?;
@@ -1094,6 +1138,37 @@ mod tests {
         }
         assert_eq!(skipped.len(), MAX_SKIPPED);
     }
+    #[test]
+    fn named_ref_resolves_to_exact_commit_at_offer() {
+        let project = Uuid::from_u128(7);
+        let task = aq_admission::TaskRevision {
+            workspace_id: Uuid::from_u128(8),
+            task_id: Uuid::from_u128(9),
+            version: 1,
+            content_revision: 1,
+        };
+        let policy_ref = "policy";
+        let (a, b) = ("a".repeat(40), "b".repeat(40));
+        let scoped = |commit: Option<&str>, enrolled| {
+            source_operation(project, &task, 3, 1, policy_ref, commit, enrolled).unwrap()
+        };
+        let key = |commit| scoped(commit, false);
+        assert_ne!(scoped(Some(&a), true), key(Some(&a)));
+        // The commit resolved at offer time is part of the export identity:
+        // a moved ref is a new operation, never the old one following the ref.
+        assert_ne!(key(Some(&a)), key(Some(&b)));
+        assert_eq!(key(Some(&a)), key(Some(&a)));
+        assert_ne!(key(Some(&a)), key(None));
+        // Immutable policies keep their historical operation key.
+        assert_eq!(
+            key(None),
+            Uuid::new_v5(
+                &Uuid::from_bytes(*b"aq-native-export"),
+                &canonical(&(project, &task, 3_u64, 1_u64, policy_ref)).unwrap()
+            )
+        );
+    }
+
     #[tokio::test]
     async fn ready_selection_returns_empty_when_blocked_but_never_skips_owner_read_errors() {
         let ready = ready(2);

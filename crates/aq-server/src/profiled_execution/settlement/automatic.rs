@@ -1,15 +1,12 @@
 //! D3 automatic settlement: a policy actor evaluates each recorded result under
 //! the retained default completion policy. The AQ row is evidence, never task
 //! state; aq-graph owns completion and only its validated receipt confirms it.
-//! With `delivery_playbook` (spec 0016 section 7) the verdict half is compiled
-//! out: only a playbook's `work.complete` or `work.return` settles a result.
-#[cfg(not(feature = "delivery_playbook"))]
+//! Attempts with a Git grant are settled by the delivery playbook.
 use super::facts;
 use super::{completion, owner::*};
 use crate::{AppState, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
-#[cfg(not(feature = "delivery_playbook"))]
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -88,12 +85,10 @@ async fn lock_row(
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.
-#[cfg(not(feature = "delivery_playbook"))]
 fn outcome_acceptable(outcome: aq_admission::transport::ProcessOutcome) -> bool {
     matches!(outcome, aq_admission::transport::ProcessOutcome::Success)
 }
 /// The retained default-completion policy, or None (no rows are written).
-#[cfg(not(feature = "delivery_playbook"))]
 fn applicable(state: &AppState, r: &results::RecordedResult) -> Option<Delivery> {
     if r.outcome.review != aq_admission::outcome::ReviewRequirement::PolicyActor {
         return None;
@@ -108,13 +103,15 @@ fn applicable(state: &AppState, r: &results::RecordedResult) -> Option<Delivery>
 
 /// Runs after a result is durably recorded (new or duplicate POST) and on
 /// explicit replay. Idempotent per report; a confirmed or rework row is final.
-#[cfg(not(feature = "delivery_playbook"))]
 pub async fn settle_after_record(
     state: &AppState,
     report_id: Uuid,
 ) -> Result<Option<AutoSettlement>> {
     let mut tx = begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
+    if super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {
+        return Ok(None);
+    }
     let Some(delivery) = applicable(state, &r) else {
         return Ok(None);
     };
@@ -284,33 +281,34 @@ pub async fn record_replacement_facts(
         return Ok(facts);
     }
     let mut changed = false;
-    // Spec 0016 §5.1: the task ref at the reported head is the retention.
-    #[cfg(feature = "delivery_playbook")]
-    if !matches!(hot.retention, Retention::Retained { .. })
-        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
-            .await
-            .map_err(db)?
-    {
-        let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
-        hot.retention = Retention::Retained { receipt: reference };
-        changed = true;
-    }
-    #[cfg(not(feature = "delivery_playbook"))]
     if !matches!(hot.retention, Retention::Retained { .. }) {
-        for op in &r.report.source_receipt_ids {
-            match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {
-                Ok(confirmed) => {
-                    hot.retention = Retention::Retained {
-                        receipt: reference(
-                            format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
-                            &confirmed.acknowledgement,
-                        )?,
-                    };
-                    changed = true;
-                    break;
+        let enrolled = super::super::has_delivery_grant(&mut *tx, attempt).await?;
+        #[cfg(feature = "delivery_playbook")]
+        if enrolled
+            && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
+                .await
+                .map_err(db)?
+        {
+            let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
+            hot.retention = Retention::Retained { receipt: reference };
+            changed = true;
+        }
+        if !enrolled {
+            for op in &r.report.source_receipt_ids {
+                match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {
+                    Ok(confirmed) => {
+                        hot.retention = Retention::Retained {
+                            receipt: reference(
+                                format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
+                                &confirmed.acknowledgement,
+                            )?,
+                        };
+                        changed = true;
+                        break;
+                    }
+                    Err(crate::error::AppError::Conflict(_)) => {}
+                    Err(e) => return Err(e),
                 }
-                Err(crate::error::AppError::Conflict(_)) => {}
-                Err(e) => return Err(e),
             }
         }
     }
@@ -368,14 +366,13 @@ pub async fn reworked_without_facts(
 
 /// Judges the server-owned facts ([`facts::gather_locked`]) under the
 /// report/attempt locks with the default policy's gate.
-#[cfg(not(feature = "delivery_playbook"))]
 async fn evaluate_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     r: &results::RecordedResult,
     delivery: Delivery,
 ) -> Result<(Verdict, Value)> {
-    let g = facts::gather_locked(state, tx, r).await?;
+    let g = facts::gather_locked(state, tx, r, false).await?;
     let v = &g.view;
     let acceptance = if !r.is_current_report_head
         || !outcome_acceptable(r.report.outcome)
@@ -527,6 +524,9 @@ async fn playbook_locked<'a>(
     use crate::execution::authority::{self, hot::HotState};
     let mut tx = begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
+    if !super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {
+        return Err(conflict());
+    }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
         .bind(format!("aq-auto-settlement:{report_id}"))
         .execute(&mut *tx)
@@ -633,7 +633,7 @@ pub async fn return_by_playbook(
     Ok(Settled::Returned)
 }
 
-#[cfg(all(test, not(feature = "delivery_playbook")))]
+#[cfg(test)]
 mod outcome_tests {
     use aq_admission::transport::ProcessOutcome;
     #[test]

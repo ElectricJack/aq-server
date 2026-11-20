@@ -301,6 +301,13 @@ async fn begin(
     if let Some(old) = replay(&mut tx, n.id(), r.operation_id, &payload).await? {
         return Ok(Json(old));
     }
+    if crate::profiled_execution::has_delivery_grant(&mut *tx, r.manifest.attempt.attempt_id)
+        .await?
+    {
+        return Err(AppError::Forbidden(
+            "attempt retains source through its Git grant".into(),
+        ));
+    }
     // Historical retries retain their response, but a released attempt cannot
     // acquire a new source-transfer intent or task claim.
     if a.retention_released {

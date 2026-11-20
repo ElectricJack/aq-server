@@ -75,7 +75,28 @@ async fn prepare_with_policy_checks(
     policy_actor: Option<aq_server::profiled_execution::definitions::Definition>,
     keep_checks: bool,
 ) -> (Fixture, aq_admission::started::Request, ResultReport) {
-    let mut f = fixture().await;
+    let f = fixture().await;
+    Box::pin(prepare_on(
+        f,
+        pin,
+        stop_now,
+        graph_profile,
+        pilot,
+        policy_actor,
+        keep_checks,
+    ))
+    .await
+}
+
+async fn prepare_on(
+    mut f: Fixture,
+    pin: bool,
+    stop_now: bool,
+    graph_profile: Option<serde_json::Value>,
+    pilot: bool,
+    policy_actor: Option<aq_server::profiled_execution::definitions::Definition>,
+    keep_checks: bool,
+) -> (Fixture, aq_admission::started::Request, ResultReport) {
     // Optional synthetic ledger-fixture profile is pinned BEFORE the launch is
     // sealed. The original prepare wrapper preserves every prior fixture byte.
     if let Some(profile) = graph_profile {
@@ -208,18 +229,28 @@ async fn prepare_with_policy_checks(
     if pilot || policy_actor.is_some() {
         let mut config = (*f.state.config).clone();
         let mut p = (**config.profiled_execution.as_ref().unwrap()).clone();
-        p.revision += 1;
-        p.definition_bodies.extend(
-            pilot
-                .then(settlement_owner39::policy)
-                .into_iter()
-                .chain(policy_actor.clone()),
-        );
-        config.profiled_execution = Some(Arc::new(p));
-        f.state.config = Arc::new(config);
-        aq_server::profiled_execution::policies::install(&f.state)
-            .await
-            .unwrap();
+        let count = p.definition_bodies.len();
+        for definition in pilot
+            .then(settlement_owner39::policy)
+            .into_iter()
+            .chain(policy_actor)
+        {
+            if !p
+                .definition_bodies
+                .iter()
+                .any(|d| d.artifact() == definition.artifact())
+            {
+                p.definition_bodies.push(definition);
+            }
+        }
+        if p.definition_bodies.len() != count {
+            p.revision += 1;
+            config.profiled_execution = Some(Arc::new(p));
+            f.state.config = Arc::new(config);
+            aq_server::profiled_execution::policies::install(&f.state)
+                .await
+                .unwrap();
+        }
     }
     let pool = f.db.pool().await;
     let installed: bool =
