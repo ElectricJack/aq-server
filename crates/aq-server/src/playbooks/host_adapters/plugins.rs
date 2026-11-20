@@ -113,7 +113,17 @@ impl Service {
         if invalid {
             self.queue_plugin_notice(&mut tx, name).await?;
         }
-        self.commit_fresh(tx, grant, intent).await?;
+        self.commit_fresh(tx, grant, intent)
+            .await
+            .map_err(|error| {
+                // A child may already have applied the effect if the deadline or
+                // grant expired during the call, even when AQ refused the commit.
+                if error == Error::Forbidden {
+                    Error::Unknown
+                } else {
+                    error
+                }
+            })?;
         Ok(result)
     }
 

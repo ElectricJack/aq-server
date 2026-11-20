@@ -156,7 +156,7 @@ fn contained(root: &Path, relative: &Path) -> Option<PathBuf> {
 }
 
 fn private_file(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o777 == 0o600)
+    fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o7777 == 0o600)
 }
 
 impl Plugin {
@@ -165,13 +165,13 @@ impl Plugin {
         package: &Path,
         state_root: &Path,
         vault: &Path,
-    ) -> Result<(Self, String), &'static str> {
+    ) -> Result<(Self, String), String> {
         let manifest: Manifest = fs::read_to_string(package.join("plugin.toml"))
             .ok()
             .and_then(|text| toml::from_str(&text).ok())
             .ok_or("invalid plugin.toml")?;
         if manifest.name != name || manifest.version.is_empty() || manifest.protocol != PROTOCOL {
-            return Err("invalid plugin identity or protocol");
+            return Err("invalid plugin identity or protocol".into());
         }
         let file = |relative: &Path| contained(package, relative).filter(|p| p.is_file());
         let exe = file(&manifest.exe)
@@ -186,7 +186,16 @@ impl Plugin {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .ok_or("invalid plugin notes")?;
         let extension =
-            CatalogExtension::new(name, registry, notes).map_err(|_| "invalid plugin contracts")?;
+            CatalogExtension::new(name, registry, notes).map_err(|error| error.to_string())?;
+        let refusal_bytes = r#"{"reason":"invalid_plugin_response"}"#.len();
+        if extension
+            .registry()
+            .commands
+            .values()
+            .any(|c| c.max_payload_bytes < refusal_bytes)
+        {
+            return Err("plugin command payload budget cannot encode a host refusal".into());
+        }
         let vault = vault
             .canonicalize()
             .map_err(|_| "plugin vault unavailable")?;
@@ -196,7 +205,7 @@ impl Plugin {
                 .filter(|p| private_file(p))
                 .ok_or("plugin secret unavailable or mode differs from 0600")?;
             if secrets.insert(relative, path).is_some() {
-                return Err("duplicate plugin secret");
+                return Err("duplicate plugin secret".into());
             }
         }
         if manifest.bindings.as_ref().is_some_and(|path| {
@@ -205,7 +214,7 @@ impl Plugin {
                     .components()
                     .all(|part| matches!(part, Component::Normal(_)))
         }) {
-            return Err("invalid plugin bindings path");
+            return Err("invalid plugin bindings path".into());
         }
         let bindings = manifest.bindings;
         let state_dir = state_root.join(name);
