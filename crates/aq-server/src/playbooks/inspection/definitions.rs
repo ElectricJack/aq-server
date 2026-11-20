@@ -34,12 +34,7 @@ impl Driver {
         actor: Uuid,
         query: DefinitionsQuery,
     ) -> Result<DefinitionsPage> {
-        if query
-            .project_id
-            .is_some_and(|id| id != self.service.namespace.project_id)
-        {
-            return Err(Error::Forbidden);
-        }
+        query.validate(&self.service.namespace)?;
         self.service.authorize_inspection(actor).await?;
         let snapshot = self.loaded_definitions.get().ok_or(Error::Unknown)?;
         let page = snapshot.page(&self.service.namespace, self.service.current_time());

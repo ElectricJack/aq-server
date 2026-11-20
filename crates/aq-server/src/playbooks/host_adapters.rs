@@ -432,7 +432,7 @@ impl Service {
         self.seal_outbox(tx, event_id, &event, at, None).await
     }
 
-    async fn seal_outbox(
+    pub(super) async fn seal_outbox(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         row_id: Uuid,

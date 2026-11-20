@@ -2,14 +2,10 @@
 //! playbooks-inspection-1: definition name and version, pinned-versus-active
 //! comparison, the ordered public step graph and the pending human decision.
 //! Read-only: no activation, install or decision authority.
-use super::{NamespaceView, RunView, bounded, catalog};
+use super::{RunView, bounded, catalog};
 use crate::{
     authz::RequireOwner,
-    playbooks::{
-        domain::{Error, Result},
-        driver::Driver,
-        service::Service,
-    },
+    playbooks::{domain::Result, driver::Driver, service::Service},
 };
 use aq_playbook_domain::view_store::ViewStore;
 use aq_playbook_host::{model::Artifact, runner};
@@ -17,7 +13,6 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
 };
-use serde::Serialize;
 use std::{sync::Arc, time::Duration};
 
 const ACTIVATION_PAGES: usize = 4;
@@ -28,16 +23,6 @@ const ACTIVATION_PAGE_BUDGET: Duration = Duration::from_secs(2);
 
 pub use aq_playbook_domain::playbook_view::*;
 
-#[derive(Serialize)]
-pub(super) struct DefinitionGraph {
-    api_version: &'static str,
-    namespace: NamespaceView,
-    artifact: String,
-    graph: Option<Graph>,
-    #[serde(flatten)]
-    details: DefinitionDetails,
-}
-
 /// Reads the same public projection as run inspection, keyed by the immutable
 /// artifact so it also works before a run exists and for historical run pins.
 pub(super) async fn definition_graph(
@@ -47,12 +32,7 @@ pub(super) async fn definition_graph(
     Query(query): Query<super::definitions::DefinitionsQuery>,
 ) -> Result<Json<DefinitionGraph>> {
     let service = &driver.service;
-    if query
-        .project_id
-        .is_some_and(|id| id != service.namespace.project_id)
-    {
-        return Err(Error::Forbidden);
-    }
+    query.validate(&service.namespace)?;
     validate_artifact_id(&artifact)?;
     service.authorize_inspection(actor.id).await?;
     let mut tx = service.tx().await?;
@@ -66,13 +46,12 @@ pub(super) async fn definition_graph(
     let graph = registered.flatten();
     let details = DefinitionDetails::new(graph.as_ref(), authored.as_ref(), description_markdown);
     service.authorize_inspection(actor.id).await?;
-    bounded(DefinitionGraph {
-        api_version: "playbooks-definition-graph-1",
-        namespace: (&service.namespace).into(),
+    bounded(DefinitionGraph::new(
+        &service.namespace,
         artifact,
         graph,
         details,
-    })
+    ))
 }
 
 impl Service {

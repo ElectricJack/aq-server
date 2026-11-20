@@ -89,6 +89,15 @@ pub struct DefinitionsQuery {
     pub project_id: Option<Uuid>,
 }
 
+impl DefinitionsQuery {
+    pub fn validate(&self, namespace: &Namespace) -> Result<()> {
+        if self.project_id.is_some_and(|id| id != namespace.project_id) {
+            return Err(Error::Forbidden);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoadedNamespace {

@@ -7,4 +7,4 @@ ALTER TABLE dashboard_operations ADD CONSTRAINT dashboard_operation_principal CH
  OR (owner_id IS NULL AND supervisor_session_id IS NULL
      AND kind IN ('task.create','task.graph.create','task.edit','task.cancel','task.dependency.add','task.dependency.remove'))
 );
-UPDATE meta SET value='161' WHERE key='state_format_version';
+UPDATE meta SET value='160' WHERE key='state_format_version';

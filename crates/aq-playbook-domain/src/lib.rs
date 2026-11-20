@@ -18,6 +18,7 @@ pub mod loaded_definitions;
 pub mod playbook_view;
 pub mod plugin_effects;
 pub mod review_domain;
+pub mod route_store;
 mod step_inspection;
 pub mod view_store;
 pub mod work_mutations;

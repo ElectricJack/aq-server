@@ -1,5 +1,6 @@
 //! Public predicates and projections for the playbook inspector.
 use crate::{Error, Namespace, Result, playbook_view};
+use aq_playbook_host::runner::InspectionPage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,6 +16,14 @@ pub struct PageQuery {
     pub project_id: Option<Uuid>,
 }
 impl PageQuery {
+    pub fn first(&self, limit: usize) -> Self {
+        Self {
+            limit: Some(limit),
+            project_id: self.project_id,
+            after: None,
+        }
+    }
+
     pub fn validate(&self, namespace: &Namespace) -> Result<usize> {
         let limit = self.limit.unwrap_or(25);
         if limit == 0
@@ -261,6 +270,34 @@ pub fn receipt(v: Value) -> Result<ReceiptView> {
         child: optional(&v["detail"], "child")?,
     })
 }
+pub const VERSION: &str = "playbooks-inspection-1";
+
+pub fn project_page<T>(
+    namespace: &Namespace,
+    raw: Value,
+    limit: usize,
+    now: i64,
+    project: impl Fn(Value) -> Result<T>,
+) -> Result<Page<T>> {
+    let raw: InspectionPage = serde_json::from_value(raw).map_err(|_| Error::Unknown)?;
+    if raw.items.len() > limit {
+        return Err(Error::Unknown);
+    }
+    let items = raw
+        .items
+        .into_iter()
+        .map(project)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Page {
+        api_version: VERSION,
+        namespace: NamespaceView::from(namespace),
+        server_time_ms: now,
+        revision: Some(raw.revision.to_string()),
+        items,
+        next_cursor: raw.next,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

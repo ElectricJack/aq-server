@@ -7,7 +7,7 @@ use super::{
 use crate::{AppState, authz::RequireOwner};
 use aq_playbook_host::{
     Request,
-    runner::{InspectionKind, InspectionPage, InspectionQuery},
+    runner::{InspectionKind, InspectionQuery},
 };
 use axum::{
     Extension, Json, Router,
@@ -24,16 +24,15 @@ pub mod catalog;
 pub mod definitions;
 pub mod playbook_view;
 
-pub const VERSION: &str = "playbooks-inspection-1";
 const MAX_BYTES: usize = catalog::MAX_BYTES;
 /// Engine pages examined by one ranged runs request; a sparse range returns a
 /// short page whose `next_cursor` resumes the scan.
 const RANGE_SCAN_PAGES: usize = 8;
 pub use aq_playbook_domain::inspection::{
     AdmissionView, EffectView, NamespaceView, Page, PageQuery, ReceiptView, RunDetail, RunView,
-    RunsQuery,
+    RunsQuery, VERSION,
 };
-use aq_playbook_domain::inspection::{effect, receipt, run};
+use aq_playbook_domain::inspection::{effect, project_page, receipt, run};
 fn bounded<T: Serialize>(v: T) -> Result<Json<T>> {
     if serde_json::to_vec(&v).map_err(|_| Error::Unknown)?.len() > MAX_BYTES {
         return Err(Error::Overloaded);
@@ -66,24 +65,15 @@ impl Driver {
             )
             .await
             .map_err(|_| Error::Unknown)?;
-        let raw: InspectionPage = serde_json::from_value(raw).map_err(|_| Error::Unknown)?;
-        if raw.items.len() > limit {
-            return Err(Error::Unknown);
-        }
-        let items = raw
-            .items
-            .into_iter()
-            .map(project)
-            .collect::<Result<Vec<_>>>()?;
+        let page = project_page(
+            &self.service.namespace,
+            raw,
+            limit,
+            self.service.current_time(),
+            project,
+        )?;
         self.service.authorize_inspection(actor).await?;
-        Ok(Page {
-            api_version: VERSION,
-            namespace: NamespaceView::from(&self.service.namespace),
-            server_time_ms: self.service.current_time(),
-            revision: Some(raw.revision.to_string()),
-            items,
-            next_cursor: raw.next,
-        })
+        Ok(page)
     }
     pub async fn inspect_runs(&self, actor: Uuid, query: RunsQuery) -> Result<Page<RunView>> {
         query.validate()?;
@@ -170,11 +160,7 @@ impl Driver {
                 actor,
                 InspectionKind::Runs,
                 Some(id.clone()),
-                PageQuery {
-                    after: None,
-                    limit: Some(1),
-                    project_id: query.project_id,
-                },
+                query.first(1),
                 run,
             )
             .await?;
@@ -187,11 +173,7 @@ impl Driver {
                 actor,
                 InspectionKind::Effects,
                 Some(id.clone()),
-                PageQuery {
-                    after: None,
-                    limit: Some(25),
-                    project_id: query.project_id,
-                },
+                query.first(25),
                 effect,
             )
             .await?;

@@ -426,6 +426,33 @@ pub fn definition_view<'a>(
     }
 }
 
+#[derive(Serialize)]
+pub struct DefinitionGraph {
+    api_version: &'static str,
+    namespace: crate::inspection::NamespaceView,
+    artifact: String,
+    graph: Option<Graph>,
+    #[serde(flatten)]
+    details: DefinitionDetails,
+}
+
+impl DefinitionGraph {
+    pub fn new(
+        namespace: &Namespace,
+        artifact: String,
+        graph: Option<Graph>,
+        details: DefinitionDetails,
+    ) -> Self {
+        Self {
+            api_version: "playbooks-definition-graph-1",
+            namespace: namespace.into(),
+            artifact,
+            graph,
+            details,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
