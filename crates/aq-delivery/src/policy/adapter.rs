@@ -130,8 +130,8 @@ pub trait GitHubAdapter: Send + Sync {
     ) -> GitHubResult<PullRequest>;
     /// One read of the PR: its state and head. Safe to poll.
     async fn pull_request(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest>;
-    /// Check runs and commit statuses on the PR head, against `required`
-    /// when given, else against the base branch's protection and rulesets.
+    /// Check the PR head against base branch protection, rulesets, and any
+    /// additional names supplied by the project.
     async fn checks(
         &self,
         repo: &GitHubRepository,
@@ -140,13 +140,14 @@ pub trait GitHubAdapter: Send + Sync {
     ) -> GitHubResult<Checks>;
     /// One read of the PR; safe to poll.
     async fn mergeability(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<Mergeability>;
-    /// Merges only if the head is still `expected_head_sha`.
+    /// Check the base branch and submit the merge with the expected head SHA.
     async fn merge(
         &self,
         repo: &GitHubRepository,
         pr: u64,
         method: MergeMethod,
         expected_head_sha: &str,
+        expected_base: &str,
     ) -> GitHubResult<MergeOutcome>;
     async fn close(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest>;
     async fn delete_branch(
@@ -188,6 +189,7 @@ impl GitHubAdapter for UnconfiguredGitHub {
         _: &GitHubRepository,
         _: u64,
         _: MergeMethod,
+        _: &str,
         _: &str,
     ) -> GitHubResult<MergeOutcome> {
         Err(GitHubApiError::Unconfigured)

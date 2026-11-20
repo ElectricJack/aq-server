@@ -14,7 +14,7 @@
 //! the operation bookkeeping and decides nothing about a result.
 use super::*;
 use aq_delivery::commands::{self as delivery, Accepting, Delivery, DeliveryTarget, GitTarget};
-use aq_playbook_domain::review_domain::DELIVERY_COMMANDS;
+use aq_playbook_domain::{delivery_store::Latest, review_domain::DELIVERY_COMMANDS};
 
 /// What the delivery commands need of the server besides the graph.
 #[async_trait::async_trait]
@@ -37,8 +37,10 @@ pub struct ServerDelivery {
 }
 impl ServerDelivery {
     pub fn new(state: crate::AppState) -> Self {
-        let commands = tokio::sync::OnceCell::new();
-        Self { state, commands }
+        Self {
+            state,
+            commands: Default::default(),
+        }
     }
 }
 #[async_trait::async_trait]
@@ -88,14 +90,14 @@ fn delivery_error(error: aq_delivery::DeliveryError) -> Error {
 }
 
 impl Service {
-    /// The task or project a command names, `(subject, project, workspace,
-    /// task, head)`, or the catalog's refusal reason. A task of another
-    /// project is served only with `installation_routing`.
+    /// The command's scope and latest task result, or the catalog refusal.
+    /// Tasks of other projects require `installation_routing`.
     async fn delivery_scope(
         &self,
         name: &str,
         input: &Value,
-    ) -> Result<std::result::Result<(String, Uuid, Uuid, Option<Uuid>, String), &'static str>> {
+    ) -> Result<std::result::Result<(String, Uuid, Uuid, Option<(Uuid, Latest)>), &'static str>>
+    {
         let own = (self.namespace.workspace_id, self.namespace.project_id);
         if name == "main.sync" {
             let Ok(project) = Uuid::parse_str(text(input, "project")?) else {
@@ -106,13 +108,7 @@ impl Service {
             {
                 return Ok(Err("unknown_project"));
             }
-            return Ok(Ok((
-                project.to_string(),
-                project,
-                own.0,
-                None,
-                String::new(),
-            )));
+            return Ok(Ok((project.to_string(), project, own.0, None)));
         }
         let Ok(task) = Uuid::parse_str(text(input, "task")?) else {
             return Ok(Err("unknown_task"));
@@ -122,8 +118,7 @@ impl Service {
                 task.to_string(),
                 l.project_id,
                 l.workspace_id,
-                Some(task),
-                l.head,
+                Some((task, l)),
             )),
             _ => Err("unknown_task"),
         })
@@ -147,11 +142,8 @@ impl Service {
             Stage::Fresh => {}
         }
         let (name, input) = (intent.command.name.as_str(), &intent.input);
-        let refused = |reason: &str| HostResult {
-            outcome: "refused".into(),
-            output: json!({"reason": reason}),
-        };
-        let (subject_id, project, workspace, task, head) =
+        let refused = |reason: &str| host_result("refused", json!({"reason": reason}));
+        let (subject_id, project, workspace, result) =
             match self.delivery_scope(name, input).await? {
                 Ok(scope) => scope,
                 // `.await_checks` and `.close` have no refusal in the catalog:
@@ -160,7 +152,7 @@ impl Service {
                 Err(_) if matches!(name, "pull_request.await_checks" | "pull_request.close") => {
                     let ns = &self.namespace;
                     let task = text(input, "task")?.to_owned();
-                    (task, ns.project_id, ns.workspace_id, None, String::new())
+                    (task, ns.project_id, ns.workspace_id, None)
                 }
                 Err(reason) => {
                     let result = refused(reason);
@@ -169,6 +161,10 @@ impl Service {
                         .await;
                 }
             };
+        let (task, latest) = result
+            .as_ref()
+            .map(|(task, latest)| (*task, latest))
+            .unzip();
         let text = match (name, task) {
             ("pull_request.open", Some(task)) => Some(
                 self.ports()?
@@ -178,24 +174,28 @@ impl Service {
             ),
             _ => None,
         };
-        let longest_check_wait_ms = match name {
-            "pull_request.await_checks" => Some(
-                aq_role_settings::delivery_limits(&self.pool)
-                    .await
-                    .map_err(|_| Error::Unknown)?
-                    .0
-                    .longest_check_wait_ms,
-            ),
-            _ => None,
+        let longest_check_wait_ms = if name == "pull_request.await_checks" {
+            let (limits, _) = aq_role_settings::delivery_limits(&self.pool)
+                .await
+                .map_err(|_| Error::Unknown)?;
+            Some(limits.longest_check_wait_ms)
+        } else {
+            None
         };
         let accepting = Accepting {
             command: name,
             project,
             task,
-            head: &head,
+            head: latest.map_or("", |record| record.head.as_str()),
             subject: subject(&subject_id, 0),
             text,
             longest_check_wait_ms,
+            merge_target: if name == "pull_request.merge" {
+                self.ports()?.delivery_ops.target(project).await?
+            } else {
+                None
+            },
+            result_ids: latest.map(|record| (record.attempt_id, record.result_id)),
         };
         let request = match delivery::frozen_request(&self.pool, accepting, input, self.now()?)
             .await
@@ -210,10 +210,7 @@ impl Service {
             }
         };
         let operation = self.operation(intent)?;
-        let accepted = HostResult {
-            outcome: "accepted".into(),
-            output: json!({"handle": operation.to_string()}),
-        };
+        let accepted = host_result("accepted", json!({"handle": operation.to_string()}));
         let (outcome, output) = (&accepted.outcome, &accepted.output);
         self.record(&mut tx, id, revision, intent, &identity, outcome, output)
             .await?;
@@ -306,10 +303,7 @@ impl Service {
         let Some(completion) = step.await.map_err(delivery_error)? else {
             return Ok(false);
         };
-        let result = HostResult {
-            outcome: completion.outcome.into(),
-            output: completion.output,
-        };
+        let result = host_result(completion.outcome, completion.output);
         self.complete_operation(operation, &op.command, &op.intent_id, result)
             .await?;
         Ok(true)

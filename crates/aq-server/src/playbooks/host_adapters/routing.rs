@@ -73,13 +73,6 @@ impl RoutingPort for ServerRouting {
     }
 }
 
-fn result(outcome: &str, output: Value) -> HostResult {
-    HostResult {
-        outcome: outcome.into(),
-        output,
-    }
-}
-
 impl Service {
     pub(super) async fn work_routing(
         &self,
@@ -143,7 +136,7 @@ impl Service {
             .ok_or(Error::Invalid)?;
         let (task, (workspace, project), node) = match self.routed_task(&input["subject"]).await? {
             Ok(found) => found,
-            Err(reason) => return Ok(result("refused", host9::refusal(id, asked, reason))),
+            Err(reason) => return Ok(host_result("refused", host9::refusal(id, asked, reason))),
         };
         let routing = &self.ports()?.routing;
         let version = node_version(&node)?;
@@ -151,21 +144,21 @@ impl Service {
             let (charged, ended) = routing.attempts(task).await?;
             let ours = self.namespace_work(tx, task).await?;
             let facts = WorkFacts::of(&node, ours, charged, ended);
-            return Ok(result(
+            return Ok(host_result(
                 "observed",
                 host9::read_output(task, version, &facts),
             ));
         }
         let reasons = &input["reasons"];
         let stored = host9::route_source(&node["metadata"]);
-        let refused = |reason| Ok(result("refused", host9::refusal(id, version, reason)));
+        let refused = |reason| Ok(host_result("refused", host9::refusal(id, version, reason)));
         if name == "work.unroutable" && reasons.as_array().is_none_or(Vec::is_empty) {
             return refused("no_reasons");
         }
         if stored == Some(Source::Owner) {
             return refused("owner_route");
         }
-        let stale = || Ok(result("stale", host9::task_output(id, version)));
+        let stale = || Ok(host_result("stale", host9::task_output(id, version)));
         if asked != version {
             return stale();
         }
@@ -182,7 +175,7 @@ impl Service {
             }
             self.route_settled(tx, (task, project), left, "unroutable", input, None)
                 .await?;
-            return Ok(result("recorded", host9::task_output(id, left)));
+            return Ok(host_result("recorded", host9::task_output(id, left)));
         }
         let options = routing.options().await?;
         let (artifact_digest, source_revision) = self.deciding_artifact(tx, task).await?;
@@ -212,7 +205,10 @@ impl Service {
             .bind(task)
             .execute(&mut **tx)
             .await?;
-        Ok(result("routed", host9::routed_output(id, version, &route)))
+        Ok(host_result(
+            "routed",
+            host9::routed_output(id, version, &route),
+        ))
     }
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
@@ -228,7 +224,7 @@ impl Service {
         let asked = input["subject"]["revision"]
             .as_i64()
             .ok_or(Error::Invalid)?;
-        let refused = |reason| Ok(result("refused", host9::refusal(id, asked, reason)));
+        let refused = |reason| Ok(host_result("refused", host9::refusal(id, asked, reason)));
         let Ok(task) = Uuid::parse_str(id) else {
             return refused("unknown_task");
         };
@@ -245,7 +241,7 @@ impl Service {
         let (charged, ended) = ports.routing.attempts(task).await?;
         let facts = (self.namespace_work(tx, task).await?, charged, ended);
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
-        Ok(result("observed", output))
+        Ok(host_result("observed", output))
     }
 
     /// The artifact the engine has active on the routing binding (what the

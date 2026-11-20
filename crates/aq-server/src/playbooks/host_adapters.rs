@@ -23,6 +23,13 @@ use sqlx::{PgConnection, PgExecutor, Postgres, Row, Transaction};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+fn host_result(outcome: &str, output: Value) -> HostResult {
+    HostResult {
+        outcome: outcome.into(),
+        output,
+    }
+}
+
 mod activate;
 mod assess;
 #[cfg(feature = "delivery_playbook")]
