@@ -62,6 +62,9 @@ impl DomainHost for MailHost {
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }
+    fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
+        self.dispatch_adapter(intent, false)
+    }
 }
 impl Host for MailHost {
     fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
@@ -84,38 +87,7 @@ impl Host for MailHost {
     }
     fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
         if self.host_command(intent) {
-            let Ok((id, revision)) = grant_actor(&intent.authority) else {
-                return DispatchResult::Rejected {
-                    reason: "grant binding refused".into(),
-                };
-            };
-            let result = self.handle.block_on(self.service.host_dispatch(
-                &self.runtime,
-                id,
-                revision,
-                intent,
-            ));
-            // D11 GATE-05 fixture: the AQ effect and its final row committed,
-            // then the reply is lost before the runner records it.
-            #[cfg(feature = "test-support")]
-            if result.is_ok()
-                && let Ok(mut armed) = self.lose_host_reply.lock()
-                && armed.as_deref() == Some(intent.command.name.as_str())
-            {
-                *armed = None;
-                return DispatchResult::Unknown {
-                    reason: "synthetic lost host reply after owner commit".into(),
-                };
-            }
-            return match result {
-                Ok(result) => host_result(result, intent),
-                Err(Error::Unknown) => DispatchResult::Unknown {
-                    reason: "host effect outcome unknown; retained lookup required".into(),
-                },
-                Err(error) => DispatchResult::Rejected {
-                    reason: error.to_string(),
-                },
-            };
+            return self.dispatch_adapter(intent, true);
         }
         if intent.command.name == "decision.request" {
             let Ok((id, revision)) = grant_actor(&intent.authority) else {
@@ -278,6 +250,45 @@ impl Host for MailHost {
     }
 }
 impl MailHost {
+    fn dispatch_adapter(&mut self, intent: &Intent, plugin_available: bool) -> DispatchResult {
+        let Ok((id, revision)) = grant_actor(&intent.authority) else {
+            return DispatchResult::Rejected {
+                reason: "grant binding refused".into(),
+            };
+        };
+        let result = self.handle.block_on(async {
+            if plugin_available {
+                self.service
+                    .host_dispatch(&self.runtime, id, revision, intent)
+                    .await
+            } else {
+                self.service
+                    .plugin_dispatch(&self.runtime, id, revision, intent, false)
+                    .await
+            }
+        });
+        // D11 GATE-05 fixture: the AQ effect and its final row committed,
+        // then the reply is lost before the runner records it.
+        #[cfg(feature = "test-support")]
+        if result.is_ok()
+            && let Ok(mut armed) = self.lose_host_reply.lock()
+            && armed.as_deref() == Some(intent.command.name.as_str())
+        {
+            *armed = None;
+            return DispatchResult::Unknown {
+                reason: "synthetic lost host reply after owner commit".into(),
+            };
+        }
+        match result {
+            Ok(result) => host_result(result, intent),
+            Err(Error::Unknown) => DispatchResult::Unknown {
+                reason: "host effect outcome unknown; retained lookup required".into(),
+            },
+            Err(error) => DispatchResult::Rejected {
+                reason: error.to_string(),
+            },
+        }
+    }
     /// Host-adapter commands of the pinned profile (5: D4 catalog 1.0.0;
     /// 7: AQ host catalog 2.0.0, which also owns operation.get).
     fn host_command(&self, intent: &Intent) -> bool {

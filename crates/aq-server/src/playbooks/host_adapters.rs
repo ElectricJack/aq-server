@@ -149,7 +149,8 @@ impl Service {
     ) -> Result<HostResult> {
         match intent.command.name.as_str() {
             name if aq_playbook_host::plugins::command_plugin(name).is_some() => {
-                self.plugin_dispatch(owner, id, revision, intent).await
+                self.plugin_dispatch(owner, id, revision, intent, true)
+                    .await
             }
             "findings.reconcile" => self.findings_reconcile(owner, id, revision, intent).await,
             "work.read" | "work.route" | "work.unroutable" => {

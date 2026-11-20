@@ -11,12 +11,13 @@ fn refused(reason: &str) -> HostResult {
 }
 
 impl Service {
-    pub(super) async fn plugin_dispatch(
+    pub(in crate::playbooks) async fn plugin_dispatch(
         &self,
         owner: &RuntimeOwner,
         grant: Uuid,
         revision: i64,
         intent: &Intent,
+        plugin_available: bool,
     ) -> Result<HostResult> {
         let name = command_plugin(&intent.command.name).ok_or(Error::Invalid)?;
         let (mut tx, stage, identity) = self.begin(Some(owner), grant, revision, intent).await?;
@@ -29,7 +30,8 @@ impl Service {
             _ => return Err(Error::Unknown),
         }
         let plugin = self.plugins.get(name).filter(|plugin| {
-            plugin.registry().commands.get(&intent.command.name) == Some(&intent.command)
+            plugin_available
+                && plugin.registry().commands.get(&intent.command.name) == Some(&intent.command)
         });
         let mut events = Vec::new();
         let invocation = if let Some(plugin) = plugin {

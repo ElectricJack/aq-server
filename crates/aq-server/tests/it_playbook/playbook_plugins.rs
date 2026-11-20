@@ -13,9 +13,18 @@ struct PluginFiles(tempfile::TempDir);
 impl PluginFiles {
     fn new() -> Self {
         let dir = Self(tempfile::tempdir().unwrap());
-        fs::create_dir_all(dir.root().join("plugins")).unwrap();
-        let source = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join(PACKAGE)).unwrap();
-        std::os::unix::fs::symlink(source, dir.root().join("plugins/test")).unwrap();
+        let package = dir.root().join("plugins/test");
+        fs::create_dir_all(package.join("bin")).unwrap();
+        fs::create_dir_all(package.join("contracts")).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(PACKAGE);
+        for path in [
+            "plugin.toml",
+            "bin/test",
+            "contracts/notes.json",
+            "contracts/registry.json",
+        ] {
+            fs::copy(source.join(path), package.join(path)).unwrap();
+        }
         fs::create_dir_all(dir.root().join("vault/plugins/test")).unwrap();
         dir.private("secret", "fake token");
         dir
@@ -37,6 +46,13 @@ impl PluginFiles {
             &self.root().join("state"),
             &self.root().join("vault"),
         )
+    }
+
+    fn update_registry(&self, update: impl FnOnce(&mut Registry)) {
+        let path = self.root().join("plugins/test/contracts/registry.json");
+        let mut registry = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        update(&mut registry);
+        fs::write(path, serde_json::to_vec(&registry).unwrap()).unwrap();
     }
 
     fn calls(&self) -> Vec<Value> {
@@ -172,32 +188,19 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
 #[test]
 fn plugin_discovery_refuses_missing_secret_and_missing_refused_outcome() {
     let files = PluginFiles::new();
-    let package = files.root().join("plugins/test");
     fs::remove_file(files.root().join("vault/plugins/test/secret")).unwrap();
     assert!(files.discover().get("test").is_none());
     files.private("secret", "fake token");
     assert!(files.discover().get("test").is_some());
 
-    fs::remove_file(&package).unwrap();
-    fs::create_dir_all(package.join("contracts")).unwrap();
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(PACKAGE);
-    fs::create_dir(package.join("bin")).unwrap();
-    for path in ["plugin.toml", "bin/test", "contracts/notes.json"] {
-        fs::copy(source.join(path), package.join(path)).unwrap();
-    }
-    let mut registry: Registry =
-        serde_json::from_slice(&fs::read(source.join("contracts/registry.json")).unwrap()).unwrap();
-    registry
-        .commands
-        .get_mut(COMMAND)
-        .unwrap()
-        .outcomes
-        .remove("refused");
-    fs::write(
-        package.join("contracts/registry.json"),
-        serde_json::to_vec(&registry).unwrap(),
-    )
-    .unwrap();
+    files.update_registry(|registry| {
+        registry
+            .commands
+            .get_mut(COMMAND)
+            .unwrap()
+            .outcomes
+            .remove("refused");
+    });
     assert!(files.discover().get("test").is_none());
 }
 
@@ -266,10 +269,11 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
             on_error: None,
         },
     );
+    let event = service.registry().events[EVENT].clone();
+    producer.registry.events.insert(EVENT.into(), event.clone());
     let producer = Artifact::seal(producer).unwrap();
     let artifact = producer.digest.clone();
 
-    let event = service.registry().events[EVENT].clone();
     let mut consumer = pure_artifact().content;
     consumer.registry.events.insert(EVENT.into(), event.clone());
     consumer.playbook.triggers.push(Trigger {
@@ -344,15 +348,19 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
         .unwrap();
     assert_eq!(notifications, 1);
 
-    // Leave an already admitted run in flight, then restart without the plugin.
+    // Change only the event contract pinned by an already admitted run.
     let pending = admit("normal").await.unwrap();
     driver
         .admission(e.f.actor, pending.request_id, false)
         .await
         .unwrap();
     driver.stop().await.unwrap();
+    files.update_registry(|registry| registry.events.get_mut(EVENT).unwrap().retention_ms += 1);
+    let upgraded = e.service.clone().with_plugins(files.discover());
+    assert_eq!(upgraded.registry().commands[COMMAND], command);
+    assert_ne!(upgraded.registry().events[EVENT], event);
     let restarted = Driver::start(
-        e.service.clone(),
+        upgraded,
         aq_playbook_host::Limits::default(),
         protected_factory(source_url(&e)),
     )

@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::{
     collections::{BTreeSet, VecDeque},
     sync::{
-        Arc, Condvar, Mutex, RwLock, Weak,
+        Arc, Condvar, Mutex, OnceLock, RwLock, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -46,6 +46,11 @@ pub struct AcquiredOwner {
 
 pub trait DomainHost: Host {
     fn set_mode(&mut self, mode: HostMode);
+    fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
+        DispatchResult::Unknown {
+            reason: "plugin contract is unavailable".into(),
+        }
+    }
 }
 pub use aq_playbooks_runner::MemoryStorage;
 
@@ -337,6 +342,7 @@ struct Shared {
     registry: Registry,
     declared_events: RwLock<BTreeSet<(String, String)>>,
     plugin_artifacts: AtomicBool,
+    stale_artifacts: OnceLock<BTreeSet<String>>,
     catalog_supported: AtomicBool,
 }
 impl Shared {
@@ -434,6 +440,7 @@ impl Owner {
             registry,
             declared_events: RwLock::default(),
             plugin_artifacts: AtomicBool::default(),
+            stale_artifacts: OnceLock::default(),
             catalog_supported: AtomicBool::new(false),
         });
         let owner = Self {
@@ -458,9 +465,14 @@ impl Owner {
                         let _ = engine.release();
                         return Err(Error::Invalid);
                     }
-                    for artifact in state.artifacts.values() {
+                    let mut stale_artifacts = BTreeSet::new();
+                    for (digest, artifact) in &state.artifacts {
                         remember_contracts(&shared, &artifact.content.registry);
+                        if !plugins_match(&shared.registry, &artifact.content.registry) {
+                            stale_artifacts.insert(digest.clone());
+                        }
                     }
+                    let _ = shared.stale_artifacts.set(stale_artifacts);
                     if let Some(policy) = shared
                         .limits
                         .engine_retention
@@ -798,12 +810,12 @@ fn execute<S: Storage>(
             artifact,
             authority,
         } => {
-            if shared.plugin_artifacts.load(Ordering::Acquire) {
-                let snapshot = engine.snapshot().map_err(engine_error)?;
-                let definition = snapshot.artifacts.get(&artifact).ok_or(Error::Invalid)?;
-                if !plugins_match(&shared.registry, &definition.content.registry) {
-                    return Err(Error::Invalid);
-                }
+            if shared
+                .stale_artifacts
+                .get()
+                .is_some_and(|stale| stale.contains(&artifact))
+            {
+                return Err(Error::Invalid);
             }
             engine
                 .activate(&binding, &artifact, authority)
@@ -898,7 +910,15 @@ fn execute<S: Storage>(
                 host.set_mode(HostMode::Dispatch);
                 recovery.map_err(engine_error)?;
             }
-            serde_json::json!({"transitions": engine.drive(host, now_ms, shared.limits.transitions).map_err(engine_error)?})
+            let mut guarded = PluginCatalogHost {
+                engine,
+                host,
+                stale_artifacts: shared
+                    .stale_artifacts
+                    .get()
+                    .filter(|stale| !stale.is_empty()),
+            };
+            serde_json::json!({"transitions": engine.drive(&mut guarded, now_ms, shared.limits.transitions).map_err(engine_error)?})
         }
         Request::Cancel { run, now_ms } => {
             engine.cancel(&run, now_ms).map_err(engine_error)?;
@@ -910,6 +930,54 @@ fn execute<S: Storage>(
         Request::Stop => Value::Null,
     };
     Ok(value)
+}
+
+/// Run-local pins remain available to the owner even after an extension
+/// changes. Unknown lookup results must never authorize a new plugin call.
+struct PluginCatalogHost<'a, S, H> {
+    engine: &'a Engine<S>,
+    host: &'a mut H,
+    stale_artifacts: Option<&'a BTreeSet<String>>,
+}
+
+impl<S: Storage, H: DomainHost> Host for PluginCatalogHost<'_, S, H> {
+    fn authorize(&self, authority: &Authority, contract: &CommandContract) -> bool {
+        self.host.authorize(authority, contract)
+    }
+
+    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
+        if let Some(stale) = self.stale_artifacts
+            && plugins::command_plugin(&intent.command.name).is_some()
+        {
+            let Ok(state) = self.engine.snapshot() else {
+                return DispatchResult::Unknown {
+                    reason: "cannot read plugin artifact pins".into(),
+                };
+            };
+            let Some(run) = state.runs.get(&intent.run) else {
+                return DispatchResult::Unknown {
+                    reason: "cannot read plugin run".into(),
+                };
+            };
+            if stale.contains(&run.artifact)
+                || state
+                    .runs
+                    .get(&run.root)
+                    .is_some_and(|root| stale.contains(&root.artifact))
+            {
+                return self.host.dispatch_unavailable_plugin(intent);
+            }
+        }
+        self.host.dispatch(intent)
+    }
+
+    fn reconcile(&mut self, intent: &Intent) -> DispatchResult {
+        self.host.reconcile(intent)
+    }
+
+    fn cancel(&mut self, intent: &Intent) -> CancellationResult {
+        self.host.cancel(intent)
+    }
 }
 
 // Count through a capped writer rather than allocating an unbounded serialized
