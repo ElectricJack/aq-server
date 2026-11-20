@@ -209,6 +209,7 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
             .await,
     );
     assert_eq!(git.request(1)["params"]["expected_old"]["hex"], old);
+    assert_eq!(git.request(1)["params"]["update"], "replace");
 }
 
 #[tokio::test]

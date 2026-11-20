@@ -261,6 +261,11 @@ impl GitPort for SocketGit {
         let reference = task_ref(reference)?;
         let old = sha1(expected_old.unwrap_or("0000000000000000000000000000000000000000"))?;
         let mut params = json!({"source_ref": reference, "target": reference, "expected_old": old});
+        // A repaired task can rebuild its branch from main. The remote update
+        // still requires the exact commit of the previous publication.
+        if expected_old.is_some() {
+            params["update"] = json!("replace");
+        }
         if let Some(source) = expected_source {
             params["expected_source"] = sha1(source)?;
         }
