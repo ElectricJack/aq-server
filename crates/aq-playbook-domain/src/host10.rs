@@ -185,6 +185,14 @@ pub struct ResultReady {
     pub version: i64,
 }
 
+impl ResultReady {
+    /// Whether the command names this event's task and report.
+    pub fn names_result(&self, input: &Value) -> bool {
+        input["task"] == self.task_id.to_string()
+            && input["result_id"] == self.result_id.to_string()
+    }
+}
+
 /// The trusted `aq.work.result_ready` event.
 pub fn result_ready_event(
     event_id: Uuid,

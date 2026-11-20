@@ -13,23 +13,12 @@
 //! and the facts it records are `aq_delivery::commands`; this module only does
 //! the operation bookkeeping and decides nothing about a result.
 use super::*;
-use aq_delivery::commands::{self as delivery, Accepting, Delivery, DeliveryTarget, GitTarget};
+use aq_delivery::commands::{self as delivery, Delivery, DeliveryTarget, GitTarget};
 use aq_playbook_domain::{
-    delivery_store::Latest, host10::ResultReady, review_domain::DELIVERY_COMMANDS,
+    delivery_runs::{self, DeliveryRuns},
+    review_domain::DELIVERY_COMMANDS,
 };
-
-/// What the delivery commands need of the server besides the graph.
-#[async_trait::async_trait]
-pub trait DeliveryOps: Send + Sync {
-    /// Where a project's work is delivered, or `None` when the project is not
-    /// bound to a repository the server delivers to.
-    async fn target(&self, project: Uuid) -> Result<Option<DeliveryTarget>>;
-    /// The commands over the forge and central aq-git, or `None` when central
-    /// git is not configured.
-    async fn commands(&self) -> Option<Delivery>;
-    /// The title and the body of the task's pull request.
-    async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)>;
-}
+pub use delivery_runs::DeliveryOps;
 
 /// Production port: the project bindings, the onboarding record, the
 /// configured GitHub App and the aq-git socket.
@@ -84,16 +73,18 @@ impl DeliveryOps for ServerDelivery {
     }
 }
 
-fn delivery_error(error: aq_delivery::DeliveryError) -> Error {
-    match error {
-        aq_delivery::DeliveryError::InvalidInput(_) => Error::Invalid,
-        _ => Error::Unknown,
-    }
-}
-
 impl Service {
+    fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
+        Ok(DeliveryRuns {
+            pool: &self.pool,
+            namespace: &self.namespace,
+            installation_routing: self.installation_routing,
+            results: self.delivery.as_ref(),
+            operations: self.ports()?.delivery_ops.as_ref(),
+        })
+    }
+
     /// Bind the engine's actual fan-out run IDs to the original sealed result event.
-    /// Run inputs and caller-supplied IDs cannot establish this relationship.
     pub async fn record_delivery_runs(
         &self,
         owner: &RuntimeOwner,
@@ -101,100 +92,12 @@ impl Service {
         event: &EventEnvelope,
         runs: &Value,
     ) -> Result<()> {
-        if event.producer != "aq.host.bridge@1" || event.contract.name != "aq.work.result_ready" {
-            return Err(Error::Invalid);
-        }
-        let ready: ResultReady = serde_json::from_value(event.payload.clone())?;
-        let runs = runs.as_array().ok_or(Error::Invalid)?;
-        // Receipts are bounded at 16 KiB. A delivery binding normally has one trigger.
-        if runs.len() > 128
-            || runs.iter().any(|run| {
-                !run.as_str()
-                    .is_some_and(|id| id.starts_with("event-sha256:") && id.len() == 77)
-            })
-        {
-            return Err(Error::Invalid);
-        }
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        let proof = json!({"result_ready": ready, "runs": runs});
-        let changed = sqlx::query(
-            "UPDATE playbook_outbox SET engine_receipt=engine_receipt || $5::jsonb
-             WHERE namespace_id=$1 AND generation=$2 AND producer='aq.host.bridge@1'
-             AND event_id=$3 AND event_digest=$4 AND status='engine_accepted'
-             AND (NOT engine_receipt ? 'result_ready' OR engine_receipt->'result_ready'=$5::jsonb->'result_ready')",
-        )
-        .bind(self.namespace.namespace_id)
-        .bind(self.namespace.generation)
-        .bind(id)
-        .bind(digest(event)?)
-        .bind(proof)
-        .execute(&mut *tx)
-        .await?;
-        if changed.rows_affected() != 1 {
-            return Err(Error::Conflict);
-        }
+        delivery_runs::record_origins(&mut tx, &self.namespace, id, event, runs).await?;
         tx.commit().await?;
         Ok(())
-    }
-
-    pub(super) async fn delivery_origin(
-        &self,
-        db: &mut PgConnection,
-        intent: &Intent,
-    ) -> Result<Option<ResultReady>> {
-        if !intent.run.starts_with("event-") {
-            return Ok(None);
-        }
-        let ready: Option<Value> = sqlx::query_scalar(
-            "SELECT engine_receipt->'result_ready' FROM playbook_outbox
-             WHERE namespace_id=$1 AND generation=$2 AND producer='aq.host.bridge@1'
-             AND (engine_receipt->'runs') ? $3",
-        )
-        .bind(self.namespace.namespace_id)
-        .bind(self.namespace.generation)
-        .bind(&intent.run)
-        .fetch_optional(db)
-        .await?;
-        ready
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    /// The command's scope and latest task result, or the catalog refusal.
-    /// Tasks of other projects require `installation_routing`.
-    async fn delivery_scope(
-        &self,
-        name: &str,
-        input: &Value,
-    ) -> Result<std::result::Result<(String, Uuid, Uuid, Option<(Uuid, Latest)>), &'static str>>
-    {
-        let own = (self.namespace.workspace_id, self.namespace.project_id);
-        if name == "main.sync" {
-            let Ok(project) = Uuid::parse_str(text(input, "project")?) else {
-                return Ok(Err("unknown_project"));
-            };
-            if (project != own.1 && !self.installation_routing)
-                || self.ports()?.delivery_ops.target(project).await?.is_none()
-            {
-                return Ok(Err("unknown_project"));
-            }
-            return Ok(Ok((project.to_string(), project, own.0, None)));
-        }
-        let Ok(task) = Uuid::parse_str(text(input, "task")?) else {
-            return Ok(Err("unknown_task"));
-        };
-        Ok(match self.delivery.latest(task).await? {
-            Some(l) if l.project_id == own.1 || self.installation_routing => Ok((
-                task.to_string(),
-                l.project_id,
-                l.workspace_id,
-                Some((task, l)),
-            )),
-            _ => Err("unknown_task"),
-        })
     }
 
     /// Dispatches one of the six delivery commands.
@@ -214,109 +117,21 @@ impl Service {
             Stage::Pending(_) => return Err(Error::Unknown),
             Stage::Fresh => {}
         }
-        let (name, input) = (intent.command.name.as_str(), &intent.input);
-        let refused = |reason: &str| host_result("refused", json!({"reason": reason}));
-        let (subject_id, project, workspace, result) =
-            match self.delivery_scope(name, input).await? {
-                Ok(scope) => scope,
-                // `.await_checks` and `.close` have no refusal in the catalog:
-                // for a task the host does not know there is nothing to wait
-                // for or to close, which the operation completes as `closed`.
-                Err(_) if matches!(name, "pull_request.await_checks" | "pull_request.close") => {
-                    let ns = &self.namespace;
-                    let task = text(input, "task")?.to_owned();
-                    (task, ns.project_id, ns.workspace_id, None)
-                }
-                Err(reason) => {
-                    let result = refused(reason);
-                    return self
-                        .settle_fresh(tx, id, revision, intent, &identity, result)
-                        .await;
-                }
-            };
-        let (task, latest) = result
-            .as_ref()
-            .map(|(task, latest)| (*task, latest))
-            .unzip();
-        let origin = if name == "main.sync" || task.is_none() {
-            None
-        } else {
-            let origin = self.delivery_origin(&mut tx, intent).await?;
-            if intent.run.starts_with("event-") {
-                let origin = origin.ok_or(Error::Forbidden)?;
-                if task != Some(origin.task_id)
-                    || origin.project_id != project
-                    || !self.delivery.lock_current(&mut tx, &origin).await?
-                {
-                    return Err(Error::Conflict);
-                }
-                Some(origin)
-            } else {
-                return Err(Error::Forbidden);
-            }
-        };
-        let text = match (name, task) {
-            ("pull_request.open", Some(task)) => Some(
-                self.ports()?
-                    .delivery_ops
-                    .pull_request_text(workspace, task)
-                    .await?,
-            ),
-            _ => None,
-        };
-        let longest_check_wait_ms = if name == "pull_request.await_checks" {
-            let (limits, _) = aq_role_settings::delivery_limits(&self.pool)
-                .await
-                .map_err(|_| Error::Unknown)?;
-            Some(limits.longest_check_wait_ms)
-        } else {
-            None
-        };
-        let accepting = Accepting {
-            command: name,
-            project,
-            task,
-            head: latest.map_or("", |record| record.head.as_str()),
-            subject: subject(&subject_id, 0),
-            text,
-            longest_check_wait_ms,
-            merge_target: if name == "pull_request.merge" {
-                self.ports()?.delivery_ops.target(project).await?
-            } else {
-                None
-            },
-            result_ids: origin.map(|event| (event.attempt_id, event.result_id)),
-        };
-        let mut request = match delivery::frozen_request(&self.pool, accepting, input, self.now()?)
-            .await
-            .map_err(delivery_error)?
-        {
-            Ok(request) => request,
-            Err(reason) => {
-                let result = refused(reason);
+        let runs = self.delivery_runs()?;
+        let prepared = match runs.prepare(&mut tx, intent, || self.now()).await? {
+            Ok(prepared) => prepared,
+            Err(answer) => {
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, result)
+                    .settle_fresh(tx, id, revision, intent, &identity, answer)
                     .await;
             }
         };
-        if let Some(origin) = origin {
-            request["result_ready"] = json!(origin);
-        }
         let operation = self.operation(intent)?;
         let accepted = host_result("accepted", json!({"handle": operation.to_string()}));
         let (outcome, output) = (&accepted.outcome, &accepted.output);
         self.record(&mut tx, id, revision, intent, &identity, outcome, output)
             .await?;
-        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,check_id,request,status,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,0,NULL,$7,'running',$8)")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(name)
-            .bind(&subject_id)
-            .bind(&request)
-            .bind(self.now()?)
-            .execute(&mut *tx)
+        runs.enqueue(&mut tx, operation, intent, prepared, self.now()?)
             .await?;
         self.commit_fresh(tx, id, intent).await?;
         Ok(accepted)
@@ -374,57 +189,13 @@ impl Service {
         if op.status != "running" {
             return Ok(true);
         }
-        let ports = self.ports()?;
-        let project = op.request["project"]
-            .as_str()
-            .and_then(|p| Uuid::parse_str(p).ok());
-        let target = ports
-            .delivery_ops
-            .target(project.ok_or(Error::Unknown)?)
-            .await?;
-        let commands = ports.delivery_ops.commands().await;
-        let (request, now) = (&op.request, self.now()?);
-        // Hold the same attempt/report-head fence the result writer uses until
-        // this quantum's external operation has returned.
         let mut fence = self.tx().await?;
-        if op.command != "main.sync"
-            && (!request["task"].is_null()
-                || !matches!(
-                    op.command.as_str(),
-                    "pull_request.await_checks" | "pull_request.close"
-                ))
-        {
-            let current =
-                match serde_json::from_value::<ResultReady>(request["result_ready"].clone()) {
-                    Ok(origin) => self.delivery.lock_current(&mut fence, &origin).await?,
-                    Err(_) => false,
-                };
-            if !current {
-                fence.commit().await?;
-                let answer = match op.command.as_str() {
-                    "pull_request.await_checks" => host_result("timeout", json!({})),
-                    "pull_request.close" => host_result("closed", json!({})),
-                    "branch.publish" => host_result("refused", json!({"reason": "no_branch"})),
-                    "pull_request.open" => {
-                        host_result("refused", json!({"reason": "unknown_task"}))
-                    }
-                    _ => host_result("refused", json!({"reason": "head_changed"})),
-                };
-                self.complete_operation(operation, &op.command, &op.intent_id, answer)
-                    .await?;
-                return Ok(true);
-            }
-        }
-        let step = delivery::run_step(
-            &self.pool,
-            commands.as_ref(),
-            target.as_ref(),
-            operation,
-            &op.command,
-            request,
-            now,
-        );
-        let completion = step.await.map_err(delivery_error)?;
+        let completion = self
+            .delivery_runs()?
+            .step(&mut fence, operation, &op.command, &op.request, || {
+                self.now()
+            })
+            .await?;
         fence.commit().await?;
         let Some(completion) = completion else {
             return Ok(false);

@@ -11,7 +11,10 @@
 //! which is idempotent per result. `work.hold` and `supervisor.notify` have
 //! no external effect: their rows commit with the final intent row.
 use super::*;
-use aq_playbook_domain::delivery_decisions::{self as decisions, Decision, Named, Settled};
+use aq_playbook_domain::{
+    delivery_decisions::{self as decisions, Decision, Named, Settled},
+    delivery_runs,
+};
 pub use decisions::DeliverySettlement;
 
 /// Production port: the server's automatic settlement.
@@ -73,19 +76,14 @@ impl Service {
                 (id("task")?, id("result_id")?)
             }
             Stage::Fresh => {
-                if intent.run.starts_with("event-") {
-                    let origin = self
-                        .delivery_origin(&mut tx, intent)
-                        .await?
-                        .ok_or(Error::Forbidden)?;
-                    if input["task"] != origin.task_id.to_string()
-                        || input["result_id"] != origin.result_id.to_string()
-                    {
-                        let refused = decisions::refused("stale_result");
-                        return self
-                            .settle_fresh(tx, id, revision, intent, &identity, refused)
-                            .await;
-                    }
+                if let Some(origin) =
+                    delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?
+                    && !origin.names_result(input)
+                {
+                    let refused = decisions::refused("stale_result");
+                    return self
+                        .settle_fresh(tx, id, revision, intent, &identity, refused)
+                        .await;
                 }
                 let early = match self.named(input).await? {
                     Err(reason) => Err(decisions::refused(reason)),
@@ -150,41 +148,10 @@ impl Service {
             tx.commit().await?;
             return Ok(retained);
         }
-        if intent.run.starts_with("event-") {
-            let origin = self
-                .delivery_origin(&mut tx, intent)
-                .await?
-                .ok_or(Error::Forbidden)?;
-            if intent.input["task"] != origin.task_id.to_string()
-                || intent.input["result_id"] != origin.result_id.to_string()
-                || !self.delivery.lock_current(&mut tx, &origin).await?
-            {
-                return Err(Error::Conflict);
-            }
-        }
-        match self.named(&intent.input).await? {
-            Ok((task, result)) => {
-                if matches!(
-                    decisions::decision(&mut tx, result).await?.as_deref(),
-                    Some("completed" | "returned")
-                ) {
-                    return Err(Error::Conflict);
-                }
-                let reason = Some(text(&intent.input, "reason")?);
-                let (detail, update_from_main, decision) = (None, None, "held");
-                let d = Decision {
-                    task,
-                    result,
-                    decision,
-                    reason,
-                    detail,
-                    update_from_main,
-                };
-                decisions::record(&mut tx, &d, self.now()?).await?;
-            }
-            Err("stale_result") => return Err(Error::Conflict),
-            Err(_) => return Err(Error::Invalid),
-        }
+        let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
+        decisions::fence_hold(&mut tx, self.delivery.as_ref(), origin, &intent.input).await?;
+        let named = self.named(&intent.input).await?;
+        decisions::hold(&mut tx, named, &intent.input, self.now()?).await?;
         let held = decisions::held();
         (self.settle_fresh(tx, id, revision, intent, &identity, held)).await
     }
@@ -213,29 +180,10 @@ impl Service {
         {
             return Err(Error::Forbidden);
         }
-        let key = if intent.run.starts_with("event-") {
-            let origin = self
-                .delivery_origin(&mut tx, intent)
-                .await?
-                .ok_or(Error::Forbidden)?;
-            if origin.project_id != project || !self.delivery.lock_current(&mut tx, &origin).await?
-            {
-                return Err(Error::Conflict);
-            }
-            let reason: Option<String> = sqlx::query_scalar(
-                "SELECT reason FROM delivery_decisions
-                 WHERE result_id=$1 AND task_id=$2 AND decision='held'",
-            )
-            .bind(origin.result_id)
-            .bind(origin.task_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .flatten();
-            let reason = reason.ok_or(Error::Conflict)?;
-            decisions::notify_key(&format!("{}:{reason}", origin.result_id))?
-        } else {
-            decisions::notify_key(text(input, "identity")?)?
-        };
+        let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
+        let key =
+            decisions::notification_key(&mut tx, self.delivery.as_ref(), origin, project, input)
+                .await?;
         let told = decisions::told(&mut tx, project, &key).await?;
         if !told {
             let now = self.now()?;

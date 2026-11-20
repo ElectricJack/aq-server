@@ -635,6 +635,83 @@ async fn merge_recovers_after_an_unknown_reply() {
 }
 
 #[tokio::test]
+async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge_write() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let target = target();
+    let merged = |head| {
+        pull(
+            7,
+            json!({
+                "state": "closed", "merged": true, "merge_commit_sha": sha('d'),
+                "head": {"ref": format!("aq/{TASK}"), "sha": sha(head)},
+            }),
+        )
+    };
+    let poll = async || {
+        delivery
+            .step(
+                Uuid::from_u128(9),
+                "pull_request.await_checks",
+                &json!({
+                    "task": TASK, "pull_request": 7, "result_head": sha('a'),
+                    "required": ["check", "deployment"], "deadline_at_ms": 1000,
+                }),
+                &target,
+                1000,
+            )
+            .await
+            .unwrap()
+    };
+    let reconcile = async || {
+        done(
+            delivery
+                .pull_request_merge(
+                    Uuid::from_u128(10),
+                    &target,
+                    TASK,
+                    7,
+                    MergeMethod::Merge,
+                    &sha('a'),
+                )
+                .await,
+        )
+    };
+
+    mock.reply(200, vec![], merged('b'));
+    assert_eq!(done(poll().await.step.unwrap()).outcome, "timeout");
+    mock.reply(200, vec![], merged('b'));
+    assert_eq!(reconcile().await.output["reason"], "head_changed");
+    assert!(git.operations().is_empty());
+
+    let reply_checks = |check_runs| {
+        mock.reply(200, vec![], merged('a'));
+        mock.reply(200, vec![], merged('a'));
+        mock.reply(200, vec![], json!([]));
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
+        mock.reply(200, vec![], check_runs);
+        mock.reply(200, vec![], no_statuses());
+    };
+    reply_checks(runs(&[("check", "completed", Some("success"))]));
+    assert_eq!(done(poll().await.step.unwrap()).outcome, "timeout");
+    assert!(git.operations().is_empty());
+
+    reply_checks(runs(&[
+        ("check", "completed", Some("success")),
+        ("deployment", "completed", Some("success")),
+    ]));
+    let checked = poll().await;
+    assert_eq!(done(checked.step.unwrap()).outcome, "passed");
+    assert_eq!(checked.observed.unwrap().state, "merged");
+    mock.reply(200, vec![], merged('a'));
+    assert_eq!(reconcile().await.outcome, "merged");
+
+    assert!(paths(&mock).iter().all(|(method, _)| method == "GET"));
+    assert_eq!(git.operations(), ["ref.delete"]);
+    assert_eq!(git.request(0)["params"]["expected_old"]["hex"], sha('a'));
+}
+
+#[tokio::test]
 async fn close_closes_the_pull_request_and_deletes_the_branch() {
     let git = FakeGit::start(healthy);
     let (delivery, mock) = delivery(&git).await;

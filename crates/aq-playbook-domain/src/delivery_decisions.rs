@@ -11,10 +11,11 @@
 //! `completed` and `returned` are final. `returns` counts each result sent
 //! back once.
 use crate::{
-    Result,
+    Error, Result,
     delivery_store::{DeliveryPort, locate},
     digest,
     host_values::{HostResult, text},
+    host10::ResultReady,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -208,6 +209,81 @@ pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Res
             .await?;
     }
     Ok(recorded)
+}
+
+/// Fence a hold before looking up its named result or writing its receipt.
+pub async fn fence_hold(
+    db: &mut PgConnection,
+    port: &dyn DeliveryPort,
+    origin: Option<ResultReady>,
+    input: &Value,
+) -> Result<()> {
+    if let Some(origin) = origin
+        && (!origin.names_result(input) || !port.lock_current(db, &origin).await?)
+    {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+/// Records a hold while keeping a stale run from receiving a held receipt.
+pub async fn hold(
+    db: &mut PgConnection,
+    named: std::result::Result<(Uuid, Uuid), &str>,
+    input: &Value,
+    now: i64,
+) -> Result<()> {
+    let (task, result) = match named {
+        Ok(named) => named,
+        Err("stale_result") => return Err(Error::Conflict),
+        Err(_) => return Err(Error::Invalid),
+    };
+    if matches!(
+        decision(db, result).await?.as_deref(),
+        Some("completed" | "returned")
+    ) {
+        return Err(Error::Conflict);
+    }
+    record(
+        db,
+        &Decision {
+            task,
+            result,
+            decision: "held",
+            reason: Some(text(input, "reason")?),
+            detail: None,
+            update_from_main: None,
+        },
+        now,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The notification for a delivery event is tied to a recorded hold on its current result.
+pub async fn notification_key(
+    db: &mut PgConnection,
+    port: &dyn DeliveryPort,
+    origin: Option<ResultReady>,
+    project: Uuid,
+    input: &Value,
+) -> Result<String> {
+    let Some(origin) = origin else {
+        return notify_key(text(input, "identity")?);
+    };
+    if origin.project_id != project || !port.lock_current(db, &origin).await? {
+        return Err(Error::Conflict);
+    }
+    let reason: Option<String> = sqlx::query_scalar(
+        "SELECT reason FROM delivery_decisions WHERE result_id=$1 AND task_id=$2 AND decision='held'",
+    )
+    .bind(origin.result_id)
+    .bind(origin.task_id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    let reason = reason.ok_or(Error::Conflict)?;
+    notify_key(&format!("{}:{reason}", origin.result_id))
 }
 
 /// The once-only key of `supervisor.notify` in a project.
