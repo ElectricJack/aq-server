@@ -168,14 +168,12 @@ async fn checks_require_what_rulesets_and_branch_protection_require() {
             "required_status_checks": {"enforcement_level": "everyone",
                 "contexts": ["lint"], "checks": [{"context": "lint", "app_id": null}]}}}),
     );
-    mock.reply(
-        200,
-        vec![],
-        runs(&[
-            ("ci/test", "completed", Some("success")),
-            ("optional", "completed", Some("failure")),
-        ]),
-    );
+    let mut check_runs = runs(&[
+        ("ci/test", "completed", Some("success")),
+        ("optional", "completed", Some("failure")),
+    ]);
+    check_runs["check_runs"][0]["app"] = json!({"id": 15368});
+    mock.reply(200, vec![], check_runs);
     mock.reply(200, vec![], statuses(&[("lint", "success")]));
     let checks = app.checks(&repo(), 7, None).await.unwrap();
     assert_eq!(
@@ -206,6 +204,8 @@ async fn checks_report_pending_failed_and_passed_for_an_explicit_list() {
     let required = ["build".to_string(), "deploy/preview".to_string()];
     let check = async |check_runs: Value, commit_statuses: Value| {
         mock.reply(200, vec![], pull(7, json!({})));
+        mock.reply(200, vec![], json!([]));
+        mock.reply(200, vec![], json!({"name": "main", "protected": false}));
         mock.reply(200, vec![], check_runs);
         mock.reply(200, vec![], commit_statuses);
         app.checks(&repo(), 7, Some(&required[..])).await.unwrap()
@@ -244,13 +244,84 @@ async fn checks_report_pending_failed_and_passed_for_an_explicit_list() {
     .await;
     assert_eq!(c.state, ChecksState::Passed);
     assert!(c.failed.is_empty());
-    let paths: Vec<_> = requests(&mock).into_iter().map(|(_, p)| p).collect();
-    assert!(
-        !paths
-            .iter()
-            .any(|p| p.contains("/rules/") || p.contains("/branches/")),
-        "an explicit list reads no protection: {paths:?}"
-    );
+}
+
+#[tokio::test]
+async fn explicit_checks_preserve_protected_producers_for_the_same_name() {
+    let (app, mock) = ready().await;
+    let required = ["ci".to_string(), "project".to_string()];
+    let check =
+        async |reports: &[(Option<u64>, &str)]| {
+            mock.reply(200, vec![], pull(7, json!({})));
+            mock.reply(
+                200,
+                vec![],
+                json!([
+                    {"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "ci", "integration_id": 1}]
+                    }}
+                ]),
+            );
+            mock.reply(200, vec![], json!({"protected": true, "protection": {
+            "required_status_checks": {
+                "contexts": ["ci", "legacy"],
+                "checks": [{"context": "ci", "app_id": 2}, {"context": "legacy", "app_id": -1}]
+            }
+        }}));
+            let checks: Vec<_> = reports
+                .iter()
+                .map(|(id, conclusion)| {
+                    json!({"name": "ci", "status": "completed", "conclusion": conclusion,
+                   "app": id.map(|id| json!({"id": id}))})
+                })
+                .collect();
+            mock.reply(
+                200,
+                vec![],
+                json!({"total_count": checks.len(), "check_runs": checks}),
+            );
+            mock.reply(
+                200,
+                vec![],
+                statuses(&[
+                    ("ci", "success"),
+                    ("legacy", "success"),
+                    ("project", "success"),
+                ]),
+            );
+            app.checks(&repo(), 7, Some(&required)).await.unwrap()
+        };
+
+    for reports in [
+        &[][..],
+        &[(None, "success")][..],
+        &[(Some(3), "success")][..],
+        &[(Some(1), "success")][..],
+        &[(Some(2), "success")][..],
+    ] {
+        let checks = check(reports).await;
+        assert_eq!(checks.state, ChecksState::Pending, "{reports:?}");
+        assert_eq!(checks.required, ["ci", "legacy", "project"]);
+        assert!(checks.failed.is_empty());
+    }
+
+    let checks = check(&[
+        (Some(1), "success"),
+        (Some(2), "success"),
+        (Some(3), "failure"),
+    ])
+    .await;
+    assert_eq!(checks.state, ChecksState::Passed);
+    assert!(checks.failed.is_empty());
+
+    let checks = check(&[
+        (Some(1), "success"),
+        (Some(1), "failure"),
+        (Some(2), "failure"),
+    ])
+    .await;
+    assert_eq!(checks.state, ChecksState::Failed);
+    assert_eq!(checks.failed, ["ci"]);
 }
 
 #[tokio::test]
@@ -307,14 +378,16 @@ async fn check_runs_are_read_across_pages() {
         .map(|n| (n.as_str(), "completed", Some("success")))
         .collect();
     mock.reply(200, vec![], pull(7, json!({})));
+    mock.reply(200, vec![], json!([]));
+    mock.reply(200, vec![], json!({"name": "main", "protected": false}));
     mock.reply(200, vec![], runs(&page));
     mock.reply(200, vec![], runs(&[("late", "completed", Some("failure"))]));
     mock.reply(200, vec![], statuses(&[]));
     let c = app.checks(&repo(), 7, Some(&[][..])).await.unwrap();
     assert_eq!(c.failed, ["late"]);
     let seen = mock.seen();
-    assert_eq!(seen[3].query.as_deref(), Some("per_page=100&page=2"));
-    assert_eq!(seen.len(), 5);
+    assert_eq!(seen[5].query.as_deref(), Some("per_page=100&page=2"));
+    assert_eq!(seen.len(), 7);
 }
 
 #[tokio::test]
@@ -358,7 +431,7 @@ async fn merge_sends_the_method_and_expected_sha() {
         json!({"sha": "d".repeat(40), "merged": true, "message": "Pull Request successfully merged"}),
     );
     let outcome = app
-        .merge(&repo(), 7, MergeMethod::Squash, &head())
+        .merge(&repo(), 7, MergeMethod::Squash, &head(), "main")
         .await
         .unwrap();
     assert_eq!(
@@ -378,6 +451,18 @@ async fn merge_sends_the_method_and_expected_sha() {
 }
 
 #[tokio::test]
+async fn retargeted_pull_request_is_refused_before_merge() {
+    let (app, mock) = ready().await;
+    mock.reply(200, vec![], pull(7, json!({})));
+    let outcome = app
+        .merge(&repo(), 7, MergeMethod::Merge, &head(), "release")
+        .await
+        .unwrap();
+    assert!(matches!(outcome, MergeOutcome::NotMergeable { .. }));
+    assert_eq!(requests(&mock).len(), 1);
+}
+
+#[tokio::test]
 async fn merge_with_a_stale_sha_is_refused() {
     let (app, mock) = ready().await;
     // The head has moved before the merge: refused without a merge call.
@@ -387,7 +472,7 @@ async fn merge_with_a_stale_sha_is_refused() {
         pull(7, json!({"head": {"ref": "aq/task-1", "sha": moved()}})),
     );
     let outcome = app
-        .merge(&repo(), 7, MergeMethod::Merge, &head())
+        .merge(&repo(), 7, MergeMethod::Merge, &head(), "main")
         .await
         .unwrap();
     assert!(matches!(
@@ -406,7 +491,7 @@ async fn merge_with_a_stale_sha_is_refused() {
         json!({"message": "Head branch was modified. Review and try the merge again."}),
     );
     let outcome = app
-        .merge(&repo(), 7, MergeMethod::Merge, &head())
+        .merge(&repo(), 7, MergeMethod::Merge, &head(), "main")
         .await
         .unwrap();
     assert_eq!(
@@ -418,7 +503,7 @@ async fn merge_with_a_stale_sha_is_refused() {
     );
     assert_eq!(requests(&mock).len(), 3, "no retry after the refusal");
     let err = app
-        .merge(&repo(), 7, MergeMethod::Merge, "HEAD")
+        .merge(&repo(), 7, MergeMethod::Merge, "HEAD", "main")
         .await
         .unwrap_err();
     assert_eq!(err.code(), "github_invalid_input");
@@ -428,7 +513,7 @@ async fn merge_with_a_stale_sha_is_refused() {
 async fn merge_outcomes_for_conflict_not_mergeable_closed_and_merged() {
     let (app, mock) = ready().await;
     let merge = async || {
-        app.merge(&repo(), 7, MergeMethod::Rebase, &head())
+        app.merge(&repo(), 7, MergeMethod::Rebase, &head(), "main")
             .await
             .unwrap()
     };
@@ -495,7 +580,7 @@ async fn merge_outcomes_for_conflict_not_mergeable_closed_and_merged() {
         json!({"message": "secondary rate limit"}),
     );
     let err = app
-        .merge(&repo(), 7, MergeMethod::Merge, &head())
+        .merge(&repo(), 7, MergeMethod::Merge, &head(), "main")
         .await
         .unwrap_err();
     assert_eq!(err.code(), "retryable");

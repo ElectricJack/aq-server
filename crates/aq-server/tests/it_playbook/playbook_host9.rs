@@ -2263,6 +2263,7 @@ mod delivery {
         struct Fake {
             log: Mutex<Vec<String>>,
             checks: Mutex<(ChecksState, Vec<String>)>,
+            delete_unavailable: Mutex<bool>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2299,6 +2300,13 @@ mod delivery {
                 reference: &str,
             ) -> std::result::Result<RefDeletion, GitFailure> {
                 self.log.lock().unwrap().push(format!("delete {reference}"));
+                if *self.delete_unavailable.lock().unwrap() {
+                    return Err(GitFailure {
+                        code: "transport".into(),
+                        message: "cleanup unavailable".into(),
+                        transient: true,
+                    });
+                }
                 Ok(RefDeletion::Deleted)
             }
         }
@@ -2357,6 +2365,7 @@ mod delivery {
                 _: u64,
                 method: MergeMethod,
                 expected_head_sha: &str,
+                _: &str,
             ) -> GitHubResult<MergeOutcome> {
                 self.log
                     .lock()
@@ -2405,6 +2414,7 @@ mod delivery {
             let fake = Arc::new(Fake {
                 log: Mutex::default(),
                 checks: Mutex::new((ChecksState::Pending, vec![])),
+                delete_unavailable: Mutex::new(false),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h.service.with_delivery_ops(Arc::new(Ops(fake.clone())));
@@ -2559,6 +2569,74 @@ mod delivery {
             assert_eq!(
                 h.read(task).await.output["facts"]["pull_request"]["state"],
                 "merged"
+            );
+        }
+
+        #[tokio::test]
+        async fn merge_evidence_survives_cleanup_retry() {
+            let (h, fake) = harness().await;
+            let (task, result) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "passed", json!([])).await;
+            let handle = h
+                .accepted(
+                    "pull_request.merge",
+                    json!({
+                        "task": task, "method": "merge", "expected_head_sha": oid('a')
+                    }),
+                )
+                .await;
+
+            h.port
+                .latest
+                .lock()
+                .unwrap()
+                .get_mut(&task)
+                .unwrap()
+                .result_id = Uuid::new_v4();
+            *fake.delete_unavailable.lock().unwrap() = true;
+            assert_eq!(h.pass().await, 0);
+            assert!(h.completions().await.is_empty());
+
+            let pool = h.pool().await;
+            let operation = Uuid::parse_str(&handle).unwrap();
+            let evidence = || {
+                sqlx::query_scalar::<_, Value>(
+                    "SELECT to_jsonb(e) FROM delivery_merge_evidence e WHERE operation_id=$1",
+                )
+                .bind(operation)
+                .fetch_one(&pool)
+            };
+            let saved = evidence().await.unwrap();
+            assert_eq!(saved["task_id"], json!(task));
+            assert_eq!(saved["project_id"], json!(h.scope.project_id));
+            assert_eq!(saved["attempt_id"], json!(result.attempt_id));
+            assert_eq!(saved["result_id"], json!(result.result_id));
+            assert_eq!(
+                saved["target"]["git"]["repository_id"],
+                json!(Uuid::from_u128(1))
+            );
+            assert_eq!(
+                saved["target"]["github"],
+                json!({"owner": "Acme", "name": "widgets"})
+            );
+            assert_eq!(saved["target_ref"], "refs/heads/main");
+            assert_eq!(saved["pull_request"], 7);
+            assert_eq!(saved["expected_head_sha"], oid('a'));
+            assert_eq!(saved["merge_sha"], oid('d'));
+
+            *fake.delete_unavailable.lock().unwrap() = false;
+            h.later(1);
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(h.pass().await, 0);
+            assert_eq!(
+                h.completions().await,
+                [(handle, json!({"outcome": "merged", "output": {}}))]
+            );
+            assert_eq!(evidence().await.unwrap(), saved);
+            let delete = format!("delete refs/heads/aq/{task}");
+            assert_eq!(
+                *fake.log.lock().unwrap(),
+                [format!("merge merge {}", oid('a')), delete.clone(), delete]
             );
         }
 

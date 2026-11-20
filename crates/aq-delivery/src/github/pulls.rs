@@ -18,6 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// GitHub protocol: the largest `per_page` list endpoints accept.
 const GITHUB_MAX_PER_PAGE: usize = 100;
 
+// An empty set allows any producer. A nonempty set requires each listed App.
+type RequiredChecks = BTreeMap<String, BTreeSet<u64>>;
+type ReportedChecks = BTreeMap<String, BTreeMap<Option<u64>, ChecksState>>;
+
 #[derive(Deserialize)]
 struct WireRef {
     sha: String,
@@ -193,10 +197,9 @@ impl<'a> Session<'a> {
         Ok(all)
     }
 
-    /// Required status check names on `base`: repository rulesets plus
-    /// classic branch protection.
-    async fn required_checks(&self, base: &str) -> GitHubResult<Vec<String>> {
-        let mut names = BTreeSet::new();
+    /// Required check names and their App pins from rulesets and classic protection.
+    async fn required_checks(&self, base: &str) -> GitHubResult<RequiredChecks> {
+        let mut required = RequiredChecks::new();
         let rules = self
             .pages(&format!("/rules/branches/{base}"), |v| array(v, None))
             .await?;
@@ -209,7 +212,7 @@ impl<'a> Session<'a> {
                 .into_iter()
                 .flatten()
             {
-                names.extend(check["context"].as_str().map(str::to_string));
+                require_check(&mut required, check, "integration_id");
             }
         }
         let branch: Value = self
@@ -217,19 +220,22 @@ impl<'a> Session<'a> {
             .await?;
         if branch["protected"] == true {
             let checks = &branch["protection"]["required_status_checks"];
+            // Legacy contexts can repeat names from the structured checks.
             for context in checks["contexts"].as_array().into_iter().flatten() {
-                names.extend(context.as_str().map(str::to_string));
+                if let Some(name) = context.as_str() {
+                    required.entry(name.to_string()).or_default();
+                }
             }
             for check in checks["checks"].as_array().into_iter().flatten() {
-                names.extend(check["context"].as_str().map(str::to_string));
+                require_check(&mut required, check, "app_id");
             }
         }
-        Ok(names.into_iter().collect())
+        Ok(required)
     }
 
-    /// Check runs (latest per name) and commit statuses on `sha`, by name.
-    async fn reported_checks(&self, sha: &str) -> GitHubResult<BTreeMap<String, ChecksState>> {
-        let mut reported = BTreeMap::new();
+    /// Check runs and commit statuses on `sha`, grouped by name and App.
+    async fn reported_checks(&self, sha: &str) -> GitHubResult<ReportedChecks> {
+        let mut reported = ReportedChecks::new();
         let runs = self
             .pages(&format!("/commits/{sha}/check-runs"), |v| {
                 array(v, Some("check_runs"))
@@ -244,7 +250,7 @@ impl<'a> Session<'a> {
                 (Some("completed"), Some(_)) => ChecksState::Failed,
                 _ => ChecksState::Pending,
             };
-            record(&mut reported, name, state);
+            record(&mut reported, name, run["app"]["id"].as_u64(), state);
         }
         let statuses = self
             .pages(&format!("/commits/{sha}/status"), |v| {
@@ -262,7 +268,8 @@ impl<'a> Session<'a> {
                 Some("failure" | "error") => ChecksState::Failed,
                 _ => ChecksState::Pending,
             };
-            record(&mut reported, name, state);
+            // The combined status response supplies no GitHub App identity.
+            record(&mut reported, name, None, state);
         }
         Ok(reported)
     }
@@ -279,38 +286,63 @@ fn array(v: Value, key: Option<&str>) -> GitHubResult<Vec<Value>> {
         _ => Err(GitHubApiError::Protocol("expected a list".into())),
     }
 }
-/// A name reported twice (a check run and a status) keeps the worse state.
-fn record(reported: &mut BTreeMap<String, ChecksState>, name: &str, state: ChecksState) {
-    let rank = |s: ChecksState| match s {
+fn require_check(required: &mut RequiredChecks, check: &Value, app_field: &str) {
+    if let Some(name) = check["context"].as_str() {
+        let app_id = check[app_field].as_u64().filter(|id| *id > 0);
+        required.entry(name.to_string()).or_default().extend(app_id);
+    }
+}
+
+fn severity(state: ChecksState) -> u8 {
+    match state {
         ChecksState::Passed => 0,
         ChecksState::Pending => 1,
         ChecksState::Failed => 2,
-    };
+    }
+}
+
+/// Repeated reports from the same producer keep the worse state.
+fn record(reported: &mut ReportedChecks, name: &str, app_id: Option<u64>, state: ChecksState) {
     reported
         .entry(name.to_string())
-        .and_modify(|s| {
-            if rank(state) > rank(*s) {
-                *s = state;
+        .or_default()
+        .entry(app_id)
+        .and_modify(|current| {
+            if severity(state) > severity(*current) {
+                *current = state;
             }
         })
         .or_insert(state);
 }
-/// With required names, only they count and a missing one is pending.
-/// Otherwise, every reported check counts and an empty report is pending.
-pub(super) fn evaluate(
-    required: &[String],
-    reported: &BTreeMap<String, ChecksState>,
-) -> (ChecksState, Vec<String>) {
+
+fn worst_state(states: impl Iterator<Item = ChecksState>) -> ChecksState {
+    states
+        .max_by_key(|state| severity(*state))
+        .unwrap_or(ChecksState::Pending)
+}
+
+/// Missing reports from a required App stay pending.
+fn evaluate(required: &RequiredChecks, reported: &ReportedChecks) -> (ChecksState, Vec<String>) {
     let counted: Vec<(&str, ChecksState)> = if required.is_empty() {
-        reported.iter().map(|(n, s)| (n.as_str(), *s)).collect()
+        reported
+            .iter()
+            .map(|(name, states)| (name.as_str(), worst_state(states.values().copied())))
+            .collect()
     } else {
         required
             .iter()
-            .map(|n| {
-                (
-                    n.as_str(),
-                    reported.get(n).copied().unwrap_or(ChecksState::Pending),
-                )
+            .map(|(name, apps)| {
+                let state = match reported.get(name) {
+                    None => ChecksState::Pending,
+                    Some(states) if apps.is_empty() => worst_state(states.values().copied()),
+                    Some(states) => worst_state(apps.iter().map(|id| {
+                        states
+                            .get(&Some(*id))
+                            .copied()
+                            .unwrap_or(ChecksState::Pending)
+                    })),
+                };
+                (name.as_str(), state)
             })
             .collect()
     };
@@ -379,21 +411,16 @@ impl GitHubAdapter for GitHubApp {
         let head_sha = commit_sha(&pull.head.sha)
             .map_err(|_| GitHubApiError::Protocol("pull request head is not an object id".into()))?
             .to_string();
-        let required = match required {
-            Some(names) => names
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            None => s.required_checks(base).await?,
-        };
+        let mut requirements = s.required_checks(base).await?;
+        for name in required.into_iter().flatten() {
+            requirements.entry(name.clone()).or_default();
+        }
         let reported = s.reported_checks(&head_sha).await?;
-        let (state, failed) = evaluate(&required, &reported);
+        let (state, failed) = evaluate(&requirements, &reported);
         Ok(Checks {
             state,
             failed,
-            required,
+            required: requirements.into_keys().collect(),
             head_sha,
         })
     }
@@ -409,10 +436,19 @@ impl GitHubAdapter for GitHubApp {
         pr: u64,
         method: MergeMethod,
         expected_head_sha: &str,
+        expected_base: &str,
     ) -> GitHubResult<MergeOutcome> {
         let expected = commit_sha(expected_head_sha)?;
         let s = Session::new(self, repo).await?;
         let pull = s.pull(pr).await?;
+        if pull.base.name != expected_base {
+            return Ok(MergeOutcome::NotMergeable {
+                message: format!(
+                    "pull request targets {}, expected {expected_base}",
+                    pull.base.name
+                ),
+            });
+        }
         let moved = || MergeOutcome::Refused {
             reason: MergeRefusal::HeadMoved,
             message: format!("head is {}, expected {expected}", pull.head.sha),
