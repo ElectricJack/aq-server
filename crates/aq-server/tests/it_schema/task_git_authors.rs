@@ -7,7 +7,7 @@ use uuid::Uuid;
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 struct Intent<'a> {
-    owner: Option<Uuid>,
+    principal: Uuid,
     project: Uuid,
     workspace: Uuid,
     operations: &'a [Value],
@@ -43,13 +43,12 @@ impl Intent<'_> {
         let response = receipt(operation, self.project, disposition, self.affected);
         sqlx::query(
             "INSERT INTO dashboard_operations
-                (operation_id,principal_id,owner_id,kind,scope,request_digest,
+                (operation_id,principal_id,kind,scope,request_digest,
                  disposition,response,created_at,updated_at)
-             VALUES($1,$2,$3,'task.graph.create',$4,$5,$6,$7,now(),now())",
+             VALUES($1,$2,'task.graph.create',$3,$4,$5,$6,now(),now())",
         )
         .bind(operation)
-        .bind(self.owner.unwrap_or_else(Uuid::new_v4))
-        .bind(self.owner)
+        .bind(self.principal)
         .bind(&response["scope"])
         .bind(DIGEST)
         .bind(disposition)
@@ -99,6 +98,41 @@ async fn owner(pool: &PgPool, email: &str) -> Uuid {
     id
 }
 
+async fn supervisor_session(pool: &PgPool) -> Uuid {
+    let actor = Uuid::new_v4();
+    let session = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO central_session_heads (actor_id,conversation_id,authority_id,current_generation)
+         VALUES($1,$2,$3,1)",
+    )
+    .bind(actor)
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .execute(pool)
+    .await
+    .unwrap();
+    let state = json!({
+        "document": "state",
+        "data": {"plan": {
+            "subject": {"actor_id": actor},
+            "generation": 1,
+            "session": {"kind": "central", "session_id": session, "generation": 1},
+        }},
+    });
+    sqlx::query(
+        "INSERT INTO central_session_generations
+            (actor_id,generation,session_id,revision,state_bytes,state_digest)
+         VALUES($1,1,$2,1,$3,encode(sha256(convert_to($3,'UTF8')),'hex'))",
+    )
+    .bind(actor)
+    .bind(session)
+    .bind(state.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    session
+}
+
 #[tokio::test]
 async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     let db = TestDb::create().await;
@@ -114,7 +148,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     let requester = owner(&pool, email).await;
 
     Intent {
-        owner: Some(requester),
+        principal: requester,
         project,
         workspace,
         operations: &[task(legacy), task(unrelated)],
@@ -125,7 +159,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     let malformed = Uuid::new_v4();
     let malformed_email = "Old<Account@@example.test";
     Intent {
-        owner: Some(owner(&pool, malformed_email).await),
+        principal: owner(&pool, malformed_email).await,
         project,
         workspace,
         operations: &[task(malformed)],
@@ -168,7 +202,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     let other_workspace = Uuid::new_v4();
     let direct_child = Uuid::new_v4();
     let intent = Intent {
-        owner: Some(requester),
+        principal: requester,
         project,
         workspace,
         operations: &[
@@ -217,7 +251,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
         Uuid::new_v4(),
     );
     let service = Intent {
-        owner: None,
+        principal: supervisor_session(&pool).await,
         project,
         workspace,
         operations: &[
@@ -258,7 +292,7 @@ async fn snapshots_only_confirmed_creations_and_inherits_the_sealed_parent() {
     );
 
     let reused = Intent {
-        owner: Some(requester),
+        principal: requester,
         project,
         workspace: other_workspace,
         operations: &[task(legacy)],
