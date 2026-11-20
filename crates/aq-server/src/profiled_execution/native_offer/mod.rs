@@ -1,7 +1,8 @@
 //! Historical original publication only; this function grants no authority.
-pub mod observation;
 use crate::{error::AppError, profiled_execution::artifacts};
 use aq_admission::{Digest, execution_spec::decode_profiled_spec, startup::NativeOffer};
+use aq_profiled_state::git_author::OfferDelivery;
+pub use aq_profiled_state::native_offer as observation;
 use observation::StoredOffer;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -11,11 +12,20 @@ pub async fn load_original_offer_locked(
     tx: &mut Transaction<'_, Postgres>,
     attempt: Uuid,
 ) -> Result<NativeOffer, AppError> {
+    load_original_delivery_locked(tx, attempt)
+        .await
+        .map(|delivery| delivery.native)
+}
+
+pub(super) async fn load_original_delivery_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+) -> Result<OfferDelivery, AppError> {
     let row=sqlx::query("SELECT launch_binding,launch_manifest,execution_spec,execution_spec_digest,manifest_digest,graph_task_observation,offer_expires_at_ms FROM profiled_launches WHERE attempt_id=$1 FOR SHARE").bind(attempt).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(|| refused())?;
     let stored: StoredOffer =
         serde_json::from_value(row.get("graph_task_observation")).map_err(|_| refused())?;
-    stored.value()?;
-    let native = stored.native_offer;
+    stored.value().map_err(|_| refused())?;
+    let native = &stored.native_offer.native;
     let offer = &native.offered.offer;
     if offer.binding.attempt_id != attempt
         || row.get::<serde_json::Value, _>("launch_binding")
@@ -37,7 +47,10 @@ pub async fn load_original_offer_locked(
     // Validate at the original publication instant: historical expiry does not
     // erase a receipt and cannot be mistaken for fresh delivery permission.
     let published = native.offered.clock.server_time_ms;
-    stored.read_provenance.validate_at(published)?;
+    stored
+        .read_provenance
+        .validate_at(published)
+        .map_err(|_| refused())?;
     if native.offered.clock.expires_at_ms
         > stored
             .read_provenance
@@ -100,7 +113,7 @@ pub async fn load_original_offer_locked(
     if !remaining.is_empty() {
         return Err(refused());
     }
-    Ok(native)
+    Ok(stored.native_offer)
 }
 
 #[track_caller]

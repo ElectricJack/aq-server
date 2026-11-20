@@ -295,6 +295,7 @@ async fn graph(state: &AppState, input: &Input) -> Result<ReadProvenance, AppErr
         projection.artifact.digest,
         time,
     )
+    .map_err(|_| refused())
 }
 /// No SQL locks are held by this read owner. Cancellation of the private read
 /// retains its existing bounded worker ownership through I/O and zeroization.

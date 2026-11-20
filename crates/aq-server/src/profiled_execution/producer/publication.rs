@@ -8,12 +8,19 @@ use crate::{
     source_retention::profiled_base::{RetentionObservation, VerifiedExport},
     worker_api::AuthenticatedNode,
 };
-use aq_admission::startup::NativeOffer;
+use aq_profiled_state::git_author::{GitAuthor, OfferDelivery};
 use aq_selection::ExecutionTarget;
 
 use crate::error::db;
 use uuid::Uuid;
-pub async fn publish(
+
+pub(super) enum Outcome {
+    Published(Box<OfferDelivery>),
+    Unavailable,
+    NeedsGitAuthor,
+}
+
+pub(super) async fn publish(
     state: &AppState,
     auth: &AuthenticatedNode,
     built: Built,
@@ -21,7 +28,7 @@ pub async fn publish(
     fact: &VerifiedExport,
     inspection: &RetentionObservation,
     slot: u32,
-) -> Result<Option<NativeOffer>, AppError> {
+) -> Result<Outcome, AppError> {
     let mut digests = built
         .native
         .offered
@@ -59,7 +66,7 @@ pub async fn publish(
             .map_err(mc)?
             .is_some()
     {
-        return Ok(None);
+        return Ok(Outcome::Unavailable);
     }
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     let (node, boot) = match built.decision.inputs.node.target {
@@ -88,7 +95,7 @@ pub async fn publish(
     if !slot_free {
         // The slot was taken since the poll's early gate: no offer, no refusal.
         aq_machine_control::recent::forget(node).await;
-        return Ok(None);
+        return Ok(Outcome::Unavailable);
     } else if task_held {
         return Err(refused());
     }
@@ -120,10 +127,29 @@ pub async fn publish(
     if expected_generation as u64 != binding.assignment_generation {
         return Err(refused());
     }
+    let m = &built.state.offer.manifest;
+    let (project, workspace, task) = (
+        m.bindings.project_id,
+        m.bindings.graph_id,
+        m.bindings.task_id,
+    );
+    // Confirmation can land during assembly. Fence it inside publication
+    // before recording a task or slot claim.
+    let git_author = aq_human_work::task_git_author::lookup(&mut *tx, project, workspace, task)
+        .await
+        .map_err(db)?
+        .map(|author| GitAuthor {
+            name: author.name,
+            email: author.email,
+        });
+    if git_author.is_some() && !built.supports_git_author {
+        return Ok(Outcome::NeedsGitAuthor);
+    }
     let time = now(state)?;
-    let stored: StoredOffer =
-        serde_json::from_value(built.central_observation.clone()).map_err(|_| refused())?;
-    stored.read_provenance.validate_at(time)?;
+    built
+        .read_provenance
+        .validate_at(time)
+        .map_err(|_| refused())?;
     if time >= built.deadline
         || time < built.source.admission.observed_at_ms
         || time >= built.source.admission.expires_at_ms
@@ -137,13 +163,14 @@ pub async fn publish(
     let mut native = built.native;
     native.offered.clock =
         aq_admission::transport::DeliveryClock::new(time, built.deadline).map_err(|_| refused())?;
-    native.validate().map_err(|_| refused())?;
+    let delivery = OfferDelivery { native, git_author };
     let original = StoredOffer {
         schema_version: 1,
-        read_provenance: stored.read_provenance,
-        native_offer: native.clone(),
+        read_provenance: built.read_provenance,
+        native_offer: delivery.clone(),
     }
-    .value()?;
+    .value()
+    .map_err(|_| refused())?;
     let session_id = match binding.session {
         aq_session_protocol::SessionIdentity::Remote { session_id, .. } => session_id,
         _ => return Err(refused()),
@@ -203,7 +230,8 @@ pub async fn publish(
         .iter()
         .map(super::artifacts::canonical)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut offered_bytes = native
+    let mut offered_bytes = delivery
+        .native
         .offered
         .artifacts
         .iter()
@@ -218,14 +246,12 @@ pub async fn publish(
         source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection)
     })
     .await?;
-    let m = &built.state.offer.manifest;
     let effective: Vec<_> = m
         .permissions
         .effective
         .iter()
         .map(|p| (p.operation.as_str(), p.resource.as_str()))
         .collect();
-    let (project, task) = (m.bindings.project_id, m.bindings.task_id);
     let grants = crate::agent_access::grant_check::resolve_native(
         &mut tx,
         state,
@@ -256,7 +282,9 @@ pub async fn publish(
         .await
         .map_err(crate::machine_api::mapped)?;
     match tx.commit().await {
-        Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(None),
-        done => done.map(|_| Some(native)).map_err(db),
+        Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(Outcome::Unavailable),
+        done => done
+            .map(|_| Outcome::Published(Box::new(delivery)))
+            .map_err(db),
     }
 }

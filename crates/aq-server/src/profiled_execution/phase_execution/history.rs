@@ -114,7 +114,10 @@ pub(crate) async fn load_optional_locked(
         crate::profiled_execution::source_exports::load_linked_locked(tx, binding.attempt_id)
             .await?;
     provenance.retention.validate_for(linked.token())?;
-    provenance.graph.validate_at(receipt.issued_at_ms)?;
+    provenance
+        .graph
+        .validate_at(receipt.issued_at_ms)
+        .map_err(|_| refused())?;
     let installation = initial_grant::load_installed_receipt_locked(
         tx,
         &accepted.receipt.lease.materials[0],

@@ -177,6 +177,8 @@ impl ProfiledState {
 pub mod claim;
 pub mod default_policy;
 pub mod fairness;
+pub mod git_author;
+pub mod native_offer;
 pub mod replacement;
 pub mod replacement_sql;
 pub mod result_facts;

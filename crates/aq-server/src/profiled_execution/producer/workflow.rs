@@ -24,6 +24,7 @@ use aq_admission::{
     transport::{Poll, TransportDocument},
 };
 use aq_machine_control::holds;
+use aq_profiled_state::git_author::PollDelivery;
 use aq_routing::Placement;
 use aq_selection::{CapabilitySnapshot, ExecutionTarget, TaskLineage};
 use sqlx::Row;
@@ -345,19 +346,22 @@ pub async fn poll(
     auth: &AuthenticatedNode,
     request: &Poll,
 ) -> Result<NativePollPage, AppError> {
-    poll_slot(state, auth, request, 1).await
+    poll_slot(state, auth, request, 1, false)
+        .await
+        .map(PollDelivery::into_native)
 }
-pub async fn poll_slot(
+pub(super) async fn poll_slot(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
     slot: u32,
-) -> Result<NativePollPage, AppError> {
+    supports_git_author: bool,
+) -> Result<PollDelivery, AppError> {
     TransportDocument::Poll(request.clone())
         .validate()
         .map_err(|_| AppError::BadRequest("invalid native poll".into()))?;
     let cancellations = super::super::cancellation::pending(state, auth, &request.identity).await?;
-    let page = NativePollPage {
+    let page = PollDelivery {
         schema_version: 1,
         operation_id: request.operation_id,
         identity: request.identity.clone(),
@@ -382,7 +386,15 @@ pub async fn poll_slot(
         let page = page.clone();
         async move {
             let _permit = permit;
-            let result = Box::pin(offers(&state, &auth, &request, page, slot)).await;
+            let result = Box::pin(offers(
+                &state,
+                &auth,
+                &request,
+                page,
+                slot,
+                supports_git_author,
+            ))
+            .await;
             if let Err(error) = &result {
                 tracing::warn!(node_id = %auth.id(), ?error, "background offer assembly refused");
             }
@@ -402,9 +414,10 @@ async fn offers(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
-    mut page: NativePollPage,
+    mut page: PollDelivery,
     slot: u32,
-) -> Result<NativePollPage, AppError> {
+    supports_git_author: bool,
+) -> Result<PollDelivery, AppError> {
     let (runtime, snapshot, modes) = on_heap(|| runtime(state, auth, request)).await?;
     if request.available.slots == 0 {
         return Ok(page);
@@ -413,7 +426,10 @@ async fn offers(
     if let Some(native) =
         on_heap(|| super::redelivery::existing(state, auth, request, slot)).await?
     {
-        page.server_time_ms = native.offered.clock.server_time_ms;
+        if native.git_author.is_some() && !supports_git_author {
+            return Ok(page);
+        }
+        page.server_time_ms = native.native.offered.clock.server_time_ms;
         page.offers.push(native);
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);
@@ -559,7 +575,11 @@ async fn offers(
                     (c.revision.task_id, &c.node, class)
                 });
                 let role_held = crate::role_settings::held(state, &record.binding, nodes).await?;
-                let (revision, project) = (record.revision, policy.project_id);
+                let (revision, project, workspace) = (
+                    record.revision,
+                    policy.project_id,
+                    record.binding.graph_workspace_id,
+                );
                 let (placed, items, role_held) = (&placements, &ready.items, &role_held);
                 if let Some((task, assessment)) = on_heap(|| {
                     first_eligible_task(&ready, &skipped, |task| async move {
@@ -571,6 +591,18 @@ async fn offers(
                             return Ok(Assessment::Blocked("route_missing"));
                         }
                         let (pool, at) = (&state.store.pool, (state.clock)());
+                        // A worker's wire support is local to this poll.
+                        // Keep scanning without persisting a hold on the task.
+                        if !supports_git_author
+                            && aq_human_work::task_git_author::lookup(
+                                pool, project, workspace, task,
+                            )
+                            .await
+                            .map_err(db)?
+                            .is_some()
+                        {
+                            return Ok(Assessment::Blocked("git_author_unsupported"));
+                        }
                         let seen = holds::attempts(pool, task).await;
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
@@ -690,7 +722,8 @@ async fn offers(
             &context,
             compiled.projection.artifact.digest.clone(),
             now(state)?,
-        )?;
+        )
+        .map_err(|_| refused())?;
         let original_ready_node = canonical(
             &ready
                 .items
@@ -911,6 +944,7 @@ async fn offers(
                 logical_identity: &token.request().logical_identity,
                 generation,
                 enrolled,
+                supports_git_author,
             })
         })
         .await?;
@@ -939,11 +973,18 @@ async fn offers(
                 .await?;
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         aq_machine_control::recent::forget(auth.id()).await;
-        let Some(offer) = offer else { return Ok(page) };
+        let offer = match offer {
+            publication::Outcome::Published(offer) => *offer,
+            publication::Outcome::Unavailable => return Ok(page),
+            publication::Outcome::NeedsGitAuthor => {
+                skipped.insert(task.task_id);
+                continue;
+            }
+        };
         if crate::role_settings::tables(state) {
             aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
         }
-        page.server_time_ms = offer.offered.clock.server_time_ms;
+        page.server_time_ms = offer.native.offered.clock.server_time_ms;
         page.offers.push(offer);
         page.validate_for(request).map_err(|_| refused())?;
         return Ok(page);

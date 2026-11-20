@@ -35,10 +35,11 @@ pub struct Built {
     pub graph_profile: Value,
     pub work_kind: Option<String>,
     pub context: Value,
-    pub central_observation: Value,
+    pub read_provenance: super::observation::ReadProvenance,
     pub source: Observation,
     pub decision: Decision,
     pub deadline: u64,
+    pub supports_git_author: bool,
     /// Spec 0016 §5.2: recorded with the attempt and served by `/v1/git/grants`.
     #[cfg(feature = "delivery_playbook")]
     pub git: Option<aq_delivery::git_grant::GitGrant>,
@@ -192,6 +193,7 @@ pub struct Assembly<'a> {
     pub logical_identity: &'a str,
     pub generation: u64,
     pub enrolled: bool,
+    pub supports_git_author: bool,
 }
 /// Re-derives the frozen confinement mode from the selection's placement facts
 /// and the role's execution profile.
@@ -222,6 +224,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         logical_identity,
         generation,
         enrolled,
+        supports_git_author,
     } = input;
     let selected: &ResolvedSelection = decision
         .outcome
@@ -733,18 +736,14 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         effects: Effects::Unknown,
     };
     state_projection.validate().map_err(|_| refused())?;
-    let central_observation = super::observation::StoredOffer {
-        schema_version: 1,
-        read_provenance: super::observation::ReadProvenance::capture(
-            task,
-            ready,
-            context,
-            compiled.projection.artifact.digest.clone(),
-            time,
-        )?,
-        native_offer: native.clone(),
-    }
-    .value()?;
+    let read_provenance = super::observation::ReadProvenance::capture(
+        task,
+        ready,
+        context,
+        compiled.projection.artifact.digest.clone(),
+        time,
+    )
+    .map_err(|_| refused())?;
     Ok(Built {
         runtime: runtime.clone(),
         native,
@@ -754,10 +753,11 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         graph_profile: profile,
         work_kind: compiled.work_kind,
         context: compiled.projection.context,
-        central_observation,
+        read_provenance,
         source,
         decision,
         deadline,
+        supports_git_author,
         #[cfg(feature = "delivery_playbook")]
         git,
     })
