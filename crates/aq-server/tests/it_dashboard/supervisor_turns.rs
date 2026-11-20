@@ -159,6 +159,49 @@ impl Fixture {
             .unwrap();
         f
     }
+    /// Makes the supervisor the one the binding trigger created for `project`.
+    async fn scope_to(&mut self, project: Uuid) {
+        self.conversation = sqlx::query_scalar(
+            "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+        )
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap();
+        self.actor =
+            sqlx::query_scalar("SELECT actor_id FROM supervisor_controls WHERE conversation_id=$1")
+                .bind(self.conversation)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap();
+        sqlx::query(
+        "UPDATE supervisor_controls SET enabled=true,profile='{}',approved_by=$2 WHERE actor_id=$1",
+    )
+    .bind(self.actor)
+    .bind(self.user.id)
+    .execute(&self.pool)
+    .await
+    .unwrap();
+        self.owner()
+            .configure_actor(
+                &self.user,
+                &serde_json::to_vec(&Configure {
+                    operation_id: Uuid::new_v4(),
+                    actor_id: self.actor,
+                    expected_actor_revision: 0,
+                    policy: LocalPolicy {
+                        schema_version: 1,
+                        kind: PolicyKind::GlobalSupervisorReservation,
+                        actor_id: self.actor,
+                        conversation_id: self.conversation,
+                        enabled: true,
+                    },
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
     fn owner(&self) -> ReservationOwner {
         ReservationOwner::new(&self.state)
     }
@@ -1540,46 +1583,7 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
     let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Scoped test\",\"enabled\":true}',1,'{}')").bind(project).execute(&f.pool).await.unwrap();
-    f.conversation = sqlx::query_scalar(
-        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
-    )
-    .bind(project)
-    .fetch_one(&f.pool)
-    .await
-    .unwrap();
-    f.actor =
-        sqlx::query_scalar("SELECT actor_id FROM supervisor_controls WHERE conversation_id=$1")
-            .bind(f.conversation)
-            .fetch_one(&f.pool)
-            .await
-            .unwrap();
-    sqlx::query(
-        "UPDATE supervisor_controls SET enabled=true,profile='{}',approved_by=$2 WHERE actor_id=$1",
-    )
-    .bind(f.actor)
-    .bind(f.user.id)
-    .execute(&f.pool)
-    .await
-    .unwrap();
-    f.owner()
-        .configure_actor(
-            &f.user,
-            &serde_json::to_vec(&Configure {
-                operation_id: Uuid::new_v4(),
-                actor_id: f.actor,
-                expected_actor_revision: 0,
-                policy: LocalPolicy {
-                    schema_version: 1,
-                    kind: PolicyKind::GlobalSupervisorReservation,
-                    actor_id: f.actor,
-                    conversation_id: f.conversation,
-                    enabled: true,
-                },
-            })
-            .unwrap(),
-        )
-        .await
-        .unwrap();
+    f.scope_to(project).await;
     f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;
@@ -1642,12 +1646,12 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
         );
         assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
     }
-    // With it, another project reads through the owner bridge.
+    // With it, the owner bridge refuses another project.
     #[cfg(feature = "supervisor_full_access")]
     {
         let cross = format!("/v1/supervisor/owner/api/human/conversations/projects/{other}");
         let (status, out) = read(cross).await;
-        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
     }
     f.answer(&p).await;
     f.assert_consumed(r.id).await;

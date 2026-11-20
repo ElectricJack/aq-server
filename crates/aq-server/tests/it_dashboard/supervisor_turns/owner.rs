@@ -36,6 +36,8 @@ struct Owner {
     machine: Router,
     owner: Router,
     project: Uuid,
+    /// A second bound project.
+    other: Uuid,
     workspace: Uuid,
     graph: Graph,
     server: tokio::task::JoinHandle<()>,
@@ -51,7 +53,21 @@ impl Drop for Owner {
 /// with a bound project on a fake Graph. A request without the dev header is
 /// not the owner, so only the bridge can make a headerless request the owner's.
 async fn owner() -> Owner {
+    build(false).await
+}
+
+/// [`owner`], but the supervisor is the project supervisor of `project`.
+async fn project_owner() -> Owner {
+    build(true).await
+}
+
+async fn build(scoped: bool) -> Owner {
     let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let (project, workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    bind(&f, project, workspace).await;
+    if scoped {
+        f.scope_to(project).await;
+    }
     f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;
@@ -66,8 +82,8 @@ async fn owner() -> Owner {
         reqwest::Client::new(),
     );
     let (graph, server, dir) = graph_runtime(&mut f.state).await;
-    let (project, workspace) = (Uuid::new_v4(), Uuid::new_v4());
-    bind(&f, project, workspace).await;
+    let other = Uuid::new_v4();
+    bind(&f, other, Uuid::new_v4()).await;
     let owner = aq_server::build_admin_router(f.state.clone());
     let machine = aq_server::build_worker_router_with_owner_app(f.state.clone(), owner.clone());
     Owner {
@@ -76,6 +92,7 @@ async fn owner() -> Owner {
         machine,
         owner,
         project,
+        other,
         workspace,
         graph,
         server,
@@ -453,16 +470,9 @@ impl Owner {
 
 #[tokio::test]
 async fn project_supervisor_creates_a_task_in_another_project() {
-    let o = owner().await;
-    // Synthetic, on this test's own database: scope the fixture supervisor
-    // to an unbound project, so the bound one is another project.
-    for sql in [
-        "ALTER TABLE supervisor_conversation_ids DISABLE TRIGGER supervisor_scope_immutable",
-        "ALTER TABLE supervisor_conversation_ids DROP CONSTRAINT supervisor_conversation_ids_project_id_fkey",
-        "UPDATE supervisor_conversation_ids SET project_id=gen_random_uuid() WHERE project_id IS NULL",
-    ] {
-        sqlx::query(sql).execute(&o.f.pool).await.unwrap();
-    }
+    let mut o = project_owner().await;
+    // Create in the second project, not the supervisor's own.
+    o.project = o.other;
     let (status, out) = o.direct("POST", "/api/v1/actions", Some(o.create())).await;
     assert_eq!(status, StatusCode::OK, "{out}");
     assert_eq!(out["data"]["disposition"], "confirmed", "{out}");
@@ -497,4 +507,69 @@ async fn operation_show_still_finds_the_supervisors_own_task_create() {
     let (status, shown) = o.direct("GET", &path, None).await;
     assert_eq!(status, StatusCode::OK, "{shown}");
     assert_eq!(shown["data"], sent["data"]);
+}
+
+const REFUSAL: &str = "Project supervisor can act only on its own project";
+
+#[tokio::test]
+async fn project_supervisor_activates_and_comments_in_its_own_project() {
+    let o = project_owner().await;
+    let (id, a) = o.draft();
+    let request = json!({"operation_id":a["operation_id"],"subject":a["subject"],
+        "expected_versions":a["expected_versions"],"params":a["payload"]});
+    let (status, out) = o.command("task.activate", request).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(o.graph.nodes.lock().unwrap()[&id]["task_state"], "active");
+    let op = Uuid::new_v4();
+    let params = json!({"task_id":id,"project_id":o.project,"operation_id":op,"body":"Own"});
+    let (status, out) = o
+        .command(
+            "task.comment.add",
+            json!({"operation_id":op,"params":params}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let params = json!({"project_id":o.project});
+    let (status, out) = o.command("task.list", json!({"params":params})).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+}
+
+#[tokio::test]
+async fn project_supervisor_is_refused_outside_its_project() {
+    let o = project_owner().await;
+    let (_, mut a) = o.draft();
+    a["payload"]["project_id"] = json!(o.other);
+    let activate = json!({"operation_id":a["operation_id"],"subject":a["subject"],
+        "expected_versions":a["expected_versions"],"params":a["payload"]});
+    let list = json!({"params":{"project_id":o.other}});
+    for (name, request) in [
+        ("task.activate", activate),
+        ("task.list", list),
+        ("dashboard.swarm", json!({})),
+        ("worker.list", json!({})),
+        ("playbook.source.list", json!({})),
+    ] {
+        let (status, out) = o.command(name, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {out}");
+        assert_eq!(out["message"], REFUSAL, "{name}: {out}");
+    }
+    assert!(o.graph.posts.lock().unwrap().is_empty(), "nothing written");
+}
+
+#[tokio::test]
+async fn project_supervisor_action_body_bounds() {
+    let o = project_owner().await;
+    let path = format!("{PREFIX}/api/v1/actions");
+    for (body, expected) in [
+        ("{not json".to_string(), StatusCode::BAD_REQUEST),
+        (" ".repeat(70_000), StatusCode::PAYLOAD_TOO_LARGE),
+    ] {
+        let request = Request::post(&path)
+            .header("authorization", format!("Bearer {}", o.token))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        let response = o.machine.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
 }
