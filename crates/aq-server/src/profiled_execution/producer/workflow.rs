@@ -150,10 +150,18 @@ async fn reservation(
     state: &AppState,
     compiled: &compose::Compiled,
     operation: Uuid,
+    task: Uuid,
     observed: source::Observation,
 ) -> Result<source_exports::Reservation, AppError> {
     let project = compiled.frozen.project.binding.project_id;
     if let Some(old) = source_exports::recover_existing(state, operation, project).await? {
+        let token = match &old {
+            source_exports::Reservation::Pending(token)
+            | source_exports::Reservation::Verified {
+                reservation: token, ..
+            } => token,
+        };
+        source::require_base(state, task, &observed, token.request()).await?;
         return Ok(old);
     }
     // Original proposal remains Context. Final Source owner publication is a
@@ -292,27 +300,6 @@ fn frozen_commit<'a>(
         SourceSelection::Immutable { .. } => None,
         SourceSelection::NamedRef { .. } => Some(observed.admission.resolved_object.hex.as_str()),
     }
-}
-fn source_operation<T: serde::Serialize>(
-    project: Uuid,
-    task: &aq_admission::TaskRevision,
-    project_revision: u64,
-    generation: u64,
-    policy_ref: T,
-    frozen_commit: Option<&str>,
-) -> Result<Uuid, AppError> {
-    let key = match frozen_commit {
-        None => canonical(&(project, task, project_revision, generation, policy_ref))?,
-        Some(commit) => canonical(&(
-            project,
-            task,
-            project_revision,
-            generation,
-            policy_ref,
-            commit,
-        ))?,
-    };
-    Ok(Uuid::new_v5(&Uuid::from_bytes(*b"aq-native-export"), &key))
 }
 async fn first_eligible_task<F, Fut>(
     ready: &crate::agent_access::scheduling::ReadyPage,
@@ -693,9 +680,8 @@ async fn offers(
             }
             compiled => compiled?,
         };
-        // An earlier refusal of this task's offer no longer describes it.
         if crate::role_settings::tables(state) {
-            aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
+            aq_role_settings::refusals::clear_after_compose(&state.store.pool, task.task_id).await;
         }
         super::observation::ReadProvenance::capture(
             &task,
@@ -753,14 +739,22 @@ async fn offers(
                         .await?
                     }
                     None => {
-                        on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
+                        on_heap(|| {
+                            source::observe_for_offer(
+                                state,
+                                &compiled.frozen,
+                                &policy_record,
+                                &context,
+                            )
+                        })
+                        .await?
                     }
                 };
                 let frozen = match &handoff {
                     Some(base) => Some(base.oid.as_str()),
                     None => frozen_commit(&policy.source, &observed),
                 };
-                let operation = source_operation(
+                let operation = aq_delivery::offer_source::export_operation(
                     policy.project_id,
                     &task,
                     record.revision,
@@ -769,8 +763,10 @@ async fn offers(
                         .project_policy_ref(policy.project_id)
                         .map_err(|_| refused())?,
                     frozen,
-                )?;
-                let reserved = on_heap(|| reservation(state, &compiled, operation, observed));
+                )
+                .map_err(|_| AppError::Internal)?;
+                let reserved =
+                    on_heap(|| reservation(state, &compiled, operation, task.task_id, observed));
                 Ok(match reserved.await? {
                     source_exports::Reservation::Pending(token) => {
                         let fact = on_heap(|| profiled_base::verify_export(state, &token)).await?;
@@ -791,6 +787,10 @@ async fn offers(
             }
             .await;
             match fresh {
+                Err(AppError::Conflict(reason)) if not_offered(&reason) => {
+                    skipped.insert(task.task_id);
+                    continue;
+                }
                 // Q1 (live acceptance D5): a refused handoff export skips the task.
                 // #116 I1, M1: a counted skip; held as `handoff_successor_stuck` once stuck.
                 Err(error @ AppError::Conflict(_)) if handoff.is_some() => {
@@ -860,19 +860,34 @@ async fn offers(
         if replacement.is_some() {
             holds::cleared(&state.store.pool, task.task_id).await;
         }
-        let source = if replacement.is_some() {
-            on_heap(|| {
-                source::observe_retained(state, &compiled.frozen, &policy_record, token.request())
-            })
-            .await?
-        } else {
-            on_heap(|| source::observe(state, &compiled.frozen, &policy_record)).await?
-        };
-        if source.admission.resolved_object.hex != token.request().base.hex
-            || source.admission.repository_binding_generation != token.request().binding_generation
-        {
-            return Err(refused());
+        let observed = async {
+            let source = if replacement.is_some() {
+                on_heap(|| {
+                    source::observe_retained(
+                        state,
+                        &compiled.frozen,
+                        &policy_record,
+                        token.request(),
+                    )
+                })
+                .await?
+            } else {
+                on_heap(|| {
+                    source::observe_for_offer(state, &compiled.frozen, &policy_record, &context)
+                })
+                .await?
+            };
+            source::require_base(state, task.task_id, &source, token.request()).await?;
+            Ok(source)
         }
+        .await;
+        let source = match observed {
+            Err(AppError::Conflict(reason)) if not_offered(&reason) => {
+                skipped.insert(task.task_id);
+                continue;
+            }
+            observed => observed?,
+        };
         let built = on_heap(|| {
             build::assemble(build::Assembly {
                 state,
@@ -915,6 +930,9 @@ async fn offers(
         tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
         aq_machine_control::recent::forget(auth.id()).await;
         let Some(offer) = offer else { return Ok(page) };
+        if crate::role_settings::tables(state) {
+            aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
+        }
         page.server_time_ms = offer.offered.clock.server_time_ms;
         page.offers.push(offer);
         page.validate_for(request).map_err(|_| refused())?;
@@ -1076,35 +1094,6 @@ mod tests {
         }
         assert_eq!(skipped.len(), MAX_SKIPPED);
     }
-    #[test]
-    fn named_ref_resolves_to_exact_commit_at_offer() {
-        let project = Uuid::from_u128(7);
-        let task = aq_admission::TaskRevision {
-            workspace_id: Uuid::from_u128(8),
-            task_id: Uuid::from_u128(9),
-            version: 1,
-            content_revision: 1,
-        };
-        let policy_ref = "policy";
-        let (a, b) = ("a".repeat(40), "b".repeat(40));
-        let key = |commit: Option<&str>| {
-            source_operation(project, &task, 3, 1, policy_ref, commit).unwrap()
-        };
-        // The commit resolved at offer time is part of the export identity:
-        // a moved ref is a new operation, never the old one following the ref.
-        assert_ne!(key(Some(&a)), key(Some(&b)));
-        assert_eq!(key(Some(&a)), key(Some(&a)));
-        assert_ne!(key(Some(&a)), key(None));
-        // Immutable policies keep their historical operation key.
-        assert_eq!(
-            key(None),
-            Uuid::new_v5(
-                &Uuid::from_bytes(*b"aq-native-export"),
-                &canonical(&(project, &task, 3_u64, 1_u64, policy_ref)).unwrap()
-            )
-        );
-    }
-
     #[tokio::test]
     async fn ready_selection_returns_empty_when_blocked_but_never_skips_owner_read_errors() {
         let ready = ready(2);

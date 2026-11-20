@@ -10,6 +10,7 @@ pub mod git_grant;
 pub mod github;
 #[cfg(feature = "delivery_playbook")]
 pub mod main_sync;
+pub mod offer_source;
 mod policy;
 mod protocol;
 mod reconcile;

@@ -19,6 +19,9 @@ use std::{path::Path, time::Duration};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+mod ancestry;
+pub use ancestry::dependent_current;
+
 /// The named ref of one repository binding that a project follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
@@ -281,11 +284,30 @@ pub async fn current(
     now_ms: impl Fn() -> u64,
 ) -> Result<MainSync> {
     let limits = limits(pool).await?;
-    if let Some(synced) = latest(pool, scope).await?
-        && synced.fresh(now_ms(), limits.main_freshness_ms)
-    {
+    if let Some(synced) = cached(pool, scope, &limits, &now_ms).await? {
         return Ok(synced);
     }
+    refresh(pool, socket, scope, &limits, now_ms).await
+}
+
+async fn cached(
+    pool: &PgPool,
+    scope: &Scope,
+    limits: &DeliveryLimits,
+    now_ms: impl Fn() -> u64,
+) -> Result<Option<MainSync>> {
+    Ok(latest(pool, scope)
+        .await?
+        .filter(|synced| synced.fresh(now_ms(), limits.main_freshness_ms)))
+}
+
+async fn refresh(
+    pool: &PgPool,
+    socket: &Path,
+    scope: &Scope,
+    limits: &DeliveryLimits,
+    now_ms: impl Fn() -> u64,
+) -> Result<MainSync> {
     let synced = retain(pool, socket, scope, limits.git_transfer_timeout_ms, &now_ms).await?;
     if !synced.fresh(now_ms(), limits.main_freshness_ms) {
         return Err(DeliveryError::Protocol);
