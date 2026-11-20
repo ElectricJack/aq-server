@@ -11,19 +11,18 @@ use crate::{
         service::Service,
     },
 };
+use aq_playbook_domain::view_store::ViewStore;
 use aq_playbook_host::{model::Artifact, runner};
 use axum::{
     Extension, Json,
     extract::{Path, Query},
 };
 use serde::Serialize;
-use sqlx::Row;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     sync::Arc,
     time::Duration,
 };
-use uuid::Uuid;
 
 const ACTIVATION_PAGES: usize = 4;
 /// Per-page budget for reading current activations. 500 ms was too tight on
@@ -81,107 +80,11 @@ pub(super) async fn definition_graph(
 }
 
 impl Service {
-    /// Idempotent: the first install of an artifact in this namespace
-    /// generation fixes its per-name version.
     pub(crate) async fn register_definition(&self, artifact: &Artifact) -> Result<()> {
-        let graph = graph_for_storage(&artifact.content.playbook)?;
         let mut tx = self.tx().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-            .bind(format!(
-                "aq.playbook.definitions/{}/{}",
-                self.namespace.namespace_id, self.namespace.generation
-            ))
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO playbook_definitions(namespace_id,generation,artifact,name,version,graph,registered_at_ms) SELECT $1,$2,$3,$4,COALESCE(MAX(version),0)+1,$5,$6 FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND name=$4 ON CONFLICT (namespace_id,generation,artifact) DO NOTHING")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&artifact.digest)
-            .bind(&artifact.content.playbook.id)
-            .bind(graph)
-            .bind(self.current_time())
-            .execute(&mut *tx)
-            .await?;
+        ViewStore(&self.namespace).register_definition(&mut tx, artifact, self.current_time()).await?;
         tx.commit().await?;
         Ok(())
-    }
-    async fn registered(&self, artifacts: &[String]) -> Result<BTreeMap<String, (String, i64)>> {
-        let mut tx = self.tx().await?;
-        let rows = sqlx::query("SELECT artifact,name,version FROM playbook_definitions WHERE namespace_id=$1 AND generation=$2 AND artifact=ANY($3)")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(artifacts)
-            .fetch_all(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| (row.get("artifact"), (row.get("name"), row.get("version"))))
-            .collect())
-    }
-    /// Binding and activation revision of runs admitted through a retained
-    /// admission. Binding is null for admissions prepared before it was kept.
-    async fn admitted_runs(
-        &self,
-        runs: &[String],
-    ) -> Result<BTreeMap<String, (Option<String>, i64)>> {
-        if runs.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let mut tx = self.tx().await?;
-        let rows = sqlx::query("SELECT receipt->>'run_id' AS run_id,binding,expected_activation_revision FROM playbook_admissions WHERE namespace_id=$1 AND generation=$2 AND receipt IS NOT NULL AND receipt->>'run_id'=ANY($3)")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(runs)
-            .fetch_all(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.get("run_id"),
-                    (row.get("binding"), row.get("expected_activation_revision")),
-                )
-            })
-            .collect())
-    }
-    async fn pending_decisions(&self, intents: &[String]) -> Result<BTreeMap<String, WaitingView>> {
-        if intents.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let mut tx = self.tx().await?;
-        let rows = sqlx::query("SELECT e.intent_id,e.receipt->>'handle' AS handle,d.state,s.task_id FROM playbook_effects e LEFT JOIN human_decision_requests d ON d.decision_id::text=e.receipt->>'handle' LEFT JOIN review_subjects s ON s.subject_digest=d.subject_digest WHERE e.namespace_id=$1 AND e.generation=$2 AND e.command_name='decision.request' AND e.intent_id=ANY($3)")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(intents)
-            .fetch_all(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        let mut out = BTreeMap::new();
-        for row in rows {
-            let intent: String = row.get("intent_id");
-            // A queued or refused request has no decision handle yet: the run
-            // is not waiting on a human decision, so no view (never an error
-            // that would hide the whole runs page).
-            let Some(decision_id) = row
-                .get::<Option<String>, _>("handle")
-                .and_then(|h| Uuid::parse_str(&h).ok())
-            else {
-                continue;
-            };
-            out.insert(
-                intent.clone(),
-                WaitingView {
-                    kind: "decision".into(),
-                    intent,
-                    decision_id,
-                    decision_state: row.get("state"),
-                    related_task_ids: row.get::<Option<Uuid>, _>("task_id").into_iter().collect(),
-                },
-            );
-        }
-        Ok(out)
     }
 }
 impl Driver {
@@ -239,14 +142,17 @@ impl Driver {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let registry = self.service.registered(&artifacts).await?;
+        let store = ViewStore(&self.service.namespace);
+        let mut tx = self.service.tx().await?;
+        let registry = store.registered(&mut tx, &artifacts).await?;
         let intents = runs
             .iter()
             .flat_map(|r| r.pending_intents.iter().cloned())
             .collect::<Vec<_>>();
-        let waiting = self.service.pending_decisions(&intents).await?;
+        let waiting = store.pending_decisions(&mut tx, &intents).await?;
         let ids = runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
-        let admitted = self.service.admitted_runs(&ids).await?;
+        let admitted = store.admitted_runs(&mut tx, &ids).await?;
+        tx.commit().await?;
         for run in runs.iter_mut() {
             if let Some((binding, revision)) = admitted.get(&run.id) {
                 run.binding = binding.clone();

@@ -14,9 +14,11 @@ pub mod host_operations;
 pub mod host_requests;
 pub mod host_values;
 pub mod inspection;
+pub mod loaded_definitions;
 pub mod playbook_view;
 pub mod review_domain;
 mod step_inspection;
+pub mod view_store;
 pub mod work_mutations;
 use aq_playbook_host::{
     model::*,
