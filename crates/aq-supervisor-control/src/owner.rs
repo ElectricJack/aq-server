@@ -38,8 +38,14 @@ pub async fn approving_owner(
 /// Whether the request names at least one project and every project it names
 /// is `project`: each segment after `projects` in `path` (no query), and for
 /// `POST /api/v1/actions` the body's `payload.project_id` and project subject.
+/// Replacing the binding (`project.set`) and any `playbook.*` action are
+/// refused: either would reach past the project.
 pub fn names_only(project: uuid::Uuid, method: &Method, path: &str, body: Option<&Value>) -> bool {
     let segments: Vec<&str> = path.split('/').collect();
+    // project.set could repoint the binding at another project's workspace.
+    if method == Method::POST && matches!(segments[..], ["", "api", "projects", _]) {
+        return false;
+    }
     // An unparsable id still counts as named, so it can only refuse.
     let mut named: Vec<Option<uuid::Uuid>> = segments
         .windows(2)
@@ -48,6 +54,11 @@ pub fn names_only(project: uuid::Uuid, method: &Method, path: &str, body: Option
         .collect();
     let id = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| s.parse().ok());
     if let (&Method::POST, "/api/v1/actions", Some(body)) = (method, path, body) {
+        // Playbook policy is global even when its namespace is this project.
+        let kind = body.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if kind.starts_with("playbook.") {
+            return false;
+        }
         if let Some(p) = body.pointer("/payload/project_id") {
             named.push(id(Some(p)));
         }
@@ -207,6 +218,23 @@ mod tests {
         ] {
             let named = names_only(P, &Method::POST, "/api/v1/actions", Some(&body));
             assert_eq!(named, expected, "{body}");
+        }
+    }
+
+    #[test]
+    fn names_only_refuses_binding_replacement_and_playbook_actions() {
+        let path = format!("/api/projects/{P}");
+        assert!(names_only(P, &Method::GET, &path, None));
+        assert!(!names_only(P, &Method::POST, &path, None));
+        let disable = format!("/api/projects/{P}/disable");
+        assert!(names_only(P, &Method::POST, &disable, None));
+        for kind in ["playbook.run.start", "playbook.activation.rollback"] {
+            let body =
+                json!({"kind":kind,"subject":{"type":"project","id":P},"payload":{"project_id":P}});
+            assert!(
+                !names_only(P, &Method::POST, "/api/v1/actions", Some(&body)),
+                "{kind}"
+            );
         }
     }
 

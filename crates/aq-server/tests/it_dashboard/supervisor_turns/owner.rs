@@ -599,3 +599,29 @@ async fn project_supervisor_is_refused_when_its_workspace_is_shared() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
     assert_eq!(out["message"], REFUSAL, "{out}");
 }
+
+#[tokio::test]
+async fn project_supervisor_cannot_replace_its_binding() {
+    let o = project_owner().await;
+    let path = format!("/api/projects/{}", o.project);
+    let (status, shown) = o.supervisor("GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    let mut binding = shown["binding"].clone();
+    binding["graph_workspace_id"] = json!(Uuid::new_v4());
+    let put = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"binding":binding});
+    let (status, out) = o.supervisor("POST", &path, Some(put)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert_eq!(out["message"], REFUSAL, "{out}");
+    let (_, after) = o.supervisor("GET", &path, None).await;
+    assert_eq!(after, shown, "binding unchanged");
+}
+
+#[tokio::test]
+async fn project_supervisor_cannot_send_playbook_actions() {
+    let o = project_owner().await;
+    let payload = json!({"operation_id":Uuid::new_v4(),"project_id":o.project});
+    let start = action("playbook.run.start", "project", o.project, "1", payload);
+    let (status, out) = o.supervisor("POST", "/api/v1/actions", Some(start)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert_eq!(out["message"], REFUSAL, "{out}");
+}
