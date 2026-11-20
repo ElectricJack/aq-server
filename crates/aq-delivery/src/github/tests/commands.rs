@@ -762,7 +762,7 @@ async fn a_frozen_request_runs_as_the_command_it_was_accepted_for() {
         panic!("not done")
     };
     assert_eq!(c.outcome, "published");
-    assert_eq!(git.request(0)["params"]["expected_old"], sha('1'));
+    assert_eq!(git.request(0)["params"]["expected_old"]["hex"], sha('1'));
     // merge with no pull request: refused, nothing sent anywhere.
     let r = run(
         "pull_request.merge",
