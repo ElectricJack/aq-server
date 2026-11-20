@@ -1,0 +1,7 @@
+name = "graph_deploy"
+version = "0.2.0"
+protocol = "aq.plugin/1"
+exe = "bin/graph-deploy"
+contracts = "contracts/registry.json"
+notes = "contracts/notes.json"
+bindings = "plugins/graph_deploy/bindings.toml"

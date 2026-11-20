@@ -2242,7 +2242,7 @@ mod delivery {
     // The asynchronous delivery commands: main.sync, branch.publish and
     // pull_request.*. A fake forge and central git stand behind the port; the
     // adapters over GitHub and aq-git are tested in `aq-delivery`.
-    mod commands {
+    pub(super) mod commands {
         use super::*;
         use aq_delivery::{
             Checks, ChecksState, GitHubAdapter, GitHubRepository, MergeMethod, MergeOutcome,
@@ -2264,6 +2264,7 @@ mod delivery {
             log: Mutex<Vec<String>>,
             checks: Mutex<(ChecksState, Vec<String>)>,
             delete_unavailable: Mutex<bool>,
+            merge_sha: Mutex<String>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2371,7 +2372,9 @@ mod delivery {
                     .lock()
                     .unwrap()
                     .push(format!("merge {} {expected_head_sha}", method.as_str()));
-                Ok(MergeOutcome::Merged { sha: oid('d') })
+                Ok(MergeOutcome::Merged {
+                    sha: self.merge_sha.lock().unwrap().clone(),
+                })
             }
             async fn close(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push("close".into());
@@ -2385,21 +2388,11 @@ mod delivery {
                 Ok(aq_delivery::BranchDeletion::Deleted)
             }
         }
-        struct Ops(Arc<Fake>);
+        struct Ops(Arc<Fake>, DeliveryTarget);
         #[async_trait::async_trait]
         impl DeliveryOps for Ops {
             async fn target(&self, _: Uuid) -> Result<Option<DeliveryTarget>> {
-                Ok(Some(DeliveryTarget {
-                    git: GitTarget {
-                        repository_id: Uuid::from_u128(1),
-                        binding_generation: 1,
-                    },
-                    github: GitHubRepository {
-                        owner: "Acme".into(),
-                        name: "widgets".into(),
-                    },
-                    default_branch: "main".into(),
-                }))
+                Ok(Some(self.1.clone()))
             }
             async fn commands(&self) -> Option<Delivery> {
                 Some(Delivery::new(self.0.clone(), self.0.clone()))
@@ -2410,16 +2403,84 @@ mod delivery {
         }
 
         async fn harness() -> (D, Arc<Fake>) {
+            harness_for(DeliveryTarget {
+                git: GitTarget {
+                    repository_id: Uuid::from_u128(1),
+                    binding_generation: 1,
+                },
+                github: GitHubRepository {
+                    owner: "Acme".into(),
+                    name: "widgets".into(),
+                },
+                default_branch: "main".into(),
+            })
+            .await
+        }
+
+        async fn harness_for(target: DeliveryTarget) -> (D, Arc<Fake>) {
             let mut h = delivery(false).await;
             let fake = Arc::new(Fake {
                 log: Mutex::default(),
                 checks: Mutex::new((ChecksState::Pending, vec![])),
                 delete_unavailable: Mutex::new(false),
+                merge_sha: Mutex::new(oid('d')),
             });
             // By value: the port of a shared (cloned) service is not replaced.
-            h.service = h.service.with_delivery_ops(Arc::new(Ops(fake.clone())));
+            h.service = h
+                .service
+                .with_delivery_ops(Arc::new(Ops(fake.clone(), target)));
             (h, fake)
         }
+        /// A disposable Host10 producer with its real operation/evidence store.
+        /// Only central Git and the forge response are scripted.
+        pub(crate) struct GraphMergeHost {
+            host: D,
+            forge: Arc<Fake>,
+            pub(crate) repository: Uuid,
+        }
+
+        impl GraphMergeHost {
+            pub(crate) async fn new() -> Self {
+                let repository = Uuid::new_v4();
+                let (host, forge) = harness_for(DeliveryTarget {
+                    git: GitTarget {
+                        repository_id: repository,
+                        binding_generation: 1,
+                    },
+                    github: GitHubRepository {
+                        owner: "ElectricJack".into(),
+                        name: "aq-graph".into(),
+                    },
+                    default_branch: "main".into(),
+                })
+                .await;
+                Self {
+                    host,
+                    forge,
+                    repository,
+                }
+            }
+
+            pub(crate) fn fixture(&self) -> &common::profiled::Fixture {
+                &self.host.f
+            }
+
+            pub(crate) async fn merge(&self, revision: &str) -> Uuid {
+                let (task, _) = self.host.stopped(self.host.scope.project_id, "success");
+                self.host.pull_request(task, "passed", json!([])).await;
+                *self.forge.merge_sha.lock().unwrap() = revision.into();
+                let handle = self
+                    .host
+                    .accepted(
+                        "pull_request.merge",
+                        json!({"task": task, "method": "merge", "expected_head_sha": oid('a')}),
+                    )
+                    .await;
+                assert_eq!(self.host.pass().await, 1);
+                Uuid::parse_str(&handle).unwrap()
+            }
+        }
+
         impl D {
             /// A command that answers `accepted {handle}`: its handle.
             async fn accepted(&self, name: &str, input: Value) -> String {
@@ -2764,3 +2825,6 @@ mod delivery {
         }
     }
 }
+
+#[cfg(feature = "delivery_playbook")]
+pub(crate) use delivery::commands::GraphMergeHost;
