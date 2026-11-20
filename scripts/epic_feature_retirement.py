@@ -165,7 +165,7 @@ class Graph:
                     return None
                 if reply.code != 503 or attempt == 2:
                     raise GraphError(reply.code, json.load(reply)) from None
-            except (URLError, TimeoutError) as error:
+            except (URLError, TimeoutError, ConnectionResetError) as error:
                 if attempt == 2:
                     raise RetirementError(
                         "Graph response unavailable. Retry the same command to recover."

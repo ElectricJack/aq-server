@@ -63,7 +63,7 @@ class ScratchGraph:
             try:
                 with urlopen(self.origin + "/health/ready", timeout=1):
                     return
-            except (URLError, TimeoutError):
+            except (URLError, TimeoutError, ConnectionResetError):
                 time.sleep(0.1)
         raise RuntimeError(
             f"scratch Graph did not become ready: {docker('logs', self.container)}"
