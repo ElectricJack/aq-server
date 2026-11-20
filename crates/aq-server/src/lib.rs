@@ -71,6 +71,7 @@ mod migration_catalog {
 }
 /// Database format and readable prefixes, derived from the migration catalog.
 /// Every migration changes the format so updater rollback restores its backup.
+pub use aq_human_work::task_git_author;
 pub use migration_catalog::{READABLE_STATE_FORMATS, STATE_FORMAT_VERSION};
 /// Versions that may be upgraded to this release.
 pub const UPGRADE_FROM: &str = ">=0.1.0";

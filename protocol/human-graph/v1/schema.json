@@ -357,6 +357,16 @@
             "type": "string",
             "format": "date-time"
           },
+          "requested_by": {
+            "type": "object",
+            "description": "Trusted initiating AQ account for a task, including a service-created child with retained parent attribution. Omitted when provenance is unavailable.",
+            "additionalProperties": false,
+            "required": ["name", "email"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "email": {"type": "string", "minLength": 1}
+            }
+          },
           "created_by": {
             "type": "string",
             "description": "Immutable authenticated creator. Legacy snapshots may omit this field; legacy default is legacy:unknown.",
