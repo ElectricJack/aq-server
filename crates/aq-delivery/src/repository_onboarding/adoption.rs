@@ -216,12 +216,18 @@ impl Adoption<'_> {
         let target =
             super::branch_ref(&branch).ok_or(Conflict("GitHub reported an invalid default ref"))?;
         project.check_target(&target)?;
-        if !["allowed_refs", "allowed_targets"].iter().all(|field| {
+        let permits = |field: &str, name: &str| {
             show[field]
                 .as_array()
-                .is_some_and(|refs| refs.iter().any(|r| r == target.as_str()))
-        }) {
-            return Err(Conflict("default ref is not allowed by the aq-git binding"));
+                .is_some_and(|refs| refs.iter().any(|r| r == name))
+        };
+        let can_publish = permits("allowed_targets", &target)
+            || (project.publication.is_none()
+                && permits("allowed_target_prefixes", "refs/heads/aq/"));
+        if !permits("allowed_refs", &target) || !can_publish {
+            return Err(Conflict(
+                "aq-git must permit the default source ref and the project's publication path",
+            ));
         }
         let observation = self
             .git_read(&request, "repo.observation", json!({"refs":[target]}))

@@ -471,6 +471,22 @@ async fn delivery_target(
 }
 
 #[tokio::test]
+async fn adopting_task_branch_delivery_needs_no_direct_push_to_the_default_branch() {
+    let o = onboarding().await;
+    bind(&o.env).await;
+    {
+        let mut f = o.fake.lock().unwrap();
+        f.remote = "https://github.com/acme/widgets.git".into();
+        f.show_overrides.insert("allowed_targets".into(), json!([]));
+        f.show_overrides
+            .insert("allowed_target_prefixes".into(), json!(["refs/heads/aq/"]));
+    }
+    let (status, body) = adopt(&o, adopt_request(Uuid::new_v4())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["disposition"], "bound");
+}
+
+#[tokio::test]
 async fn adopting_a_seeded_project_records_a_replayable_delivery_target() {
     let o = onboarding().await;
     o.fake.lock().unwrap().remote = "https://github.com/acme/widgets.git".into();
