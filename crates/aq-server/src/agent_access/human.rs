@@ -151,20 +151,7 @@ async fn gate(State(r): State<Arc<ReadRuntime>>, request: Request, next: Next) -
         Err(_) => unavailable().into_response(),
     }
 }
-#[derive(Clone, Serialize)]
-struct Project {
-    id: Uuid,
-    name: String,
-    revision: String,
-    workspace_id: Uuid,
-}
-#[derive(Serialize)]
-struct Envelope {
-    contract: &'static str,
-    project: Project,
-    observed_at: String,
-    data: Value,
-}
+use aq_human_work::projection::{Envelope, Project};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Page {
@@ -308,6 +295,10 @@ async fn finish(
 ) -> Result<Json<Envelope>> {
     aq_human_work::attribution::records(
         &r.pool,
+        (
+            a.record.binding.project_id,
+            a.record.binding.graph_workspace_id,
+        ),
         state
             .agent_access
             .as_ref()
@@ -321,23 +312,15 @@ async fn finish(
     if now < a.requested || now - a.requested >= 5000 {
         return Err(unavailable());
     }
-    let reply = Envelope {
-        contract: "human-graph-1",
-        project: Project {
-            id: a.record.binding.project_id,
-            name: a.record.binding.name,
-            revision: a.record.revision.to_string(),
-            workspace_id: a.record.binding.graph_workspace_id,
-        },
-        observed_at: chrono::DateTime::from_timestamp_millis(now)
-            .ok_or_else(unavailable)?
-            .to_rfc3339(),
-        data,
+    let project = Project {
+        id: a.record.binding.project_id,
+        name: a.record.binding.name,
+        revision: a.record.revision.to_string(),
+        workspace_id: a.record.binding.graph_workspace_id,
     };
-    if serde_json::to_vec(&reply).map_err(|_| unavailable())?.len() > 1_048_576 {
-        return Err(unavailable());
-    }
-    Ok(Json(reply))
+    Envelope::bounded(project, now, data)
+        .map(Json)
+        .ok_or_else(unavailable)
 }
 impl Runtime {
     pub(super) async fn human_get(

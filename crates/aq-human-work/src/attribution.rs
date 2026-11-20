@@ -8,6 +8,7 @@ use uuid::Uuid;
 /// ID) or last verified the record instead; other attributions are unchanged.
 pub async fn records(
     pool: &PgPool,
+    scope: (Uuid, Uuid),
     service: Option<&str>,
     data: &mut Value,
 ) -> Result<(), sqlx::Error> {
@@ -24,11 +25,29 @@ pub async fn records(
             _ => {}
         }
     }
+    let mut found = Vec::new();
+    records(data, &mut found);
+    let tasks: Vec<Uuid> = found
+        .iter()
+        .filter(|node| node["kind"] == "task")
+        .filter_map(|node| node["id"].as_str()?.parse().ok())
+        .collect();
+    if !tasks.is_empty() {
+        let authors = crate::task_git_author::for_tasks(pool, scope.0, scope.1, &tasks).await?;
+        for node in found.iter_mut().filter(|node| node["kind"] == "task") {
+            if let Some((_, name, email, parent)) =
+                authors.iter().find(|(id, ..)| node["id"] == json!(id))
+            {
+                node.insert("requested_by".into(), json!({"name":name, "email":email}));
+                if parent.is_none() {
+                    node.insert("created_by".into(), json!(email));
+                }
+            }
+        }
+    }
     let Some(service) = service else {
         return Ok(());
     };
-    let mut found = Vec::new();
-    records(data, &mut found);
     let by_service =
         |o: &serde_json::Map<String, Value>, k: &str| o.get(k) == Some(&json!(service));
     found.retain(|o| by_service(o, "created_by") || by_service(o, "last_verified_by"));
@@ -44,7 +63,12 @@ pub async fn records(
     for o in found {
         let row = rows.iter().find(|row| o["id"] == json!(row.0));
         for (key, human) in [
-            ("created_by", row.and_then(|r| r.1.as_ref())),
+            (
+                "created_by",
+                (o["kind"] != "task")
+                    .then(|| row.and_then(|r| r.1.as_ref()))
+                    .flatten(),
+            ),
             ("last_verified_by", row.and_then(|r| r.2.as_ref())),
         ] {
             if let Some(email) = human.filter(|_| by_service(o, key)) {
@@ -56,12 +80,11 @@ pub async fn records(
 }
 /// QA P1-07: Graph names AQ's one mutation identity as every AQ write's actor.
 /// An entry in a change set that an owner's journalled operation confirmed
-/// (dashboard action or task create), or the creation of a task an owner's
-/// operation created (#97), names that owner's email instead.
+/// names that owner's email when the retained receipt matches this project and workspace.
 pub async fn history(
     pool: &PgPool,
     service: Option<&str>,
-    task: Uuid,
+    scope: (Uuid, Uuid),
     rows: &[Value],
 ) -> Result<Vec<Value>, sqlx::Error> {
     let mut out: Vec<Value> = rows.iter().map(|h| h["actor_id"].clone()).collect();
@@ -77,16 +100,19 @@ pub async fn history(
     if sets.is_empty() {
         return Ok(out);
     }
-    let found: Vec<(Option<Uuid>, String)> = sqlx::query_as("SELECT c.cs,u.email FROM unnest($1::uuid[]) AS c(cs) JOIN users u ON u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.disposition='confirmed' AND d.response->'receipt_refs' @> jsonb_build_array(jsonb_build_object('type','graph_change_set','id',c.cs::text)) LIMIT 1),(SELECT h.actor_id FROM human_graph_operations h WHERE h.raw_receipt->>'change_set_id'=c.cs::text LIMIT 1)) UNION ALL SELECT NULL,u.email FROM users u WHERE u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.operation_id=$2),(SELECT h.actor_id FROM human_graph_operations h WHERE h.operation_id=$2))")
-        .bind(&sets).bind(task).fetch_all(pool).await?;
+    let authors: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT c.cs,u.email FROM unnest($1::uuid[]) AS c(cs) JOIN users u ON u.id=COALESCE(
+          (SELECT d.owner_id FROM dashboard_operations d JOIN dashboard_graph_intents i USING(operation_id)
+           WHERE d.disposition='confirmed' AND i.project_id=$2 AND i.workspace_id=$3
+             AND d.response->'receipt_refs' @> jsonb_build_array(jsonb_build_object('type','graph_change_set','id',c.cs::text)) LIMIT 1),
+          (SELECT h.actor_id FROM human_graph_operations h WHERE h.project_id=$2 AND h.workspace_id=$3
+             AND h.raw_receipt->>'change_set_id'=c.cs::text LIMIT 1))",
+    ).bind(&sets).bind(scope.0).bind(scope.1).fetch_all(pool).await?;
     for (h, actor) in rows.iter().zip(out.iter_mut()).filter(|(h, _)| ours(h)) {
-        let set = found
+        if let Some((_, email)) = authors
             .iter()
-            .find(|f| f.0.is_some() && h["change_set_id"] == json!(f.0));
-        let created = found
-            .iter()
-            .find(|f| f.0.is_none() && h["operation"] == "created" && h["category"] != "edge");
-        if let Some((_, email)) = set.or(created) {
+            .find(|(id, _)| h["change_set_id"] == json!(id))
+        {
             *actor = json!(email);
         }
     }

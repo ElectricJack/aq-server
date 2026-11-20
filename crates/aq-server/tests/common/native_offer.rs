@@ -138,7 +138,9 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 };
                 return ([("X-AQ-Graph-API-Version", "1")], axum::Json(value));
             }
-            if mode == 6 && uri.path().ends_with("/ready") {
+            if (mode == 6 && uri.path().ends_with("/ready"))
+                || (mode == 12 && uri.path().ends_with("/context"))
+            {
                 // Exact external-observation boundary; normal fixtures never arm
                 // this mode. Permits prevent lost notifications in race tests.
                 entered.add_permits(1);

@@ -4,6 +4,34 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+#[derive(Clone, serde::Serialize)]
+pub struct Project {
+    pub id: Uuid,
+    pub name: String,
+    pub revision: String,
+    pub workspace_id: Uuid,
+}
+
+#[derive(serde::Serialize)]
+pub struct Envelope {
+    contract: &'static str,
+    project: Project,
+    observed_at: String,
+    pub data: Value,
+}
+
+impl Envelope {
+    pub fn bounded(project: Project, observed_at_ms: i64, data: Value) -> Option<Self> {
+        let reply = Self {
+            contract: "human-graph-1",
+            project,
+            observed_at: chrono::DateTime::from_timestamp_millis(observed_at_ms)?.to_rfc3339(),
+            data,
+        };
+        (serde_json::to_vec(&reply).ok()?.len() <= 1_048_576).then_some(reply)
+    }
+}
+
 /// Project the explicitly public fields of a validated node.
 pub fn node(raw: &Value, kind: &str) -> Option<Value> {
     let mut output = serde_json::Map::new();

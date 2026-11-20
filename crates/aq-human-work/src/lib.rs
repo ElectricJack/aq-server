@@ -8,6 +8,7 @@ pub mod epic_retirement;
 pub mod knowledge_actions;
 pub mod projection;
 pub mod subtree_activation;
+pub mod task_git_author;
 pub mod task_graph;
 pub mod task_list;
 use serde_json::{Map, Value, json};

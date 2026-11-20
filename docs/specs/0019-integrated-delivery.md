@@ -4,6 +4,14 @@ Builds on [0016 Delivery by playbook](0016-delivery-by-playbook.md). The pilot u
 
 The [repository enrollment runbook](../operations/delivery-enrollment.md) covers the GitHub App, required checks, AQ bindings and the evidence to collect before widening a pilot.
 
+## Task creator and Git authorship
+
+When a person creates a task, AQ records the authenticated creator's account ID and snapshots the Git author name and email for that task. The default email is the creator's AQ account email. It becomes visible to anyone who can read the commit. People looking at the task can use the recorded creator to find the person who requested the work.
+
+AQ uses that snapshot for commits it creates for the task. A retry, repair or reassignment to another worker keeps the original author. A task submitted by a second person has its own author, including when both people are working in the same repository. The worker records its automation identity as Git committer. Publishing the branch preserves existing commit objects, and the GitHub App performs the PR and merge actions.
+
+For older tasks, AQ may recover the creator from its authenticated task-creation record. Work with no attributable person keeps the existing automation identity. Existing commits retain their recorded authors and SHAs.
+
 ## Result to merge
 
 1. On aq.work.result_ready, read the current attempt and result. The initial code policy holds an unsuccessful or unchanged result and notifies its supervisor once. A report-only project may author a different rule.

@@ -17,6 +17,18 @@ One AQ project delivers a code task through one branch, `refs/heads/aq/<task-id>
 5. For a seeded project, record the verified delivery destination through the owner endpoint `POST /api/repositories/adopt`. Pin the operation ID, project, repository UUID, binding generation and canonical GitHub remote. AQ checks the retained base and forge identity. Save the receipt and reuse the operation ID on retry. PR-only projects grant writes to `refs/heads/aq/` and keep the default branch protected. The [seeded-project adoption guide](../implementation/D2.md#adopting-a-seeded-project) includes the request and CLI.
 6. Build the server image with `--build-arg AQ_DELIVERY_PLAYBOOK=true`, and install a compatible worker, its matching sandbox helpers and central aq-git with smart HTTP enabled. Verify the private Git socket, lookup of an enrolled attempt's grant, and the legacy result path on the same worker. Record a restorable backup before upgrading the live database and rehearse the upgrade on a separate copy.
 
+## Verify task commit attribution
+
+For a multi-user installation, use individual AQ logins. Tasks created with a shared desktop login carry the shared account's email. Git stores this address in the commit, including when the repository is public.
+
+Upgrade worker-side aq-git and the workers before enabling the server that sends task authors. Create two tasks in the same repository from different AQ accounts. Compare the **Requested by** field on each task with the author of its task-branch commit. Repeat after returning one task for repair. Inspect the task commit SHA with:
+
+```sh
+git show -s --format='author    %an <%ae>%ncommitter %cn <%ce>' <task-commit-sha>
+```
+
+The author email should match the task creator's AQ account, and the committer should identify the worker. Check the PR's merge actor separately. Both tasks use the same repository binding.
+
 ## Activate and prove one task
 
 Qualify the routing and delivery policies together against the target catalog. Each namespace pins its catalog. Preserve the old routing artifact, fixtures, approved capabilities and activation record when opening a new namespace. Verify that an ordinary routing task still reaches its intended level, and that a task outside enrollment still settles.

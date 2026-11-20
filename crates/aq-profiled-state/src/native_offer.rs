@@ -1,12 +1,43 @@
-//! Central read provenance is not worker startup content or readiness authority.
-use super::{canonical, refused};
-use crate::{
-    agent_access::scheduling::{ReadyPage, TaskContext},
-    error::AppError,
-};
-use aq_admission::{Digest, TaskRevision, startup::NativeOffer};
+//! Central Graph read provenance and the stored original native offer.
+use crate::git_author::OfferDelivery;
+use aq_admission::{Digest, Invalid, Result, TaskRevision};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
+
+fn canonical(value: &impl Serialize) -> Result<Vec<u8>> {
+    let mut value = serde_json::to_value(value).map_err(|_| Invalid("offer encoding"))?;
+    value.sort_all_objects();
+    serde_json::to_vec(&value).map_err(|_| Invalid("offer encoding"))
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphReadStamp {
+    pub requested_at_ms: u64,
+    pub received_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub response_digest: String,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadyTask {
+    pub revision: TaskRevision,
+    pub node: Value,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadyPage {
+    pub workspace_id: Uuid,
+    pub items: Vec<ReadyTask>,
+    pub next_cursor: Option<String>,
+    pub stamp: GraphReadStamp,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskContext {
+    pub revision: TaskRevision,
+    pub context: Value,
+    pub raw_json: String,
+    pub digest: String,
+    pub truncated: bool,
+    pub stamp: GraphReadStamp,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadProvenance {
@@ -29,22 +60,23 @@ impl ReadProvenance {
         context: &TaskContext,
         authorized: Digest,
         now: u64,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self> {
         let selected = ready
             .items
             .iter()
             .find(|v| &v.revision == task)
-            .ok_or_else(|| refused())?;
+            .ok_or(Invalid("invalid Graph read provenance"))?;
         if &context.revision != task
             || ready.workspace_id != task.workspace_id
             || canonical(&selected.node)? != canonical(&context.context["node"])?
             || context.stamp.response_digest != Digest::of(context.raw_json.as_bytes()).as_str()
             || context.digest != context.stamp.response_digest
             || context.truncated
-            || serde_json::from_str::<Value>(&context.raw_json).map_err(|_| refused())?
+            || serde_json::from_str::<Value>(&context.raw_json)
+                .map_err(|_| Invalid("invalid Graph read provenance"))?
                 != context.context
         {
-            return Err(refused());
+            return Err(Invalid("invalid Graph read provenance"));
         }
         let result = Self {
             schema_version: 1,
@@ -52,14 +84,14 @@ impl ReadProvenance {
             ready_response_digest: serde_json::from_value(serde_json::json!(
                 ready.stamp.response_digest
             ))
-            .map_err(|_| refused())?,
+            .map_err(|_| Invalid("invalid Graph read provenance"))?,
             ready_requested_at_ms: ready.stamp.requested_at_ms,
             ready_received_at_ms: ready.stamp.received_at_ms,
             ready_expires_at_ms: ready.stamp.expires_at_ms,
             context_response_digest: serde_json::from_value(serde_json::json!(
                 context.stamp.response_digest
             ))
-            .map_err(|_| refused())?,
+            .map_err(|_| Invalid("invalid Graph read provenance"))?,
             context_requested_at_ms: context.stamp.requested_at_ms,
             context_received_at_ms: context.stamp.received_at_ms,
             context_expires_at_ms: context.stamp.expires_at_ms,
@@ -68,11 +100,13 @@ impl ReadProvenance {
         result.validate_at(now)?;
         Ok(result)
     }
-    pub fn validate_at(&self, now: u64) -> Result<(), AppError> {
+    pub fn validate_at(&self, now: u64) -> Result<()> {
         if self.schema_version != 1 || now == 0 {
-            return Err(refused());
+            return Err(Invalid("invalid Graph read provenance"));
         }
-        self.task.validate().map_err(|_| refused())?;
+        self.task
+            .validate()
+            .map_err(|_| Invalid("invalid Graph read provenance"))?;
         for (requested, received, expires) in [
             (
                 self.ready_requested_at_ms,
@@ -91,7 +125,7 @@ impl ReadProvenance {
                 || now >= expires
                 || expires.checked_sub(received).is_none_or(|d| d > 30_000)
             {
-                return Err(refused());
+                return Err(Invalid("invalid Graph read provenance"));
             }
         }
         Ok(())
@@ -102,25 +136,23 @@ impl ReadProvenance {
 pub struct StoredOffer {
     pub schema_version: u32,
     pub read_provenance: ReadProvenance,
-    pub native_offer: NativeOffer,
+    pub native_offer: OfferDelivery,
 }
 impl StoredOffer {
     // jsonb::text adds whitespace. Twice compact bytes plus a fixed allowance is
     // conservative for this finite string/key/array shape under the SQL1MiB cap.
-    pub fn value(&self) -> Result<Value, AppError> {
-        self.native_offer.validate().map_err(|_| refused())?;
+    pub fn value(&self) -> Result<Value> {
+        self.native_offer.validate()?;
         if self.schema_version != 1 || canonical(self)?.len() > 500_000 {
-            return Err(refused());
+            return Err(Invalid("stored offer version or bound"));
         }
-        serde_json::to_value(self).map_err(|_| AppError::Internal)
+        serde_json::to_value(self).map_err(|_| Invalid("offer encoding"))
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_access::scheduling::{GraphReadStamp, ReadyTask};
     use serde_json::json;
-    use uuid::Uuid;
     fn reads() -> (TaskRevision, ReadyPage, TaskContext) {
         let task = TaskRevision {
             workspace_id: Uuid::new_v4(),

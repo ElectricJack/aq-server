@@ -467,6 +467,12 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     status_schema(&unknown);
     assert_eq!(unknown["state"], "unknown");
     assert_eq!(unknown["effect"], "possible");
+    assert!(
+        aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let count = calls.load(Ordering::SeqCst);
     let lost_path = format!("/api/human/operations/{lost}");
     assert_eq!(
@@ -527,6 +533,22 @@ async fn actual_graph_creation_response_loss_recovery_and_authority_fences() {
     status_schema(&recovered);
     assert_eq!(recovered["state"], "confirmed");
     assert_eq!(recovered["receipt"]["version"], "1");
+    let author = aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(author.name, "owner");
+    assert_eq!(author.email, "owner@localhost");
+    assert_eq!(
+        send(&app, &lost_path, None, "owner@localhost").await.1,
+        recovered
+    );
+    assert_eq!(
+        aq_human_work::task_git_author::lookup(&pool, project, workspace, lost)
+            .await
+            .unwrap(),
+        Some(author)
+    );
     assert_eq!(calls.load(Ordering::SeqCst), count + 1);
     {
         let all = observed.lock().await;

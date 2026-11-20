@@ -652,6 +652,7 @@ dependencies = [
 name = "aq-profiled-state"
 version = "0.1.0"
 dependencies = [
+ "aq-admission 0.1.13",
  "aq-machine-control",
  "aq-profiles",
  "aq-selection",

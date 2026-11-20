@@ -262,7 +262,7 @@ pub(super) async fn history(
         s.agent_access
             .as_ref()
             .and_then(|rt| rt.mutation_actor.as_deref()),
-        id,
+        (p, w),
         rows,
     )
     .await

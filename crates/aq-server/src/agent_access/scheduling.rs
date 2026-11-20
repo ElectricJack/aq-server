@@ -3,7 +3,7 @@
 pub(super) mod parse;
 use super::{Runtime, contract};
 use aq_admission::TaskRevision;
-use serde::Serialize;
+pub use aq_profiled_state::native_offer::{GraphReadStamp, ReadyPage, ReadyTask, TaskContext};
 use serde_json::Value;
 use uuid::Uuid;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -22,34 +22,6 @@ pub enum SchedulingReadError {
     StaleTask,
 }
 type Result<T> = std::result::Result<T, SchedulingReadError>;
-#[derive(Debug, Clone, Serialize)]
-pub struct GraphReadStamp {
-    pub requested_at_ms: u64,
-    pub received_at_ms: u64,
-    pub expires_at_ms: u64,
-    pub response_digest: String,
-}
-#[derive(Debug, Clone, Serialize)]
-pub struct ReadyTask {
-    pub revision: TaskRevision,
-    pub node: Value,
-}
-#[derive(Debug, Clone, Serialize)]
-pub struct ReadyPage {
-    pub workspace_id: Uuid,
-    pub items: Vec<ReadyTask>,
-    pub next_cursor: Option<String>,
-    pub stamp: GraphReadStamp,
-}
-#[derive(Debug, Clone, Serialize)]
-pub struct TaskContext {
-    pub revision: TaskRevision,
-    pub context: Value,
-    pub raw_json: String,
-    pub digest: String,
-    pub truncated: bool,
-    pub stamp: GraphReadStamp,
-}
 fn bounded_cursor(value: &str) -> bool {
     !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
 }

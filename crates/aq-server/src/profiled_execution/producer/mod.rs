@@ -15,6 +15,32 @@ mod workflow;
 pub(crate) use super::native_offer::load_original_offer_locked;
 use crate::{AppState, error::AppError};
 pub use workflow::poll;
+
+async fn task_git_author<'e>(
+    _state: &AppState,
+    executor: impl sqlx::PgExecutor<'e>,
+    project: uuid::Uuid,
+    workspace: uuid::Uuid,
+    task: uuid::Uuid,
+) -> Result<Option<aq_human_work::task_git_author::TaskGitAuthor>, AppError> {
+    // Historical test fixtures explicitly pin a schema prior to this store.
+    // Current stores must propagate lookup errors, including a missing table.
+    #[cfg(feature = "test-support")]
+    {
+        const TASK_GIT_AUTHOR_FORMAT: u32 = 162;
+        if _state
+            .store
+            .fixture_profile
+            .is_some_and(|v| v < TASK_GIT_AUTHOR_FORMAT)
+        {
+            return Ok(None);
+        }
+    }
+    aq_human_work::task_git_author::lookup(executor, project, workspace, task)
+        .await
+        .map_err(crate::error::db)
+}
+
 fn now(state: &AppState) -> Result<u64, AppError> {
     u64::try_from((state.clock)().timestamp_millis())
         .ok()
