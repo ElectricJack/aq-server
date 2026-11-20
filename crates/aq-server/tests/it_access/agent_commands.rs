@@ -1972,17 +1972,18 @@ async fn agent_draft_graph_mutations_fence_both_endpoints_and_work_subject() {
     .await;
     assert_eq!(status, StatusCode::OK, "{lookup}");
     assert_eq!(lookup["data"], dependency["data"]);
-    let writes = posted.lock().unwrap();
-    let patch = writes.last().unwrap()["operations"].as_array().unwrap();
-    for id in [draft, sibling, planner] {
-        assert!(
-            patch.iter().any(|op| op["op"] == "update_node"
-                && op["id"] == json!(id)
-                && op["patch"] == json!({})),
-            "Missing version guard for {id}: {patch:?}"
-        );
+    {
+        let writes = posted.lock().unwrap();
+        let patch = writes.last().unwrap()["operations"].as_array().unwrap();
+        for id in [draft, sibling, planner] {
+            assert!(
+                patch.iter().any(|op| op["op"] == "update_node"
+                    && op["id"] == json!(id)
+                    && op["patch"] == json!({})),
+                "Missing version guard for {id}: {patch:?}"
+            );
+        }
     }
-    drop(writes);
     let (status, removed) = command("task.dependency.remove", json!({"operation_id":Uuid::new_v4(),
         "params":{"task_id":sibling,"expected_version":"1","edge_id":unrelated_edge["id"],"edge_version":"1"}})).await;
     assert_eq!(status, StatusCode::OK, "{removed}");
