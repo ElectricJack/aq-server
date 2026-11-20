@@ -1630,6 +1630,7 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
         .collect();
     let (project, other) = (project.to_string(), other.to_string());
     assert_eq!(ids, [project.as_str()]);
+    assert!(!ids.contains(&other.as_str()));
     // The read nest exists only without supervisor_full_access.
     #[cfg(not(feature = "supervisor_full_access"))]
     {
