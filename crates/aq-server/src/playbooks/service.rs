@@ -1802,7 +1802,7 @@ impl Service {
             // A bad source item (no task id, or not this contract) is queued
             // held `invalid`, so it is listed and later items are collected.
             let registry = self.registry();
-            let valid = aq_playbook_host::model::validate_event(&event, &registry).is_ok();
+            let valid = aq_playbook_host::model::validate_event(&event, registry).is_ok();
             let held = (task.is_none() || !valid).then_some("invalid");
             let status = if held.is_some() { "unknown" } else { "pending" };
             let digest = digest(&event)?;
