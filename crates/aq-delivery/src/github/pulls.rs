@@ -60,24 +60,29 @@ impl WirePull {
         }
     }
     fn pull(&self) -> GitHubResult<PullRequest> {
+        let state = self.state()?;
         Ok(PullRequest {
             number: self.number,
             url: self.html_url.clone(),
             head_sha: self.head.sha.clone(),
-            state: self.state()?,
+            base_branch: self.base.name.clone(),
+            base_sha: self.base.sha.clone(),
+            state,
+            mergeability: self.mergeability(state),
         })
     }
-    fn mergeability(&self) -> GitHubResult<Mergeability> {
-        if self.state()? != PullRequestState::Open {
-            return Ok(Mergeability::Blocked);
+    fn mergeability(&self, state: PullRequestState) -> Mergeability {
+        if state != PullRequestState::Open {
+            return Mergeability::Blocked;
         }
-        Ok(match (self.mergeable, self.mergeable_state.as_deref()) {
+        match (self.mergeable, self.mergeable_state.as_deref()) {
             (Some(false), _) | (_, Some("dirty")) => Mergeability::Conflict,
             (Some(true), Some("clean" | "unstable" | "has_hooks")) => Mergeability::Clean,
-            (Some(true), Some("blocked" | "behind" | "draft")) => Mergeability::Blocked,
+            (Some(true), Some("behind")) => Mergeability::Behind,
+            (Some(true), Some("blocked" | "draft")) => Mergeability::Blocked,
             // `null` while GitHub computes it lazily, or a state we do not know.
             _ => Mergeability::Unknown,
-        })
+        }
     }
 }
 
@@ -161,13 +166,20 @@ impl<'a> Session<'a> {
             .await
     }
     async fn pull(&self, pr: u64) -> GitHubResult<WirePull> {
-        self.call(
-            Method::GET,
-            &format!("/pulls/{}", pr_number(pr)?),
-            &[],
-            None,
-        )
-        .await
+        let pull: WirePull = self
+            .call(
+                Method::GET,
+                &format!("/pulls/{}", pr_number(pr)?),
+                &[],
+                None,
+            )
+            .await?;
+        if pull.number != pr {
+            return Err(GitHubApiError::Protocol(
+                "pull request number differs from the requested number".into(),
+            ));
+        }
+        Ok(pull)
     }
     /// Every page of a list endpoint; `items` picks the page's entries.
     async fn pages(
@@ -415,28 +427,23 @@ impl GitHubAdapter for GitHubApp {
         required: Option<&[String]>,
     ) -> GitHubResult<Checks> {
         let s = Session::new(self, repo).await?;
-        let pull = s.pull(pr).await?;
-        let base = short_branch(&pull.base.name)?;
-        let head_sha = commit_sha(&pull.head.sha)
-            .map_err(|_| GitHubApiError::Protocol("pull request head is not an object id".into()))?
-            .to_string();
+        let pull_request = s.pull(pr).await?.pull()?;
+        let base = short_branch(&pull_request.base_branch)?;
+        let head_sha = commit_sha(&pull_request.head_sha).map_err(|_| {
+            GitHubApiError::Protocol("pull request head is not an object id".into())
+        })?;
         let mut requirements = s.required_checks(base).await?;
         for name in required.into_iter().flatten() {
             requirements.entry(name.clone()).or_default();
         }
-        let reported = s.reported_checks(&head_sha).await?;
+        let reported = s.reported_checks(head_sha).await?;
         let (state, failed) = evaluate(&requirements, &reported);
         Ok(Checks {
             state,
             failed,
             required: requirements.into_keys().collect(),
-            head_sha,
+            pull_request,
         })
-    }
-
-    async fn mergeability(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<Mergeability> {
-        let s = Session::new(self, repo).await?;
-        s.pull(pr).await?.mergeability()
     }
 
     async fn merge(
@@ -458,9 +465,9 @@ impl GitHubAdapter for GitHubApp {
                 ),
             });
         }
-        let moved = || MergeOutcome::Refused {
+        let moved = |actual: &str| MergeOutcome::Refused {
             reason: MergeRefusal::HeadMoved,
-            message: format!("head is {}, expected {expected}", pull.head.sha),
+            message: format!("head is {actual}, expected {expected}"),
         };
         match pull.state()? {
             PullRequestState::Merged if pull.head.sha == expected => {
@@ -471,7 +478,7 @@ impl GitHubAdapter for GitHubApp {
                     )),
                 };
             }
-            PullRequestState::Merged => return Ok(moved()),
+            PullRequestState::Merged => return Ok(moved(&pull.head.sha)),
             PullRequestState::Closed => {
                 return Ok(MergeOutcome::Refused {
                     reason: MergeRefusal::Closed,
@@ -481,46 +488,68 @@ impl GitHubAdapter for GitHubApp {
             PullRequestState::Open => {}
         }
         if pull.head.sha != expected {
-            return Ok(moved());
+            return Ok(moved(&pull.head.sha));
         }
-        if pull.mergeability()? == Mergeability::Conflict {
-            return Ok(MergeOutcome::Conflict);
+        match pull.mergeability(PullRequestState::Open) {
+            Mergeability::Conflict => return Ok(MergeOutcome::Conflict),
+            Mergeability::Behind => return Ok(MergeOutcome::Behind),
+            _ => {}
         }
         let body = json!({"merge_method": method.as_str(), "sha": expected});
         let merged: GitHubResult<MergeResponse> = s
             .call(Method::PUT, &format!("/pulls/{pr}/merge"), &[], Some(&body))
             .await;
-        match merged {
+        let message = match merged {
             Ok(MergeResponse {
                 merged: true,
                 sha: Some(sha),
                 ..
-            }) => Ok(MergeOutcome::Merged { sha }),
+            }) => return Ok(MergeOutcome::Merged { sha }),
             Ok(MergeResponse {
                 merged: true,
                 sha: None,
                 ..
-            }) => Err(GitHubApiError::Protocol(
-                "merge response without a sha".into(),
-            )),
-            Ok(MergeResponse { message, .. }) => Ok(MergeOutcome::NotMergeable { message }),
-            Err(GitHubApiError::Status {
+            }) => {
+                return Err(GitHubApiError::Protocol(
+                    "merge response without a sha".into(),
+                ));
+            }
+            Ok(MergeResponse { message, .. })
+            | Err(GitHubApiError::Status {
                 status: 405,
                 message,
-            }) => Ok(MergeOutcome::NotMergeable { message }),
+            }) => message,
             Err(GitHubApiError::Status {
                 status: 409,
                 message,
-            }) => Ok(MergeOutcome::Refused {
-                reason: MergeRefusal::HeadMoved,
-                message,
-            }),
-            Err(GitHubApiError::Invalid { message }) => Ok(MergeOutcome::Refused {
-                reason: MergeRefusal::Invalid,
-                message,
-            }),
-            Err(e) => Err(e),
+            }) => {
+                return Ok(MergeOutcome::Refused {
+                    reason: MergeRefusal::HeadMoved,
+                    message,
+                });
+            }
+            Err(GitHubApiError::Invalid { message }) => {
+                return Ok(MergeOutcome::Refused {
+                    reason: MergeRefusal::Invalid,
+                    message,
+                });
+            }
+            Err(e) => return Err(e),
+        };
+        // GitHub can advance the base between the read and the merge request.
+        // A refusal alone is also consistent with checks or review policy.
+        if let Ok(current) = s.pull(pr).await
+            && current.base.name == expected_base
+            && matches!(current.state(), Ok(PullRequestState::Open))
+        {
+            if current.head.sha != expected {
+                return Ok(moved(&current.head.sha));
+            }
+            if current.mergeability(PullRequestState::Open) == Mergeability::Behind {
+                return Ok(MergeOutcome::Behind);
+            }
         }
+        Ok(MergeOutcome::NotMergeable { message })
     }
 
     async fn close(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest> {

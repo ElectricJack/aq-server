@@ -2309,6 +2309,7 @@ mod delivery {
             log: Mutex<Vec<String>>,
             checks: Mutex<(ChecksState, Vec<String>)>,
             pr_state: Mutex<PullRequestState>,
+            mergeability: Mutex<Mergeability>,
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
         }
@@ -2365,7 +2366,10 @@ mod delivery {
                 number: 7,
                 url: "https://example.test/pr/7".into(),
                 head_sha: oid('a'),
+                base_branch: "main".into(),
+                base_sha: oid('b'),
                 state,
+                mergeability: Mergeability::Clean,
             }
         }
         #[async_trait::async_trait]
@@ -2386,12 +2390,15 @@ mod delivery {
                 _: &GitHubRepository,
                 _: u64,
             ) -> GitHubResult<PullRequest> {
-                Ok(pull(self.pr_state.lock().unwrap().clone()))
+                Ok(PullRequest {
+                    mergeability: *self.mergeability.lock().unwrap(),
+                    ..pull(self.pr_state.lock().unwrap().clone())
+                })
             }
             async fn checks(
                 &self,
-                _: &GitHubRepository,
-                _: u64,
+                repo: &GitHubRepository,
+                pr: u64,
                 _: Option<&[String]>,
             ) -> GitHubResult<Checks> {
                 let (state, failed) = self.checks.lock().unwrap().clone();
@@ -2399,15 +2406,8 @@ mod delivery {
                     state,
                     failed,
                     required: vec![],
-                    head_sha: oid('a'),
+                    pull_request: self.pull_request(repo, pr).await?,
                 })
-            }
-            async fn mergeability(
-                &self,
-                _: &GitHubRepository,
-                _: u64,
-            ) -> GitHubResult<Mergeability> {
-                Ok(Mergeability::Clean)
             }
             async fn merge(
                 &self,
@@ -2472,6 +2472,7 @@ mod delivery {
                 log: Mutex::default(),
                 checks: Mutex::new((ChecksState::Pending, vec![])),
                 pr_state: Mutex::new(PullRequestState::Open),
+                mergeability: Mutex::new(Mergeability::Clean),
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
             });
@@ -2681,6 +2682,51 @@ mod delivery {
                 h.read(task).await.output["facts"]["pull_request"]["state"],
                 "merged"
             );
+        }
+
+        #[tokio::test]
+        async fn a_behind_check_returns_the_result_for_update_from_main_and_keeps_the_pr() {
+            let (h, fake) = harness().await;
+            let (task, pending) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "passed", json!([])).await;
+            *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+            let wait = h
+                .accepted(
+                    "pull_request.await_checks",
+                    json!({"task": task, "required": ["check", "deployment"], "deadline_ms": 600_000}),
+                )
+                .await;
+            assert_eq!(h.pass().await, 1);
+            assert_eq!(
+                h.completions().await,
+                [(wait, json!({"outcome": "conflict", "output": {}}))]
+            );
+
+            // The policy's existing conflict path returns the current result.
+            *h.settle.answer.lock().unwrap() = Settled::Returned;
+            let returned = h
+                .run(
+                    "behind-repair",
+                    "work.return",
+                    json!({
+                        "task": task, "result_id": pending.result_id,
+                        "reason": "merge_conflict", "update_from_main": true
+                    }),
+                )
+                .await;
+            assert_eq!(returned.outcome, "returned");
+            let repair: bool = sqlx::query_scalar(
+                "SELECT update_from_main FROM delivery_decisions WHERE result_id=$1",
+            )
+            .bind(pending.result_id)
+            .fetch_one(&h.pool().await)
+            .await
+            .unwrap();
+            assert!(repair);
+            let facts = h.read(task).await.output["facts"].clone();
+            assert_eq!(facts["pull_request"]["number"], 7);
+            assert_eq!(facts["pull_request"]["state"], "open");
+            assert!(fake.log.lock().unwrap().is_empty());
         }
 
         #[tokio::test]

@@ -171,7 +171,7 @@ impl DeliveryRuns<'_> {
             subject: crate::host_values::subject(&subject.id, 0),
             text,
             longest_check_wait_ms,
-            merge_target: if name == "pull_request.merge" {
+            target: if matches!(name, "pull_request.merge" | "pull_request.await_checks") {
                 self.operations.target(subject.project).await?
             } else {
                 None

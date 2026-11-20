@@ -27,7 +27,10 @@ pub struct PullRequest {
     /// The PR's web URL (`html_url`).
     pub url: String,
     pub head_sha: String,
+    pub base_branch: String,
+    pub base_sha: String,
     pub state: PullRequestState,
+    pub mergeability: Mergeability,
 }
 
 /// Check results for a PR's current head.
@@ -42,8 +45,8 @@ pub struct Checks {
     /// given, else what branch protection and rulesets require on the base
     /// branch. Empty means every reported check counts.
     pub required: Vec<String>,
-    /// The head SHA the checks were read for.
-    pub head_sha: String,
+    /// The same pull request observation that selected the check head and base.
+    pub pull_request: PullRequest,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,8 +54,9 @@ pub struct Checks {
 pub enum Mergeability {
     Clean,
     Conflict,
-    /// Not mergeable for another reason: protection, a draft, a head behind
-    /// the base, or a PR that is no longer open.
+    /// The head needs to incorporate changes from the base.
+    Behind,
+    /// Protection, a draft, or a PR that is no longer open.
     Blocked,
     /// GitHub has not computed it yet; a later read may answer.
     Unknown,
@@ -95,6 +99,8 @@ pub enum MergeOutcome {
         sha: String,
     },
     Conflict,
+    /// GitHub positively observed that the tracked head is behind its base.
+    Behind,
     /// GitHub 405: not mergeable now (protection, pending checks, ...).
     NotMergeable {
         message: String,
@@ -138,8 +144,6 @@ pub trait GitHubAdapter: Send + Sync {
         pr: u64,
         required: Option<&[String]>,
     ) -> GitHubResult<Checks>;
-    /// One read of the PR; safe to poll.
-    async fn mergeability(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<Mergeability>;
     /// Check the base branch and submit the merge with the expected head SHA.
     async fn merge(
         &self,
@@ -179,9 +183,6 @@ impl GitHubAdapter for UnconfiguredGitHub {
         _: u64,
         _: Option<&[String]>,
     ) -> GitHubResult<Checks> {
-        Err(GitHubApiError::Unconfigured)
-    }
-    async fn mergeability(&self, _: &GitHubRepository, _: u64) -> GitHubResult<Mergeability> {
         Err(GitHubApiError::Unconfigured)
     }
     async fn merge(
