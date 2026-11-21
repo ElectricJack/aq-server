@@ -133,6 +133,14 @@ pub async fn notify<E: std::fmt::Debug>(
         }
         let can_retry = reason == "returns_exhausted"
             || aq_machine_control::holds::budget_code(&reason).is_some();
+        if aq_machine_control::holds::is_budget_hold(&reason)
+            && let Some(evidence) =
+                crate::delivery_store::returned_result_evidence(&mut tx, project, task, attempt)
+                    .await?
+        {
+            body.push(' ');
+            body.push_str(&evidence);
+        }
         if can_retry {
             if let Some(id) = report
                 && let Some(evidence) = crate::delivery_store::held_pr_evidence(&mut tx, id).await?

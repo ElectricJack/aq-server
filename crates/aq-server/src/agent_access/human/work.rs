@@ -69,6 +69,21 @@ async fn result_waiting(
     Some(waiting)
 }
 
+/// An optional read of the recorded result, restricted to the same claim as
+/// the budget hold. Readiness stays available if the detail cannot be read.
+#[cfg(feature = "delivery_playbook")]
+async fn budget_evidence(
+    pool: &PgPool,
+    project: Uuid,
+    task: Uuid,
+    attempt: Uuid,
+) -> Option<String> {
+    let mut db = pool.acquire().await.ok()?;
+    aq_playbook_domain::delivery_store::returned_result_evidence(&mut db, project, task, attempt)
+        .await
+        .ok()?
+}
+
 /// The hierarchy relationships that keep the active task `id` out of the
 /// runnable queue (Graph's ready query leaves out a task under a draft or
 /// retired ancestor and a container with live children), and whether the read
@@ -137,9 +152,26 @@ pub(super) async fn work(
             }
         }
     }
+    #[cfg(feature = "delivery_playbook")]
+    let evidence = match &held {
+        Some(h) if aq_machine_control::holds::is_budget_hold(&h.reason) => {
+            budget_evidence(&r.pool, p, id, h.attempt_id).await
+        }
+        _ => None,
+    };
     let held = held.map(|h| {
         let phrase = aq_machine_control::holds::phrase(&h.reason);
-        aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
+        let reason = aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase);
+        #[cfg(feature = "delivery_playbook")]
+        if let Some(evidence) = evidence {
+            let mut reason = reason;
+            reason["message"] = json!(format!(
+                "{} {evidence}",
+                reason["message"].as_str().unwrap_or_default()
+            ));
+            return reason;
+        }
+        reason
     });
     // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
     let role = aq_role_settings::tasks::effective_role(

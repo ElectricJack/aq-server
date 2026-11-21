@@ -2095,6 +2095,24 @@ mod playbook {
             .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'task_sandbox_minutes_budget_exhausted',$4,'returned',to_timestamp($5))")
             .bind(Uuid::new_v4()).bind(task).bind(lineage.project_id).bind(attempt).bind(NOW as f64 / 1000.0).execute(&pool).await.unwrap();
+        let reasons = work_reasons(&env).await;
+        let evidence = format!("returned result {result}. Worker outcome: success.");
+        assert!(reasons.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
+        }));
+        assert!(
+            aq_playbook_domain::delivery_store::returned_result_evidence(
+                &mut pool.acquire().await.unwrap(),
+                Uuid::new_v4(),
+                task,
+                attempt
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
         let calls = AtomicUsize::new(0);
         aq_playbook_domain::scheduling_notices::notify(
             &pool,
@@ -2105,6 +2123,7 @@ mod playbook {
                     body.contains("task_sandbox_minutes_budget_exhausted")
                         && body.contains(&"4".repeat(40))
                         && body.contains("conflict")
+                        && body.contains(&evidence)
                 );
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, ()>(Uuid::new_v4())

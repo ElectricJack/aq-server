@@ -393,6 +393,43 @@ pub async fn checking_pr(db: &mut PgConnection, result: Uuid) -> Result<Option<S
     }))
 }
 
+/// The current claimed report's actual outcome and recorded return, for a
+/// project supervisor inspecting a budget hold. Only bounded status fields
+/// pass through; the report body stays on its own route.
+pub async fn returned_result_evidence(
+    db: &mut PgConnection,
+    project: Uuid,
+    task: Uuid,
+    attempt: Uuid,
+) -> Result<Option<String>> {
+    let record: Option<(Uuid, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT h.report_id,convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome',s.disposition,p.head
+         FROM execution_attempts a JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r USING(attempt_id,report_id)
+         JOIN delivery_decisions d ON d.result_id=h.report_id AND d.task_id=a.task_id AND d.decision='returned'
+         LEFT JOIN profiled_auto_settlements s ON s.report_id=h.report_id AND s.attempt_id=a.attempt_id
+         LEFT JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         WHERE a.holds_task AND a.task_id=$2 AND a.attempt_id=$3 AND l.execution_spec#>>'{lifecycle,project_id}'=$1",
+    )
+    .bind(project.to_string())
+    .bind(task)
+    .bind(attempt)
+    .fetch_optional(db)
+    .await?;
+    Ok(record.map(|(result, outcome, settlement, head)| {
+        let mut text =
+            format!("The delivery playbook returned result {result}. Worker outcome: {outcome}.");
+        if let Some(disposition) = settlement {
+            text.push_str(&format!(" Recorded settlement: {disposition}."));
+        }
+        if let Some(head) = head {
+            text.push_str(&format!(" Retained commit: {head}."));
+        }
+        text
+    }))
+}
+
 /// Last final PR failure observed by AQ on this result's published head.
 pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
     let observed: Option<(String, String, String)> = sqlx::query_as(
