@@ -324,6 +324,133 @@ async fn work_explains_readiness_blockers_and_attached_execution() {
     assert_eq!(unsure["readiness"]["complete"], false);
 }
 
+/// Graph's ready query leaves out a task under a draft or retired ancestor
+/// and a container with live children; the work read must not say `ready`.
+#[tokio::test]
+async fn work_names_the_hierarchy_that_keeps_an_active_task_out_of_the_queue() {
+    let x = setup().await;
+    let w = x.w();
+    let held = x.held();
+    let new = |states: [&str; 2]| {
+        let (child, parent, grand) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let nodes = vec![
+            task(parent, w, "Parent", states[0]),
+            task(grand, w, "Grand", states[1]),
+        ];
+        let edges = vec![
+            edge(w, parent, child, "parent-child"),
+            edge(w, grand, parent, "parent-child"),
+        ];
+        (child, parent, grand, nodes, edges)
+    };
+    let put = |id: Uuid, state: &str, nodes: Vec<Value>, edges: Vec<Value>, truncated: bool| {
+        x.graph.contexts.lock().unwrap().insert(
+            id,
+            context(&task(id, w, "Child", state), nodes, edges, truncated),
+        );
+    };
+
+    // The reproduced case: a satisfied prerequisite and a draft parent.
+    let (child, parent, _, mut nodes, mut edges) = new(["draft", "active"]);
+    let done = Uuid::new_v4();
+    nodes.push(task(done, w, "Done", "completed"));
+    edges.push(edge(w, done, child, "blocks"));
+    put(child, "active", nodes, edges, false);
+    let r = x.get(&format!("/tasks/{child}/work")).await;
+    assert_eq!(r["readiness"]["state"], "waiting", "{r}");
+    assert_eq!(r["readiness"]["blockers"][0]["satisfied"], true);
+    let h = &r["readiness"]["hierarchy"];
+    assert_eq!(h.as_array().unwrap().len(), 1, "{h}");
+    assert_eq!(h[0]["relationship"], "ancestor");
+    assert_eq!(
+        (&h[0]["code"], &h[0]["level"]),
+        (&json!("ancestor_draft"), &json!(1))
+    );
+    assert_eq!(
+        (&h[0]["id"], &h[0]["task_state"]),
+        (&json!(parent), &json!("draft"))
+    );
+    assert_eq!(r["parent"]["id"], json!(parent));
+
+    // The grandparent is the third level; a retired one blocks as well.
+    let (child, _, grand, nodes, edges) = new(["active", "draft"]);
+    put(child, "active", nodes, edges, false);
+    let r = x.get(&format!("/tasks/{child}/work")).await;
+    assert_eq!(r["readiness"]["state"], "waiting", "{r}");
+    assert_eq!(r["readiness"]["hierarchy"][0]["id"], json!(grand));
+    assert_eq!(r["readiness"]["hierarchy"][0]["level"], 2);
+    let (child, _, grand, mut nodes, edges) = new(["active", "active"]);
+    nodes[1]["retired"] = json!(true);
+    put(child, "active", nodes, edges, false);
+    let r = x.get(&format!("/tasks/{child}/work")).await;
+    assert_eq!(r["readiness"]["state"], "waiting", "{r}");
+    assert_eq!(r["readiness"]["hierarchy"][0]["code"], "ancestor_retired");
+    assert_eq!(r["readiness"]["hierarchy"][0]["id"], json!(grand));
+
+    // Active ancestors: a genuinely runnable leaf stays ready, with no new field.
+    let (child, _, _, nodes, edges) = new(["active", "active"]);
+    put(child, "active", nodes, edges, false);
+    let r = x.get(&format!("/tasks/{child}/work")).await;
+    assert_eq!(r["readiness"]["state"], "ready", "{r}");
+    assert!(r["readiness"].get("hierarchy").is_none());
+
+    // An active container is not a leaf: its live children run instead.
+    let (container, kid) = (Uuid::new_v4(), Uuid::new_v4());
+    put(
+        container,
+        "active",
+        vec![task(kid, w, "Kid", "active")],
+        vec![edge(w, container, kid, "parent-child")],
+        false,
+    );
+    let r = x.get(&format!("/tasks/{container}/work")).await;
+    assert_eq!(r["readiness"]["state"], "waiting", "{r}");
+    let h = &r["readiness"]["hierarchy"][0];
+    assert_eq!(
+        (&h["relationship"], &h["code"]),
+        (&json!("child"), &json!("has_live_children"))
+    );
+    assert_eq!(h["id"], json!(kid));
+
+    // A parent Graph did not return, or a truncated Context, is unknown.
+    let (child, parent) = (Uuid::new_v4(), Uuid::new_v4());
+    put(
+        child,
+        "active",
+        vec![],
+        vec![edge(w, parent, child, "parent-child")],
+        false,
+    );
+    let r = x.get(&format!("/tasks/{child}/work")).await;
+    assert_eq!(r["readiness"]["state"], "unknown", "{r}");
+    assert_eq!(r["readiness"]["complete"], false);
+    let (child, _, _, nodes, edges) = new(["active", "active"]);
+    put(child, "active", nodes, edges, true);
+    assert_eq!(
+        x.get(&format!("/tasks/{child}/work")).await["readiness"]["state"],
+        "unknown"
+    );
+
+    // Terminal tasks and a running attempt keep their own state.
+    for state in ["completed", "canceled", "draft"] {
+        let (child, _, _, nodes, edges) = new(["draft", "draft"]);
+        put(child, state, nodes, edges, false);
+        let r = x.get(&format!("/tasks/{child}/work")).await;
+        assert_eq!(r["readiness"]["state"], state, "{r}");
+        assert!(r["readiness"].get("hierarchy").is_none());
+    }
+    let (_, parent, _, nodes, _) = new(["draft", "active"]);
+    put(
+        held,
+        "active",
+        nodes,
+        vec![edge(w, parent, held, "parent-child")],
+        false,
+    );
+    let r = x.get(&format!("/tasks/{held}/work")).await;
+    assert_eq!(r["readiness"]["state"], "running", "{r}");
+}
+
 /// Spec 0014 §5.5: every task read shows the effective role and where it
 /// comes from, and the work read holds a task whose role is disabled or gone.
 #[tokio::test]
