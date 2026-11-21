@@ -249,6 +249,8 @@ interactive CLI in the session host's tmux pane"):
   ended session keeps its retained tail.
 - `manifest.terminal.input_enabled` stays false for docker-local attempts. The
   finite relay does not carry their input.
+- Resize is a controller action on both transports; the browser contracts, bounds and
+  refusals are in [`docs/operations/terminal-resize.md`](../operations/terminal-resize.md).
 - **Stall ladder.** Every viewer of the attempt stream can type, so an attached
   viewer is human control of the pane. The stream records it in
   `attempt_terminal_viewers` (renewed every 2 s while attached, removed on detach,

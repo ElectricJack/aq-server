@@ -916,6 +916,53 @@ async fn live_stream_preserves_bytes_and_fences_input(
             "an attempt viewer cannot choose the pane geometry"
         );
     }
+    if fixed {
+        // A read-only viewer of an attempt pane never resizes it: the frame ends
+        // its attach and only a detach reaches the worker.
+        let mut watching = format!("{url}&read_only=true")
+            .into_client_request()
+            .unwrap();
+        watching
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        let (mut viewer, _) = connect_async(watching).await.unwrap();
+        let attach: Value =
+            serde_json::from_str(&stream_frame(&mut node).await.into_text().unwrap()).unwrap();
+        assert_eq!(attach["kind"], "attach");
+        assert_eq!(attach["read_only"], true);
+        let watching_connection: Uuid =
+            serde_json::from_value(attach["connection_id"].clone()).unwrap();
+        node.send(Message::Text(
+            json!({"kind":"ready","connection_id":watching_connection,"columns":120,"rows":40})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&stream_frame(&mut viewer).await.into_text().unwrap())
+                .unwrap()["kind"],
+            "ready"
+        );
+        viewer
+            .send(Message::Text(
+                json!({"kind":"resize","columns":100,"rows":30})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let detached: Value = serde_json::from_str(
+            &tokio::time::timeout(std::time::Duration::from_secs(3), stream_frame(&mut node))
+                .await
+                .unwrap()
+                .into_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detached["kind"], "detach", "a read-only resize is refused");
+        assert_eq!(detached["connection_id"], json!(watching_connection));
+    }
     let mut bad = url.clone().into_client_request().unwrap();
     bad.headers_mut().insert(
         "origin",
@@ -1010,6 +1057,23 @@ async fn live_stream_preserves_bytes_and_fences_input(
         .unwrap();
         let painted = stream_frame(&mut browser).await.into_text().unwrap();
         assert!(painted.contains("ready"));
+        // After ready, its current controller may resize the pane. The server adds
+        // the checked connection and generation to the worker relay frame.
+        browser
+            .send(Message::Text(
+                json!({"kind":"resize","columns":100,"rows":30})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let resized: Value =
+            serde_json::from_str(&stream_frame(&mut node).await.into_text().unwrap()).unwrap();
+        assert_eq!(
+            resized,
+            json!({"kind":"resize","columns":100,"rows":30,
+                "connection_id":connection,"generation":generation})
+        );
     } else {
         browser
             .send(Message::Text(
@@ -1033,10 +1097,22 @@ async fn live_stream_preserves_bytes_and_fences_input(
     )
     .await;
     assert_eq!(takeover.0, StatusCode::OK);
-    browser
-        .send(Message::Binary(b"never-forward".as_slice().into()))
-        .await
-        .unwrap();
+    if fixed {
+        // A stale controller cannot resize either.
+        browser
+            .send(Message::Text(
+                json!({"kind":"resize","columns":90,"rows":31})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    } else {
+        browser
+            .send(Message::Binary(b"never-forward".as_slice().into()))
+            .await
+            .unwrap();
+    }
     let detached = tokio::time::timeout(std::time::Duration::from_secs(3), stream_frame(&mut node))
         .await
         .unwrap()
