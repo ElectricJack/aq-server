@@ -1,13 +1,10 @@
 //! D1b: policy-driven delivery, typed refusals and §10.3 reconciliation.
 use super::delivery::{candidate, context, peer, ready, response_peer, retain, service};
 use super::*;
-#[cfg(feature = "delivery_playbook")]
 use aq_server::delivery::{
     BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, PullRequest,
     github::{GitHubApiError, GitHubResult},
 };
-#[cfg(not(feature = "delivery_playbook"))]
-use aq_server::delivery::{ChecksState, GitHubError, PullRequest, PullRequestSpec};
 use aq_server::delivery::{
     DeliverRequest, DeliveryError, DeliveryOutcome, DeliveryService, GitHubAdapter,
     ObservationRequest, PublicationMode, PublicationPolicy, ReconcileRequest, RefusalReason,
@@ -19,29 +16,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct FakeGitHub {
     calls: AtomicUsize,
 }
-#[cfg(not(feature = "delivery_playbook"))]
-#[async_trait::async_trait]
-impl GitHubAdapter for FakeGitHub {
-    async fn open_pull_request(
-        &self,
-        _: &PullRequestSpec,
-    ) -> std::result::Result<PullRequest, GitHubError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(GitHubError("fake".into()))
-    }
-    async fn checks(&self, _: &PullRequest) -> std::result::Result<ChecksState, GitHubError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(ChecksState::Pending)
-    }
-}
-#[cfg(feature = "delivery_playbook")]
 impl FakeGitHub {
     fn call<T>(&self) -> GitHubResult<T> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(GitHubApiError::Unconfigured)
     }
 }
-#[cfg(feature = "delivery_playbook")]
 #[async_trait::async_trait]
 impl GitHubAdapter for FakeGitHub {
     async fn open_or_find(

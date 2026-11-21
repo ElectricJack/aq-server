@@ -364,7 +364,6 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
 /// while no delivery playbook is active, the result waits and nothing else
 /// completes, publishes or reworks it. `delivery_policy` says whether a
 /// delivery playbook is active for the task's project.
-#[cfg(feature = "delivery_playbook")]
 pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Value {
     let (code, message) = match delivery_policy {
         false => (
@@ -1211,7 +1210,7 @@ pub use execution::{
 mod downstream;
 pub use downstream::blocked_by;
 
-#[cfg(all(test, feature = "delivery_playbook"))]
+#[cfg(test)]
 mod delivery_tests {
     #[test]
     fn a_waiting_result_names_the_missing_delivery_policy() {

@@ -101,15 +101,13 @@ def main():
             "CARGO_PROFILE_TEST_DEBUG": os.environ.get("CARGO_PROFILE_TEST_DEBUG", "0"),
             "CARGO_TARGET_DIR": str(ROOT / "target"),
         }
-        features = []
         test = "merged_graph_rolls_out_by_verified_digest"
         if args.automatic:
-            features = ["--features", "delivery_playbook"]
             test = "automatic::host10_evidence_drives_host11"
             env["AQ_GRAPH_DEPLOY_PSQL"] = str(Path(client).absolute())
             env["AQ_GRAPH_DEPLOY_GRAPH_REPO"] = str(args.graph_repo.resolve())
         subprocess.run(
-            ["timeout", "900", "cargo", "test", "--locked", "-p", "aq-server", *features,
+            ["timeout", "900", "cargo", "test", "--locked", "-p", "aq-server",
              "--test", "it_playbook", "--", f"{TEST_PREFIX}::{test}", "--exact", "--ignored", "--nocapture"],
             env=env, cwd=ROOT, check=True,
         )

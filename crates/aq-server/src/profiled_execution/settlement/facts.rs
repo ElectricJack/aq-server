@@ -41,7 +41,6 @@ pub(super) async fn gather_locked(
     let (mut source, mut lineage_unknown) = (None, false);
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
     // head when the report was recorded; the report id keys its evidence.
-    #[cfg(feature = "delivery_playbook")]
     if enrolled
         && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
             .await
@@ -149,7 +148,6 @@ impl Gathered {
 /// lock it stores what [`gather_locked`] reads as the result's facts (replaced
 /// on a duplicate record) and returns them. No settlement row, publication,
 /// rework or completion: the result waits for a playbook's decision.
-#[cfg(feature = "delivery_playbook")]
 pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
     let mut tx = super::automatic::begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;

@@ -300,10 +300,7 @@ async fn onboard_github_repo_creates_binding_and_retained_base() {
         assert_eq!(p["allowed_refs"], json!(["refs/heads/trunk"]));
         assert_eq!(p["allowed_targets"], json!(["refs/heads/trunk"]));
         // Spec 0016 §5.2: every task's branch is a prefix-scoped target.
-        #[cfg(feature = "delivery_playbook")]
         assert_eq!(p["allowed_target_prefixes"], json!(["refs/heads/aq/"]));
-        #[cfg(not(feature = "delivery_playbook"))]
-        assert!(p.get("allowed_target_prefixes").is_none());
         assert!(p.get("credential_profile").is_none());
         assert_eq!(f.syncs[0]["refs"], json!(["refs/heads/trunk"]));
     }
@@ -456,7 +453,6 @@ async fn rows(o: &Onboarding) -> i64 {
         .await
         .unwrap()
 }
-#[cfg(feature = "delivery_playbook")]
 async fn delivery_target(
     o: &Onboarding,
     generation: u64,
@@ -491,7 +487,6 @@ async fn adopting_a_seeded_project_records_a_replayable_delivery_target() {
     let o = onboarding().await;
     o.fake.lock().unwrap().remote = "https://github.com/acme/widgets.git".into();
     let seeded = bind(&o.env).await;
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 1).await.is_none());
     let owner2 = "another-owner@localhost";
     o.env
@@ -523,7 +518,6 @@ async fn adopting_a_seeded_project_records_a_replayable_delivery_target() {
     assert!(v["base"].is_null());
     assert!(v["repository_observation_id"].as_str().is_some());
     assert_eq!(v["repository_binding_generation"], 1);
-    #[cfg(feature = "delivery_playbook")]
     {
         let target = delivery_target(&o, 1).await.expect("target resolves");
         assert_eq!(
@@ -586,12 +580,10 @@ async fn ordinary_onboarding_keeps_its_target_and_operation_identity() {
     assert_eq!(status, StatusCode::CONFLICT, "{v}");
     assert_eq!(adopt(&o, adopt_request(op)).await.0, StatusCode::CONFLICT);
     assert_eq!(rows(&o).await, 1);
-    #[cfg(feature = "delivery_playbook")]
     assert_eq!(
         delivery_target(&o, 1).await.unwrap().default_branch,
         "trunk"
     );
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 2).await.is_none());
 }
 
@@ -672,7 +664,6 @@ async fn adoption_refuses_mismatches_and_records_nothing() {
     let (status, v) = adopt(&o, adopt_request(Uuid::new_v4())).await;
     assert_eq!(status, StatusCode::CONFLICT, "signing: {v}");
     assert_eq!(rows(&o).await, 0);
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 1).await.is_none());
 }
 
@@ -760,7 +751,6 @@ async fn adoption_fences_project_revision_and_refuses_stale_generations() {
     .await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(adopt(&o, adopt_request(op)).await.0, StatusCode::CONFLICT);
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 2).await.is_none());
 
     o.fake.lock().unwrap().generation = 2;
@@ -769,7 +759,6 @@ async fn adoption_fences_project_revision_and_refuses_stale_generations() {
     let (status, answer) = adopt(&o, new).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(rows(&o).await, 2);
-    #[cfg(feature = "delivery_playbook")]
     assert_eq!(
         delivery_target(&o, 2).await.unwrap().default_branch,
         "trunk"
@@ -786,7 +775,6 @@ async fn ambiguous_historical_rows_cannot_supply_a_delivery_target_or_be_adopted
     let duplicate = Uuid::new_v4();
     sqlx::query("INSERT INTO repository_onboardings SELECT $2,actor_id,request_digest,project_id,repository_id,step,state,created_at_ms,updated_at_ms+1 FROM repository_onboardings WHERE operation_id=$1")
         .bind(op).bind(duplicate).execute(&o.env.pool).await.unwrap();
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 1).await.is_none());
     sqlx::query(
         "UPDATE repository_onboardings SET state=state-'binding_generation' WHERE operation_id=$1",
@@ -795,7 +783,6 @@ async fn ambiguous_historical_rows_cannot_supply_a_delivery_target_or_be_adopted
     .execute(&o.env.pool)
     .await
     .unwrap();
-    #[cfg(feature = "delivery_playbook")]
     assert!(delivery_target(&o, 1).await.is_none());
     assert_eq!(
         adopt(&o, adopt_request(Uuid::new_v4())).await.0,
@@ -923,7 +910,6 @@ async fn competing_adoption_operations_cannot_both_record_the_same_generation() 
     assert_eq!(rows(&o).await, 1);
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn owner_cli_uses_the_configured_repository_scoped_github_app() {
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};

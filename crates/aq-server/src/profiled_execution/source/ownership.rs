@@ -29,7 +29,6 @@ struct Evidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     handoff: Option<Value>,
     /// Spec 0016 §4: the synced, retained head of the followed named ref.
-    #[cfg(feature = "delivery_playbook")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     main_sync: Option<Value>,
     commit_inspection: Value,
@@ -64,7 +63,6 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
     {
         return Err(refused());
     }
-    #[cfg(feature = "delivery_playbook")]
     if body.evidence.main_sync.is_some() && !matches!(a.selection, SourceSelection::NamedRef { .. })
     {
         return Err(refused());
@@ -78,7 +76,6 @@ pub fn validate_body(bytes: &[u8], project: Uuid, now: u64) -> Result<SourceAdmi
                 return Err(refused());
             }
         }
-        #[cfg(feature = "delivery_playbook")]
         SourceSelection::NamedRef { reference } if body.evidence.main_sync.is_some() => {
             let (e, id, g) = (
                 &body.evidence,

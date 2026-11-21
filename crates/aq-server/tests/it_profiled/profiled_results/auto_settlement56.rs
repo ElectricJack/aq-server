@@ -30,7 +30,6 @@ pub(crate) struct AutoEnv {
     pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
     _directory: tempfile::TempDir,
-    #[cfg(feature = "delivery_playbook")]
     _task_ref: Option<super::pushed_ref::TaskRef>,
 }
 
@@ -110,7 +109,6 @@ async fn finish_auto_env(
     enrolled: bool,
 ) -> AutoEnv {
     let auth = context(&f).await;
-    #[cfg(feature = "delivery_playbook")]
     let task_ref = if enrolled {
         let task_ref = super::pushed_ref::task_ref(&mut f, &mut report).await;
         let head = if changed {
@@ -286,7 +284,6 @@ async fn finish_auto_env(
         writes,
         bodies,
         _directory: directory,
-        #[cfg(feature = "delivery_playbook")]
         _task_ref: task_ref,
     }
 }
@@ -303,7 +300,6 @@ async fn settlement_row(f: &Fixture, report: Uuid) -> (String, Option<String>) {
 }
 
 /// How many settlement rows the report has (0 or 1).
-#[cfg(feature = "delivery_playbook")]
 async fn settlement_rows(f: &Fixture, report: Uuid) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM profiled_auto_settlements WHERE report_id=$1")
         .bind(report)
@@ -313,7 +309,6 @@ async fn settlement_rows(f: &Fixture, report: Uuid) -> i64 {
 }
 
 /// The facts the result path recorded for the report (spec 0016 section 7).
-#[cfg(feature = "delivery_playbook")]
 async fn result_facts(f: &Fixture, report: Uuid) -> Option<Value> {
     sqlx::query_scalar("SELECT facts FROM delivery_result_facts WHERE report_id=$1")
         .bind(report)
@@ -1357,7 +1352,6 @@ async fn replacement_facts_are_never_recorded_for_a_confirmed_result() {
 /// is asked for, only that the result is the attempt's current report head,
 /// that the attempt still holds the task, that its stop is proven and that it
 /// was neither revoked nor cancelled.
-#[cfg(feature = "delivery_playbook")]
 mod playbook {
     use super::*;
     use aq_server::{
@@ -1440,7 +1434,7 @@ mod playbook {
         );
         assert!(
             delivery_store::undecided(
-                &mut *pool.acquire().await.unwrap(),
+                &mut pool.acquire().await.unwrap(),
                 legacy.report.binding.attempt_id
             )
             .await

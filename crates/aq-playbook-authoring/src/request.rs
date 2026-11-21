@@ -58,7 +58,6 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
 /// every other.
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
-    #[cfg(feature = "delivery_playbook")]
     if record.id == crate::builtin::DELIVERY {
         return catalog_2_3();
     }
@@ -66,7 +65,6 @@ pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
     Ok(docs::catalog_registry())
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub fn catalog_2_3() -> Result<Registry> {
     serde_json::from_str(docs::CATALOG_2_3_REGISTRY)
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
@@ -74,7 +72,6 @@ pub fn catalog_2_3() -> Result<Registry> {
 
 /// `CATALOG.md` of the catalog the workspace actually uses.
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
-    #[cfg(feature = "delivery_playbook")]
     if _catalog
         .commands
         .get("work.read")

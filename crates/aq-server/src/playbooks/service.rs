@@ -42,10 +42,8 @@ pub struct Service {
     /// R1 (Host9): the routing commands serve any project on the router.
     pub installation_routing: bool,
     /// Epic 0: what the server records of results (`aq.work.result_ready`, `work.read`).
-    #[cfg(feature = "delivery_playbook")]
     pub(super) delivery: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
     /// Epic 0: the server's settlement, for `work.complete` and `work.return`.
-    #[cfg(feature = "delivery_playbook")]
     pub(super) settlement: Arc<dyn super::host_adapters::DeliverySettlement>,
 }
 #[derive(Clone, Debug)]
@@ -86,7 +84,6 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
-            #[cfg(feature = "delivery_playbook")]
             delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
@@ -173,7 +170,6 @@ impl Service {
             judgments,
             integration,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
-            #[cfg(feature = "delivery_playbook")]
             delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
@@ -214,7 +210,6 @@ impl Service {
             || extension_command(&contract.name, contract)
     }
     /// Replaces the delivery port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_delivery_ops(
         mut self,
         delivery_ops: Arc<dyn super::host_adapters::DeliveryOps>,
@@ -240,7 +235,6 @@ impl Service {
             judgments: None,
             integration: None,
             routing: Arc::new(super::host_adapters::ServerRouting(state.clone())),
-            #[cfg(feature = "delivery_playbook")]
             delivery_ops: Arc::new(super::host_adapters::ServerDelivery::new(state.clone())),
         }));
         Ok(service)
@@ -300,16 +294,13 @@ impl Service {
             reviews,
             host: None,
             installation_routing: false,
-            #[cfg(feature = "delivery_playbook")]
             delivery: Arc::new(aq_playbook_domain::delivery_store::PgDelivery(
                 state.store.pool.clone(),
             )),
-            #[cfg(feature = "delivery_playbook")]
             settlement: Arc::new(super::host_adapters::ServerSettlement(state.clone())),
         })
     }
     /// Replaces the delivery port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_delivery(
         mut self,
         port: Arc<dyn aq_playbook_domain::delivery_store::DeliveryPort>,
@@ -318,7 +309,6 @@ impl Service {
         self
     }
     /// Replaces the settlement port of a freshly built host service (tests).
-    #[cfg(feature = "delivery_playbook")]
     pub fn with_settlement(
         mut self,
         port: Arc<dyn super::host_adapters::DeliverySettlement>,
@@ -894,7 +884,6 @@ impl Service {
         .map_err(|_| Error::Invalid)
     }
     pub async fn prepare(&self, actor: Uuid, request: PrepareRequest) -> Result<AdmissionStatus> {
-        #[cfg(feature = "delivery_playbook")]
         if self.profile.is_delivery() && request.binding == super::domain::host10::DELIVERY_BINDING
         {
             return Err(Error::Forbidden);

@@ -5,10 +5,6 @@ edition.workspace = true
 publish = false
 description = "The stored profiled execution state projection (moved out of the aq-server lib)"
 
-[features]
-# Epic 0 (spec 0016): compiles out the D3 default completion policy.
-delivery_playbook = []
-
 [dependencies]
 aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }

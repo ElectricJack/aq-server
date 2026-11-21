@@ -10,7 +10,6 @@ use serde_json::Value;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
-#[cfg(feature = "delivery_playbook")]
 #[path = "native_offers/ancestry.rs"]
 mod ancestry;
 #[cfg(feature = "project_environments")]
@@ -18,7 +17,6 @@ mod ancestry;
 mod environments;
 #[path = "native_offers/git_author.rs"]
 mod git_author;
-#[cfg(feature = "delivery_playbook")]
 #[path = "native_offers/git_grant.rs"]
 mod git_grant;
 #[path = "native_offers/handoff.rs"]

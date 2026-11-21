@@ -290,9 +290,7 @@ async fn d4_host_catalog_recovery_classes_are_admitted() {
     )
     .await;
     assert!(owner.is_ok());
-    // Host catalog 2.3.0 (twenty-six commands, Epic 0) is admitted whole, with
-    // the feature `delivery_playbook` only.
-    #[cfg(feature = "delivery_playbook")]
+    // Host catalog 2.3.0 (twenty-six commands, Epic 0) is admitted whole.
     {
         let registry: Registry = serde_json::from_str(include_str!(
             "../../../vendor/aq-host-catalog-2.3.0/registry.json"

@@ -164,7 +164,6 @@ impl authoring::Server for AppState {
     fn config(&self) -> authoring::Config {
         self.config.playbook_authoring.clone()
     }
-    #[cfg(feature = "delivery_playbook")]
     fn routing_host10(&self) -> Option<authoring::continuity::Target> {
         let driver = self.internal_work.authoring().driver().ok()?;
         let service = &driver.service;

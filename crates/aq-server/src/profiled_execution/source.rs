@@ -75,7 +75,6 @@ pub(super) async fn require_base(
     {
         return Ok(());
     }
-    #[cfg(feature = "delivery_playbook")]
     if serde_json::from_slice::<Value>(&source.bytes)
         .is_ok_and(|body| body["evidence"].get("main_sync").is_some())
     {
@@ -91,10 +90,8 @@ pub(super) async fn require_base(
     Err(refused())
 }
 
-#[cfg(feature = "delivery_playbook")]
 use aq_role_settings::refusals::{DeliveryAncestryWait, OfferRefusal};
 
-#[cfg(feature = "delivery_playbook")]
 async fn ancestry_wait(
     state: &AppState,
     project: Uuid,
@@ -221,7 +218,6 @@ async fn observe_source(
     }
     // Spec 0016 §4: a named ref follows the head central aq-git last synced
     // from the remote and retained, synced now when older than Settings allow.
-    #[cfg(feature = "delivery_playbook")]
     let synced = match &selection {
         SourceSelection::NamedRef { reference } if enrolled => {
             let runtime = state.source_retention.as_ref().ok_or_else(|| refused())?;
@@ -288,7 +284,6 @@ async fn observe_source(
     let mut retention_handle = retention_handle;
     let object = match &selection {
         SourceSelection::Immutable { object } => object.clone(),
-        #[cfg(feature = "delivery_playbook")]
         SourceSelection::NamedRef { .. } if synced.is_some() => {
             let (object, handle) = synced.ok_or_else(refused)?;
             retention_handle = handle;
@@ -341,7 +336,6 @@ async fn observe_source(
     }
     // Enrollment selects the result path. A first offer on either path must
     // still prove the chosen base against its completed blockers.
-    #[cfg(feature = "delivery_playbook")]
     let object = if let Some(offer) = _offer.filter(|_| !evidence.contains_key("main_sync")) {
         use aq_delivery::main_sync::{OfferAncestry, Scope};
         let task = offer.revision.task_id;
@@ -475,7 +469,6 @@ async fn observe_source(
     })
 }
 /// Spec 0016 §4: the loop syncing each enabled project's followed named ref.
-#[cfg(feature = "delivery_playbook")]
 pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<bool>) {
     let (Some(runtime), Some(config), Some(delivery)) = (
         &state.source_retention,

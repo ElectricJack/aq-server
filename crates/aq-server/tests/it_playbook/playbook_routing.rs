@@ -136,7 +136,6 @@ async fn a_saved_routing_document_routes_a_new_task_and_places_it_on_the_routed_
     Box::pin(routes_with_saved_artifact(CatalogProfile::Host9)).await;
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn host10_reinstalls_and_runs_the_active_host9_routing_artifact() {
     Box::pin(routes_with_saved_artifact(CatalogProfile::Host10)).await;

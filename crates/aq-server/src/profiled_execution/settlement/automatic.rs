@@ -5,7 +5,6 @@
 use super::facts;
 use super::{completion, owner::*};
 use crate::{AppState, profiled_execution::results};
-#[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
 use serde::Serialize;
@@ -283,7 +282,6 @@ pub async fn record_replacement_facts(
     let mut changed = false;
     if !matches!(hot.retention, Retention::Retained { .. }) {
         let enrolled = super::super::has_delivery_grant(&mut *tx, attempt).await?;
-        #[cfg(feature = "delivery_playbook")]
         if enrolled
             && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
                 .await
@@ -511,7 +509,6 @@ async fn dispatch(
 /// settlement row and whether the fences hold. A playbook decides only on the
 /// attempt's current report head, while the attempt still holds the task,
 /// after its proven stop, and when it was neither revoked nor cancelled.
-#[cfg(feature = "delivery_playbook")]
 async fn playbook_locked<'a>(
     state: &'a AppState,
     report_id: Uuid,
@@ -566,7 +563,6 @@ async fn playbook_locked<'a>(
 /// claim is released only on a validated Graph receipt. Idempotent per
 /// report: a confirmed result is `Completed` again, a dispatched one replays
 /// the same payload, and a Graph version conflict is never dispatched again.
-#[cfg(feature = "delivery_playbook")]
 pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<Settled> {
     let settled = |s: &AutoSettlement| match s.disposition {
         AutoDisposition::Confirmed => Settled::Completed,
@@ -607,7 +603,6 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
 /// replacement owner admits a new attempt. Idempotent per report: a result
 /// already refused is `Returned` again (and its facts are recorded again); a
 /// completed or completing one is `Stale`.
-#[cfg(feature = "delivery_playbook")]
 pub async fn return_by_playbook(
     state: &AppState,
     report_id: Uuid,

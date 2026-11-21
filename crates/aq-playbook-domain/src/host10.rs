@@ -1,7 +1,7 @@
 //! Host catalog 2.3.0 (Host10), pure parts (Epic 0, spec 0016 section 6):
 //! the facts of a task's latest result for `work.read`, and the
 //! `aq.work.result_ready` event with its level-triggered emission rule. No
-//! I/O. Compiled in only with the cargo feature `delivery_playbook`.
+//! I/O.
 //!
 //! Code provides facts and events; a playbook decides. Nothing here says what
 //! a result is worth.

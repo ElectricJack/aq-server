@@ -1605,7 +1605,6 @@ mod adapters {
 // ------------------------------------------------------------------------
 // Epic 0 (spec 0016 section 6): host catalog 2.3.0 (profile 10), the event
 // `aq.work.result_ready` and the result facts of `work.read`.
-#[cfg(feature = "delivery_playbook")]
 mod delivery {
     use super::adapters::{FakeGraph, FakeRouting};
     use crate::common;
@@ -2383,7 +2382,7 @@ mod delivery {
                 _: &str,
             ) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push(format!("open {title}"));
-                Ok(pull(self.pr_state.lock().unwrap().clone()))
+                Ok(pull(*self.pr_state.lock().unwrap()))
             }
             async fn pull_request(
                 &self,
@@ -2392,7 +2391,7 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
-                    ..pull(self.pr_state.lock().unwrap().clone())
+                    ..pull(*self.pr_state.lock().unwrap())
                 })
             }
             async fn checks(
@@ -3001,5 +3000,4 @@ mod delivery {
     }
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) use delivery::commands::GraphMergeHost;

@@ -1,4 +1,4 @@
-//! Spec 0016 §5.1 (feature `delivery_playbook`): a result report names the
+//! Spec 0016 §5.1: a result report names the
 //! task branch the node pushed and its commit. The server records it only
 //! when central aq-git's `ref.show` has the attempt's task ref at that commit;
 //! the ref is the record of the result, so its source is retained.

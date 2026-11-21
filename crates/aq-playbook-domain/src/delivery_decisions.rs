@@ -3,8 +3,7 @@
 //! task and result a command names, what it answers, and the rows it writes
 //! (`delivery_decisions`, `delivery_tasks.returns`,
 //! `delivery_notifications`). The server's intent rows, settlement and
-//! supervisor message are in aq-server. Compiled in only with the cargo
-//! feature `delivery_playbook`.
+//! supervisor message are in aq-server.
 //!
 //! Mechanism only: nothing here judges a result. A decision is per result: a
 //! result with one is not announced again. `held` waits for a later decision;

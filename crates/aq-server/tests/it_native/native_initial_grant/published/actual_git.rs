@@ -158,7 +158,6 @@ async fn setup_actual_with_prefix(task_prefix: bool) -> Unpublished {
         base,
     }
 }
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 #[ignore = "qualification requires a delivery-enabled aq-git with source leases"]
 async fn actual_git_publishes_only_the_submitted_commit_and_cleans_both_refs() {

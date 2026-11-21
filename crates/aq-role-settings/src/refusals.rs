@@ -25,7 +25,6 @@ pub enum OfferRefusal {
     },
     /// The server ships no platform text for `environment`.
     PlatformTextMissing { environment: String },
-    #[cfg(feature = "delivery_playbook")]
     #[serde(rename = "delivery_ancestry_wait")]
     DeliveryAncestry { wait: DeliveryAncestryWait },
     /// Spec 0017 §5.4: `environment` lacks the `missing` labels of the
@@ -40,7 +39,6 @@ pub enum OfferRefusal {
     NoNodeHasEnvironment { environment: String },
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeliveryAncestryWait {
@@ -68,7 +66,6 @@ pub enum DeliveryAncestryWait {
     SourceBaseChanged,
 }
 
-#[cfg(feature = "delivery_playbook")]
 impl DeliveryAncestryWait {
     fn message(&self) -> String {
         match self {
@@ -111,7 +108,6 @@ impl OfferRefusal {
         match self {
             Self::StartupOverLimit { .. } => "startup_over_limit",
             Self::PlatformTextMissing { .. } => "platform_text_missing",
-            #[cfg(feature = "delivery_playbook")]
             Self::DeliveryAncestry { .. } => "delivery_ancestry_wait",
             #[cfg(feature = "project_environments")]
             Self::EnvironmentMissingCapability { .. } => "environment_missing_capability",
@@ -151,7 +147,6 @@ impl OfferRefusal {
             Self::PlatformTextMissing { environment } => format!(
                 "AQ does not offer this task: the server has no platform text for environment `{environment}`, and an agent is not launched without it."
             ),
-            #[cfg(feature = "delivery_playbook")]
             Self::DeliveryAncestry { wait } => format!(
                 "AQ is waiting to offer this task because {}.",
                 wait.message()

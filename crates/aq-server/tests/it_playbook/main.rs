@@ -25,7 +25,6 @@ mod playbook_authoring;
 mod playbook_bridge;
 mod playbook_coding;
 mod playbook_contract;
-#[cfg(feature = "delivery_playbook")]
 mod playbook_delivery_document;
 mod playbook_findings_triggers;
 mod playbook_host9;

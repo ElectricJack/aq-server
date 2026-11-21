@@ -149,7 +149,6 @@ impl Service {
     /// settled, while a delivery artifact is active. It is repeated every
     /// `decision_repeat_ms` (Settings), at once when main or the pull request
     /// moves, and never while a run that read the task is unfinished.
-    #[cfg(feature = "delivery_playbook")]
     pub async fn collect_result_ready(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_playbook_domain::delivery_store as store;
         let (Some(host), true) = (self.host.as_deref(), self.profile.is_delivery()) else {

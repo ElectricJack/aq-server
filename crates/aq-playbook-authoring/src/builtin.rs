@@ -13,11 +13,9 @@ pub const ROUTING_OPTIONS: &str = "routing_options";
 
 /// The id of the source whose document says what happens to a task's result
 /// (spec 0016 §8).
-#[cfg(feature = "delivery_playbook")]
 pub const DELIVERY: &str = "delivery";
 /// The binding its playbook is activated on (`aq-playbook-domain`'s
 /// `DELIVERY_BINDING`; a server test keeps the two equal).
-#[cfg(feature = "delivery_playbook")]
 pub const DELIVERY_BINDING: &str = "aq.delivery";
 
 /// The record of the `routing` source: it reads a task, asks a structured
@@ -66,7 +64,6 @@ pub fn routing() -> SourceRecord {
 /// ([`crate::request::pinned_catalog`]). The document is the only thing it
 /// reads besides the task: Settings offers no fact provider to it, and the
 /// numbers it uses (returns allowed, check wait) are the document's own words.
-#[cfg(feature = "delivery_playbook")]
 pub fn delivery() -> SourceRecord {
     let names =
         |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
@@ -131,7 +128,6 @@ mod tests {
         docs::catalog(&record.commands, &record.events).unwrap();
     }
 
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_record_may_settle_a_result_and_no_more() {
         let record = delivery();
@@ -185,7 +181,6 @@ mod tests {
     /// The worked delivery example of catalog 2.3.0 seals as a playbook of
     /// this record, against catalog 2.3.0, with the record's scope, binding and
     /// abilities (`project` is the one scope the contracts allow).
-    #[cfg(feature = "delivery_playbook")]
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
         const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";

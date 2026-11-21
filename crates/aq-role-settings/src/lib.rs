@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod attempts;
-#[cfg(feature = "delivery_playbook")]
 pub mod delivery;
 #[cfg(feature = "project_environments")]
 pub mod environments;
@@ -27,7 +26,6 @@ pub use store::{
     save, save_limits, save_routing_document, save_selection_defaults, selection_defaults,
     settings, snapshot, startup, unpin,
 };
-#[cfg(feature = "delivery_playbook")]
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
 
 /// Something outside this store that names one of its documents, such as a
@@ -124,14 +122,10 @@ pub struct Settings {
     pub routing_revision: i64,
     /// The delivery document: the text the delivery playbook is authored
     /// from (spec 0016 §8). Empty means no delivery policy.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_markdown: String,
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_revision: i64,
     /// The delivery limits (spec 0016 §4), a Settings value of their own.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_limits: delivery::DeliveryLimits,
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_limits_revision: i64,
 }
 
@@ -162,10 +156,8 @@ pub enum Change {
     /// The node observation limits. They are not part of a snapshot.
     ObservationLimits(observation::ObservationLimits),
     /// The delivery document. It is not part of a snapshot.
-    #[cfg(feature = "delivery_playbook")]
     DeliveryDocument(String),
     /// The delivery limits. They are not part of a snapshot.
-    #[cfg(feature = "delivery_playbook")]
     DeliveryLimits(delivery::DeliveryLimits),
 }
 /// A change with its fence and its retry identity.

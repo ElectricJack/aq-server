@@ -1920,7 +1920,6 @@ mod media_http;
 pub(crate) mod auto_settlement56;
 #[path = "profiled_results/operations.rs"]
 mod operations;
-#[cfg(feature = "delivery_playbook")]
 #[path = "profiled_results/pushed_ref.rs"]
 mod pushed_ref;
 #[path = "profiled_results/question_inbox.rs"]

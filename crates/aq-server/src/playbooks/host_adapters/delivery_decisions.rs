@@ -1,7 +1,6 @@
 //! Host catalog 2.3.0 (Epic 0, spec 0016 section 6.2): `work.complete`,
 //! `work.return`, `work.hold` and `supervisor.notify`, with the pure parts
-//! and the rows in `aq_playbook_domain::delivery_decisions`. Compiled in only
-//! with the cargo feature `delivery_playbook`.
+//! and the rows in `aq_playbook_domain::delivery_decisions`.
 //!
 //! `work.complete` and `work.return` are two-phase: the `pending` intent row
 //! commits, then the server's settlement runs (`complete_by_playbook`,

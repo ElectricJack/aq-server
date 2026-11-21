@@ -2,10 +2,10 @@
 # One authority owns this private state/socket. The child PID is diagnostic only.
 set -eu
 child=''
-# Spec 0016 §5.2 (delivery_playbook): with AQ_GIT_HTTP_SOCKET set, aq-git also
-# serves git smart-HTTP for task attempts on that socket, beside the JSON one
-# in the same shared directory. Only an aq-git built with its own
-# delivery_playbook feature accepts the flag, so it stays off by default.
+# Spec 0016 §5.2: with AQ_GIT_HTTP_SOCKET set, aq-git also serves git
+# smart-HTTP for task attempts on that socket, beside the JSON one in the same
+# shared directory. Only an aq-git with git smart-HTTP accepts the flag, so it
+# is passed only when the socket is set.
 set --
 if [ -n "${AQ_GIT_HTTP_SOCKET:-}" ]; then
     set -- --git-http-socket "$AQ_GIT_HTTP_SOCKET"

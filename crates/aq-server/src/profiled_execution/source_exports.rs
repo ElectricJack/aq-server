@@ -253,7 +253,6 @@ pub async fn reserve(
     let policy_handle = configured.retention_handle == request.source_retention_handle
         || head_handle == Some(request.source_retention_handle);
     // Spec 0016 §4: a handle `repo.retain_ref` returned for this exact head.
-    #[cfg(feature = "delivery_playbook")]
     let policy_handle = policy_handle
         || match &configured.source {
             aq_admission::SourceSelection::NamedRef { reference } => {

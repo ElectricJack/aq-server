@@ -242,7 +242,6 @@ pub async fn start(
     Ok(())
 }
 
-#[cfg(feature = "delivery_playbook")]
 pub(crate) async fn delivery_state(
     pool: &PgPool,
     project: Uuid,

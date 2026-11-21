@@ -126,7 +126,6 @@ impl Service {
         intent: &Intent,
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
-        #[cfg(feature = "delivery_playbook")]
         if name == "work.read" && self.profile.is_delivery() && intent.command.version == "2.3.0" {
             return self.read_delivery(tx, input).await;
         }
@@ -213,7 +212,6 @@ impl Service {
 
     /// Catalog 2.3.0 `work.read` (spec 0016 section 6.2): the task's facts and
     /// those of its latest result, for a task of any bound project.
-    #[cfg(feature = "delivery_playbook")]
     async fn read_delivery(
         &self,
         tx: &mut Transaction<'_, Postgres>,

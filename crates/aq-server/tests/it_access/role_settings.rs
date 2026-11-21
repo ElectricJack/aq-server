@@ -1110,7 +1110,6 @@ async fn the_routing_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
     const PATH: &str = "/api/settings/delivery-document";
@@ -1182,7 +1181,6 @@ async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     use aq_role_settings::delivery::DeliveryLimits;
@@ -1248,9 +1246,13 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         let mut negative = defaults.clone();
         negative[field] = json!(-1);
         cases.push(negative);
-        let mut missing = defaults.clone();
-        missing.as_object_mut().unwrap().remove(field);
-        cases.push(missing);
+        // `require_landed_results` defaults to true when absent (rows stored
+        // before it existed), so only the numbers are required.
+        if field != "require_landed_results" {
+            let mut missing = defaults.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            cases.push(missing);
+        }
     }
     let mut unknown = defaults.clone();
     unknown["surprise"] = json!(1);

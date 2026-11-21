@@ -32,18 +32,14 @@ fn host_result(outcome: &str, output: Value) -> HostResult {
 
 mod activate;
 mod assess;
-#[cfg(feature = "delivery_playbook")]
 mod delivery_commands;
-#[cfg(feature = "delivery_playbook")]
 mod delivery_decisions;
 mod delivery_port;
 mod integration;
 mod messages;
 mod requests;
 mod routing;
-#[cfg(feature = "delivery_playbook")]
 pub use delivery_commands::{DeliveryOps, ServerDelivery};
-#[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
 pub use integration::*;
@@ -64,7 +60,6 @@ pub struct HostPorts {
     pub routing: Arc<dyn RoutingPort>,
     /// Catalog 2.3.0 delivery commands (Epic 0): where a project's work is
     /// delivered, and the commands over the forge and central aq-git.
-    #[cfg(feature = "delivery_playbook")]
     pub delivery_ops: Arc<dyn DeliveryOps>,
 }
 
@@ -169,11 +164,8 @@ impl Service {
             super::review_domain::WORK_ACTIVATE => {
                 self.work_activate(owner, id, revision, intent).await
             }
-            #[cfg(feature = "delivery_playbook")]
             "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
-            #[cfg(feature = "delivery_playbook")]
             "work.hold" => self.work_hold(owner, id, revision, intent).await,
-            #[cfg(feature = "delivery_playbook")]
             "supervisor.notify" => self.supervisor_notify(owner, id, revision, intent).await,
             "operation.cancel" => self.operation_cancel(owner, id, revision, intent).await,
             "judgment.request" => self.judgment_request(owner, id, revision, intent).await,
@@ -187,7 +179,6 @@ impl Service {
                 self.host_decision_request(owner, id, revision, intent)
                     .await
             }
-            #[cfg(feature = "delivery_playbook")]
             name if self.profile.is_delivery()
                 && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
             {
@@ -405,7 +396,6 @@ impl Service {
         let at = self.now()?;
         // `aq.delivery.completed` names no subject or revision: the join
         // correlates it by the operation.
-        #[cfg(feature = "delivery_playbook")]
         let (subject_id, revision) = if subject.is_null() {
             (None, None)
         } else {
@@ -414,11 +404,6 @@ impl Service {
                 Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
             )
         };
-        #[cfg(not(feature = "delivery_playbook"))]
-        let (subject_id, revision) = (
-            Some(text(subject, "id")?.to_string()),
-            Some(subject["revision"].as_u64().ok_or(Error::Invalid)?),
-        );
         let event = EventEnvelope {
             producer: "aq.host.bridge@1".into(),
             event_id: event_id.to_string(),

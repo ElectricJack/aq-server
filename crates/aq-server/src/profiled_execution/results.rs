@@ -67,7 +67,6 @@ pub async fn record(
     report: &ResultReport,
 ) -> Result<Receipt, AppError> {
     let (pool, attempt) = (&state.store.pool, report.binding.attempt_id);
-    #[cfg(feature = "delivery_playbook")]
     let enrolled = super::has_delivery_grant(pool, attempt).await?;
     let receipt = match record_only(state, node, report).await {
         // The attempt was released (its task cancelled): tell the worker, which retried forever.
@@ -78,7 +77,6 @@ pub async fn record(
         }
         recorded => recorded?,
     };
-    #[cfg(feature = "delivery_playbook")]
     if enrolled {
         if let Err(error) = super::settlement::record_facts(state, report.report_id).await {
             tracing::warn!(report_id = %report.report_id, ?error, "result facts deferred");
@@ -117,7 +115,6 @@ pub async fn record(
 }
 /// Spec 0016 §5.2: [`record`] of a report that names the task branch its node
 /// pushed (at the named head in central aq-git) or a push conflict.
-#[cfg(feature = "delivery_playbook")]
 pub async fn record_pushed(
     state: &AppState,
     node: &AuthenticatedNode,
@@ -445,9 +442,6 @@ async fn report(
     .await?;
     crate::delegated_permits::runtime::require_binding(&node, &request.binding)?;
     crate::delegated_permits::runtime::require_binding(&node, &request.stop.binding)?;
-    #[cfg(feature = "delivery_playbook")]
     let receipt = record_pushed(&state, &node, &request, &headers).await?;
-    #[cfg(not(feature = "delivery_playbook"))]
-    let receipt = record(&state, &node, &request).await?;
     crate::delegated_permits::receipts::result(&node, &request, receipt)
 }

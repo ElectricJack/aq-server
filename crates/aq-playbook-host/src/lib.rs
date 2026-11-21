@@ -1064,7 +1064,6 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
     if current == Some(contract) {
         return true;
     }
-    #[cfg(feature = "delivery_playbook")]
     if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.3.0") {
         static HOST9: OnceLock<Registry> = OnceLock::new();
         let legacy = HOST9.get_or_init(|| {
@@ -1106,8 +1105,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "operation.get",
         "operation.cancel",
     ];
-    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands, only
-    // with the cargo feature `delivery_playbook`.
+    // Host catalog 2.3.0 (Epic 0, spec 0016): the ten delivery commands.
     const DELIVERY: [&str; 10] = [
         "work.complete",
         "work.return",
@@ -1120,8 +1118,7 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "pull_request.merge",
         "pull_request.close",
     ];
-    let delivery = cfg!(feature = "delivery_playbook");
-    let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
+    let admitted = |name: &str| COMMANDS.contains(&name) || DELIVERY.contains(&name);
     let base_event_count = registry
         .events
         .keys()

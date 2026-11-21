@@ -1,7 +1,6 @@
 //! Host catalog 2.3.0 asynchronous delivery commands (Epic 0, spec 0016
 //! section 6.2): `main.sync`, `branch.publish`, `pull_request.open`,
 //! `pull_request.await_checks`, `pull_request.merge` and `pull_request.close`.
-//! Compiled in only with the cargo feature `delivery_playbook`.
 //!
 //! Each command records one durable intent (`playbook_effects` row `accepted`
 //! plus one `playbook_host_operations` row `running`) and answers

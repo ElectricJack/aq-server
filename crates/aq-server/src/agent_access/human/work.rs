@@ -61,7 +61,6 @@ fn error_class(error: &AppError) -> &'static str {
 /// Epic 0 (spec 0016 section 7): why a stopped attempt's undecided result
 /// holds the task, and whether a delivery playbook is active for `project`
 /// to decide it. A read failure omits it; the attempt's own hold is shown.
-#[cfg(feature = "delivery_playbook")]
 async fn result_waiting(
     s: &AppState,
     pool: &PgPool,
@@ -160,7 +159,6 @@ pub(super) async fn work(
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
     // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
     // for a playbook, and the read says whether one is active to decide it.
-    #[cfg(feature = "delivery_playbook")]
     let held = held.chain(match (&hold, open) {
         (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
         _ => None,

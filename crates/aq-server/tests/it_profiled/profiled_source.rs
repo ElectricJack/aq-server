@@ -14,7 +14,7 @@ use sqlx::Row;
 use std::sync::{Arc, atomic::Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
-// With `delivery_playbook` a named ref never reads `repo.observation` or the
+// A named ref never reads `repo.observation` or the
 // configured handle (spec 0016 §4); the test below covers that path.
 #[tokio::test]
 async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_retention() {
@@ -147,11 +147,10 @@ async fn fixed_public_source_reads_preserve_original_age_and_refuse_released_ret
     task.abort();
 }
 
-/// Spec 0016 §4 (feature `delivery_playbook`): a project whose source is
+/// Spec 0016 §4: a project whose source is
 /// `NamedRef refs/heads/main` follows the remote's `main` through heads
 /// central aq-git synced and retained (`repo.retain_ref`), with no config
 /// change. The synthetic aq-git peer holds the fixture remote's `main`.
-#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn named_main_follows_remote_pushes_through_synced_retained_heads() {
     use aq_delivery::main_sync::{self, Scope};

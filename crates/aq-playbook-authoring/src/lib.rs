@@ -10,10 +10,8 @@
 pub mod builtin;
 pub mod complete;
 pub mod config;
-#[cfg(feature = "delivery_playbook")]
 pub mod continuity;
 pub mod deploy;
-#[cfg(feature = "delivery_playbook")]
 pub mod document;
 pub mod http;
 pub mod request;
@@ -29,7 +27,6 @@ pub use complete::{
 };
 pub use config::Config;
 pub use deploy::{Deployer, Server};
-#[cfg(feature = "delivery_playbook")]
 pub use document::{author_document, author_saved, catch_up};
 pub use request::{INSTRUCTIONS, OUTCOME_SCHEMA, PreviousPlaybook, workspace_files};
 pub use runs::{

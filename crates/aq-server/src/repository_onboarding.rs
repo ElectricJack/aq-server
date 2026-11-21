@@ -360,7 +360,6 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
                     params["credential_profile"] = json!(name);
                 }
                 // Spec 0016 §5.2: each task's branch `refs/heads/aq/<task-id>`.
-                #[cfg(feature = "delivery_playbook")]
                 {
                     params["allowed_target_prefixes"] = json!(["refs/heads/aq/"]);
                 }
@@ -565,7 +564,6 @@ pub async fn adopt(state: &AppState, actor: Uuid, request: AdoptRequest) -> Resu
         pool: &state.store.pool,
         socket: git_socket(state),
         onboarding: state.config.onboarding.as_ref(),
-        #[cfg(feature = "delivery_playbook")]
         github_app: state
             .config
             .delivery

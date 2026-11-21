@@ -79,7 +79,6 @@ pub struct Config {
     #[serde(default)]
     pub supervisor_attachments: aq_supervisor_control::attachments::Limits,
     /// Epic 0 (spec 0016) `[delivery]`; without `[delivery.github]` the adapter is unavailable.
-    #[cfg(feature = "delivery_playbook")]
     #[serde(default, deserialize_with = "aq_delivery::github::deserialize")]
     pub delivery: Option<aq_delivery::github::DeliveryConfig>,
 }
@@ -351,7 +350,6 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
             .validate()
             .map_err(|reason| ("result_media".into(), reason.into()))?;
     }
-    #[cfg(feature = "delivery_playbook")]
     if c.delivery.as_ref().is_some_and(|d| d.has_enrollment()) && c.source_retention.is_none() {
         return invalid(
             "delivery.project_allowlist",
@@ -476,7 +474,6 @@ mod tests {
             internal_work: None,
             playbook_authoring: Default::default(),
             supervisor_attachments: Default::default(),
-            #[cfg(feature = "delivery_playbook")]
             delivery: None,
         }
     }

@@ -38,11 +38,8 @@ enum Lock {
 }
 async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> {
     const COLUMNS: &str = "revision,active_digest,selection_defaults,selection_defaults_revision,limits,limits_revision,routing_markdown,routing_revision";
-    #[cfg(feature = "delivery_playbook")]
     const DELIVERY: &str =
         ",delivery_markdown,delivery_revision,delivery_limits,delivery_limits_revision";
-    #[cfg(not(feature = "delivery_playbook"))]
-    const DELIVERY: &str = "";
     let suffix = match lock {
         Lock::None => "",
         Lock::Share => " FOR SHARE",
@@ -70,15 +67,11 @@ async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> 
             .get::<Option<String>, _>("routing_markdown")
             .unwrap_or_default(),
         routing_revision: row.get("routing_revision"),
-        #[cfg(feature = "delivery_playbook")]
         delivery_markdown: row
             .get::<Option<String>, _>("delivery_markdown")
             .unwrap_or_default(),
-        #[cfg(feature = "delivery_playbook")]
         delivery_revision: row.get("delivery_revision"),
-        #[cfg(feature = "delivery_playbook")]
         delivery_limits: stored(row.get("delivery_limits"))?,
-        #[cfg(feature = "delivery_playbook")]
         delivery_limits_revision: row.get("delivery_limits_revision"),
     })
 }
@@ -350,9 +343,7 @@ pub async fn apply_referenced(
         }
         Change::RoutingDocument(_) => state.routing_revision,
         Change::ObservationLimits(_) => observation_limits(&mut tx).await?.1,
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(_) => state.delivery_revision,
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryLimits(_) => state.delivery_limits_revision,
     };
     if current != mutation.expected_revision {
@@ -373,7 +364,6 @@ pub async fn apply_referenced(
     }
     // The routing document is not part of a snapshot: saving it compiles
     // and activates nothing.
-    #[cfg(feature = "delivery_playbook")]
     let delivery = match &mutation.change {
         Change::DeliveryDocument(markdown) => {
             let limit = state.limits.documents.max_document_bytes;
@@ -391,8 +381,6 @@ pub async fn apply_referenced(
         }
         _ => false,
     };
-    #[cfg(not(feature = "delivery_playbook"))]
-    let delivery = false;
     let snapshot = if let Change::RoutingDocument(markdown) = &mutation.change {
         let limit = state.limits.documents.max_document_bytes;
         if markdown.len() > limit {
@@ -474,7 +462,6 @@ pub async fn apply_referenced(
             .execute(&mut *tx)
             .await?;
         }
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(markdown) => {
             sqlx::query(
                 "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton",
@@ -484,7 +471,6 @@ pub async fn apply_referenced(
             .execute(&mut *tx)
             .await?;
         }
-        #[cfg(feature = "delivery_playbook")]
         Change::DeliveryLimits(limits) => {
             sqlx::query(
                 "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",
@@ -616,14 +602,12 @@ pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
 pub async fn document_of(pool: &PgPool, source: &str) -> Result<Option<(String, i64)>> {
     match source {
         "routing" => routing_document(pool).await.map(Some),
-        #[cfg(feature = "delivery_playbook")]
         "delivery" => delivery_document(pool).await.map(Some),
         _ => Ok(None),
     }
 }
 /// Replace the delivery document (spec 0016 §8). `expected_revision` is its
 /// revision as last read, 0 before the first save.
-#[cfg(feature = "delivery_playbook")]
 pub async fn save_delivery_document(
     pool: &PgPool,
     actor: Uuid,
@@ -641,14 +625,12 @@ pub async fn save_delivery_document(
 }
 /// The delivery document and its revision; empty at revision 0 until saved,
 /// which means no delivery policy.
-#[cfg(feature = "delivery_playbook")]
 pub async fn delivery_document(pool: &PgPool) -> Result<(String, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.delivery_markdown, settings.delivery_revision))
 }
 /// Replace the delivery limits. They are validated
 /// ([`delivery::DeliveryLimits::validate`]) before anything is stored.
-#[cfg(feature = "delivery_playbook")]
 pub async fn save_delivery_limits(
     pool: &PgPool,
     actor: Uuid,
@@ -666,7 +648,6 @@ pub async fn save_delivery_limits(
 }
 /// The delivery limits and their revision; the defaults at revision 0 until
 /// saved.
-#[cfg(feature = "delivery_playbook")]
 pub async fn delivery_limits(pool: &PgPool) -> Result<(delivery::DeliveryLimits, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.delivery_limits, settings.delivery_limits_revision))

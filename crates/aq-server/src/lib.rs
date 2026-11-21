@@ -390,7 +390,6 @@ fn build_worker_router_inner(
         Some(policy) => profiled_execution::closure::api::routes(state.clone(), policy),
         None => Router::new(),
     };
-    #[cfg(feature = "delivery_playbook")]
     let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
     let router = Router::new()
         .merge(closure)
@@ -521,7 +520,6 @@ async fn run_with_listeners_and_dashboard(
     let wakes_task = tokio::spawn(agent_access::wakes::run(state.clone(), rx.clone()));
     let expiry_task = tokio::spawn(profiled_execution::expiry::run(state.clone(), rx.clone()));
     let source_gc_task = tokio::spawn(source_retention::gc::run(state.clone(), rx.clone()));
-    #[cfg(feature = "delivery_playbook")]
     tokio::spawn(profiled_execution::source::follow_main(
         state.clone(),
         rx.clone(),

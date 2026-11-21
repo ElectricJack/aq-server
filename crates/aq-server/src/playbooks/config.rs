@@ -124,7 +124,6 @@ enum Profile {
     Host8,
     #[serde(rename = "host_v9")]
     Host9,
-    #[cfg(feature = "delivery_playbook")]
     #[serde(rename = "host_v10")]
     Host10,
     #[serde(rename = "host_v11")]
@@ -232,7 +231,6 @@ impl Configuration {
             Profile::Host7 => CatalogProfile::Host7,
             Profile::Host8 => CatalogProfile::Host8,
             Profile::Host9 => CatalogProfile::Host9,
-            #[cfg(feature = "delivery_playbook")]
             Profile::Host10 => CatalogProfile::Host10,
             Profile::Host11 => CatalogProfile::Host11,
         };

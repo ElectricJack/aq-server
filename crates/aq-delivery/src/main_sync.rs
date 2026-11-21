@@ -1,4 +1,4 @@
-//! Following main (spec 0016 §4, feature `delivery_playbook`). Central aq-git
+//! Following main (spec 0016 §4). Central aq-git
 //! syncs a project's default branch from its remote and retains the head
 //! (`repo.retain_ref`). This module makes that call, records each retained
 //! head in `profiled_main_syncs`, and answers two questions: which head an

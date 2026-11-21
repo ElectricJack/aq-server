@@ -57,7 +57,7 @@ max_age = 2592000 # seconds (30 days)
 staging_root = "/var/lib/aq/source-staging"
 git_root = "/var/lib/aq/git"
 git_socket = "/run/aq-git/central.sock"
-# Spec 0016 §5.2 with the delivery_playbook feature and a central Git HTTP socket.
+# Spec 0016 §5.2 with a central Git HTTP socket.
 # New offers in listed projects use Git grants. An empty list leaves new offers
 # on bundle transfer and the existing settlement policy.
 # [delivery]

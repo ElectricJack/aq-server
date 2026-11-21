@@ -43,7 +43,6 @@ pub struct Adoption<'a> {
     pub pool: &'a PgPool,
     pub socket: Option<&'a Path>,
     pub onboarding: Option<&'a OnboardingConfig>,
-    #[cfg(feature = "delivery_playbook")]
     pub github_app: Option<&'a crate::github::GitHubAppConfig>,
 }
 

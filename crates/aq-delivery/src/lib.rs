@@ -2,14 +2,10 @@
 //! only `git_grant` (spec 0016 §5.2) serves the server's `/v1/git` route.
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
-#[cfg(feature = "delivery_playbook")]
 pub mod commands;
 pub mod diff_patch;
-#[cfg(feature = "delivery_playbook")]
 pub mod git_grant;
-#[cfg(feature = "delivery_playbook")]
 pub mod github;
-#[cfg(feature = "delivery_playbook")]
 pub mod main_sync;
 pub mod offer_source;
 mod policy;
@@ -22,7 +18,6 @@ pub mod source_checks;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,
 };
-#[cfg(feature = "delivery_playbook")]
 pub use policy::{
     BranchDeletion, Checks, GitHubRepository, MergeMethod, MergeOutcome, MergeRefusal,
     Mergeability, PullRequest, PullRequestState,
@@ -32,8 +27,6 @@ pub use policy::{
     PublicationMode, PublicationPolicy, PublicationRefusal, RecoveryBlocked, RefusalReason,
     UnconfiguredGitHub, WaitForChecks,
 };
-#[cfg(not(feature = "delivery_playbook"))]
-pub use policy::{GitHubError, PullRequest, PullRequestSpec};
 pub use protocol::{
     CandidateResult, CandidateState, CommitMetadata, ConflictPath, GitError, OperationResult,
     OperationStatus, PublishResult, Receipt, ReconcileResult, Resolution, RetainedSource,

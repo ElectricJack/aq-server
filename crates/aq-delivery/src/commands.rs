@@ -1,8 +1,7 @@
 //! The asynchronous delivery commands of host catalog 2.3.0 (Epic 0, spec 0016
 //! section 6.2): `main.sync`, `branch.publish`, `pull_request.open`,
 //! `pull_request.await_checks`, `pull_request.merge` and `pull_request.close`,
-//! over the GitHub App adapter and aq-git. Compiled in only with the cargo
-//! feature `delivery_playbook`.
+//! over the GitHub App adapter and aq-git.
 //!
 //! Code provides operations, facts and events; a playbook decides. Each
 //! method makes the calls its command needs and reports a catalog outcome and

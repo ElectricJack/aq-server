@@ -59,7 +59,6 @@ async fn write(
     if saved.is_ok() {
         // The routing document or what the levels offer may have changed.
         crate::routing::author(&state).await;
-        #[cfg(feature = "delivery_playbook")]
         aq_playbook_authoring::author_saved(&state, uri.path()).await;
     }
     http::respond(saved, error)
