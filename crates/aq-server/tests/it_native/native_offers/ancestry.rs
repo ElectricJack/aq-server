@@ -299,6 +299,24 @@ impl Fixture {
         }
     }
 
+    /// A result `task` pushed to its task ref in the project's repository
+    /// (spec 0016 section 5.2): the record that it has changes to deliver.
+    async fn insert_pushed_result(&self, task: Uuid) {
+        let pool = &self.case.env.env.pool;
+        let repository = self.case.env.frozen.project.binding.repository_id;
+        let attempt = Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,holds_task,state) VALUES($1,$2,$3,$4,$5,false,'{}')")
+            .bind(attempt).bind(task).bind(self.case.env.env.node)
+            .bind(Uuid::new_v4()).bind(Uuid::new_v4()).execute(pool).await.unwrap();
+        let task_ref = format!("refs/heads/aq/{task}");
+        sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,$3,$4)")
+            .bind(attempt).bind(repository).bind(OLD).bind(&task_ref)
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
+            .bind(Uuid::new_v4()).bind(attempt).bind(&task_ref).bind(UNRELATED)
+            .execute(pool).await.unwrap();
+    }
+
     fn operations(&self, operation: &str) -> Vec<Value> {
         self.requests
             .lock()
@@ -537,4 +555,72 @@ async fn unenrolled_stale_immutable_dependent_waits_without_refreshing_its_base(
     assert_eq!(reason["code"], "delivery_ancestry_wait");
     assert_eq!(reason["wait"]["reason"], "merge_missing_from_base");
     assert_eq!(reason["wait"]["base"], OLD);
+}
+
+#[tokio::test]
+async fn a_completed_blocker_whose_pushed_result_is_not_merged_keeps_its_dependent_waiting() {
+    let f = Fixture::new(true, false).await;
+    let [first, second, ..] = f.blockers;
+    // `first` and `second` pushed results; the report-only blocker pushed none.
+    f.insert_pushed_result(first).await;
+    f.insert_pushed_result(second).await;
+    f.insert_merges(false).await;
+    let (status, body) = poll(&f.case).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["body"]["offers"], json!([]));
+    assembled(&f.case).await;
+    assert!(f.operations("artifact.export").is_empty());
+    let reason = f.refusal().await.unwrap();
+    assert_eq!(reason["code"], "delivery_ancestry_wait");
+    assert_eq!(reason["wait"]["reason"], "prerequisite_not_delivered");
+    assert_eq!(reason["wait"]["prerequisite"], json!(first));
+    assert!(
+        f.operations("contains").is_empty(),
+        "no ancestry check runs for an undelivered result"
+    );
+
+    // Once the merges are recorded and the base contains them, it starts.
+    f.insert_merges(true).await;
+    *f.remote.lock().unwrap() = NEW;
+    let offered = f.offer().await;
+    assert_eq!(
+        offered.offered.lifecycle_binding.task_id,
+        f.case.env.lineage.task_id
+    );
+    assert_eq!(f.granted_base(&offered).await.as_deref(), Some(NEW));
+    assert!(f.refusal().await.is_none());
+}
+
+#[tokio::test]
+async fn blockers_without_pushed_results_are_satisfied_at_once() {
+    let f = Fixture::new(true, false).await;
+    // No blocker pushed anything and no merge is recorded: nothing to deliver.
+    let offered = f.offer().await;
+    assert_eq!(
+        offered.offered.lifecycle_binding.task_id,
+        f.case.env.lineage.task_id
+    );
+    assert!(f.operations("contains").is_empty());
+    assert!(f.refusal().await.is_none());
+}
+
+#[tokio::test]
+async fn settings_can_stop_requiring_landed_results() {
+    let f = Fixture::new(true, false).await;
+    let [first, ..] = f.blockers;
+    f.insert_pushed_result(first).await;
+    let pool = &f.case.env.env.pool;
+    let limits = aq_role_settings::delivery::DeliveryLimits {
+        require_landed_results: false,
+        ..Default::default()
+    };
+    aq_role_settings::save_delivery_limits(pool, f.case.env.actor, &limits, 0, Uuid::new_v4(), 1)
+        .await
+        .unwrap();
+    let offered = f.offer().await;
+    assert_eq!(
+        offered.offered.lifecycle_binding.task_id,
+        f.case.env.lineage.task_id
+    );
+    assert!(f.refusal().await.is_none());
 }
