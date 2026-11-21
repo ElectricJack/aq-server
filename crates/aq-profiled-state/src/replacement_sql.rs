@@ -149,3 +149,46 @@ pub async fn predecessor_project_revision(
     .await?;
     Ok(pinned.flatten().and_then(|r| u64::try_from(r).ok()))
 }
+
+/// `attempt.show` for a profiled attempt: the owner facts B4 decides on, read-only and
+/// server-owned (no worker text, no input). `None` when `attempt` is not a profiled attempt.
+/// `blockers` names each fact that keeps this attempt from being replaced
+/// ([`crate::replacement::blockers`]); `in_history` is false for an attempt B4 does not count
+/// (never granted, or left out by an owner's fresh start).
+pub async fn inspect(
+    conn: &mut sqlx::PgConnection,
+    attempt: uuid::Uuid,
+    now: u64,
+) -> Result<Option<serde_json::Value>, aq_machine_control::Error> {
+    use sqlx::Row;
+    let Some(row) = sqlx::query("SELECT a.task_id,a.holds_task,h.state FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1 AND a.kind='profiled_v1'")
+        .bind(attempt).fetch_optional(&mut *conn).await?
+    else {
+        return Ok(None);
+    };
+    let task: uuid::Uuid = row.get("task_id");
+    let hot: serde_json::Value = row.get("state");
+    let prior = load(&mut *conn, task).await?;
+    let prior = prior.into_iter().find(|p| p.attempt_id == attempt);
+    let evaluations: Vec<String> = sqlx::query_scalar("SELECT disposition FROM profiled_settlement_evaluations WHERE attempt_id=$1 ORDER BY operation_id")
+        .bind(attempt).fetch_all(&mut *conn).await?;
+    let settlements: Vec<serde_json::Value> = if format(conn).await? >= AUTO_SETTLEMENT_FORMAT {
+        sqlx::query_scalar("SELECT jsonb_build_object('report_id',report_id,'disposition',disposition,'reason',reason,'decided_by',evidence->>'decided_by') FROM profiled_auto_settlements WHERE attempt_id=$1 ORDER BY created_at_ms,report_id")
+            .bind(attempt).fetch_all(&mut *conn).await?
+    } else {
+        Vec::new()
+    };
+    let facts = prior.as_ref().map(|p| {
+        serde_json::json!({"released": p.released, "accepted": p.accepted, "rejected": p.rejected,
+            "needs_reconciliation": p.needs_reconciliation, "cancelled_settled": p.cancelled_settled,
+            "completion": p.completion, "exempt": p.exempt, "forgiven": p.forgiven,
+            "blockers": crate::replacement::blockers(p, now)})
+    });
+    Ok(Some(serde_json::json!({
+        "kind": "profiled_v1", "attempt_id": attempt, "task_id": task,
+        "holds_task": row.get::<bool, _>("holds_task"), "status": hot["status"],
+        "execution_deadline_ms": hot["execution_deadline_ms"], "stop": hot["stop"],
+        "retention": hot["retention"], "effects": hot["effects"], "in_history": prior.is_some(),
+        "replacement": facts, "settlement_evaluations": evaluations, "auto_settlements": settlements,
+    })))
+}
