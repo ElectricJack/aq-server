@@ -83,6 +83,13 @@ pub async fn notify<E: std::fmt::Debug>(
             body.push_str(&format!(" Result: {id}."));
         }
         body.push_str(" Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.");
+        if aq_machine_control::holds::budget_code(&reason).is_some() {
+            let request = serde_json::json!({
+                "operation_id":"<fresh UUID>", "reason":"<why another attempt is justified>",
+                "params":{"project_id":project,"task_id":task,"expected_version":"<current version from task.work>"}
+            });
+            body.push_str(&format!(" If a budget override is justified, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
+        }
         match send(&mut tx, Some(project), &body, now as u64).await {
             Ok(message) => {
                 delivery_decisions::record_told(&mut tx, project, &key, message, now).await?;
