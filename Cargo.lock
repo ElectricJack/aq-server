@@ -239,10 +239,12 @@ name = "aq-delivery"
 version = "0.1.0"
 dependencies = [
  "aq-admission 0.1.13",
+ "aq-dashboard-contract",
  "aq-role-settings",
  "aq-worker-protocol",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "hex",

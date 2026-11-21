@@ -100,6 +100,16 @@ fn subject_rules_match_the_action_schemas() {
     }
 }
 
+/// The agent route path the registry gives `name`.
+fn registry_agent_path(name: &str) -> String {
+    let command = aq_server::commands::registry().get(name);
+    let route = command.and_then(|c| c.agent);
+    route
+        .unwrap_or_else(|| panic!("{name} has no agent route"))
+        .path
+        .to_string()
+}
+
 /// `.route(path, ...)` in the lib sources, outside `#[cfg(test)] mod` tails.
 fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     // Paths given by a constant rather than a literal.
@@ -149,6 +159,21 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         (
             ("api.rs", "PATH"),
             "/v1/worker/profiled/material/refresh".to_string(),
+        ),
+        // `results.rs` mounts LIST, SHOW and PATCH: the agent routes of the
+        // `result.review.*` commands, so a path that drifts from the
+        // registry is not mounted under the name the registry gives.
+        (
+            ("results.rs", "LIST"),
+            registry_agent_path("result.review.list"),
+        ),
+        (
+            ("results.rs", "SHOW"),
+            registry_agent_path("result.review.show"),
+        ),
+        (
+            ("results.rs", "PATCH"),
+            registry_agent_path("result.review.patch"),
         ),
     ]
     .into_iter()

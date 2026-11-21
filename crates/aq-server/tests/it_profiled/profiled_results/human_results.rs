@@ -200,3 +200,84 @@ async fn dashboard_search_uses_retained_result_metadata_and_digest() {
         assert!(!body.to_string().contains(excluded));
     }
 }
+#[tokio::test]
+async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart() {
+    let (f, _, report) = prepare(true, true).await;
+    let auth = context(&f).await;
+    let receipt = results::record(&f.state, &auth, &report).await.unwrap();
+    let mut correction = report.clone();
+    correction.report_id = Uuid::new_v4();
+    correction.operation_id = Uuid::new_v4();
+    correction.supersedes = Some(report.report_id);
+    results::record(&f.state, &auth, &correction).await.unwrap();
+    let project = f.selection.lineage.project_id;
+    let page = human_results::read_project(&f.state, project, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(!page.incomplete && page.unavailable.is_empty());
+    // Another project sees nothing, and cannot probe an exact revision here.
+    let other = Uuid::new_v4();
+    let page = human_results::read_project(&f.state, other, None, None, None)
+        .await
+        .unwrap();
+    assert!(page.items.is_empty() && !page.incomplete);
+    assert!(
+        human_results::read_project(
+            &f.state,
+            other,
+            None,
+            None,
+            Some((report.report_id, receipt.report_digest.as_str()))
+        )
+        .await
+        .is_err()
+    );
+    // The original's stored bytes stop being its canonical encoding, with the
+    // row's digest kept equal to the new bytes (so the row stays valid for
+    // `profiled_result_reports_check`): its validation refuses. The correction
+    // still lists, the page says it is incomplete.
+    let pool = f.db.pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE profiled_result_reports SET report_bytes=report_bytes||'\\x0a'::bytea, \
+         report_digest=encode(sha256(report_bytes||'\\x0a'::bytea),'hex') WHERE report_id=$1",
+    )
+    .bind(report.report_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("ALTER TABLE profiled_result_reports ENABLE TRIGGER profiled_result_immutable")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let page = human_results::read_project(&f.state, project, None, None, None)
+        .await
+        .unwrap();
+    assert!(page.incomplete);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].report_id, correction.report_id);
+    assert_eq!(page.unavailable.len(), 1);
+    assert_eq!(page.unavailable[0].report_id, report.report_id);
+    let (status, human) = get(&f, "/api/human/results").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(human["incomplete"], true);
+    assert_eq!(human["items"].as_array().unwrap().len(), 1);
+    // An exact read of the unreadable report still fails as a whole.
+    assert!(
+        human_results::read_project(
+            &f.state,
+            project,
+            None,
+            None,
+            Some((report.report_id, receipt.report_digest.as_str()))
+        )
+        .await
+        .is_err()
+    );
+}

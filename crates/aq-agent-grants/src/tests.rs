@@ -210,6 +210,25 @@ fn every_route_grant_is_grantable() {
             Target::OwnAttempt
         );
     }
+    // Result reads are project targets: only a project scope reaches them.
+    for path in [
+        "/v1/agent/results/list",
+        "/v1/agent/results/show",
+        "/v1/agent/results/patch",
+    ] {
+        let target = route_grant(path, h, Relation::Own).unwrap().2;
+        assert_eq!(target, Target::Project(id(1)));
+        for (scope, allowed) in [
+            (Scope::ProjectSelf, true),
+            (Scope::Project(id(1)), true),
+            (Scope::Project(id(2)), false),
+            (Scope::TaskSubtree, false),
+            (Scope::TaskSelf, false),
+            (Scope::AttemptSelf, false),
+        ] {
+            assert_eq!(allows(scope, h, target), allowed, "{path} {scope}");
+        }
+    }
     assert!(route_grant("/v1/agent/messages/send", h, Relation::Own).is_none());
     for o in OWNER_ONLY {
         assert!(!grantable(o));

@@ -110,6 +110,33 @@ above. Repository UUID, identity, generation and base must match the frozen
 assignment. The server does not invent bindings, start the daemon, change
 socket ownership or infer source durability when that service is unavailable.
 
+## Reviewing a retained result's exact diff
+
+`POST /v1/agent/results/patch` (command `result.review.patch`, see
+[`protocol/agent-results/v1`](../protocol/agent-results/v1/README.md)) gives a
+reviewing attempt that holds `result.read` at project scope the exact patch
+between the base and head AQ recorded for one result revision. The server
+reads it from central aq-git through the `diff.patch` query, on the same
+`git_socket`, for the recorded root repository and binding generation, and
+returns it only after the answer's format, both commit OIDs, size, decoded
+length and sha256 were checked.
+
+**Required aq-git capability.** The service must list the operation
+`diff.patch` in `capabilities.operations` and a positive
+`limits.diff_patch_bytes` (aq-git PR 24 or later; the maximum is 4194304 raw
+bytes). Check it with:
+
+```sh
+aq-git --socket /run/aq-git/central.sock --json capabilities
+```
+
+An older aq-git (including the v0.2.0 release) lacks both. The route then
+answers `patch.served: false, reason: "unsupported"` together with the manual
+`retrieve` steps; the other result routes are unaffected. Deploying the
+server before upgrading aq-git is safe: no patch is served until the
+capability appears, and the server asks `capabilities` before every query, so
+no restart is needed after the upgrade.
+
 # Reproducible aq-git package
 
 `python3 scripts/check-git-candidate.py --official` verifies the retained

@@ -4429,6 +4429,159 @@
     {
       "cli": [
         "result",
+        "review",
+        "list"
+      ],
+      "grant": "result.read",
+      "kind": "read",
+      "name": "result.review.list",
+      "owner_only": false,
+      "principals": {
+        "agent": {
+          "body": "params_with_api_version",
+          "params_digest": "sha256:76923a17e77414c1ef5dfb8b38d1432b9f4efbc77599e15804900f5506399d8d",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "after": {
+                "description": "The last report of the previous page",
+                "format": "uuid",
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "description": "Omitted: the attempt's project; another is refused",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/results/list"
+          }
+        }
+      },
+      "summary": "Retained results of the attempt's project; a report that cannot be read is listed as unavailable and the page says it is incomplete",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "result",
+        "review",
+        "patch"
+      ],
+      "grant": "result.read",
+      "kind": "read",
+      "name": "result.review.patch",
+      "owner_only": false,
+      "principals": {
+        "agent": {
+          "body": "params_with_api_version",
+          "params_digest": "sha256:5aea34ff47b5661c3b788b95acebc9dc0ef998c9ec38c4186a78bd276866df32",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "max_bytes": {
+                "description": "The most raw patch bytes to accept; default and maximum 4194304",
+                "maximum": 4194304,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "project_id": {
+                "description": "Omitted: the attempt's project; another is refused",
+                "format": "uuid",
+                "type": "string"
+              },
+              "report_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "revision": {
+                "description": "The exact report digest",
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "report_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/results/patch"
+          }
+        }
+      },
+      "summary": "The exact retained patch of one result revision of the attempt's project (base to head as recorded by AQ), with size and sha256 verified against aq-git's diff.patch answer; reports why no bytes are served when the work is missing, too large or aq-git lacks diff.patch",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "result",
+        "review",
+        "show"
+      ],
+      "grant": "result.read",
+      "kind": "read",
+      "name": "result.review.show",
+      "owner_only": false,
+      "principals": {
+        "agent": {
+          "body": "params_with_api_version",
+          "params_digest": "sha256:f134fdbcefbb1ae797ac85fb53ef45dedd5210839cb3e553e896f900fe87ae30",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "project_id": {
+                "description": "Omitted: the attempt's project; another is refused",
+                "format": "uuid",
+                "type": "string"
+              },
+              "report_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "revision": {
+                "description": "The exact report digest",
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "report_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/v1/agent/results/show"
+          }
+        }
+      },
+      "summary": "One retained result revision of the attempt's project, with where its work is retained (ref, base, head, provenance digest) and how to read the exact diff",
+      "target": {
+        "param": "project_id",
+        "rule": "project"
+      }
+    },
+    {
+      "cli": [
+        "result",
         "show"
       ],
       "grant": "result.read",
