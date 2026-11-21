@@ -228,6 +228,71 @@ pub fn hierarchy(
     Some(Hierarchy { blocking, complete })
 }
 
+/// [`hierarchy`] for the work view: reads the incoming ancestry through
+/// `incoming` only when [`needs_ancestry`]. A read that returns None (it
+/// failed) leaves the answer incomplete, not an error.
+pub async fn hierarchy_via<F: Future<Output = Option<Value>>>(
+    context: &Value,
+    task: Uuid,
+    max_levels: u32,
+    incoming: impl FnOnce() -> F,
+) -> Option<Hierarchy> {
+    let deeper = match needs_ancestry(context, task) {
+        true => incoming().await,
+        false => None,
+    };
+    hierarchy(context, deeper.as_ref(), task, max_levels)
+}
+
+/// Parent of `task` from a present `parent-child` edge (the source is the
+/// parent) in a Context; `Null` without one. `check` validates the parent's
+/// node for its kind. None when the parent node fails it.
+pub fn parent(
+    context: &Value,
+    task: Uuid,
+    check: impl Fn(&Value, &str) -> Option<Value>,
+) -> Option<Value> {
+    let edges = context["edges"].as_array().into_iter().flatten();
+    let Some(edge) = { edges }.find(|e| live_parent_edge(e) && e["target"] == json!(task)) else {
+        return Some(Value::Null);
+    };
+    let pid = &edge["source"];
+    let nodes = context["nodes"].as_array().into_iter().flatten();
+    let Some(found) = { nodes }.find(|n| &n["id"] == pid && n["deleted"] == false) else {
+        return Some(
+            json!({"id":pid,"kind":null,"title":null,"task_state":null,"edge_id":edge["id"]}),
+        );
+    };
+    let n = check(found, found["kind"].as_str()?)?;
+    Some(
+        json!({"id":pid,"kind":n["kind"],"title":n["title"],"task_state":n["task_state"],"edge_id":edge["id"]}),
+    )
+}
+
+/// The hold of the attempt named by an execution projection's `attempt_id`
+/// (the agent session attached to a task), read from its authority state;
+/// None when there is no such attempt.
+pub async fn attempt_hold(
+    pool: &sqlx::PgPool,
+    attempt_id: &Value,
+) -> Result<Option<Hold>, sqlx::Error> {
+    let Some(attempt) = attempt_id.as_str().and_then(|a| a.parse().ok()) else {
+        return Ok(None);
+    };
+    let state = sqlx::query_scalar::<_, Value>("SELECT COALESCE(h.state,e.state) FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) WHERE e.attempt_id=$1")
+        .bind(attempt).fetch_optional(pool).await?;
+    Ok(state.map(|state| Hold::from_authority(attempt, &state)))
+}
+
+/// Whether the latest confirmed default-policy settlement of `task` found no
+/// file change (owner ruling 4b).
+pub async fn completed_without_changes(pool: &sqlx::PgPool, task: Uuid) -> bool {
+    let quiet = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT s.evidence#>>'{delivery,state}' FROM profiled_auto_settlements s JOIN execution_attempts e USING(attempt_id) WHERE e.task_id=$1 AND s.disposition='confirmed' ORDER BY s.updated_at_ms DESC LIMIT 1",
+    );
+    matches!(quiet.bind(task).fetch_optional(pool).await, Ok(Some(Some(s))) if s == "no_change")
+}
+
 /// The attempt holding a task, from AQ's execution authority state (the hot
 /// authority for adopted native attempts, else the attempt's own state).
 pub struct Hold {
@@ -943,6 +1008,35 @@ mod tests {
         );
         assert_eq!(c[2], Value::Null, "unknown states are never echoed");
         assert_eq!(c[3]["summary"], "deleted");
+    }
+
+    #[test]
+    fn parent_reads_the_live_parent_edge_and_defers_node_validation() {
+        let (top, child) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let edge = json!({"id":"e","edge_type":"parent-child","deleted":false,"source":top,"target":child});
+        let nodes =
+            vec![json!({"id":top,"kind":"task","title":"t","task_state":"draft","deleted":false})];
+        let pass = |n: &Value, _: &str| Some(n.clone());
+        let found = parent(&ctx(nodes.clone(), vec![edge.clone()], false), child, pass);
+        assert_eq!(found.unwrap()["task_state"], "draft");
+        assert_eq!(
+            parent(
+                &ctx(nodes.clone(), vec![edge.clone()], false),
+                child,
+                |_, _| None
+            ),
+            None
+        );
+        assert_eq!(
+            parent(&ctx(nodes, vec![edge], false), top, pass),
+            Some(Value::Null)
+        );
+        let gone = json!({"id":"e","edge_type":"parent-child","deleted":false,"source":top,"target":child});
+        let unlisted = parent(&ctx(vec![], vec![gone], false), child, pass).unwrap();
+        assert_eq!(
+            (unlisted["id"].clone(), unlisted["kind"].clone()),
+            (json!(top), Value::Null)
+        );
     }
 
     #[test]

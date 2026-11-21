@@ -589,63 +589,33 @@ async fn document(
 struct GraphPage {
     limit: Option<u16>,
 }
-/// Bounded depth-1 Context read shared by the graph and Work projections.
-async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
+/// Bounded Context read shared by the graph and Work projections: depth 1 in
+/// both directions, or (the work view's ancestry check) `depth` levels incoming.
+async fn context_at(s: &AppState, w: Uuid, id: Uuid, depth: u32, dir: &str) -> Result<Value> {
+    let query = [("depth", depth.to_string()), ("limit", "63".into())]
+        .into_iter()
+        .chain([("max_bytes", "262144".into()), ("direction", dir.into())])
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect::<Vec<_>>();
     let raw = runtime(s)?
         .human_get(
             &format!("/v1/workspaces/{w}/nodes/{id}/context"),
-            &[
-                ("depth".into(), "1".into()),
-                ("limit".into(), "63".into()),
-                ("max_bytes".into(), "262144".into()),
-                ("direction".into(), "both".into()),
-            ],
+            &query,
             262144,
         )
         .await?;
-    if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(id) {
-        return Err(unavailable());
-    }
-    for v in raw["nodes"].as_array().into_iter().flatten() {
-        if v["workspace_id"] != json!(w) {
-            return Err(unavailable());
-        }
-    }
-    for e in raw["edges"].as_array().into_iter().flatten() {
-        if e["workspace_id"] != json!(w) {
-            return Err(unavailable());
-        }
-    }
-    Ok(raw)
-}
-
-/// The task's incoming Context as deep as Graph's hierarchy goes (its
-/// ancestors), for the work view's hierarchy check.
-async fn ancestry(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
-    let raw = runtime(s)?
-        .human_get(
-            &format!("/v1/workspaces/{w}/nodes/{id}/context"),
-            &[
-                (
-                    "depth".into(),
-                    aq_agent_grants::draft_scope::MAX_ANCESTRY.to_string(),
-                ),
-                ("limit".into(), "63".into()),
-                ("max_bytes".into(), "262144".into()),
-                ("direction".into(), "incoming".into()),
-            ],
-            262144,
-        )
-        .await?;
-    if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(id) {
-        return Err(unavailable());
-    }
     let same = |v: &Value| v["workspace_id"] == json!(w);
     let all = |k: &str| raw[k].as_array().into_iter().flatten().all(same);
+    if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(id) {
+        return Err(unavailable());
+    }
     if !all("nodes") || !all("edges") {
         return Err(unavailable());
     }
     Ok(raw)
+}
+async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
+    context_at(s, w, id, 1, "both").await
 }
 
 pub(crate) async fn decision_subject(
@@ -671,26 +641,9 @@ pub(crate) async fn decision_subject(
         aq_playbook_domain::host_operations::produced_knowledge(&raw, task),
     ))
 }
-/// Parent of `id` from a present `parent-child` edge (source is the parent).
+/// Parent of `id` from a present `parent-child` edge.
 fn parent(raw: &Value, w: Uuid, id: Uuid) -> Result<Value> {
-    let Some(edge) = raw["edges"].as_array().into_iter().flatten().find(|e| {
-        e["edge_type"] == "parent-child" && e["deleted"] == false && e["target"] == json!(id)
-    }) else {
-        return Ok(Value::Null);
-    };
-    let pid = &edge["source"];
-    let found = raw["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|n| &n["id"] == pid && n["deleted"] == false);
-    Ok(match found {
-        Some(n) => {
-            let n = node(n, w, n["kind"].as_str().ok_or_else(unavailable)?)?;
-            json!({"id":pid,"kind":n["kind"],"title":n["title"],"task_state":n["task_state"],"edge_id":edge["id"]})
-        }
-        None => json!({"id":pid,"kind":null,"title":null,"task_state":null,"edge_id":edge["id"]}),
-    })
+    aq_human_work::parent(raw, id, |n, kind| node(n, w, kind).ok()).ok_or_else(unavailable)
 }
 async fn graph(
     State(s): State<AppState>,
