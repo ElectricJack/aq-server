@@ -12,24 +12,21 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, AppError>;
 pub use aq_dashboard_contract::result_metadata::{
-    COVERAGE, NATIVE_V2_COVERAGE, Page, ReadProfile, ResultMetadata, ResultOrigin, ResultPage,
-    UnavailableResult,
+    COVERAGE, Collector, NATIVE_V2_COVERAGE, Page, ReadProfile, ResultMetadata, ResultOrigin,
+    ResultPage,
 };
 /// A stable, non-sensitive reason for a report that could not be read.
 pub fn unavailable_reason(error: &AppError) -> &'static str {
+    use AppError::{Busy, Conflict, ExecutionCancelled, Forbidden, NotFound};
+    use AppError::{IdentityUnavailable as Unavailable, Maintenance};
     match error {
-        AppError::NotFound(_) => "outside_coverage",
-        AppError::Forbidden(_) | AppError::Conflict(_) | AppError::ExecutionCancelled => "refused",
-        AppError::Busy | AppError::IdentityUnavailable(_) | AppError::Maintenance(_) => {
-            "temporarily_unavailable"
-        }
+        NotFound(_) => "outside_coverage",
+        Forbidden(_) | Conflict(_) | ExecutionCancelled => "refused",
+        Busy | Unavailable(_) | Maintenance(_) => "temporarily_unavailable",
         _ => "validation_failed",
     }
 }
 use crate::error::db;
-fn invalid() -> AppError {
-    AppError::BadRequest("invalid result metadata query".into())
-}
 /// Validated keyset discovery. UUID order is stable; it is not chronological Latest.
 pub async fn read(
     state: &AppState,
@@ -86,7 +83,7 @@ async fn read_inner(
     use aq_profiled_state::result_reads as sql;
     let limit = page.limit.unwrap_or(sql::DEFAULT_LIMIT);
     if !sql::query_is_valid(limit, page.project_id, page.after, exact) {
-        return Err(invalid());
+        return Err(AppError::BadRequest("invalid result metadata query".into()));
     }
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     sql::bound_waits(&mut tx).await.map_err(db)?;
@@ -104,52 +101,48 @@ async fn read_inner(
             .map_err(db)?
     };
     let more = ids.len() > limit as usize;
-    let (mut items, mut unavailable, mut last) = (Vec::new(), Vec::new(), None);
+    let mut found = Collector::new(page.profile, page.project_id, exact.map(|(_, r)| r));
     for id in ids.into_iter().take(limit as usize) {
-        last = Some(id);
-        if let (Some(project), Some(_)) = (page.project_id, exact) {
+        if let (Some(project), Some(_)) = (page.project_id, exact)
+            && !sql::in_project(&mut tx, id, project).await.map_err(db)?
+        {
             // A report of another project is not found before any owner read.
-            let inside = sql::in_project(&mut tx, id, project).await.map_err(db)?;
-            if !inside {
-                return Err(AppError::NotFound("result revision not found".into()));
-            }
+            return Err(AppError::NotFound("result revision not found".into()));
         }
         // A listed report is read in a savepoint so one refused validation
         // is reported in its place; an exact read still fails as a whole.
         let isolate = exact.is_none();
-        if isolate {
-            sql::savepoint(&mut tx).await.map_err(db)?;
-        }
+        sql::savepoint(&mut tx, isolate).await.map_err(db)?;
         let loaded = super::results::load_locked(state, &mut tx, id).await;
-        if isolate {
-            sql::settle(&mut tx, loaded.is_ok()).await.map_err(db)?;
-        }
-        let retained = match loaded {
-            Ok(v) if v.origin.is_covered_by(page.profile) => v,
-            Ok(_) if isolate => {
-                unavailable.push(UnavailableResult::new(id, "outside_coverage"));
-                continue;
-            }
-            Ok(_) => {
-                let outside = "result origin is outside current metadata coverage";
-                return Err(AppError::NotFound(outside.into()));
-            }
+        sql::settle(&mut tx, isolate, loaded.is_ok())
+            .await
+            .map_err(db)?;
+        let outside =
+            || AppError::NotFound("result origin is outside current metadata coverage".into());
+        let retained = match loaded.and_then(|v| {
+            v.origin
+                .is_covered_by(page.profile)
+                .then_some(v)
+                .ok_or_else(outside)
+        }) {
+            Ok(v) => v,
             Err(e) if isolate => {
-                unavailable.push(UnavailableResult::new(id, unavailable_reason(&e)));
+                found.unavailable(id, unavailable_reason(&e));
                 continue;
             }
             Err(e) => return Err(e),
         };
-        let origin = page.profile.map(|_| retained.origin);
         let head = (retained.head_report_id, retained.is_current_report_head);
-        let (report, receipt, spec) = (retained.report, &retained.receipt, retained.spec);
-        let value = ResultMetadata::record(origin, report, receipt, spec, head);
-        if value.is_outside(page.project_id, exact) {
+        let recorded = (
+            retained.origin,
+            retained.report,
+            &retained.receipt,
+            retained.spec,
+        );
+        if !found.record(id, recorded, head) {
             return Err(AppError::NotFound("result revision not found".into()));
         }
-        items.push(value);
     }
-    let next_after = if more { last } else { None };
     let server_time_ms =
         u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
     // B1 takes common Node/attempt locks. Acquire human identity only afterward,
@@ -158,12 +151,7 @@ async fn read_inner(
         pin.fence(&mut tx).await?;
     }
     tx.commit().await.map_err(db)?;
-    Ok(ResultPage::new(
-        server_time_ms,
-        page.profile,
-        (items, next_after),
-        unavailable,
-    ))
+    Ok(found.finish(server_time_ms, more))
 }
 pub fn routes() -> Router<AppState> {
     Router::new()

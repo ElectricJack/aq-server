@@ -79,21 +79,23 @@ pub async fn in_project(
         .bind(report).bind(project).fetch_one(conn).await
 }
 
-/// Opens the savepoint a listed report is read in, so one refused validation
-/// can be undone without losing the page.
-pub async fn savepoint(conn: &mut PgConnection) -> sqlx::Result<()> {
-    sqlx::query("SAVEPOINT result_item").execute(conn).await?;
+/// Opens the savepoint a listed report is read in (when `isolate`), so one
+/// refused validation can be undone without losing the page.
+pub async fn savepoint(conn: &mut PgConnection, isolate: bool) -> sqlx::Result<()> {
+    if isolate {
+        sqlx::query("SAVEPOINT result_item").execute(conn).await?;
+    }
     Ok(())
 }
-/// Keeps the savepoint's reads when `loaded`, and otherwise rolls them back.
-pub async fn settle(conn: &mut PgConnection, loaded: bool) -> sqlx::Result<()> {
-    sqlx::query(if loaded {
-        "RELEASE SAVEPOINT result_item"
-    } else {
-        "ROLLBACK TO SAVEPOINT result_item"
-    })
-    .execute(conn)
-    .await?;
+/// Keeps the savepoint's reads when `loaded`, and otherwise rolls them back
+/// (when `isolate`).
+pub async fn settle(conn: &mut PgConnection, isolate: bool, loaded: bool) -> sqlx::Result<()> {
+    if isolate {
+        let end = if loaded { "RELEASE" } else { "ROLLBACK TO" };
+        sqlx::query(&format!("{end} SAVEPOINT result_item"))
+            .execute(conn)
+            .await?;
+    }
     Ok(())
 }
 

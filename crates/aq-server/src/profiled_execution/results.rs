@@ -30,9 +30,7 @@ fn db(error: sqlx::Error) -> AppError {
     }
 }
 fn canonical(value: &impl serde::Serialize) -> Result<Vec<u8>, AppError> {
-    let mut value = serde_json::to_value(value).map_err(|_| AppError::Internal)?;
-    value.sort_all_objects();
-    serde_json::to_vec(&value).map_err(|_| AppError::Internal)
+    aq_profiled_state::result_reads::canonical(value).map_err(|_| AppError::Internal)
 }
 /// Historical compute occupancy only. This cannot release a task/source claim
 /// or create current launch authority. Caller holds node -> attempt/hot locks.

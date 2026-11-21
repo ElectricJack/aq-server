@@ -2,7 +2,7 @@
 //! exact patch (`result.read`). Reads only: never approves, settles or recreates work.
 use super::{Error as AgentError, authenticate, grant_check, id as field, ok};
 use crate::{AppState, error::AppError, profiled_execution::human_results};
-use aq_agent_api::result_requests::{List, Patch, Show, Versioned};
+use aq_agent_api::result_requests::{List, Patch, Show, Versioned, parse};
 use aq_delivery::{diff_patch::MAX_PATCH_BYTES, result_patch::Retained};
 use axum::{
     Router,
@@ -47,11 +47,7 @@ async fn serve<
             .map_err(IntoResponse::into_response)?;
         grant_check::require(s, h, &p, path, None).await?;
         let project = field(&p.binding, "project_id").map_err(IntoResponse::into_response)?;
-        let q: Q = serde_json::from_slice(body)
-            .map_err(|_| AgentError("invalid_request").into_response())?;
-        if q.api_version() != 1 {
-            return Err(AgentError("unsupported_api_version").into_response());
-        }
+        let q: Q = parse(body).map_err(|code| AgentError(code).into_response())?;
         let _permit = budget
             .try_acquire()
             .map_err(|_| AgentError("overloaded").into_response())?;
@@ -64,12 +60,11 @@ async fn serve<
     go.await.map_or_else(|r: Response| r, ok)
 }
 fn refuse(error: AppError) -> Response {
+    use AppError::{BadRequest, Busy, IdentityUnavailable as Unavailable, Maintenance, NotFound};
     AgentError(match error {
-        AppError::NotFound(_) => "not_found",
-        AppError::BadRequest(_) => "invalid_request",
-        AppError::Busy | AppError::IdentityUnavailable(_) | AppError::Maintenance(_) => {
-            "overloaded"
-        }
+        NotFound(_) => "not_found",
+        BadRequest(_) => "invalid_request",
+        Busy | Unavailable(_) | Maintenance(_) => "overloaded",
         _ => "internal",
     })
     .into_response()
@@ -97,11 +92,10 @@ async fn retained(
     report: Uuid,
     revision: &str,
 ) -> Result<Retained, AppError> {
-    let page =
-        human_results::read_project(s, project, None, None, Some((report, revision))).await?;
+    let exact = Some((report, revision));
+    let page = human_results::read_project(s, project, None, None, exact).await?;
     let found = Retained::from_page(&s.store.pool, page).await;
-    (found.map_err(|_| AppError::Internal)?)
-        .ok_or(AppError::NotFound("result revision not found".into()))
+    (found.map_err(|_| AppError::Internal)?).ok_or(AppError::NotFound("result revision".into()))
 }
 async fn show(State(s): State<AppState>, h: HeaderMap, body: Bytes) -> Response {
     let s = &s;

@@ -7,6 +7,16 @@ use uuid::Uuid;
 pub trait Versioned {
     fn api_version(&self) -> u32;
 }
+/// The request in `body`, or the agent error code that refuses it: malformed
+/// or unknown fields are `invalid_request`, any `api_version` but 1 is
+/// `unsupported_api_version`.
+pub fn parse<Q: for<'de> Deserialize<'de> + Versioned>(body: &[u8]) -> Result<Q, &'static str> {
+    let request: Q = serde_json::from_slice(body).map_err(|_| "invalid_request")?;
+    match request.api_version() {
+        1 => Ok(request),
+        _ => Err("unsupported_api_version"),
+    }
+}
 macro_rules! versioned {
     ($($name:ident),*) => {$(impl Versioned for $name {
         fn api_version(&self) -> u32 {

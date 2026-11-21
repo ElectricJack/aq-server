@@ -130,25 +130,72 @@ impl UnavailableResult {
         }
     }
 }
-impl ResultPage {
-    /// A page of `items`; it is incomplete when any listed report is `unavailable`.
+/// A page being read: the metadata of each report read, the reports that
+/// could not be, and the last report visited (the page's keyset cursor).
+pub struct Collector {
+    profile: Option<ReadProfile>,
+    project: Option<Uuid>,
+    revision: Option<String>,
+    items: Vec<ResultMetadata>,
+    unavailable: Vec<UnavailableResult>,
+    last: Option<Uuid>,
+}
+impl Collector {
+    /// A page of `profile` in `project`; an exact read also names its `revision`.
     pub fn new(
-        server_time_ms: u64,
         profile: Option<ReadProfile>,
-        (items, next_after): (Vec<ResultMetadata>, Option<Uuid>),
-        unavailable: Vec<UnavailableResult>,
+        project: Option<Uuid>,
+        revision: Option<&str>,
     ) -> Self {
         Self {
+            profile,
+            project,
+            revision: revision.map(Into::into),
+            items: Vec::new(),
+            unavailable: Vec::new(),
+            last: None,
+        }
+    }
+    /// Reports that `id` could not be read, for `reason`.
+    pub fn unavailable(&mut self, id: Uuid, reason: &str) {
+        self.last = Some(id);
+        self.unavailable.push(UnavailableResult::new(id, reason));
+    }
+    /// Adds the metadata of `id`'s validated result; false (and nothing
+    /// added) when it is not in the page's project or at its exact revision.
+    pub fn record(&mut self, id: Uuid, recorded: Recorded<'_>, head: (Uuid, bool)) -> bool {
+        self.last = Some(id);
+        let (origin, report, receipt, spec) = recorded;
+        let origin = self.profile.map(|_| origin);
+        let value = ResultMetadata::record(origin, report, receipt, spec, head);
+        let exact = self.revision.as_deref().map(|revision| (id, revision));
+        let outside = value.is_outside(self.project, exact);
+        if !outside {
+            self.items.push(value);
+        }
+        !outside
+    }
+    /// The page; it is incomplete when any listed report is `unavailable`, and
+    /// continues after the last report visited when `more` follow.
+    pub fn finish(self, server_time_ms: u64, more: bool) -> ResultPage {
+        ResultPage {
             schema_version: 1,
             server_time_ms,
-            coverage: profile.map_or(COVERAGE, |_| NATIVE_V2_COVERAGE).into(),
-            items,
-            next_after,
-            incomplete: !unavailable.is_empty(),
-            unavailable,
+            coverage: self.profile.map_or(COVERAGE, |_| NATIVE_V2_COVERAGE).into(),
+            items: self.items,
+            next_after: self.last.filter(|_| more),
+            incomplete: !self.unavailable.is_empty(),
+            unavailable: self.unavailable,
         }
     }
 }
+/// A validated recorded result: its origin, report, receipt and spec.
+pub type Recorded<'a> = (
+    ResultOrigin,
+    aq_admission::transport::ResultReport,
+    &'a aq_admission::result_record::Receipt,
+    aq_admission::execution_spec::ProfiledExecutionSpec,
+);
 /// The query of a result page: all optional, `limit` 1 to 25.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
