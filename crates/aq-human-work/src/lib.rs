@@ -4,7 +4,10 @@
 //!
 //! The all-project task list joins Graph's page to AQ's current owner and project bindings.
 pub mod attribution;
+#[cfg(feature = "delivery_playbook")]
+pub mod delivery;
 pub mod epic_retirement;
+pub mod history;
 pub mod knowledge_actions;
 pub mod projection;
 pub mod subtree_activation;
@@ -391,6 +394,31 @@ impl Hold {
             json!({"code":code,"attempt_id":self.attempt_id,"status":self.status,"message":message}),
         )
     }
+}
+
+/// Format the current scheduling hold and any recorded result for that same attempt.
+pub async fn recorded_hold(
+    _pool: &PgPool,
+    _project: Uuid,
+    _task: Uuid,
+    current: Option<&aq_machine_control::holds::Current>,
+) -> Option<Value> {
+    let h = current?;
+    let phrase = aq_machine_control::holds::phrase(&h.reason);
+    let shown = task_hold(h.attempt_id, &h.status, &h.reason, &phrase);
+    #[cfg(feature = "delivery_playbook")]
+    if aq_machine_control::holds::is_budget_hold(&h.reason)
+        && let Some(evidence) =
+            delivery::budget_evidence(_pool, _project, _task, h.attempt_id).await
+    {
+        let mut shown = shown;
+        if let Some(Value::String(message)) = shown.get_mut("message") {
+            message.push(' ');
+            message.push_str(&evidence);
+        }
+        return Some(shown);
+    }
+    Some(shown)
 }
 
 /// A server-side hold of the task itself (R6): AQ does not offer it, for `code` (a server reason

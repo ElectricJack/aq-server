@@ -4,7 +4,6 @@
 use super::*;
 
 const HISTORY_LIMIT: u16 = 25;
-const ATTEMPT_LIMIT: i64 = 16;
 
 pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> Result<Vec<Value>> {
     aq_human_work::holding_executions(pool, project, tasks)
@@ -22,66 +21,6 @@ fn error_class(error: &AppError) -> &'static str {
         AppError::Internal => "internal",
         _ => "other",
     }
-}
-
-/// Show the current delivery decision or the policy that can decide an open result.
-#[cfg(feature = "delivery_playbook")]
-async fn result_waiting(
-    s: &AppState,
-    pool: &PgPool,
-    project: Uuid,
-    h: &aq_human_work::Hold,
-) -> Option<Value> {
-    use aq_playbook_domain::delivery_store as store;
-    let mut db = pool.acquire().await.ok()?;
-    let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
-    if let Some(reason) = hold {
-        let evidence = store::held_pr_evidence(&mut db, result)
-            .await
-            .ok()
-            .flatten();
-        return Some(aq_human_work::delivery_hold(
-            h,
-            result,
-            &reason,
-            evidence.as_deref(),
-        ));
-    }
-    let pb = s.config.playbooks.as_deref().filter(|pb| {
-        pb.profile.is_delivery() && (pb.installation_routing || pb.namespace.project_id == project)
-    });
-    let active = match pb {
-        Some(pb) => store::active(
-            &mut db,
-            (pb.namespace.namespace_id, pb.namespace.generation),
-        )
-        .await
-        .ok()?,
-        None => false,
-    };
-    let mut waiting = aq_human_work::result_waiting(h.attempt_id, result, active);
-    if let Ok(Some(check)) = store::checking_pr(&mut db, result).await
-        && let Some(Value::String(message)) = waiting.get_mut("message")
-    {
-        message.push(' ');
-        message.push_str(&check);
-    }
-    Some(waiting)
-}
-
-/// An optional read of the recorded result, restricted to the same claim as
-/// the budget hold. Readiness stays available if the detail cannot be read.
-#[cfg(feature = "delivery_playbook")]
-async fn budget_evidence(
-    pool: &PgPool,
-    project: Uuid,
-    task: Uuid,
-    attempt: Uuid,
-) -> Option<String> {
-    let mut db = pool.acquire().await.ok()?;
-    aq_playbook_domain::delivery_store::returned_result_evidence(&mut db, project, task, attempt)
-        .await
-        .ok()?
 }
 
 /// The hierarchy relationships that keep the active task `id` out of the
@@ -152,27 +91,7 @@ pub(super) async fn work(
             }
         }
     }
-    #[cfg(feature = "delivery_playbook")]
-    let evidence = match &held {
-        Some(h) if aq_machine_control::holds::is_budget_hold(&h.reason) => {
-            budget_evidence(&r.pool, p, id, h.attempt_id).await
-        }
-        _ => None,
-    };
-    let held = held.map(|h| {
-        let phrase = aq_machine_control::holds::phrase(&h.reason);
-        let reason = aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase);
-        #[cfg(feature = "delivery_playbook")]
-        if let Some(evidence) = evidence {
-            let mut reason = reason;
-            reason["message"] = json!(format!(
-                "{} {evidence}",
-                reason["message"].as_str().unwrap_or_default()
-            ));
-            return reason;
-        }
-        reason
-    });
+    let held = aq_human_work::recorded_hold(&r.pool, p, id, held.as_ref()).await;
     // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
     let role = aq_role_settings::tasks::effective_role(
         &raw["node"]["metadata"],
@@ -195,7 +114,18 @@ pub(super) async fn work(
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
     #[cfg(feature = "delivery_playbook")]
     let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h).await,
+        (Some(h), true) if h.stopped => {
+            let namespace = s
+                .config
+                .playbooks
+                .as_deref()
+                .filter(|pb| {
+                    pb.profile.is_delivery()
+                        && (pb.installation_routing || pb.namespace.project_id == p)
+                })
+                .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
+            aq_human_work::delivery::waiting(&r.pool, namespace, h).await
+        }
         _ => None,
     });
     let (hierarchy, complete) = match open {
@@ -313,64 +243,20 @@ pub(super) async fn history(
             .map(|v| v["node"].clone()),
         None => None,
     };
-    let changes = aq_human_work::changes(rows, id, prior.as_ref());
-    let actors = aq_human_work::attribution::history(
-        &r.pool,
-        s.agent_access
-            .as_ref()
-            .and_then(|rt| rt.mutation_actor.as_deref()),
-        (p, w),
-        rows,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    let items: Vec<Value> = rows
-        .iter()
-        .zip(changes.into_iter().zip(actors))
-        .map(|(h, (change, actor))| {
-            Ok(json!({
-                "sequence": h["sequence"].as_u64().filter(|n| *n > 0).ok_or_else(unavailable)?.to_string(),
-                "entry_id": h["entry_id"], "category": h["category"], "operation": h["operation"],
-                "actor_id": actor, "reason": h["reason"], "created_at": h["created_at"], "change": change,
-            }))
-        })
-        .collect::<Result<_>>()?;
+    let service = s
+        .agent_access
+        .as_ref()
+        .and_then(|rt| rt.mutation_actor.as_deref());
+    let items = aq_human_work::history::items(&r.pool, service, (p, w), id, rows, prior.as_ref())
+        .await
+        .ok_or_else(unavailable)?;
     let next = match page["next_cursor"].as_str() {
         Some(c) => Some(r.cursors.encode(&binding, c, stamp(&s))?),
         None => None,
     };
-    let attempts = sqlx::query(
-        "SELECT e.attempt_id,e.session_id,e.holds_task,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
-         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=$1 AND e.kind='profiled_v1' \
-         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
-         ORDER BY e.holds_task DESC,e.attempt_id LIMIT $3",
-    )
-    .bind(id)
-    .bind(p.to_string())
-    .bind(ATTEMPT_LIMIT + 1)
-    .fetch_all(&r.pool)
-    .await
-    .map_err(|_| unavailable())?;
-    let attempts_truncated = attempts.len() as i64 > ATTEMPT_LIMIT;
-    let ran_with = aq_role_settings::attempts::ran_with_rows(&r.pool, &attempts).await;
-    let attempts: Vec<Value> = attempts
-        .iter()
-        .take(ATTEMPT_LIMIT as usize)
-        .map(|row| {
-            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
-            let mut shown = json!({
-                "attempt_id": attempt,
-                "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
-                "holds_task": row.try_get::<bool, _>("holds_task").map_err(|_| unavailable())?,
-                "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            });
-            if let Some(summary) = ran_with.get(&attempt) {
-                shown["ran_with"] = json!(summary);
-            }
-            Ok(shown)
-        })
-        .collect::<Result<_>>()?;
+    let (attempts, attempts_truncated) = aq_human_work::history::attempts(&r.pool, p, id)
+        .await
+        .map_err(|_| unavailable())?;
     finish(
         &s,
         &r,
