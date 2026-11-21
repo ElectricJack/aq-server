@@ -274,26 +274,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
     .fetch_one(&f.db.pool().await)
     .await
     .unwrap();
-    // A task pane keeps its launch geometry: a viewer resize is refused and
-    // never reaches the worker.
     let before = queue_snapshot(&f).await;
-    service::mutate(
-        &f.state,
-        f.actor,
-        &service::Mutation::Resize(aq_session_api::ResizeRequest {
-            terminal: r.terminal.clone(),
-            operation_id: Uuid::new_v4(),
-            lease_id: lease.lease_id,
-            expected_controller_generation: lease.generation,
-            expected_session_revision: 1,
-            expires_at_ms: NOW + 2000,
-            sequence: 1,
-            columns: 100,
-            rows: 30,
-        }),
-    )
-    .await
-    .unwrap_err();
     assert_eq!(before, queue_snapshot(&f).await);
     let (code, body) = http(&f, &request(&r)).await;
     assert_eq!(code, StatusCode::OK, "{body}");
@@ -320,6 +301,130 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
     assert!(!full.effects.iter().any(|e| matches!(e, Effect::Resize(_))));
 }
 
+fn resize(
+    r: &Register,
+    lease: &aq_session_protocol::ControllerLease,
+    sequence: u64,
+    columns: u16,
+    rows: u16,
+) -> service::Mutation {
+    service::Mutation::Resize(aq_session_api::ResizeRequest {
+        terminal: r.terminal.clone(),
+        operation_id: Uuid::new_v4(),
+        lease_id: lease.lease_id,
+        expected_controller_generation: lease.generation,
+        expected_session_revision: 1,
+        expires_at_ms: NOW + 2000,
+        sequence,
+        columns,
+        rows,
+    })
+}
+#[tokio::test]
+async fn resize_is_accepted_only_from_the_current_controller_within_bounds() {
+    let (f, _dir, r) = Box::pin(setup()).await;
+    let node = auth(&f).await;
+    let MutationReply::Control { status, .. } = service::mutate(
+        &f.state,
+        f.actor,
+        &service::Mutation::Control(aq_session_api::AcquireControlRequest {
+            terminal: r.terminal.clone(),
+            operation_id: Uuid::new_v4(),
+            expected_session_revision: 1,
+            expected_controller_generation: 0,
+            expires_at_ms: NOW + 4000,
+        }),
+    )
+    .await
+    .unwrap() else {
+        panic!()
+    };
+    let lease = status.lease.unwrap();
+    let first = terminal::peer::poll(&f.state, &node, &request(&r))
+        .await
+        .unwrap();
+    let fence = first
+        .effects
+        .iter()
+        .find_map(|e| {
+            if let Effect::Fence(f) = e {
+                Some(f)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    terminal::peer::upload(
+        &f.state,
+        &node,
+        &PeerUpload {
+            version: 1,
+            capability: r.capability.clone(),
+            peer: r.peer.clone(),
+            exchange_id: Uuid::new_v4(),
+            cursor: first.cursor,
+            receipts: vec![],
+            epoch_receipts: vec![],
+            resize_receipts: vec![],
+            fence_acks: vec![FenceAck {
+                terminal: r.terminal.clone(),
+                fence_id: fence.fence_id,
+                generation: fence.generation,
+            }],
+            frames: vec![],
+            snapshots: vec![],
+            gaps: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    // Out-of-range geometry and a caller with no scope on the terminal change nothing.
+    let before = queue_snapshot(&f).await;
+    for (columns, rows) in [(0, 24), (80, 0), (1001, 24), (80, 1001)] {
+        service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, columns, rows))
+            .await
+            .unwrap_err();
+    }
+    service::mutate(&f.state, Uuid::new_v4(), &resize(&r, &lease, 1, 80, 24))
+        .await
+        .unwrap_err();
+    let mut stale = lease.clone();
+    stale.generation += 1;
+    service::mutate(&f.state, f.actor, &resize(&r, &stale, 1, 80, 24))
+        .await
+        .unwrap_err();
+    assert_eq!(before, queue_snapshot(&f).await);
+    // The current controller's resize is accepted and queued for the worker.
+    let reply = service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, 1000, 1000))
+        .await
+        .unwrap();
+    assert!(matches!(reply, MutationReply::Resize { sequence: 1, .. }));
+    let polled = terminal::peer::poll(&f.state, &node, &request(&r))
+        .await
+        .unwrap();
+    let sent: Vec<_> = polled
+        .effects
+        .iter()
+        .filter_map(|e| {
+            if let Effect::Resize(v) = e {
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        (sent[0].columns, sent[0].rows, sent[0].sequence),
+        (1000, 1000, 1)
+    );
+    assert_eq!(sent[0].lease.lease_id, lease.lease_id);
+    assert_eq!(sent[0].lease.generation, lease.generation);
+    // A replayed sequence is stale.
+    service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, 80, 24))
+        .await
+        .unwrap_err();
+}
 #[tokio::test]
 async fn output_poll_progresses_during_control_poll_and_limits_each_lane() {
     let (f, _dir, r) = Box::pin(setup()).await;

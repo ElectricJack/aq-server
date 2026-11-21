@@ -230,7 +230,9 @@ fn browser_control(text: &str, fixed: bool, read_only: bool) -> Option<(Value, u
     match value["kind"].as_str()? {
         "repaint" if fixed => Some((json!({"kind":"repaint"}), 0)),
         "escape" if fixed && !read_only => Some((json!({"kind":"escape"}), 1)),
-        "resize" if !fixed => {
+        // A manual pane takes the viewer's size. A task attempt pane keeps its
+        // launch geometry until its current non-read-only controller resizes it.
+        "resize" if !fixed || !read_only => {
             let c = u16::try_from(value["columns"].as_u64()?).ok()?;
             let r = u16::try_from(value["rows"].as_u64()?).ok()?;
             dimensions(c, r).then(|| (json!({"kind":"resize","columns":c,"rows":r}), 0))
@@ -334,10 +336,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attempt_controls_repaint_without_input_and_refuse_viewer_resize() {
+    fn attempt_controls_repaint_without_input_and_resize_only_from_a_controller() {
         let resize = r#"{"kind":"resize","columns":80,"rows":8}"#;
-        assert!(browser_control(resize, true, false).is_none());
-        assert!(browser_control(resize, false, false).is_some());
+        let forwarded = Some((json!({"kind":"resize","columns":80,"rows":8}), 0));
+        // A controller of either pane kind may resize; a read-only attempt
+        // viewer may not.
+        assert_eq!(browser_control(resize, true, false), forwarded);
+        assert_eq!(browser_control(resize, false, false), forwarded);
+        assert!(browser_control(resize, true, true).is_none());
         assert_eq!(
             browser_control(r#"{"kind":"repaint"}"#, true, true),
             Some((json!({"kind":"repaint"}), 0))
@@ -348,6 +354,40 @@ mod tests {
         );
         assert!(browser_control(r#"{"kind":"repaint"}"#, false, false).is_none());
         assert!(browser_control(r#"{"kind":"escape"}"#, true, true).is_none());
+    }
+
+    #[test]
+    fn resize_dimensions_are_bounded_and_extra_fields_are_not_forwarded() {
+        for fixed in [true, false] {
+            for (columns, rows, accepted) in [
+                (2, 1, true),
+                (500, 300, true),
+                (1, 24, false),
+                (0, 24, false),
+                (501, 24, false),
+                (80, 0, false),
+                (80, 301, false),
+                (65536, 24, false),
+            ] {
+                let text = json!({"kind":"resize","columns":columns,"rows":rows}).to_string();
+                assert_eq!(
+                    browser_control(&text, fixed, false).is_some(),
+                    accepted,
+                    "{columns}x{rows} fixed={fixed}"
+                );
+            }
+            // Connection and generation are added by the server, never taken
+            // from the browser frame.
+            let spoofed = json!({"kind":"resize","columns":80,"rows":24,
+                "connection_id":Uuid::from_u128(9),"generation":99})
+            .to_string();
+            assert_eq!(
+                browser_control(&spoofed, fixed, false),
+                Some((json!({"kind":"resize","columns":80,"rows":24}), 0))
+            );
+            let missing = json!({"kind":"resize","columns":80}).to_string();
+            assert!(browser_control(&missing, fixed, false).is_none());
+        }
     }
 
     #[test]

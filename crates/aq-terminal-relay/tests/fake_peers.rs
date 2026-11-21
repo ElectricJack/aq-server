@@ -578,6 +578,102 @@ fn resize_id_history_is_immutable_after_intervening_operations() {
     stale.sequence = 1;
     assert!(matches!(l.resize(&a, &stale, 13), Err(Error::Stale)));
 }
+fn resize_request(
+    l: &Ledger,
+    c: &ControllerLease,
+    n: u128,
+    sequence: u64,
+    columns: u16,
+    rows: u16,
+) -> api::ResizeRequest {
+    api::ResizeRequest {
+        terminal: l.terminal().clone(),
+        operation_id: id(n),
+        lease_id: c.lease_id,
+        expected_controller_generation: c.generation,
+        expected_session_revision: 1,
+        expires_at_ms: 1000,
+        sequence,
+        columns,
+        rows,
+    }
+}
+#[test]
+fn resize_reaches_the_worker_only_from_the_current_controller_within_bounds() {
+    for central in [false, true] {
+        let (l, mut s, a, p) = setup(central);
+        let (l, c) = grant(l, &mut s, &a, &p, 0, 900);
+        // Accepted: exactly one resize effect carrying the checked lease.
+        let ok = resize_request(&l, &c, 910, 1, 120, 40);
+        let done = apply(l.resize(&a, &ok, 10).unwrap(), &mut s);
+        let [Effect::Resize(command)] = &done.effects[..] else {
+            panic!("expected one resize effect")
+        };
+        assert_eq!(command.lease.lease_id, c.lease_id);
+        assert_eq!(command.lease.generation, c.generation);
+        assert_eq!(
+            (command.columns, command.rows, command.sequence),
+            (120, 40, 1)
+        );
+        let l = done.ledger;
+        // The protocol bounds are 1..=1000 on both axes.
+        for (n, columns, rows) in [(911, 1, 1), (912, 1000, 1000)] {
+            let edge = resize_request(&l, &c, n, n as u64 - 909, columns, rows);
+            assert!(l.resize(&a, &edge, 11).is_ok(), "{columns}x{rows}");
+        }
+        for (n, columns, rows) in [(913, 0, 24), (914, 80, 0), (915, 1001, 24), (916, 80, 1001)] {
+            let bad = resize_request(&l, &c, n, 10, columns, rows);
+            assert!(
+                matches!(l.resize(&a, &bad, 11), Err(Error::Invalid)),
+                "{columns}x{rows}"
+            );
+        }
+        // A viewer that may watch but not control cannot resize.
+        let mut viewer = a.clone();
+        viewer.control = false;
+        assert!(matches!(
+            l.resize(&viewer, &resize_request(&l, &c, 917, 10, 80, 24), 11),
+            Err(Error::Forbidden)
+        ));
+        // Another principal, a stale generation or lease and a stale session
+        // revision are all refused.
+        let other = access(l.terminal(), "mallory");
+        assert!(matches!(
+            l.resize(&other, &resize_request(&l, &c, 918, 10, 80, 24), 11),
+            Err(Error::Stale)
+        ));
+        let mut stale = resize_request(&l, &c, 919, 10, 80, 24);
+        stale.expected_controller_generation += 1;
+        assert!(matches!(l.resize(&a, &stale, 11), Err(Error::Stale)));
+        let mut wrong_lease = resize_request(&l, &c, 920, 10, 80, 24);
+        wrong_lease.lease_id = id(999);
+        assert!(matches!(l.resize(&a, &wrong_lease, 11), Err(Error::Stale)));
+        let mut old_revision = resize_request(&l, &c, 921, 10, 80, 24);
+        old_revision.expected_session_revision = 0;
+        assert!(matches!(l.resize(&a, &old_revision, 11), Err(Error::Stale)));
+        // A released controller can no longer resize.
+        let release = l
+            .release(
+                &a,
+                &ReleaseControl {
+                    terminal: l.terminal().clone(),
+                    operation_id: id(922),
+                    lease_id: c.lease_id,
+                    expected_controller_generation: c.generation,
+                    expected_session_revision: 1,
+                },
+                id(923),
+                12,
+            )
+            .unwrap();
+        let released = apply(release, &mut s).ledger;
+        assert!(
+            released
+                .resize(&a, &resize_request(&released, &c, 924, 10, 80, 24), 13)
+                .is_err()
+        );
+    }
+}
 #[test]
 fn viewers_are_scoped_independent_and_bounded() {
     let (mut l, mut s, a, _) = setup(false);
