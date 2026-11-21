@@ -30,7 +30,22 @@ fn target(body: &str) -> Option<(Uuid, &str)> {
 }
 
 fn verdict(conclusion: &str, report: Uuid, revision: &str, head: &str) -> Option<&'static str> {
-    let rest = conclusion.strip_prefix("Outcome: done; Changes: none; Copied: none; ")?;
+    let (claim, rest) = conclusion
+        .strip_prefix("Outcome: done; Changes: ")?
+        .split_once("; Copied: none; ")?;
+    // The runner ends the Changes field at the first semicolon, even inside a note.
+    let claim = claim.trim_end_matches(['.', ')']).trim();
+    if ![
+        "none",
+        "none (review only",
+        "none (review-only",
+        "none (read-only review",
+    ]
+    .iter()
+    .any(|value| claim.eq_ignore_ascii_case(value))
+    {
+        return None;
+    }
     let (runner, message) = rest.split_once("; Result: Review verdict: ")?;
     if !matches!(runner, "Claude exit 0" | "Codex exit 0") {
         return None;
@@ -125,6 +140,35 @@ mod tests {
                 &head
             ),
             Some("review_changes_requested")
+        );
+        for note in [
+            "none (review only",
+            "None (review-only).",
+            "none (read-only review)",
+        ] {
+            let actual = summary.replace("Changes: none", &format!("Changes: {note}"));
+            assert_eq!(
+                verdict(&actual, report, &revision, &head),
+                Some("review_approved")
+            );
+        }
+        for change in [
+            "none.rs",
+            "none except src/lib.rs",
+            "src/lib.rs",
+            "none; Copied: src/lib.rs",
+        ] {
+            let actual = summary.replace("Changes: none", &format!("Changes: {change}"));
+            assert!(verdict(&actual, report, &revision, &head).is_none());
+        }
+        assert!(
+            verdict(
+                &summary.replace("Copied: none", "Copied: src/lib.rs"),
+                report,
+                &revision,
+                &head
+            )
+            .is_none()
         );
         assert!(verdict(&summary, report, &revision, &"3".repeat(40)).is_none());
         assert!(
