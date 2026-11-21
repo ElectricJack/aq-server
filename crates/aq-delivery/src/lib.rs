@@ -4,6 +4,7 @@
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
 #[cfg(feature = "delivery_playbook")]
 pub mod commands;
+pub mod diff_patch;
 #[cfg(feature = "delivery_playbook")]
 pub mod git_grant;
 #[cfg(feature = "delivery_playbook")]

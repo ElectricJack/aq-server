@@ -11,7 +11,7 @@ pub use messaging::global as supervisor_conversation;
 mod mutations;
 pub(crate) mod native_binding;
 pub mod questions;
-pub(crate) mod results;
+pub mod results;
 pub mod scheduling;
 pub mod waits;
 pub mod wakes;

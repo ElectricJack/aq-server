@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const ROUTES: [(&str, &str, &str); 13] = [
+const ROUTES: [(&str, &str, &str); 14] = [
     ("/v1/agent/questions", "question.ask", "question.ask"),
     ("/v1/agent/questions/show", "question.show", "question.read"),
     ("/v1/agent/comments", "task.comment.add", "comment.write"),
@@ -39,6 +39,11 @@ const ROUTES: [(&str, &str, &str); 13] = [
     (
         "/v1/agent/results/show",
         "result.review.show",
+        "result.read",
+    ),
+    (
+        "/v1/agent/results/patch",
+        "result.review.patch",
         "result.read",
     ),
 ];
@@ -204,7 +209,11 @@ fn route_contracts_publish_the_grant_each_route_checks() {
 async fn result_review_routes_need_project_scope_and_stay_in_the_attempts_project() {
     for scope in ["attempt:self", "task:self", "task:subtree"] {
         let e = setup_with(Some(json!([{"operation":"result.read","scope":scope}]))).await;
-        for path in ["/v1/agent/results/list", "/v1/agent/results/show"] {
+        for path in [
+            "/v1/agent/results/list",
+            "/v1/agent/results/show",
+            "/v1/agent/results/patch",
+        ] {
             let (status, body) = structured(&e, path).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{scope} {path} {body}");
             assert_eq!(body["code"], "scope_denied", "{scope} {path} {body}");
@@ -251,5 +260,36 @@ async fn result_review_routes_need_project_scope_and_stay_in_the_attempts_projec
         Some(json!({"api_version":1})),
     )
     .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The patch route reads the same exact revisions: an unknown report is
+    // not found, the byte bound is 1..=4 MiB, and the project is the binding's.
+    let patch = |body: Value| {
+        send(
+            &e.app,
+            "/v1/agent/results/patch",
+            Some(&e.token),
+            Some(body),
+        )
+    };
+    let query = json!({"api_version":1,"report_id":Uuid::new_v4(),"revision":"a".repeat(64)});
+    let (status, body) = patch(query.clone()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    for max_bytes in [0, 4_194_305] {
+        let mut bounded = query.clone();
+        bounded["max_bytes"] = json!(max_bytes);
+        let (status, body) = patch(bounded).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{max_bytes} {body}");
+    }
+    let mut other_project = query.clone();
+    other_project["project_id"] = json!(Uuid::new_v4());
+    assert_eq!(patch(other_project).await.0, StatusCode::BAD_REQUEST);
+    let mut short = query.clone();
+    short["revision"] = json!("short");
+    assert_eq!(patch(short).await.0, StatusCode::BAD_REQUEST);
+    let mut future = query.clone();
+    future["api_version"] = json!(2);
+    assert_eq!(patch(future).await.0, StatusCode::UPGRADE_REQUIRED);
+    let (status, _) = send(&e.app, "/v1/agent/results/patch", None, Some(query)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

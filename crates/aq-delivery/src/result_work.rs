@@ -12,9 +12,10 @@
 //! names its worker-claimed source receipts, which this module does not
 //! resolve or vouch for.
 //!
-//! aq-git serves refs and name-status only, never patch bytes, so this
-//! reports the exact provenance and a digest binding it, plus the steps that
-//! read the diff from the retained commit.
+//! This reports the exact provenance and a digest binding it. The patch bytes
+//! come from aq-git's `diff.patch` query ([`crate::diff_patch`]) where the
+//! deployment offers it; otherwise the steps that read the diff from the
+//! retained commit are listed.
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgExecutor, Row};
@@ -30,15 +31,20 @@ pub struct Recorded {
     pub head: Option<String>,
     pub repository_id: Option<Uuid>,
     pub base: Option<String>,
+    /// The repository binding generation of the attempt's launch, which aq-git
+    /// checks every query against.
+    pub binding_generation: Option<u64>,
 }
 
 /// The recorded push and the attempt's git grant for `report_id`.
 pub async fn recorded(db: impl PgExecutor<'_>, report_id: Uuid) -> sqlx::Result<Recorded> {
     let row = sqlx::query(
-        "SELECT p.report_id IS NOT NULL AS row,p.task_ref,p.head,g.repository_id,g.base \
+        "SELECT p.report_id IS NOT NULL AS row,p.task_ref,p.head,g.repository_id,g.base,\
+         (l.execution_spec#>>'{source,repository_binding_generation}')::bigint AS generation \
          FROM profiled_result_reports r \
          LEFT JOIN delivery_pushed_results p ON p.report_id=r.report_id \
-         LEFT JOIN delivery_git_grants g ON g.attempt_id=r.attempt_id WHERE r.report_id=$1",
+         LEFT JOIN delivery_git_grants g ON g.attempt_id=r.attempt_id \
+         LEFT JOIN profiled_launches l ON l.attempt_id=r.attempt_id WHERE r.report_id=$1",
     )
     .bind(report_id)
     .fetch_optional(db)
@@ -49,6 +55,9 @@ pub async fn recorded(db: impl PgExecutor<'_>, report_id: Uuid) -> sqlx::Result<
         head: row.get("head"),
         repository_id: row.get("repository_id"),
         base: row.get("base"),
+        binding_generation: row
+            .get::<Option<i64>, _>("generation")
+            .and_then(|g| u64::try_from(g).ok()),
     }))
 }
 
@@ -110,13 +119,15 @@ pub fn describe(subject: &Subject<'_>, recorded: &Recorded) -> Value {
                 },
                 "patch": {
                     "served": false,
-                    "reason": "central aq-git serves refs and name-status, not patch bytes",
+                    "reason": "show returns provenance only; the exact bytes are read with result.review.patch",
+                    "route": "/v1/agent/results/patch",
+                    "requires": "aq-git capability diff.patch with limits.diff_patch_bytes",
                     "retrieve": [
                         format!("git fetch <worker origin>/v1/git/{repository} {task_ref} (with the AQ-Attempt header of an attempt holding a live git grant for this repository)"),
                         format!("git rev-parse FETCH_HEAD must print {head}; refuse any other commit"),
                         format!("git diff --binary {base} {head}"),
                     ],
-                    "note": "The ref is the record of the result; it may have moved since. The recorded head is exact, and aq-git 0.2.0 does not prune objects.",
+                    "note": "The ref is the record of the result; it may have moved since. The recorded head is exact. retrieve is the fallback for an aq-git without diff.patch.",
                 },
             })
         }
@@ -158,6 +169,7 @@ mod tests {
             head: Some(HEAD.into()),
             repository_id: Some(Uuid::from_u128(4)),
             base: Some("3333333333333333333333333333333333333333".into()),
+            binding_generation: Some(1),
         }
     }
     #[test]
@@ -213,6 +225,7 @@ mod tests {
             head: Some(head.into()),
             repository_id: Some(repository),
             base: Some(base.into()),
+            binding_generation: Some(1),
         };
         let v = describe(&subject, &row);
         assert_eq!(v["state"], "pushed_ref");

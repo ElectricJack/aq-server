@@ -211,7 +211,11 @@ fn every_route_grant_is_grantable() {
         );
     }
     // Result reads are project targets: only a project scope reaches them.
-    for path in ["/v1/agent/results/list", "/v1/agent/results/show"] {
+    for path in [
+        "/v1/agent/results/list",
+        "/v1/agent/results/show",
+        "/v1/agent/results/patch",
+    ] {
         let target = route_grant(path, h, Relation::Own).unwrap().2;
         assert_eq!(target, Target::Project(id(1)));
         for (scope, allowed) in [

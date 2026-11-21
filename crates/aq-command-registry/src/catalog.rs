@@ -677,6 +677,22 @@ pub fn catalog() -> Vec<CommandSpec> {
                 ),
             ),
         ),
+        agent(
+            read(
+                "result.review.patch",
+                op::RESULT_READ,
+                P,
+                "The exact retained patch of one result revision of the attempt's project (base to head as recorded by AQ), with size and sha256 verified against aq-git's diff.patch answer; reports why no bytes are served when the work is missing, too large or aq-git lacks diff.patch",
+                None,
+            ),
+            Route::post(
+                "/v1/agent/results/patch",
+                Body::Versioned,
+                Params::Inline(
+                    r#"{"type":"object","additionalProperties":false,"required":["report_id","revision"],"properties":{"project_id":{"type":"string","format":"uuid","description":"Omitted: the attempt's project; another is refused"},"report_id":{"type":"string","format":"uuid"},"revision":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The exact report digest"},"max_bytes":{"type":"integer","minimum":1,"maximum":4194304,"description":"The most raw patch bytes to accept; default and maximum 4194304"}}}"#,
+                ),
+            ),
+        ),
         read(
             "feedback.task.show",
             op::RESULT_READ,

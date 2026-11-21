@@ -423,7 +423,7 @@ pub fn check(
 /// Grant each `/v1/agent/*` question, comment, wait and result route requires, with
 /// the registry command it maps to (spec 0006 §9). The graph and message
 /// routes keep checking their agent-access-1 profile capability.
-pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 13] = [
+pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
     ("/v1/agent/questions", "question.ask", op::QUESTION_ASK),
     (
         "/v1/agent/questions/show",
@@ -459,6 +459,11 @@ pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 13] = [
     (
         "/v1/agent/results/show",
         "result.review.show",
+        op::RESULT_READ,
+    ),
+    (
+        "/v1/agent/results/patch",
+        "result.review.patch",
         op::RESULT_READ,
     ),
 ];
