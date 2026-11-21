@@ -85,6 +85,38 @@ async fn result_waiting(
     Some(aq_human_work::result_waiting(attempt, result, active))
 }
 
+/// The hierarchy relationships that keep the active task `id` out of the
+/// runnable queue, and whether the read is still complete. The ancestry above
+/// the depth-1 Context `raw` costs one more bounded incoming Context read,
+/// made only when `raw` shows a parent or was truncated; when that read fails
+/// the answer is incomplete (`unknown`), not an error.
+async fn hierarchy_of(
+    s: &AppState,
+    w: Uuid,
+    id: Uuid,
+    raw: &Value,
+    complete: bool,
+) -> Result<(Vec<Value>, bool)> {
+    let incoming = match aq_human_work::needs_ancestry(raw, id) {
+        true => match ancestry(s, w, id).await {
+            Ok(context) => Some(context),
+            Err(error) => {
+                tracing::warn!(task = %id, class = error_class(&error), "task ancestry unavailable");
+                None
+            }
+        },
+        false => None,
+    };
+    let found = aq_human_work::hierarchy(
+        raw,
+        incoming.as_ref(),
+        id,
+        aq_agent_grants::draft_scope::MAX_ANCESTRY,
+    )
+    .ok_or_else(unavailable)?;
+    Ok((found.blocking, complete && found.complete))
+}
+
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
 /// the attached execution for one task.
 pub(super) async fn work(
@@ -150,11 +182,18 @@ pub(super) async fn work(
         (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
         _ => None,
     });
-    let readiness = aq_human_work::readiness_with(
+    // Graph's ready query also leaves out a task under a draft or retired
+    // ancestor and a container with live children; say which, not `ready`.
+    let (hierarchy, complete) = match open {
+        true => hierarchy_of(&s, w, id, &raw, complete).await?,
+        false => (Vec::new(), complete),
+    };
+    let readiness = aq_human_work::readiness_in(
         root["task_state"].as_str(),
         hold.as_ref(),
         held.collect(),
         blockers,
+        hierarchy,
         complete,
     );
     let parent = parent(&raw, w, id)?;

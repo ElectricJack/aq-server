@@ -619,6 +619,35 @@ async fn context(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
     Ok(raw)
 }
 
+/// The task's incoming Context as deep as Graph's hierarchy goes (its
+/// ancestors), for the work view's hierarchy check.
+async fn ancestry(s: &AppState, w: Uuid, id: Uuid) -> Result<Value> {
+    let raw = runtime(s)?
+        .human_get(
+            &format!("/v1/workspaces/{w}/nodes/{id}/context"),
+            &[
+                (
+                    "depth".into(),
+                    aq_agent_grants::draft_scope::MAX_ANCESTRY.to_string(),
+                ),
+                ("limit".into(), "63".into()),
+                ("max_bytes".into(), "262144".into()),
+                ("direction".into(), "incoming".into()),
+            ],
+            262144,
+        )
+        .await?;
+    if !contract::upstream_valid("Context", &raw) || raw["node"]["id"] != json!(id) {
+        return Err(unavailable());
+    }
+    let same = |v: &Value| v["workspace_id"] == json!(w);
+    let all = |k: &str| raw[k].as_array().into_iter().flatten().all(same);
+    if !all("nodes") || !all("edges") {
+        return Err(unavailable());
+    }
+    Ok(raw)
+}
+
 pub(crate) async fn decision_subject(
     state: &AppState,
     actor: User,
