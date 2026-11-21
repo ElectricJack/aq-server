@@ -1051,3 +1051,30 @@ async fn a_fresh_owner_retry_is_refused_for_any_other_hold() {
         .unwrap();
     assert_eq!(fresh, 0);
 }
+
+#[tokio::test]
+async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_expires() {
+    let (c, predecessor) = budget_held("lineage_time_budget_exhausted").await;
+    let (status, _) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
+    assert_eq!(status, 422);
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+        .bind(c.env.lineage.project_id)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    let (status, plain) = retry(&c, Uuid::new_v4(), Some("old binding")).await;
+    assert_eq!(status, 422, "{plain}");
+    assert_eq!(plain["code"], "replacement_project_revision_changed");
+    let operation = Uuid::new_v4();
+    let (status, fresh) = retry_with(&c, operation, Some("pinned review source"), true).await;
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(fresh["data"]["disposition"], "confirmed", "{fresh}");
+    let recorded: Uuid = sqlx::query_scalar(
+        "SELECT released_attempt_id FROM task_fresh_starts WHERE operation_id=$1",
+    )
+    .bind(operation)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, predecessor);
+}

@@ -121,7 +121,8 @@ async fn fresh_start(
         return Ok(Outcome::refused("fresh_retry_not_applicable"));
     }
     let now = now(state)?;
-    let replacement::Assessment::Replace(r) = replacement::assess_task(state, task, now).await?
+    let replacement::Assessment::Replace(r) =
+        replacement::fresh_predecessor(state, task, now).await?
     else {
         return Ok(rejected());
     };
