@@ -15,6 +15,7 @@ mod policy;
 mod protocol;
 mod reconcile;
 pub mod repository_onboarding;
+pub mod result_work;
 pub mod source_checks;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,

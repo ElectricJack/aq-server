@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "credential": "per-attempt machine credential (Authorization: Bearer, X-AQ-Request: 1); the project is taken from the authenticated binding, never from the body. Both routes need result.read at project scope (project:self or the attempt's own project:<id>); attempt:self, task:self and task:subtree do not reach results",
+  "routes": [
+    {
+      "method": "POST", "path": "/v1/agent/results/list", "capability": "result.review.list", "grant": "result.read",
+      "request": {"api_version": 1, "after?": "report uuid from next_after", "limit?": "integer 1..25, default 10"},
+      "response": {
+        "api_version": 1, "project_id": "uuid", "coverage": "recorded_native_v2",
+        "complete": "false when any listed report could not be read; the healthy reports are still returned",
+        "unavailable": "[{report_id, reason}] one per unreadable report; reason is outside_coverage, refused, temporarily_unavailable or validation_failed",
+        "items": "result metadata (as GET /api/human/results with profile=recorded_native_v2)", "next_after": "report uuid or null"
+      }
+    },
+    {
+      "method": "POST", "path": "/v1/agent/results/show", "capability": "result.review.show", "grant": "result.read",
+      "request": {"api_version": 1, "report_id": "uuid", "revision": "the exact report digest, 64 lowercase hex"},
+      "response": {
+        "api_version": 1, "project_id": "uuid", "coverage": "recorded_native_v2", "complete": true,
+        "result": "one revision's metadata", 
+        "work": "where the revision's work is retained: state pushed_ref (provenance: repository_id, base, head, ref, digest; patch.retrieve lists the steps that read the diff), push_conflict, source_receipts_only or missing (explicit evidence; nothing is recreated or approved). patch.served is false: aq-git serves refs and name-status, not patch bytes. provenance.digest binds revision, repository, base, head and ref, not patch bytes"
+      }
+    }
+  ],
+  "errors": {
+    "invalid_request": 400,
+    "unauthorized": 401, "session_revoked": 401, "session_expired": 401,
+    "scope_denied": 403,
+    "not_found": 404,
+    "unsupported_api_version": 426,
+    "overloaded": 503
+  }
+}

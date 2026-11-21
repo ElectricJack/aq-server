@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const ROUTES: [(&str, &str, &str); 11] = [
+const ROUTES: [(&str, &str, &str); 13] = [
     ("/v1/agent/questions", "question.ask", "question.ask"),
     ("/v1/agent/questions/show", "question.show", "question.read"),
     ("/v1/agent/comments", "task.comment.add", "comment.write"),
@@ -31,6 +31,16 @@ const ROUTES: [(&str, &str, &str); 11] = [
     ("/v1/agent/waits/ack", "wait.ack", "wait.ack"),
     ("/v1/agent/waits/list", "wait.list", "wait.read"),
     ("/v1/agent/waits/show", "wait.show", "wait.read"),
+    (
+        "/v1/agent/results/list",
+        "result.review.list",
+        "result.read",
+    ),
+    (
+        "/v1/agent/results/show",
+        "result.review.show",
+        "result.read",
+    ),
 ];
 
 async fn structured(e: &Env, path: &str) -> (StatusCode, Value) {
@@ -167,6 +177,7 @@ fn route_contracts_publish_the_grant_each_route_checks() {
         include_str!("../../../../protocol/agent-questions/v1/routes.json"),
         include_str!("../../../../protocol/agent-comments/v1/routes.json"),
         include_str!("../../../../protocol/agent-waits/v1/routes.json"),
+        include_str!("../../../../protocol/agent-results/v1/routes.json"),
     ] {
         let routes: Value = serde_json::from_str(raw).unwrap();
         for r in routes["routes"].as_array().unwrap() {
@@ -185,4 +196,60 @@ fn route_contracts_publish_the_grant_each_route_checks() {
         ROUTES.map(|(p, c, g)| (p, c, g)).to_vec(),
         aq_agent_grants::AGENT_ROUTE_GRANTS.to_vec()
     );
+}
+
+/// `result.read` reaches a project, never a task or the attempt alone, and a
+/// project grant for another project is not this project's.
+#[tokio::test]
+async fn result_review_routes_need_project_scope_and_stay_in_the_attempts_project() {
+    for scope in ["attempt:self", "task:self", "task:subtree"] {
+        let e = setup_with(Some(json!([{"operation":"result.read","scope":scope}]))).await;
+        for path in ["/v1/agent/results/list", "/v1/agent/results/show"] {
+            let (status, body) = structured(&e, path).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{scope} {path} {body}");
+            assert_eq!(body["code"], "scope_denied", "{scope} {path} {body}");
+            assert_eq!(body["grant"], "result.read");
+        }
+    }
+    let other = format!("project:{}", Uuid::new_v4());
+    let e = setup_with(Some(json!([{"operation":"result.read","scope":other}]))).await;
+    let (status, body) = structured(&e, "/v1/agent/results/list").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "scope_denied", "{body}");
+
+    let e = setup_with(Some(
+        json!([{"operation":"result.read","scope":"project:self"}]),
+    ))
+    .await;
+    let list = |body: Value| send(&e.app, "/v1/agent/results/list", Some(&e.token), Some(body));
+    let (status, page) = list(json!({"api_version":1})).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["project_id"], e.binding["project_id"]);
+    assert_eq!(page["complete"], true);
+    assert_eq!(page["items"], json!([]));
+    assert_eq!(page["unavailable"], json!([]));
+    // The project is the binding's: a body cannot name another.
+    let (status, body) = list(json!({"api_version":1,"project_id":Uuid::new_v4()})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, _) = list(json!({"api_version":1,"limit":26})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = list(json!({"api_version":2})).await;
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+    // An unknown report, a malformed digest and a report of no project are
+    // all "not found" or invalid; none says another project holds it.
+    let show = |body: Value| send(&e.app, "/v1/agent/results/show", Some(&e.token), Some(body));
+    let (status, body) =
+        show(json!({"api_version":1,"report_id":Uuid::new_v4(),"revision":"a".repeat(64)})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) =
+        show(json!({"api_version":1,"report_id":Uuid::new_v4(),"revision":"short"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = send(
+        &e.app,
+        "/v1/agent/results/show",
+        None,
+        Some(json!({"api_version":1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

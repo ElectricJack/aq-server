@@ -325,12 +325,14 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(get(&f, &path).await.0, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        get(&f, "/api/human/results?profile=recorded_native_v2")
-            .await
-            .0,
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
+    // The exact read stays a refusal, but a list isolates the one bad report
+    // and says so: the page is incomplete, not an error for every report.
+    let (status, page) = get(&f, "/api/human/results?profile=recorded_native_v2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["incomplete"], true);
+    assert_eq!(page["items"], serde_json::json!([]));
+    assert_eq!(page["unavailable"][0]["report_id"], serde_json::json!(report.report_id));
+    assert_eq!(page["unavailable"][0]["reason"], "validation_failed");
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
         .execute(&mut *tx)

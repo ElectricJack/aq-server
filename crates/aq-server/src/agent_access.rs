@@ -11,6 +11,7 @@ pub use messaging::global as supervisor_conversation;
 mod mutations;
 pub(crate) mod native_binding;
 pub mod questions;
+pub(crate) mod results;
 pub mod scheduling;
 pub mod waits;
 pub mod wakes;
@@ -374,6 +375,7 @@ pub fn machine_routes(state: AppState) -> Router<AppState> {
         .merge(waits::routes::machine_routes())
         .merge(questions::machine_routes())
         .merge(human::comments::machine_routes())
+        .merge(results::machine_routes())
         .merge(agent_tasks::machine_routes())
         .route("/v1/agent/context", get(context))
         .route("/v1/agent/graph/read", post(read))

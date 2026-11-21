@@ -56,6 +56,31 @@ pub struct ResultPage {
     pub coverage: String,
     pub items: Vec<ResultMetadata>,
     pub next_after: Option<Uuid>,
+    /// True when a listed report could not be read; `unavailable` names each.
+    /// Both are omitted from a complete page, so its bytes are unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<UnavailableResult>,
+}
+/// One report of a listed page that was refused or failed validation. It is
+/// reported in place of metadata, so one bad report cannot hide the others.
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnavailableResult {
+    pub report_id: Uuid,
+    pub reason: String,
+}
+/// A stable, non-sensitive reason for a report that could not be read.
+pub fn unavailable_reason(error: &AppError) -> &'static str {
+    match error {
+        AppError::NotFound(_) => "outside_coverage",
+        AppError::Forbidden(_) | AppError::Conflict(_) | AppError::ExecutionCancelled => "refused",
+        AppError::Busy | AppError::IdentityUnavailable(_) | AppError::Maintenance(_) => {
+            "temporarily_unavailable"
+        }
+        _ => "validation_failed",
+    }
 }
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -125,7 +150,25 @@ pub async fn read(
             "native v2 result reads require the authenticated full principal".into(),
         ));
     }
-    read_inner(state, actor, page, exact, None).await
+    read_inner(state, Some(actor), page, exact, None).await
+}
+/// Project-scoped read for an attempt that holds `result.read` at project
+/// scope. The caller has authorized `project`; the filter is forced to it, so
+/// a report of another project is never loaded or revealed.
+pub async fn read_project(
+    state: &AppState,
+    project: Uuid,
+    after: Option<Uuid>,
+    limit: Option<u32>,
+    exact: Option<(Uuid, &str)>,
+) -> Result<ResultPage> {
+    let page = Page {
+        profile: Some(ReadProfile::RecordedNativeV2),
+        project_id: Some(project),
+        after,
+        limit,
+    };
+    read_inner(state, None, &page, exact, None).await
 }
 /// The new profile retains the exact HTTP principal across common B1 lock waits.
 /// The old UUID-only wrapper remains legacy-only for existing internal callers.
@@ -139,11 +182,11 @@ pub async fn read_as(
         return read(state, actor.id, page, exact).await;
     }
     let pin = ActorPin::observe(state, actor).await?;
-    read_inner(state, actor.id, page, exact, Some(pin)).await
+    read_inner(state, None, page, exact, Some(pin)).await
 }
 async fn read_inner(
     state: &AppState,
-    actor: Uuid,
+    owner_check: Option<Uuid>,
     page: &Page,
     exact: Option<(Uuid, &str)>,
     pin: Option<ActorPin>,
@@ -173,7 +216,7 @@ async fn read_inner(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    if pin.is_none() {
+    if let Some(actor) = owner_check {
         owner(&mut tx, actor).await?;
     }
     let ids: Vec<Uuid> = if let Some((id, _)) = exact {
@@ -183,12 +226,55 @@ async fn read_inner(
             .bind(page.project_id).bind(page.after).bind(i64::from(limit)+1).bind(page.profile.is_some()).fetch_all(&mut *tx).await.map_err(db)?
     };
     let more = ids.len() > limit as usize;
-    let mut items = Vec::new();
+    let (mut items, mut unavailable, mut last) = (Vec::new(), Vec::new(), None);
     for id in ids.into_iter().take(limit as usize) {
-        let retained = super::results::load_locked(state, &mut tx, id).await?;
+        last = Some(id);
+        if let (Some(project), Some(_)) = (page.project_id, exact) {
+            // A report of another project is not found before any owner read.
+            let inside: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE r.report_id=$1 AND (l.execution_spec#>>'{lifecycle,project_id}')=$2::text)")
+                .bind(id).bind(project).fetch_one(&mut *tx).await.map_err(db)?;
+            if !inside {
+                return Err(AppError::NotFound("result revision not found".into()));
+            }
+        }
+        // A listed report is read in a savepoint so one refused validation
+        // is reported in its place; an exact read still fails as a whole.
+        let loaded = if exact.is_some() {
+            super::results::load_locked(state, &mut tx, id).await
+        } else {
+            let mut item = sqlx::Acquire::begin(&mut tx).await.map_err(db)?;
+            match super::results::load_locked(state, &mut item, id).await {
+                Ok(v) => {
+                    item.commit().await.map_err(db)?;
+                    Ok(v)
+                }
+                Err(e) => {
+                    item.rollback().await.map_err(db)?;
+                    Err(e)
+                }
+            }
+        };
+        let retained = match loaded {
+            Ok(v) => v,
+            Err(e) if exact.is_none() => {
+                unavailable.push(UnavailableResult {
+                    report_id: id,
+                    reason: unavailable_reason(&e).into(),
+                });
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if page.profile.is_none()
             && retained.origin != super::results::RecordedOrigin::LegacyPrepareV1
         {
+            if exact.is_none() {
+                unavailable.push(UnavailableResult {
+                    report_id: id,
+                    reason: "outside_coverage".into(),
+                });
+                continue;
+            }
             return Err(AppError::NotFound(
                 "result origin is outside current metadata coverage".into(),
             ));
@@ -201,11 +287,7 @@ async fn read_inner(
         }
         items.push(value);
     }
-    let next_after = if more {
-        items.last().map(|v| v.report_id)
-    } else {
-        None
-    };
+    let next_after = if more { last } else { None };
     let server_time_ms =
         u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
     // B1 takes common Node/attempt locks. Acquire human identity only afterward,
@@ -225,6 +307,8 @@ async fn read_inner(
         .into(),
         items,
         next_after,
+        incomplete: !unavailable.is_empty(),
+        unavailable,
     })
 }
 pub fn routes() -> Router<AppState> {

@@ -641,6 +641,42 @@ pub fn catalog() -> Vec<CommandSpec> {
                 &[("id", "result_id")],
             )),
         ),
+        // A reviewing agent's project-scoped read of retained results: it needs
+        // `result.read@project:self` (not the owner's session) and answers from
+        // the same validated owner reads as `result.list` and `result.show`,
+        // beside where the retained work (the exact diff) is kept.
+        agent(
+            read(
+                "result.review.list",
+                op::RESULT_READ,
+                P,
+                "Retained results of the attempt's project; a report that cannot be read is listed as unavailable and the page says it is incomplete",
+                None,
+            ),
+            Route::post(
+                "/v1/agent/results/list",
+                Body::Versioned,
+                Params::Inline(
+                    r#"{"type":"object","additionalProperties":false,"properties":{"project_id":{"type":"string","format":"uuid","description":"Omitted: the attempt's project; another is refused"},"after":{"type":"string","format":"uuid","description":"The last report of the previous page"},"limit":{"type":"integer","minimum":1,"maximum":25}}}"#,
+                ),
+            ),
+        ),
+        agent(
+            read(
+                "result.review.show",
+                op::RESULT_READ,
+                P,
+                "One retained result revision of the attempt's project, with where its work is retained (ref, base, head, provenance digest) and how to read the exact diff",
+                None,
+            ),
+            Route::post(
+                "/v1/agent/results/show",
+                Body::Versioned,
+                Params::Inline(
+                    r#"{"type":"object","additionalProperties":false,"required":["report_id","revision"],"properties":{"project_id":{"type":"string","format":"uuid","description":"Omitted: the attempt's project; another is refused"},"report_id":{"type":"string","format":"uuid"},"revision":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"The exact report digest"}}}"#,
+                ),
+            ),
+        ),
         read(
             "feedback.task.show",
             op::RESULT_READ,
