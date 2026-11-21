@@ -33,6 +33,16 @@ aq --local --origin http://127.0.0.1:28080 --json run epic.retirement.evidence \
 | `epic.retirement.evidence` | `kind`, `approval_revision`, `evidence` and the kind's fields from the evidence table below | Records one verified merge, ordinary-build or integrated receipt against the approved decision. |
 | `epic.retirement.close` | none | Completes the closure gate and the epic with a verified closure receipt once every registered repository has a merge and a passing flag-free ordinary build at that SHA, the passing integrated check names exactly those merges and builds, the cleanup task has completed through normal delivery and no other epic task is open. |
 
+An existing registration whose approval task already completed as ordinary work, releasing the cleanup task, before any decision was recorded is settled through the same `epic.retirement.decide` command. Restore the closure gate first. The task state is never taken as approval: the owner supplies an explicit `approve` decision, revision 1, with the vetted SHA of every registered repository and the vetting evidence. AQ then requires the following:
+
+- the AQ journal holds the owner's own confirmed `epic.retirement.register` operation that created the registration in this workspace and project;
+- the approval task is completed and carries no retirement decision marker;
+- the cleanup task is the registration's own active or completed task;
+- the closure gate is the verified draft;
+- every dependency is exactly as registered.
+
+The batch version-guards the approval, cleanup and closure tasks without changing them, so the original work is preserved and nothing is released again. It records the verified decision as both `approved` and `reconciled` on the registration. A request for changes, an earlier recorded decision, a mismatched task or repository set, and a changed version are refused. Evidence and closure then follow the ordinary path.
+
 A refused action settles as `rejected` and the server logs the reason. The registration record's `aq:epic_feature_retirement` metadata names the current decision and the `merges`, `ordinary` and `integrated` receipts. Take the guarded revision from the gate's Graph history: it is the revision the service verified before the deletion. The decision manifest fields and the evidence kinds below are the same for both workflows.
 
 ## Run the direct Graph qualification workflow

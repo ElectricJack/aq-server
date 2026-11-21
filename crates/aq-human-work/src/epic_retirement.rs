@@ -31,6 +31,31 @@ pub async fn owner_created(
     Ok(count == 2)
 }
 
+/// Whether this owner's confirmed `epic.retirement.register` operation, the
+/// one the record names, created `registration` in this workspace and project.
+/// A Graph record by itself cannot show that it came through the AQ owner API.
+pub async fn owner_registered(
+    pool: &sqlx::PgPool,
+    (actor, workspace, project): (Uuid, Uuid, Uuid),
+    operation: Uuid,
+    registration: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM dashboard_operations d JOIN dashboard_graph_intents i USING(operation_id)
+         WHERE d.operation_id=$1 AND d.principal_id=$2 AND d.kind=$3 AND d.disposition='confirmed'
+         AND i.workspace_id=$4 AND i.project_id=$5
+         AND convert_from(i.body,'UTF8')::jsonb->'operations' @> $6::jsonb)",
+    )
+    .bind(operation)
+    .bind(actor)
+    .bind(KIND)
+    .bind(workspace)
+    .bind(project)
+    .bind(json!([{"op":"create_node","id":registration,"kind":"knowledge"}]).to_string())
+    .fetch_one(pool)
+    .await
+}
+
 #[derive(Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Adopt {

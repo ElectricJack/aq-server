@@ -291,6 +291,13 @@ fn fixture() -> Fixture {
 }
 
 impl Fixture {
+    /// The same identities over an empty model.
+    fn clone_ids(&self) -> Fixture {
+        Fixture {
+            graph: Graph::default(),
+            ..*self
+        }
+    }
     fn load(&self) -> Result<Registration, Refusal> {
         Registration::load(
             &self.graph.get(self.registration),
@@ -330,10 +337,8 @@ impl Fixture {
             .map(|id| (id, self.graph.get(id)))
             .collect()
     }
-    fn decide(&mut self, revision: i32, choice: Choice) -> Result<(), String> {
-        let reg = self.load()?;
-        let [a, c, g] = self.gates(&reg);
-        let decide = Decide {
+    fn decision(&self, revision: i32, choice: Choice) -> Decide {
+        Decide {
             operation_id: Uuid::new_v4(),
             project_id: self.project,
             registration_id: self.registration,
@@ -346,10 +351,24 @@ impl Fixture {
                 .map(|(i, r)| (r.to_string(), sha(i as u8 + 1)))
                 .collect(),
             evidence: artifact(0xd0),
-        };
+        }
+    }
+    fn plan_decision(&self, decide: &Decide, journaled: bool) -> Planned {
         assert!(decide.valid());
-        let operations = decide.plan(&reg, &a, &c, &g)?;
+        let reg = self.load()?;
+        let [a, c, g] = self.gates(&reg);
+        decide.plan(&reg, &a, &c, &g, journaled)
+    }
+    fn decide(&mut self, revision: i32, choice: Choice) -> Result<(), String> {
+        let operations = self.plan_decision(&self.decision(revision, choice), false)?;
         self.graph.apply(&operations)
+    }
+    /// One ordinary Graph task edit outside the retirement workflow.
+    fn edit(&mut self, id: Uuid, patch: Value) {
+        let node = self.graph.get(id);
+        self.graph
+            .apply(&[json!({"op":"update_node","id":id,"expected_version":node["version"],"patch":patch})])
+            .unwrap();
     }
     fn evidence(&mut self, evidence: Evidence) -> Result<(), String> {
         assert!(evidence.valid());
@@ -677,6 +696,184 @@ fn closure_refuses_an_open_sibling_task() {
     assert!(f.close().unwrap_err().contains("still open"));
 }
 
+/// The registered Epic 0 shape: the closure gate restored, but the approval
+/// task already completed as ordinary work and the cleanup task released and
+/// worked on, with no decision on the registration.
+fn released_before_decision() -> Fixture {
+    let mut f = fixture();
+    f.graph.apply(&f.plan_restore(f.guarded).unwrap()).unwrap();
+    let reg = f.load().unwrap();
+    f.edit(reg.approval, json!({"task_state":"active"}));
+    f.edit(reg.approval, json!({"task_state":"completed"}));
+    f.edit(reg.cleanup, json!({"task_state":"active"}));
+    f.edit(
+        reg.cleanup,
+        json!({"title":"Remove the delivery_playbook flag"}),
+    );
+    assert!(f.state().get("decision").is_none());
+    f
+}
+
+/// Merges, passing flag-free ordinary builds and the combined check for
+/// every registered repository, then the cleanup's ordinary completion.
+fn settle_cleanup(f: &mut Fixture, approval_revision: i32) {
+    let at = |e: Evidence| Evidence {
+        approval_revision,
+        ..e
+    };
+    let mut merges = BTreeMap::new();
+    let mut builds = BTreeMap::new();
+    for (i, repo) in REPOS.iter().enumerate() {
+        let commit = sha(0x40 + i as u8);
+        f.evidence(at(f.merge(repo, commit.clone(), None))).unwrap();
+        f.evidence(at(f.ordinary(repo, commit.clone(), 0x60 + i as u8, true)))
+            .unwrap();
+        merges.insert(repo.to_string(), commit);
+        builds.insert(repo.to_string(), artifact(0x60 + i as u8));
+    }
+    f.evidence(at(f.integrated(&merges, &builds))).unwrap();
+    let cleanup = f.load().unwrap().cleanup;
+    if f.graph.get(cleanup)["task_state"] != "completed" {
+        f.edit(cleanup, json!({"task_state":"completed"}));
+    }
+}
+
+#[test]
+fn a_release_before_any_decision_is_reconciled_by_an_explicit_owner_decision() {
+    let mut f = released_before_decision();
+    let reg = f.load().unwrap();
+    let (approval, cleanup) = (f.graph.get(reg.approval), f.graph.get(reg.cleanup));
+    // Task state is never approval: evidence and closure still need a decision.
+    assert!(
+        f.evidence(Evidence {
+            approval_revision: 1,
+            ..f.merge(REPOS[0], sha(0x40), None)
+        })
+        .unwrap_err()
+        .contains("approval is still pending")
+    );
+    assert!(f.close().unwrap_err().contains("approval is still pending"));
+    let approve = f.decision(1, Choice::Approve);
+    let refused = |f: &Fixture, decide: &Decide, journaled| {
+        f.plan_decision(decide, journaled).unwrap_err().to_string()
+    };
+    assert!(refused(&f, &approve, false).contains("this owner's AQ registration"));
+    let changes = f.decision(1, Choice::RequestChanges);
+    assert!(refused(&f, &changes, true).contains("returned for changes"));
+    assert!(refused(&f, &f.decision(2, Choice::Approve), true).contains("follow"));
+    let mut partial = approve.clone();
+    partial.vetted.remove(REPOS[4]);
+    assert!(refused(&f, &partial, true).contains("registered repositories"));
+    let mut extra = approve.clone();
+    extra.vetted.insert("Acme/other".into(), sha(9));
+    assert!(refused(&f, &extra, true).contains("registered repositories"));
+
+    // Version races: the planned batch is fenced on every task it relies on.
+    let operations = f.plan_decision(&approve, true).unwrap();
+    for moved in [reg.approval, reg.cleanup, reg.closure, f.registration] {
+        let mut raced = Fixture {
+            graph: f.graph.clone(),
+            ..f.clone_ids()
+        };
+        raced.edit(moved, json!({"title":"Concurrent edit"}));
+        let error = raced.graph.apply(&operations).unwrap_err();
+        assert!(error.starts_with("stale"), "{moved}: {error}");
+    }
+
+    f.graph.apply(&operations).unwrap();
+    // The original work is untouched and nothing is released again.
+    assert_eq!(f.graph.get(reg.approval), approval);
+    assert_eq!(f.graph.get(reg.cleanup), cleanup);
+    let anchor = Uuid::new_v5(&f.registration, b"decision/1");
+    let state = f.state();
+    assert_eq!(state["approved"], json!(anchor));
+    assert_eq!(state["reconciled"], json!(anchor));
+    assert_eq!(state["decision_revision"], 1);
+    let record = f.graph.get(anchor);
+    assert_eq!(record["verification"], "verified");
+    let event = &record["metadata"][META];
+    assert_eq!(event["choice"], "approve");
+    assert_eq!(event["vetted"].as_object().unwrap().len(), REPOS.len());
+    assert_eq!(
+        event["released_before_decision"]["cleanup"]["version"],
+        cleanup["version"]
+    );
+    assert!(f.graph.get(f.registration)["verification"] == "verified");
+    // Replay with a fresh operation, or a later decision, is refused.
+    assert!(
+        f.plan_decision(&f.decision(1, Choice::Approve), true)
+            .is_err()
+    );
+    assert!(
+        f.plan_decision(&f.decision(2, Choice::Approve), true)
+            .is_err()
+    );
+
+    settle_cleanup(&mut f, 1);
+    f.close().unwrap();
+    assert_eq!(f.graph.get(f.epic)["task_state"], "completed");
+    assert_eq!(f.graph.get(f.closure)["task_state"], "completed");
+    assert!(f.close().is_err(), "closed once");
+}
+
+#[test]
+fn reconciliation_refuses_tasks_that_are_not_the_registered_release() {
+    let approve = |f: &Fixture| f.plan_decision(&f.decision(1, Choice::Approve), true);
+    // The closure gate must be restored first.
+    let mut f = fixture();
+    let reg = f.load().unwrap();
+    f.edit(reg.approval, json!({"task_state":"completed"}));
+    assert!(
+        approve(&f)
+            .unwrap_err()
+            .contains("another owner or project")
+    );
+    // An approval completed by this workflow carries its decision marker.
+    let mut f = released_before_decision();
+    let reg = f.load().unwrap();
+    let mut metadata = f.graph.get(reg.approval)["metadata"].clone();
+    metadata[META] = json!({"registration":f.registration,"role":"approval"});
+    f.edit(reg.approval, json!({"metadata":metadata}));
+    assert!(approve(&f).unwrap_err().contains("outside a decision"));
+    // The cleanup must still be the registration's own task.
+    let mut f = released_before_decision();
+    let reg = f.load().unwrap();
+    let mut metadata = f.graph.get(reg.cleanup)["metadata"].clone();
+    metadata.as_object_mut().unwrap().remove(META);
+    f.edit(reg.cleanup, json!({"metadata":metadata}));
+    assert!(approve(&f).is_err());
+    // A canceled cleanup is not released work to preserve.
+    let mut f = released_before_decision();
+    let reg = f.load().unwrap();
+    f.edit(reg.cleanup, json!({"task_state":"canceled"}));
+    assert!(
+        approve(&f)
+            .unwrap_err()
+            .contains("released before a decision")
+    );
+    // Another owner's or project's task.
+    let mut f = released_before_decision();
+    let reg = f.load().unwrap();
+    let mut metadata = f.graph.get(reg.approval)["metadata"].clone();
+    metadata["aq:human_actor_id"] = json!(Uuid::new_v4());
+    f.edit(reg.approval, json!({"metadata":metadata}));
+    assert!(
+        approve(&f)
+            .unwrap_err()
+            .contains("another owner or project")
+    );
+    // A recorded request for changes followed by an outside completion.
+    let mut f = fixture();
+    f.graph.apply(&f.plan_restore(f.guarded).unwrap()).unwrap();
+    f.decide(1, Choice::RequestChanges).unwrap();
+    let reg = f.load().unwrap();
+    f.edit(reg.approval, json!({"task_state":"completed"}));
+    let error = f
+        .plan_decision(&f.decision(2, Choice::Approve), true)
+        .unwrap_err();
+    assert!(error.contains("already recorded"), "{error}");
+}
+
 #[test]
 fn payload_bounds() {
     let f = fixture();
@@ -770,6 +967,7 @@ async fn dispatch_reads_only_what_the_registration_names() {
     let mut f = fixture();
     // Only registration reads a journal table; these actions never touch it.
     let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(200))
         .connect_lazy("postgres://localhost/unused")
         .unwrap();
     let at = (f.workspace, f.actor, f.project, SERVICE);
@@ -820,4 +1018,14 @@ async fn dispatch_reads_only_what_the_registration_names() {
     let r = Served(&f.graph, f.workspace);
     let pending = plan(&r, &pool, at, &subject, Action::Close(&close)).await;
     assert_eq!(pending.unwrap_err(), "a cleanup merge is pending");
+
+    // A release before any decision is reconciled only after the journal
+    // read, which this unreachable pool cannot answer.
+    let f = released_before_decision();
+    let at = (f.workspace, f.actor, f.project, SERVICE);
+    let subject = f.graph.get(f.registration);
+    let decide = f.decision(1, Choice::Approve);
+    let r = Served(&f.graph, f.workspace);
+    let unread = plan(&r, &pool, at, &subject, Action::Decide(&decide)).await;
+    assert_eq!(unread.unwrap_err(), "unavailable");
 }

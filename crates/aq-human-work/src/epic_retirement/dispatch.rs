@@ -3,7 +3,7 @@
 //! The server supplies the reads (its Graph runtime and upstream schemas);
 //! everything an action reads is named by its registration, not its request.
 use super::settle::{Close, Decide, Evidence, Refusal, Registration, Restore};
-use super::{Register, owner_created};
+use super::{Register, owner_created, owner_registered};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -151,7 +151,17 @@ pub async fn plan<R: Reads>(
         }
         Action::Decide(payload) => {
             let [approval, cleanup, closure] = gates(r, at, &reg).await?;
-            payload.plan(&reg, &approval, &cleanup, &closure)
+            // A draft decision needs no journal read; a reconciliation does.
+            let journaled = match reg.operation() {
+                Some(op) if Decide::released(&approval) => {
+                    let scope = (at.actor, at.workspace, at.project);
+                    owner_registered(pool, scope, op, reg.id)
+                        .await
+                        .map_err(|_| r.fail(None))?
+                }
+                _ => false,
+            };
+            payload.plan(&reg, &approval, &cleanup, &closure, journaled)
         }
         Action::Evidence(payload) => {
             let [approval, cleanup, closure] = gates(r, at, &reg).await?;

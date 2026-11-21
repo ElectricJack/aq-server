@@ -1142,6 +1142,13 @@ async fn check_epic_retirement_registration(
         registration,
     };
     check_epic_retirement_settlement(&app, origin, workspace, token, &ids).await;
+    let at = At {
+        app: &app,
+        origin,
+        workspace,
+        token,
+    };
+    check_epic_retirement_released_before_decision(&at, project).await;
 }
 
 const REPOSITORIES: [&str; 5] = [
@@ -1372,4 +1379,209 @@ async fn check_epic_retirement_settlement(
         state["closed"],
         json!(Uuid::new_v5(&ids.registration, b"close"))
     );
+}
+
+/// The Graph workspace and admin router one settlement check runs against.
+struct At<'a> {
+    app: &'a Router,
+    origin: &'a str,
+    workspace: Uuid,
+    token: &'a str,
+}
+impl At<'_> {
+    async fn node(&self, id: Uuid) -> Value {
+        graph_node(self.origin, self.workspace, self.token, id, "").await
+    }
+    /// One task edit outside the retirement workflow, as ordinary work and
+    /// its settlement make it.
+    async fn edit(&self, id: Uuid, patch: Value) {
+        let node = self.node(id).await;
+        let edited = reqwest::Client::new()
+            .post(format!("{}/v1/workspaces/{}/mutations", self.origin, self.workspace))
+            .bearer_auth(self.token)
+            .header("X-AQ-Graph-API-Version", "1")
+            .json(&json!({"idempotency_key":format!("edit-{id}-{}", node["version"]),"reason":"Ordinary work",
+                "operations":[{"op":"update_node","id":id,"expected_version":node["version"],"patch":patch}]}))
+            .send()
+            .await
+            .unwrap();
+        let status = edited.status();
+        let text = edited.text().await.unwrap();
+        assert!(status.is_success(), "{id}: {text}");
+    }
+    /// An owner action on the registration at its current version.
+    async fn settle(
+        &self,
+        ids: &Retirement,
+        kind: &str,
+        extra: Value,
+        email: &str,
+    ) -> (Uuid, Value) {
+        let current = self.node(ids.registration).await;
+        let mut params = json!({"project_id":ids.project,"registration_id":ids.registration,
+            "expected_version":current["version"].to_string()});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        owner_command(self.app, kind, params, email).await
+    }
+}
+
+/// The registered Epic 0 shape on disposable Graph: an AQ owner registration
+/// whose gate was deleted and restored, and whose approval task completed as
+/// ordinary work and released the cleanup before any decision was recorded.
+/// Only an explicit, vetted owner decision settles it, without touching the
+/// original tasks; then the ordinary five-repository evidence closes the epic.
+async fn check_epic_retirement_released_before_decision(at: &At<'_>, project: Uuid) {
+    let owner = "owner@localhost";
+    let disposition = |result: &Value| result["data"]["disposition"].clone();
+    let [epic, approval, cleanup] = std::array::from_fn(|_| Uuid::new_v4());
+    let tasks = format!("/api/human/projects/{project}/tasks");
+    for id in [epic, approval, cleanup] {
+        let (_, result) = send(at.app, &tasks, Some(&request(id, "1")), owner).await;
+        assert_eq!(result["state"], "confirmed", "{result}");
+    }
+    let dependency = json!({"project_id":project,"task_id":cleanup,"expected_version":"1","blocker_id":approval});
+    let (_, linked) = owner_command(at.app, "task.dependency.add", dependency, owner).await;
+    assert_eq!(disposition(&linked), "confirmed", "{linked}");
+    let register = json!({"project_id":project,"epic_id":epic,"expected_version":"1","generation":1,
+        "repositories":repositories(),"ordinary_default":false,
+        "permanent_behavior":"Enable B in ordinary builds","adopt":{"approval":approval,"cleanup":cleanup}});
+    let (_, registered) = owner_command(at.app, "epic.retirement.register", register, owner).await;
+    assert_eq!(disposition(&registered), "confirmed", "{registered}");
+    let registration = Uuid::new_v5(
+        &at.workspace,
+        format!("aq/epic-retirement/1/{project}/{epic}/1").as_bytes(),
+    );
+    let ids = Retirement {
+        project,
+        epic,
+        approval,
+        cleanup,
+        registration,
+    };
+    let closure = Uuid::new_v5(&registration, b"closure-gate");
+    let gate = at.node(closure).await;
+    let guarded = gate["content_revision"].as_i64().unwrap();
+    let delete = json!({"project_id":project,"task_id":closure,"expected_version":gate["version"].to_string()});
+    let (_, deleted) = owner_command(at.app, "task.delete", delete, owner).await;
+    assert_eq!(disposition(&deleted), "confirmed", "{deleted}");
+    let restore = json!({"revision":guarded});
+    let (_, restored) = at
+        .settle(&ids, "epic.retirement.restore", restore, owner)
+        .await;
+    assert_eq!(disposition(&restored), "confirmed", "{restored}");
+    at.edit(approval, json!({"task_state":"active"})).await;
+    at.edit(approval, json!({"task_state":"completed"})).await;
+    at.edit(cleanup, json!({"task_state":"active"})).await;
+    let before = [at.node(approval).await, at.node(cleanup).await];
+    let state = &at.node(registration).await["metadata"]["aq:epic_feature_retirement"];
+    assert!(state.get("decision").is_none(), "{state}");
+
+    let vetted: Value = (REPOSITORIES.iter().enumerate())
+        .map(|(i, repo)| (repo.to_string(), json!(commit(200 + i))))
+        .collect();
+    let decision = |revision: u32, choice: &str, vetted: &Value| json!({"revision":revision,"choice":choice,"vetted":vetted,"evidence":artifact(0xd1)});
+    let early = json!({"kind":"merge","approval_revision":1,"evidence":artifact(0x10),
+        "repository":REPOSITORIES[0],"pull_request":"https://github.com/Acme/service/pull/2","sha":commit(300)});
+    let (_, early) = at
+        .settle(&ids, "epic.retirement.evidence", early, owner)
+        .await;
+    assert_eq!(
+        disposition(&early),
+        "rejected",
+        "task state is not approval: {early}"
+    );
+    let approve = decision(1, "approve", &vetted);
+    let (_, denied) = at
+        .settle(
+            &ids,
+            "epic.retirement.decide",
+            approve.clone(),
+            "viewer@localhost",
+        )
+        .await;
+    assert_ne!(disposition(&denied), "confirmed", "{denied}");
+    let changes = decision(1, "request_changes", &vetted);
+    let (_, changes) = at
+        .settle(&ids, "epic.retirement.decide", changes, owner)
+        .await;
+    assert_eq!(disposition(&changes), "rejected", "{changes}");
+    let mut partial = vetted.clone();
+    partial.as_object_mut().unwrap().remove(REPOSITORIES[4]);
+    let partial = decision(1, "approve", &partial);
+    let (_, partial) = at
+        .settle(&ids, "epic.retirement.decide", partial, owner)
+        .await;
+    assert_eq!(disposition(&partial), "rejected", "{partial}");
+    let mut stale = approve.clone();
+    let fence = json!({"project_id":project,"registration_id":registration,"expected_version":"1"});
+    stale
+        .as_object_mut()
+        .unwrap()
+        .extend(fence.as_object().unwrap().clone());
+    let (_, stale) = owner_command(at.app, "epic.retirement.decide", stale, owner).await;
+    assert_eq!(disposition(&stale), "conflict", "{stale}");
+
+    let (op, decided) = at
+        .settle(&ids, "epic.retirement.decide", approve, owner)
+        .await;
+    assert_eq!(disposition(&decided), "confirmed", "{decided}");
+    let (_, replay) = send(at.app, &format!("/api/v1/operations/{op}"), None, owner).await;
+    assert_eq!(
+        replay["data"]["receipt_refs"],
+        decided["data"]["receipt_refs"]
+    );
+    for (id, was) in [approval, cleanup].into_iter().zip(&before) {
+        let now = at.node(id).await;
+        for key in ["version", "task_state", "metadata"] {
+            assert_eq!(now[key], was[key], "{id} {key}");
+        }
+    }
+    let anchor = Uuid::new_v5(&registration, b"decision/1");
+    let state = at.node(registration).await["metadata"]["aq:epic_feature_retirement"].clone();
+    assert_eq!(state["approved"], json!(anchor));
+    assert_eq!(state["reconciled"], json!(anchor));
+    assert_eq!(at.node(anchor).await["verification"], "verified");
+    let again = decision(2, "approve", &vetted);
+    let (_, again) = at
+        .settle(&ids, "epic.retirement.decide", again, owner)
+        .await;
+    assert_eq!(disposition(&again), "rejected", "{again}");
+
+    let mut merges = serde_json::Map::new();
+    let mut builds = serde_json::Map::new();
+    for (i, repo) in REPOSITORIES.iter().enumerate() {
+        let sha = commit(300 + i);
+        let merge = json!({"kind":"merge","approval_revision":1,"evidence":artifact(0x10),
+            "repository":repo,"pull_request":format!("https://github.com/{repo}/pull/2"),"sha":sha});
+        let (_, merged) = at
+            .settle(&ids, "epic.retirement.evidence", merge, owner)
+            .await;
+        assert_eq!(disposition(&merged), "confirmed", "{merged}");
+        let build = artifact(0x30 + i as u8);
+        let ordinary = json!({"kind":"ordinary","approval_revision":1,"evidence":build,
+            "repository":repo,"sha":sha,"passed":true,"flag_absent":true});
+        let (_, built) = at
+            .settle(&ids, "epic.retirement.evidence", ordinary, owner)
+            .await;
+        assert_eq!(disposition(&built), "confirmed", "{built}");
+        merges.insert(repo.to_string(), json!(sha));
+        builds.insert(repo.to_string(), build);
+    }
+    let combined = json!({"kind":"integrated","approval_revision":1,"evidence":artifact(0xef),
+        "revisions":merges,"builds":builds,"passed":true});
+    let (_, combined) = at
+        .settle(&ids, "epic.retirement.evidence", combined, owner)
+        .await;
+    assert_eq!(disposition(&combined), "confirmed", "{combined}");
+    // Stand-in for the cleanup's normal delivery settlement.
+    at.edit(cleanup, json!({"task_state":"completed"})).await;
+    let (_, closed) = at
+        .settle(&ids, "epic.retirement.close", json!({}), owner)
+        .await;
+    assert_eq!(disposition(&closed), "confirmed", "{closed}");
+    assert_eq!(at.node(epic).await["task_state"], "completed");
+    assert_eq!(at.node(closure).await["task_state"], "completed");
 }
