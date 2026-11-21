@@ -96,6 +96,39 @@ pub fn capability(limits: &Limits) -> Capability {
     }
 }
 
+/// The served metadata of one stored file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Descriptor {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub media_type: String,
+    pub size_bytes: u64,
+    pub digest: String,
+}
+impl Descriptor {
+    /// Whether the descriptor is one the writer could have produced.
+    pub fn valid(&self) -> bool {
+        !self.id.is_nil()
+            && name_valid(&self.name)
+            && allowed(&self.media_type)
+            && (1..=MAX_FILE_BYTES as u64).contains(&self.size_bytes)
+            && digest_valid(&self.digest)
+    }
+    /// One stable line for the supervisor turn text. The name is JSON-quoted
+    /// so owner text cannot forge a line break or a closing bracket.
+    pub fn render(&self) -> String {
+        format!(
+            "{} name {} {} {} bytes {}",
+            self.id,
+            serde_json::json!(self.name),
+            self.media_type,
+            self.size_bytes,
+            self.digest
+        )
+    }
+}
+
 pub fn allowed(media_type: &str) -> bool {
     MEDIA_TYPES.contains(&media_type)
 }

@@ -7,7 +7,7 @@ use super::*;
 // The ceilings: what a stored file or message may hold whatever the
 // configuration. The configured limits live in `Service::limits`.
 pub(super) use aq_supervisor_control::attachments::{
-    MAX_FILE_BYTES as MAX_SIZE, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
+    Descriptor, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
 };
 use aq_supervisor_control::attachments::{
     MAX_STAGED_BYTES, MAX_STAGED_FILES, Refusal, STAGED_TTL_MS, allowed, content_valid,
@@ -32,37 +32,6 @@ pub(super) fn refs_valid(refs: &[AttachmentRef], max: usize) -> bool {
         && refs.iter().enumerate().all(|(i, a)| {
             !a.id.is_nil() && digest_valid(&a.digest) && refs[..i].iter().all(|b| b.id != a.id)
         })
-}
-/// The served metadata of one stored file.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Descriptor {
-    pub(super) id: Uuid,
-    pub(super) name: String,
-    pub(super) media_type: String,
-    pub(super) size_bytes: u64,
-    pub(super) digest: String,
-}
-impl Descriptor {
-    fn valid(&self) -> bool {
-        !self.id.is_nil()
-            && name_valid(&self.name)
-            && allowed(&self.media_type)
-            && (1..=MAX_SIZE as u64).contains(&self.size_bytes)
-            && digest_valid(&self.digest)
-    }
-    /// One stable line for the supervisor turn text. The name is JSON-quoted
-    /// so owner text cannot forge a line break or a closing bracket.
-    pub(super) fn render(&self) -> String {
-        format!(
-            "{} name {} {} {} bytes {}",
-            self.id,
-            json!(self.name),
-            self.media_type,
-            self.size_bytes,
-            self.digest
-        )
-    }
 }
 /// Decodes the stored descriptors of one message, refusing anything the
 /// writer could not produce.
