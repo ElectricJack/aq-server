@@ -103,20 +103,21 @@ pub async fn notify<E: std::fmt::Debug>(
                 continue;
             }
             body.push_str(" Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt.");
-            if let Some(evidence) =
-                crate::delivery_store::held_pr_evidence(&mut tx, identity).await?
+        }
+        let can_retry = reason == "returns_exhausted"
+            || aq_machine_control::holds::budget_code(&reason).is_some();
+        if can_retry {
+            if let Some(id) = report
+                && let Some(evidence) = crate::delivery_store::held_pr_evidence(&mut tx, id).await?
             {
-                body.push(' ');
-                body.push_str(&evidence);
+                body.push_str(&format!(" {evidence} Compare this head and outcome with the previous attempt when deciding whether a bounded retry is justified."));
             }
             if let Some(url) = pr {
                 body.push_str(&format!(" Pull request: {url}."));
             }
         }
         body.push_str(" Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.");
-        if aq_machine_control::holds::budget_code(&reason).is_some()
-            || reason == "returns_exhausted"
-        {
+        if can_retry {
             let request = serde_json::json!({
                 "operation_id":"<fresh UUID>", "reason":"<why another attempt is justified>",
                 "params":{"project_id":project,"task_id":task,"expected_version":"<current version from task.work>"}

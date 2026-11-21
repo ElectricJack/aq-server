@@ -1967,6 +1967,33 @@ mod playbook {
         assert_eq!(facts, ("retained".into(), "quiescent".into()));
         assert!(env.holds_task().await);
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+
+        // A return followed by a budget hold also carries the original PR
+        // evidence, allowing a supervisor to compare independently recorded heads.
+        sqlx::query("UPDATE delivery_decisions SET decision='returned',reason='merge_conflict',update_from_main=true WHERE result_id=$1")
+            .bind(result).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'task_sandbox_minutes_budget_exhausted',$4,'returned',to_timestamp($5))")
+            .bind(Uuid::new_v4()).bind(task).bind(lineage.project_id).bind(attempt).bind(NOW as f64 / 1000.0).execute(&pool).await.unwrap();
+        let calls = AtomicUsize::new(0);
+        aq_playbook_domain::scheduling_notices::notify(
+            &pool,
+            NOW as i64 + 600_001,
+            async |_, scope, body: &str, _| {
+                assert_eq!(scope, Some(lineage.project_id));
+                assert!(
+                    body.contains("task_sandbox_minutes_budget_exhausted")
+                        && body.contains(&"4".repeat(40))
+                        && body.contains("conflict")
+                );
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, ()>(Uuid::new_v4())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
