@@ -251,6 +251,47 @@ pub async fn observe(
     }
     Ok(reason)
 }
+/// The scheduler refreshes a refused task's observation until it can admit the task.
+pub async fn show_task_wait(
+    readiness: &mut Value,
+    pool: &sqlx::PgPool,
+    task: Uuid,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    if readiness["state"] != "ready" {
+        return Ok(());
+    }
+    let mut conn = pool.acquire().await?;
+    if !available(&mut conn).await? {
+        return Ok(());
+    }
+    let wait: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT reason,provider,intelligence_class FROM swarm_waiting w
+         WHERE task_id=$1 AND expires_at_ms>$2 AND NOT EXISTS
+           (SELECT 1 FROM execution_attempts a WHERE a.task_id=w.task_id AND a.holds_task)",
+    )
+    .bind(task)
+    .bind(now_ms)
+    .fetch_optional(&mut *conn)
+    .await?;
+    if let Some((code, provider, class)) = wait {
+        let message = match code.as_str() {
+            CEILING => format!(
+                "Waiting for a {provider} {class} slot. AQ will retry automatically when capacity is available."
+            ),
+            PROVIDER_REMOVED => {
+                format!("The {provider} provider is unavailable for the {class} route.")
+            }
+            _ => format!(
+                "AQ could not admit the {provider} {class} route. The scheduler reported {code}."
+            ),
+        };
+        readiness["state"] = Value::from("waiting");
+        readiness["reasons"] = serde_json::json!([{"code":code,"provider":provider,"intelligence_class":class,"message":message}]);
+    }
+    Ok(())
+}
+
 pub async fn clear_waiting(conn: &mut PgConnection, task: Uuid) -> Result<(), sqlx::Error> {
     if available(conn).await? {
         sqlx::query("DELETE FROM swarm_waiting WHERE task_id=$1")

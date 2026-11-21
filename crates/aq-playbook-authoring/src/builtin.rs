@@ -178,6 +178,22 @@ mod tests {
         let catalog = crate::request::pinned_catalog(&record).unwrap();
         assert_eq!(catalog.commands["work.read"].version, "2.3.0");
         assert!(catalog.events.contains_key("aq.work.result_ready"));
+        let workspace = crate::request::workspace_files(
+            &record,
+            "review",
+            &catalog,
+            &Default::default(),
+            "1",
+            None,
+        )
+        .unwrap();
+        for fact in [
+            "review_approved",
+            "review_changes_requested",
+            "review_incomplete",
+        ] {
+            assert!(workspace["CATALOG.md"].contains(fact));
+        }
         // 2.2.0 does not know the event: it is not the catalog of this record.
         assert!(docs::catalog(&record.commands, &record.events).is_err());
     }

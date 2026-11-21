@@ -391,7 +391,7 @@ pub async fn reroute(
     project: Uuid,
     ready: &[crate::agent_access::scheduling::ReadyTask],
     id: Uuid,
-    attempt: Option<(Uuid, Option<i32>)>,
+    attempt: Option<(Uuid, Option<aq_machine_control::holds::History>)>,
 ) {
     let Some(task) = ready
         .iter()

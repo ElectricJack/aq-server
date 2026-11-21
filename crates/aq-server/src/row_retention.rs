@@ -4,6 +4,8 @@
 pub use aq_row_retention::*;
 
 pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
+    let mut notices = tokio::time::interval(std::time::Duration::from_secs(60));
+    notices.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut interval = tokio::time::interval(INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -11,6 +13,12 @@ pub async fn run(state: crate::AppState, mut stop: tokio::sync::watch::Receiver<
             break;
         }
         tokio::select! {
+            _=notices.tick(), if cfg!(feature = "delivery_playbook") => {
+                #[cfg(feature = "delivery_playbook")]
+                if let Err(e) = aq_playbook_domain::scheduling_notices::notify(&state.store.pool, (state.clock)().timestamp_millis(), crate::agent_access::supervisor_conversation::system_message_in).await {
+                    tracing::warn!(error=?e, "scheduler supervisor escalation deferred");
+                }
+            },
             changed=stop.changed()=>{if changed.is_err()||*stop.borrow(){break;}},
             _=interval.tick()=>{
                 match collect(&state.store.pool,&state.agent_access,(state.clock)().timestamp_millis(),BATCH).await {

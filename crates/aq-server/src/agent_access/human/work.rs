@@ -1,49 +1,15 @@
 //! Work-view task projections: readiness, blockers, parent, attached execution,
 //! history timeline and per-scope completion counts (G11 X8-X13).
-//!
-//! Readiness is derived server-side from one bounded depth-1 Graph Context and
-//! the attempt holding the task. It never claims `ready` when the Context was
-//! truncated without a known open blocker: that is reported as `unknown`.
+//! Readiness combines Graph dependencies, execution holds and current scheduler observations.
 use super::*;
 
 const HISTORY_LIMIT: u16 = 25;
 const ATTEMPT_LIMIT: i64 = 16;
 
-/// Holding attempt (the agent session attached to each task) for a page of
-/// tasks in this project. At most one attempt holds a task.
 pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> Result<Vec<Value>> {
-    if tasks.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = sqlx::query(
-        "SELECT e.task_id,e.attempt_id,e.session_id,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
-         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=ANY($1) AND e.kind='profiled_v1' AND e.holds_task \
-         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
-         ORDER BY e.task_id,e.attempt_id LIMIT 65",
-    )
-    .bind(tasks)
-    .bind(project.to_string())
-    .fetch_all(pool)
-    .await
-    .map_err(|_| unavailable())?;
-    // Spec 0014 §7.1: what each attempt ran with, from its own record.
-    let ran_with = aq_role_settings::attempts::ran_with_rows(pool, &rows).await;
-    rows.iter()
-        .map(|row| {
-            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
-            let mut execution = json!({
-                "task_id": row.try_get::<Uuid, _>("task_id").map_err(|_| unavailable())?,
-                "attempt_id": attempt,
-                "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
-                "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            });
-            if let Some(summary) = ran_with.get(&attempt) {
-                execution["ran_with"] = json!(summary);
-            }
-            Ok(execution)
-        })
-        .collect()
+    aq_human_work::holding_executions(pool, project, tasks)
+        .await
+        .map_err(|_| unavailable())
 }
 
 /// A fixed label for an error's kind, for logs: never the variant's payload.
@@ -58,31 +24,49 @@ fn error_class(error: &AppError) -> &'static str {
     }
 }
 
-/// Epic 0 (spec 0016 section 7): why a stopped attempt's undecided result
-/// holds the task, and whether a delivery playbook is active for `project`
-/// to decide it. A read failure omits it; the attempt's own hold is shown.
+/// Show the current delivery decision or the policy that can decide an open result.
 #[cfg(feature = "delivery_playbook")]
 async fn result_waiting(
     s: &AppState,
     pool: &PgPool,
     project: Uuid,
-    attempt: Uuid,
+    h: &aq_human_work::Hold,
 ) -> Option<Value> {
     use aq_playbook_domain::delivery_store as store;
     let mut db = pool.acquire().await.ok()?;
-    let result = store::undecided(&mut db, attempt).await.ok()??;
-    // The namespace's delivery artifact, for its project or (installation routing) all.
-    let active = match s.config.playbooks.as_deref() {
-        Some(pb)
-            if pb.profile.is_delivery()
-                && (pb.installation_routing || pb.namespace.project_id == project) =>
-        {
-            let namespace = (pb.namespace.namespace_id, pb.namespace.generation);
-            store::active(&mut db, namespace).await.ok()?
-        }
-        _ => false,
+    let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
+    if let Some(reason) = hold {
+        let evidence = store::held_pr_evidence(&mut db, result)
+            .await
+            .ok()
+            .flatten();
+        return Some(aq_human_work::delivery_hold(
+            h,
+            result,
+            &reason,
+            evidence.as_deref(),
+        ));
+    }
+    let pb = s.config.playbooks.as_deref().filter(|pb| {
+        pb.profile.is_delivery() && (pb.installation_routing || pb.namespace.project_id == project)
+    });
+    let active = match pb {
+        Some(pb) => store::active(
+            &mut db,
+            (pb.namespace.namespace_id, pb.namespace.generation),
+        )
+        .await
+        .ok()?,
+        None => false,
     };
-    Some(aq_human_work::result_waiting(attempt, result, active))
+    let mut waiting = aq_human_work::result_waiting(h.attempt_id, result, active);
+    if let Ok(Some(check)) = store::checking_pr(&mut db, result).await
+        && let Some(Value::String(message)) = waiting.get_mut("message")
+    {
+        message.push(' ');
+        message.push_str(&check);
+    }
+    Some(waiting)
 }
 
 /// The hierarchy relationships that keep the active task `id` out of the
@@ -134,7 +118,26 @@ pub(super) async fn work(
         aq_machine_control::holds::clear_closed(&r.pool, id, (s.clock)()).await;
     }
     let held = aq_machine_control::holds::current(&r.pool, p, id).await;
-    let held = (held.map_err(|_| unavailable())?).map(|h| {
+    let mut held = held.map_err(|_| unavailable())?;
+    if let Some(h) = held
+        .as_mut()
+        .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
+    {
+        let current = a.record.revision;
+        let pinned =
+            aq_profiled_state::replacement_sql::predecessor_project_revision(&r.pool, h.attempt_id)
+                .await
+                .map_err(|_| unavailable())?;
+        if pinned != Some(current) {
+            let now = u64::try_from((s.clock)().timestamp_millis()).map_err(|_| unavailable())?;
+            if let Some(code) =
+                crate::profiled_execution::replacement::retry_hold(&s, id, now, current).await?
+            {
+                h.reason = code.into();
+            }
+        }
+    }
+    let held = held.map(|h| {
         let phrase = aq_machine_control::holds::phrase(&h.reason);
         aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
     });
@@ -158,18 +161,16 @@ pub(super) async fn work(
         false => None,
     };
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
-    // for a playbook, and the read says whether one is active to decide it.
     #[cfg(feature = "delivery_playbook")]
     let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
+        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h).await,
         _ => None,
     });
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),
     };
-    let readiness = aq_human_work::readiness_in(
+    let mut readiness = aq_human_work::readiness_in(
         root["task_state"].as_str(),
         hold.as_ref(),
         held.collect(),
@@ -177,6 +178,14 @@ pub(super) async fn work(
         hierarchy,
         complete,
     );
+    aq_swarm_settings::admission::show_task_wait(
+        &mut readiness,
+        &r.pool,
+        id,
+        (s.clock)().timestamp_millis(),
+    )
+    .await
+    .map_err(|_| unavailable())?;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,"parent":parent,"execution":execution});

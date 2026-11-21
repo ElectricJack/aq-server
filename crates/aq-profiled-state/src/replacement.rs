@@ -114,6 +114,16 @@ impl Assessment {
             _ => None,
         }
     }
+    /// The decision as an inspector shows it: its kind, and the hold code or predecessor.
+    pub fn view(&self) -> serde_json::Value {
+        match self {
+            Self::Fresh => serde_json::json!({"kind": "fresh"}),
+            Self::Replace(r) => serde_json::json!({"kind": "replace",
+                "predecessor": r.predecessor, "needs_release": r.needs_release,
+                "attempts_started": r.attempts_started, "exempt_attempts": r.exempt_attempts}),
+            Self::Blocked(code) => serde_json::json!({"kind": "blocked", "code": code}),
+        }
+    }
 }
 
 fn failed(prior: &Prior, now: u64) -> bool {
@@ -150,8 +160,54 @@ pub fn latest(priors: &[Prior]) -> Option<Uuid> {
     last.map(|p| p.attempt_id)
 }
 
+/// Every fact of one started attempt that keeps [`assess`] from replacing it, in [`assess`]'s
+/// order; empty when that attempt alone blocks nothing (lineage budgets are not per attempt).
+/// This is what an inspector names for a `replacement_effects_unreconciled` or
+/// `replacement_prior_execution_uncertain` hold: which owner fact is missing.
+pub fn blockers(prior: &Prior, now: u64) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let mut add = |blocked: bool, code| {
+        if blocked {
+            out.push(code);
+        }
+    };
+    add(prior.offered_at_ms.is_none(), "lineage_history_unknown");
+    add(prior.accepted, "settlement_accepted");
+    add(!prior.stop.known_stopped(), "stop_not_proven");
+    add(matches!(prior.effects, Effects::Unknown), "effects_unknown");
+    add(
+        matches!(prior.effects, Effects::Pending { .. }),
+        "effects_pending",
+    );
+    add(
+        prior.needs_reconciliation,
+        "settlement_needs_reconciliation",
+    );
+    add(prior.completion.is_some(), "task_completion_recorded");
+    add(
+        !matches!(prior.retention, Retention::Retained { .. }),
+        "source_not_retained",
+    );
+    add(
+        !prior.holds_task && !prior.released,
+        "claim_release_unknown",
+    );
+    add(!failed(prior, now), "not_failed");
+    out
+}
+
 /// Pure replacement decision over the complete started-attempt history.
 pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, true)
+}
+
+/// A fresh start closes the old lineage, so its limits do not charge the new source.
+/// Stop, effect, retention, settlement and release proofs still apply in full.
+pub fn assess_for_fresh_start(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, false)
+}
+
+fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bool) -> Assessment {
     use Assessment::Blocked;
     let mut ordered = priors.iter().collect::<Vec<_>>();
     if ordered.is_empty() {
@@ -205,7 +261,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
     let exempt = uncharged(&ordered, limits);
     let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
-    if attempts_started - exempt_attempts >= limits.max_attempts {
+    if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
         return Blocked("lineage_retry_budget_exhausted");
     }
     // Lineage time is the sum of the charged attempts' windows, each from its
@@ -218,7 +274,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
                 .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
         })
         .fold(0u64, u64::saturating_add);
-    if elapsed_ms >= limits.max_lineage_elapsed_ms {
+    if charge_budget && elapsed_ms >= limits.max_lineage_elapsed_ms {
         return Blocked("lineage_time_budget_exhausted");
     }
     // Conservative sandbox charge: each granted attempt is billed its full
@@ -231,7 +287,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
                 .saturating_sub(p.offered_at_ms.unwrap_or(0))
         })
         .fold(0u64, u64::saturating_add);
-    if sandbox_ms >= limits.max_lineage_sandbox_ms {
+    if charge_budget && sandbox_ms >= limits.max_lineage_sandbox_ms {
         return Blocked("task_sandbox_minutes_budget_exhausted");
     }
     Assessment::Replace(Box::new(Replacement {
@@ -492,6 +548,57 @@ mod tests {
             assess(&[unreleased, failed_prior(900_000)], &budget(), now),
             Assessment::Blocked("replacement_prior_execution_uncertain")
         );
+    }
+
+    /// A finished attempt whose result was returned but whose effects were never recorded
+    /// quiescent (the 2026-11-21 attachment-task hold) names exactly that fact, and every
+    /// per-attempt refusal of `assess` has a blocker name.
+    #[test]
+    fn blockers_name_the_missing_owner_fact() {
+        let now = 1_000_000;
+        assert!(blockers(&failed_prior(900_000), now).is_empty());
+        let mut held = failed_prior(900_000);
+        held.effects = Effects::Unknown;
+        assert_eq!(blockers(&held, now), ["effects_unknown"]);
+        assert_eq!(
+            assess(std::slice::from_ref(&held), &budget(), now),
+            Assessment::Blocked("replacement_effects_unreconciled")
+        );
+        for (edit, code) in [
+            (
+                (|p| p.effects = Effects::Pending { count: 2 }) as fn(&mut Prior),
+                "effects_pending",
+            ),
+            (
+                |p| p.needs_reconciliation = true,
+                "settlement_needs_reconciliation",
+            ),
+            (
+                |p| p.completion = Some("conflict".into()),
+                "task_completion_recorded",
+            ),
+            (|p| p.stop = Stop::Running, "stop_not_proven"),
+            (|p| p.retention = Retention::Pending, "source_not_retained"),
+            (|p| p.accepted = true, "settlement_accepted"),
+            (|p| p.offered_at_ms = None, "lineage_history_unknown"),
+            (|p| p.holds_task = false, "claim_release_unknown"),
+            (
+                |p| {
+                    p.rejected = false;
+                    p.status = Status::Granted;
+                    p.execution_deadline_ms = Some(u64::MAX);
+                },
+                "not_failed",
+            ),
+        ] {
+            let mut p = failed_prior(900_000);
+            edit(&mut p);
+            assert_eq!(blockers(&p, now), [code]);
+            assert!(
+                !matches!(assess(&[p], &budget(), now), Assessment::Replace(_)),
+                "{code} must also block assess"
+            );
+        }
     }
 
     fn exempt(mut prior: Prior) -> Prior {

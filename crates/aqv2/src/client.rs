@@ -44,12 +44,17 @@ pub(crate) fn response(value: aq_human_http::JsonResponse) -> Result<Value> {
                 | "unavailable"
                 | "invalid_request"
                 | "cursor_restart_required"
+                | "replacement_project_revision_changed"
+                | "fresh_retry_not_applicable"
         )
     }) {
         err["server_code"] = code.into();
         if matches!(code, "unknown_action_kind" | "unsupported_contract") {
             err["code"] = "unsupported".into();
         }
+    }
+    if value.status == 422 && err["server_code"] == "replacement_project_revision_changed" {
+        err["message"] = "The task's project binding changed. To start from the current project source, use aq task retry with --fresh true.".into();
     }
     if let Some(id) = value.body["request_id"]
         .as_str()

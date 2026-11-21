@@ -12,6 +12,7 @@ pub mod task_git_author;
 pub mod task_graph;
 pub mod task_list;
 use serde_json::{Map, Value, json};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Task-state buckets for omitted and summary counts; an unset state is `unknown`.
@@ -269,6 +270,46 @@ pub fn parent(
     )
 }
 
+/// Holding attempt (the agent session attached to each task) for a page of
+/// tasks in this project. At most one attempt holds a task.
+pub async fn holding_executions(
+    pool: &PgPool,
+    project: Uuid,
+    tasks: &[Uuid],
+) -> Result<Vec<Value>, sqlx::Error> {
+    if tasks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        "SELECT e.task_id,e.attempt_id,e.session_id,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
+         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
+         WHERE e.task_id=ANY($1) AND e.kind='profiled_v1' AND e.holds_task \
+         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
+         ORDER BY e.task_id,e.attempt_id LIMIT 65",
+    )
+    .bind(tasks)
+    .bind(project.to_string())
+    .fetch_all(pool)
+    .await?;
+    // Spec 0014 §7.1: what each attempt ran with, from its own record.
+    let ran_with = aq_role_settings::attempts::ran_with_rows(pool, &rows).await;
+    rows.iter()
+        .map(|row| {
+            let attempt: Uuid = row.try_get("attempt_id")?;
+            let mut execution = json!({
+                "task_id": row.try_get::<Uuid, _>("task_id")?,
+                "attempt_id": attempt,
+                "session_id": row.try_get::<Uuid, _>("session_id")?,
+                "status": row.try_get::<String, _>("status")?,
+            });
+            if let Some(summary) = ran_with.get(&attempt) {
+                execution["ran_with"] = json!(summary);
+            }
+            Ok(execution)
+        })
+        .collect()
+}
+
 /// The hold of the attempt named by an execution projection's `attempt_id`
 /// (the agent session attached to a task), read from its authority state;
 /// None when there is no such attempt.
@@ -357,6 +398,28 @@ impl Hold {
 pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Value {
     let message = format!("AQ does not offer this task: {phrase} (hold reason: {code}).");
     json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code})
+}
+
+/// A delivery hold has a result and reason even after the playbook has ended.
+#[cfg(feature = "delivery_playbook")]
+pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&str>) -> Value {
+    let why = match reason {
+        "returns_exhausted" => "the delivery playbook reached its repair-return limit",
+        _ => "the delivery playbook held the recorded result",
+    };
+    let mut shown = task_hold(
+        hold.attempt_id,
+        &hold.status,
+        reason,
+        &format!("{why} for result {result}"),
+    );
+    if let Some(evidence) = evidence {
+        shown["message"] = json!(format!(
+            "{} {evidence}",
+            shown["message"].as_str().unwrap_or_default()
+        ));
+    }
+    shown
 }
 
 /// Epic 0 (spec 0016 section 7): the task read's word on a stopped attempt

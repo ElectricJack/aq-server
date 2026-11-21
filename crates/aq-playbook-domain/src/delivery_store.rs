@@ -61,6 +61,10 @@ pub trait DeliveryPort: Send + Sync {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
     /// The latest result of `task`, if it has one.
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Read the same facts inside the caller's delivery transaction.
+    async fn latest_in(&self, _db: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
+        self.latest(task).await
+    }
     /// Lock the event's attempt and verify its current result before an effect.
     /// Fixture ports use the equivalent identity check against their own store.
     async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
@@ -116,6 +120,10 @@ impl DeliveryPort for PgDelivery {
 
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>> {
         let mut conn = self.0.acquire().await?;
+        self.latest_in(&mut conn, task).await
+    }
+
+    async fn latest_in(&self, conn: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
         let row = sqlx::query(
             "SELECT r.report_id,r.attempt_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,\
@@ -164,7 +172,7 @@ impl DeliveryPort for PgDelivery {
         // and a result with a source then counts as changed.
         let base = match start.is_empty() {
             true => None,
-            false => aq_machine_control::lineage_base(&mut conn, task, &start)
+            false => aq_machine_control::lineage_base(conn, task, &start)
                 .await
                 .map_err(|_| crate::Error::Unknown)?,
         };
@@ -307,8 +315,16 @@ pub async fn observed(
         .as_i64()
         .filter(|v| *v >= 1)
         .ok_or(crate::Error::Unknown)?;
-    let work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
-    let facts = result_facts(db, task, at.1, latest).await?;
+    let mut work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
+    let mut facts = result_facts(db, task, at.1, latest).await?;
+    if let Some(result) = latest
+        && crate::delivery_review::designated(node)
+    {
+        work.kind = "review-only".into();
+        facts.outcome = crate::delivery_review::outcome(db, node, task, version, result)
+            .await?
+            .to_owned();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
 }
 
@@ -334,15 +350,68 @@ pub async fn plan(
 /// The latest result of `attempt` with no playbook decision on it and no
 /// `work.complete` or `work.return` settling it (the task read says it waits).
 pub async fn undecided(db: &mut PgConnection, attempt: Uuid) -> Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar(
-        "SELECT h.report_id FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id) WHERE h.attempt_id=$1 \
-         AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+    Ok(result_wait(db, attempt)
+        .await?
+        .and_then(|(id, hold)| hold.is_none().then_some(id)))
+}
+
+/// The claim's current undecided or held result, with its recorded hold reason.
+pub async fn result_wait(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,CASE WHEN d.decision='held' THEN COALESCE(d.reason,'delivery_hold') END
+         FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id)
+         LEFT JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE h.attempt_id=$1 AND (d.decision IS NULL OR d.decision='held')
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
          AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",
     )
     .bind(attempt)
     .fetch_optional(db)
     .await?)
+}
+
+/// A check operation still running for this exact result, attempt and published head.
+pub async fn checking_pr(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let check: Option<(String, String)> = sqlx::query_as(
+        "SELECT o.request->>'pull_request',p.head FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND a.holds_task AND o.command_name='pull_request.await_checks' AND o.status='running'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND o.request->>'result_head'=p.head AND jsonb_typeof(o.request->'pull_request')='number'
+         ORDER BY o.created_at_ms DESC,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(check.map(|(number, head)| {
+        format!("AQ is waiting for required checks on PR #{number} at commit {head}.")
+    }))
+}
+
+/// Last final PR failure observed by AQ on this result's published head.
+pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let observed: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT o.command_name,o.status,p.head FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND COALESCE(o.request->>'result_head',o.request->>'expected_head_sha')=p.head
+           AND ((o.command_name='pull_request.await_checks' AND o.status IN ('conflict','failed'))
+             OR (o.command_name='pull_request.merge' AND o.status='conflict'))
+         ORDER BY o.completed_at_ms DESC NULLS LAST,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(observed.map(|(command, status, head)| {
+        format!("AQ recorded {status} from {command} on published head {head}.")
+    }))
 }
 
 /// Whether an artifact is active on the delivery binding of the namespace:
