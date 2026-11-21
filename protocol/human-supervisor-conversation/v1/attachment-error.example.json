@@ -1,0 +1,4 @@
+{
+  "error": "attachment_unreadable",
+  "message": "attachment bytes are empty or not a readable file of the declared type"
+}

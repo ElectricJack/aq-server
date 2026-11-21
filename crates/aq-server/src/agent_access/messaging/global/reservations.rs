@@ -143,6 +143,7 @@ impl ReservationOwner {
             service: Service {
                 pool,
                 gate: tokio::sync::Semaphore::new(2),
+                limits: Default::default(),
             },
         }
     }

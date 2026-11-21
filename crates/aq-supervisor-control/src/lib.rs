@@ -1,6 +1,7 @@
 //! Central supervisor scopes and operator controls, separate from worker sessions.
 pub mod admin;
 mod api;
+pub mod attachments;
 pub mod authority;
 #[cfg(feature = "supervisor_full_access")]
 pub mod owner;
