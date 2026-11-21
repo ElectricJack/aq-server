@@ -196,6 +196,9 @@ impl Run {
     pub fn dispatch(&self) -> &DispatchState {
         &self.dispatch
     }
+    pub fn stopped_evidence(&self) -> Option<&StopEvidenceRef> {
+        self.stop.as_ref()
+    }
     pub fn cancellation(&self) -> Option<CancelReason> {
         self.cancellation
     }

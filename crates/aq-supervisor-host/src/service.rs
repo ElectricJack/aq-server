@@ -460,7 +460,7 @@ async fn step(
                 .fetch_one(pool)
                 .await?;
                 archive_turn(config, &turn)?;
-                if ctl.enabled && !replied {
+                if ctl.enabled && !replied && !retry_unstarted(pool, &state).await? {
                     *failed_revision = Some(ctl.revision);
                     report(pool,config,instance,"failed","Turn ended without a confirmed reply; inspect task changes before continuing",Some(&state)).await?;
                     return Ok(());
@@ -648,7 +648,11 @@ async fn step(
                 row.get("created_at_ms"),
                 row.get::<Option<i64>, _>("control_ms").unwrap_or(0),
             ) {
-                if release {
+                let mut retry = release;
+                if !retry && let Some(previous) = &prior {
+                    retry = retry_unstarted(pool, previous).await?;
+                }
+                if retry {
                     let reservation = actor
                         .current_reservation
                         .as_ref()
@@ -710,6 +714,27 @@ async fn step(
         }
     }
     Ok(())
+}
+
+/// Automatically retry a mail batch once if its previous guardian never
+/// started the harness. A repeated launch failure stays visible for inspection.
+async fn retry_unstarted(pool: &PgPool, previous: &Snapshot) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    if crate::verifier::not_started(&mut tx, &previous.run)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let first: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM central_supervisor_dispatches p
+         WHERE p.actor_id=d.actor_id AND p.generation<d.generation AND p.batch_digest=d.batch_digest)
+         FROM central_supervisor_dispatches d WHERE d.dispatch_id=$1",
+    )
+    .bind(previous.run.plan().dispatch_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(first)
 }
 
 /// The current reservation's own turn ran (its generation is the latest) and

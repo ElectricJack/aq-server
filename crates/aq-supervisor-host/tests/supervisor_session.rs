@@ -747,7 +747,7 @@ impl HostAdapter for RevokeDuringPreparation {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revocation_before_physical_start_refuses_and_stops_guardian() {
-    let case = Case::new().await;
+    let mut case = Case::new().await;
     let allowed = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let host = Supervisor::new(
         case.pool.clone(),
@@ -781,6 +781,30 @@ async fn revocation_before_physical_start_refuses_and_stops_guardian() {
             .unwrap(),
         0
     );
+    // Recover against the same mail batch using a new, independently admitted generation.
+    let next = case.controller();
+    case.central.generation = 2;
+    if let SessionIdentity::Central {
+        session_id,
+        generation,
+        ..
+    } = &mut case.central.session
+    {
+        *session_id = Uuid::new_v4();
+        *generation = 2;
+    }
+    case.central.dispatch_id = Uuid::new_v4();
+    case.central.host_operation_id = Uuid::new_v4();
+    case.host.session = case.central.session.clone();
+    case.host.input.dispatch_id = case.central.dispatch_id;
+    case.host.input.host_operation_id = case.central.host_operation_id;
+    let now = aq_supervisor_host::clock().unwrap();
+    case.host.admitted_boot_ms = now.boot_ms;
+    case.host.deadline_boot_ms = now.boot_ms + case.central.wall_time_ms;
+    case.central.profiles.host_plan.digest = case.host.digest().unwrap();
+    let state = case.start(&next).await;
+    assert_eq!(state.run.phase(), Phase::RunningReported);
+    next.stop(case.central.subject.actor_id()).await.unwrap();
 }
 
 #[tokio::test]
