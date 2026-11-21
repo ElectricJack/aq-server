@@ -261,15 +261,16 @@ pub async fn hold(
 }
 
 /// The notification for a delivery event is tied to a recorded hold on its current result.
-pub async fn notification_key(
+pub async fn notification(
     db: &mut PgConnection,
     port: &dyn DeliveryPort,
     origin: Option<ResultReady>,
     project: Uuid,
     input: &Value,
-) -> Result<String> {
+) -> Result<(String, String)> {
+    let body = text(input, "text")?;
     let Some(origin) = origin else {
-        return notify_key(text(input, "identity")?);
+        return Ok((notify_key(text(input, "identity")?)?, body.to_owned()));
     };
     if origin.project_id != project || !port.lock_current(db, &origin).await? {
         return Err(Error::Conflict);
@@ -283,7 +284,12 @@ pub async fn notification_key(
     .await?
     .flatten();
     let reason = reason.ok_or(Error::Conflict)?;
-    notify_key(&format!("{}:{reason}", origin.result_id))
+    let key = notify_key(&format!("{}:{reason}", origin.result_id))?;
+    let context = format!(
+        "Delivery hold {reason} for project {}, task {} (revision {}), attempt {}, result {}.",
+        origin.project_id, origin.task_id, origin.version, origin.attempt_id, origin.result_id
+    );
+    Ok((key, format!("{context}\n\n{body}")))
 }
 
 /// The once-only key of `supervisor.notify` in a project.

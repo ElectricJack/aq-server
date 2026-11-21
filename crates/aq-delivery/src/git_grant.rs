@@ -164,6 +164,18 @@ pub async fn record_locked(
     Ok(())
 }
 
+/// Current report of a stopped attempt whose delivery decision retained it for supervisor handling.
+pub async fn held_report<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    task: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT h.report_id FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
+         JOIN delivery_git_grants g USING(attempt_id) JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held' AND d.reason='policy'",
+    ).bind(task).fetch_optional(db).await
+}
+
 /// The frozen delivery selector, independent of the attempt's lifecycle.
 pub async fn exists<'e>(db: impl sqlx::PgExecutor<'e>, attempt: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM delivery_git_grants WHERE attempt_id=$1)")

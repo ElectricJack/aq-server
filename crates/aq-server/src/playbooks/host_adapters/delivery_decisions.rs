@@ -181,15 +181,15 @@ impl Service {
             return Err(Error::Forbidden);
         }
         let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
-        let key =
-            decisions::notification_key(&mut tx, self.delivery.as_ref(), origin, project, input)
+        let (key, body) =
+            decisions::notification(&mut tx, self.delivery.as_ref(), origin, project, input)
                 .await?;
         let told = decisions::told(&mut tx, project, &key).await?;
         if !told {
             let now = self.now()?;
             let at = u64::try_from(now).map_err(|_| Error::Invalid)?;
             use crate::agent_access::supervisor_conversation::system_message_in;
-            let message = system_message_in(&mut tx, Some(project), text(input, "text")?, at);
+            let message = system_message_in(&mut tx, Some(project), &body, at);
             let message = message.await.map_err(|error| match error {
                 crate::error::AppError::BadRequest(_) => Error::Invalid,
                 crate::error::AppError::Maintenance(_) => Error::Overloaded,

@@ -227,6 +227,27 @@ pub async fn record_replacement_facts(
     state: &AppState,
     report_id: Uuid,
 ) -> Result<ReplacementFacts> {
+    replacement_facts(state, report_id, false).await
+}
+
+/// An admitted owner retry may recover a failed delivery result held by the playbook.
+/// Resolve the current report from the task so an earlier result cannot authorize a retry.
+#[cfg(feature = "delivery_playbook")]
+pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
+    let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
+        .await
+        .map_err(db)?;
+    if let Some(report) = report {
+        Box::pin(replacement_facts(state, report, true)).await?;
+    }
+    Ok(())
+}
+
+async fn replacement_facts(
+    state: &AppState,
+    report_id: Uuid,
+    owner_retry: bool,
+) -> Result<ReplacementFacts> {
     use crate::execution::{
         authority::{self, hot::HotState},
         profiled::{Effects, Retention},
@@ -240,6 +261,24 @@ pub async fn record_replacement_facts(
         .map_err(db)?;
     let reworked = match lock_row(&mut tx, report_id).await? {
         Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
+        None if owner_retry
+            && matches!(
+                r.report.outcome,
+                aq_admission::transport::ProcessOutcome::Failed
+            ) =>
+        {
+            #[cfg(feature = "delivery_playbook")]
+            {
+                aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
+                    .await
+                    .map_err(db)?
+                    == Some(report_id)
+            }
+            #[cfg(not(feature = "delivery_playbook"))]
+            {
+                false
+            }
+        }
         None => false,
     };
     let view = authority::load_locked(
@@ -274,6 +313,7 @@ pub async fn record_replacement_facts(
         || !r.is_current_report_head
         || !view.holds_task
         || !view.stopped
+        || (owner_retry && (view.revoked || view.cancellation_id.is_some()))
         || !hot.stop.known_stopped()
         || owner_settled
     {

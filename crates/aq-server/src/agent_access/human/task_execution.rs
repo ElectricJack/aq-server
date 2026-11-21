@@ -188,6 +188,22 @@ impl ActionKind for TaskRetry {
             let now = now(state)?;
             let mut assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
+            #[cfg(feature = "delivery_playbook")]
+            if !p.fresh
+                && matches!(
+                    assessment,
+                    replacement::Assessment::Blocked(
+                        "replacement_effects_unreconciled" | "replacement_source_retention_unknown"
+                    )
+                )
+            {
+                Box::pin(
+                    crate::profiled_execution::settlement::recover_held_for_retry(state, task),
+                )
+                .await?;
+                assessment =
+                    replacement::assess_task_for_revision(state, task, now, revision).await?;
+            }
             if p.fresh {
                 return fresh_start(state, user, request, &p, (task, revision), assessment).await;
             }

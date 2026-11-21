@@ -352,6 +352,35 @@ async fn a_stale_hold_and_its_notification_cannot_act_on_a_same_head_replacement
 }
 
 #[tokio::test]
+async fn held_result_notice_identifies_the_work_that_needs_attention() {
+    let h = delivery(false).await;
+    let (task, original) = h.stopped(h.scope.project_id, "failed");
+    let run = h.event_run(task).await;
+    let mut hold_intent = h.intent(
+        "hold",
+        "work.hold",
+        hold(task, original.result_id, "policy"),
+    );
+    hold_intent.run.clone_from(&run);
+    assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
+    let mut notice = h.intent("notify", "supervisor.notify",
+        json!({"project":original.project_id, "identity":original.result_id, "text":"Delivery requires attention."}));
+    notice.run = run;
+    assert_eq!(h.try_run(&notice).await.unwrap(), empty("sent"));
+    let body: String = sqlx::query_scalar("SELECT m.body FROM mailbox_messages m JOIN delivery_notifications n USING(message_id) WHERE n.project_id=$1")
+        .bind(original.project_id).fetch_one(&h.pool().await).await.unwrap();
+    for id in [
+        original.project_id,
+        task,
+        original.attempt_id,
+        original.result_id,
+    ] {
+        assert!(body.contains(&id.to_string()), "{body}");
+    }
+    assert!(body.contains("policy") && body.contains("Delivery requires attention."));
+}
+
+#[tokio::test]
 async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let h = delivery(false).await;
     let notify = |project: Uuid, identity: &str, text: &str| json!({"project": project.to_string(), "identity": identity, "text": text});

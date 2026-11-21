@@ -1370,22 +1370,7 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
     assert_eq!(before["effects"]["kind"], "unknown", "{before}");
     let blockers = before["replacement"]["blockers"].to_string();
     assert!(blockers.contains("effects_unknown"), "{before}");
-    let mut tx = pool.begin().await.unwrap();
-    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
-        .await
-        .unwrap();
-    let SessionIdentity::Remote {
-        node_id,
-        boot_id,
-        session_id,
-        ..
-    } = env.report.binding.session
-    else {
-        unreachable!()
-    };
-    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(&profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
-    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(&profile).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
+    seed_agent_binding(&env, &profile).await;
     let s = env.settle().await;
     env.assert_not_completed(&s, AutoDisposition::ReworkRequired, "not_accepted")
         .await;
@@ -1416,6 +1401,27 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
         env.holds_task().await,
         "only the replacement owner releases"
     );
+}
+
+async fn seed_agent_binding(env: &AutoEnv, profile: &Value) {
+    let pool = env.f.db.pool().await;
+    let attempt = env.report.binding.attempt_id;
+    let mut tx = pool.begin().await.unwrap();
+    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
+        .await
+        .unwrap();
+    let SessionIdentity::Remote {
+        node_id,
+        boot_id,
+        session_id,
+        ..
+    } = env.report.binding.session
+    else {
+        unreachable!()
+    };
+    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
+    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(profile).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 
 /// The facts writer never acts on a confirmed (Success) settlement or on a
@@ -1683,6 +1689,47 @@ mod playbook {
         assert!(env.holds_task().await);
         // Recording decided nothing and a stale decision writes no row.
         assert_eq!(settlement_rows(&env.f, env.report.report_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn owner_retry_proves_the_pushed_source_and_effects_of_a_failed_policy_hold() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
+        ))
+        .unwrap();
+        let profile = fixture["proposal_profiles"][0]["profile"].clone();
+        let (f, _, mut report) = Box::pin(prepare_with_policy_checks(
+            true,
+            true,
+            Some(profile.clone()),
+            false,
+            Some(default_policy("not_required")),
+            false,
+        ))
+        .await;
+        report.outcome = aq_admission::transport::ProcessOutcome::Failed;
+        let env = finish_auto_env(f, report, axum::http::StatusCode::OK, true, true).await;
+        seed_agent_binding(&env, &profile).await;
+        let task = env.f.selection.lineage.task_id;
+        let pool = env.f.db.pool().await;
+        let facts = || async {
+            sqlx::query_as::<_,(String,String)>("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+                .bind(env.report.binding.attempt_id).fetch_one(&pool).await.unwrap()
+        };
+        settlement::recover_held_for_retry(&env.f.state, task)
+            .await
+            .unwrap();
+        assert_eq!(facts().await, ("pending".into(), "unknown".into()));
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','policy',$3)")
+            .bind(env.report.report_id).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        for _ in 0..2 {
+            settlement::recover_held_for_retry(&env.f.state, task)
+                .await
+                .unwrap();
+            assert_eq!(facts().await, ("retained".into(), "quiescent".into()));
+        }
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+        assert!(env.holds_task().await);
     }
 
     #[tokio::test]
