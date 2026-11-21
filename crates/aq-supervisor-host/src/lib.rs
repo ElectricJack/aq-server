@@ -8,6 +8,8 @@ mod conversation;
 pub mod credentials;
 pub mod internal;
 mod journal;
+#[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+pub mod repo;
 pub mod service;
 pub mod subscription;
 pub mod tool;
