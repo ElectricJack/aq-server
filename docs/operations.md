@@ -10,6 +10,10 @@ hosted-access plan; see [Not covered here](#not-covered-here).
 To respond to a playbook decision from a terminal, see
 [Answer a host playbook decision with curl](operations/playbook-decisions.md).
 
+To give a reviewer an exact retained patch when result reads are not
+routable for them, see
+[Recover an exact retained patch for review](operations/retained-result-recovery.md).
+
 ## The pieces
 
 - **Images** on GHCR, always referenced by digest:
