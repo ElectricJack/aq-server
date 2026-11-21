@@ -4,6 +4,8 @@
 //! `Create` by id and digest. Binding pins the row to the owner message, so
 //! its retention is the message's retention (`ON DELETE CASCADE`).
 use super::*;
+// The ceilings: what a stored file or message may hold whatever the
+// configuration. The configured limits live in `Service::limits`.
 pub(super) use aq_supervisor_control::attachments::{
     MAX_FILE_BYTES as MAX_SIZE, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
 };
@@ -24,8 +26,9 @@ pub(super) struct AttachmentRef {
     #[schemars(regex(pattern = "^sha256:[0-9a-f]{64}$"))]
     pub(super) digest: String,
 }
-pub(super) fn refs_valid(refs: &[AttachmentRef]) -> bool {
-    refs.len() <= MAX_ATTACHMENTS
+/// `max` is the configured files-per-message limit.
+pub(super) fn refs_valid(refs: &[AttachmentRef], max: usize) -> bool {
+    refs.len() <= max
         && refs.iter().enumerate().all(|(i, a)| {
             !a.id.is_nil() && digest_valid(&a.digest) && refs[..i].iter().all(|b| b.id != a.id)
         })
@@ -189,7 +192,7 @@ pub(super) async fn upload(
         StatusCode::PAYLOAD_TOO_LARGE => Refused::File(Refusal::TooLarge),
         _ => Refused::App(invalid()),
     })?;
-    if bytes.len() > MAX_SIZE {
+    if bytes.len() > service.limits.max_file_bytes {
         return Err(Refusal::TooLarge.into());
     }
     if id.is_nil() || attachment.is_nil() {

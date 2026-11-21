@@ -92,7 +92,10 @@
               "const": 16
             },
             "attachments": {
-              "const": 4
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4,
+              "description": "Files one Create may bind: the effective max_files_per_message (default and ceiling 4)."
             },
             "history_page": {
               "const": 16
@@ -1321,7 +1324,7 @@
     },
     "AttachmentCapability": {
       "type": "object",
-      "description": "Discovery.attachments: owner upload support and the limits this server enforces. Absent on servers without owner attachments; clients then hide uploads (older servers also advertise limits.attachments 0).",
+      "description": "Discovery.attachments: owner upload support and the effective limits this server enforces (max_file_bytes and max_files_per_message default to 1048576 and 4, the ceilings, and an operator may only lower them). Absent on servers without owner attachments; clients then hide uploads (older servers also advertise limits.attachments 0).",
       "properties": {
         "media_types": {
           "type": "array",

@@ -77,16 +77,21 @@ conversation is 404 `not_found`.
 ### Capability discovery
 
 Discovery carries `attachments` (`$defs/AttachmentCapability`, example
-`discovery.example.json`): the accepted `media_types` and the limits the
-server enforces: `max_file_bytes` (1048576), `max_files_per_message` (4, equal
-to `limits.attachments`), `max_staged_files` (16) and `max_staged_bytes`
-(16777216) per conversation, `staged_ttl_ms` (86400000) and `max_name_bytes`
-(255). These values are the same constants the routes enforce; they are not
-configurable in this release, and a future configuration may only lower them,
-never above the 1 MiB body limit or the 4-file Create bound. Clients size and
-filter uploads from this object, not from hard-coded values. When the object
-is absent or `limits.attachments` is 0, the server has no owner attachments:
-hide the upload control (see Release prerequisites).
+`discovery.example.json`): the accepted `media_types` and the effective limits
+the server enforces: `max_file_bytes` (default 1048576), `max_files_per_message`
+(default 4, always equal to `limits.attachments`), `max_staged_files` (16) and
+`max_staged_bytes` (16777216) per conversation, `staged_ttl_ms` (86400000) and
+`max_name_bytes` (255). The first two are configurable by the server operator
+(`[supervisor_attachments]`, see Release prerequisites); an operator can only
+lower them, never above 1 MiB or 4 files, so a client must read them from
+discovery on every session and never assume the defaults. The advertised values
+are the very values the routes enforce: the PUT body limit is
+`max_file_bytes` (413 `attachment_too_large` above it, the limit itself is
+accepted) and a Create listing more than `max_files_per_message` refs is 400
+`bad_request`. Lowering a limit never hides a file or message stored earlier.
+Clients size and filter uploads from this object, not from hard-coded values.
+When the object is absent or `limits.attachments` is 0, the server has no
+owner attachments: hide the upload control (see Release prerequisites).
 
 ### Media types
 
@@ -113,7 +118,7 @@ inflated by the server.
 
 | Method and path | Success | Refusals |
 | --- | --- | --- |
-| PUT `/api/human/conversations/{id}/attachments/{attachment}?name=<urlencoded>`, raw bytes as body | 201 `AttachmentUpload` (staged); 200 with the current state for an identical retry (same owner, conversation, name, type and bytes, also after it was attached) | 415 `attachment_media_type_unsupported`, 413 `attachment_too_large` (body above `max_file_bytes`), 400 `attachment_name_invalid`, 400 `attachment_unreadable` (empty or failing its content check), 409 `attachment_id_conflict` (the id holds another upload), 503 `attachment_capacity_exhausted` (staged quota) |
+| PUT `/api/human/conversations/{id}/attachments/{attachment}?name=<urlencoded>`, raw bytes as body | 201 `AttachmentUpload` (staged); 200 with the current state for an identical retry (same owner, conversation, name, type and bytes, also after it was attached) | 415 `attachment_media_type_unsupported`, 413 `attachment_too_large` (body above the advertised `max_file_bytes`), 400 `attachment_name_invalid`, 400 `attachment_unreadable` (empty or failing its content check), 409 `attachment_id_conflict` (the id holds another upload), 503 `attachment_capacity_exhausted` (staged quota) |
 | GET `/api/human/conversations/{id}/attachments/{attachment}/metadata` | 200 `AttachmentUpload` | 404 `attachment_not_found` |
 | GET `/api/human/conversations/{id}/attachments/{attachment}` | 200 the exact bytes | 404 `attachment_not_found` |
 | DELETE `/api/human/conversations/{id}/attachments/{attachment}` | 204, empty body: the staged upload is gone | 404 `attachment_not_found`, 409 `attachment_bound` |
@@ -147,7 +152,7 @@ failures keep their generic codes (401, 403, 503 `identity_unavailable`).
 
 ### Binding from a Create
 
-- A Create lists `{id, digest}` for up to 4 staged uploads of the same owner
+- A Create lists `{id, digest}` for up to `max_files_per_message` (default 4) staged uploads of the same owner
   and conversation. If any ref is missing, expired, deleted, already attached,
   someone else's, or pinned to a different digest (a stale ref), the operation
   is a retained `not_queued` receipt with reason `attachment_unavailable` and
@@ -176,8 +181,14 @@ a dashboard enables uploads against a server:
    number, and take types and limits from it.
 3. Attachment bytes are stored in PostgreSQL, so database backups grow by at
    most 16 MiB of staged files per conversation plus bound files within the
-   64 MiB retention reservation. No new secret, volume or configuration key is
-   needed.
+   64 MiB retention reservation. No new secret or volume is needed.
+   The only configuration is optional: the vault `config.toml` table
+   `[supervisor_attachments]` with `max_file_bytes` (1 to 1048576, default
+   1048576) and `max_files_per_message` (1 to 4, default 4). An omitted table
+   keeps the defaults; a value outside the range, or an unknown key, makes the
+   server refuse to start. A change takes effect at the next server restart
+   and is then advertised by discovery. This is a deployment (owner) setting
+   that this change does not edit; the defaults need no action.
 4. Pin the schema digest below in the dashboard and re-check it on upgrade.
 
 This document does not deploy anything; releasing follows the normal release
@@ -185,7 +196,7 @@ and owner review process.
 
 ## Supervisor History attachments (additive, for G8)
 
-Published schema digest: `sha256:dc7a2bfec7da19afa7cf0ce8636a09920d90ef84911d8540b09edc2f19add6e7`
+Published schema digest: `sha256:eda588e205779a11b74a319628f603a55e311358b3de345200d87fe6031f3ed3`
 (also in `schema.sha256`; `supervisor_turns` fails if the two diverge). Pin it.
 
 A supervisor `SupervisorItem` may carry `attachments` (0–4 items, schema

@@ -7,11 +7,13 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Files one `Create` may bind (also `limits.attachments`).
+/// Most files one `Create` may bind, whatever the configuration: the
+/// `ordinal` column of the store holds 0 to 3. The default limit.
 pub const MAX_PER_MESSAGE: usize = 4;
-/// Largest accepted file body (the PUT body limit).
+/// Largest file body, whatever the configuration: the `size_bytes` column of
+/// the store holds up to this. The default limit.
 pub const MAX_FILE_BYTES: usize = 1 << 20;
 /// Staged (not yet attached) files one conversation may hold at once.
 pub const MAX_STAGED_FILES: i64 = 16;
@@ -42,6 +44,34 @@ pub const MEDIA_TYPES: [&str; 10] = [
     "image/webp",
 ];
 
+/// `[supervisor_attachments]`: the effective per-file and per-message limits.
+/// Both default to, and may not exceed, [`MAX_FILE_BYTES`] and
+/// [`MAX_PER_MESSAGE`]; reading stored files always uses those ceilings, so
+/// lowering a limit never hides a file that was accepted earlier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Limits {
+    /// Largest accepted file body in bytes (the PUT body limit).
+    pub max_file_bytes: usize,
+    /// Files one `Create` may bind (also `limits.attachments`).
+    pub max_files_per_message: usize,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: MAX_FILE_BYTES,
+            max_files_per_message: MAX_PER_MESSAGE,
+        }
+    }
+}
+impl Limits {
+    /// Whether both limits are at least 1 and within their ceilings.
+    pub fn valid(&self) -> bool {
+        (1..=MAX_FILE_BYTES).contains(&self.max_file_bytes)
+            && (1..=MAX_PER_MESSAGE).contains(&self.max_files_per_message)
+    }
+}
+
 /// Discovery's `attachments` object: what this server accepts right now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Capability {
@@ -53,11 +83,12 @@ pub struct Capability {
     pub staged_ttl_ms: u32,
     pub max_name_bytes: u16,
 }
-pub fn capability() -> Capability {
+/// What `limits` enforces, advertised to clients.
+pub fn capability(limits: &Limits) -> Capability {
     Capability {
         media_types: &MEDIA_TYPES,
-        max_file_bytes: MAX_FILE_BYTES as u32,
-        max_files_per_message: MAX_PER_MESSAGE as u8,
+        max_file_bytes: limits.max_file_bytes as u32,
+        max_files_per_message: limits.max_files_per_message as u8,
         max_staged_files: MAX_STAGED_FILES as u32,
         max_staged_bytes: MAX_STAGED_BYTES as u32,
         staged_ttl_ms: STAGED_TTL_MS as u32,
@@ -241,7 +272,7 @@ impl Refusal {
     fn message(self) -> &'static str {
         match self {
             Self::MediaTypeUnsupported => "Content-Type is not an accepted attachment media type",
-            Self::TooLarge => "attachment exceeds 1048576 bytes",
+            Self::TooLarge => "attachment exceeds max_file_bytes of this server",
             Self::NameInvalid => "name must be one path segment of 1 to 255 UTF-8 bytes",
             Self::Unreadable => {
                 "attachment bytes are empty or not a readable file of the declared type"
@@ -347,6 +378,30 @@ mod tests {
         );
     }
     #[test]
+    fn limits_default_to_the_ceilings_and_never_exceed_them() {
+        assert_eq!(Limits::default().max_file_bytes, 1 << 20);
+        assert_eq!(Limits::default().max_files_per_message, 4);
+        assert!(Limits::default().valid());
+        let parsed = |t: &str| serde_json::from_str::<Limits>(t);
+        assert_eq!(parsed("{}").unwrap(), Limits::default());
+        let half = parsed(r#"{"max_file_bytes":524288}"#).unwrap();
+        assert_eq!(
+            (half.max_file_bytes, half.max_files_per_message),
+            (524288, 4)
+        );
+        assert!(half.valid());
+        for bad in [
+            r#"{"max_file_bytes":0}"#,
+            r#"{"max_file_bytes":1048577}"#,
+            r#"{"max_files_per_message":0}"#,
+            r#"{"max_files_per_message":5}"#,
+        ] {
+            assert!(!parsed(bad).unwrap().valid(), "{bad}");
+        }
+        assert!(parsed(r#"{"max_file_bytes":-1}"#).is_err());
+        assert!(parsed(r#"{"max_files":2}"#).is_err());
+    }
+    #[test]
     fn names_are_single_safe_path_segments() {
         assert!(name_valid("notes v2.md"));
         assert!(name_valid(&"é".repeat(127)));
@@ -367,9 +422,16 @@ mod tests {
     }
     #[test]
     fn capability_lists_the_enforced_limits() {
-        let c = serde_json::to_value(capability()).unwrap();
+        let c = serde_json::to_value(capability(&Limits::default())).unwrap();
         assert_eq!(c["max_file_bytes"], 1048576);
         assert_eq!(c["max_files_per_message"], 4);
+        let lowered = Limits {
+            max_file_bytes: 2048,
+            max_files_per_message: 2,
+        };
+        let c = serde_json::to_value(capability(&lowered)).unwrap();
+        assert_eq!(c["max_file_bytes"], 2048);
+        assert_eq!(c["max_files_per_message"], 2);
         assert_eq!(
             c["media_types"].as_array().unwrap().len(),
             MEDIA_TYPES.len()

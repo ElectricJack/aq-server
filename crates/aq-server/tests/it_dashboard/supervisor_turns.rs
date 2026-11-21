@@ -93,6 +93,10 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(version: u32) -> Self {
+        Self::configured(version, "").await
+    }
+    /// `extra` is appended to the vault `config.toml` (a trailing table).
+    async fn configured(version: u32, extra: &str) -> Self {
         let db = TestDb::create().await;
         let store = with_store_profile(version, db.store()).await;
         let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
@@ -103,7 +107,7 @@ impl Fixture {
             .await
             .unwrap()
             .unwrap();
-        let config: Config = toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
+        let config: Config = toml::from_str(&("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n".to_owned() + extra)).unwrap();
         let state = AppState {
             internal_work: Default::default(),
             store,
@@ -848,7 +852,10 @@ fn attachment_fixtures_match_schema_and_published_digest() {
     conversation_schema(&discovery);
     assert_eq!(
         discovery["attachments"],
-        serde_json::to_value(aq_supervisor_control::attachments::capability()).unwrap(),
+        serde_json::to_value(aq_supervisor_control::attachments::capability(
+            &Default::default()
+        ))
+        .unwrap(),
         "the published example advertises the enforced limits"
     );
     let mut legacy = discovery.clone();
@@ -1312,7 +1319,10 @@ async fn owner_attachments_are_stored_bound_echoed_rendered_and_served() {
     assert_eq!(discovery["limits"]["attachments"], json!(4));
     assert_eq!(
         discovery["attachments"],
-        serde_json::to_value(aq_supervisor_control::attachments::capability()).unwrap()
+        serde_json::to_value(aq_supervisor_control::attachments::capability(
+            &Default::default()
+        ))
+        .unwrap()
     );
     assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1 << 20));
     assert_eq!(discovery["attachments"]["max_files_per_message"], json!(4));
@@ -1924,4 +1934,121 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
         f.human("GET", &f.history_path(), None).await.0,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn configured_attachment_limits_are_advertised_and_enforced() {
+    let f = Fixture::configured(
+        aq_server::STATE_FORMAT_VERSION,
+        "[supervisor_attachments]\nmax_file_bytes = 1024\nmax_files_per_message = 2\n",
+    )
+    .await;
+    let (status, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    conversation_schema(&discovery);
+    assert_eq!(discovery["limits"]["attachments"], json!(2));
+    assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1024));
+    assert_eq!(discovery["attachments"]["max_files_per_message"], json!(2));
+    // Everything else stays at its published value.
+    let mut defaults = serde_json::to_value(aq_supervisor_control::attachments::capability(
+        &Default::default(),
+    ))
+    .unwrap();
+    defaults["max_file_bytes"] = json!(1024);
+    defaults["max_files_per_message"] = json!(2);
+    assert_eq!(discovery["attachments"], defaults);
+    // The byte limit is inclusive and the refusal is the structured 413.
+    let (exact, over) = (Uuid::new_v4(), Uuid::new_v4());
+    let (status, body) = upload(&f, exact, "exact.txt", "text/plain", &[b'x'; 1024]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = upload(&f, over, "over.txt", "text/plain", &[b'x'; 1025]).await;
+    assert_eq!(
+        refusal(status, &body),
+        (StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large")
+    );
+    let (second, third) = (Uuid::new_v4(), Uuid::new_v4());
+    for id in [second, third] {
+        let (status, body) = upload(&f, id, "a.txt", "text/plain", b"abc").await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let r = |id: Uuid, bytes: &[u8]| json!({"id":id,"digest":sha(bytes)});
+    let create = |refs: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"files","context":[],"attachments":refs});
+    // Three refs exceed the configured count: refused, nothing bound.
+    let three = create(json!([
+        r(exact, &[b'x'; 1024]),
+        r(second, b"abc"),
+        r(third, b"abc")
+    ]));
+    let (status, body) = f.post(&f.history_path(), None, three).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (_, staged) = f
+        .human(
+            "GET",
+            &format!("{}/metadata", attachment_path(&f, exact)),
+            None,
+        )
+        .await;
+    assert_eq!(staged["state"], "staged");
+    let two = create(json!([r(exact, &[b'x'; 1024]), r(second, b"abc")]));
+    let (status, receipt) = f.post(&f.history_path(), None, two).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+}
+
+#[tokio::test]
+async fn attachment_limits_default_to_one_mebibyte_and_four_files() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let (_, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(discovery["limits"]["attachments"], json!(4));
+    assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1_048_576));
+    let id = Uuid::new_v4();
+    let (status, body) = upload(&f, id, "max.txt", "text/plain", &vec![b'x'; 1 << 20]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+#[test]
+fn attachment_limits_in_the_vault_config_reject_out_of_range_values() {
+    let base = "format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n";
+    let vault = std::env::temp_dir().join(format!("aq-attachment-limits-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&vault).unwrap();
+    for (extra, key) in [
+        ("max_file_bytes = 1048577", "max_file_bytes"),
+        ("max_file_bytes = 0", "max_file_bytes"),
+        ("max_files_per_message = 5", "max_files_per_message"),
+        ("max_files_per_message = 0", "max_files_per_message"),
+    ] {
+        std::fs::write(
+            vault.join("config.toml"),
+            format!("{base}[supervisor_attachments]\n{extra}\n"),
+        )
+        .unwrap();
+        let error = aq_server::config::load(&vault).unwrap_err().to_string();
+        assert!(error.contains("supervisor_attachments"), "{extra}: {error}");
+        assert!(error.contains(key), "{extra}: {error}");
+    }
+    std::fs::write(
+        vault.join("config.toml"),
+        format!("{base}[supervisor_attachments]\nmax_files = 2\n"),
+    )
+    .unwrap();
+    assert!(aq_server::config::load(&vault).is_err(), "unknown key");
+    std::fs::write(
+        vault.join("config.toml"),
+        format!("{base}[supervisor_attachments]\nmax_file_bytes = 4096\n"),
+    )
+    .unwrap();
+    let lowered = aq_server::config::load(&vault)
+        .unwrap()
+        .supervisor_attachments;
+    assert_eq!(
+        (lowered.max_file_bytes, lowered.max_files_per_message),
+        (4096, 4)
+    );
+    std::fs::write(vault.join("config.toml"), base).unwrap();
+    let loaded = aq_server::config::load(&vault).unwrap();
+    assert_eq!(loaded.supervisor_attachments, Default::default());
+    std::fs::remove_dir_all(&vault).unwrap();
 }
