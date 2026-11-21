@@ -855,8 +855,12 @@ fn attachment_fixtures_match_schema_and_published_digest() {
     legacy.as_object_mut().unwrap().remove("attachments");
     conversation_schema(&legacy);
     for raw in [
-        include_str!("../../../../protocol/human-supervisor-conversation/v1/attachment-upload.example.json"),
-        include_str!("../../../../protocol/human-supervisor-conversation/v1/attachment-error.example.json"),
+        include_str!(
+            "../../../../protocol/human-supervisor-conversation/v1/attachment-upload.example.json"
+        ),
+        include_str!(
+            "../../../../protocol/human-supervisor-conversation/v1/attachment-error.example.json"
+        ),
     ] {
         conversation_schema(&example(raw));
     }
@@ -1566,7 +1570,11 @@ async fn staged_attachments_expire_and_are_bounded_per_conversation() {
         .unwrap();
     assert_eq!(count, 16, "the expired row was purged on upload");
     let (status, body) = upload(&f, Uuid::new_v4(), "17.txt", "text/plain", b"x").await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "staged quota: {body}");
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "staged quota: {body}"
+    );
     assert_eq!(body["error"], "attachment_capacity_exhausted");
 }
 
@@ -1635,7 +1643,12 @@ async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denia
         (Uuid::new_v4(), "design notes.docx", DOCX, docx.clone()),
         (Uuid::new_v4(), "spec.pdf", "application/pdf", pdf),
         (Uuid::new_v4(), "plan.md", "text/markdown", markdown),
-        (Uuid::new_v4(), "notes.txt", "text/plain", b"plain notes\n".to_vec()),
+        (
+            Uuid::new_v4(),
+            "notes.txt",
+            "text/plain",
+            b"plain notes\n".to_vec(),
+        ),
     ];
     let meta = |f: &Fixture, id: Uuid| format!("{}/metadata", attachment_path(f, id));
     for (id, name, media, bytes) in &files {
@@ -1660,16 +1673,30 @@ async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denia
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         refusal(status, &body),
-        (StatusCode::UNSUPPORTED_MEDIA_TYPE, "attachment_media_type_unsupported")
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment_media_type_unsupported"
+        )
     );
     let (unsupported, unreadable, large) = (
-        (StatusCode::UNSUPPORTED_MEDIA_TYPE, "attachment_media_type_unsupported"),
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment_media_type_unsupported",
+        ),
         (StatusCode::BAD_REQUEST, "attachment_unreadable"),
         (StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large"),
     );
     for (media, bytes, want) in [
-        ("application/msword", b"\xd0\xcf\x11\xe0".to_vec(), unsupported),
-        (DOCX, zip(&["[Content_Types].xml", "xl/workbook.xml"]), unreadable),
+        (
+            "application/msword",
+            b"\xd0\xcf\x11\xe0".to_vec(),
+            unsupported,
+        ),
+        (
+            DOCX,
+            zip(&["[Content_Types].xml", "xl/workbook.xml"]),
+            unreadable,
+        ),
         (DOCX, docx[..docx.len() - 1].to_vec(), unreadable),
         ("application/pdf", b"%PDF-1.7\n1 0 obj".to_vec(), unreadable),
         ("text/markdown", b"\xc3\x28".to_vec(), unreadable),
@@ -1706,7 +1733,10 @@ async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denia
     assert_eq!((status, body.len()), (StatusCode::NO_CONTENT, 0));
     let (status, body) = f.human("DELETE", &attachment_path(&f, gone), None).await;
     assert_eq!(refusal(status, &body), not_found, "retried unstage");
-    assert_eq!(f.human("GET", &meta(&f, gone), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        f.human("GET", &meta(&f, gone), None).await.0,
+        StatusCode::NOT_FOUND
+    );
     let r = |id: Uuid, bytes: &[u8]| json!({"id":id,"digest":sha(bytes)});
     let create = |refs: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"documents","context":[],"attachments":refs});
     let stale = create(json!([r(files[0].0, &files[0].3), r(gone, &files[3].3)]));
@@ -1722,7 +1752,9 @@ async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denia
     let request = create(json!(refs));
     let (status, receipt) = f.post(&f.history_path(), None, request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
-    let (status, body) = f.human("DELETE", &attachment_path(&f, files[0].0), None).await;
+    let (status, body) = f
+        .human("DELETE", &attachment_path(&f, files[0].0), None)
+        .await;
     assert_eq!(
         refusal(status, &body),
         (StatusCode::CONFLICT, "attachment_bound")
@@ -1782,7 +1814,6 @@ async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denia
     assert_eq!(status, StatusCode::CONFLICT, "{receipt}");
     assert_eq!(receipt["reason"], "attachment_unavailable");
 }
-
 
 #[tokio::test]
 async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revokes_tools() {

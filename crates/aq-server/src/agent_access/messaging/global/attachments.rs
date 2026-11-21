@@ -4,6 +4,9 @@
 //! `Create` by id and digest. Binding pins the row to the owner message, so
 //! its retention is the message's retention (`ON DELETE CASCADE`).
 use super::*;
+pub(super) use aq_supervisor_control::attachments::{
+    MAX_FILE_BYTES as MAX_SIZE, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
+};
 use aq_supervisor_control::attachments::{
     MAX_STAGED_BYTES, MAX_STAGED_FILES, Refusal, STAGED_TTL_MS, allowed, content_valid,
     digest_valid, name_valid, serve,
@@ -11,9 +14,6 @@ use aq_supervisor_control::attachments::{
 use axum::extract::rejection::BytesRejection;
 use axum::http::{HeaderMap, StatusCode, header};
 use sqlx::Row as _;
-pub(super) use aq_supervisor_control::attachments::{
-    MAX_FILE_BYTES as MAX_SIZE, MAX_PER_MESSAGE as MAX_ATTACHMENTS,
-};
 const COLUMNS: &str = "attachment_id,conversation_id,uploader_id,name,media_type,size_bytes,digest,created_at_ms,message_id";
 
 /// A pinned reference from `Create.attachments` to a staged upload.
@@ -396,7 +396,9 @@ pub(super) async fn supervisor_download(
     if !dispatched {
         return Err(missing());
     }
-    let (row, bytes) = fetch(&mut tx, attachment, true).await?.ok_or_else(missing)?;
+    let (row, bytes) = fetch(&mut tx, attachment, true)
+        .await?
+        .ok_or_else(missing)?;
     tx.commit().await.map_err(db)?;
     content(row, bytes)
 }

@@ -117,7 +117,11 @@ pub fn content_valid(media_type: &str, bytes: &[u8]) -> bool {
 /// A DOCX is a ZIP whose central directory names `[Content_Types].xml` and
 /// `word/document.xml`. Entry data is not inflated.
 fn docx(bytes: &[u8]) -> bool {
-    let u16_at = |i: usize| bytes.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u16_at = |i: usize| {
+        bytes
+            .get(i..i + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
     let u32_at = |i: usize| {
         bytes
             .get(i..i + 4)
@@ -134,7 +138,8 @@ fn docx(bytes: &[u8]) -> bool {
     else {
         return false;
     };
-    let (Some(count), Some(size), Some(start)) = (u16_at(end + 10), u32_at(end + 12), u32_at(end + 16))
+    let (Some(count), Some(size), Some(start)) =
+        (u16_at(end + 10), u32_at(end + 12), u32_at(end + 16))
     else {
         return false;
     };
@@ -143,10 +148,14 @@ fn docx(bytes: &[u8]) -> bool {
     }
     let (mut at, mut types, mut document) = (start, false, false);
     for _ in 0..count {
-        if !bytes.get(at..).is_some_and(|b| b.starts_with(b"PK\x01\x02")) {
+        if !bytes
+            .get(at..)
+            .is_some_and(|b| b.starts_with(b"PK\x01\x02"))
+        {
             return false;
         }
-        let (Some(n), Some(x), Some(c)) = (u16_at(at + 28), u16_at(at + 30), u16_at(at + 32)) else {
+        let (Some(n), Some(x), Some(c)) = (u16_at(at + 28), u16_at(at + 30), u16_at(at + 32))
+        else {
             return false;
         };
         let Some(name) = bytes.get(at + 46..at + 46 + n) else {
@@ -234,9 +243,13 @@ impl Refusal {
             Self::MediaTypeUnsupported => "Content-Type is not an accepted attachment media type",
             Self::TooLarge => "attachment exceeds 1048576 bytes",
             Self::NameInvalid => "name must be one path segment of 1 to 255 UTF-8 bytes",
-            Self::Unreadable => "attachment bytes are empty or not a readable file of the declared type",
+            Self::Unreadable => {
+                "attachment bytes are empty or not a readable file of the declared type"
+            }
             Self::IdConflict => "attachment id already holds a different upload",
-            Self::CapacityExhausted => "staged attachment capacity of this conversation is exhausted",
+            Self::CapacityExhausted => {
+                "staged attachment capacity of this conversation is exhausted"
+            }
             Self::NotFound => "attachment not found",
             Self::Bound => "attachment is bound to a message and lives as long as it",
         }
@@ -288,8 +301,14 @@ mod tests {
         assert!(!content_valid("text/plain", b"a\0b"));
         assert!(content_valid("application/json", br#"{"a":1}"#));
         assert!(!content_valid("application/json", b"{"));
-        assert!(content_valid("application/pdf", b"%PDF-1.7\n1 0 obj\n%%EOF\n"));
-        assert!(!content_valid("application/pdf", b"%PDF-1.7\n1 0 obj\n"), "truncated");
+        assert!(content_valid(
+            "application/pdf",
+            b"%PDF-1.7\n1 0 obj\n%%EOF\n"
+        ));
+        assert!(
+            !content_valid("application/pdf", b"%PDF-1.7\n1 0 obj\n"),
+            "truncated"
+        );
         assert!(!content_valid("application/pdf", b"PK\x03\x04%%EOF"));
         assert!(content_valid("image/png", b"\x89PNG\r\n\x1a\nrest"));
         assert!(!content_valid("image/png", b"GIF89a"));
@@ -322,7 +341,10 @@ mod tests {
         let mut lying = good.clone();
         let n = lying.len();
         lying[n - 6..n - 2].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert!(!content_valid(DOCX, &lying), "directory offset out of range");
+        assert!(
+            !content_valid(DOCX, &lying),
+            "directory offset out of range"
+        );
     }
     #[test]
     fn names_are_single_safe_path_segments() {
@@ -348,7 +370,10 @@ mod tests {
         let c = serde_json::to_value(capability()).unwrap();
         assert_eq!(c["max_file_bytes"], 1048576);
         assert_eq!(c["max_files_per_message"], 4);
-        assert_eq!(c["media_types"].as_array().unwrap().len(), MEDIA_TYPES.len());
+        assert_eq!(
+            c["media_types"].as_array().unwrap().len(),
+            MEDIA_TYPES.len()
+        );
         assert!(MEDIA_TYPES.iter().all(|t| allowed(t)));
         assert_eq!(Refusal::TooLarge.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
