@@ -177,6 +177,7 @@ impl ProfiledState {
 pub mod claim;
 pub mod default_policy;
 pub mod effect_profile;
+pub use effect_profile as effect_ledger;
 pub mod fairness;
 pub mod git_author;
 pub mod native_offer;
@@ -212,5 +213,3 @@ mod login_write_back_tests {
         }
     }
 }
-
-pub use effect_profile as effect_ledger;
