@@ -1525,6 +1525,50 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn expired_delivery_notice_reaches_the_project_once_for_the_current_held_result() {
+        use aq_playbook_domain::{delivery_decisions, scheduling_notices};
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let result = env.report.report_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held','returns_exhausted',$3)")
+            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
+        let calls = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            assert!(
+                body.contains(&task.to_string())
+                    && body.contains(&result.to_string())
+                    && body.contains("task.retry")
+            );
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        scheduling_notices::notify(&pool, NOW as i64, &send)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            scheduling_notices::notify(&pool, NOW as i64 + 600_001, &send)
+                .await
+                .unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            delivery_decisions::told(&mut pool.acquire().await.unwrap(), project, &key)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn independent_review_reads_the_assigned_result_revision_and_retained_commit() {
         use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
         let target = Box::pin(super::auto_env("not_required", axum::http::StatusCode::OK)).await;
