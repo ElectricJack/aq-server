@@ -424,3 +424,5 @@ mod human_digest_pattern_tests {
         ));
     }
 }
+
+pub use operation_receipt as effects;

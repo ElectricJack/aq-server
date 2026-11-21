@@ -6,6 +6,8 @@ pub mod daily_schedules;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
 #[cfg(feature = "delivery_playbook")]
+mod delivery_review;
+#[cfg(feature = "delivery_playbook")]
 pub mod delivery_runs;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
@@ -21,6 +23,8 @@ pub mod playbook_view;
 pub mod plugin_effects;
 pub mod review_domain;
 pub mod route_store;
+#[cfg(feature = "delivery_playbook")]
+pub mod scheduling_notices;
 mod step_inspection;
 pub mod view_store;
 pub mod work_mutations;

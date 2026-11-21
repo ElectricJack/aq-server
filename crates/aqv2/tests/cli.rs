@@ -795,6 +795,35 @@ async fn missing_server_action_kind_is_explicitly_unsupported_without_fallback()
 }
 
 #[tokio::test]
+async fn a_retry_refused_for_an_old_binding_explains_the_fresh_source_option() {
+    let srv = server(vec![(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({
+            "code":"replacement_project_revision_changed","message":"untrusted text"
+        }),
+    )])
+    .await;
+    let err = aqv2::execute(
+        srv.client.clone(),
+        &[
+            "tasks",
+            "retry",
+            "00000000-0000-4000-8000-000000000010",
+            "--project",
+            "00000000-0000-4000-8000-000000000011",
+            "--revision",
+            "5",
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["server_code"], "replacement_project_revision_changed");
+    assert!(err["message"].as_str().unwrap().contains("--fresh true"));
+    assert!(!err.to_string().contains("untrusted text"));
+    assert!(err.get("recovery").is_none());
+}
+
+#[tokio::test]
 async fn review_regression_rejects_duplicate_decisions() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("decision.json");

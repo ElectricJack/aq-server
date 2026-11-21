@@ -201,8 +201,14 @@ impl Service {
             return Ok(false);
         };
         let result = host_result(completion.outcome, completion.output);
-        self.complete_operation(operation, &op.command, &op.intent_id, result)
-            .await?;
+        self.complete_operation(
+            operation,
+            &op.command,
+            &op.intent_id,
+            result,
+            completion.diagnostic,
+        )
+        .await?;
         Ok(true)
     }
 }

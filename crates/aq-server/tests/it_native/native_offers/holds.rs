@@ -706,7 +706,7 @@ async fn a_stuck_successor_needs_ten_minutes_of_skips_not_only_twenty() {
         project: c.env.lineage.project_id,
         task,
         predecessor,
-        seen: Some(1),
+        seen: holds::history(&pool, task).await,
     };
     let t0 = (c.env.env.state.clock)();
     let at = |seconds: i64| t0 + chrono::Duration::seconds(seconds);
@@ -804,6 +804,64 @@ async fn an_owner_retry_overrides_the_never_granted_bound_and_the_task_is_offere
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(offered_tasks(&body), [task], "{body}");
+}
+
+/// A selector can finish after a retry but before a replacement is offered. Only a
+/// decision made on the new budget can then record a new hold on the same attempt.
+#[tokio::test]
+async fn a_confirmed_budget_retry_fences_the_previous_selection_decision() {
+    let (mut c, predecessor) = failed_once(None).await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let project = c.env.lineage.project_id;
+    let at = (c.env.env.state.clock)();
+    let code = "task_sandbox_minutes_budget_exhausted";
+    let before = holds::history(&pool, task).await.unwrap();
+    holds::selection_hold(&pool, Some(before), project, task, code, at).await;
+    owner_actions(&mut c).await;
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("verified replacement")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    holds::selection_hold(&pool, Some(before), project, task, code, at).await;
+    let successor = holds::Successor {
+        project,
+        task,
+        predecessor,
+        seen: Some(before),
+    };
+    holds::selection_refused(&pool, successor, &[code.to_owned()], at).await;
+    assert!(
+        holds::current(&pool, project, task)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let after = holds::history(&pool, task).await.unwrap();
+    assert_eq!(before.attempts, after.attempts);
+    let cost = "lineage_cost_budget_exhausted";
+    holds::selection_hold(&pool, Some(after), project, task, cost, at).await;
+    assert_eq!(
+        holds::current(&pool, project, task)
+            .await
+            .unwrap()
+            .unwrap()
+            .reason,
+        cost
+    );
+    // Replaying the original operation cannot clear the newer decision.
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    holds::record_override(&mut conn, task, &recorded[0], at)
+        .await
+        .unwrap();
+    drop(conn);
+    assert_eq!(
+        holds::current(&pool, project, task)
+            .await
+            .unwrap()
+            .unwrap()
+            .reason,
+        cost
+    );
 }
 
 /// A cost hold is recorded by selection, not by B4's assessment, so the retry reads the
@@ -1050,4 +1108,37 @@ async fn a_fresh_owner_retry_is_refused_for_any_other_hold() {
         .await
         .unwrap();
     assert_eq!(fresh, 0);
+}
+
+#[tokio::test]
+async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_expires() {
+    let (mut c, predecessor) = budget_held("lineage_time_budget_exhausted").await;
+    owner_actions(&mut c).await;
+    let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
+    assert_eq!(status, 422, "{same}");
+    assert_eq!(same["code"], "lineage_time_budget_exhausted");
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+        .bind(c.env.lineage.project_id)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        held_reason(&work(&c, c.env.lineage.task_id).await).as_deref(),
+        Some("replacement_project_revision_changed")
+    );
+    let (status, plain) = retry(&c, Uuid::new_v4(), Some("old binding")).await;
+    assert_eq!(status, 422, "{plain}");
+    assert_eq!(plain["code"], "replacement_project_revision_changed");
+    let operation = Uuid::new_v4();
+    let (status, fresh) = retry_with(&c, operation, Some("pinned review source"), true).await;
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(fresh["data"]["disposition"], "confirmed", "{fresh}");
+    let recorded: Uuid = sqlx::query_scalar(
+        "SELECT released_attempt_id FROM task_fresh_starts WHERE operation_id=$1",
+    )
+    .bind(operation)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, predecessor);
 }

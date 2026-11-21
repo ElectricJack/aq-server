@@ -128,6 +128,30 @@ async fn report(
     sqlx::query("INSERT INTO supervisor_service_reports(conversation_id,instance_id,observed_at_ms,phase,stage,generation,session_id,last_error) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(conversation_id) DO UPDATE SET instance_id=EXCLUDED.instance_id,observed_at_ms=EXCLUDED.observed_at_ms,phase=EXCLUDED.phase,stage=EXCLUDED.stage,generation=EXCLUDED.generation,session_id=EXCLUDED.session_id,last_error=EXCLUDED.last_error").bind(config.conversation_id).bind(instance).bind(now()as i64).bind(phase).bind(stage).bind(generation).bind(session).bind(if matches!(phase,"failed"|"uncertain"){Some(stage)}else{None}).execute(pool).await?;
     Ok(())
 }
+// Neither a pool acquisition timeout nor PostgreSQL refusing a new connection
+// establishes a failed turn. Re-read the retained reservation and turn on the next poll.
+fn connection_unavailable(error: &anyhow::Error) -> bool {
+    match error.downcast_ref::<sqlx::Error>() {
+        Some(sqlx::Error::PoolTimedOut) => true,
+        Some(sqlx::Error::Database(db)) => db.code().as_deref() == Some("53300"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn pool_exhaustion_can_repoll_but_an_unconfirmed_turn_stays_failed() {
+    let timed_out =
+        anyhow::Error::from(sqlx::Error::PoolTimedOut).context("read supervisor control");
+    assert!(connection_unavailable(&timed_out));
+    assert!(!connection_unavailable(&anyhow::anyhow!(
+        "turn ended without a reply"
+    )));
+    assert!(!connection_unavailable(&anyhow::Error::from(
+        sqlx::Error::RowNotFound
+    )));
+}
+
 fn api_error(_: aq_server::error::AppError) -> anyhow::Error {
     anyhow::anyhow!("Supervisor reservation or dispatch was refused")
 }
@@ -137,7 +161,7 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-fn installed(config: &ServiceConfig) -> Result<Option<(Config, Host)>> {
+fn installed(config: &ServiceConfig, service_pool: &PgPool) -> Result<Option<(Config, Host)>> {
     let path = config.turn_file();
     if !path.exists() {
         return Ok(None);
@@ -156,7 +180,13 @@ fn installed(config: &ServiceConfig) -> Result<Option<(Config, Host)>> {
         credential_profiles: vec![],
         context_material: vec![],
     };
-    let pool = PgPool::connect_lazy(&c.database_url)?;
+    // The installed plan normally uses this service's database. Reuse its
+    // bounded pool on each control poll, including while a turn is active.
+    let pool = if c.database_url == config.database_url {
+        service_pool.clone()
+    } else {
+        PgPool::connect_lazy(&c.database_url)?
+    };
     let host = Supervisor::new(
         pool,
         c.root.clone(),
@@ -235,8 +265,15 @@ pub async fn run(path: &Path) -> Result<()> {
     let mut scan_after = 0;
     let mut failed_revision = None;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut poll_delay = Duration::ZERO;
     loop {
-        let ctl = control(&pool, config.conversation_id).await?;
+        tokio::select! {_=terminate.recv()=>break,_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(poll_delay)=>{}}
+        poll_delay = Duration::from_millis(750);
+        let ctl = match control(&pool, config.conversation_id).await {
+            Ok(ctl) => ctl,
+            Err(error) if connection_unavailable(&error) => continue,
+            Err(error) => return Err(error),
+        };
         let outcome = step(
             &config,
             &pool,
@@ -248,6 +285,18 @@ pub async fn run(path: &Path) -> Result<()> {
         )
         .await;
         if let Err(error) = outcome {
+            if connection_unavailable(&error) {
+                let _ = report(
+                    &pool,
+                    &config,
+                    instance,
+                    "waiting",
+                    "Waiting for a database connection",
+                    None,
+                )
+                .await;
+                continue;
+            }
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
             if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -270,9 +319,8 @@ pub async fn run(path: &Path) -> Result<()> {
             .await;
             failed_revision = Some(ctl.revision);
         }
-        tokio::select! {_=terminate.recv()=>break,_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(Duration::from_millis(750))=>{}}
     }
-    if let Some((c, host)) = installed(&config)? {
+    if let Some((c, host)) = installed(&config, &pool)? {
         let s = host.stop(c.central.subject.actor_id()).await?;
         if s.run.phase() == Phase::StoppedReported {
             clean_homes(&config)?;
@@ -309,7 +357,7 @@ async fn step(
     scan_after: &mut u64,
     failed_revision: &mut Option<u64>,
 ) -> Result<()> {
-    if let Some((turn, host)) = installed(config)? {
+    if let Some((turn, host)) = installed(config, pool)? {
         ensure!(
             turn.central.subject.actor_id() == ctl.actor,
             "supervisor actor changed"
@@ -412,7 +460,7 @@ async fn step(
                 .fetch_one(pool)
                 .await?;
                 archive_turn(config, &turn)?;
-                if ctl.enabled && !replied {
+                if ctl.enabled && !replied && !retry_unstarted(pool, &state).await? {
                     *failed_revision = Some(ctl.revision);
                     report(pool,config,instance,"failed","Turn ended without a confirmed reply; inspect task changes before continuing",Some(&state)).await?;
                     return Ok(());
@@ -600,7 +648,11 @@ async fn step(
                 row.get("created_at_ms"),
                 row.get::<Option<i64>, _>("control_ms").unwrap_or(0),
             ) {
-                if release {
+                let mut retry = release;
+                if !retry && let Some(previous) = &prior {
+                    retry = retry_unstarted(pool, previous).await?;
+                }
+                if retry {
                     let reservation = actor
                         .current_reservation
                         .as_ref()
@@ -664,6 +716,27 @@ async fn step(
     Ok(())
 }
 
+/// Automatically retry a mail batch once if its previous guardian never
+/// started the harness. A repeated launch failure stays visible for inspection.
+async fn retry_unstarted(pool: &PgPool, previous: &Snapshot) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    if crate::verifier::not_started(&mut tx, &previous.run)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let first: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM central_supervisor_dispatches p
+         WHERE p.actor_id=d.actor_id AND p.generation<d.generation AND p.batch_digest=d.batch_digest)
+         FROM central_supervisor_dispatches d WHERE d.dispatch_id=$1",
+    )
+    .bind(previous.run.plan().dispatch_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(first)
+}
+
 /// The current reservation's own turn ran (its generation is the latest) and
 /// stopped without a reply: `Some(true)` releases its mail for the next turn
 /// because the owner stopped and started the supervisor after the dispatch,
@@ -715,7 +788,7 @@ async fn start_turn(
         .map_err(api_error)?;
     let candidate = plan::assemble(config, ctl, policy, generation, session, turn)?;
     plan::install(config, &candidate)?;
-    let (_, host) = installed(config)?.context("installed supervisor turn missing")?;
+    let (_, host) = installed(config, pool)?.context("installed supervisor turn missing")?;
     let state = host
         .start(
             candidate.central.clone(),
