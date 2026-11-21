@@ -25,6 +25,19 @@ pub struct Permit {
 pub type Auth = Arc<
     dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Permit, Error>> + Send>> + Send + Sync,
 >;
+/// The owner a trusted in-process caller vouches for: the request extension,
+/// or a bridged request's [`crate::owner::DELEGATED_OWNER`].
+pub fn delegated(extensions: &axum::http::Extensions) -> Option<ReadOwner> {
+    let owner = extensions.get::<ReadOwner>().cloned();
+    #[cfg(feature = "supervisor_full_access")]
+    {
+        owner.or_else(|| crate::owner::DELEGATED_OWNER.try_with(Clone::clone).ok())
+    }
+    #[cfg(not(feature = "supervisor_full_access"))]
+    {
+        owner
+    }
+}
 pub async fn owner(tx: &mut Transaction<'_, Postgres>, actor: Uuid) -> Result<ReadOwner, Error> {
     let row=sqlx::query("SELECT u.id,u.email,u.issuer,u.subject,a.approved_identity FROM central_supervisor_actors a JOIN users u ON u.id=a.approved_by WHERE a.actor_id=$1 AND u.role='owner' FOR SHARE OF u").bind(actor).fetch_optional(&mut **tx).await?.ok_or(Error(StatusCode::FORBIDDEN,"Supervisor owner authorization is unavailable"))?;
     let owner = ReadOwner {
@@ -111,27 +124,34 @@ pub(crate) fn bearer(pool: sqlx::PgPool, clock: Clock, scope: &'static str) -> A
     })
 }
 
+/// `/v1/supervisor/projects`: the projects the bearer's scope covers.
+pub fn projects<S: Clone + Send + Sync + 'static>(
+    pool: sqlx::PgPool,
+    clock: Clock,
+) -> axum::Router<S> {
+    let auth = bearer(pool.clone(), clock, "graph.read");
+    let projects = axum::routing::get(move |headers: HeaderMap| {
+        let auth = auth.clone();
+        let pool = pool.clone();
+        async move {
+            let permit = auth(headers).await?;
+            let project = permit.project;
+            let rows:Vec<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',project_id,'revision',revision::text,'name',binding->>'name','enabled',binding->'enabled') FROM project_execution_bindings WHERE $1::uuid IS NULL OR project_id=$1 ORDER BY project_id LIMIT 256").bind(project).fetch_all(&pool).await?;
+            Ok::<_, Error>(axum::Json(serde_json::json!({"projects":rows})))
+        }
+    });
+    axum::Router::new().route("/v1/supervisor/projects", projects)
+}
+
+/// Mounts `routes` at `/v1/supervisor/read` behind [`gate`].
 pub fn routes<S: Clone + Send + Sync + 'static>(
     routes: axum::Router<S>,
     pool: sqlx::PgPool,
     clock: Clock,
 ) -> axum::Router<S> {
-    let project_pool = pool.clone();
     let auth = bearer(pool, clock, "graph.read");
-    let project_auth = auth.clone();
-    let projects = axum::routing::get(move |headers: HeaderMap| {
-        let auth = project_auth.clone();
-        let pool = project_pool.clone();
-        async move {
-            let permit = auth(headers).await?;
-            let rows:Vec<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',project_id,'revision',revision::text,'name',binding->>'name','enabled',binding->'enabled') FROM project_execution_bindings WHERE $1::uuid IS NULL OR project_id=$1 ORDER BY project_id LIMIT 256").bind(permit.project).fetch_all(&pool).await?;
-            Ok::<_, Error>(axum::Json(serde_json::json!({"projects":rows})))
-        }
-    });
-    axum::Router::new()
-        .route("/v1/supervisor/projects", projects)
-        .nest(
-            "/v1/supervisor/read",
-            routes.layer(axum::middleware::from_fn_with_state(auth, gate)),
-        )
+    axum::Router::new().nest(
+        "/v1/supervisor/read",
+        routes.layer(axum::middleware::from_fn_with_state(auth, gate)),
+    )
 }

@@ -28,7 +28,9 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[cfg(not(feature = "supervisor_full_access"))]
 mod admin;
+mod owner;
 
 #[derive(Clone)]
 struct Evidence;
@@ -160,6 +162,49 @@ impl Fixture {
             .await
             .unwrap();
         f
+    }
+    /// Makes the supervisor the one the binding trigger created for `project`.
+    async fn scope_to(&mut self, project: Uuid) {
+        self.conversation = sqlx::query_scalar(
+            "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+        )
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap();
+        self.actor =
+            sqlx::query_scalar("SELECT actor_id FROM supervisor_controls WHERE conversation_id=$1")
+                .bind(self.conversation)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap();
+        sqlx::query(
+        "UPDATE supervisor_controls SET enabled=true,profile='{}',approved_by=$2 WHERE actor_id=$1",
+    )
+    .bind(self.actor)
+    .bind(self.user.id)
+    .execute(&self.pool)
+    .await
+    .unwrap();
+        self.owner()
+            .configure_actor(
+                &self.user,
+                &serde_json::to_vec(&Configure {
+                    operation_id: Uuid::new_v4(),
+                    actor_id: self.actor,
+                    expected_actor_revision: 0,
+                    policy: LocalPolicy {
+                        schema_version: 1,
+                        kind: PolicyKind::GlobalSupervisorReservation,
+                        actor_id: self.actor,
+                        conversation_id: self.conversation,
+                        enabled: true,
+                    },
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
     }
     fn owner(&self) -> ReservationOwner {
         ReservationOwner::new(&self.state)
@@ -1830,46 +1875,7 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
     let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Scoped test\",\"enabled\":true}',1,'{}')").bind(project).execute(&f.pool).await.unwrap();
-    f.conversation = sqlx::query_scalar(
-        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
-    )
-    .bind(project)
-    .fetch_one(&f.pool)
-    .await
-    .unwrap();
-    f.actor =
-        sqlx::query_scalar("SELECT actor_id FROM supervisor_controls WHERE conversation_id=$1")
-            .bind(f.conversation)
-            .fetch_one(&f.pool)
-            .await
-            .unwrap();
-    sqlx::query(
-        "UPDATE supervisor_controls SET enabled=true,profile='{}',approved_by=$2 WHERE actor_id=$1",
-    )
-    .bind(f.actor)
-    .bind(f.user.id)
-    .execute(&f.pool)
-    .await
-    .unwrap();
-    f.owner()
-        .configure_actor(
-            &f.user,
-            &serde_json::to_vec(&Configure {
-                operation_id: Uuid::new_v4(),
-                actor_id: f.actor,
-                expected_actor_revision: 0,
-                policy: LocalPolicy {
-                    schema_version: 1,
-                    kind: PolicyKind::GlobalSupervisorReservation,
-                    actor_id: f.actor,
-                    conversation_id: f.conversation,
-                    enabled: true,
-                },
-            })
-            .unwrap(),
-        )
-        .await
-        .unwrap();
+    f.scope_to(project).await;
     f.send().await;
     let r = f.reserve().await.reservation.unwrap();
     let p = f.plan(r.id, 1).await;
@@ -1877,7 +1883,13 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
     let token = reply::issue_credential(&f.pool, f.actor, 60000, 999000)
         .await
         .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
     let machine = aq_server::build_worker_router(f.state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let machine = aq_server::build_worker_router_with_owner_app(
+        f.state.clone(),
+        aq_server::build_admin_router(f.state.clone()),
+    );
     let read = |path: String| {
         let app = machine.clone();
         let token = token.clone();
@@ -1897,15 +1909,36 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
             (status, serde_json::from_slice::<Value>(&bytes).unwrap())
         }
     };
+    // Another project: narrowed away.
+    let other = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Other\",\"enabled\":true}',1,'{}')").bind(other).execute(&f.pool).await.unwrap();
     let (status, projects) = read("/v1/supervisor/projects".into()).await;
     assert_eq!(status, StatusCode::OK, "{projects}");
-    assert_eq!(projects["projects"].as_array().unwrap().len(), 1);
-    assert_eq!(projects["projects"][0]["id"], project.to_string());
-    let cross = format!(
-        "/v1/supervisor/read/api/human/projects/{}/tasks",
-        Uuid::new_v4()
-    );
-    assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    let ids: Vec<&str> = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    let (project, other) = (project.to_string(), other.to_string());
+    assert_eq!(ids, [project.as_str()]);
+    assert!(!ids.contains(&other.as_str()));
+    // The read nest exists only without supervisor_full_access.
+    #[cfg(not(feature = "supervisor_full_access"))]
+    {
+        let cross = format!(
+            "/v1/supervisor/read/api/human/projects/{}/tasks",
+            Uuid::new_v4()
+        );
+        assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+    }
+    // With it, the owner bridge refuses another project.
+    #[cfg(feature = "supervisor_full_access")]
+    {
+        let cross = format!("/v1/supervisor/owner/api/human/conversations/projects/{other}");
+        let (status, out) = read(cross).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    }
     f.answer(&p).await;
     f.assert_consumed(r.id).await;
     f.send().await;

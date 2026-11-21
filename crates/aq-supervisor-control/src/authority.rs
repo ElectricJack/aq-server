@@ -59,6 +59,7 @@ pub fn session_id(plan: &CentralPlan) -> Option<Uuid> {
         _ => None,
     }
 }
+#[cfg(not(feature = "supervisor_full_access"))]
 pub const SCOPES: [&str; 6] = [
     "graph.read",
     "graph.write",
@@ -66,6 +67,16 @@ pub const SCOPES: [&str; 6] = [
     "messaging",
     "decisions",
     "settings",
+];
+#[cfg(feature = "supervisor_full_access")]
+pub const SCOPES: [&str; 7] = [
+    "graph.read",
+    "graph.write",
+    "enqueue",
+    "messaging",
+    "decisions",
+    "settings",
+    "owner",
 ];
 pub const REPLY_CONTRACT: &str = "supervisor-conversation-reply-1";
 const TOKEN_PREFIX: &str = "aqsv1_";
@@ -79,6 +90,14 @@ pub struct SupervisorPrincipal {
     pub session_id: Uuid,
     pub scopes: Vec<String>,
     pub project_id: Option<Uuid>,
+}
+impl SupervisorPrincipal {
+    /// Whether this principal, journaling as `user`, may enqueue in `project`.
+    pub fn may_enqueue(&self, user: Uuid, project: Uuid) -> bool {
+        user == self.session_id
+            && self.scopes.iter().any(|s| s == "enqueue")
+            && self.project_id.is_none_or(|id| id == project)
+    }
 }
 
 fn rejected() -> Error {
@@ -260,4 +279,15 @@ pub async fn authenticate_in_transaction(
     }
     crate::read::owner(tx, actor).await?;
     Ok(principal)
+}
+
+#[cfg(all(test, feature = "supervisor_full_access"))]
+mod tests {
+    use super::SCOPES;
+
+    #[test]
+    fn scopes_include_owner_when_flagged() {
+        assert!(SCOPES.contains(&"owner"));
+        assert_eq!(SCOPES.len(), 7);
+    }
 }

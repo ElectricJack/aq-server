@@ -1280,6 +1280,15 @@ pub fn catalog() -> Vec<CommandSpec> {
             )),
         ),
     ];
+    // Every supervisor lists projects here, with full access too.
+    for c in commands.iter_mut().filter(|c| c.name == "project.list") {
+        c.supervisor = c.owner.map(|owner| Route {
+            path: "/v1/supervisor/projects",
+            ..owner
+        });
+    }
+    // With full access the registry routes these through the owner bridge.
+    #[cfg(not(feature = "supervisor_full_access"))]
     for command in &mut commands {
         let path = match command.name {
             "task.list" => "/v1/supervisor/read/api/human/projects/{project}/tasks",
@@ -1297,7 +1306,6 @@ pub fn catalog() -> Vec<CommandSpec> {
             "comment.list" => {
                 "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/comments"
             }
-            "project.list" => "/v1/supervisor/projects",
             "knowledge.list" => "/v1/supervisor/read/api/human/projects/{project}/knowledge",
             "knowledge.show" => "/v1/supervisor/read/api/human/projects/{project}/knowledge/{node}",
             _ => continue,

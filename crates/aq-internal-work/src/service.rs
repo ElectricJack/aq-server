@@ -185,7 +185,12 @@ impl Service {
             let Some(notify) = &self.notify else { continue };
             // A failed send is not repeated: the run waits in `supervisor`,
             // and silence takes it to the owner.
-            match notify(row.project_id, notice::supervisor(&row)).await {
+            // The notice's runs routes name no project, so under full access
+            // only the global supervisor can follow them.
+            let project = row
+                .project_id
+                .filter(|_| !cfg!(feature = "supervisor_full_access"));
+            match notify(project, notice::supervisor(&row)).await {
                 Ok(()) => told += 1,
                 Err(error) => tracing::warn!(run = %row.id, %error, "telling a supervisor failed"),
             }
