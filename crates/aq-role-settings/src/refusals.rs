@@ -48,6 +48,11 @@ pub enum DeliveryAncestryWait {
     PrerequisiteIncomplete {
         prerequisite: Uuid,
     },
+    /// The completed prerequisite pushed a result that no recorded merge
+    /// delivered to the followed branch.
+    PrerequisiteNotDelivered {
+        prerequisite: Uuid,
+    },
     MergeEvidenceUnavailable,
     MainSyncUnavailable,
     AncestryUnavailable {
@@ -73,6 +78,9 @@ impl DeliveryAncestryWait {
             Self::PrerequisiteIncomplete { prerequisite } => {
                 format!("Graph prerequisite {prerequisite} is still open")
             }
+            Self::PrerequisiteNotDelivered { prerequisite } => format!(
+                "Graph prerequisite {prerequisite} is complete but its result is not merged yet"
+            ),
             Self::MergeEvidenceUnavailable => "delivery merge evidence could not be read".into(),
             Self::MainSyncUnavailable => {
                 "the repository's followed branch could not be refreshed and retained".into()
