@@ -357,12 +357,17 @@ mod tests {
             let text = instructions(&config, &control);
             for want in [
                 "Create tasks active unless the owner asks for a draft",
-                "every owner command is available to you",
+                "dashboard.swarm, session.list and attempt.show",
                 "Do not merge, deploy or alter host services or credentials.",
                 "resend it to recheck an owner command",
             ] {
                 assert!(text.contains(want), "{want}");
             }
+            let mut scoped = control.clone();
+            scoped.project = Some(Uuid::new_v4());
+            let scoped = instructions(&config, &scoped);
+            assert!(scoped.contains("task.work and task.history"));
+            assert!(!scoped.contains("dashboard.swarm"));
             for gone in [
                 "Create draft tasks for proposals",
                 "owner-only configuration",
