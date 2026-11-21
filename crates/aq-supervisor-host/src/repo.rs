@@ -23,7 +23,11 @@ pub async fn sync(project: Uuid, workspace: &Path) -> Result<PathBuf> {
         .send()
         .await
         .context("project.show transport failed")?;
-    ensure!(response.status().is_success(), "AQ refused project.show");
+    ensure!(
+        response.status().is_success(),
+        "AQ refused project.show ({})",
+        response.status()
+    );
     let record: Value = response.json().await?;
     let name = record["binding"]["name"].as_str().context("project name")?;
     let repository: Uuid = record["binding"]["repository_id"]
@@ -31,7 +35,7 @@ pub async fn sync(project: Uuid, workspace: &Path) -> Result<PathBuf> {
         .context("project repository")?
         .parse()?;
     let remote = origin.join(&format!("v1/supervisor/git/{repository}"))?;
-    let dir = checkout_dir(workspace, name);
+    let dir = checkout_dir(workspace, name, repository);
     let head = sync_from(remote.as_str(), token, &dir)?;
     println!("{} {head}", dir.display());
     Ok(dir)
@@ -49,8 +53,9 @@ pub fn git_env(token: &str) -> Vec<(String, String)> {
     ]
 }
 
-/// `workspace/repos/<name>`, with the name reduced to one safe path segment.
-pub fn checkout_dir(workspace: &Path, project_name: &str) -> PathBuf {
+/// `workspace/repos/<name>-<repository id prefix>`: the name reduced to one safe
+/// path segment, the id making the folder unique to the repository.
+pub fn checkout_dir(workspace: &Path, project_name: &str, repository: Uuid) -> PathBuf {
     let mut name: String = project_name
         .chars()
         .map(|c| {
@@ -64,7 +69,8 @@ pub fn checkout_dir(workspace: &Path, project_name: &str) -> PathBuf {
     if name.trim_matches('.').is_empty() {
         name = "_".into();
     }
-    workspace.join("repos").join(name)
+    let id = &repository.simple().to_string()[..8];
+    workspace.join("repos").join(format!("{name}-{id}"))
 }
 
 const REFSPECS: [&str; 2] = [
@@ -83,7 +89,9 @@ fn sync_from(remote: &str, token: &str, dir: &Path) -> Result<String> {
             &["clone", "-q", "--origin", "origin", remote, target],
         )?;
     }
-    let mut fetch = vec!["fetch", "-q", "origin"];
+    // The route can change between syncs; never fetch from a stored old URL.
+    git(token, Some(dir), &["remote", "set-url", "origin", remote])?;
+    let mut fetch = vec!["fetch", "-q", "--prune", "origin"];
     fetch.extend(REFSPECS);
     git(token, Some(dir), &fetch)?;
     // Untracked files never block the move; local edits to tracked files do.
@@ -122,7 +130,12 @@ fn git(token: &str, dir: Option<&Path>, args: &[&str]) -> Result<String> {
         command.current_dir(dir);
     }
     let output = command.output().context("git could not run")?;
-    ensure!(output.status.success(), "git {} failed", args[0]);
+    if !output.status.success() {
+        // git does not echo http.extraHeader; the replace is belt and braces.
+        let stderr = String::from_utf8_lossy(&output.stderr).replace(token, "***");
+        let detail: String = stderr.trim().chars().take(2048).collect();
+        anyhow::bail!("git {} failed: {detail}", args[0]);
+    }
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
@@ -146,12 +159,15 @@ mod tests {
     #[test]
     fn checkout_dir_sanitizes_names() {
         let w = Path::new("/w");
+        let id = Uuid::parse_str("0123abcd-0000-0000-0000-000000000000").unwrap();
         assert_eq!(
-            checkout_dir(w, "aq-server"),
-            Path::new("/w/repos/aq-server")
+            checkout_dir(w, "aq-server", id),
+            Path::new("/w/repos/aq-server-0123abcd")
         );
+        let other = Uuid::parse_str("ffff0000-0000-0000-0000-000000000000").unwrap();
+        assert_ne!(checkout_dir(w, "same", id), checkout_dir(w, "same", other));
         for bad in ["../x", "a/b", "..", ".", "", "/"] {
-            let dir = checkout_dir(w, bad);
+            let dir = checkout_dir(w, bad, id);
             assert_eq!(dir.parent(), Some(Path::new("/w/repos")), "{bad}");
             assert!(!matches!(
                 dir.file_name().unwrap().to_str(),
@@ -194,7 +210,7 @@ mod tests {
         let first = commit("one");
         let url = format!("file://{}", bare.display());
         run(&work, &["push", "-q", &url, "main", "main:aq/task-1"]);
-        let dir = checkout_dir(root.path(), "proj");
+        let dir = checkout_dir(root.path(), "proj", Uuid::nil());
         assert_eq!(sync_from(&url, "unused", &dir).unwrap(), first);
         assert_eq!(run(&dir, &["rev-parse", "origin/aq/task-1"]), first);
         std::fs::write(dir.join("notes.txt"), "mine").unwrap();
@@ -207,5 +223,34 @@ mod tests {
             std::fs::read_to_string(dir.join("notes.txt")).unwrap(),
             "mine"
         );
+
+        // A deleted aq/* branch is pruned on the next sync.
+        run(&work, &["push", "-q", &url, ":aq/task-1"]);
+        sync_from(&url, "unused", &dir).unwrap();
+        assert!(!run(&dir, &["branch", "-r"]).contains("origin/aq/task-1"));
+        assert!(run(&dir, &["branch", "-r"]).contains("origin/aq/task-2"));
+
+        // A clone whose stored origin is stale is re-pointed before fetching.
+        run(
+            &dir,
+            &["remote", "set-url", "origin", "file:///nonexistent"],
+        );
+        assert_eq!(sync_from(&url, "unused", &dir).unwrap(), second);
+        assert_eq!(run(&dir, &["remote", "get-url", "origin"]), url);
+    }
+
+    #[test]
+    fn failed_git_reports_stderr_without_the_token() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = checkout_dir(root.path(), "p", Uuid::nil());
+        let err = sync_from("file:///nonexistent/repo.git", "SECRETTOKEN", &dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("git clone failed: "), "{err}");
+        assert!(
+            err.len() > "git clone failed: ".len() && err.len() < 2100,
+            "{err}"
+        );
+        assert!(!err.contains("SECRETTOKEN"));
     }
 }
