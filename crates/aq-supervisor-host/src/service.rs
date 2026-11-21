@@ -137,7 +137,7 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-fn installed(config: &ServiceConfig) -> Result<Option<(Config, Host)>> {
+fn installed(config: &ServiceConfig, service_pool: &PgPool) -> Result<Option<(Config, Host)>> {
     let path = config.turn_file();
     if !path.exists() {
         return Ok(None);
@@ -156,7 +156,13 @@ fn installed(config: &ServiceConfig) -> Result<Option<(Config, Host)>> {
         credential_profiles: vec![],
         context_material: vec![],
     };
-    let pool = PgPool::connect_lazy(&c.database_url)?;
+    // The installed plan normally uses this service's database. Reuse its
+    // bounded pool on each control poll, including while a turn is active.
+    let pool = if c.database_url == config.database_url {
+        service_pool.clone()
+    } else {
+        PgPool::connect_lazy(&c.database_url)?
+    };
     let host = Supervisor::new(
         pool,
         c.root.clone(),
@@ -272,7 +278,7 @@ pub async fn run(path: &Path) -> Result<()> {
         }
         tokio::select! {_=terminate.recv()=>break,_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(Duration::from_millis(750))=>{}}
     }
-    if let Some((c, host)) = installed(&config)? {
+    if let Some((c, host)) = installed(&config, &pool)? {
         let s = host.stop(c.central.subject.actor_id()).await?;
         if s.run.phase() == Phase::StoppedReported {
             clean_homes(&config)?;
@@ -309,7 +315,7 @@ async fn step(
     scan_after: &mut u64,
     failed_revision: &mut Option<u64>,
 ) -> Result<()> {
-    if let Some((turn, host)) = installed(config)? {
+    if let Some((turn, host)) = installed(config, pool)? {
         ensure!(
             turn.central.subject.actor_id() == ctl.actor,
             "supervisor actor changed"
@@ -715,7 +721,7 @@ async fn start_turn(
         .map_err(api_error)?;
     let candidate = plan::assemble(config, ctl, policy, generation, session, turn)?;
     plan::install(config, &candidate)?;
-    let (_, host) = installed(config)?.context("installed supervisor turn missing")?;
+    let (_, host) = installed(config, pool)?.context("installed supervisor turn missing")?;
     let state = host
         .start(
             candidate.central.clone(),
