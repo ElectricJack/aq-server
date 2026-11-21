@@ -1321,6 +1321,103 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
     assert!(env.holds_task().await);
 }
 
+/// 2026-11-21 (attachment task 8c6ba979, owner retry refused
+/// `replacement_effects_unreconciled`): a returned attempt whose profile may write (here the
+/// delivery fixture's `write.*` profile; `message.*` is the same verdict) has a final ledger,
+/// so B4 records it quiescent and the attempt is replaceable once. Its acceptance verdict is
+/// unchanged, `attempt.show`'s owner read names the missing fact before and none after, and
+/// a replay changes nothing.
+#[tokio::test]
+async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
+    use aq_admission::transport::ProcessOutcome;
+    use aq_profiled_state::replacement_sql::inspect;
+    use aq_server::{
+        execution::profiled::Effects,
+        profiled_execution::replacement::{self, Assessment},
+    };
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
+    ))
+    .unwrap();
+    let profile = fixture["proposal_profiles"][0]["profile"].clone();
+    assert!(profile["capabilities"].to_string().contains("write."));
+    let env = Box::pin(auto_env_profiled(
+        "not_required",
+        axum::http::StatusCode::OK,
+        false,
+        Some(ProcessOutcome::Failed),
+        Some(profile.clone()),
+    ))
+    .await;
+    let pool = env.f.db.pool().await;
+    let attempt = env.report.binding.attempt_id;
+    // B4 needs the original offer instant (as the read-only test sets it).
+    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
+        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
+    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let shown = || async {
+        let mut conn = pool.acquire().await.unwrap();
+        inspect(&mut conn, attempt, NOW + 1).await.unwrap().unwrap()
+    };
+    let before = shown().await;
+    assert_eq!(before["effects"]["kind"], "unknown", "{before}");
+    let blockers = before["replacement"]["blockers"].to_string();
+    assert!(blockers.contains("effects_unknown"), "{before}");
+    let mut tx = pool.begin().await.unwrap();
+    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
+        .await
+        .unwrap();
+    let SessionIdentity::Remote {
+        node_id,
+        boot_id,
+        session_id,
+        ..
+    } = env.report.binding.session
+    else {
+        unreachable!()
+    };
+    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(&profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
+    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(&profile).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let s = env.settle().await;
+    env.assert_not_completed(&s, AutoDisposition::ReworkRequired, "not_accepted")
+        .await;
+    let after = shown().await;
+    assert_eq!(after["effects"]["kind"], "quiescent", "{after}");
+    assert_eq!(after["retention"]["kind"], "retained", "{after}");
+    assert_eq!(after["replacement"]["blockers"], json!([]), "{after}");
+    let again = settlement::record_replacement_facts(&env.f.state, env.report.report_id)
+        .await
+        .unwrap();
+    assert!(again.effects_quiescent && !again.changed);
+    assert_eq!(shown().await["effects"], after["effects"]);
+    let v: Value =
+        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let hot: aq_server::execution::authority::hot::HotState = serde_json::from_value(v).unwrap();
+    assert!(matches!(hot.effects, Effects::Quiescent { .. }));
+    let task = env.f.selection.lineage.task_id;
+    let assessment = replacement::assess_task(&env.f.state, task, NOW + 1).await;
+    let Assessment::Replace(r) = assessment.unwrap() else {
+        panic!("a returned writer attempt with a final ledger is replaceable");
+    };
+    assert_eq!((r.predecessor, r.needs_release), (attempt, true));
+    assert!(
+        env.holds_task().await,
+        "only the replacement owner releases"
+    );
+}
+
 /// The facts writer never acts on a confirmed (Success) settlement or on a
 /// report that is not finally reworked.
 #[tokio::test]
