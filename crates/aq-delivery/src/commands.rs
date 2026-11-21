@@ -93,6 +93,8 @@ pub struct Completion {
     pub output: Value,
     /// The pull request as this command left it, when it touched one.
     pub pull_request: Option<PullRequestObserved>,
+    /// Diagnostic retained with the operation, outside the versioned catalog response.
+    pub diagnostic: Option<&'static str>,
 }
 impl Completion {
     pub fn new(outcome: &'static str, output: Value) -> Self {
@@ -100,6 +102,7 @@ impl Completion {
             outcome,
             output,
             pull_request: None,
+            diagnostic: None,
         }
     }
     pub fn refused(reason: &'static str) -> Self {
@@ -200,6 +203,10 @@ impl Delivery {
             }
             Ok(RefPublication::Moved) => Completion::new("conflict", json!({})),
             Ok(RefPublication::NoRef) => Completion::refused("no_branch"),
+            Err(e) if e.code == "rejected" && e.message == "remote_rejected" => Completion {
+                diagnostic: Some("remote_rejected"),
+                ..Completion::refused("unreachable")
+            },
             Err(_) => Completion::refused("unreachable"),
         })
     }

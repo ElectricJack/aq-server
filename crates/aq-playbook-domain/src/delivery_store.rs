@@ -373,6 +373,33 @@ pub async fn result_wait(
     .await?)
 }
 
+/// The latest refused publication for the claimed task, result and retained head.
+/// Older hosts recorded only the catalog reason. A later success supersedes all refusals.
+pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let refusal: Option<(Uuid, String, bool)> = sqlx::query_as(
+        "SELECT o.operation_id,p.head,COALESCE(o.request->>'answer_note'='remote_rejected',false)
+         FROM delivery_pushed_results p JOIN profiled_result_heads h USING(report_id,attempt_id)
+         JOIN execution_attempts a USING(attempt_id)
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text AND o.command_name='branch.publish'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND o.request->>'result_head'=p.head
+         WHERE p.report_id=$1 AND a.holds_task AND o.status='refused' AND o.output->>'reason'='unreachable'
+         AND NOT EXISTS(SELECT 1 FROM playbook_host_operations ok WHERE ok.subject_id=o.subject_id
+             AND ok.command_name='branch.publish' AND ok.status='published'
+             AND ok.request#>>'{result_ready,result_id}'=p.report_id::text
+             AND ok.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND ok.output->>'head'=p.head)
+         ORDER BY o.completed_at_ms DESC,o.operation_id LIMIT 1",
+    ).bind(result).fetch_optional(db).await?;
+    Ok(refusal.map(|(id, head, rejected)| {
+        let cause = if rejected {
+            "AQ Git recorded a rejection from the remote"
+        } else {
+            "the delivery host recorded an unreachable response"
+        };
+        format!("Publication of commit {head} failed ({cause}). AQ Git operation {id}.")
+    }))
+}
+
 /// A check operation still running for this exact result, attempt and published head.
 pub async fn checking_pr(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
     let check: Option<(String, String)> = sqlx::query_as(

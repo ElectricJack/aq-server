@@ -126,7 +126,13 @@ pub async fn notify<E: std::fmt::Debug>(
             body.push_str(" Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt.");
         }
         if reason == "branch_publication_refused" {
-            body.push_str(" AQ repeatedly received an unreachable response while publishing this retained result branch. Check the remote, task ref and publisher permissions. Delivery can continue with the same result after publication recovers.");
+            if let Some(detail) =
+                crate::delivery_store::publication_refusal(&mut tx, identity).await?
+            {
+                body.push(' ');
+                body.push_str(&detail);
+            }
+            body.push_str(" Check the remote, task ref and publisher permissions. Escalate any permission change to the owner. Delivery can continue with the same result after publication recovers.");
         }
         if reason == "stopped_without_result" {
             body.push_str(" The worker recorded a physical stop and still holds the task without a result. Inspect the worker's recovery status and retained workspace. Escalate missing evidence to the owner.");

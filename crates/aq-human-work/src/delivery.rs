@@ -29,11 +29,18 @@ pub async fn waiting(
         None => false,
     };
     let mut waiting = crate::result_waiting(h.attempt_id, result, active);
-    if let Ok(Some(check)) = store::checking_pr(&mut db, result).await
+    let detail = match store::checking_pr(&mut db, result).await {
+        Ok(Some(check)) => Some(check),
+        _ => store::publication_refusal(&mut db, result)
+            .await
+            .ok()
+            .flatten(),
+    };
+    if let Some(detail) = detail
         && let Some(Value::String(message)) = waiting.get_mut("message")
     {
         message.push(' ');
-        message.push_str(&check);
+        message.push_str(&detail);
     }
     Some(waiting)
 }

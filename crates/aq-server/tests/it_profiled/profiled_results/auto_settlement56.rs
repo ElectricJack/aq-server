@@ -1590,6 +1590,7 @@ mod playbook {
             };
             sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,$6,$7,$8,$8)")
                 .bind(id).bind(ns).bind(id.to_string()).bind(task.to_string()).bind(request).bind(status).bind(output).bind(NOW as i64).execute(&pool).await.unwrap();
+            id
         };
         let calls = AtomicUsize::new(0);
         let send =
@@ -1599,6 +1600,8 @@ mod playbook {
                     body.contains("branch_publication_refused")
                         && body.contains(&result.to_string())
                         && body.contains(&attempt.to_string())
+                        && body.contains(&head)
+                        && body.contains("rejection from the remote")
                 );
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, ()>(Uuid::new_v4())
@@ -1609,7 +1612,18 @@ mod playbook {
         record(&head, Uuid::new_v4(), "refused").await;
         notify(&pool, due, &send).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        record(&head, result, "refused").await;
+        let known_refusal = record(&head, result, "refused").await;
+        // Simulate a newer publisher alongside the older, catalog-only receipt.
+        sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb,completed_at_ms=completed_at_ms+1 WHERE operation_id=$1")
+            .bind(known_refusal).execute(&pool).await.unwrap();
+        let detail = aq_playbook_domain::delivery_store::publication_refusal(
+            &mut *pool.acquire().await.unwrap(),
+            result,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(detail.contains(&known_refusal.to_string()));
         notify(&pool, due - 1, &send).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         for _ in 0..2 {
@@ -1624,6 +1638,15 @@ mod playbook {
         record(&head, result, "published").await;
         notify(&pool, due, &send).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            aq_playbook_domain::delivery_store::publication_refusal(
+                &mut *pool.acquire().await.unwrap(),
+                result
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
         assert!(env.holds_task().await);
     }
 

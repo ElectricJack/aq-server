@@ -337,6 +337,13 @@ pub async fn completed_without_changes(pool: &sqlx::PgPool, task: Uuid) -> bool 
     matches!(quiet.bind(task).fetch_optional(pool).await, Ok(Some(Some(s))) if s == "no_change")
 }
 
+/// Add the settled delivery outcome to a completed task's work view.
+pub async fn show_no_change_settlement(data: &mut Value, pool: &PgPool, task: Uuid) {
+    if data["task_state"] == "completed" && completed_without_changes(pool, task).await {
+        data["completed_without_changes"] = json!(true);
+    }
+}
+
 /// The attempt holding a task, from AQ's execution authority state (the hot
 /// authority for adopted native attempts, else the attempt's own state).
 pub struct Hold {

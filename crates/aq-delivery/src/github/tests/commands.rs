@@ -244,6 +244,7 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
         Some(old) if old == sha('2') => {
             json!({"error": {"code": "object_unavailable", "message": "no such ref"}})
         }
+        Some(old) if old == sha('4') => json!({"outcome":"rejected","reason":"remote_rejected"}),
         _ => {
             json!({"error": {"code": "remote_unreachable", "message": "x", "retry": "safe_same_operation"}})
         }
@@ -263,7 +264,14 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
         (c.outcome, c.output),
         ("refused", json!({"reason": "no_branch"}))
     );
+    let rejected = publish(Some(&sha('4'))).await;
+    assert_eq!(rejected.diagnostic, Some("remote_rejected"));
+    assert_eq!(
+        (rejected.outcome, rejected.output),
+        ("refused", json!({"reason":"unreachable"}))
+    );
     let c = publish(Some(&sha('3'))).await;
+    assert!(c.diagnostic.is_none());
     assert_eq!(
         (c.outcome, c.output),
         ("refused", json!({"reason": "unreachable"}))

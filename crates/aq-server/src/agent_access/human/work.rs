@@ -152,12 +152,7 @@ pub(super) async fn work(
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,"parent":parent,"execution":execution});
     crate::role_settings::show(&mut data, &raw["node"], &a.record.binding.default_role);
-    // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
-    if root["task_state"] == "completed"
-        && aq_human_work::completed_without_changes(&r.pool, id).await
-    {
-        data["completed_without_changes"] = json!(true);
-    }
+    aq_human_work::show_no_change_settlement(&mut data, &r.pool, id).await;
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
     // Optional field: when it cannot be computed the read still succeeds without it.
     match crate::routing::view(&s, id, &raw["node"], ready).await {
