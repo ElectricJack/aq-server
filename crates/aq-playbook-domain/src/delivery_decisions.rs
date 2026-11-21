@@ -280,7 +280,7 @@ pub async fn notification(
     )
     .bind(origin.result_id)
     .bind(origin.task_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *db)
     .await?
     .flatten();
     let reason = reason.ok_or(Error::Conflict)?;
@@ -289,7 +289,30 @@ pub async fn notification(
         "Delivery hold {reason} for project {}, task {} (revision {}), attempt {}, result {}.",
         origin.project_id, origin.task_id, origin.version, origin.attempt_id, origin.result_id
     );
-    Ok((key, format!("{context}\n\n{body}")))
+    let latest = port
+        .latest_in(db, origin.task_id)
+        .await?
+        .filter(|r| {
+            r.project_id == project
+                && r.attempt_id == origin.attempt_id
+                && r.result_id == origin.result_id
+        })
+        .ok_or(Error::Conflict)?;
+    let head = if latest.head.is_empty() {
+        "none recorded"
+    } else {
+        &latest.head
+    };
+    let evidence = format!(
+        "Recorded outcome: {}. Changes from the lineage base: {}. Retained head: {head}.",
+        latest.outcome, latest.changed
+    );
+    Ok((
+        key,
+        format!(
+            "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
+        ),
+    ))
 }
 
 /// The once-only key of `supervisor.notify` in a project.

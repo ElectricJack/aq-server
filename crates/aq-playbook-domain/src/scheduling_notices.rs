@@ -82,7 +82,7 @@ pub async fn notify<E: std::fmt::Debug>(
         if let Some(id) = report {
             body.push_str(&format!(" Result: {id}."));
         }
-        body.push_str(" Inspect the task, its latest attempt and its receipts. Escalate an owner-only decision with these identifiers.");
+        body.push_str(" Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.");
         match send(&mut tx, Some(project), &body, now as u64).await {
             Ok(message) => {
                 delivery_decisions::record_told(&mut tx, project, &key, message, now).await?;

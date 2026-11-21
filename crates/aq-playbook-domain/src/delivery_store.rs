@@ -61,6 +61,10 @@ pub trait DeliveryPort: Send + Sync {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
     /// The latest result of `task`, if it has one.
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Read the same facts inside the caller's delivery transaction.
+    async fn latest_in(&self, _db: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
+        self.latest(task).await
+    }
     /// Lock the event's attempt and verify its current result before an effect.
     /// Fixture ports use the equivalent identity check against their own store.
     async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
@@ -116,6 +120,10 @@ impl DeliveryPort for PgDelivery {
 
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>> {
         let mut conn = self.0.acquire().await?;
+        self.latest_in(&mut conn, task).await
+    }
+
+    async fn latest_in(&self, conn: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
         let row = sqlx::query(
             "SELECT r.report_id,r.attempt_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,\
@@ -164,7 +172,7 @@ impl DeliveryPort for PgDelivery {
         // and a result with a source then counts as changed.
         let base = match start.is_empty() {
             true => None,
-            false => aq_machine_control::lineage_base(&mut conn, task, &start)
+            false => aq_machine_control::lineage_base(conn, task, &start)
                 .await
                 .map_err(|_| crate::Error::Unknown)?,
         };

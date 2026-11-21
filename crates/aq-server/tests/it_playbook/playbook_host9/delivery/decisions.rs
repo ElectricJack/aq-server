@@ -378,6 +378,11 @@ async fn held_result_notice_identifies_the_work_that_needs_attention() {
         assert!(body.contains(&id.to_string()), "{body}");
     }
     assert!(body.contains("policy") && body.contains("Delivery requires attention."));
+    assert!(body.contains("Recorded outcome: failed.") && body.contains("task.work"));
+    assert!(
+        body.contains(&format!("Retained head: {}", "a".repeat(40)))
+            && body.contains("task.history")
+    );
 }
 
 #[tokio::test]
