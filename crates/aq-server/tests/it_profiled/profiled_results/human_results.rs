@@ -233,8 +233,10 @@ async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart(
         .await
         .is_err()
     );
-    // The original's stored digest no longer matches its bytes: its validation
-    // refuses. The correction still lists, the page says it is incomplete.
+    // The original's stored bytes stop being its canonical encoding, with the
+    // row's digest kept equal to the new bytes (so the row stays valid for
+    // `profiled_result_reports_check`): its validation refuses. The correction
+    // still lists, the page says it is incomplete.
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
@@ -242,7 +244,8 @@ async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart(
         .await
         .unwrap();
     sqlx::query(
-        "UPDATE profiled_result_reports SET report_digest=repeat('0',64) WHERE report_id=$1",
+        "UPDATE profiled_result_reports SET report_bytes=report_bytes||'\\x0a'::bytea, \
+         report_digest=encode(sha256(report_bytes||'\\x0a'::bytea),'hex') WHERE report_id=$1",
     )
     .bind(report.report_id)
     .execute(&mut *tx)

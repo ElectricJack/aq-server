@@ -13,6 +13,7 @@ use aq_admission::{
     result_record::{self, Disposition, Receipt},
     transport::ResultReport,
 };
+use aq_profiled_state::result_reads::Stored;
 use sqlx::Row;
 use uuid::Uuid;
 fn conflict() -> AppError {
@@ -317,12 +318,7 @@ async fn record_only(
 /// Validated retained owner facts, never an eligibility or current execution
 /// permit. Callers authenticate/project-scope independently and keep this same
 /// transaction when relying on the report-head snapshot for another admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecordedOrigin {
-    LegacyPrepareV1,
-    PhaseExecutionV2,
-    PhaseRefreshExecutionV1,
-}
+pub use aq_dashboard_contract::result_metadata::ResultOrigin as RecordedOrigin;
 pub struct RecordedResult {
     /// Validated historical origin only; no eligibility or release authority.
     pub origin: RecordedOrigin,
@@ -343,42 +339,18 @@ pub async fn load_locked(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     report_id: Uuid,
 ) -> Result<RecordedResult, AppError> {
-    use aq_session_protocol::Validate;
     if report_id.is_nil() {
         return Err(AppError::BadRequest("invalid report identity".into()));
     }
-    let row = sqlx::query("SELECT * FROM profiled_result_reports WHERE report_id=$1")
-        .bind(report_id)
-        .fetch_optional(&mut **tx)
+    let Stored {
+        row,
+        report,
+        receipt,
+        node_id,
+    } = aq_profiled_state::result_reads::read_report(tx, report_id)
         .await
         .map_err(db)?
         .ok_or_else(|| AppError::NotFound("recorded result not found".into()))?;
-    let bytes: Vec<u8> = row.get("report_bytes");
-    let report = result_record::decode_report(&bytes).map_err(|_| AppError::Internal)?;
-    let digest = result_record::report_digest(&report).map_err(|_| AppError::Internal)?;
-    let SessionIdentity::Remote {
-        node_id, boot_id, ..
-    } = report.binding.session
-    else {
-        return Err(AppError::Internal);
-    };
-    if canonical(&report)? != bytes
-        || digest.as_str() != row.get::<String, _>("report_digest")
-        || report.report_id != report_id
-        || report.binding.attempt_id != row.get::<Uuid, _>("attempt_id")
-        || node_id != row.get::<Uuid, _>("node_id")
-        || report.operation_id != row.get::<Uuid, _>("operation_id")
-        || report.identity.node_id != node_id
-        || report.identity.boot_id != boot_id
-    {
-        return Err(AppError::Internal);
-    }
-    let receipt_bytes: Vec<u8> = row.get("receipt_bytes");
-    let receipt =
-        result_record::decode_receipt(&receipt_bytes, &report).map_err(|_| AppError::Internal)?;
-    if canonical(&receipt)? != receipt_bytes {
-        return Err(AppError::Internal);
-    }
     let view =
         authority::load_locked(state, tx, &report.binding.session, Policy::IdentityOnly).await?;
     if view.kind != Kind::ProfiledV1
@@ -405,48 +377,11 @@ pub async fn load_locked(
     {
         return Err(AppError::Internal);
     }
-    let result_origin = match pin.kind {
-        "legacy_prepare_v1" => RecordedOrigin::LegacyPrepareV1,
-        "phase_execution_v2" => RecordedOrigin::PhaseExecutionV2,
-        "phase_refresh_execution_v1" => RecordedOrigin::PhaseRefreshExecutionV1,
-        _ => return Err(AppError::Internal),
-    };
-    let launch=sqlx::query("SELECT launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest FROM profiled_launches WHERE attempt_id=$1 FOR SHARE")
-        .bind(report.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
-    let binding: aq_admission::LaunchBinding =
-        serde_json::from_value(launch.get("launch_binding")).map_err(|_| AppError::Internal)?;
-    let manifest: aq_session_protocol::LaunchManifest =
-        serde_json::from_value(launch.get("launch_manifest")).map_err(|_| AppError::Internal)?;
-    let spec = aq_admission::execution_spec::decode_profiled_spec(&canonical(
-        &launch.get::<serde_json::Value, _>("execution_spec"),
-    )?)
-    .map_err(|_| AppError::Internal)?;
-    // This is frozen offer metadata only, never a reconstruction of current
-    // authority from historical state. Common authority was locked above.
-    let offer: aq_session_protocol::ProfiledOffer = serde_json::from_value(
-        sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT state->'offer' FROM execution_attempts WHERE attempt_id=$1",
-        )
-        .bind(report.binding.attempt_id)
-        .fetch_one(&mut **tx)
+    let result_origin = RecordedOrigin::from_kind(pin.kind).ok_or(AppError::Internal)?;
+    let scope = (view.project_id, view.task_id);
+    let (binding, spec) = aq_profiled_state::result_reads::read_launch(tx, &report.binding, scope)
         .await
-        .map_err(db)?,
-    )
-    .map_err(|_| AppError::Internal)?;
-    offer.validate().map_err(|_| AppError::Internal)?;
-    spec.validate_against(&offer)
-        .map_err(|_| AppError::Internal)?;
-    if binding != report.binding
-        || offer.binding != binding
-        || offer.manifest != manifest
-        || launch.get::<String, _>("manifest_digest") != binding.launch_manifest_digest.as_str()
-        || launch.get::<String, _>("execution_spec_digest")
-            != binding.execution_spec_digest.as_str()
-        || spec.lifecycle.project_id != view.project_id
-        || spec.task.task_id != view.task_id
-    {
-        return Err(AppError::Internal);
-    }
+        .map_err(db)?;
     let artifact_id: Uuid = row.get("outcome_artifact_id");
     let linked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_launch_artifacts WHERE attempt_id=$1 AND artifact_id=$2)").bind(binding.attempt_id).bind(artifact_id).fetch_one(&mut **tx).await.map_err(db)?;
     let retained = artifacts::load_locked(tx, artifact_id).await?;
@@ -463,14 +398,8 @@ pub async fn load_locked(
     outcome
         .validate_against(&spec)
         .map_err(|_| AppError::Internal)?;
-    let head_report_id: Uuid = sqlx::query_scalar(
-        "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR SHARE",
-    )
-    .bind(binding.attempt_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(db)?
-    .ok_or(AppError::Internal)?;
+    let head = aq_profiled_state::result_reads::head_report(tx, binding.attempt_id);
+    let head_report_id = head.await.map_err(db)?.ok_or(AppError::Internal)?;
     let receipt_artifact = receipt.artifact(&report).map_err(|_| AppError::Internal)?;
     Ok(RecordedResult {
         origin: result_origin,

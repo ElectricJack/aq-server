@@ -276,13 +276,15 @@ async fn opt_in_phase_metadata_refuses_changed_nominal_terminal_origin() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    // The exact read keeps the origin fence as a refusal; a list isolates the
+    // refused report in `unavailable` rather than failing every report.
     assert_eq!(get(&f, &path).await.0, StatusCode::CONFLICT);
-    assert_eq!(
-        get(&f, "/api/human/results?profile=recorded_native_v2")
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
+    let (status, page) = get(&f, "/api/human/results?profile=recorded_native_v2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["incomplete"], true);
+    assert_eq!(page["items"], serde_json::json!([]));
+    assert_eq!(page["unavailable"][0]["report_id"], serde_json::json!(report.report_id));
+    assert_eq!(page["unavailable"][0]["reason"], "refused");
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE profiled_stopped_receipts DISABLE TRIGGER profiled_stopped_immutable")
         .execute(&mut *tx)
