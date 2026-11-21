@@ -93,7 +93,11 @@ pub fn with_operation(error: Value, id: Uuid) -> Value {
 }
 pub fn with_operation_in(mode: Mode, mut error: Value, id: Uuid) -> Value {
     error["operation_id"] = json!(id);
-    error["recovery"] = json!(recovery(mode, id));
+    // A retry refused before admission has no operation receipt to look up.
+    if error["http_status"] != 422 || error["server_code"] != "replacement_project_revision_changed"
+    {
+        error["recovery"] = json!(recovery(mode, id));
+    }
     error
 }
 

@@ -6,41 +6,10 @@ use super::*;
 const HISTORY_LIMIT: u16 = 25;
 const ATTEMPT_LIMIT: i64 = 16;
 
-/// Holding attempt (the agent session attached to each task) for a page of
-/// tasks in this project. At most one attempt holds a task.
 pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> Result<Vec<Value>> {
-    if tasks.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = sqlx::query(
-        "SELECT e.task_id,e.attempt_id,e.session_id,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
-         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=ANY($1) AND e.kind='profiled_v1' AND e.holds_task \
-         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
-         ORDER BY e.task_id,e.attempt_id LIMIT 65",
-    )
-    .bind(tasks)
-    .bind(project.to_string())
-    .fetch_all(pool)
-    .await
-    .map_err(|_| unavailable())?;
-    // Spec 0014 §7.1: what each attempt ran with, from its own record.
-    let ran_with = aq_role_settings::attempts::ran_with_rows(pool, &rows).await;
-    rows.iter()
-        .map(|row| {
-            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
-            let mut execution = json!({
-                "task_id": row.try_get::<Uuid, _>("task_id").map_err(|_| unavailable())?,
-                "attempt_id": attempt,
-                "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
-                "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            });
-            if let Some(summary) = ran_with.get(&attempt) {
-                execution["ran_with"] = json!(summary);
-            }
-            Ok(execution)
-        })
-        .collect()
+    aq_human_work::holding_executions(pool, project, tasks)
+        .await
+        .map_err(|_| unavailable())
 }
 
 /// A fixed label for an error's kind, for logs: never the variant's payload.
@@ -142,7 +111,26 @@ pub(super) async fn work(
         aq_machine_control::holds::clear_closed(&r.pool, id, (s.clock)()).await;
     }
     let held = aq_machine_control::holds::current(&r.pool, p, id).await;
-    let held = (held.map_err(|_| unavailable())?).map(|h| {
+    let mut held = held.map_err(|_| unavailable())?;
+    if let Some(h) = held
+        .as_mut()
+        .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
+    {
+        let current = a.record.revision;
+        let pinned =
+            aq_profiled_state::replacement_sql::predecessor_project_revision(&r.pool, h.attempt_id)
+                .await
+                .map_err(|_| unavailable())?;
+        if pinned != Some(current) {
+            let now = u64::try_from((s.clock)().timestamp_millis()).map_err(|_| unavailable())?;
+            if let Some(code) =
+                crate::profiled_execution::replacement::retry_hold(&s, id, now, current).await?
+            {
+                h.reason = code.into();
+            }
+        }
+    }
+    let held = held.map(|h| {
         let phrase = aq_machine_control::holds::phrase(&h.reason);
         aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
     });

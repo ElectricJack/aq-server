@@ -1122,6 +1122,10 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_expires(
         .execute(&c.env.env.pool)
         .await
         .unwrap();
+    assert_eq!(
+        held_reason(&work(&c, c.env.lineage.task_id).await).as_deref(),
+        Some("replacement_project_revision_changed")
+    );
     let (status, plain) = retry(&c, Uuid::new_v4(), Some("old binding")).await;
     assert_eq!(status, 422, "{plain}");
     assert_eq!(plain["code"], "replacement_project_revision_changed");
