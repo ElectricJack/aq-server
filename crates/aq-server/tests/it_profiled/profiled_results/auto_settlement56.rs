@@ -1868,8 +1868,7 @@ mod playbook {
         assert_eq!(settlement_rows(&env.f, env.report.report_id).await, 0);
     }
 
-    #[tokio::test]
-    async fn owner_retry_proves_the_pushed_source_and_effects_of_a_failed_policy_hold() {
+    async fn held_retry_env(outcome: aq_admission::transport::ProcessOutcome) -> AutoEnv {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
         ))
@@ -1884,9 +1883,18 @@ mod playbook {
             false,
         ))
         .await;
-        report.outcome = aq_admission::transport::ProcessOutcome::Failed;
+        report.outcome = outcome;
         let env = finish_auto_env(f, report, axum::http::StatusCode::OK, true, true).await;
         seed_agent_binding(&env, &profile).await;
+        env
+    }
+
+    #[tokio::test]
+    async fn owner_retry_proves_the_pushed_source_and_effects_of_a_failed_policy_hold() {
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
         let task = env.f.selection.lineage.task_id;
         let pool = env.f.db.pool().await;
         let facts = || async {
@@ -1907,6 +1915,58 @@ mod playbook {
         }
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
         assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
+    async fn exhausted_success_retry_requires_a_final_pr_failure_for_this_exact_result() {
+        use aq_delivery::git_grant::held_report;
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Success,
+        ))
+        .await;
+        let pool = env.f.db.pool().await;
+        let lineage = &env.f.selection.lineage;
+        let (task, attempt, result) = (
+            lineage.task_id,
+            env.report.binding.attempt_id,
+            env.report.report_id,
+        );
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
+            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        let ns = Uuid::new_v4();
+        sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retry',$2,$3,$4,repeat('a',64),repeat('b',64))")
+            .bind(ns).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        let record = async |command: &str, status: &str, report: Uuid| {
+            let id = Uuid::new_v4();
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms) VALUES($1,$2,1,$3,$4,$5,0,$6,$7,CASE WHEN $7='running' THEN NULL ELSE '{}'::jsonb END,$8)")
+                .bind(id).bind(ns).bind(id.to_string()).bind(command).bind(task.to_string())
+                .bind(json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":"4".repeat(40)}))
+                .bind(status).bind(NOW as i64).execute(&pool).await.unwrap();
+            id
+        };
+        record("pull_request.await_checks", "conflict", Uuid::new_v4()).await;
+        assert_eq!(held_report(&pool, task).await.unwrap(), None);
+        record("pull_request.await_checks", "conflict", result).await;
+        let reasons = work_reasons(&env).await;
+        assert!(
+            reasons.iter().any(|r| r["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("pull_request.await_checks")
+                    && text.contains(&"4".repeat(40))))
+        );
+        let merge = record("pull_request.merge", "running", result).await;
+        assert_eq!(held_report(&pool, task).await.unwrap(), None);
+        sqlx::query("UPDATE playbook_host_operations SET status='conflict',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(merge).bind(NOW as i64).execute(&pool).await.unwrap();
+        assert_eq!(held_report(&pool, task).await.unwrap(), Some(result));
+        settlement::recover_held_for_retry(&env.f.state, task)
+            .await
+            .unwrap();
+        let facts: (String,String)=sqlx::query_as("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(&pool).await.unwrap();
+        assert_eq!(facts, ("retained".into(), "quiescent".into()));
+        assert!(env.holds_task().await);
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

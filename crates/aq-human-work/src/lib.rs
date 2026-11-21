@@ -188,17 +188,24 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
 
 /// A delivery hold has a result and reason even after the playbook has ended.
 #[cfg(feature = "delivery_playbook")]
-pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str) -> Value {
+pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&str>) -> Value {
     let why = match reason {
         "returns_exhausted" => "the delivery playbook reached its repair-return limit",
         _ => "the delivery playbook held the recorded result",
     };
-    task_hold(
+    let mut shown = task_hold(
         hold.attempt_id,
         &hold.status,
         reason,
         &format!("{why} for result {result}"),
-    )
+    );
+    if let Some(evidence) = evidence {
+        shown["message"] = json!(format!(
+            "{} {evidence}",
+            shown["message"].as_str().unwrap_or_default()
+        ));
+    }
+    shown
 }
 
 /// Epic 0 (spec 0016 section 7): the task read's word on a stopped attempt

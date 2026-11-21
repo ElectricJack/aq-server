@@ -67,7 +67,16 @@ async fn result_waiting(
     let mut db = pool.acquire().await.ok()?;
     let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
     if let Some(reason) = hold {
-        return Some(aq_human_work::delivery_hold(h, result, &reason));
+        let evidence = store::held_pr_evidence(&mut db, result)
+            .await
+            .ok()
+            .flatten();
+        return Some(aq_human_work::delivery_hold(
+            h,
+            result,
+            &reason,
+            evidence.as_deref(),
+        ));
     }
     let pb = s.config.playbooks.as_deref().filter(|pb| {
         pb.profile.is_delivery() && (pb.installation_routing || pb.namespace.project_id == project)

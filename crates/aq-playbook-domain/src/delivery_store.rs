@@ -373,6 +373,27 @@ pub async fn result_wait(
     .await?)
 }
 
+/// Last final PR failure observed by AQ on this result's published head.
+pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let observed: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT o.command_name,o.status,p.head FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND COALESCE(o.request->>'result_head',o.request->>'expected_head_sha')=p.head
+           AND ((o.command_name='pull_request.await_checks' AND o.status IN ('conflict','failed'))
+             OR (o.command_name='pull_request.merge' AND o.status='conflict'))
+         ORDER BY o.completed_at_ms DESC NULLS LAST,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(observed.map(|(command, status, head)| {
+        format!("AQ recorded {status} from {command} on published head {head}.")
+    }))
+}
+
 /// Whether an artifact is active on the delivery binding of the namespace:
 /// the event is sent only then (and the task read says so).
 pub async fn active(db: &mut PgConnection, namespace: (Uuid, i64)) -> Result<bool> {

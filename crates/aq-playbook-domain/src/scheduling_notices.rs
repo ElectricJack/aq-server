@@ -103,6 +103,12 @@ pub async fn notify<E: std::fmt::Debug>(
                 continue;
             }
             body.push_str(" Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt.");
+            if let Some(evidence) =
+                crate::delivery_store::held_pr_evidence(&mut tx, identity).await?
+            {
+                body.push(' ');
+                body.push_str(&evidence);
+            }
             if let Some(url) = pr {
                 body.push_str(&format!(" Pull request: {url}."));
             }

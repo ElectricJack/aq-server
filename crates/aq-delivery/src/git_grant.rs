@@ -182,7 +182,20 @@ pub async fn held_report<'e>(
     sqlx::query_scalar(
         "SELECT h.report_id FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
          JOIN delivery_git_grants g USING(attempt_id) JOIN delivery_decisions d ON d.result_id=h.report_id
-         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held' AND d.reason='policy'",
+         JOIN profiled_result_reports r ON r.report_id=h.report_id
+         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held'
+         AND CASE convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'
+           WHEN 'failed' THEN d.reason IN ('policy','returns_exhausted')
+           WHEN 'success' THEN d.reason='returns_exhausted' AND EXISTS(
+             SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+               AND o.request#>>'{result_ready,result_id}'=r.report_id::text
+               AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+               AND ((o.command_name='pull_request.await_checks' AND o.status IN ('failed','conflict'))
+                 OR (o.command_name='pull_request.merge' AND o.status='conflict')))
+             AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+               AND o.request#>>'{result_ready,result_id}'=r.report_id::text
+               AND o.command_name='pull_request.merge' AND o.status NOT IN ('conflict','refused','not_mergeable'))
+           ELSE false END",
     ).bind(task).fetch_optional(db).await
 }
 
