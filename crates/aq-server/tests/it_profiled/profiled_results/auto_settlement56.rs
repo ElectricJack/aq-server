@@ -2178,6 +2178,13 @@ mod playbook {
             .unwrap()
             .is_none()
         );
+        sqlx::query("UPDATE delivery_decisions SET reason='checks_failed',detail='tests (shard 3/6)',update_from_main=false WHERE result_id=$1")
+            .bind(result).execute(&pool).await.unwrap();
+        assert!(work_reasons(&env).await.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("tests (shard 3/6)"))
+        }));
         let calls = AtomicUsize::new(0);
         aq_playbook_domain::scheduling_notices::notify(
             &pool,
@@ -2189,6 +2196,7 @@ mod playbook {
                         && body.contains(&"4".repeat(40))
                         && body.contains("conflict")
                         && body.contains(&evidence)
+                        && body.contains("tests (shard 3/6)")
                 );
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, ()>(Uuid::new_v4())

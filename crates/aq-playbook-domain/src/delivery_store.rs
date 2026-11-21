@@ -429,8 +429,10 @@ pub async fn returned_result_evidence(
     task: Uuid,
     attempt: Uuid,
 ) -> Result<Option<String>> {
-    let record: Option<(Uuid, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT h.report_id,convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome',s.disposition,p.head
+    let record = sqlx::query(
+        "SELECT h.report_id,convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome' AS outcome,s.disposition,p.head,
+                CASE WHEN d.reason='checks_failed' AND char_length(d.detail) BETWEEN 1 AND 512
+                          AND d.detail !~ '[[:cntrl:]]' THEN d.detail END AS check_detail
          FROM execution_attempts a JOIN profiled_launches l USING(attempt_id)
          JOIN profiled_result_heads h USING(attempt_id)
          JOIN profiled_result_reports r USING(attempt_id,report_id)
@@ -444,14 +446,19 @@ pub async fn returned_result_evidence(
     .bind(attempt)
     .fetch_optional(db)
     .await?;
-    Ok(record.map(|(result, outcome, settlement, head)| {
+    Ok(record.map(|row| {
+        let result: Uuid = row.get("report_id");
+        let outcome: String = row.get("outcome");
         let mut text =
             format!("The delivery playbook returned result {result}. Worker outcome: {outcome}.");
-        if let Some(disposition) = settlement {
+        if let Some(disposition) = row.get::<Option<String>, _>("disposition") {
             text.push_str(&format!(" Recorded settlement: {disposition}."));
         }
-        if let Some(head) = head {
+        if let Some(head) = row.get::<Option<String>, _>("head") {
             text.push_str(&format!(" Retained commit: {head}."));
+        }
+        if let Some(detail) = row.get::<Option<String>, _>("check_detail") {
+            text.push_str(&format!(" Recorded failed check detail: {detail:?}. Inspect the failed workflow step before requesting source changes."));
         }
         text
     }))
