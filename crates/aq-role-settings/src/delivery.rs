@@ -27,6 +27,15 @@ pub struct DeliveryLimits {
     pub git_transfer_timeout_ms: u64,
     /// The most bytes one push to central aq-git may carry.
     pub max_push_bytes: u64,
+    /// Whether a dependent task waits until each completed blocker that pushed
+    /// a result has that result merged into the followed branch. A blocker
+    /// that pushed nothing is satisfied at once. Settings stored before this
+    /// field existed read as `true`.
+    #[serde(default = "require_landed_results")]
+    pub require_landed_results: bool,
+}
+fn require_landed_results() -> bool {
+    true
 }
 impl Default for DeliveryLimits {
     fn default() -> Self {
@@ -37,6 +46,7 @@ impl Default for DeliveryLimits {
             longest_check_wait_ms: 3_600_000,
             git_transfer_timeout_ms: 600_000,
             max_push_bytes: 268_435_456,
+            require_landed_results: true,
         }
     }
 }
@@ -110,6 +120,7 @@ mod tests {
             ),
             (60_000, 30_000, 120_000, 3_600_000, 600_000, 268_435_456)
         );
+        assert!(d.require_landed_results);
         assert_eq!(d.validate(), Ok(()));
     }
     #[test]
@@ -154,6 +165,16 @@ mod tests {
             set(&mut limits, most);
             assert_eq!(limits.validate(), Ok(()), "{name} at its maximum");
         }
+    }
+    #[test]
+    fn limits_stored_before_landed_results_existed_require_them() {
+        let mut stored = serde_json::to_value(DeliveryLimits::default()).unwrap();
+        stored
+            .as_object_mut()
+            .unwrap()
+            .remove("require_landed_results");
+        let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
+        assert!(read.require_landed_results);
     }
     #[test]
     fn unknown_and_missing_fields_are_refused() {

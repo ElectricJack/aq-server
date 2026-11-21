@@ -125,6 +125,7 @@ impl Fixture {
         let service = Service {
             pool: self.pool.clone(),
             gate: Semaphore::new(2),
+            limits: Default::default(),
         };
         let dispatch = self.snapshot.run.association().unwrap().clone();
         write(

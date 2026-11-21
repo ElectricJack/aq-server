@@ -32,9 +32,10 @@ async fn discover(service: Arc<Service>, user: User, id: Option<Uuid>) -> Result
         limits: Limits {
             body_bytes: 16384,
             context_refs: writes::MAX_CONTEXT_REFS as u8,
-            attachments: attachments::MAX_ATTACHMENTS as u8,
+            attachments: service.limits.max_files_per_message as u8,
             history_page: 16,
         },
+        attachments: aq_supervisor_control::attachments::capability(&service.limits),
     }))
 }
 #[derive(Deserialize)]

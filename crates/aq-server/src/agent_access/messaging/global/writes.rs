@@ -77,7 +77,8 @@ fn context_valid(refs: &[ContextRef]) -> bool {
             .all(|(i, a)| refs[..i].iter().all(|b| (b.kind, b.id) != (a.kind, a.id)))
 }
 impl Create {
-    fn parse(bytes: &[u8]) -> Result<Self> {
+    /// `max_files` is the configured files-per-message limit.
+    fn parse(bytes: &[u8], max_files: usize) -> Result<Self> {
         if bytes.is_empty() || bytes.len() > 131072 {
             return Err(invalid());
         }
@@ -91,7 +92,7 @@ impl Create {
             || v.body.len() > 16384
             || v.body.contains('\0')
             || !context_valid(&v.context)
-            || !super::attachments::refs_valid(&v.attachments)
+            || !super::attachments::refs_valid(&v.attachments, max_files)
         {
             return Err(invalid());
         }
@@ -182,7 +183,7 @@ pub(super) async fn enqueue(
     Path(id): Path<Uuid>,
     bytes: Bytes,
 ) -> Result<Response> {
-    let request = Create::parse(&bytes)?;
+    let request = Create::parse(&bytes, service.limits.max_files_per_message)?;
     let action = action::request(id, &request);
     let mut registry = crate::dashboard_api::actions::Registry::default();
     registry
@@ -229,7 +230,7 @@ async fn enqueue_domain(
     id: Uuid,
     bytes: Bytes,
 ) -> Result<Receipt> {
-    let request = Create::parse(&bytes)?;
+    let request = Create::parse(&bytes, service.limits.max_files_per_message)?;
     if id.is_nil() {
         return Err(invalid());
     }
