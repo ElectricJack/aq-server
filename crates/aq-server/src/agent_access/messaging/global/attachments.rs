@@ -238,8 +238,7 @@ pub(super) async fn upload(
     Ok((StatusCode::CREATED, Json(row.upload())).into_response())
 }
 /// Bytes are served as an inert download whatever their declared type.
-fn content(row: Row, bytes: Vec<u8>) -> Result<Response> {
-    let d = row.descriptor;
+fn content(d: Descriptor, bytes: Vec<u8>) -> Result<Response> {
     let ok = hash(&bytes) == d.digest;
     ok.then(|| serve(&d.name, &d.media_type, &d.digest, bytes))
         .flatten()
@@ -296,7 +295,7 @@ pub(super) async fn download(
     Path(ids): Path<(Uuid, Uuid)>,
 ) -> Reply {
     let (row, bytes) = readable(&state, &service, &user, ids, true).await?;
-    Ok(content(row, bytes)?)
+    Ok(content(row.descriptor, bytes)?)
 }
 /// `GET .../attachments/{attachment}/metadata`: the `AttachmentUpload` state.
 pub(super) async fn metadata(
@@ -342,37 +341,31 @@ pub(super) async fn unstage(
     tx.commit().await.map_err(db)?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
-/// `GET /v1/supervisor/conversation/attachments/{attachment}`: the central
-/// supervisor reads a bound file only when its message was dispatched to it.
+/// `GET /v1/supervisor/conversation/attachments/{attachment}[/text]`: a file whose message was
+/// dispatched to the calling supervisor, as exact bytes or (`/text`) a `delivery::Delivery`.
 pub(super) async fn supervisor_download(
     State(state): State<AppState>,
     Extension(service): Extension<Arc<Service>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     Path(attachment): Path<Uuid>,
 ) -> Result<Response> {
     let at = stamp(&state)?;
-    let bearer = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(reply::rejected)?;
+    let bearer = reply::bearer(&headers)?;
     let mut tx = service.tx().await?;
     let principal =
         reply::authenticate_in_transaction(&service.pool, &mut tx, bearer, "messaging", at).await?;
-    let dispatched: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM global_supervisor_attachments a JOIN central_supervisor_mail_members b ON b.message_id=a.message_id JOIN central_supervisor_dispatches d ON d.actor_id=b.actor_id AND d.reservation_id=b.reservation_id WHERE a.attachment_id=$1 AND b.actor_id=$2)")
-        .bind(attachment)
-        .bind(principal.actor_id)
-        .fetch_one(&mut *tx)
+    let file = aq_supervisor_control::delivery::dispatched(&mut tx, principal.actor_id, attachment)
         .await
-        .map_err(db)?;
-    if !dispatched {
-        return Err(missing());
-    }
-    let (row, bytes) = fetch(&mut tx, attachment, true)
-        .await?
+        .map_err(db)?
         .ok_or_else(missing)?;
     tx.commit().await.map_err(db)?;
-    content(row, bytes)
+    if !uri.path().ends_with("/text") {
+        return content(file.source, file.bytes);
+    }
+    let d = tokio::task::spawn_blocking(move || aq_supervisor_control::delivery::deliver(file));
+    let d = d.await.map_err(|_| unavailable())?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(d)).into_response())
 }
 /// Binds the referenced staged uploads to a new owner message inside the
 /// enqueue transaction. `None` when any ref is not a live staged upload of

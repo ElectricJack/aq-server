@@ -155,6 +155,10 @@ pub fn supervisor_routes(state: &AppState) -> Router<AppState> {
             "/v1/supervisor/conversation/attachments/{attachment}",
             get(attachments::supervisor_download),
         )
+        .route(
+            "/v1/supervisor/conversation/attachments/{attachment}/text",
+            get(attachments::supervisor_download),
+        )
         .layer(DefaultBodyLimit::max(131072))
         .layer(Extension(service.clone()))
         .layer(middleware::from_fn_with_state(service, gate))
