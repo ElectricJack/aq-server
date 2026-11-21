@@ -350,9 +350,21 @@ pub async fn plan(
 /// The latest result of `attempt` with no playbook decision on it and no
 /// `work.complete` or `work.return` settling it (the task read says it waits).
 pub async fn undecided(db: &mut PgConnection, attempt: Uuid) -> Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar(
-        "SELECT h.report_id FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id) WHERE h.attempt_id=$1 \
-         AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+    Ok(result_wait(db, attempt)
+        .await?
+        .and_then(|(id, hold)| hold.is_none().then_some(id)))
+}
+
+/// The claim's current undecided or held result, with its recorded hold reason.
+pub async fn result_wait(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,CASE WHEN d.decision='held' THEN COALESCE(d.reason,'delivery_hold') END
+         FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id)
+         LEFT JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE h.attempt_id=$1 AND (d.decision IS NULL OR d.decision='held')
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
          AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",
     )

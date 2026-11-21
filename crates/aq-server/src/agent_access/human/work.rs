@@ -55,31 +55,33 @@ fn error_class(error: &AppError) -> &'static str {
     }
 }
 
-/// Epic 0 (spec 0016 section 7): why a stopped attempt's undecided result
-/// holds the task, and whether a delivery playbook is active for `project`
-/// to decide it. A read failure omits it; the attempt's own hold is shown.
+/// Show the current delivery decision or the policy that can decide an open result.
 #[cfg(feature = "delivery_playbook")]
 async fn result_waiting(
     s: &AppState,
     pool: &PgPool,
     project: Uuid,
-    attempt: Uuid,
+    h: &aq_human_work::Hold,
 ) -> Option<Value> {
     use aq_playbook_domain::delivery_store as store;
     let mut db = pool.acquire().await.ok()?;
-    let result = store::undecided(&mut db, attempt).await.ok()??;
-    // The namespace's delivery artifact, for its project or (installation routing) all.
-    let active = match s.config.playbooks.as_deref() {
-        Some(pb)
-            if pb.profile.is_delivery()
-                && (pb.installation_routing || pb.namespace.project_id == project) =>
-        {
-            let namespace = (pb.namespace.namespace_id, pb.namespace.generation);
-            store::active(&mut db, namespace).await.ok()?
-        }
-        _ => false,
+    let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
+    if let Some(reason) = hold {
+        return Some(aq_human_work::delivery_hold(h, result, &reason));
+    }
+    let pb = s.config.playbooks.as_deref().filter(|pb| {
+        pb.profile.is_delivery() && (pb.installation_routing || pb.namespace.project_id == project)
+    });
+    let active = match pb {
+        Some(pb) => store::active(
+            &mut db,
+            (pb.namespace.namespace_id, pb.namespace.generation),
+        )
+        .await
+        .ok()?,
+        None => false,
     };
-    Some(aq_human_work::result_waiting(attempt, result, active))
+    Some(aq_human_work::result_waiting(h.attempt_id, result, active))
 }
 
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
@@ -140,11 +142,9 @@ pub(super) async fn work(
         false => None,
     };
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
-    // for a playbook, and the read says whether one is active to decide it.
     #[cfg(feature = "delivery_playbook")]
     let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
+        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h).await,
         _ => None,
     });
     let mut readiness = aq_human_work::readiness_with(

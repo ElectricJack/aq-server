@@ -1536,6 +1536,10 @@ mod playbook {
             .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held','returns_exhausted',$3)")
             .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        let reasons = work_reasons(&env).await;
+        assert!(reasons.iter().any(|r| r["code"] == "task_held"
+            && r["hold_reason"] == "returns_exhausted"
+            && r["message"].as_str().unwrap().contains(&result.to_string())));
         let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
         let calls = AtomicUsize::new(0);
         let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
