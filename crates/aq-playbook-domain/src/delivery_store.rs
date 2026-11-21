@@ -307,11 +307,12 @@ pub async fn observed(
         .as_i64()
         .filter(|v| *v >= 1)
         .ok_or(crate::Error::Unknown)?;
-    let work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
+    let mut work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
     let mut facts = result_facts(db, task, at.1, latest).await?;
     if let Some(result) = latest
         && crate::delivery_review::designated(node)
     {
+        work.kind = "review-only".into();
         facts.outcome = crate::delivery_review::outcome(db, node, task, version, result)
             .await?
             .to_owned();

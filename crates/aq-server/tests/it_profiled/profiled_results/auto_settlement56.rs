@@ -1482,6 +1482,134 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn persistent_scheduling_hold_notifies_its_project_once_after_settling_time() {
+        use aq_playbook_domain::scheduling_notices;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true, profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_time_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
+            .bind(Uuid::new_v4()).bind(task).bind(project).bind(attempt).bind(NOW as f64/1000.0).execute(&pool).await.unwrap();
+        assert_eq!(
+            aq_machine_control::holds::unclaimed_count(&pool, &[task, Uuid::new_v4()])
+                .await
+                .unwrap(),
+            1
+        );
+        let count = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            for id in [task, attempt, env.report.report_id] {
+                assert!(body.contains(&id.to_string()));
+            }
+            assert!(body.contains("lineage_time_budget_exhausted"));
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        scheduling_notices::notify(&pool, NOW as i64, &send)
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            scheduling_notices::notify(&pool, NOW as i64 + 600_001, &send)
+                .await
+                .unwrap();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn independent_review_reads_the_assigned_result_revision_and_retained_commit() {
+        use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
+        let target = Box::pin(super::auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = target.f.db.pool().await;
+        let id = target.report.report_id;
+        let pin: String = sqlx::query_scalar(
+            "SELECT report_revision FROM result_revision_pins WHERE report_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let lineage = aq_selection::TaskLineage {
+            task_id: Uuid::new_v4(),
+            ..target.f.selection.lineage.clone()
+        };
+        let f = Box::pin(common::profiled::fixture_on(
+            target.f.db.clone(),
+            Some((target.f.actor, lineage.clone())),
+        ))
+        .await;
+        let (f, _, mut report) = Box::pin(prepare_on(
+            f,
+            true,
+            true,
+            None,
+            false,
+            Some(default_policy("not_required")),
+            true,
+        ))
+        .await;
+        let signed = format!(
+            "Outcome: done; Changes: none; Copied: none; Claude exit 0; Result: Review verdict: changes_requested {id}@{pin} {} Unit checks exposed a defect.",
+            target.checkpoint
+        );
+        report.conclusion = Label::new(signed).unwrap();
+        let reviewer = Box::pin(finish_auto_env(
+            f,
+            report,
+            axum::http::StatusCode::OK,
+            false,
+            true,
+        ))
+        .await;
+        let latest = PgDelivery(pool.clone())
+            .latest(lineage.task_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let version = reviewer.expected_version;
+        let graph = json!({"version":version,"labels":["review-only"],"body":format!("Review target: {id}@{pin}")});
+        let observed = |node: Value| {
+            let pool = pool.clone();
+            let latest = latest.clone();
+            let lineage = lineage.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                delivery_store::observed(
+                    &mut conn,
+                    lineage.task_id,
+                    (lineage.workspace_id, lineage.project_id),
+                    Some(&latest),
+                    &node,
+                    (false, 0, 1),
+                )
+                .await
+                .unwrap()["facts"]
+                    .clone()
+            }
+        };
+        let facts = observed(graph.clone()).await;
+        assert_eq!(facts["kind"], "review-only");
+        assert_eq!(facts["outcome"], "review_changes_requested");
+        let mut moved = graph.clone();
+        moved["version"] = json!(version + 1);
+        assert_eq!(observed(moved).await["outcome"], "review_incomplete");
+        let mut wrong = graph.clone();
+        wrong["body"] = json!(format!("Review target: {id}@{}", "0".repeat(64)));
+        assert_eq!(observed(wrong).await["outcome"], "review_incomplete");
+        let mut unmarked = graph;
+        unmarked["labels"] = json!([]);
+        assert_eq!(observed(unmarked).await["outcome"], "success");
+    }
+
+    #[tokio::test]
     async fn two_projects_keep_distinct_result_paths_after_enrollment_changes() {
         use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
         let mut legacy = super::auto_env("not_required", axum::http::StatusCode::OK).await;

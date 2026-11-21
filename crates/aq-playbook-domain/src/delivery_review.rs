@@ -62,10 +62,26 @@ pub(crate) async fn outcome(
         return Ok(incomplete);
     }
     let evidence: Option<(String, String)> = sqlx::query_as(
-        "SELECT convert_from(r.report_bytes,'UTF8')::jsonb->>'conclusion', p.head
+        "SELECT convert_from(r.report_bytes,'UTF8')::jsonb->>'conclusion', verified.head
          FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id)
          JOIN result_revision_pins target ON target.report_id=$1 AND target.report_revision=$2
-         JOIN delivery_pushed_results p ON p.report_id=target.report_id AND p.head IS NOT NULL
+         JOIN profiled_result_reports subject ON subject.report_id=target.report_id
+         JOIN profiled_launches target_launch ON target_launch.attempt_id=subject.attempt_id
+         JOIN LATERAL (
+           SELECT min(source.head) AS head FROM (
+             SELECT p.head FROM delivery_pushed_results p WHERE p.report_id=target.report_id
+             UNION ALL
+             SELECT t.central_receipt#>>'{source,hex}' FROM source_transfers t
+              WHERE t.attempt_id=subject.attempt_id AND t.state='retained'
+                AND t.manifest->>'role'='checkpoint'
+                AND t.repository_id::text=target_launch.execution_spec#>>'{source,repository_id}'
+                AND (convert_from(subject.report_bytes,'UTF8')::jsonb->'source_receipt_ids') ? (t.receipt->>'receipt_id')
+                AND t.central_receipt->>'retention_state'='active'
+                AND t.central_receipt->'source'=t.receipt->'source'
+                AND t.receipt->'source'=t.manifest->'checkpoint'
+                AND NOT EXISTS(SELECT 1 FROM source_retention_releases x WHERE x.transfer_id=t.transfer_id)
+           ) source HAVING count(DISTINCT source.head)=1
+         ) verified ON true
          WHERE r.report_id=$3 AND r.attempt_id=$4 AND target.project_id=$5 AND target.task_id<>$6
            AND (l.execution_spec#>>'{task,version}')::bigint=$7",
     )

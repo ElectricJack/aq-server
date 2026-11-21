@@ -486,6 +486,24 @@ pub struct Current {
     pub status: String,
     pub held_at: DateTime<Utc>,
 }
+/// Count Graph-ready tasks that an attempt or a current scheduling hold does not claim.
+pub async fn unclaimed_count(pool: &PgPool, tasks: &[Uuid]) -> Result<usize, Error> {
+    if tasks.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = pool.acquire().await?;
+    let sql = if has_holds(&mut conn).await? {
+        "SELECT count(*) FROM unnest($1::uuid[]) t(id) WHERE NOT EXISTS(SELECT 1 FROM execution_attempts a WHERE a.task_id=t.id AND a.holds_task) AND NOT EXISTS(SELECT 1 FROM task_holds_current h WHERE h.task_id=t.id)"
+    } else {
+        "SELECT count(*) FROM unnest($1::uuid[]) t(id) WHERE NOT EXISTS(SELECT 1 FROM execution_attempts a WHERE a.task_id=t.id AND a.holds_task)"
+    };
+    let count: i64 = sqlx::query_scalar(sql)
+        .bind(tasks)
+        .fetch_one(&mut *conn)
+        .await?;
+    usize::try_from(count).map_err(|_| Error::Invalid("ready count"))
+}
+
 pub async fn current(pool: &PgPool, project: Uuid, task: Uuid) -> Result<Option<Current>, Error> {
     let mut conn = pool.acquire().await?;
     if !has_holds(&mut conn).await? {

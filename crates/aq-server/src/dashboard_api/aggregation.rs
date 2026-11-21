@@ -395,7 +395,14 @@ async fn ready(
             .scheduling_ready_current(workspace, 32, None, state.clock.as_ref())
             .await
             .map_err(|_| Error::Unavailable)?;
-        n += page.items.len();
+        let ids: Vec<_> = page
+            .items
+            .iter()
+            .map(|item| item.revision.task_id)
+            .collect();
+        n += aq_machine_control::holds::unclaimed_count(&state.store.pool, &ids)
+            .await
+            .map_err(|_| Error::Unavailable)?;
         more |= page.next_cursor.is_some();
         let mut s = source(
             "graph_ready",
