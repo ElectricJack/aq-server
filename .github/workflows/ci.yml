@@ -116,7 +116,9 @@ jobs:
             exit 1
           fi
       - name: cargo nextest archive --workspace
-        run: cargo nextest archive --workspace --locked --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+        run: |
+          cargo nextest archive --workspace --locked --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          install -m 0755 "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
       # The archive's total, to compare with the sum of the shards' counts.
       - name: Count the archived tests
         run: |
@@ -128,7 +130,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-archive
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: |
+            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/cargo-nextest
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
@@ -169,9 +173,6 @@ jobs:
         run: |
           toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
           rustup toolchain install "$toolchain" --profile minimal
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
-        with:
-          tool: cargo-nextest@0.9.148
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: nextest-archive
@@ -185,7 +186,9 @@ jobs:
         run: |
           # env!("CARGO_TARGET_TMPDIR") points here; the archive does not carry it.
           mkdir -p "$GITHUB_WORKSPACE/target/tmp"
-          cargo nextest run --archive-file "$RUNNER_TEMP/archive/nextest-archive.tar.zst" \
+          # Artifact downloads do not preserve executable permissions.
+          chmod +x "$RUNNER_TEMP/archive/cargo-nextest"
+          "$RUNNER_TEMP/archive/cargo-nextest" nextest run --archive-file "$RUNNER_TEMP/archive/nextest-archive.tar.zst" \
             --extract-to "$GITHUB_WORKSPACE" --extract-overwrite \
             --workspace-remap . --no-fail-fast --profile ci \
             --partition hash:${{ matrix.shard }}/6
