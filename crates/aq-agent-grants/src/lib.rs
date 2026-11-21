@@ -420,10 +420,10 @@ pub fn check(
     }
 }
 
-/// Grant each `/v1/agent/*` question, comment and wait route requires, with
+/// Grant each `/v1/agent/*` question, comment, wait and result route requires, with
 /// the registry command it maps to (spec 0006 §9). The graph and message
 /// routes keep checking their agent-access-1 profile capability.
-pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 11] = [
+pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
     ("/v1/agent/questions", "question.ask", op::QUESTION_ASK),
     (
         "/v1/agent/questions/show",
@@ -451,6 +451,21 @@ pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 11] = [
     ("/v1/agent/waits/ack", "wait.ack", op::WAIT_ACK),
     ("/v1/agent/waits/list", "wait.list", op::WAIT_READ),
     ("/v1/agent/waits/show", "wait.show", op::WAIT_READ),
+    (
+        "/v1/agent/results/list",
+        "result.review.list",
+        op::RESULT_READ,
+    ),
+    (
+        "/v1/agent/results/show",
+        "result.review.show",
+        op::RESULT_READ,
+    ),
+    (
+        "/v1/agent/results/patch",
+        "result.review.patch",
+        op::RESULT_READ,
+    ),
 ];
 /// `(command, grant, target)` for an agent route path. Comments act on a
 /// task thread related to the attempt's task as `relation` (its own task
@@ -466,6 +481,10 @@ pub fn route_grant(
             project: holder.project,
             relation,
         }
+    } else if *grant == op::RESULT_READ {
+        // Results are read by project: `result.read@project:self` reaches them
+        // and no narrower scope does.
+        Target::Project(holder.project)
     } else {
         Target::OwnAttempt
     };

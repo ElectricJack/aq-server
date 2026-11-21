@@ -1,5 +1,6 @@
 //! Pure validation of the published agent-access v1 boundary.
 //! Shape/digest checks are not authentication, live authorization or graph effects.
+pub mod result_requests;
 use serde_json::Value;
 use std::sync::OnceLock;
 pub mod operation_receipt;

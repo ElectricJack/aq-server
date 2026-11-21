@@ -183,6 +183,7 @@ pub mod native_offer;
 pub mod replacement;
 pub mod replacement_sql;
 pub mod result_facts;
+pub mod result_reads;
 /// The body of `FUNCTION <name>(…) … AS $$<body>$$;` in a migration's SQL (the schema
 /// attestation compares it with the installed function's source).
 pub fn sql_function_body<'a>(sql: &'a str, name: &str) -> Option<&'a str> {
