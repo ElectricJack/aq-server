@@ -8,7 +8,10 @@ const MAX_NOTICE_BYTES: usize = 16 * 1024;
 /// Longest attempt detail repeated in a notice.
 const MAX_DETAIL_BYTES: usize = 500;
 /// Where a supervisor reaches the runs routes.
+#[cfg(not(feature = "supervisor_full_access"))]
 const RUNS: &str = "/v1/supervisor/admin/api/internal-work/runs";
+#[cfg(feature = "supervisor_full_access")]
+const RUNS: &str = "/v1/supervisor/owner/api/internal-work/runs";
 
 /// The purpose, the affected item, the reason, what the supervisor may do,
 /// and each attempt's provider, model and detail. The run's instructions and
@@ -95,4 +98,10 @@ fn clip(text: &str) -> &str {
         end -= 1;
     }
     &text[..end]
+}
+
+#[cfg(all(test, feature = "supervisor_full_access"))]
+#[test]
+fn notice_runs_path_uses_the_owner_mount() {
+    assert!(RUNS.starts_with("/v1/supervisor/owner/"));
 }

@@ -94,8 +94,10 @@ pub fn classify(path: &str) -> Class {
     {
         return Class::TerminalInteractive;
     }
-
-    if path == "/api/v1/commands" || path.starts_with("/api/v1/commands/") {
+    if path == "/api/v1/commands"
+        || path.starts_with("/api/v1/commands/")
+        || path.starts_with("/v1/supervisor/owner/")
+    {
         return Class::AgentCommand;
     }
     #[cfg(feature = "delivery_playbook")]
@@ -167,7 +169,6 @@ pub fn classify(path: &str) -> Class {
     {
         return Class::TerminalInteractive;
     }
-
     if path == "/v1/execution/sources/status" {
         return Class::Control;
     }
@@ -329,6 +330,7 @@ mod output_poll_tests {
             classify("/v1/terminal-relay/upload"),
             Class::TerminalOutput
         ));
+        assert_eq!(classify("/v1/supervisor/owner/a"), Class::AgentCommand);
     }
     #[cfg(feature = "delivery_playbook")]
     #[test]

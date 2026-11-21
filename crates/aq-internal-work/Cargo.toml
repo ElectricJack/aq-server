@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# Supervisors get full access (owner scope and registry); off by default.
+supervisor_full_access = []
+
 [dependencies]
 aq-intelligence-config = { path = "../aq-intelligence-config" }
 aq-role-settings = { path = "../aq-role-settings" }

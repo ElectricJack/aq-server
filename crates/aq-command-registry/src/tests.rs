@@ -627,3 +627,48 @@ fn route_backed_owner_mutations_fill_the_path_and_send_the_rest() {
         }
     }
 }
+
+#[cfg(feature = "supervisor_full_access")]
+#[test]
+fn every_owner_command_has_a_supervisor_route() {
+    let kept = [
+        "whoami",
+        "operation.show",
+        "task.create",
+        "task.graph.create",
+        "task.edit",
+        "task.reprioritize",
+        "task.role.set",
+        "task.route.set",
+        "task.route.clear",
+        "task.dependency.add",
+        "task.dependency.remove",
+        "project.list",
+    ];
+    let r = Registry::new(&actions()).unwrap();
+    for c in r.commands() {
+        let Some(owner) = c.owner.filter(|o| o.body != Body::Local) else {
+            continue;
+        };
+        let supervisor = c.supervisor.unwrap_or_else(|| panic!("{}", c.name));
+        if kept.contains(&c.name) {
+            assert!(!supervisor.path.starts_with(OWNER_PREFIX), "{}", c.name);
+            continue;
+        }
+        assert_eq!(
+            supervisor.path,
+            format!("{OWNER_PREFIX}{}", owner.path),
+            "{}",
+            c.name
+        );
+        assert_eq!(
+            Route {
+                path: owner.path,
+                ..supervisor
+            },
+            owner,
+            "{}",
+            c.name
+        );
+    }
+}

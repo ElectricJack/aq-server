@@ -26,10 +26,10 @@ use uuid::Uuid;
 type Receipts = Arc<Mutex<HashMap<String, (Vec<u8>, Value)>>>;
 
 #[derive(Clone, Default)]
-struct Graph {
-    nodes: Arc<Mutex<HashMap<Uuid, Value>>>,
-    posts: Arc<Mutex<Vec<Value>>>,
-    reply: Arc<Mutex<Option<(u16, Value)>>>,
+pub(crate) struct Graph {
+    pub(crate) nodes: Arc<Mutex<HashMap<Uuid, Value>>>,
+    pub(crate) posts: Arc<Mutex<Vec<Value>>>,
+    pub(crate) reply: Arc<Mutex<Option<(u16, Value)>>>,
     bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     receipts: Receipts,
     timeout_after_commit: Arc<AtomicBool>,
@@ -142,6 +142,24 @@ async fn mutate(State(g): State<Graph>, headers: HeaderMap, bytes: Bytes) -> Res
     graph_response(status, &reply)
 }
 
+/// A page of nodes of `kind`, in id order; the cursor is the last id served.
+async fn list_nodes(
+    State(g): State<Graph>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let limit: usize = q["limit"].parse().unwrap();
+    let mut nodes: Vec<Value> = g.nodes.lock().unwrap().values().cloned().collect();
+    nodes.retain(|n| {
+        n["kind"] == q["kind"].as_str()
+            && q.get("cursor")
+                .is_none_or(|c| n["id"].as_str().unwrap() > c.as_str())
+    });
+    nodes.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let next = (nodes.len() > limit).then(|| nodes[limit - 1]["id"].clone());
+    nodes.truncate(limit);
+    graph_response(200, &json!({"items":nodes,"next_cursor":next}))
+}
+
 async fn read_tree(State(g): State<Graph>) -> Response {
     graph_response(
         200,
@@ -171,10 +189,24 @@ async fn setup() -> Fixture {
     setup_runtime(f).await
 }
 async fn setup_runtime(mut f: common::profiled::Fixture) -> Fixture {
+    let (graph, server, dir) = graph_runtime(&mut f.state).await;
+    Fixture {
+        f,
+        graph,
+        server,
+        _dir: dir,
+    }
+}
+/// A fake public Graph API on a local port, and the agent access runtime in
+/// `state` that reaches it. The caller keeps the server and key directory.
+pub(crate) async fn graph_runtime(
+    state: &mut aq_server::AppState,
+) -> (Graph, tokio::task::JoinHandle<()>, tempfile::TempDir) {
     let graph = Graph::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let app = Router::new()
+        .route("/v1/workspaces/{w}/nodes", get(list_nodes))
         .route("/v1/workspaces/{w}/nodes/{id}", get(read_node))
         .route("/v1/workspaces/{w}/nodes/{id}/history", get(read_history))
         .route("/v1/workspaces/{w}/nodes/{id}/tree", get(read_tree))
@@ -195,13 +227,8 @@ async fn setup_runtime(mut f: common::profiled::Fixture) -> Fixture {
     })
     .await
     .unwrap();
-    f.state.agent_access = Some(Arc::new(runtime));
-    Fixture {
-        f,
-        graph,
-        server,
-        _dir: dir,
-    }
+    state.agent_access = Some(Arc::new(runtime));
+    (graph, server, dir)
 }
 impl Fixture {
     fn workspace(&self) -> Uuid {
@@ -252,7 +279,7 @@ impl Fixture {
         serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap()
     }
 }
-fn node(id: Uuid, workspace: Uuid, kind: &str, version: u64) -> Value {
+pub(crate) fn node(id: Uuid, workspace: Uuid, kind: &str, version: u64) -> Value {
     let knowledge = kind == "knowledge";
     json!({"id":id,"workspace_id":workspace,"kind":kind,"version":version,"content_revision":version,
         "title":"Original title","body":"Original body","acceptance_criteria":"","labels":[],
@@ -263,12 +290,12 @@ fn node(id: Uuid, workspace: Uuid, kind: &str, version: u64) -> Value {
         "content_type":"note","summary":null,
         "summary_of_revision":null,"valid_from":null,"valid_until":null,"review_at":null,"successor_id":null})
 }
-fn action(kind: &str, entity: &str, id: Uuid, revision: &str, payload: Value) -> Value {
+pub(crate) fn action(kind: &str, entity: &str, id: Uuid, revision: &str, payload: Value) -> Value {
     json!({"operation_id":payload["operation_id"],"kind":kind,
         "subject":{"type":entity,"id":id,"revision":revision},
         "expected_versions":{entity:revision},"payload":payload})
 }
-fn change_set(results: Vec<Value>) -> Value {
+pub(crate) fn change_set(results: Vec<Value>) -> Value {
     json!({"change_set_id":Uuid::new_v4(),"results":results})
 }
 

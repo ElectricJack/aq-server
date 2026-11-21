@@ -3,6 +3,10 @@ name = "aq-supervisor-control"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+[features]
+# Supervisors get full access (owner scope and registry); off by default.
+supervisor_full_access = ["dep:tower"]
+
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
@@ -11,6 +15,7 @@ serde_json.workspace = true
 sqlx.workspace = true
 sqlx-postgres.workspace = true
 tokio.workspace = true
+tower = { workspace = true, optional = true }
 uuid.workspace = true
 aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-central-authority = { path = "../aq-central-authority" }
