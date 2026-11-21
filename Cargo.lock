@@ -996,6 +996,7 @@ name = "aq-supervisor-control"
 version = "0.1.0"
 dependencies = [
  "aq-central-authority",
+ "aq-delivery",
  "aq-manual-sessions",
  "async-trait",
  "axum",
