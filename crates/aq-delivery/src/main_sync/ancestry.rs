@@ -148,7 +148,8 @@ impl OfferAncestry {
 
 /// The first of `blockers` that pushed a result for `repository` (spec 0016
 /// section 5.2) with no recorded merge into that repository. A blocker without
-/// a pushed result produced no changes and is delivered.
+/// a pushed result, or one that only published its offered base with no earlier
+/// changes on the leased branch, has no code to land.
 async fn undelivered(
     pool: &PgPool,
     blockers: &[Uuid],
@@ -159,6 +160,7 @@ async fn undelivered(
          JOIN execution_attempts a ON a.attempt_id=p.attempt_id \
          JOIN delivery_git_grants g ON g.attempt_id=p.attempt_id \
          WHERE a.task_id=ANY($1) AND g.repository_id=$2 AND p.head IS NOT NULL \
+           AND (p.head<>g.base OR (g.lease IS NOT NULL AND g.lease<>g.base)) \
            AND NOT EXISTS (SELECT 1 FROM delivery_merge_evidence m WHERE m.task_id=a.task_id \
                            AND m.target #>> '{git,repository_id}'=$3) \
          ORDER BY a.task_id LIMIT 1",

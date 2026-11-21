@@ -1,49 +1,14 @@
 //! Work-view task projections: readiness, blockers, parent, attached execution,
 //! history timeline and per-scope completion counts (G11 X8-X13).
-//!
-//! Readiness is derived server-side from one bounded depth-1 Graph Context and
-//! the attempt holding the task. It never claims `ready` when the Context was
-//! truncated without a known open blocker: that is reported as `unknown`.
+//! Readiness combines Graph dependencies, execution holds and current scheduler observations.
 use super::*;
 
 const HISTORY_LIMIT: u16 = 25;
-const ATTEMPT_LIMIT: i64 = 16;
 
-/// Holding attempt (the agent session attached to each task) for a page of
-/// tasks in this project. At most one attempt holds a task.
 pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> Result<Vec<Value>> {
-    if tasks.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = sqlx::query(
-        "SELECT e.task_id,e.attempt_id,e.session_id,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
-         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=ANY($1) AND e.kind='profiled_v1' AND e.holds_task \
-         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
-         ORDER BY e.task_id,e.attempt_id LIMIT 65",
-    )
-    .bind(tasks)
-    .bind(project.to_string())
-    .fetch_all(pool)
-    .await
-    .map_err(|_| unavailable())?;
-    // Spec 0014 §7.1: what each attempt ran with, from its own record.
-    let ran_with = aq_role_settings::attempts::ran_with_rows(pool, &rows).await;
-    rows.iter()
-        .map(|row| {
-            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
-            let mut execution = json!({
-                "task_id": row.try_get::<Uuid, _>("task_id").map_err(|_| unavailable())?,
-                "attempt_id": attempt,
-                "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
-                "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            });
-            if let Some(summary) = ran_with.get(&attempt) {
-                execution["ran_with"] = json!(summary);
-            }
-            Ok(execution)
-        })
-        .collect()
+    aq_human_work::holding_executions(pool, project, tasks)
+        .await
+        .map_err(|_| unavailable())
 }
 
 /// A fixed label for an error's kind, for logs: never the variant's payload.
@@ -56,33 +21,6 @@ fn error_class(error: &AppError) -> &'static str {
         AppError::Internal => "internal",
         _ => "other",
     }
-}
-
-/// Epic 0 (spec 0016 section 7): why a stopped attempt's undecided result
-/// holds the task, and whether a delivery playbook is active for `project`
-/// to decide it. A read failure omits it; the attempt's own hold is shown.
-#[cfg(feature = "delivery_playbook")]
-async fn result_waiting(
-    s: &AppState,
-    pool: &PgPool,
-    project: Uuid,
-    attempt: Uuid,
-) -> Option<Value> {
-    use aq_playbook_domain::delivery_store as store;
-    let mut db = pool.acquire().await.ok()?;
-    let result = store::undecided(&mut db, attempt).await.ok()??;
-    // The namespace's delivery artifact, for its project or (installation routing) all.
-    let active = match s.config.playbooks.as_deref() {
-        Some(pb)
-            if pb.profile.is_delivery()
-                && (pb.installation_routing || pb.namespace.project_id == project) =>
-        {
-            let namespace = (pb.namespace.namespace_id, pb.namespace.generation);
-            store::active(&mut db, namespace).await.ok()?
-        }
-        _ => false,
-    };
-    Some(aq_human_work::result_waiting(attempt, result, active))
 }
 
 /// The hierarchy relationships that keep the active task `id` out of the
@@ -134,10 +72,26 @@ pub(super) async fn work(
         aq_machine_control::holds::clear_closed(&r.pool, id, (s.clock)()).await;
     }
     let held = aq_machine_control::holds::current(&r.pool, p, id).await;
-    let held = (held.map_err(|_| unavailable())?).map(|h| {
-        let phrase = aq_machine_control::holds::phrase(&h.reason);
-        aq_human_work::task_hold(h.attempt_id, &h.status, &h.reason, &phrase)
-    });
+    let mut held = held.map_err(|_| unavailable())?;
+    if let Some(h) = held
+        .as_mut()
+        .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
+    {
+        let current = a.record.revision;
+        let pinned =
+            aq_profiled_state::replacement_sql::predecessor_project_revision(&r.pool, h.attempt_id)
+                .await
+                .map_err(|_| unavailable())?;
+        if pinned != Some(current) {
+            let now = u64::try_from((s.clock)().timestamp_millis()).map_err(|_| unavailable())?;
+            if let Some(code) =
+                crate::profiled_execution::replacement::retry_hold(&s, id, now, current).await?
+            {
+                h.reason = code.into();
+            }
+        }
+    }
+    let held = aq_human_work::recorded_hold(&r.pool, p, id, held.as_ref()).await;
     // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
     let role = aq_role_settings::tasks::effective_role(
         &raw["node"]["metadata"],
@@ -158,18 +112,27 @@ pub(super) async fn work(
         false => None,
     };
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
-    // for a playbook, and the read says whether one is active to decide it.
     #[cfg(feature = "delivery_playbook")]
     let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
+        (Some(h), true) if h.stopped => {
+            let namespace = s
+                .config
+                .playbooks
+                .as_deref()
+                .filter(|pb| {
+                    pb.profile.is_delivery()
+                        && (pb.installation_routing || pb.namespace.project_id == p)
+                })
+                .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
+            aq_human_work::delivery::waiting(&r.pool, namespace, h).await
+        }
         _ => None,
     });
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),
     };
-    let readiness = aq_human_work::readiness_in(
+    let mut readiness = aq_human_work::readiness_in(
         root["task_state"].as_str(),
         hold.as_ref(),
         held.collect(),
@@ -177,16 +140,19 @@ pub(super) async fn work(
         hierarchy,
         complete,
     );
+    aq_swarm_settings::admission::show_task_wait(
+        &mut readiness,
+        &r.pool,
+        id,
+        (s.clock)().timestamp_millis(),
+    )
+    .await
+    .map_err(|_| unavailable())?;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,"parent":parent,"execution":execution});
     crate::role_settings::show(&mut data, &raw["node"], &a.record.binding.default_role);
-    // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
-    if root["task_state"] == "completed"
-        && aq_human_work::completed_without_changes(&r.pool, id).await
-    {
-        data["completed_without_changes"] = json!(true);
-    }
+    aq_human_work::show_no_change_settlement(&mut data, &r.pool, id).await;
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
     // Optional field: when it cannot be computed the read still succeeds without it.
     match crate::routing::view(&s, id, &raw["node"], ready).await {
@@ -272,64 +238,20 @@ pub(super) async fn history(
             .map(|v| v["node"].clone()),
         None => None,
     };
-    let changes = aq_human_work::changes(rows, id, prior.as_ref());
-    let actors = aq_human_work::attribution::history(
-        &r.pool,
-        s.agent_access
-            .as_ref()
-            .and_then(|rt| rt.mutation_actor.as_deref()),
-        (p, w),
-        rows,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    let items: Vec<Value> = rows
-        .iter()
-        .zip(changes.into_iter().zip(actors))
-        .map(|(h, (change, actor))| {
-            Ok(json!({
-                "sequence": h["sequence"].as_u64().filter(|n| *n > 0).ok_or_else(unavailable)?.to_string(),
-                "entry_id": h["entry_id"], "category": h["category"], "operation": h["operation"],
-                "actor_id": actor, "reason": h["reason"], "created_at": h["created_at"], "change": change,
-            }))
-        })
-        .collect::<Result<_>>()?;
+    let service = s
+        .agent_access
+        .as_ref()
+        .and_then(|rt| rt.mutation_actor.as_deref());
+    let items = aq_human_work::history::items(&r.pool, service, (p, w), id, rows, prior.as_ref())
+        .await
+        .ok_or_else(unavailable)?;
     let next = match page["next_cursor"].as_str() {
         Some(c) => Some(r.cursors.encode(&binding, c, stamp(&s))?),
         None => None,
     };
-    let attempts = sqlx::query(
-        "SELECT e.attempt_id,e.session_id,e.holds_task,COALESCE(h.state->>'status',e.state->>'status','unknown') AS status \
-         FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) \
-         WHERE e.task_id=$1 AND e.kind='profiled_v1' \
-         AND e.state->'offer'->'manifest'->'bindings'->>'project_id'=$2 \
-         ORDER BY e.holds_task DESC,e.attempt_id LIMIT $3",
-    )
-    .bind(id)
-    .bind(p.to_string())
-    .bind(ATTEMPT_LIMIT + 1)
-    .fetch_all(&r.pool)
-    .await
-    .map_err(|_| unavailable())?;
-    let attempts_truncated = attempts.len() as i64 > ATTEMPT_LIMIT;
-    let ran_with = aq_role_settings::attempts::ran_with_rows(&r.pool, &attempts).await;
-    let attempts: Vec<Value> = attempts
-        .iter()
-        .take(ATTEMPT_LIMIT as usize)
-        .map(|row| {
-            let attempt: Uuid = row.try_get("attempt_id").map_err(|_| unavailable())?;
-            let mut shown = json!({
-                "attempt_id": attempt,
-                "session_id": row.try_get::<Uuid, _>("session_id").map_err(|_| unavailable())?,
-                "holds_task": row.try_get::<bool, _>("holds_task").map_err(|_| unavailable())?,
-                "status": row.try_get::<String, _>("status").map_err(|_| unavailable())?,
-            });
-            if let Some(summary) = ran_with.get(&attempt) {
-                shown["ran_with"] = json!(summary);
-            }
-            Ok(shown)
-        })
-        .collect::<Result<_>>()?;
+    let (attempts, attempts_truncated) = aq_human_work::history::attempts(&r.pool, p, id)
+        .await
+        .map_err(|_| unavailable())?;
     finish(
         &s,
         &r,

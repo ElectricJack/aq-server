@@ -61,6 +61,10 @@ pub trait DeliveryPort: Send + Sync {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>>;
     /// The latest result of `task`, if it has one.
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>>;
+    /// Read the same facts inside the caller's delivery transaction.
+    async fn latest_in(&self, _db: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
+        self.latest(task).await
+    }
     /// Lock the event's attempt and verify its current result before an effect.
     /// Fixture ports use the equivalent identity check against their own store.
     async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
@@ -116,6 +120,10 @@ impl DeliveryPort for PgDelivery {
 
     async fn latest(&self, task: Uuid) -> Result<Option<Latest>> {
         let mut conn = self.0.acquire().await?;
+        self.latest_in(&mut conn, task).await
+    }
+
+    async fn latest_in(&self, conn: &mut PgConnection, task: Uuid) -> Result<Option<Latest>> {
         let row = sqlx::query(
             "SELECT r.report_id,r.attempt_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,\
@@ -164,7 +172,7 @@ impl DeliveryPort for PgDelivery {
         // and a result with a source then counts as changed.
         let base = match start.is_empty() {
             true => None,
-            false => aq_machine_control::lineage_base(&mut conn, task, &start)
+            false => aq_machine_control::lineage_base(conn, task, &start)
                 .await
                 .map_err(|_| crate::Error::Unknown)?,
         };
@@ -307,8 +315,16 @@ pub async fn observed(
         .as_i64()
         .filter(|v| *v >= 1)
         .ok_or(crate::Error::Unknown)?;
-    let work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
-    let facts = result_facts(db, task, at.1, latest).await?;
+    let mut work = WorkFacts::of(node, task_facts.0, task_facts.1, task_facts.2);
+    let mut facts = result_facts(db, task, at.1, latest).await?;
+    if let Some(result) = latest
+        && crate::delivery_review::designated(node)
+    {
+        work.kind = "review-only".into();
+        facts.outcome = crate::delivery_review::outcome(db, node, task, version, result)
+            .await?
+            .to_owned();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
 }
 
@@ -334,15 +350,152 @@ pub async fn plan(
 /// The latest result of `attempt` with no playbook decision on it and no
 /// `work.complete` or `work.return` settling it (the task read says it waits).
 pub async fn undecided(db: &mut PgConnection, attempt: Uuid) -> Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar(
-        "SELECT h.report_id FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id) WHERE h.attempt_id=$1 \
-         AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+    Ok(result_wait(db, attempt)
+        .await?
+        .and_then(|(id, hold)| hold.is_none().then_some(id)))
+}
+
+/// The claim's current undecided or held result, with its recorded hold reason.
+pub async fn result_wait(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,CASE WHEN d.decision='held' THEN COALESCE(d.reason,'delivery_hold') END
+         FROM profiled_result_heads h JOIN delivery_git_grants g USING(attempt_id)
+         LEFT JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE h.attempt_id=$1 AND (d.decision IS NULL OR d.decision='held')
          AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements a WHERE a.report_id=h.report_id \
          AND a.disposition IN ('prepared','possible','confirmed','rework_required'))",
     )
     .bind(attempt)
     .fetch_optional(db)
     .await?)
+}
+
+/// The latest refused publication for the claimed task, result and retained head.
+/// Older hosts recorded only the catalog reason. A later success supersedes all refusals.
+pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let refusal: Option<(Uuid, String, bool)> = sqlx::query_as(
+        "SELECT o.operation_id,p.head,COALESCE(o.request->>'answer_note'='remote_rejected',false)
+         FROM delivery_pushed_results p JOIN profiled_result_heads h USING(report_id,attempt_id)
+         JOIN execution_attempts a USING(attempt_id)
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text AND o.command_name='branch.publish'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND o.request->>'result_head'=p.head
+         WHERE p.report_id=$1 AND a.holds_task AND o.status='refused' AND o.output->>'reason'='unreachable'
+         AND NOT EXISTS(SELECT 1 FROM playbook_host_operations ok WHERE ok.subject_id=o.subject_id
+             AND ok.command_name='branch.publish' AND ok.status='published'
+             AND ok.request#>>'{result_ready,result_id}'=p.report_id::text
+             AND ok.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND ok.output->>'head'=p.head)
+         ORDER BY o.completed_at_ms DESC,o.operation_id LIMIT 1",
+    ).bind(result).fetch_optional(db).await?;
+    Ok(refusal.map(|(id, head, rejected)| {
+        let cause = if rejected {
+            "AQ Git recorded a rejection from the remote"
+        } else {
+            "the delivery host recorded an unreachable response"
+        };
+        format!("Publication of commit {head} failed ({cause}). AQ Git operation {id}.")
+    }))
+}
+
+/// A check operation still running for this exact result, attempt and published head.
+pub async fn checking_pr(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let check: Option<(String, String)> = sqlx::query_as(
+        "SELECT o.request->>'pull_request',p.head FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND a.holds_task AND o.command_name='pull_request.await_checks' AND o.status='running'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND o.request->>'result_head'=p.head AND jsonb_typeof(o.request->'pull_request')='number'
+         ORDER BY o.created_at_ms DESC,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(check.map(|(number, head)| {
+        format!("AQ is waiting for required checks on PR #{number} at commit {head}.")
+    }))
+}
+
+/// The current claimed report's actual outcome and recorded return, for a
+/// project supervisor inspecting a budget hold. Only bounded status fields
+/// pass through; the report body stays on its own route.
+pub async fn returned_result_evidence(
+    db: &mut PgConnection,
+    project: Uuid,
+    task: Uuid,
+    attempt: Uuid,
+) -> Result<Option<String>> {
+    let record = sqlx::query(
+        "SELECT h.report_id,convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome' AS outcome,s.disposition,p.head,
+                CASE WHEN d.reason='checks_failed' AND char_length(d.detail) BETWEEN 1 AND 512
+                          AND d.detail !~ '[[:cntrl:]]' THEN d.detail END AS check_detail
+         FROM execution_attempts a JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r USING(attempt_id,report_id)
+         JOIN delivery_decisions d ON d.result_id=h.report_id AND d.task_id=a.task_id AND d.decision='returned'
+         LEFT JOIN profiled_auto_settlements s ON s.report_id=h.report_id AND s.attempt_id=a.attempt_id
+         LEFT JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         WHERE a.holds_task AND a.task_id=$2 AND a.attempt_id=$3 AND l.execution_spec#>>'{lifecycle,project_id}'=$1",
+    )
+    .bind(project.to_string())
+    .bind(task)
+    .bind(attempt)
+    .fetch_optional(db)
+    .await?;
+    Ok(record.map(|row| {
+        let result: Uuid = row.get("report_id");
+        let outcome: String = row.get("outcome");
+        let mut text =
+            format!("The delivery playbook returned result {result}. Worker outcome: {outcome}.");
+        if let Some(disposition) = row.get::<Option<String>, _>("disposition") {
+            text.push_str(&format!(" Recorded settlement: {disposition}."));
+        }
+        if let Some(head) = row.get::<Option<String>, _>("head") {
+            text.push_str(&format!(" Retained commit: {head}."));
+        }
+        if let Some(detail) = row.get::<Option<String>, _>("check_detail") {
+            text.push_str(&format!(" Recorded failed check detail: {detail:?}. Inspect the failed workflow step before requesting source changes."));
+        }
+        text
+    }))
+}
+
+/// Last final PR failure observed by AQ on this result's published head.
+pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let observed: Option<(String, String, String, Uuid, bool)> = sqlx::query_as(
+        "SELECT o.command_name,o.status,p.head,a.task_id,COALESCE(o.request->>'answer_note'='behind_base',false) FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND COALESCE(o.request->>'result_head',o.request->>'expected_head_sha')=p.head
+           AND ((o.command_name='pull_request.await_checks' AND o.status IN ('conflict','failed'))
+             OR (o.command_name='pull_request.merge' AND o.status='conflict'))
+         ORDER BY o.completed_at_ms DESC NULLS LAST,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some((command, status, head, task, behind)) = observed else {
+        return Ok(None);
+    };
+    let mut evidence = format!("AQ recorded {status} from {command} on published head {head}.");
+    if behind {
+        evidence.push_str(" GitHub reported that this head is behind its base branch.");
+    }
+    if aq_delivery::git_grant::held_report(&mut *db, task).await? == Some(result) {
+        evidence.push_str(
+            " AQ verified that this held result qualifies for repair through task.retry.",
+        );
+        if status == "conflict" {
+            evidence.push_str(" A replacement can integrate current main if the retained task ref and repository binding still match.");
+        }
+    }
+    Ok(Some(evidence))
 }
 
 /// Whether an artifact is active on the delivery binding of the namespace:

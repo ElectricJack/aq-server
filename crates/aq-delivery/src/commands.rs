@@ -93,6 +93,8 @@ pub struct Completion {
     pub output: Value,
     /// The pull request as this command left it, when it touched one.
     pub pull_request: Option<PullRequestObserved>,
+    /// Diagnostic retained with the operation, outside the versioned catalog response.
+    pub diagnostic: Option<&'static str>,
 }
 impl Completion {
     pub fn new(outcome: &'static str, output: Value) -> Self {
@@ -100,6 +102,13 @@ impl Completion {
             outcome,
             output,
             pull_request: None,
+            diagnostic: None,
+        }
+    }
+    fn behind_base() -> Self {
+        Self {
+            diagnostic: Some("behind_base"),
+            ..Self::new("conflict", json!({}))
         }
     }
     pub fn refused(reason: &'static str) -> Self {
@@ -200,6 +209,10 @@ impl Delivery {
             }
             Ok(RefPublication::Moved) => Completion::new("conflict", json!({})),
             Ok(RefPublication::NoRef) => Completion::refused("no_branch"),
+            Err(e) if e.code == "rejected" && e.message == "remote_rejected" => Completion {
+                diagnostic: Some("remote_rejected"),
+                ..Completion::refused("unreachable")
+            },
             Err(_) => Completion::refused("unreachable"),
         })
     }
@@ -458,9 +471,8 @@ impl Delivery {
             Ok(MergeOutcome::Merged { .. }) => MergeAttempt::Unconfirmed(Step::Retry(
                 "GitHub did not report a valid merge SHA".into(),
             )),
-            Ok(MergeOutcome::Conflict | MergeOutcome::Behind) => {
-                done(Completion::new("conflict", json!({})))
-            }
+            Ok(MergeOutcome::Behind) => done(Completion::behind_base()),
+            Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
             }
@@ -754,7 +766,7 @@ fn check_repair(
                 seen.mergeable = "conflicting";
             }
         }
-        Mergeability::Behind if repair_behind => {}
+        Mergeability::Behind if repair_behind => return Some(Completion::behind_base()),
         _ => return None,
     }
     Some(Completion::new("conflict", json!({})))

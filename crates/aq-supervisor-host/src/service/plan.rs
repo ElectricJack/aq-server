@@ -47,18 +47,18 @@ fn instructions(config: &ServiceConfig, control: &Control) -> String {
 fn instructions(config: &ServiceConfig, control: &Control) -> String {
     let scope = if let Some(project) = control.project {
         format!(
-            "You supervise only project {} ({project}); you hold the owner's powers inside it. The server refuses other projects and global administration.",
+            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
             control.label
         )
     } else {
-        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers.".into()
+        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers. Inspect execution across projects using dashboard.swarm, session.list and attempt.show.".into()
     };
     format!(
         r#"{scope}
-You manage AQ work through authenticated tools and hold the owner's powers: every owner command is available to you.
-Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use project.list for project identifiers and revisions; task.list and task.show expose current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
+Use authenticated AQ tools within the scope above.
+Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use task.list and task.show with the project ID for current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
 {ATTACHMENTS}
-Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify with dashboard.swarm, session.list and attempt.show rather than assuming a worker started.
+Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify the task's current execution and history before reporting that a worker started.
 This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
 Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
 Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
@@ -367,12 +367,17 @@ mod tests {
             let text = instructions(&config, &control);
             for want in [
                 "Create tasks active unless the owner asks for a draft",
-                "every owner command is available to you",
+                "dashboard.swarm, session.list and attempt.show",
                 "Do not merge, deploy or alter host services or credentials.",
                 "resend it to recheck an owner command",
             ] {
                 assert!(text.contains(want), "{want}");
             }
+            let mut scoped = control.clone();
+            scoped.project = Some(Uuid::new_v4());
+            let scoped = instructions(&config, &scoped);
+            assert!(scoped.contains("task.work and task.history"));
+            assert!(!scoped.contains("dashboard.swarm"));
             for gone in [
                 "Create draft tasks for proposals",
                 "owner-only configuration",

@@ -198,6 +198,16 @@ pub fn blockers(prior: &Prior, now: u64) -> Vec<&'static str> {
 
 /// Pure replacement decision over the complete started-attempt history.
 pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, true)
+}
+
+/// A fresh start closes the old lineage, so its limits do not charge the new source.
+/// Stop, effect, retention, settlement and release proofs still apply in full.
+pub fn assess_for_fresh_start(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, false)
+}
+
+fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bool) -> Assessment {
     use Assessment::Blocked;
     let mut ordered = priors.iter().collect::<Vec<_>>();
     if ordered.is_empty() {
@@ -251,7 +261,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
     let exempt = uncharged(&ordered, limits);
     let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
-    if attempts_started - exempt_attempts >= limits.max_attempts {
+    if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
         return Blocked("lineage_retry_budget_exhausted");
     }
     // Lineage time is the sum of the charged attempts' windows, each from its
@@ -264,7 +274,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
                 .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
         })
         .fold(0u64, u64::saturating_add);
-    if elapsed_ms >= limits.max_lineage_elapsed_ms {
+    if charge_budget && elapsed_ms >= limits.max_lineage_elapsed_ms {
         return Blocked("lineage_time_budget_exhausted");
     }
     // Conservative sandbox charge: each granted attempt is billed its full
@@ -277,7 +287,7 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
                 .saturating_sub(p.offered_at_ms.unwrap_or(0))
         })
         .fold(0u64, u64::saturating_add);
-    if sandbox_ms >= limits.max_lineage_sandbox_ms {
+    if charge_budget && sandbox_ms >= limits.max_lineage_sandbox_ms {
         return Blocked("task_sandbox_minutes_budget_exhausted");
     }
     Assessment::Replace(Box::new(Replacement {

@@ -7,10 +7,12 @@ description = "Work-view projections for AQ's owner Graph reads: readiness, hold
 
 [features]
 # Epic 0 (spec 0016): the hold reason of a result waiting for a playbook.
-delivery_playbook = []
+delivery_playbook = ["aq-playbook-domain/delivery_playbook"]
 project_environments = ["aq-project-policy/project_environments"]
 
 [dependencies]
+aq-machine-control = { path = "../aq-machine-control" }
+aq-playbook-domain = { path = "../aq-playbook-domain", optional = true }
 aq-human-cursor = { path = "../aq-human-cursor" }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-role-settings = { path = "../aq-role-settings" }

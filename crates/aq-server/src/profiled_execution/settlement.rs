@@ -18,7 +18,7 @@ pub use automatic::{
     reworked_without_facts,
 };
 #[cfg(feature = "delivery_playbook")]
-pub use automatic::{complete_by_playbook, return_by_playbook};
+pub use automatic::{complete_by_playbook, recover_held_for_retry, return_by_playbook};
 #[cfg(feature = "delivery_playbook")]
 pub use facts::record_facts;
 

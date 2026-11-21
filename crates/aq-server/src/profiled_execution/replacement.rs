@@ -59,6 +59,15 @@ pub async fn assess_task_in(
     task: Uuid,
     now: u64,
 ) -> Result<Assessment, AppError> {
+    assess_on(conn, task, now, assess).await
+}
+
+async fn assess_on(
+    conn: &mut sqlx::PgConnection,
+    task: Uuid,
+    now: u64,
+    decide: fn(&[Prior], &Limits, u64) -> Assessment,
+) -> Result<Assessment, AppError> {
     if super::disposition::task_disposed(conn, task).await? {
         return Ok(Assessment::Blocked("task_terminally_disposed"));
     }
@@ -84,7 +93,7 @@ pub async fn assess_task_in(
         return Ok(decided);
     }
     Ok(match load(conn, task, counts.started).await? {
-        Some(priors) => assess(&priors, &limits(conn, &priors).await?, now),
+        Some(priors) => decide(&priors, &limits(conn, &priors).await?, now),
         None => Assessment::Blocked("replacement_lineage_history_unknown"),
     })
 }
@@ -101,24 +110,22 @@ pub async fn assess_task_for_revision(
     project_revision: u64,
 ) -> Result<Assessment, AppError> {
     let assessment = assess_task(state, task, now).await?;
-    fence_revision(state, assessment, project_revision).await
-}
-async fn fence_revision(
-    state: &AppState,
-    assessment: Assessment,
-    project_revision: u64,
-) -> Result<Assessment, AppError> {
-    let Some(replacement) = assessment.replacement() else {
-        return Ok(assessment);
-    };
-    let pinned = sql::predecessor_project_revision(&state.store.pool, replacement.predecessor);
-    let pinned = pinned.await.map_err(internal)?;
-    if pinned != Some(project_revision) {
-        return Ok(Assessment::Blocked("replacement_project_revision_changed"));
+    if let Assessment::Blocked(code) = assessment
+        && aq_machine_control::holds::is_budget_hold(code)
+    {
+        let mut conn = state.store.pool.acquire().await.map_err(internal)?;
+        let closing = assess_on(&mut conn, task, now, assess_for_fresh_start).await?;
+        let fenced = sql::fence_revision(&mut *conn, closing, project_revision)
+            .await
+            .map_err(internal)?;
+        if matches!(fenced, Assessment::Blocked(aq_machine_control::fresh::HOLD)) {
+            return Ok(fenced);
+        }
     }
-    Ok(assessment)
+    sql::fence_revision(&state.store.pool, assessment, project_revision)
+        .await
+        .map_err(internal)
 }
-
 /// The hold the offer path records for `task` ([`assess_task_for_revision`]), if any: why an
 /// owner retry cannot simply release it.
 pub async fn retry_hold(
@@ -161,7 +168,9 @@ pub async fn override_budget(
     (o.attempt_id, o.hold_code) = (attempt, code.into());
     (holds::record_override(&mut tx, task, &o, at).await).map_err(internal)?;
     let again = assess_task_in(&mut tx, task, now).await?;
-    let again = fence_revision(state, again, project_revision).await?;
+    let again = sql::fence_revision(&mut *tx, again, project_revision)
+        .await
+        .map_err(internal)?;
     if !matches!(again, Assessment::Blocked(_)) {
         tx.commit().await.map_err(internal)?;
         tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a limit hold; the task's budgets start again");
@@ -175,8 +184,16 @@ pub async fn override_budget(
 pub async fn release(state: &AppState, task: Uuid, r: &Replacement) -> Result<(), AppError> {
     release_as(state, task, r, None).await
 }
-/// [`release`]; an owner's `fresh` start also records, in the same transaction, that the task's
-/// attempts are no longer its history ([`aq_machine_control::fresh`]).
+/// Verify the predecessor when a changed project binding requires a new lineage.
+pub async fn fresh_predecessor(
+    state: &AppState,
+    task: Uuid,
+    now: u64,
+) -> Result<Assessment, AppError> {
+    let mut conn = state.store.pool.acquire().await.map_err(internal)?;
+    assess_on(&mut conn, task, now, assess_for_fresh_start).await
+}
+
 pub async fn release_as(
     state: &AppState,
     task: Uuid,
@@ -187,27 +204,8 @@ pub async fn release_as(
         return Ok(());
     }
     let db = |_: sqlx::Error| AppError::Internal;
-    let node: Uuid = sqlx::query_scalar("SELECT node_id FROM execution_attempts WHERE attempt_id=$1 AND task_id=$2 AND kind='profiled_v1'")
-        .bind(replacement.predecessor)
-        .bind(task)
-        .fetch_one(&state.store.pool)
-        .await
-        .map_err(db)?;
     let mut tx = state.store.pool.begin().await.map_err(db)?;
-    for setting in [
-        "SET LOCAL lock_timeout='2s'",
-        "SET LOCAL statement_timeout='5s'",
-    ] {
-        sqlx::query(setting).execute(&mut *tx).await.map_err(db)?;
-    }
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(node)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-    sqlx::query("SELECT 1 FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1 FOR UPDATE OF a,h")
-        .bind(replacement.predecessor)
-        .fetch_one(&mut *tx)
+    sql::lock_release(&mut tx, task, replacement.predecessor)
         .await
         .map_err(db)?;
     let counts = super::no_grant::attempt_counts_locked(&mut tx, task).await?;
@@ -219,33 +217,33 @@ pub async fn release_as(
         .filter(|n| *n > 0)
         .ok_or(AppError::Internal)?;
     let limits = limits(&mut tx, &priors).await?;
-    let Assessment::Replace(locked) = assess(&priors, &limits, now) else {
+    let decision = if fresh.is_some() {
+        assess_for_fresh_start
+    } else {
+        assess
+    };
+    let Assessment::Replace(locked) = decision(&priors, &limits, now) else {
         return Err(AppError::Conflict(
             "replacement no longer admissible".into(),
         ));
     };
+    if let Some(f) = fresh
+        && sql::predecessor_project_revision(&mut *tx, locked.predecessor)
+            .await
+            .map_err(internal)?
+            == Some(f.project_revision)
+    {
+        return Err(AppError::Conflict(
+            "predecessor already uses this binding".into(),
+        ));
+    }
     if locked.predecessor != replacement.predecessor {
         return Err(AppError::Conflict("replacement predecessor changed".into()));
     }
     if locked.needs_release {
-        sqlx::query("INSERT INTO profiled_replacement_releases(attempt_id,task_id,reason,stop_receipt_digest,retained_source_receipt_digest,effect_reconciliation_receipt_digest,attempts_started,recorded_at_ms) VALUES($1,$2,'failed_attempt_replacement',$3,$4,$5,$6,$7)")
-            .bind(locked.predecessor)
-            .bind(task)
-            .bind(locked.stop_receipt.digest.as_str())
-            .bind(locked.retained_source_receipt.digest.as_str())
-            .bind(locked.effect_reconciliation_receipt.digest.as_str())
-            .bind(i32::try_from(locked.attempts_started).map_err(|_| AppError::Internal)?)
-            .bind(i64::try_from(now).map_err(|_| AppError::Internal)?)
-            .execute(&mut *tx)
+        sql::record_release(&mut tx, task, &locked, now)
             .await
-            .map_err(db)?;
-        sqlx::query(
-            "UPDATE execution_attempts SET holds_task=FALSE WHERE attempt_id=$1 AND holds_task",
-        )
-        .bind(locked.predecessor)
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
+            .map_err(internal)?;
     }
     if let Some(f) = fresh {
         let at = (state.clock)();

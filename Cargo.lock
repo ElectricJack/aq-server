@@ -322,6 +322,8 @@ name = "aq-human-work"
 version = "0.1.0"
 dependencies = [
  "aq-human-cursor",
+ "aq-machine-control",
+ "aq-playbook-domain",
  "aq-project-policy",
  "aq-role-settings",
  "chrono",
@@ -571,6 +573,7 @@ dependencies = [
  "sqlx-postgres",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

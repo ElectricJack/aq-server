@@ -1370,22 +1370,7 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
     assert_eq!(before["effects"]["kind"], "unknown", "{before}");
     let blockers = before["replacement"]["blockers"].to_string();
     assert!(blockers.contains("effects_unknown"), "{before}");
-    let mut tx = pool.begin().await.unwrap();
-    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
-        .await
-        .unwrap();
-    let SessionIdentity::Remote {
-        node_id,
-        boot_id,
-        session_id,
-        ..
-    } = env.report.binding.session
-    else {
-        unreachable!()
-    };
-    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(&profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
-    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(&profile).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
+    seed_agent_binding(&env, &profile).await;
     let s = env.settle().await;
     env.assert_not_completed(&s, AutoDisposition::ReworkRequired, "not_accepted")
         .await;
@@ -1416,6 +1401,27 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
         env.holds_task().await,
         "only the replacement owner releases"
     );
+}
+
+async fn seed_agent_binding(env: &AutoEnv, profile: &Value) {
+    let pool = env.f.db.pool().await;
+    let attempt = env.report.binding.attempt_id;
+    let mut tx = pool.begin().await.unwrap();
+    let recorded = results::load_locked(&env.f.state, &mut tx, env.report.report_id)
+        .await
+        .unwrap();
+    let SessionIdentity::Remote {
+        node_id,
+        boot_id,
+        session_id,
+        ..
+    } = env.report.binding.session
+    else {
+        unreachable!()
+    };
+    let binding = json!({"task_id":recorded.spec.task.task_id,"attempt_id":attempt,"session_id":session_id,"generation":env.report.binding.assignment_generation,"node_id":node_id,"boot_id":boot_id,"project_id":recorded.spec.lifecycle.project_id,"workspace_id":recorded.spec.task.workspace_id,"resolved_spec_digest":env.report.binding.execution_spec_digest,"profile_digest":aq_agent_api::digest(profile).unwrap(),"context_digest":env.f.profiled.graph.context_digest});
+    sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,$4,'{}')").bind(attempt).bind(node_id).bind(&binding).bind(profile).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 
 /// The facts writer never acts on a confirmed (Success) settlement or on a
@@ -1473,6 +1479,309 @@ mod playbook {
         ))
         .await;
         finish_auto_env(f, report, status, true, true).await
+    }
+
+    #[tokio::test]
+    async fn persistent_scheduling_hold_notifies_its_project_once_after_settling_time() {
+        use aq_playbook_domain::scheduling_notices;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true, profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_time_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
+            .bind(Uuid::new_v4()).bind(task).bind(project).bind(attempt).bind(NOW as f64/1000.0).execute(&pool).await.unwrap();
+        assert_eq!(
+            aq_machine_control::holds::unclaimed_count(&pool, &[task, Uuid::new_v4()])
+                .await
+                .unwrap(),
+            1
+        );
+        let count = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            for id in [task, attempt, env.report.report_id] {
+                assert!(body.contains(&id.to_string()));
+            }
+            assert!(body.contains("lineage_time_budget_exhausted"));
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        scheduling_notices::notify(&pool, NOW as i64, &send)
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            scheduling_notices::notify(&pool, NOW as i64 + 600_001, &send)
+                .await
+                .unwrap();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_physically_stopped_task_without_a_result_escalates_once_after_contention_clears() {
+        let (f, _, report) = Box::pin(prepare(true, true)).await;
+        let pool = f.db.pool().await;
+        let project = f.selection.lineage.project_id;
+        let attempt = report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls SET enabled=true, profile='{}',approved_by=$2 WHERE conversation_id=(SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1)")
+            .bind(project).bind(f.actor).execute(&pool).await.unwrap();
+        let stopped: i64 = sqlx::query_scalar("SELECT (convert_from(receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::bigint FROM profiled_stopped_receipts WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(&pool).await.unwrap();
+        let count = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            assert!(body.contains("stopped_without_result") && body.contains(&attempt.to_string()));
+            assert!(!body.contains("submit task.retry"));
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        use aq_playbook_domain::scheduling_notices::notify;
+        notify(&pool, stopped + 599_999, &send).await.unwrap();
+        let mut busy = pool.begin().await.unwrap();
+        sqlx::query("SELECT attempt_id FROM execution_attempts WHERE attempt_id=$1 FOR UPDATE")
+            .bind(attempt)
+            .execute(&mut *busy)
+            .await
+            .unwrap();
+        notify(&pool, stopped + 600_000, &send).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        busy.rollback().await.unwrap();
+        for _ in 0..2 {
+            notify(&pool, stopped + 660_000, &send).await.unwrap();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn repeated_publication_refusals_notify_once_for_the_current_unpublished_head() {
+        use aq_playbook_domain::scheduling_notices::notify;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let lineage = &env.f.selection.lineage;
+        let task = lineage.task_id;
+        let attempt = env.report.binding.attempt_id;
+        let result = env.report.report_id;
+        let head = "4".repeat(40);
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO UPDATE SET head=EXCLUDED.head")
+            .bind(result).bind(attempt).bind(format!("refs/heads/aq/{task}")).bind(&head).execute(&pool).await.unwrap();
+        let ns = Uuid::new_v4();
+        sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'publish',$2,$3,$4,repeat('a',64),repeat('b',64))")
+            .bind(ns).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        let record = async |sha: &str, report: Uuid, status: &str| {
+            let id = Uuid::new_v4();
+            let request =
+                json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":sha});
+            let output = if status == "published" {
+                json!({"head":sha})
+            } else {
+                json!({"reason":"unreachable"})
+            };
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,$6,$7,$8,$8)")
+                .bind(id).bind(ns).bind(id.to_string()).bind(task.to_string()).bind(request).bind(status).bind(output).bind(NOW as i64).execute(&pool).await.unwrap();
+            id
+        };
+        let calls = AtomicUsize::new(0);
+        let send =
+            async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>, scope, body: &str, _: u64| {
+                assert_eq!(scope, Some(lineage.project_id));
+                assert!(
+                    body.contains("branch_publication_refused")
+                        && body.contains(&result.to_string())
+                        && body.contains(&attempt.to_string())
+                        && body.contains(&head)
+                        && body.contains("rejection from the remote")
+                );
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, ()>(Uuid::new_v4())
+            };
+        let due = NOW as i64 + 600_000;
+        record(&head, result, "refused").await;
+        record(&"5".repeat(40), result, "refused").await;
+        record(&head, Uuid::new_v4(), "refused").await;
+        notify(&pool, due, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let known_refusal = record(&head, result, "refused").await;
+        // Simulate a newer publisher alongside the older, catalog-only receipt.
+        sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb,completed_at_ms=completed_at_ms+1 WHERE operation_id=$1")
+            .bind(known_refusal).execute(&pool).await.unwrap();
+        let detail = aq_playbook_domain::delivery_store::publication_refusal(
+            &mut *pool.acquire().await.unwrap(),
+            result,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(detail.contains(&known_refusal.to_string()));
+        notify(&pool, due - 1, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            notify(&pool, due, &send).await.unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+            .bind(lineage.project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        record(&head, result, "published").await;
+        notify(&pool, due, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            aq_playbook_domain::delivery_store::publication_refusal(
+                &mut *pool.acquire().await.unwrap(),
+                result
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
+    async fn expired_delivery_notice_reaches_the_project_once_for_the_current_held_result() {
+        use aq_playbook_domain::{delivery_decisions, scheduling_notices};
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let result = env.report.report_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held','returns_exhausted',$3)")
+            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        let reasons = work_reasons(&env).await;
+        assert!(reasons.iter().any(|r| r["code"] == "task_held"
+            && r["hold_reason"] == "returns_exhausted"
+            && r["message"].as_str().unwrap().contains(&result.to_string())));
+        let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
+        let calls = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            assert!(
+                body.contains(&task.to_string())
+                    && body.contains(&result.to_string())
+                    && body.contains("task.retry")
+            );
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        scheduling_notices::notify(&pool, NOW as i64, &send)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            scheduling_notices::notify(&pool, NOW as i64 + 600_001, &send)
+                .await
+                .unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            delivery_decisions::told(&mut pool.acquire().await.unwrap(), project, &key)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn independent_review_reads_the_assigned_result_revision_and_retained_commit() {
+        use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
+        let target = Box::pin(super::auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = target.f.db.pool().await;
+        let id = target.report.report_id;
+        let pin: String = sqlx::query_scalar(
+            "SELECT report_revision FROM result_revision_pins WHERE report_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let lineage = aq_selection::TaskLineage {
+            task_id: Uuid::new_v4(),
+            ..target.f.selection.lineage.clone()
+        };
+        let mut f = Box::pin(common::profiled::fixture_on(
+            target.f.db.clone(),
+            Some((target.f.actor, lineage.clone())),
+        ))
+        .await;
+        f.state.config = target.f.state.config.clone();
+        let (f, _, mut report) = Box::pin(prepare_on(
+            f,
+            true,
+            true,
+            None,
+            false,
+            Some(default_policy("not_required")),
+            true,
+        ))
+        .await;
+        let signed = format!(
+            "Outcome: done; Changes: none; Copied: none; Claude exit 0; Result: Review verdict: changes_requested {id}@{pin} {} Unit checks exposed a defect.",
+            target.checkpoint
+        );
+        report.conclusion = Label::new(signed).unwrap();
+        let reviewer = Box::pin(finish_auto_env(
+            f,
+            report,
+            axum::http::StatusCode::OK,
+            false,
+            true,
+        ))
+        .await;
+        let latest = PgDelivery(pool.clone())
+            .latest(lineage.task_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let version = reviewer.expected_version;
+        let graph = json!({"version":version,"labels":["review-only"],"body":format!("Review target: {id}@{pin}")});
+        let observed = |node: Value| {
+            let pool = pool.clone();
+            let latest = latest.clone();
+            let lineage = lineage.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                delivery_store::observed(
+                    &mut conn,
+                    lineage.task_id,
+                    (lineage.workspace_id, lineage.project_id),
+                    Some(&latest),
+                    &node,
+                    (false, 0, 1),
+                )
+                .await
+                .unwrap()["facts"]
+                    .clone()
+            }
+        };
+        let facts = observed(graph.clone()).await;
+        assert_eq!(facts["kind"], "review-only");
+        assert_eq!(facts["outcome"], "review_changes_requested");
+        let mut moved = graph.clone();
+        moved["version"] = json!(version + 1);
+        assert_eq!(observed(moved).await["outcome"], "review_incomplete");
+        let mut wrong = graph.clone();
+        wrong["body"] = json!(format!("Review target: {id}@{}", "0".repeat(64)));
+        assert_eq!(observed(wrong).await["outcome"], "review_incomplete");
+        let mut unmarked = graph;
+        unmarked["labels"] = json!([]);
+        assert_eq!(observed(unmarked).await["outcome"], "success");
     }
 
     #[tokio::test]
@@ -1683,6 +1992,219 @@ mod playbook {
         assert!(env.holds_task().await);
         // Recording decided nothing and a stale decision writes no row.
         assert_eq!(settlement_rows(&env.f, env.report.report_id).await, 0);
+    }
+
+    async fn held_retry_env(outcome: aq_admission::transport::ProcessOutcome) -> AutoEnv {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
+        ))
+        .unwrap();
+        let profile = fixture["proposal_profiles"][0]["profile"].clone();
+        let (f, _, mut report) = Box::pin(prepare_with_policy_checks(
+            true,
+            true,
+            Some(profile.clone()),
+            false,
+            Some(default_policy("not_required")),
+            false,
+        ))
+        .await;
+        report.outcome = outcome;
+        let env = finish_auto_env(f, report, axum::http::StatusCode::OK, true, true).await;
+        seed_agent_binding(&env, &profile).await;
+        env
+    }
+
+    #[tokio::test]
+    async fn owner_retry_proves_the_pushed_source_and_effects_of_a_failed_policy_hold() {
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
+        let task = env.f.selection.lineage.task_id;
+        let pool = env.f.db.pool().await;
+        let facts = || async {
+            sqlx::query_as::<_,(String,String)>("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+                .bind(env.report.binding.attempt_id).fetch_one(&pool).await.unwrap()
+        };
+        settlement::recover_held_for_retry(&env.f.state, task)
+            .await
+            .unwrap();
+        assert_eq!(facts().await, ("pending".into(), "unknown".into()));
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','policy',$3)")
+            .bind(env.report.report_id).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        for _ in 0..2 {
+            settlement::recover_held_for_retry(&env.f.state, task)
+                .await
+                .unwrap();
+            assert_eq!(facts().await, ("retained".into(), "quiescent".into()));
+        }
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+        assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
+    async fn exhausted_success_retry_requires_a_final_pr_failure_for_this_exact_result() {
+        use aq_delivery::git_grant::held_report;
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Success,
+        ))
+        .await;
+        let pool = env.f.db.pool().await;
+        let lineage = &env.f.selection.lineage;
+        let (task, attempt, result) = (
+            lineage.task_id,
+            env.report.binding.attempt_id,
+            env.report.report_id,
+        );
+        let ns = Uuid::new_v4();
+        sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retry',$2,$3,$4,repeat('a',64),repeat('b',64))")
+            .bind(ns).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        let record = async |command: &str, status: &str, report: Uuid| {
+            let id = Uuid::new_v4();
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms) VALUES($1,$2,1,$3,$4,$5,0,$6,$7,CASE WHEN $7='running' THEN NULL ELSE '{}'::jsonb END,$8)")
+                .bind(id).bind(ns).bind(id.to_string()).bind(command).bind(task.to_string())
+                .bind(json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":"4".repeat(40),"pull_request":228}))
+                .bind(status).bind(NOW as i64).execute(&pool).await.unwrap();
+            id
+        };
+        let check = record("pull_request.await_checks", "running", result).await;
+        let reasons = work_reasons(&env).await;
+        assert!(reasons.iter().any(|r| {
+            r["code"] == "result_ready_no_delivery_policy"
+                && r["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("PR #228") && m.contains(&"4".repeat(40)))
+        }));
+        sqlx::query("UPDATE playbook_host_operations SET status='passed',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(check).bind(NOW as i64).execute(&pool).await.unwrap();
+        assert!(
+            !work_reasons(&env)
+                .await
+                .iter()
+                .any(|r| r["message"].as_str().is_some_and(|m| m.contains("PR #228")))
+        );
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
+            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+        record("pull_request.await_checks", "conflict", Uuid::new_v4()).await;
+        assert_eq!(held_report(&pool, task).await.unwrap(), None);
+        let behind = record("pull_request.await_checks", "conflict", result).await;
+        sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"behind_base\"}'::jsonb WHERE operation_id=$1")
+            .bind(behind).execute(&pool).await.unwrap();
+        let reasons = work_reasons(&env).await;
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r["message"].as_str().is_some_and(|text| text
+                    .contains("pull_request.await_checks")
+                    && text.contains("behind its base")
+                    && text.contains("qualifies for repair")
+                    && text.contains(&"4".repeat(40))))
+        );
+        let port = aq_playbook_domain::delivery_store::PgDelivery(pool.clone());
+        let origin = aq_playbook_domain::host10::ResultReady {
+            task_id: task,
+            result_id: result,
+            project_id: lineage.project_id,
+            attempt_id: attempt,
+            version: 1,
+        };
+        let notice = json!({"text":"Inspect this held result."});
+        let mut tx = pool.begin().await.unwrap();
+        let (_, body) = aq_playbook_domain::delivery_decisions::notification(
+            &mut tx,
+            &port,
+            Some(origin),
+            lineage.project_id,
+            &notice,
+        )
+        .await
+        .unwrap();
+        assert!(body.contains("behind its base") && body.contains("qualifies for repair"));
+        assert!(
+            aq_playbook_domain::delivery_decisions::notification(
+                &mut tx,
+                &port,
+                Some(origin),
+                Uuid::new_v4(),
+                &notice,
+            )
+            .await
+            .is_err()
+        );
+        tx.rollback().await.unwrap();
+        let merge = record("pull_request.merge", "running", result).await;
+        assert_eq!(held_report(&pool, task).await.unwrap(), None);
+        assert!(!work_reasons(&env).await.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|s| s.contains("qualifies for repair"))
+        }));
+        sqlx::query("UPDATE playbook_host_operations SET status='conflict',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(merge).bind(NOW as i64).execute(&pool).await.unwrap();
+        assert_eq!(held_report(&pool, task).await.unwrap(), Some(result));
+        settlement::recover_held_for_retry(&env.f.state, task)
+            .await
+            .unwrap();
+        let facts: (String,String)=sqlx::query_as("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(&pool).await.unwrap();
+        assert_eq!(facts, ("retained".into(), "quiescent".into()));
+        assert!(env.holds_task().await);
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+
+        // A return followed by a budget hold also carries the original PR
+        // evidence, allowing a supervisor to compare independently recorded heads.
+        sqlx::query("UPDATE delivery_decisions SET decision='returned',reason='merge_conflict',update_from_main=true WHERE result_id=$1")
+            .bind(result).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'task_sandbox_minutes_budget_exhausted',$4,'returned',to_timestamp($5))")
+            .bind(Uuid::new_v4()).bind(task).bind(lineage.project_id).bind(attempt).bind(NOW as f64 / 1000.0).execute(&pool).await.unwrap();
+        let reasons = work_reasons(&env).await;
+        let evidence = format!("returned result {result}. Worker outcome: success.");
+        assert!(reasons.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
+        }));
+        assert!(
+            aq_playbook_domain::delivery_store::returned_result_evidence(
+                &mut pool.acquire().await.unwrap(),
+                Uuid::new_v4(),
+                task,
+                attempt
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        sqlx::query("UPDATE delivery_decisions SET reason='checks_failed',detail='tests (shard 3/6)',update_from_main=false WHERE result_id=$1")
+            .bind(result).execute(&pool).await.unwrap();
+        assert!(work_reasons(&env).await.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("tests (shard 3/6)"))
+        }));
+        let calls = AtomicUsize::new(0);
+        aq_playbook_domain::scheduling_notices::notify(
+            &pool,
+            NOW as i64 + 600_001,
+            async |_, scope, body: &str, _| {
+                assert_eq!(scope, Some(lineage.project_id));
+                assert!(
+                    body.contains("task_sandbox_minutes_budget_exhausted")
+                        && body.contains(&"4".repeat(40))
+                        && body.contains("conflict")
+                        && body.contains(&evidence)
+                        && body.contains("tests (shard 3/6)")
+                );
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, ()>(Uuid::new_v4())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

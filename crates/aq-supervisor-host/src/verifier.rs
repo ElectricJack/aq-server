@@ -81,6 +81,41 @@ async fn observation(
     }
     Ok(o)
 }
+/// The guardian can launch a pane only after the synchronous start callback
+/// commits its fact. A stopped, childless guardian closes that launch window.
+pub(crate) async fn not_started(
+    tx: &mut Transaction<'_, Postgres>,
+    run: &Run,
+) -> OwnerResult<Option<HandoffEvidence>> {
+    let (Some(stop), Some(association)) = (run.stopped_evidence(), run.association()) else {
+        return Ok(None);
+    };
+    if !matches!(run.dispatch(), DispatchState::Unknown { .. }) {
+        return Ok(None);
+    }
+    let obs = observation(tx, run, &stop.host, "stopped").await?;
+    if obs.phase != HostPhase::Stopped
+        || !obs.kernel_wait_echild
+        || obs.pane.is_some()
+        || obs.root_status.is_some()
+        || obs.reaped_count != 0
+        || stop.stopped_writers != stop.host.observation
+    {
+        return Ok(None);
+    }
+    let started: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM central_host_facts WHERE launch_id=$1 AND kind IN ('start','running','handoff'))",
+    )
+    .bind(stop.host.launch_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok((!started).then(|| HandoffEvidence {
+        association: association.clone(),
+        disposition: HandoffDisposition::NotHandedOff,
+        receipt: stop.host.observation.clone(),
+    }))
+}
+
 #[async_trait::async_trait]
 impl<A: PlanAuthority> EvidenceVerifier for Verifier<A> {
     async fn authorize_plan(
@@ -143,6 +178,13 @@ impl<A: PlanAuthority> EvidenceVerifier for Verifier<A> {
                 }
             }
             Event::Tick | Event::Cancel { .. } => {}
+            Event::ReconcileHandoff { evidence: e }
+                if e.disposition == HandoffDisposition::NotHandedOff =>
+            {
+                if not_started(tx, run).await?.as_ref() != Some(e) {
+                    return Err(OwnerError::Evidence);
+                }
+            }
             Event::Handoff { evidence: e } | Event::ReconcileHandoff { evidence: e } => {
                 let launch: uuid::Uuid = sqlx::query_scalar(
                     "SELECT launch_id FROM central_host_launches WHERE actor_id=$1 AND generation=$2",

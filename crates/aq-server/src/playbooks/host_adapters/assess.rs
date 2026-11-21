@@ -123,8 +123,14 @@ impl Service {
                 }
             }
         };
-        self.complete_operation(request.operation, "judgment.assess", intent_id, result)
-            .await
+        self.complete_operation(
+            request.operation,
+            "judgment.assess",
+            intent_id,
+            result,
+            None,
+        )
+        .await
     }
 
     /// Every accepted judgment gets exactly one final answer: one still
@@ -153,7 +159,7 @@ impl Service {
                 &request["subject"],
                 "deadline_exceeded",
             );
-            self.complete_operation(*operation, "judgment.assess", intent_id, failed)
+            self.complete_operation(*operation, "judgment.assess", intent_id, failed, None)
                 .await?;
         }
         Ok(due.len())

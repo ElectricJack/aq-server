@@ -120,3 +120,21 @@ change, the owner reads them with one command (see "Owner recovery").
 - Agent effects outside `agent_graph_operations` and the mailbox (agent task
   creates, comments, waits) were not part of B4 quiescence before and are not
   now.
+
+## Inspect and retry
+
+Inspect the current attempt with `aq attempt show --attempt-id <attempt-id>`. Compare its stop, source retention, effect receipts, and replacement blockers with the task's current result. A revision conflict requires reading the task again. A report that was superseded cannot authorize a retry.
+
+Use `aq tasks retry <task-id> --project <project-id> --revision <current-task-version> --reason '<why another attempt is appropriate>'` after establishing that the task should resume. An admitted retry of a failed result with a delivery policy hold checks the current report, the stopped attempt, its retained source and terminal operations. The replacement owner rechecks those facts and budgets before release. A verified source lets the successor continue with the retained work. The retry operation receipt and the successor's session record show release and launch separately.
+
+For returned results the ordinary sweep records available receipts. Pending or unverified operations still require reconciliation by their owning service. A completed or revoked attempt cannot qualify for the held-result retry path.
+
+## Supervisor dispatch
+
+The delivery notice for the attachment task reached the aq-server project conversation on November 20 at 20:08 UTC. The supervisor replied 55 seconds later asking for the task or result ID. Delivery notices originating in a result event now carry the project, task, revision, attempt, result, and stored hold reason. Message deduplication still uses the result and its hold reason.
+
+## Recording an independent review
+
+Set the task type or label to `review-only`. In its body, put a single line of the form `Review target: <implementation report UUID>@<64-character report revision>`. Provide the reviewer with the exact source or a verifiable patch, along with its base and retained commit. A blocked review stays incomplete.
+
+On the first line of the reviewer's final result, record `Review verdict: approved <report UUID>@<report revision> <retained commit>` or use `changes_requested` in place of `approved`. Give findings and the checks performed, then include the usual `Changes: none` on its own line. The server compares the reviewer's recorded successful report and unchanged source with the assignment version, the target project's immutable revision pin and the target's independently recorded Git head. Completing a review records the disposition of the review assignment. Implementation delivery still uses its own protected checks and merge.

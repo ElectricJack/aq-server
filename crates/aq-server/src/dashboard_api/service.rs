@@ -850,7 +850,7 @@ pub(super) async fn session(
         }
     }
     let mut terminal = None;
-    let mut last_activity = None;
+    let mut output_ms = None;
     if !view.revoked
         && let Some(config) = state.config.terminals.as_ref()
     {
@@ -870,7 +870,7 @@ pub(super) async fn session(
                 });
                 let at: i64 = row.get("last_output_at_ms");
                 if at > 0 {
-                    last_activity = Some(timestamp(at as u64)?);
+                    output_ms = Some(at as u64);
                 }
             }
         }
@@ -957,7 +957,7 @@ pub(super) async fn session(
             "profiled_v1"
         }
         .into(),
-        last_output_at: last_activity.clone(),
+        last_output_at: output_ms.map(timestamp).transpose()?,
     };
     let ran_with = crate::role_settings::ran_with(state, &mut tx, attempt).await?;
     tx.commit().await?;
@@ -965,7 +965,10 @@ pub(super) async fn session(
         summary,
         profile_revisions: revisions,
         permissions,
-        last_activity_at: last_activity,
+        last_activity_at: output_ms
+            .max(facts.last_progress_ms)
+            .map(timestamp)
+            .transpose()?,
         observation_binding,
         ran_with,
     })
