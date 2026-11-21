@@ -16,6 +16,15 @@ pub fn origin(value: &str) -> Result<reqwest::Url> {
     );
     Ok(url)
 }
+/// The machine origin and the turn's bearer, from the turn environment.
+pub(crate) fn machine() -> Result<(reqwest::Url, Zeroizing<Vec<u8>>)> {
+    let url = origin(&std::env::var("AQ_SUPERVISOR_ORIGIN")?)?;
+    let path = std::path::PathBuf::from(std::env::var("AQ_SUPERVISOR_CREDENTIAL_FILE")?);
+    Ok((
+        url,
+        Zeroizing::new(crate::config::protected_read(&path, 70)?),
+    ))
+}
 pub async fn run(args: &[String]) -> Result<()> {
     let name = args.first().context(
         "usage: aq-supervisor-host tool commands [NAME] | attachment-text ID | NAME < request.json",
@@ -27,9 +36,7 @@ pub async fn run(args: &[String]) -> Result<()> {
                 .all(|b| b.is_ascii_lowercase() || b"._-".contains(&b)),
         "invalid command name"
     );
-    let url = origin(&std::env::var("AQ_SUPERVISOR_ORIGIN")?)?;
-    let path = std::path::PathBuf::from(std::env::var("AQ_SUPERVISOR_CREDENTIAL_FILE")?);
-    let token = Zeroizing::new(crate::config::protected_read(&path, 70)?);
+    let (url, token) = machine()?;
     let mut bearer = reqwest::header::HeaderValue::from_str(&format!(
         "Bearer {}",
         std::str::from_utf8(&token)?

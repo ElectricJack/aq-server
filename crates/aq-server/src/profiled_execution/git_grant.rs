@@ -57,10 +57,10 @@ pub(super) async fn confirm(
 }
 pub fn routes(state: AppState) -> axum::Router<AppState> {
     let route = axum::routing::any(proxy);
-    let routes = axum::Router::new().route("/v1/git/{repository}/{*path}", route);
-    let grant = axum::routing::get(grant);
+    let routes = aq_supervisor_control::git_routes(&state.store.pool, &state.clock, socket(&state));
+    let routes = routes.route("/v1/git/{repository}/{*path}", route);
     routes
-        .route("/v1/git/grants/{attempt}", grant)
+        .route("/v1/git/grants/{attempt}", axum::routing::get(grant))
         .with_state(state)
 }
 /// Discovery returns the frozen grant to its node even on replay. Smart HTTP
