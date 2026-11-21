@@ -2,6 +2,8 @@
 pub mod admin;
 mod api;
 pub mod authority;
+#[cfg(all(feature = "delivery_playbook", feature = "supervisor_full_access"))]
+pub mod git;
 #[cfg(feature = "supervisor_full_access")]
 pub mod owner;
 pub mod read;
@@ -37,6 +39,24 @@ pub fn machine_routes<S: Clone + Send + Sync + 'static>(
             .merge(read::routes(human, pool.clone(), clock.clone()))
             .merge(admin::routes(settings, pool, clock))
     }
+}
+/// The supervisor git route `/v1/supervisor/git` on the machine listener,
+/// forwarding fetches to aq-git's git `socket`: mounted only with
+/// supervisor_full_access and a configured socket.
+#[cfg(feature = "delivery_playbook")]
+pub fn git_routes<S: Clone + Send + Sync + 'static>(
+    pool: &sqlx::PgPool,
+    clock: &Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
+    socket: Option<&std::path::Path>,
+) -> axum::Router<S> {
+    #[cfg(feature = "supervisor_full_access")]
+    if let Some(socket) = socket {
+        let clock = clock.clone();
+        let clock: read::Clock = Arc::new(move || clock().timestamp_millis() as u64);
+        return git::routes(pool.clone(), clock, socket.to_owned());
+    }
+    let _ = (pool, clock, socket);
+    axum::Router::new()
 }
 /// Scope identity is immutable; the caller supplies owner authorization. These
 /// are the original global locks/counters, or the project's distinct locks.

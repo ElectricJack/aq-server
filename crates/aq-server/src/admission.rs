@@ -101,7 +101,7 @@ pub fn classify(path: &str) -> Class {
         return Class::AgentCommand;
     }
     #[cfg(feature = "delivery_playbook")]
-    if path.starts_with("/v1/git/") {
+    if path.starts_with("/v1/git/") || path.starts_with("/v1/supervisor/git/") {
         return Class::GitTransfer;
     }
     if path == "/v1/worker/profiled/material-presence" {
@@ -335,7 +335,7 @@ mod output_poll_tests {
     #[cfg(feature = "delivery_playbook")]
     #[test]
     fn git_transfers_take_their_own_lane_outside_the_bulk_deadline() {
-        let path = "/v1/git/7d1f2ad4-0f0b-4c5e-9a46-2b1c1b7a9d11/git-receive-pack";
-        assert_eq!(classify(path), Class::GitTransfer);
+        assert_eq!(classify("/v1/git/r/git-receive-pack"), Class::GitTransfer);
+        assert_eq!(classify("/v1/supervisor/git/r/x"), Class::GitTransfer);
     }
 }
