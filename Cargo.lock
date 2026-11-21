@@ -1001,6 +1001,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "flate2",
  "hex",
  "rand 0.8.8",
  "serde",

@@ -45,9 +45,11 @@ These additions serve the dashboard Work view. Counts are decimal strings.
   1. `draft`, `completed` or `canceled` from the task state.
   2. `running` when an attempt holds the task and is still executing: its authority status is not `finished`, `declined` or `never_granted`, and it has no Stopped or NotStarted proof.
   3. `held` when an attempt holds the task but has stopped or finished, or when an active task has a `task_held` hold or a role hold (below). The task is not running and no new attempt starts until the claim is released or the hold clears.
-  4. `waiting` when any blocker is not satisfied.
-  5. `unknown` when the Context was truncated.
+  4. `waiting` when any blocker is not satisfied, or when `hierarchy` (below) is present.
+  5. `unknown` when the Context, or the ancestry read, was truncated or unavailable (`complete` is false).
   6. `ready` otherwise.
+
+  `hierarchy` (added 2026-11-21, optional; absent when empty, so older readers see the shape they know) names the hierarchy relationships that keep an active task out of Graph's runnable queue, as `{relationship,level,id,title,task_state,retired,edge_id,code}`: nearest ancestor first, then at most 16 live children. `relationship` is `ancestor` (`level` 1 is the parent, 2 the grandparent, Graph's three-level maximum) or `child`. `code` is `ancestor_draft` or `ancestor_retired` (the ancestor `id` must be activated or restored; a draft epic keeps its human approval) or `has_live_children` (the task is a container, not a leaf; its children run instead). Ancestors above the parent come from one extra bounded incoming Context read, made only when the task has a parent; when it fails or is truncated, `complete` is false and a task that would be `ready` is `unknown`. It is computed only for an active task.
 
   `reasons` (at most 4, empty unless a stopped attempt holds the task, in any state, or the active task has a `task_held` hold) explains a hold as `{code,attempt_id,status,message}` (plus `hold_reason` for `task_held`). `code` is one of:
   - `cancelled_attempt_holds_task`: the attempt was cancelled (B3) and has stopped. A cancelled attempt keeps its retained source for a replacement (B4), so it keeps the claim until the task is retried or the owner abandons the attempt. This is a known limitation.

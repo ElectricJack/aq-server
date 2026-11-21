@@ -120,6 +120,179 @@ pub fn blockers(context: &Value, task: Uuid) -> Option<Vec<Value>> {
     Some(out)
 }
 
+/// Longest list of live children a hierarchy reports.
+pub const MAX_HIERARCHY_CHILDREN: usize = 16;
+
+/// What the task's place in the Graph hierarchy says about running it.
+pub struct Hierarchy {
+    /// Relationships that keep the task out of the runnable queue, ancestors
+    /// nearest first, then live children (at most [`MAX_HIERARCHY_CHILDREN`]).
+    pub blocking: Vec<Value>,
+    /// False when a Context was truncated, an ancestor could not be read, or
+    /// the ancestry was needed but not supplied.
+    pub complete: bool,
+}
+
+fn live_parent_edge(e: &Value) -> bool {
+    e["edge_type"] == "parent-child" && e["deleted"] == false
+}
+
+/// Whether the hierarchy above `task` has to be read from a deeper incoming
+/// Context: the depth-1 Context shows a live parent, or it was truncated.
+pub fn needs_ancestry(context: &Value, task: Uuid) -> bool {
+    context["truncated"] != false
+        || context["edges"].as_array().is_some_and(|edges| {
+            edges
+                .iter()
+                .any(|e| live_parent_edge(e) && e["target"] == json!(task))
+        })
+}
+
+/// The hierarchy relationships that keep an active `task` from being runnable
+/// (Graph's ready query excludes it): a draft or retired ancestor within
+/// `max_levels` above it, or any live child (a container is not a leaf).
+/// `context` is the task's depth-1 Context in both directions; `incoming` is
+/// its incoming Context at `max_levels` depth, needed when
+/// [`needs_ancestry`]. None when a Context lacks node or edge lists.
+pub fn hierarchy(
+    context: &Value,
+    incoming: Option<&Value>,
+    task: Uuid,
+    max_levels: u32,
+) -> Option<Hierarchy> {
+    let mut complete = context["truncated"] == false
+        && incoming.is_none_or(|c| c["truncated"] == false)
+        && (incoming.is_some() || !needs_ancestry(context, task));
+    let pools: Vec<&Value> = std::iter::once(context).chain(incoming).collect();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    for c in pools {
+        nodes.extend(c["nodes"].as_array()?);
+        edges.extend(c["edges"].as_array()?);
+    }
+    let node = |id: &Value| nodes.iter().find(|n| &n["id"] == id);
+    let mut blocking = Vec::new();
+    let mut seen = std::collections::BTreeSet::from([task]);
+    let mut level = vec![task];
+    for depth in 1..=max_levels {
+        let mut above = Vec::new();
+        for cur in &level {
+            for e in edges
+                .iter()
+                .filter(|e| live_parent_edge(e) && e["target"] == json!(cur))
+            {
+                let id: Uuid = e["source"].as_str()?.parse().ok()?;
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(n) = node(&e["source"]).filter(|n| n["deleted"] == false) else {
+                    complete = false;
+                    continue;
+                };
+                if n["kind"] != "task" {
+                    continue;
+                }
+                let code = if n["retired"] == true {
+                    Some("ancestor_retired")
+                } else if n["task_state"] == "draft" {
+                    Some("ancestor_draft")
+                } else {
+                    None
+                };
+                if let Some(code) = code {
+                    blocking.push(json!({"relationship":"ancestor","level":depth,"id":id,"title":n["title"],
+                        "task_state":n["task_state"],"retired":n["retired"],"edge_id":e["id"],"code":code}));
+                }
+                above.push(id);
+            }
+        }
+        level = above;
+    }
+    let children = edges
+        .iter()
+        .filter(|e| live_parent_edge(e) && e["source"] == json!(task));
+    let mut listed = 0;
+    for e in children {
+        let n = node(&e["target"]);
+        if n.is_some_and(|n| n["deleted"] == true || n["retired"] == true) {
+            continue;
+        }
+        listed += 1;
+        if listed > MAX_HIERARCHY_CHILDREN {
+            break;
+        }
+        let field = |k: &str| n.map_or(Value::Null, |n| n[k].clone());
+        blocking.push(json!({"relationship":"child","level":1,"id":e["target"],"title":field("title"),
+            "task_state":field("task_state"),"retired":field("retired"),"edge_id":e["id"],"code":"has_live_children"}));
+    }
+    Some(Hierarchy { blocking, complete })
+}
+
+/// [`hierarchy`] for the work view: reads the incoming ancestry through
+/// `incoming` only when [`needs_ancestry`]. A read that returns None (it
+/// failed) leaves the answer incomplete, not an error.
+pub async fn hierarchy_via<F: Future<Output = Option<Value>>>(
+    context: &Value,
+    task: Uuid,
+    max_levels: u32,
+    incoming: impl FnOnce() -> F,
+) -> Option<Hierarchy> {
+    let deeper = match needs_ancestry(context, task) {
+        true => incoming().await,
+        false => None,
+    };
+    hierarchy(context, deeper.as_ref(), task, max_levels)
+}
+
+/// Parent of `task` from a present `parent-child` edge (the source is the
+/// parent) in a Context; `Null` without one. `check` validates the parent's
+/// node for its kind. None when the parent node fails it.
+pub fn parent(
+    context: &Value,
+    task: Uuid,
+    check: impl Fn(&Value, &str) -> Option<Value>,
+) -> Option<Value> {
+    let edges = context["edges"].as_array().into_iter().flatten();
+    let Some(edge) = { edges }.find(|e| live_parent_edge(e) && e["target"] == json!(task)) else {
+        return Some(Value::Null);
+    };
+    let pid = &edge["source"];
+    let nodes = context["nodes"].as_array().into_iter().flatten();
+    let Some(found) = { nodes }.find(|n| &n["id"] == pid && n["deleted"] == false) else {
+        return Some(
+            json!({"id":pid,"kind":null,"title":null,"task_state":null,"edge_id":edge["id"]}),
+        );
+    };
+    let n = check(found, found["kind"].as_str()?)?;
+    Some(
+        json!({"id":pid,"kind":n["kind"],"title":n["title"],"task_state":n["task_state"],"edge_id":edge["id"]}),
+    )
+}
+
+/// The hold of the attempt named by an execution projection's `attempt_id`
+/// (the agent session attached to a task), read from its authority state;
+/// None when there is no such attempt.
+pub async fn attempt_hold(
+    pool: &sqlx::PgPool,
+    attempt_id: &Value,
+) -> Result<Option<Hold>, sqlx::Error> {
+    let Some(attempt) = attempt_id.as_str().and_then(|a| a.parse().ok()) else {
+        return Ok(None);
+    };
+    let state = sqlx::query_scalar::<_, Value>("SELECT COALESCE(h.state,e.state) FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) WHERE e.attempt_id=$1")
+        .bind(attempt).fetch_optional(pool).await?;
+    Ok(state.map(|state| Hold::from_authority(attempt, &state)))
+}
+
+/// Whether the latest confirmed default-policy settlement of `task` found no
+/// file change (owner ruling 4b).
+pub async fn completed_without_changes(pool: &sqlx::PgPool, task: Uuid) -> bool {
+    let quiet = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT s.evidence#>>'{delivery,state}' FROM profiled_auto_settlements s JOIN execution_attempts e USING(attempt_id) WHERE e.task_id=$1 AND s.disposition='confirmed' ORDER BY s.updated_at_ms DESC LIMIT 1",
+    );
+    matches!(quiet.bind(task).fetch_optional(pool).await, Ok(Some(Some(s))) if s == "no_change")
+}
+
 /// The attempt holding a task, from AQ's execution authority state (the hot
 /// authority for adopted native attempts, else the attempt's own state).
 pub struct Hold {
@@ -232,8 +405,10 @@ pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Val
 /// `draft`, `completed` or `canceled` state; `running` while the holding
 /// attempt executes; `held` when it has stopped but keeps the task claim, or
 /// an active task has a server-side hold ([`task_hold`]); `waiting` for an
-/// unsatisfied blocker; `unknown` for a truncated Context; otherwise `ready`.
-/// `reasons` explains a stopped attempt's hold in any state, then the task's hold.
+/// unsatisfied blocker or a hierarchy relationship ([`hierarchy`]) that keeps
+/// the task out of the runnable queue; `unknown` for a truncated Context;
+/// otherwise `ready`. `reasons` explains a stopped attempt's hold in any
+/// state, then the task's hold.
 pub fn readiness(
     task_state: Option<&str>,
     hold: Option<&Hold>,
@@ -259,9 +434,28 @@ pub fn readiness_with(
     blockers: Vec<Value>,
     complete: bool,
 ) -> Value {
+    readiness_in(task_state, hold, held, blockers, Vec::new(), complete)
+}
+/// [`readiness_with`] for a task whose place in the hierarchy keeps it out of
+/// the runnable queue. A non-empty `hierarchy` is listed as `hierarchy` on
+/// the result and makes an otherwise ready active task `waiting`; it is
+/// omitted when empty, so older readers see the shape they know.
+pub fn readiness_in(
+    task_state: Option<&str>,
+    hold: Option<&Hold>,
+    held: Vec<Value>,
+    blockers: Vec<Value>,
+    hierarchy: Vec<Value>,
+    complete: bool,
+) -> Value {
     let open = blockers.iter().any(|b| b["satisfied"] != true);
     let held = if task_state == Some("active") {
         held
+    } else {
+        Vec::new()
+    };
+    let hierarchy = if task_state == Some("active") {
+        hierarchy
     } else {
         Vec::new()
     };
@@ -269,7 +463,7 @@ pub fn readiness_with(
         Some(s @ ("completed" | "canceled" | "draft")) => s,
         _ if hold.is_some_and(Hold::running) => "running",
         _ if hold.is_some() || !held.is_empty() => "held",
-        _ if open => "waiting",
+        _ if open || !hierarchy.is_empty() => "waiting",
         _ if !complete => "unknown",
         _ => "ready",
     };
@@ -278,7 +472,11 @@ pub fn readiness_with(
         .into_iter()
         .chain(held)
         .collect();
-    json!({"state":state,"blockers":blockers,"complete":complete,"reasons":reasons})
+    let mut out = json!({"state":state,"blockers":blockers,"complete":complete,"reasons":reasons});
+    if !hierarchy.is_empty() {
+        out["hierarchy"] = Value::Array(hierarchy);
+    }
+    out
 }
 
 mod task_edit;
@@ -563,6 +761,126 @@ mod tests {
         json!({"status":status,"stop":{"kind":stop},"cancellation_id":cancellation})
     }
 
+    fn t(id: Uuid, state: &str) -> Value {
+        json!({"id":id,"kind":"task","title":format!("T {id}"),"task_state":state,"retired":false,"deleted":false})
+    }
+    fn pc(source: Uuid, target: Uuid) -> Value {
+        json!({"id":Uuid::new_v4(),"edge_type":"parent-child","source":source,"target":target,"deleted":false})
+    }
+    fn ctx(nodes: Vec<Value>, edges: Vec<Value>, truncated: bool) -> Value {
+        json!({"nodes":nodes,"edges":edges,"truncated":truncated})
+    }
+    fn codes(h: &Hierarchy) -> Vec<(String, u64)> {
+        h.blocking
+            .iter()
+            .map(|b| {
+                (
+                    b["code"].as_str().unwrap().into(),
+                    b["level"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_draft_or_retired_ancestor_within_three_levels_blocks() {
+        let (task, parent, grand) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let edges = vec![pc(parent, task), pc(grand, parent)];
+        let run = |p: Value, g: Value| {
+            let c = ctx(vec![p, g], edges.clone(), false);
+            hierarchy(&c, Some(&c), task, 2).unwrap()
+        };
+        let h = run(t(parent, "active"), t(grand, "active"));
+        assert!(h.blocking.is_empty() && h.complete);
+        let h = run(t(parent, "draft"), t(grand, "active"));
+        assert_eq!(codes(&h), [("ancestor_draft".into(), 1)]);
+        assert_eq!(h.blocking[0]["id"], json!(parent));
+        assert_eq!(h.blocking[0]["edge_id"], edges[0]["id"]);
+        let h = run(t(parent, "active"), t(grand, "draft"));
+        assert_eq!(codes(&h), [("ancestor_draft".into(), 2)]);
+        let mut retired = t(grand, "active");
+        retired["retired"] = json!(true);
+        let h = run(t(parent, "draft"), retired);
+        assert_eq!(
+            codes(&h),
+            [("ancestor_draft".into(), 1), ("ancestor_retired".into(), 2)]
+        );
+        let h = run(t(parent, "completed"), t(grand, "canceled"));
+        assert!(h.blocking.is_empty());
+    }
+
+    #[test]
+    fn live_children_make_a_container_but_deleted_or_retired_ones_do_not() {
+        let (task, a, b, c) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let mut gone = t(b, "active");
+        gone["deleted"] = json!(true);
+        let mut old = t(c, "active");
+        old["retired"] = json!(true);
+        let edges = vec![pc(task, a), pc(task, b), pc(task, c)];
+        let ctx1 = ctx(vec![t(a, "completed"), gone, old], edges, false);
+        let h = hierarchy(&ctx1, None, task, 2).unwrap();
+        assert_eq!(codes(&h), [("has_live_children".into(), 1)]);
+        assert_eq!(h.blocking[0]["relationship"], "child");
+        assert_eq!(h.blocking[0]["task_state"], "completed");
+        let leaf = ctx(vec![t(b, "active")], vec![], false);
+        let h = hierarchy(&leaf, None, task, 2).unwrap();
+        assert!(h.blocking.is_empty() && h.complete);
+    }
+
+    #[test]
+    fn missing_or_truncated_ancestry_is_incomplete_not_ready() {
+        let (task, parent) = (Uuid::new_v4(), Uuid::new_v4());
+        let edges = vec![pc(parent, task)];
+        // A parent edge needs the ancestry read.
+        let c = ctx(vec![t(parent, "active")], edges.clone(), false);
+        assert!(needs_ancestry(&c, task));
+        assert!(!hierarchy(&c, None, task, 2).unwrap().complete);
+        assert!(hierarchy(&c, Some(&c), task, 2).unwrap().complete);
+        // The parent node is not in either Context.
+        let c = ctx(vec![], edges, false);
+        assert!(!hierarchy(&c, Some(&c), task, 2).unwrap().complete);
+        // A truncated Context.
+        let c = ctx(vec![], vec![], true);
+        assert!(needs_ancestry(&c, task));
+        assert!(!hierarchy(&c, Some(&c), task, 2).unwrap().complete);
+        let c = ctx(vec![], vec![], false);
+        assert!(!needs_ancestry(&c, task));
+        assert!(hierarchy(&c, None, task, 2).unwrap().complete);
+        assert!(hierarchy(&json!({}), None, task, 2).is_none());
+    }
+
+    #[test]
+    fn hierarchy_makes_an_active_task_wait_and_only_then() {
+        let h = vec![json!({"code":"ancestor_draft"})];
+        let r = readiness_in(Some("active"), None, vec![], vec![], h.clone(), true);
+        assert_eq!(r["state"], "waiting");
+        assert_eq!(r["hierarchy"], json!(h));
+        // Truncated and nothing known: unknown. A relationship is waiting.
+        let r = readiness_in(Some("active"), None, vec![], vec![], vec![], false);
+        assert_eq!(r["state"], "unknown");
+        assert!(r.get("hierarchy").is_none());
+        let r = readiness_in(Some("active"), None, vec![], vec![], h.clone(), false);
+        assert_eq!(r["state"], "waiting");
+        // Terminal and draft tasks keep their own state and show no hierarchy.
+        for s in ["draft", "completed", "canceled"] {
+            let r = readiness_in(Some(s), None, vec![], vec![], h.clone(), true);
+            assert_eq!(r["state"], s);
+            assert!(r.get("hierarchy").is_none());
+        }
+        // A running attempt outranks it.
+        let live = Hold::from_authority(
+            Uuid::new_v4(),
+            &authority("granted", "running", Value::Null),
+        );
+        let r = readiness_in(Some("active"), Some(&live), vec![], vec![], h, true);
+        assert_eq!(r["state"], "running");
+    }
+
     #[test]
     fn a_stopped_holding_attempt_is_held_not_running() {
         let a = Uuid::new_v4();
@@ -712,6 +1030,35 @@ mod tests {
         );
         assert_eq!(c[2], Value::Null, "unknown states are never echoed");
         assert_eq!(c[3]["summary"], "deleted");
+    }
+
+    #[test]
+    fn parent_reads_the_live_parent_edge_and_defers_node_validation() {
+        let (top, child) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let edge = json!({"id":"e","edge_type":"parent-child","deleted":false,"source":top,"target":child});
+        let nodes =
+            vec![json!({"id":top,"kind":"task","title":"t","task_state":"draft","deleted":false})];
+        let pass = |n: &Value, _: &str| Some(n.clone());
+        let found = parent(&ctx(nodes.clone(), vec![edge.clone()], false), child, pass);
+        assert_eq!(found.unwrap()["task_state"], "draft");
+        assert_eq!(
+            parent(
+                &ctx(nodes.clone(), vec![edge.clone()], false),
+                child,
+                |_, _| None
+            ),
+            None
+        );
+        assert_eq!(
+            parent(&ctx(nodes, vec![edge], false), top, pass),
+            Some(Value::Null)
+        );
+        let gone = json!({"id":"e","edge_type":"parent-child","deleted":false,"source":top,"target":child});
+        let unlisted = parent(&ctx(vec![], vec![gone], false), child, pass).unwrap();
+        assert_eq!(
+            (unlisted["id"].clone(), unlisted["kind"].clone()),
+            (json!(top), Value::Null)
+        );
     }
 
     #[test]
