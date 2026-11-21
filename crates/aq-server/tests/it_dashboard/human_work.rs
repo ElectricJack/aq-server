@@ -721,6 +721,27 @@ async fn work_read_reports_waiting_then_routed() {
             "harnesses":["codex"],"providers":["openai"],"prefer":[],"lane":"backend",
             "provider_intent":"any","source":"owner","policy_digest":null}})
     );
+    sqlx::query("INSERT INTO swarm_waiting(task_id,provider,intelligence_class,reason,observed_at_ms,expires_at_ms) VALUES($1,'openai','standard-high','swarm_concurrency_limit_reached',0,$2)")
+        .bind(id).bind(i64::MAX).execute(&pool).await.unwrap();
+    let queued = work().await;
+    assert_eq!(queued["readiness"]["state"], "waiting");
+    assert_eq!(queued["routing"]["state"], "routed");
+    assert_eq!(
+        queued["readiness"]["reasons"][0]["code"],
+        aq_swarm_settings::admission::CEILING
+    );
+    assert!(
+        queued["readiness"]["reasons"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("openai standard-high")
+    );
+    sqlx::query("UPDATE swarm_waiting SET expires_at_ms=1 WHERE task_id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(work().await["readiness"]["state"], "ready");
 }
 
 #[tokio::test]

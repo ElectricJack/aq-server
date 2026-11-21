@@ -1150,6 +1150,9 @@
                       "$ref": "#/components/schemas/HumanOfferRefusalReason"
                     },
                     {
+                      "$ref": "#/components/schemas/HumanAdmissionWait"
+                    },
+                    {
                       "$ref": "#/components/schemas/HumanResultHoldReason"
                     }
                   ]
@@ -1927,6 +1930,18 @@
           "level",
           "message"
         ],
+        "additionalProperties": false
+      },
+      "HumanAdmissionWait": {
+        "type": "object",
+        "description": "A recent scheduler observation for an eligible task waiting for admission.",
+        "properties": {
+          "code": { "enum": ["swarm_concurrency_limit_reached", "provider_removed", "swarm_intelligence_class_unavailable"] },
+          "provider": { "type": "string", "maxLength": 128 },
+          "intelligence_class": { "type": "string", "maxLength": 128 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "provider", "intelligence_class", "message"],
         "additionalProperties": false
       },
       "HumanOfferRefusalReason": {

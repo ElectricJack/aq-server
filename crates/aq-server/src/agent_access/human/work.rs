@@ -1,9 +1,6 @@
 //! Work-view task projections: readiness, blockers, parent, attached execution,
 //! history timeline and per-scope completion counts (G11 X8-X13).
-//!
-//! Readiness is derived server-side from one bounded depth-1 Graph Context and
-//! the attempt holding the task. It never claims `ready` when the Context was
-//! truncated without a known open blocker: that is reported as `unknown`.
+//! Readiness combines Graph dependencies, execution holds and current scheduler observations.
 use super::*;
 
 const HISTORY_LIMIT: u16 = 25;
@@ -150,13 +147,21 @@ pub(super) async fn work(
         (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
         _ => None,
     });
-    let readiness = aq_human_work::readiness_with(
+    let mut readiness = aq_human_work::readiness_with(
         root["task_state"].as_str(),
         hold.as_ref(),
         held.collect(),
         blockers,
         complete,
     );
+    aq_swarm_settings::admission::show_task_wait(
+        &mut readiness,
+        &r.pool,
+        id,
+        (s.clock)().timestamp_millis(),
+    )
+    .await
+    .map_err(|_| unavailable())?;
     let parent = parent(&raw, w, id)?;
     let mut data = json!({"task_id":id,"task_state":root["task_state"],"version":root["version"],
         "readiness":readiness,"parent":parent,"execution":execution});
