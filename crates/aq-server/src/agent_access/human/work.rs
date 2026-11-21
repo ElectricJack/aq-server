@@ -85,6 +85,25 @@ async fn result_waiting(
     Some(aq_human_work::result_waiting(attempt, result, active))
 }
 
+/// The hierarchy relationships that keep the active task `id` out of the
+/// runnable queue (Graph's ready query leaves out a task under a draft or
+/// retired ancestor and a container with live children), and whether the read
+/// is complete. The ancestry above the depth-1 Context `raw` is one more
+/// bounded incoming read; when it fails the answer is `unknown`, not an error.
+async fn hierarchy_of(s: &AppState, w: Uuid, id: Uuid, raw: &Value) -> Result<(Vec<Value>, bool)> {
+    let depth = aq_agent_grants::draft_scope::MAX_ANCESTRY;
+    let read = || async {
+        let read = context_at(s, w, id, depth, "incoming").await;
+        read.inspect_err(
+            |e| tracing::warn!(task = %id, class = error_class(e), "task ancestry unavailable"),
+        )
+        .ok()
+    };
+    let found = aq_human_work::hierarchy_via(raw, id, depth, read).await;
+    let found = found.ok_or_else(unavailable)?;
+    Ok((found.blocking, found.complete))
+}
+
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
 /// the attached execution for one task.
 pub(super) async fn work(
@@ -107,12 +126,8 @@ pub(super) async fn work(
         .pop()
         .unwrap_or(Value::Null);
     // QA P1-01: a stopped attempt that keeps the claim is `held`, not running.
-    let hold = match execution["attempt_id"].as_str().and_then(|a| a.parse().ok()) {
-        Some(attempt) => sqlx::query_scalar::<_, Value>("SELECT COALESCE(h.state,e.state) FROM execution_attempts e LEFT JOIN profiled_authority_hot h USING(attempt_id) WHERE e.attempt_id=$1")
-            .bind(attempt).fetch_optional(&r.pool).await.map_err(|_| unavailable())?
-            .map(|state| aq_human_work::Hold::from_authority(attempt, &state)),
-        None => None,
-    };
+    let hold = aq_human_work::attempt_hold(&r.pool, &execution["attempt_id"]).await;
+    let hold = hold.map_err(|_| unavailable())?;
     // R6: the task's recorded hold; observing the task closed or retired clears it.
     let open = root["task_state"] == "active" && root["retired"] != true;
     if !open {
@@ -150,11 +165,16 @@ pub(super) async fn work(
         (Some(h), true) if h.stopped => result_waiting(&s, &r.pool, p, h.attempt_id).await,
         _ => None,
     });
-    let readiness = aq_human_work::readiness_with(
+    let (hierarchy, complete) = match open {
+        true => hierarchy_of(&s, w, id, &raw).await?,
+        false => (Vec::new(), complete),
+    };
+    let readiness = aq_human_work::readiness_in(
         root["task_state"].as_str(),
         hold.as_ref(),
         held.collect(),
         blockers,
+        hierarchy,
         complete,
     );
     let parent = parent(&raw, w, id)?;
@@ -162,14 +182,10 @@ pub(super) async fn work(
         "readiness":readiness,"parent":parent,"execution":execution});
     crate::role_settings::show(&mut data, &raw["node"], &a.record.binding.default_role);
     // Owner ruling 4b: the latest confirmed default-policy settlement found no file change.
-    if root["task_state"] == "completed" {
-        let quiet = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT s.evidence#>>'{delivery,state}' FROM profiled_auto_settlements s JOIN execution_attempts e USING(attempt_id) WHERE e.task_id=$1 AND s.disposition='confirmed' ORDER BY s.updated_at_ms DESC LIMIT 1",
-        );
-        let quiet = quiet.bind(id).fetch_optional(&r.pool).await;
-        if matches!(quiet, Ok(Some(Some(ref s))) if s == "no_change") {
-            data["completed_without_changes"] = json!(true);
-        }
+    if root["task_state"] == "completed"
+        && aq_human_work::completed_without_changes(&r.pool, id).await
+    {
+        data["completed_without_changes"] = json!(true);
     }
     let ready = data["readiness"]["state"].as_str().unwrap_or_default();
     // Optional field: when it cannot be computed the read still succeeds without it.
