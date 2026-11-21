@@ -303,10 +303,16 @@ pub async fn notification(
     } else {
         &latest.head
     };
-    let evidence = format!(
+    let mut evidence = format!(
         "Recorded outcome: {}. Changes from the lineage base: {}. Retained head: {head}.",
         latest.outcome, latest.changed
     );
+    if reason == "returns_exhausted"
+        && let Some(pr) = crate::delivery_store::held_pr_evidence(db, origin.result_id).await?
+    {
+        evidence.push(' ');
+        evidence.push_str(&pr);
+    }
     Ok((
         key,
         format!(

@@ -459,8 +459,8 @@ pub async fn returned_result_evidence(
 
 /// Last final PR failure observed by AQ on this result's published head.
 pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
-    let observed: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT o.command_name,o.status,p.head FROM delivery_pushed_results p
+    let observed: Option<(String, String, String, Uuid, bool)> = sqlx::query_as(
+        "SELECT o.command_name,o.status,p.head,a.task_id,COALESCE(o.request->>'answer_note'='behind_base',false) FROM delivery_pushed_results p
          JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
          JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
          WHERE p.report_id=$1 AND o.request#>>'{result_ready,result_id}'=p.report_id::text
@@ -471,11 +471,24 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
          ORDER BY o.completed_at_ms DESC NULLS LAST,o.operation_id LIMIT 1",
     )
     .bind(result)
-    .fetch_optional(db)
+    .fetch_optional(&mut *db)
     .await?;
-    Ok(observed.map(|(command, status, head)| {
-        format!("AQ recorded {status} from {command} on published head {head}.")
-    }))
+    let Some((command, status, head, task, behind)) = observed else {
+        return Ok(None);
+    };
+    let mut evidence = format!("AQ recorded {status} from {command} on published head {head}.");
+    if behind {
+        evidence.push_str(" GitHub reported that this head is behind its base branch.");
+    }
+    if aq_delivery::git_grant::held_report(&mut *db, task).await? == Some(result) {
+        evidence.push_str(
+            " AQ verified that this held result qualifies for repair through task.retry.",
+        );
+        if status == "conflict" {
+            evidence.push_str(" A replacement can integrate current main if the retained task ref and repository binding still match.");
+        }
+    }
+    Ok(Some(evidence))
 }
 
 /// Whether an artifact is active on the delivery binding of the namespace:

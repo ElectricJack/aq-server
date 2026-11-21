@@ -105,6 +105,12 @@ impl Completion {
             diagnostic: None,
         }
     }
+    fn behind_base() -> Self {
+        Self {
+            diagnostic: Some("behind_base"),
+            ..Self::new("conflict", json!({}))
+        }
+    }
     pub fn refused(reason: &'static str) -> Self {
         Self::new("refused", json!({"reason": reason}))
     }
@@ -465,9 +471,8 @@ impl Delivery {
             Ok(MergeOutcome::Merged { .. }) => MergeAttempt::Unconfirmed(Step::Retry(
                 "GitHub did not report a valid merge SHA".into(),
             )),
-            Ok(MergeOutcome::Conflict | MergeOutcome::Behind) => {
-                done(Completion::new("conflict", json!({})))
-            }
+            Ok(MergeOutcome::Behind) => done(Completion::behind_base()),
+            Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
             }
@@ -761,7 +766,7 @@ fn check_repair(
                 seen.mergeable = "conflicting";
             }
         }
-        Mergeability::Behind if repair_behind => {}
+        Mergeability::Behind if repair_behind => return Some(Completion::behind_base()),
         _ => return None,
     }
     Some(Completion::new("conflict", json!({})))

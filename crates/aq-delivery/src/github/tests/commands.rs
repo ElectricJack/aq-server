@@ -534,12 +534,17 @@ async fn two_independent_prs_repair_and_retest_the_second_after_the_first_lands(
     // repair, even though this head's checks passed before the first merge.
     let behind = second('b', 'd', "behind");
     mock.reply(200, vec![], behind.clone());
+    let check = poll_result(&delivery, 8, &sha('b')).await.unwrap();
     assert_eq!(
-        poll_result(&delivery, 8, &sha('b')).await.unwrap().outcome,
-        "conflict"
+        (check.outcome, check.diagnostic),
+        ("conflict", Some("behind_base"))
     );
     mock.reply(200, vec![], behind);
-    assert_eq!(merge(second_task, 8, 'b').await.outcome, "conflict");
+    let blocked = merge(second_task, 8, 'b').await;
+    assert_eq!(
+        (blocked.outcome, blocked.diagnostic),
+        ("conflict", Some("behind_base"))
+    );
     assert_eq!(
         git.operations(),
         ["ref.delete"],

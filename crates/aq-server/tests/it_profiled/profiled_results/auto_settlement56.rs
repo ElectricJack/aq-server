@@ -2088,16 +2088,58 @@ mod playbook {
             .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
         record("pull_request.await_checks", "conflict", Uuid::new_v4()).await;
         assert_eq!(held_report(&pool, task).await.unwrap(), None);
-        record("pull_request.await_checks", "conflict", result).await;
+        let behind = record("pull_request.await_checks", "conflict", result).await;
+        sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"behind_base\"}'::jsonb WHERE operation_id=$1")
+            .bind(behind).execute(&pool).await.unwrap();
         let reasons = work_reasons(&env).await;
         assert!(
-            reasons.iter().any(|r| r["message"]
-                .as_str()
-                .is_some_and(|text| text.contains("pull_request.await_checks")
+            reasons
+                .iter()
+                .any(|r| r["message"].as_str().is_some_and(|text| text
+                    .contains("pull_request.await_checks")
+                    && text.contains("behind its base")
+                    && text.contains("qualifies for repair")
                     && text.contains(&"4".repeat(40))))
         );
+        let port = aq_playbook_domain::delivery_store::PgDelivery(pool.clone());
+        let origin = aq_playbook_domain::host10::ResultReady {
+            task_id: task,
+            result_id: result,
+            project_id: lineage.project_id,
+            attempt_id: attempt,
+            version: 1,
+        };
+        let notice = json!({"text":"Inspect this held result."});
+        let mut tx = pool.begin().await.unwrap();
+        let (_, body) = aq_playbook_domain::delivery_decisions::notification(
+            &mut tx,
+            &port,
+            Some(origin),
+            lineage.project_id,
+            &notice,
+        )
+        .await
+        .unwrap();
+        assert!(body.contains("behind its base") && body.contains("qualifies for repair"));
+        assert!(
+            aq_playbook_domain::delivery_decisions::notification(
+                &mut tx,
+                &port,
+                Some(origin),
+                Uuid::new_v4(),
+                &notice,
+            )
+            .await
+            .is_err()
+        );
+        tx.rollback().await.unwrap();
         let merge = record("pull_request.merge", "running", result).await;
         assert_eq!(held_report(&pool, task).await.unwrap(), None);
+        assert!(!work_reasons(&env).await.iter().any(|r| {
+            r["message"]
+                .as_str()
+                .is_some_and(|s| s.contains("qualifies for repair"))
+        }));
         sqlx::query("UPDATE playbook_host_operations SET status='conflict',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
             .bind(merge).bind(NOW as i64).execute(&pool).await.unwrap();
         assert_eq!(held_report(&pool, task).await.unwrap(), Some(result));
