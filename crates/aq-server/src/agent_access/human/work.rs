@@ -59,7 +59,14 @@ async fn result_waiting(
         .ok()?,
         None => false,
     };
-    Some(aq_human_work::result_waiting(h.attempt_id, result, active))
+    let mut waiting = aq_human_work::result_waiting(h.attempt_id, result, active);
+    if let Ok(Some(check)) = store::checking_pr(&mut db, result).await
+        && let Some(Value::String(message)) = waiting.get_mut("message")
+    {
+        message.push(' ');
+        message.push_str(&check);
+    }
+    Some(waiting)
 }
 
 /// The hierarchy relationships that keep the active task `id` out of the

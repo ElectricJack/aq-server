@@ -1969,8 +1969,6 @@ mod playbook {
             env.report.binding.attempt_id,
             env.report.report_id,
         );
-        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
-            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
         let ns = Uuid::new_v4();
         sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retry',$2,$3,$4,repeat('a',64),repeat('b',64))")
             .bind(ns).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
@@ -1978,10 +1976,28 @@ mod playbook {
             let id = Uuid::new_v4();
             sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms) VALUES($1,$2,1,$3,$4,$5,0,$6,$7,CASE WHEN $7='running' THEN NULL ELSE '{}'::jsonb END,$8)")
                 .bind(id).bind(ns).bind(id.to_string()).bind(command).bind(task.to_string())
-                .bind(json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":"4".repeat(40)}))
+                .bind(json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":"4".repeat(40),"pull_request":228}))
                 .bind(status).bind(NOW as i64).execute(&pool).await.unwrap();
             id
         };
+        let check = record("pull_request.await_checks", "running", result).await;
+        let reasons = work_reasons(&env).await;
+        assert!(reasons.iter().any(|r| {
+            r["code"] == "result_ready_no_delivery_policy"
+                && r["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("PR #228") && m.contains(&"4".repeat(40)))
+        }));
+        sqlx::query("UPDATE playbook_host_operations SET status='passed',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(check).bind(NOW as i64).execute(&pool).await.unwrap();
+        assert!(
+            !work_reasons(&env)
+                .await
+                .iter()
+                .any(|r| r["message"].as_str().is_some_and(|m| m.contains("PR #228")))
+        );
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
+            .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
         record("pull_request.await_checks", "conflict", Uuid::new_v4()).await;
         assert_eq!(held_report(&pool, task).await.unwrap(), None);
         record("pull_request.await_checks", "conflict", result).await;

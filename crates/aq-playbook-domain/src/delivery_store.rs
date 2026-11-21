@@ -373,6 +373,26 @@ pub async fn result_wait(
     .await?)
 }
 
+/// A check operation still running for this exact result, attempt and published head.
+pub async fn checking_pr(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
+    let check: Option<(String, String)> = sqlx::query_as(
+        "SELECT o.request->>'pull_request',p.head FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id JOIN execution_attempts a ON a.attempt_id=h.attempt_id
+         JOIN playbook_host_operations o ON o.subject_id=a.task_id::text
+         WHERE p.report_id=$1 AND a.holds_task AND o.command_name='pull_request.await_checks' AND o.status='running'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+           AND o.request->>'result_head'=p.head AND jsonb_typeof(o.request->'pull_request')='number'
+         ORDER BY o.created_at_ms DESC,o.operation_id LIMIT 1",
+    )
+    .bind(result)
+    .fetch_optional(db)
+    .await?;
+    Ok(check.map(|(number, head)| {
+        format!("AQ is waiting for required checks on PR #{number} at commit {head}.")
+    }))
+}
+
 /// Last final PR failure observed by AQ on this result's published head.
 pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
     let observed: Option<(String, String, String)> = sqlx::query_as(
