@@ -88,6 +88,15 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
     let result = |id, key| rule("result", id, Some((VERSION, key)));
     Some(match kind {
         "epic.retirement.register" => rule("task", Id::Payload("epic_id"), Some((VERSION, "task"))),
+        // agent_access/human/graph_actions/retirement.rs: the registration record
+        "epic.retirement.restore"
+        | "epic.retirement.decide"
+        | "epic.retirement.evidence"
+        | "epic.retirement.close" => rule(
+            "knowledge",
+            Id::Payload("registration_id"),
+            Some((VERSION, "knowledge")),
+        ),
         // agent_access/human/graph_actions.rs::admit; task_execution.rs
         "task.activate"
         | "task.activate.subtree"

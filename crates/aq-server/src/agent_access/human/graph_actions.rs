@@ -18,7 +18,6 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use std::collections::{BTreeMap, BTreeSet};
 mod journal;
-mod retirement;
 mod subtree;
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -76,7 +75,7 @@ pub(crate) trait GraphPayload:
         vec![]
     }
     fn operations(&self, current: &Current<'_>) -> ApiResult<Vec<Value>>;
-    fn retirement(&self) -> Option<&aq_human_work::epic_retirement::Register> {
+    fn retirement(&self) -> Option<aq_human_work::epic_retirement::dispatch::Action<'_>> {
         None
     }
     /// A routing kind writes through `routing` instead of a Graph patch.
@@ -275,6 +274,7 @@ macro_rules! common {
     };
 }
 
+mod retirement;
 pub(super) use aq_human_work::{TaskEdit, TaskReprioritize};
 
 impl GraphPayload for TaskEdit {
@@ -699,8 +699,7 @@ impl<P> GraphAction<P> {
 }
 
 pub(crate) fn register(state: &AppState, r: &mut Registry) {
-    r.register(GraphAction::<aq_human_work::epic_retirement::Register>::new(state))
-        .expect("epic retirement registration adapter");
+    retirement::register(state, r);
     r.register(GraphAction::<super::enqueue::GraphCreate>::new(state))
         .expect("graph create adapter");
     r.register(GraphAction::<TaskDelete>::new(state))
@@ -746,8 +745,7 @@ pub(crate) fn register(state: &AppState, r: &mut Registry) {
         .expect("knowledge restore adapter");
 }
 pub(crate) fn schemas(r: &mut Registry) {
-    r.register_schema::<GraphAction<aq_human_work::epic_retirement::Register>>()
-        .expect("epic retirement registration schema");
+    retirement::schemas(r);
     r.register_schema::<GraphAction<super::enqueue::GraphCreate>>()
         .expect("graph create schema");
     r.register_schema::<GraphAction<TaskDelete>>()
@@ -1136,8 +1134,8 @@ impl<P: GraphPayload> GraphAction<P> {
         if let Some(change) = payload.route_change() {
             return route(state, workspace, subject, expected, change).await;
         }
-        let mutations = if let Some(registration) = payload.retirement() {
-            retirement::plan(state, rt, workspace, user.id, &node, registration).await?
+        let mutations = if let Some(action) = payload.retirement() {
+            retirement::plan(state, rt, (workspace, user.id, project), &node, action).await?
         } else if P::ACTIVATE_SUBTREE {
             match subtree::plan(rt, workspace, subject, expected).await? {
                 Ok(operations) => operations,
