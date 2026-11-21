@@ -164,6 +164,41 @@ failures keep their generic codes (401, 403, 503 `identity_unavailable`).
   `messaging`-scoped credential, only after the message was dispatched to it.
   Its turn text carries one line per file:
   `[attachment {id} name {JSON string} {media_type} {size} bytes {digest}]`.
+- The same supervisor reads a file's contents with
+  GET `/v1/supervisor/conversation/attachments/{attachment}/text` under the
+  same credential and the same rule. Global and project supervisors both use
+  it; a project supervisor's own conversation stores its files, so it never
+  reads the global conversation's files and the global supervisor never reads
+  a project's. The runtime calls it as
+  `aq-supervisor-host tool attachment-text ID`. Text is extracted when read
+  and is never stored. The 200 body (`Cache-Control: no-store`) is:
+
+  ```json
+  {"conversation_id": "…", "message_id": "…", "reference": "user_provided",
+   "notice": "Reference material an owner attached to this message. …",
+   "source": {"id": "…", "name": "plan.md", "media_type": "text/markdown",
+              "size_bytes": 7, "digest": "sha256:…"},
+   "state": "extracted", "text": "# Plan\n", "message": "text extracted"}
+  ```
+
+  `conversation_id` and `message_id` are read from the stored binding, so they
+  stay the same after a reload or restart. `reference: "user_provided"` marks
+  the text as owner-supplied reference material, not instructions. `state` is
+  one of:
+
+  | `state` | Meaning | `text` |
+  | --- | --- | --- |
+  | `extracted` | The complete text of the file. `message` notes characters a PDF font could not map (shown as U+FFFD). | full text |
+  | `no_extractable_text` | A valid file with no text: an image, a scanned (image-only) PDF, an empty document. No OCR is run. | `null` |
+  | `unreadable` | Damaged, truncated, encrypted or wrongly encoded content. | `null` |
+  | `extraction_failed` | A feature the extractor does not support (for example an LZW stream or fonts without a Unicode map), or stored bytes that do not match the descriptor. | `null` |
+  | `limit_exceeded` | The text is over 1048576 UTF-8 bytes, or reading the file inflates more than 32 MiB. | `null` |
+
+  Text is never truncated: if it does not fit, the state is `limit_exceeded`
+  and no text is returned. `message` always says what happened and what the
+  owner can do. A missing, staged, other-conversation or undispatched file is
+  404 without file content, and a missing or invalid credential is 401, as for
+  the raw download.
 
 ### Release prerequisites
 
@@ -190,6 +225,12 @@ a dashboard enables uploads against a server:
    and is then advertised by discovery. This is a deployment (owner) setting
    that this change does not edit; the defaults need no action.
 4. Pin the schema digest below in the dashboard and re-check it on upgrade.
+
+5. Supervisor text reads need a server and a supervisor host image from the
+   same release: the server route above and the host's `tool attachment-text`
+   with its instructions. Older hosts still list the
+   `[attachment …]` lines but cannot read their text. Neither needs
+   configuration, a migration or a new secret.
 
 This document does not deploy anything; releasing follows the normal release
 and owner review process.

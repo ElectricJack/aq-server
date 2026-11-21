@@ -11,6 +11,13 @@ pub const REPLY_CONTRACT: &str = "supervisor-conversation-reply-1";
 pub(super) fn rejected() -> AppError {
     AppError::Unauthenticated("supervisor credential rejected".into())
 }
+/// The supervisor bearer of a machine request.
+pub(super) fn bearer(headers: &HeaderMap) -> Result<&str> {
+    let value = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+    value
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(rejected)
+}
 fn authority_error(error: aq_manual_sessions::Error) -> AppError {
     let aq_manual_sessions::Error(status, message) = error;
     match status {
@@ -172,11 +179,7 @@ pub(super) async fn reply(
     bytes: Bytes,
 ) -> Result<Json<ReplyReceipt>> {
     let at = stamp(&state)?;
-    let bearer = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(rejected)?;
+    let bearer = bearer(&headers)?;
     let principal = authenticate(&service.pool, bearer, "messaging", at).await?;
     let request = ReplyRequest::parse(&bytes)?;
     let dispatch = association(&service.pool, &principal, request.dispatch_id).await?;
