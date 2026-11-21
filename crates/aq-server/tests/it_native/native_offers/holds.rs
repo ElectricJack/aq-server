@@ -1054,9 +1054,11 @@ async fn a_fresh_owner_retry_is_refused_for_any_other_hold() {
 
 #[tokio::test]
 async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_expires() {
-    let (c, predecessor) = budget_held("lineage_time_budget_exhausted").await;
-    let (status, _) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
-    assert_eq!(status, 422);
+    let (mut c, predecessor) = budget_held("lineage_time_budget_exhausted").await;
+    owner_actions(&mut c).await;
+    let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
+    assert_eq!(status, 422, "{same}");
+    assert_eq!(same["code"], "lineage_time_budget_exhausted");
     sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
         .bind(c.env.lineage.project_id)
         .execute(&c.env.env.pool)
