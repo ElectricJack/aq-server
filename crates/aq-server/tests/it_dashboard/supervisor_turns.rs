@@ -95,6 +95,10 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(version: u32) -> Self {
+        Self::configured(version, "").await
+    }
+    /// `extra` is appended to the vault `config.toml` (a trailing table).
+    async fn configured(version: u32, extra: &str) -> Self {
         let db = TestDb::create().await;
         let store = with_store_profile(version, db.store()).await;
         let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
@@ -105,7 +109,7 @@ impl Fixture {
             .await
             .unwrap()
             .unwrap();
-        let config: Config = toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
+        let config: Config = toml::from_str(&("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n".to_owned() + extra)).unwrap();
         let state = AppState {
             internal_work: Default::default(),
             store,
@@ -885,6 +889,39 @@ fn attachment_fixtures_match_schema_and_published_digest() {
     conversation_schema(&old);
     old["items"][1]["attachments"] = json!([{"type": "unknown"}]);
     assert!(!aq_agent_api::check(&s, &s, &old));
+    // Owner upload contract: discovery, upload state and structured refusals.
+    let example = |raw: &str| -> Value { serde_json::from_str(raw).unwrap() };
+    let discovery = example(include_str!(
+        "../../../../protocol/human-supervisor-conversation/v1/discovery.example.json"
+    ));
+    conversation_schema(&discovery);
+    assert_eq!(
+        discovery["attachments"],
+        serde_json::to_value(aq_supervisor_control::attachments::capability(
+            &Default::default()
+        ))
+        .unwrap(),
+        "the published example advertises the enforced limits"
+    );
+    let mut legacy = discovery.clone();
+    legacy.as_object_mut().unwrap().remove("attachments");
+    conversation_schema(&legacy);
+    for raw in [
+        include_str!(
+            "../../../../protocol/human-supervisor-conversation/v1/attachment-upload.example.json"
+        ),
+        include_str!(
+            "../../../../protocol/human-supervisor-conversation/v1/attachment-error.example.json"
+        ),
+    ] {
+        conversation_schema(&example(raw));
+    }
+    let types = &s["$defs"]["AttachmentMediaType"]["enum"];
+    assert_eq!(
+        types,
+        &json!(aq_supervisor_control::attachments::MEDIA_TYPES),
+        "schema media types match the server"
+    );
 }
 
 #[tokio::test]
@@ -1325,6 +1362,15 @@ async fn owner_attachments_are_stored_bound_echoed_rendered_and_served() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(discovery["limits"]["attachments"], json!(4));
+    assert_eq!(
+        discovery["attachments"],
+        serde_json::to_value(aq_supervisor_control::attachments::capability(
+            &Default::default()
+        ))
+        .unwrap()
+    );
+    assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1 << 20));
+    assert_eq!(discovery["attachments"]["max_files_per_message"], json!(4));
     conversation_schema(&discovery);
     let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     let (notes, image) = (Uuid::new_v4(), Uuid::new_v4());
@@ -1334,14 +1380,14 @@ async fn owner_attachments_are_stored_bound_echoed_rendered_and_served() {
             "a.html",
             "text/html",
             b"<b>".to_vec(),
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ),
         (
             notes,
             "a.txt",
             "text/plain; charset=utf-8",
             b"x".to_vec(),
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ),
         (
             notes,
@@ -1402,6 +1448,10 @@ async fn owner_attachments_are_stored_bound_echoed_rendered_and_served() {
     ] {
         let (status, body) = upload(&f, id, name, media, &bytes).await;
         assert_eq!(status, want, "{name} {media} -> {body}");
+        if !id.is_nil() {
+            conversation_schema(&body);
+            assert!(body["error"].as_str().unwrap().starts_with("attachment_"));
+        }
     }
     let text = "# plan\n\"quoted\" ]\n".as_bytes();
     let (status, staged) = upload(&f, notes, "plan \"v2\"].md", "text/markdown", text).await;
@@ -1575,7 +1625,249 @@ async fn staged_attachments_expire_and_are_bounded_per_conversation() {
         .unwrap();
     assert_eq!(count, 16, "the expired row was purged on upload");
     let (status, body) = upload(&f, Uuid::new_v4(), "17.txt", "text/plain", b"x").await;
-    assert!(!status.is_success(), "staged quota: {status} {body}");
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "staged quota: {body}"
+    );
+    assert_eq!(body["error"], "attachment_capacity_exhausted");
+}
+
+/// A minimal stored ZIP with the named empty entries (built at runtime).
+fn zip(names: &[&str]) -> Vec<u8> {
+    let (mut out, mut directory) = (Vec::new(), Vec::new());
+    for name in names {
+        let offset = out.len() as u32;
+        out.extend(b"PK\x03\x04\x14\0");
+        out.extend([0; 20]);
+        out.extend((name.len() as u16).to_le_bytes());
+        out.extend([0, 0]);
+        out.extend(name.as_bytes());
+        directory.extend(b"PK\x01\x02\x14\0\x14\0");
+        directory.extend([0; 20]);
+        directory.extend((name.len() as u16).to_le_bytes());
+        directory.extend([0; 12]);
+        directory.extend(offset.to_le_bytes());
+        directory.extend(name.as_bytes());
+    }
+    let start = out.len() as u32;
+    out.extend(&directory);
+    out.extend(b"PK\x05\x06\0\0\0\0");
+    out.extend((names.len() as u16).to_le_bytes());
+    out.extend((names.len() as u16).to_le_bytes());
+    out.extend((directory.len() as u32).to_le_bytes());
+    out.extend(start.to_le_bytes());
+    out.extend([0, 0]);
+    out
+}
+const DOCX: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+/// One request as another current owner (`second@localhost`).
+async fn as_second(f: &Fixture, method: &str, path: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-aq-dev-email", "second@localhost")
+        .header("x-aq-request", "1")
+        .body(Body::empty())
+        .unwrap();
+    let response = f.app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+fn refusal(status: StatusCode, body: &Value) -> (StatusCode, &str) {
+    conversation_schema(body);
+    (status, body["error"].as_str().unwrap_or(""))
+}
+
+#[tokio::test]
+async fn owner_attachment_contract_supports_documents_metadata_unstage_and_denial() {
+    let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'second@localhost','owner','dev','second@localhost',now())")
+        .bind(Uuid::new_v4())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let docx = zip(&["[Content_Types].xml", "_rels/.rels", "word/document.xml"]);
+    let pdf = b"%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n".to_vec();
+    let markdown = "# Plan\n\n- r\u{e9}sum\u{e9}\n".as_bytes().to_vec();
+    let files = [
+        (Uuid::new_v4(), "design notes.docx", DOCX, docx.clone()),
+        (Uuid::new_v4(), "spec.pdf", "application/pdf", pdf),
+        (Uuid::new_v4(), "plan.md", "text/markdown", markdown),
+        (
+            Uuid::new_v4(),
+            "notes.txt",
+            "text/plain",
+            b"plain notes\n".to_vec(),
+        ),
+    ];
+    let meta = |f: &Fixture, id: Uuid| format!("{}/metadata", attachment_path(f, id));
+    for (id, name, media, bytes) in &files {
+        let (status, staged) = upload(&f, *id, name, media, bytes).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {staged}");
+        conversation_schema(&staged);
+        assert_eq!(
+            (&staged["media_type"], &staged["digest"]),
+            (&json!(media), &json!(sha(bytes)))
+        );
+        let (status, read) = f.human("GET", &meta(&f, *id), None).await;
+        assert_eq!((status, &read), (StatusCode::OK, &staged), "metadata");
+        let (status, headers, served) =
+            raw(&f, "GET", &attachment_path(&f, *id), None, None, vec![]).await;
+        assert_eq!((status, &served), (StatusCode::OK, bytes));
+        assert_eq!(headers["content-type"], *media);
+    }
+    // Unsupported, unreadable and oversized inputs carry structured codes.
+    let id = Uuid::new_v4();
+    let put = format!("{}?name=a.txt", attachment_path(&f, id));
+    let (status, _, body) = raw(&f, "PUT", &put, None, None, b"x".to_vec()).await;
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        refusal(status, &body),
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment_media_type_unsupported"
+        )
+    );
+    let (unsupported, unreadable, large) = (
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment_media_type_unsupported",
+        ),
+        (StatusCode::BAD_REQUEST, "attachment_unreadable"),
+        (StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large"),
+    );
+    for (media, bytes, want) in [
+        (
+            "application/msword",
+            b"\xd0\xcf\x11\xe0".to_vec(),
+            unsupported,
+        ),
+        (
+            DOCX,
+            zip(&["[Content_Types].xml", "xl/workbook.xml"]),
+            unreadable,
+        ),
+        (DOCX, docx[..docx.len() - 1].to_vec(), unreadable),
+        ("application/pdf", b"%PDF-1.7\n1 0 obj".to_vec(), unreadable),
+        ("text/markdown", b"\xc3\x28".to_vec(), unreadable),
+        ("text/plain", vec![b'x'; (1 << 20) + 1], large),
+    ] {
+        let (status, body) = upload(&f, id, "file", media, &bytes).await;
+        assert_eq!(refusal(status, &body), want, "{media}: {body}");
+    }
+    let (status, body) = upload(&f, id, "", "text/plain", b"x").await;
+    assert_eq!(
+        refusal(status, &body),
+        (StatusCode::BAD_REQUEST, "attachment_name_invalid")
+    );
+    let (status, body) = upload(&f, files[3].0, "notes.txt", "text/plain", b"changed").await;
+    assert_eq!(
+        refusal(status, &body),
+        (StatusCode::CONFLICT, "attachment_id_conflict")
+    );
+    let not_found = (StatusCode::NOT_FOUND, "attachment_not_found");
+    // Another owner sees none of these staged files and cannot unstage them.
+    for (id, ..) in &files {
+        for (method, path) in [
+            ("GET", meta(&f, *id)),
+            ("GET", attachment_path(&f, *id)),
+            ("DELETE", attachment_path(&f, *id)),
+        ] {
+            let (status, body) = as_second(&f, method, &path).await;
+            assert_eq!(refusal(status, &body), not_found, "{method} {path}");
+        }
+    }
+    // Unstage: 204, then gone everywhere; a stale ref is refused; the id is reusable.
+    let gone = files[3].0;
+    let (status, _, body) = raw(&f, "DELETE", &attachment_path(&f, gone), None, None, vec![]).await;
+    assert_eq!((status, body.len()), (StatusCode::NO_CONTENT, 0));
+    let (status, body) = f.human("DELETE", &attachment_path(&f, gone), None).await;
+    assert_eq!(refusal(status, &body), not_found, "retried unstage");
+    assert_eq!(
+        f.human("GET", &meta(&f, gone), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let r = |id: Uuid, bytes: &[u8]| json!({"id":id,"digest":sha(bytes)});
+    let create = |refs: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"documents","context":[],"attachments":refs});
+    let stale = create(json!([r(files[0].0, &files[0].3), r(gone, &files[3].3)]));
+    let (status, receipt) = f.post(&f.history_path(), None, stale).await;
+    assert_eq!(status, StatusCode::CONFLICT, "stale ref: {receipt}");
+    assert_eq!(receipt["reason"], "attachment_unavailable");
+    let (_, unbound) = f.human("GET", &meta(&f, files[0].0), None).await;
+    assert_eq!(unbound["state"], "staged", "nothing was bound");
+    let (status, _) = upload(&f, gone, "notes.txt", "text/plain", b"plain notes\n").await;
+    assert_eq!(status, StatusCode::CREATED, "a deleted id can be reused");
+    // Bind three; bound files cannot be unstaged and any current owner reads them.
+    let refs: Vec<Value> = files[..3].iter().map(|(id, _, _, b)| r(*id, b)).collect();
+    let request = create(json!(refs));
+    let (status, receipt) = f.post(&f.history_path(), None, request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, body) = f
+        .human("DELETE", &attachment_path(&f, files[0].0), None)
+        .await;
+    assert_eq!(
+        refusal(status, &body),
+        (StatusCode::CONFLICT, "attachment_bound")
+    );
+    let (status, bound) = as_second(&f, "GET", &meta(&f, files[0].0)).await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    conversation_schema(&bound);
+    assert_eq!(bound["state"], "attached");
+    assert_eq!(bound["message_id"], request["message_id"]);
+    assert_eq!(bound["expires_at_ms"], Value::Null);
+    // Persistence: a fresh router (as after a restart), past the staged TTL.
+    f.skew
+        .store(2 * 86_400_000, std::sync::atomic::Ordering::SeqCst);
+    f.app = conversation::routes(&f.state).with_state(f.state.clone());
+    for (id, _, media, bytes) in &files[..3] {
+        let (status, headers, served) =
+            raw(&f, "GET", &attachment_path(&f, *id), None, None, vec![]).await;
+        assert_eq!((status, &served), (StatusCode::OK, bytes), "{media}");
+        assert_eq!(headers["x-aq-content-digest"], sha(bytes).as_str());
+        let (_, read) = f.human("GET", &meta(&f, *id), None).await;
+        assert_eq!(read["state"], "attached");
+    }
+    let (status, body) = f.human("GET", &meta(&f, gone), None).await;
+    assert_eq!(refusal(status, &body), not_found, "the staged file expired");
+    // Another conversation neither reads, unstages nor binds these files.
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Other\",\"enabled\":true}',1,'{}')").bind(project).execute(&f.pool).await.unwrap();
+    let home = f.conversation;
+    f.conversation = sqlx::query_scalar(
+        "SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1",
+    )
+    .bind(project)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let discovery = format!("/api/human/conversations/projects/{project}");
+    let (status, discovery) = f.human("GET", &discovery, None).await;
+    assert_eq!(status, StatusCode::OK, "{discovery}");
+    assert_eq!(discovery["attachments"]["media_types"][5], DOCX);
+    let fresh = Uuid::new_v4();
+    let (status, _) = upload(&f, fresh, "here.txt", "text/plain", b"here").await;
+    assert_eq!(status, StatusCode::CREATED);
+    for (method, path) in [
+        ("GET", meta(&f, files[0].0)),
+        ("GET", attachment_path(&f, files[0].0)),
+        ("DELETE", attachment_path(&f, files[0].0)),
+    ] {
+        let (status, body) = f.human(method, &path, None).await;
+        assert_eq!(refusal(status, &body), not_found, "{method} {path}");
+    }
+    f.conversation = home;
+    let (status, body) = f.human("GET", &meta(&f, fresh), None).await;
+    assert_eq!(refusal(status, &body), not_found);
+    let (status, receipt) = f
+        .post(&f.history_path(), None, create(json!([r(fresh, b"here")])))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{receipt}");
+    assert_eq!(receipt["reason"], "attachment_unavailable");
 }
 
 #[tokio::test]
@@ -1675,4 +1967,121 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
         f.human("GET", &f.history_path(), None).await.0,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn configured_attachment_limits_are_advertised_and_enforced() {
+    let f = Fixture::configured(
+        aq_server::STATE_FORMAT_VERSION,
+        "[supervisor_attachments]\nmax_file_bytes = 1024\nmax_files_per_message = 2\n",
+    )
+    .await;
+    let (status, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    conversation_schema(&discovery);
+    assert_eq!(discovery["limits"]["attachments"], json!(2));
+    assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1024));
+    assert_eq!(discovery["attachments"]["max_files_per_message"], json!(2));
+    // Everything else stays at its published value.
+    let mut defaults = serde_json::to_value(aq_supervisor_control::attachments::capability(
+        &Default::default(),
+    ))
+    .unwrap();
+    defaults["max_file_bytes"] = json!(1024);
+    defaults["max_files_per_message"] = json!(2);
+    assert_eq!(discovery["attachments"], defaults);
+    // The byte limit is inclusive and the refusal is the structured 413.
+    let (exact, over) = (Uuid::new_v4(), Uuid::new_v4());
+    let (status, body) = upload(&f, exact, "exact.txt", "text/plain", &[b'x'; 1024]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = upload(&f, over, "over.txt", "text/plain", &[b'x'; 1025]).await;
+    assert_eq!(
+        refusal(status, &body),
+        (StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large")
+    );
+    let (second, third) = (Uuid::new_v4(), Uuid::new_v4());
+    for id in [second, third] {
+        let (status, body) = upload(&f, id, "a.txt", "text/plain", b"abc").await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let r = |id: Uuid, bytes: &[u8]| json!({"id":id,"digest":sha(bytes)});
+    let create = |refs: Value| json!({"operation_id":Uuid::new_v4(),"message_id":Uuid::new_v4(),"expected_conversation_revision":"1","body":"files","context":[],"attachments":refs});
+    // Three refs exceed the configured count: refused, nothing bound.
+    let three = create(json!([
+        r(exact, &[b'x'; 1024]),
+        r(second, b"abc"),
+        r(third, b"abc")
+    ]));
+    let (status, body) = f.post(&f.history_path(), None, three).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (_, staged) = f
+        .human(
+            "GET",
+            &format!("{}/metadata", attachment_path(&f, exact)),
+            None,
+        )
+        .await;
+    assert_eq!(staged["state"], "staged");
+    let two = create(json!([r(exact, &[b'x'; 1024]), r(second, b"abc")]));
+    let (status, receipt) = f.post(&f.history_path(), None, two).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+}
+
+#[tokio::test]
+async fn attachment_limits_default_to_one_mebibyte_and_four_files() {
+    let f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let (_, discovery) = f
+        .human("GET", "/api/human/conversations/global", None)
+        .await;
+    assert_eq!(discovery["limits"]["attachments"], json!(4));
+    assert_eq!(discovery["attachments"]["max_file_bytes"], json!(1_048_576));
+    let id = Uuid::new_v4();
+    let (status, body) = upload(&f, id, "max.txt", "text/plain", &vec![b'x'; 1 << 20]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+#[test]
+fn attachment_limits_in_the_vault_config_reject_out_of_range_values() {
+    let base = "format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n";
+    let vault = std::env::temp_dir().join(format!("aq-attachment-limits-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&vault).unwrap();
+    for (extra, key) in [
+        ("max_file_bytes = 1048577", "max_file_bytes"),
+        ("max_file_bytes = 0", "max_file_bytes"),
+        ("max_files_per_message = 5", "max_files_per_message"),
+        ("max_files_per_message = 0", "max_files_per_message"),
+    ] {
+        std::fs::write(
+            vault.join("config.toml"),
+            format!("{base}[supervisor_attachments]\n{extra}\n"),
+        )
+        .unwrap();
+        let error = aq_server::config::load(&vault).unwrap_err().to_string();
+        assert!(error.contains("supervisor_attachments"), "{extra}: {error}");
+        assert!(error.contains(key), "{extra}: {error}");
+    }
+    std::fs::write(
+        vault.join("config.toml"),
+        format!("{base}[supervisor_attachments]\nmax_files = 2\n"),
+    )
+    .unwrap();
+    assert!(aq_server::config::load(&vault).is_err(), "unknown key");
+    std::fs::write(
+        vault.join("config.toml"),
+        format!("{base}[supervisor_attachments]\nmax_file_bytes = 4096\n"),
+    )
+    .unwrap();
+    let lowered = aq_server::config::load(&vault)
+        .unwrap()
+        .supervisor_attachments;
+    assert_eq!(
+        (lowered.max_file_bytes, lowered.max_files_per_message),
+        (4096, 4)
+    );
+    std::fs::write(vault.join("config.toml"), base).unwrap();
+    let loaded = aq_server::config::load(&vault).unwrap();
+    assert_eq!(loaded.supervisor_attachments, Default::default());
+    std::fs::remove_dir_all(&vault).unwrap();
 }

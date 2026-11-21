@@ -54,6 +54,8 @@ pub struct Discovery {
     pub conversation: Conversation,
     pub runtime: Runtime,
     pub limits: Limits,
+    /// Owner upload support: accepted types and the enforced limits.
+    pub attachments: crate::attachments::Capability,
 }
 
 pub fn recipient(conversation: Uuid) -> Value {
