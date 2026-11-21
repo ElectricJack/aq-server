@@ -187,6 +187,54 @@ mod tests {
         assert_eq!(v["patch"]["served"], false);
         assert!(v["patch"]["retrieve"][1].as_str().unwrap().contains(HEAD));
     }
+    /// The reviewed result df3d2e44…@44a9f35e…: head 105c94ad… from
+    /// `delivery_pushed_results`, base 957a001e… from its launch, with no
+    /// legacy source receipts.
+    #[test]
+    fn the_reviewed_result_binds_its_verified_head_to_its_base_and_revision() {
+        const REVISION: &str = "44a9f35e560162b48354d5374ec9c9ccc419a757ec82b5e0b52e18dbddbe8f89";
+        let (head, base) = (
+            "105c94ad4a258ab7b943f14bbd31db935ec9af5e",
+            "957a001e392c4405b00ea1f11a1e621b19842447",
+        );
+        let repository: Uuid = "674b55a3-94ec-55b4-8338-df9c4fc8a0ed".parse().unwrap();
+        let subject = Subject {
+            report_id: "df3d2e44-fdcb-42c9-aaaf-dbd47a1f9aa1".parse().unwrap(),
+            revision: REVISION,
+            attempt_id: Uuid::from_u128(2),
+            source_repository_id: repository,
+            source_base: base,
+            source_receipt_ids: &[],
+        };
+        let task_ref = "refs/heads/aq/f86d9749-4371-46ec-b302-815078c1718e";
+        let row = Recorded {
+            row: true,
+            task_ref: Some(task_ref.into()),
+            head: Some(head.into()),
+            repository_id: Some(repository),
+            base: Some(base.into()),
+        };
+        let v = describe(&subject, &row);
+        assert_eq!(v["state"], "pushed_ref");
+        assert_eq!(v["provenance"]["head"], head);
+        assert_eq!(v["provenance"]["base"], base);
+        assert_eq!(
+            v["provenance"]["digest"],
+            provenance_digest(REVISION, repository, base, head, task_ref)
+        );
+        // Empty legacy receipts do not hide the retained ref; a changed
+        // revision binds a different digest.
+        let changed = Subject {
+            revision: &REVISION.replace('4', "5"),
+            ..subject
+        };
+        assert_ne!(
+            describe(&changed, &row)["provenance"]["digest"],
+            v["provenance"]["digest"]
+        );
+        // Without the row the same result reports its source as missing.
+        assert_eq!(describe(&subject, &Recorded::default())["state"], "missing");
+    }
     #[test]
     fn digest_changes_with_each_bound_field() {
         let r = Uuid::from_u128(4);

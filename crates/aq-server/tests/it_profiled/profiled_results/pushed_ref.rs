@@ -243,3 +243,86 @@ async fn a_push_conflict_is_recorded_only_when_the_task_ref_left_its_lease() {
         ("push_conflict", "")
     );
 }
+
+/// A reviewer reads a recorded result's retained work by `report_id`: the
+/// pushed head and the grant's base, bound to the exact revision. A changed
+/// revision, another project and a report with no retained row are refused or
+/// reported as missing, never answered with someone else's work.
+#[tokio::test]
+async fn a_pushed_result_names_its_retained_head_and_refuses_other_revisions_and_projects() {
+    use aq_delivery::result_work::{Subject, describe, recorded};
+    use aq_server::profiled_execution::human_results;
+    let (mut f, _, mut report) = prepare(true, true).await;
+    let auth = context(&f).await;
+    let pool = f.db.pool().await;
+    let served = task_ref(&mut f, &mut report).await;
+    let pushed = "4".repeat(40);
+    *served.at.lock().unwrap() = Some(pushed.clone());
+    let named = Pushed::At(PushedRef {
+        reference: served.task_ref.clone(),
+        head: pushed.clone(),
+    });
+    results::record_pushed(&f.state, &auth, &report, &headers(&named))
+        .await
+        .unwrap();
+    let project = f.selection.lineage.project_id;
+    let page = human_results::read_project(&f.state, project, None, None, None)
+        .await
+        .unwrap();
+    let item = &page.items[0];
+    assert_eq!(item.report_id, report.report_id);
+    let work = |item: &human_results::ResultMetadata, recorded: &_| {
+        describe(
+            &Subject {
+                report_id: item.report_id,
+                revision: &item.revision,
+                attempt_id: item.attempt_id,
+                source_repository_id: item.repository_id,
+                source_base: item.source_base.hex.as_str(),
+                source_receipt_ids: &item.source_receipt_ids,
+            },
+            recorded,
+        )
+    };
+    let found = recorded(&pool, item.report_id).await.unwrap();
+    let described = work(item, &found);
+    assert_eq!(described["state"], "pushed_ref");
+    assert_eq!(described["provenance"]["head"], pushed);
+    assert_eq!(described["provenance"]["base"], item.source_base.hex);
+    assert_eq!(described["provenance"]["ref"], served.task_ref);
+    assert_eq!(
+        described["provenance"]["repository_id"],
+        json!(item.repository_id)
+    );
+    // The digest binds the revision: another revision cannot reuse it.
+    let other = aq_delivery::result_work::provenance_digest(
+        &"0".repeat(64),
+        item.repository_id,
+        &item.source_base.hex,
+        &pushed,
+        &served.task_ref,
+    );
+    assert_ne!(described["provenance"]["digest"], json!(other));
+
+    // A changed revision of the same report, and another project, are refused.
+    let exact = async |project, revision: &str| {
+        human_results::read_project(
+            &f.state,
+            project,
+            None,
+            None,
+            Some((report.report_id, revision)),
+        )
+        .await
+    };
+    assert!(exact(project, &item.revision).await.is_ok());
+    assert!(exact(project, &"0".repeat(64)).await.is_err());
+    assert!(exact(Uuid::new_v4(), &item.revision).await.is_err());
+    // A report with no `delivery_pushed_results` row and no receipts has no
+    // retained work: it says `missing` and recreates nothing.
+    let none = recorded(&pool, Uuid::new_v4()).await.unwrap();
+    let missing = work(item, &none);
+    assert_eq!(missing["state"], "missing");
+    assert!(missing.get("provenance").is_none());
+    assert_eq!(missing["patch"]["served"], false);
+}

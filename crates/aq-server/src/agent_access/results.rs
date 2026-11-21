@@ -1,6 +1,8 @@
 //! A reviewing attempt's read of its project's retained results and where
 //! each result's work is kept (`result.read@project:self`). Reads only: it
 //! never approves, settles or recreates work, and shows no other project.
+// An error here is the finished HTTP response, as in `grant_check`.
+#![allow(clippy::result_large_err)]
 use super::{Error as AgentError, authenticate, grant_check, id as field, ok};
 use crate::{AppState, error::AppError, profiled_execution::human_results};
 use axum::{
