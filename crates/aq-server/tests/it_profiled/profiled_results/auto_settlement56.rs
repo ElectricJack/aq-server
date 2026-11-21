@@ -1541,11 +1541,12 @@ mod playbook {
             task_id: Uuid::new_v4(),
             ..target.f.selection.lineage.clone()
         };
-        let f = Box::pin(common::profiled::fixture_on(
+        let mut f = Box::pin(common::profiled::fixture_on(
             target.f.db.clone(),
             Some((target.f.actor, lineage.clone())),
         ))
         .await;
+        f.state.config = target.f.state.config.clone();
         let (f, _, mut report) = Box::pin(prepare_on(
             f,
             true,
