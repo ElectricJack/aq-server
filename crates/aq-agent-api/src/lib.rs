@@ -3,6 +3,7 @@
 pub mod result_requests;
 use serde_json::Value;
 use std::sync::OnceLock;
+pub mod operation_receipt;
 fn schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
