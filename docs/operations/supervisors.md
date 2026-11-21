@@ -64,5 +64,10 @@ dependencies. Project supervisors can only discover, read and mutate their own
 project. Tools check current owner identity, enabled control, generation, scopes
 and central head under the central fence. Discover schemas with
 `aq-supervisor-host tool commands [NAME]`; invoke NAME with one CommandRequest
-JSON on stdin. Owner configuration commands remain unavailable. Exact mutation
+JSON on stdin. Files attached to an owner message are read with
+`aq-supervisor-host tool attachment-text ID` (the ID from the turn's
+`[attachment …]` line). It returns the extracted text, or `text: null` with an
+explicit state and message. Only files of messages dispatched to that
+supervisor can be read (see `protocol/human-supervisor-conversation/v1`). Owner
+configuration commands remain unavailable. Exact mutation
 identities and receipts are retained across uncertain responses.

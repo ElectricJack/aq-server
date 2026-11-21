@@ -17,9 +17,9 @@ pub fn origin(value: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 pub async fn run(args: &[String]) -> Result<()> {
-    let name = args
-        .first()
-        .context("usage: aq-supervisor-host tool commands [NAME] | NAME < request.json")?;
+    let name = args.first().context(
+        "usage: aq-supervisor-host tool commands [NAME] | attachment-text ID | NAME < request.json",
+    )?;
     ensure!(
         name.len() <= 128
             && name
@@ -40,8 +40,18 @@ pub async fn run(args: &[String]) -> Result<()> {
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
     let mut operation = None;
+    // Owner attachment contents are larger than command responses.
+    let mut bound = 2097152;
     let request = if name == "commands" {
         client.get(url.join("api/v1/commands")?)
+    } else if name == "attachment-text" {
+        let id: uuid::Uuid = args
+            .get(1)
+            .context("usage: aq-supervisor-host tool attachment-text ID")?
+            .parse()
+            .context("attachment ID is not a UUID")?;
+        bound = aq_supervisor_control::delivery::MAX_DELIVERY_BYTES as u64;
+        client.get(url.join(&format!("v1/supervisor/conversation/attachments/{id}/text"))?)
     } else {
         let mut bytes = Vec::new();
         std::io::stdin().take(131073).read_to_end(&mut bytes)?;
@@ -63,11 +73,11 @@ pub async fn run(args: &[String]) -> Result<()> {
         .context("supervisor tool transport failed")?;
     let status = response.status();
     ensure!(
-        response.content_length().is_none_or(|n| n <= 2097152),
+        response.content_length().is_none_or(|n| n <= bound),
         "tool response byte bound"
     );
     let bytes = response.bytes().await?;
-    ensure!(bytes.len() <= 2097152, "tool response byte bound");
+    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
     let value: Value = serde_json::from_slice(&bytes)?;
     if status.is_success()
         && matches!(name.as_str(), "task.create" | "task.graph.create")
