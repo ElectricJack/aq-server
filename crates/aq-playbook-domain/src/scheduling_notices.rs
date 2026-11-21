@@ -27,8 +27,22 @@ WITH waits AS (
  JOIN profiled_launches l USING(attempt_id)
  WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM profiled_result_heads h WHERE h.attempt_id=a.attempt_id)
  AND NOT EXISTS(SELECT 1 FROM task_holds_current h WHERE h.task_id=a.task_id)
+ UNION ALL
+ SELECT (l.execution_spec#>>'{lifecycle,project_id}')::uuid,a.task_id,a.attempt_id,h.report_id,
+        'branch_publication_refused',min(o.completed_at_ms)
+ FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
+ JOIN profiled_launches l USING(attempt_id)
+ JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+ JOIN playbook_host_operations o ON o.subject_id=a.task_id::text AND o.command_name='branch.publish'
+     AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+     AND o.request#>>'{result_ready,result_id}'=h.report_id::text AND o.request->>'result_head'=p.head
+ WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id)
+ GROUP BY l.execution_spec#>>'{lifecycle,project_id}',a.task_id,a.attempt_id,h.report_id
+ HAVING count(*) FILTER(WHERE o.status='refused' AND o.output->>'reason'='unreachable')>=2
+    AND bool_and(o.status='running' OR (o.status='refused' AND o.output->>'reason'='unreachable'))
 ), keyed AS (
- SELECT w.*, 'sha256:'||encode(sha256(convert_to('aq.scheduler.hold/'||identity::text,'UTF8')),'hex') AS key
+ SELECT w.*, 'sha256:'||encode(sha256(convert_to(
+        CASE reason WHEN 'branch_publication_refused' THEN 'aq.scheduler.publish/' ELSE 'aq.scheduler.hold/' END||identity::text,'UTF8')),'hex') AS key
  FROM waits w WHERE since_ms<=$1 AND NOT (identity=ANY($2))
  UNION ALL
  SELECT (l.execution_spec#>>'{lifecycle,project_id}')::uuid, a.task_id, a.attempt_id, h.report_id,
@@ -110,6 +124,9 @@ pub async fn notify<E: std::fmt::Debug>(
                 continue;
             }
             body.push_str(" Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt.");
+        }
+        if reason == "branch_publication_refused" {
+            body.push_str(" AQ repeatedly received an unreachable response while publishing this retained result branch. Check the remote, task ref and publisher permissions. Delivery can continue with the same result after publication recovers.");
         }
         if reason == "stopped_without_result" {
             body.push_str(" The worker recorded a physical stop and still holds the task without a result. Inspect the worker's recovery status and retained workspace. Escalate missing evidence to the owner.");

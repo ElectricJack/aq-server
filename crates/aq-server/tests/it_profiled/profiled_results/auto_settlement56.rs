@@ -1563,6 +1563,71 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn repeated_publication_refusals_notify_once_for_the_current_unpublished_head() {
+        use aq_playbook_domain::scheduling_notices::notify;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let lineage = &env.f.selection.lineage;
+        let task = lineage.task_id;
+        let attempt = env.report.binding.attempt_id;
+        let result = env.report.report_id;
+        let head = "4".repeat(40);
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO UPDATE SET head=EXCLUDED.head")
+            .bind(result).bind(attempt).bind(format!("refs/heads/aq/{task}")).bind(&head).execute(&pool).await.unwrap();
+        let ns = Uuid::new_v4();
+        sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'publish',$2,$3,$4,repeat('a',64),repeat('b',64))")
+            .bind(ns).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+        let record = async |sha: &str, report: Uuid, status: &str| {
+            let id = Uuid::new_v4();
+            let request =
+                json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":sha});
+            let output = if status == "published" {
+                json!({"head":sha})
+            } else {
+                json!({"reason":"unreachable"})
+            };
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,$6,$7,$8,$8)")
+                .bind(id).bind(ns).bind(id.to_string()).bind(task.to_string()).bind(request).bind(status).bind(output).bind(NOW as i64).execute(&pool).await.unwrap();
+        };
+        let calls = AtomicUsize::new(0);
+        let send =
+            async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>, scope, body: &str, _: u64| {
+                assert_eq!(scope, Some(lineage.project_id));
+                assert!(
+                    body.contains("branch_publication_refused")
+                        && body.contains(&result.to_string())
+                        && body.contains(&attempt.to_string())
+                );
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, ()>(Uuid::new_v4())
+            };
+        let due = NOW as i64 + 600_000;
+        record(&head, result, "refused").await;
+        record(&"5".repeat(40), result, "refused").await;
+        record(&head, Uuid::new_v4(), "refused").await;
+        notify(&pool, due, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        record(&head, result, "refused").await;
+        notify(&pool, due - 1, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for _ in 0..2 {
+            notify(&pool, due, &send).await.unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+            .bind(lineage.project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        record(&head, result, "published").await;
+        notify(&pool, due, &send).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
     async fn expired_delivery_notice_reaches_the_project_once_for_the_current_held_result() {
         use aq_playbook_domain::{delivery_decisions, scheduling_notices};
         let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
