@@ -1,7 +1,9 @@
 //! Pure validation of the published agent-access v1 boundary.
 //! Shape/digest checks are not authentication, live authorization or graph effects.
+pub mod result_requests;
 use serde_json::Value;
 use std::sync::OnceLock;
+pub mod operation_receipt;
 fn schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
@@ -423,4 +425,4 @@ mod human_digest_pattern_tests {
     }
 }
 
-pub mod effects;
+pub use operation_receipt as effects;

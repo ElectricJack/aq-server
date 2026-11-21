@@ -1,10 +1,12 @@
-//! Validation of a stored Graph operation and its terminal receipt.
-use super::{InvalidContract, digest, valid};
+//! Pure validation of a terminal graph-operation row retained by the dispatch owner.
+//! It reads the row; it does not authenticate, dispatch or fabricate an upstream receipt.
+use crate::{InvalidContract, digest, valid};
 use serde_json::{Value, json};
 
-/// Check a terminal projection retained by the actual dispatch owner. That owner
-/// already verified the upstream receipt; this read does not fabricate another
-/// Graph observation or regard a supplied receipt as proof.
+/// Whether the retained operation row is final (`Ok(true)`) or still in flight (`Ok(false)`).
+/// A row whose projection, owner binding, idempotency key, lease or receipt does not agree
+/// is `Err`, never "final". The dispatch owner already verified the upstream receipt; a
+/// supplied receipt is not regarded as proof here.
 pub fn settled(row: &Value, binding: &Value) -> Result<bool, InvalidContract> {
     let request = &row["request"];
     let status = &row["status"];
@@ -62,12 +64,9 @@ pub fn settled(row: &Value, binding: &Value) -> Result<bool, InvalidContract> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
     fn row(state: &str) -> (Value, Value) {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../protocol/agent-access/v1/fixtures/base.json"
-        ))
-        .unwrap();
+        let fixture: Value =
+            serde_json::from_str(include_str!("../artifacts/fixtures/base.json")).unwrap();
         let request = fixture["command_requests"]["correct_record"].clone();
         let binding = request["binding"].clone();
         let status = fixture["operation_statuses"][state].clone();
@@ -101,13 +100,13 @@ mod tests {
             assert!(settled(&r, &b).is_err(), "{path}");
         }
         let mut r = original.clone();
-        r["lease_id"] = json!(Uuid::new_v4());
+        r["lease_id"] = json!(uuid::Uuid::new_v4());
         assert!(settled(&r, &b).is_err());
         let mut r = original.clone();
         r["dispatch_count"] = json!(0);
         assert!(settled(&r, &b).is_err());
         let mut r = original.clone();
-        r["status"]["receipt"]["workspace_id"] = json!(Uuid::new_v4());
+        r["status"]["receipt"]["workspace_id"] = json!(uuid::Uuid::new_v4());
         assert!(settled(&r, &b).is_err());
         let (mut r, b) = row("unknown");
         r["phase"] = json!("confirmed");

@@ -4,6 +4,8 @@
 //! node/attempt after taking an operation. No SQL connection crosses remote I/O.
 use crate::{AppState, error::AppError, profiled_execution::results};
 use aq_admission::{ArtifactRef, Digest};
+pub use aq_profiled_state::effect_profile::LedgerDisposition;
+use aq_profiled_state::effect_profile::verdict;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use sqlx::{Postgres, Row, Transaction};
@@ -11,9 +13,6 @@ use uuid::Uuid;
 
 pub const MAX_OPERATIONS: usize = 4096;
 pub const MAX_INSPECTION_BYTES: u64 = 32 * 1024 * 1024;
-
-pub use aq_profiled_state::effect_ledger::LedgerDisposition;
-use aq_profiled_state::effect_ledger::verdict;
 
 /// An observation of actual retained owners, not a quiescence/release receipt.
 /// Private fields and no Deserialize prevent a request from supplying a verdict.
@@ -205,7 +204,8 @@ pub async fn inspect_aq_effects_locked(
         }
         hasher.update((encoded.len() as u64).to_be_bytes());
         hasher.update(&encoded);
-        terminal &= aq_agent_api::effects::settled(row, &binding).map_err(|_| refused())?;
+        terminal &=
+            aq_agent_api::operation_receipt::settled(row, &binding).map_err(|_| refused())?;
     }
     let disposition = verdict(mailed, &profile, terminal);
     Ok(AqEffectsSnapshot {
