@@ -49,7 +49,13 @@ async fn run() -> Result<()> {
         let project = args[3]
             .parse()
             .context("usage: aq-supervisor-host repo sync PROJECT_ID")?;
-        aq_supervisor_host::repo::sync(project, std::path::Path::new("/workspace")).await?;
+        // repo sync errors are built for the agent (token masked, no placement), so show them.
+        if let Err(error) =
+            aq_supervisor_host::repo::sync(project, std::path::Path::new("/workspace")).await
+        {
+            eprintln!("repo sync failed: {error:#}");
+            std::process::exit(1);
+        }
         return Ok(());
     }
     if args.len() == 3 && args[1] == "serve" {
