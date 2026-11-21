@@ -2085,3 +2085,302 @@ fn attachment_limits_in_the_vault_config_reject_out_of_range_values() {
     assert_eq!(loaded.supervisor_attachments, Default::default());
     std::fs::remove_dir_all(&vault).unwrap();
 }
+
+/// LSB-first bit writer for a hand-built deflate stream.
+struct Bits {
+    out: Vec<u8>,
+    acc: u64,
+    n: u32,
+}
+impl Bits {
+    fn put(&mut self, v: u64, c: u32) {
+        self.acc |= v << self.n;
+        self.n += c;
+        while self.n >= 8 {
+            self.out.push(self.acc as u8);
+            self.acc >>= 8;
+            self.n -= 8;
+        }
+    }
+    /// A Huffman code, most significant bit first.
+    fn code(&mut self, v: u64, c: u32) {
+        self.put((0..c).fold(0, |r, i| (r << 1) | ((v >> i) & 1)), c);
+    }
+}
+/// A zlib stream (one fixed-Huffman block) that inflates to `prefix`,
+/// `1 + 258 * k` bytes of `a`, then `suffix`: a small file with large text.
+fn expanding(prefix: &[u8], k: usize, suffix: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut b = Bits {
+        out: vec![0x78, 0x01],
+        acc: 0,
+        n: 0,
+    };
+    b.put(0b011, 3); // final block, fixed Huffman codes
+    let literal = |b: &mut Bits, x: u8| {
+        assert!(x < 144);
+        b.code(0x30 + x as u64, 8);
+    };
+    prefix.iter().chain(b"a").for_each(|&x| literal(&mut b, x));
+    for _ in 0..k {
+        b.code(0xC5, 8); // length 258
+        b.code(0, 5); // distance 1
+    }
+    suffix.iter().for_each(|&x| literal(&mut b, x));
+    b.code(0, 7); // end of block
+    let pad = (8 - b.n % 8) % 8;
+    b.put(0, pad);
+    let data = [prefix, &vec![b'a'; 1 + 258 * k], suffix].concat();
+    let (mut s1, mut s2) = (1u32, 0u32);
+    for &x in &data {
+        s1 = (s1 + x as u32) % 65521;
+        s2 = (s2 + s1) % 65521;
+    }
+    b.out.extend(((s2 << 16) | s1).to_be_bytes());
+    (b.out, data)
+}
+/// A one-page PDF with font `/F1` = `font` and one content stream.
+fn one_page_pdf(font: &str, content: &[u8], flate: bool) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    for (n, dict) in [
+        (1, "/Type /Catalog /Pages 2 0 R"),
+        (
+            2,
+            "/Type /Pages /Count 1 /Kids [4 0 R] /Resources << /Font << /F1 3 0 R >> >>",
+        ),
+        (3, font),
+        (4, "/Type /Page /Parent 2 0 R /Contents 5 0 R"),
+    ] {
+        out.extend(format!("{n} 0 obj\n<< {dict} >>\nendobj\n").bytes());
+    }
+    let filter = if flate { "/Filter /FlateDecode " } else { "" };
+    out.extend(format!("5 0 obj\n<< {filter}/Length {} >>\nstream\n", content.len()).bytes());
+    out.extend(content);
+    out.extend(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n");
+    out
+}
+fn crc32(data: &[u8]) -> u32 {
+    !data.iter().fold(!0u32, |c, &b| {
+        (0..8).fold(c ^ b as u32, |c, _| {
+            if c & 1 == 1 {
+                (c >> 1) ^ 0xEDB8_8320
+            } else {
+                c >> 1
+            }
+        })
+    })
+}
+/// A stored (uncompressed) DOCX package with real checksums.
+fn docx_with(body: &str) -> Vec<u8> {
+    let xml = format!(
+        "<?xml version=\"1.0\"?><w:document xmlns:w=\"x\"><w:body>{body}</w:body></w:document>"
+    );
+    let parts: [(&str, &[u8]); 2] = [
+        ("[Content_Types].xml", b"<Types/>"),
+        ("word/document.xml", xml.as_bytes()),
+    ];
+    let (mut out, mut directory) = (Vec::new(), Vec::new());
+    for (name, data) in parts {
+        let at = out.len() as u32;
+        let size = (data.len() as u32).to_le_bytes();
+        let fields = [crc32(data).to_le_bytes(), size, size].concat();
+        out.extend(b"PK\x03\x04\x14\0\0\0\0\0\0\0\0\0");
+        out.extend(&fields);
+        out.extend((name.len() as u16).to_le_bytes());
+        out.extend([0, 0]);
+        out.extend(name.as_bytes());
+        out.extend(data);
+        directory.extend(b"PK\x01\x02\x14\0\x14\0\0\0\0\0\0\0\0\0");
+        directory.extend(&fields);
+        directory.extend((name.len() as u16).to_le_bytes());
+        directory.extend([0; 12]);
+        directory.extend(at.to_le_bytes());
+        directory.extend(name.as_bytes());
+    }
+    let start = out.len() as u32;
+    out.extend(&directory);
+    out.extend(b"PK\x05\x06\0\0\0\0\x02\0\x02\0");
+    out.extend((directory.len() as u32).to_le_bytes());
+    out.extend(start.to_le_bytes());
+    out.extend([0, 0]);
+    out
+}
+/// Stages `files` and binds them to one new owner message.
+async fn attach(f: &Fixture, files: &[(&str, &str, Vec<u8>)]) -> (Uuid, Vec<Uuid>) {
+    let (mut ids, mut refs) = (vec![], vec![]);
+    for (name, media, bytes) in files {
+        let id = Uuid::new_v4();
+        let (status, body) = upload(f, id, name, media, bytes).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {body}");
+        refs.push(json!({"id":id,"digest":sha(bytes)}));
+        ids.push(id);
+    }
+    let message = Uuid::new_v4();
+    let request = json!({"operation_id":Uuid::new_v4(),"message_id":message,"expected_conversation_revision":"1","body":"see files","context":[],"attachments":refs});
+    let (status, receipt) = f.post(&f.history_path(), None, request).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    (message, ids)
+}
+/// The supervisor text read; `None` sends the owner's dev session instead.
+async fn supervisor_text(f: &Fixture, id: Uuid, token: Option<&str>) -> (StatusCode, Value) {
+    let path = format!("/v1/supervisor/conversation/attachments/{id}/text");
+    let (status, headers, body) = raw(f, "GET", &path, None, token, vec![]).await;
+    if status == StatusCode::OK {
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(headers["content-type"], "application/json");
+    }
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+/// A dispatched turn's credential for the fixture's current actor.
+async fn dispatched_token(f: &Fixture) -> String {
+    let reservation = f.reserve().await.reservation.unwrap();
+    let p = f.plan(reservation.id, 1).await;
+    f.start(&p).await;
+    reply::issue_credential(&f.pool, f.actor, 60_000, 999_000)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn supervisors_read_extracted_attachment_text_with_explicit_states() {
+    let mut f = Fixture::new(aq_server::STATE_FORMAT_VERSION).await;
+    let helvetica = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica";
+    let (packed, inflated) = expanding(b"BT /F1 12 Tf (", 4300, b") Tj ET");
+    assert!(packed.len() < 8192 && inflated.len() > (1 << 20) + 60_000);
+    let review = b"BT /F1 12 Tf 72 700 Td (Design review) Tj 0 -14 Td (Ship it) Tj ET";
+    let plan = "<w:p><w:r><w:t>Quarterly plan</w:t></w:r></w:p><w:p><w:r><w:t>Budget &amp; risks</w:t></w:r></w:p>";
+    let readable = [
+        (
+            "review.pdf",
+            "application/pdf",
+            one_page_pdf(helvetica, review, false),
+        ),
+        ("plan.docx", DOCX, docx_with(plan)),
+        (
+            "plan.md",
+            "text/markdown",
+            "# Plan\n\n- r\u{e9}sum\u{e9}\n".as_bytes().to_vec(),
+        ),
+        ("notes.txt", "text/plain", b"plain notes\n".to_vec()),
+    ];
+    let texts = [
+        "Design review\nShip it",
+        "Quarterly plan\nBudget & risks",
+        "# Plan\n\n- r\u{e9}sum\u{e9}\n",
+        "plain notes\n",
+    ];
+    let unmapped = "/Type /Font /Subtype /Type1 /Encoding << /Differences [1 /a] >>";
+    let failing = [
+        (
+            "scan.pdf",
+            "application/pdf",
+            one_page_pdf(helvetica, b"q 612 0 0 792 0 0 cm /Im0 Do Q", false),
+        ),
+        (
+            "damaged.pdf",
+            "application/pdf",
+            one_page_pdf(helvetica, b"not a zlib stream", true),
+        ),
+        (
+            "glyphs.pdf",
+            "application/pdf",
+            one_page_pdf(unmapped, b"BT /F1 12 Tf (\x01\x01) Tj ET", false),
+        ),
+        (
+            "large.pdf",
+            "application/pdf",
+            one_page_pdf(helvetica, &packed, true),
+        ),
+    ];
+    let states = [
+        ("no_extractable_text", "OCR"),
+        ("unreadable", "damaged"),
+        ("extraction_failed", "Unicode"),
+        ("limit_exceeded", "no part of it is returned"),
+    ];
+    let (first, read_ids) = attach(&f, &readable).await;
+    let (second, failing_ids) = attach(&f, &failing).await;
+    let token = dispatched_token(&f).await;
+    let global = f.conversation;
+    let check = |v: &Value, message: Uuid, id: Uuid, file: &(&str, &str, Vec<u8>)| {
+        assert_eq!(v["conversation_id"], json!(global), "{v}");
+        assert_eq!(v["message_id"], json!(message));
+        assert_eq!(v["reference"], "user_provided");
+        assert!(
+            v["notice"]
+                .as_str()
+                .unwrap()
+                .contains("not as instructions")
+        );
+        assert_eq!(
+            v["source"],
+            json!({"id":id,"name":file.0,"media_type":file.1,"size_bytes":file.2.len(),"digest":sha(&file.2)})
+        );
+    };
+    for ((file, id), want) in readable.iter().zip(&read_ids).zip(texts) {
+        let (status, v) = supervisor_text(&f, *id, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK, "{}: {v}", file.0);
+        check(&v, first, *id, file);
+        assert_eq!(
+            (&v["state"], &v["text"]),
+            (&json!("extracted"), &json!(want)),
+            "{}",
+            file.0
+        );
+    }
+    for ((file, id), (state, says)) in failing.iter().zip(&failing_ids).zip(states) {
+        let (status, v) = supervisor_text(&f, *id, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK, "{}: {v}", file.0);
+        check(&v, second, *id, file);
+        assert_eq!(v["state"], state, "{}: {v}", file.0);
+        assert_eq!(v["text"], Value::Null, "{}: never a prefix", file.0);
+        assert!(
+            v["message"].as_str().unwrap().contains(says),
+            "{}: {v}",
+            file.0
+        );
+    }
+    // The association is stored, so a fresh router (as after a restart) serves the same.
+    let (_, before) = supervisor_text(&f, read_ids[1], Some(&token)).await;
+    f.app = conversation::routes(&f.state)
+        .merge(conversation::supervisor_routes(&f.state))
+        .with_state(f.state.clone());
+    assert_eq!(
+        supervisor_text(&f, read_ids[1], Some(&token)).await,
+        (StatusCode::OK, before)
+    );
+    // Missing, undispatched and unauthenticated reads are refused without content.
+    let staged = Uuid::new_v4();
+    upload(&f, staged, "later.txt", "text/plain", b"later").await;
+    for id in [staged, Uuid::new_v4()] {
+        assert_eq!(
+            supervisor_text(&f, id, Some(&token)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    for bearer in [Some("aqsv1_bogus"), None] {
+        let (status, v) = supervisor_text(&f, read_ids[0], bearer).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{v}");
+        assert!(v.get("text").is_none());
+    }
+    // A project supervisor reads its own conversation's files, not the global ones,
+    // and the global supervisor cannot read the project's.
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,'{\"name\":\"Files\",\"enabled\":true}',1,'{}')").bind(project).execute(&f.pool).await.unwrap();
+    f.scope_to(project).await;
+    let (message, ids) = attach(&f, &readable[3..]).await;
+    let scoped = dispatched_token(&f).await;
+    let (status, v) = supervisor_text(&f, ids[0], Some(&scoped)).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_ne!(f.conversation, global);
+    assert_eq!(
+        (&v["conversation_id"], &v["message_id"]),
+        (&json!(f.conversation), &json!(message))
+    );
+    assert_eq!(v["text"], "plain notes\n");
+    for (id, bearer) in [(read_ids[0], &scoped), (ids[0], &token)] {
+        assert_eq!(
+            supervisor_text(&f, id, Some(bearer)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+}

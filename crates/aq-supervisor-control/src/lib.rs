@@ -3,6 +3,7 @@ pub mod admin;
 mod api;
 pub mod attachments;
 pub mod authority;
+pub mod delivery;
 pub mod extract;
 #[cfg(feature = "supervisor_full_access")]
 pub mod owner;
