@@ -20,6 +20,13 @@ WITH waits AS (
  WHERE a.holds_task AND s.disposition='rework_required' AND hot.state#>>'{stop,kind}'='stopped'
  AND (hot.state#>>'{effects,kind}'<>'quiescent' OR hot.state#>>'{retention,kind}'<>'retained')
  AND NOT EXISTS(SELECT 1 FROM task_holds_current h WHERE h.task_id=a.task_id)
+ UNION ALL
+ SELECT (l.execution_spec#>>'{lifecycle,project_id}')::uuid, a.task_id, a.attempt_id, a.attempt_id,
+        'stopped_without_result', (convert_from(s.receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::bigint
+ FROM execution_attempts a JOIN profiled_stopped_receipts s USING(attempt_id)
+ JOIN profiled_launches l USING(attempt_id)
+ WHERE a.holds_task AND NOT EXISTS(SELECT 1 FROM profiled_result_heads h WHERE h.attempt_id=a.attempt_id)
+ AND NOT EXISTS(SELECT 1 FROM task_holds_current h WHERE h.task_id=a.task_id)
 ), keyed AS (
  SELECT w.*, 'sha256:'||encode(sha256(convert_to('aq.scheduler.hold/'||identity::text,'UTF8')),'hex') AS key
  FROM waits w WHERE since_ms<=$1 AND NOT (identity=ANY($2))
@@ -103,6 +110,9 @@ pub async fn notify<E: std::fmt::Debug>(
                 continue;
             }
             body.push_str(" Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt.");
+        }
+        if reason == "stopped_without_result" {
+            body.push_str(" The worker recorded a physical stop and still holds the task without a result. Inspect the worker's recovery status and retained workspace. Escalate missing evidence to the owner.");
         }
         let can_retry = reason == "returns_exhausted"
             || aq_machine_control::holds::budget_code(&reason).is_some();

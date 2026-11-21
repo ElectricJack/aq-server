@@ -1525,6 +1525,44 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn a_physically_stopped_task_without_a_result_escalates_once_after_contention_clears() {
+        let (f, _, report) = Box::pin(prepare(true, true)).await;
+        let pool = f.db.pool().await;
+        let project = f.selection.lineage.project_id;
+        let attempt = report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls SET enabled=true, profile='{}',approved_by=$2 WHERE conversation_id=(SELECT conversation_id FROM supervisor_conversation_ids WHERE project_id=$1)")
+            .bind(project).bind(f.actor).execute(&pool).await.unwrap();
+        let stopped: i64 = sqlx::query_scalar("SELECT (convert_from(receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::bigint FROM profiled_stopped_receipts WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(&pool).await.unwrap();
+        let count = AtomicUsize::new(0);
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            assert!(body.contains("stopped_without_result") && body.contains(&attempt.to_string()));
+            assert!(!body.contains("submit task.retry"));
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        use aq_playbook_domain::scheduling_notices::notify;
+        notify(&pool, stopped + 599_999, &send).await.unwrap();
+        let mut busy = pool.begin().await.unwrap();
+        sqlx::query("SELECT attempt_id FROM execution_attempts WHERE attempt_id=$1 FOR UPDATE")
+            .bind(attempt)
+            .execute(&mut *busy)
+            .await
+            .unwrap();
+        notify(&pool, stopped + 600_000, &send).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        busy.rollback().await.unwrap();
+        for _ in 0..2 {
+            notify(&pool, stopped + 660_000, &send).await.unwrap();
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn expired_delivery_notice_reaches_the_project_once_for_the_current_held_result() {
         use aq_playbook_domain::{delivery_decisions, scheduling_notices};
         let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
