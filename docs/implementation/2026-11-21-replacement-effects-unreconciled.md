@@ -17,3 +17,9 @@ For returned results the ordinary sweep records available receipts. Pending or u
 ## Supervisor dispatch
 
 The delivery notice for the attachment task reached the aq-server project conversation on November 20 at 20:08 UTC. The supervisor replied 55 seconds later asking for the task or result ID. Delivery notices originating in a result event now carry the project, task, revision, attempt, result, and stored hold reason. Message deduplication still uses the result and its hold reason.
+
+## Recording an independent review
+
+Set the task type or label to `review-only`. In its body, put a single line of the form `Review target: <implementation report UUID>@<64-character report revision>`. Provide the reviewer with the exact source or a verifiable patch, along with its base and retained commit. A blocked review stays incomplete.
+
+On the first line of the reviewer's final result, record `Review verdict: approved <report UUID>@<report revision> <retained commit>` or use `changes_requested` in place of `approved`. Give findings and the checks performed, then include the usual `Changes: none` on its own line. The server compares the reviewer's recorded successful report and unchanged source with the assignment version, the target project's immutable revision pin and the target's independently recorded Git head. Completing a review records the disposition of the review assignment. Implementation delivery still uses its own protected checks and merge.
