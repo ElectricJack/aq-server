@@ -74,6 +74,10 @@ pub struct Config {
     /// Playbook authoring (spec 0013): `[playbook_authoring]`, all defaulted.
     #[serde(default)]
     pub playbook_authoring: aq_playbook_authoring::Config,
+    /// `[supervisor_attachments]`: owner upload limits of the supervisor
+    /// conversation; defaults 1 MiB and 4 files, never above them.
+    #[serde(default)]
+    pub supervisor_attachments: aq_supervisor_control::attachments::Limits,
     /// Epic 0 (spec 0016) `[delivery]`; without `[delivery.github]` the adapter is unavailable.
     #[cfg(feature = "delivery_playbook")]
     #[serde(default, deserialize_with = "aq_delivery::github::deserialize")]
@@ -256,6 +260,10 @@ fn validate(c: &Config) -> Result<(), (String, String)> {
                 c.format_version
             ),
         );
+    }
+    if !c.supervisor_attachments.valid() {
+        let reason = "max_file_bytes must be 1 to 1048576 and max_files_per_message 1 to 4";
+        return invalid("supervisor_attachments", reason.into());
     }
     if !c.playbook_authoring.valid() {
         let reason = "a bound is zero or more than internal work accepts for agent work";
@@ -467,6 +475,7 @@ mod tests {
             provider_quota: vec![],
             internal_work: None,
             playbook_authoring: Default::default(),
+            supervisor_attachments: Default::default(),
             #[cfg(feature = "delivery_playbook")]
             delivery: None,
         }

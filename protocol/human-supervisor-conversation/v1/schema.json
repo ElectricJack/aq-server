@@ -92,7 +92,10 @@
               "const": 16
             },
             "attachments": {
-              "const": 4
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4,
+              "description": "Files one Create may bind: the effective max_files_per_message (default and ceiling 4)."
             },
             "history_page": {
               "const": 16
@@ -105,6 +108,9 @@
             "history_page"
           ],
           "additionalProperties": false
+        },
+        "attachments": {
+          "$ref": "#/$defs/AttachmentCapability"
         }
       },
       "required": [
@@ -1170,17 +1176,7 @@
           "description": "One path segment: no control characters, slashes, backslashes, or leading/trailing whitespace; not . or .."
         },
         "media_type": {
-          "enum": [
-            "text/plain",
-            "text/markdown",
-            "text/csv",
-            "application/json",
-            "application/pdf",
-            "image/png",
-            "image/jpeg",
-            "image/gif",
-            "image/webp"
-          ]
+          "$ref": "#/$defs/AttachmentMediaType"
         },
         "size_bytes": {
           "type": "integer",
@@ -1203,7 +1199,7 @@
     },
     "AttachmentUpload": {
       "type": "object",
-      "description": "Response to PUT .../attachments/{id}. A staged upload expires at expires_at_ms unless a Create binds it; an attached one lives as long as its message.",
+      "description": "Response to PUT .../attachments/{id} (201 staged, 200 identical retry) and to GET .../attachments/{id}/metadata. A staged upload expires at expires_at_ms unless a Create binds it or its uploader DELETEs it; an attached one lives as long as its message.",
       "properties": {
         "id": {
           "type": "string",
@@ -1216,17 +1212,7 @@
           "description": "One path segment: no control characters, slashes, backslashes, or leading/trailing whitespace; not . or .."
         },
         "media_type": {
-          "enum": [
-            "text/plain",
-            "text/markdown",
-            "text/csv",
-            "application/json",
-            "application/pdf",
-            "image/png",
-            "image/jpeg",
-            "image/gif",
-            "image/webp"
-          ]
+          "$ref": "#/$defs/AttachmentMediaType"
         },
         "size_bytes": {
           "type": "integer",
@@ -1320,6 +1306,99 @@
           }
         }
       ]
+    },
+    "AttachmentMediaType": {
+      "description": "An accepted owner attachment Content-Type, sent exactly (no parameters). DOCX is application/vnd.openxmlformats-officedocument.wordprocessingml.document.",
+      "enum": [
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+      ]
+    },
+    "AttachmentCapability": {
+      "type": "object",
+      "description": "Discovery.attachments: owner upload support and the effective limits this server enforces (max_file_bytes and max_files_per_message default to 1048576 and 4, the ceilings, and an operator may only lower them). Absent on servers without owner attachments; clients then hide uploads (older servers also advertise limits.attachments 0).",
+      "properties": {
+        "media_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/AttachmentMediaType"
+          }
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_files_per_message": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "max_staged_files": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_staged_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "staged_ttl_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_name_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        }
+      },
+      "required": [
+        "media_types",
+        "max_file_bytes",
+        "max_files_per_message",
+        "max_staged_files",
+        "max_staged_bytes",
+        "staged_ttl_ms",
+        "max_name_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "AttachmentError": {
+      "type": "object",
+      "description": "Structured refusal of an owner attachment route. Generic AQ errors (bad_request, unauthenticated, forbidden, csrf_rejected, identity_unavailable) keep their usual codes.",
+      "properties": {
+        "error": {
+          "enum": [
+            "attachment_media_type_unsupported",
+            "attachment_too_large",
+            "attachment_name_invalid",
+            "attachment_unreadable",
+            "attachment_id_conflict",
+            "attachment_capacity_exhausted",
+            "attachment_not_found",
+            "attachment_bound"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "message"
+      ],
+      "additionalProperties": false
     }
   },
   "oneOf": [
@@ -1337,6 +1416,9 @@
     },
     {
       "$ref": "#/$defs/AttachmentUpload"
+    },
+    {
+      "$ref": "#/$defs/AttachmentError"
     }
   ]
 }

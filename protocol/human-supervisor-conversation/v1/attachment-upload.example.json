@@ -1,0 +1,12 @@
+{
+  "id": "00000000-0000-0000-0000-000000000004",
+  "name": "design notes.docx",
+  "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "size_bytes": 18342,
+  "digest": "sha256:5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+  "conversation_id": "00000000-0000-0000-0000-000000000001",
+  "created_at_ms": 1000000,
+  "state": "staged",
+  "message_id": null,
+  "expires_at_ms": 87400000
+}

@@ -44,3 +44,9 @@ offline_after_secs = 60
 # root = "/var/lib/aq/result-media"
 # storage_id = "<stable-installation-UUID>"
 # uploads_enabled = true
+
+# Optional owner upload limits of the supervisor conversation. Both default to,
+# and may only be lowered from, 1 MiB and 4 files; discovery advertises them.
+# [supervisor_attachments]
+# max_file_bytes = 1048576
+# max_files_per_message = 4
