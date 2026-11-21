@@ -1191,7 +1191,8 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     let defaults = json!({
         "main_sync_interval_ms": 60000, "main_freshness_ms": 30000,
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
-        "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456});
+        "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
+        "require_landed_results": true});
     let (status, body) = f.call("GET", PATH, None, true, false).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));

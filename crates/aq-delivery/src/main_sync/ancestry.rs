@@ -69,6 +69,19 @@ impl OfferAncestry {
         let merges = if blockers.is_empty() {
             Vec::new()
         } else {
+            if limits(pool)
+                .await
+                .map_err(sync_failed)?
+                .require_landed_results
+                && let Some(prerequisite) = undelivered(pool, &blockers, &repository)
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(%task, %error, "reading prerequisite delivery failed");
+                        Wait::MergeEvidenceUnavailable
+                    })?
+            {
+                return Err(Wait::PrerequisiteNotDelivered { prerequisite });
+            }
             sqlx::query_as(
                 "SELECT DISTINCT task_id, merge_sha FROM delivery_merge_evidence \
                  WHERE task_id=ANY($1) AND target #>> '{git,repository_id}'=$2 \
@@ -131,6 +144,30 @@ impl OfferAncestry {
     async fn check(&self, socket: &Path, base: &str) -> std::result::Result<(), Wait> {
         check(socket, &self.repository, base, &self.merges).await
     }
+}
+
+/// The first of `blockers` that pushed a result for `repository` (spec 0016
+/// section 5.2) with no recorded merge into that repository. A blocker without
+/// a pushed result produced no changes and is delivered.
+async fn undelivered(
+    pool: &PgPool,
+    blockers: &[Uuid],
+    repository: &GitTarget,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT a.task_id FROM delivery_pushed_results p \
+         JOIN execution_attempts a ON a.attempt_id=p.attempt_id \
+         JOIN delivery_git_grants g ON g.attempt_id=p.attempt_id \
+         WHERE a.task_id=ANY($1) AND g.repository_id=$2 AND p.head IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM delivery_merge_evidence m WHERE m.task_id=a.task_id \
+                           AND m.target #>> '{git,repository_id}'=$3) \
+         ORDER BY a.task_id LIMIT 1",
+    )
+    .bind(blockers)
+    .bind(repository.repository_id)
+    .bind(repository.repository_id.to_string())
+    .fetch_optional(pool)
+    .await
 }
 
 fn sync_failed(error: DeliveryError) -> Wait {
