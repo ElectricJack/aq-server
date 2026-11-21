@@ -21,5 +21,7 @@ aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-central-authority = { path = "../aq-central-authority" }
 async-trait.workspace = true
 sha2.workspace = true
+# Already a workspace dependency (aq-result-media); bounded inflate for PDF and DOCX.
+flate2 = "=1.1.10"
 hex.workspace = true
 rand.workspace = true
