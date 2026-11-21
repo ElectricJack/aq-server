@@ -1047,7 +1047,7 @@ async fn check_epic_retirement_registration(
 
     let op = Uuid::new_v4();
     let request = json!({"operation_id":op,"params":{"project_id":project,"epic_id":epic,
-        "expected_version":"1","generation":1,"repositories":{"Acme/service":"feature_a"},
+        "expected_version":"1","generation":1,"repositories":repositories(),
         "ordinary_default":false,"permanent_behavior":"Enable A in ordinary builds",
         "adopt":{"approval":approval,"cleanup":cleanup}}});
     let route = "/api/v1/commands/epic.retirement.register";
@@ -1134,4 +1134,242 @@ async fn check_epic_retirement_registration(
             assert!(retirement.get("approved").is_none());
         }
     }
+    let ids = Retirement {
+        project,
+        epic,
+        approval,
+        cleanup,
+        registration,
+    };
+    check_epic_retirement_settlement(&app, origin, workspace, token, &ids).await;
+}
+
+const REPOSITORIES: [&str; 5] = [
+    "Acme/service",
+    "Acme/dashboard",
+    "Acme/worker",
+    "Acme/playbooks",
+    "Acme/git",
+];
+fn repositories() -> Value {
+    REPOSITORIES
+        .iter()
+        .map(|repo| (repo.to_string(), json!("feature_a")))
+        .collect()
+}
+struct Retirement {
+    project: Uuid,
+    epic: Uuid,
+    approval: Uuid,
+    cleanup: Uuid,
+    registration: Uuid,
+}
+async fn graph_node(origin: &str, workspace: Uuid, token: &str, id: Uuid, path: &str) -> Value {
+    reqwest::Client::new()
+        .get(format!(
+            "{origin}/v1/workspaces/{workspace}/nodes/{id}{path}"
+        ))
+        .bearer_auth(token)
+        .header("X-AQ-Graph-API-Version", "1")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+/// One owner command, as the CLI posts it; returns its operation and result.
+async fn owner_command(app: &Router, kind: &str, params: Value, email: &str) -> (Uuid, Value) {
+    let op = Uuid::new_v4();
+    let body = json!({"operation_id":op,"params":params}).to_string();
+    let (_, result) = send(app, &format!("/api/v1/commands/{kind}"), Some(&body), email).await;
+    (op, result)
+}
+fn artifact(seed: u8) -> Value {
+    json!({"artifact_id":Uuid::from_bytes([seed; 16]),"sha256":format!("{seed:02x}").repeat(32)})
+}
+fn commit(seed: usize) -> String {
+    format!("{:040x}", 0x1000 + seed)
+}
+
+/// Spec 0020 settlement of the AQ-owned registration on disposable Graph:
+/// the dashboard deletes the verified closure gate, the owner restores it,
+/// approves, records five merges and ordinary builds plus the combined check,
+/// and closes the epic once the cleanup task has completed.
+async fn check_epic_retirement_settlement(
+    app: &Router,
+    origin: &str,
+    workspace: Uuid,
+    token: &str,
+    ids: &Retirement,
+) {
+    let node = |id: Uuid| graph_node(origin, workspace, token, id, "");
+    let version = |node: &Value| node["version"].to_string();
+    let closure = Uuid::new_v5(&ids.registration, b"closure-gate");
+    let gate = node(closure).await;
+    let guarded = gate["content_revision"].as_i64().unwrap();
+    let (_, deleted) = owner_command(
+        app,
+        "task.delete",
+        json!({"project_id":ids.project,"task_id":closure,"expected_version":version(&gate)}),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(deleted["data"]["disposition"], "confirmed", "{deleted}");
+    assert_eq!(node(closure).await["deleted"], true);
+
+    let settle = |kind: &'static str, extra: Value, email: &'static str| async move {
+        let current = node(ids.registration).await;
+        let mut params = json!({"project_id":ids.project,"registration_id":ids.registration,
+            "expected_version":version(&current)});
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        owner_command(app, kind, params, email).await
+    };
+    let disposition = |result: &Value| result["data"]["disposition"].clone();
+    // Only the owner, only the current registration version, only the
+    // guarded revision.
+    let restore = json!({"revision":guarded});
+    let (_, denied) = settle(
+        "epic.retirement.restore",
+        restore.clone(),
+        "viewer@localhost",
+    )
+    .await;
+    assert_ne!(disposition(&denied), "confirmed", "{denied}");
+    let stale = json!({"project_id":ids.project,"registration_id":ids.registration,
+        "expected_version":"1","revision":guarded});
+    let (_, stale) = owner_command(app, "epic.retirement.restore", stale, "owner@localhost").await;
+    assert_eq!(disposition(&stale), "conflict", "{stale}");
+    let (_, unverified) = settle(
+        "epic.retirement.restore",
+        json!({"revision":1}),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(disposition(&unverified), "rejected", "{unverified}");
+    let (_, early) = settle("epic.retirement.close", json!({}), "owner@localhost").await;
+    assert_eq!(disposition(&early), "rejected", "{early}");
+
+    let (op, restored) = settle("epic.retirement.restore", restore, "owner@localhost").await;
+    assert_eq!(disposition(&restored), "confirmed", "{restored}");
+    let (_, replay) = send(
+        app,
+        &format!("/api/v1/operations/{op}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(
+        replay["data"]["receipt_refs"],
+        restored["data"]["receipt_refs"]
+    );
+    let gate = node(closure).await;
+    assert_eq!(gate["deleted"], false);
+    assert_eq!(gate["task_state"], "draft");
+    assert_eq!(gate["verification"], "verified", "{gate}");
+    assert_eq!(gate["last_verified_by"], "local-admin");
+    assert_eq!(
+        gate["metadata"]["aq:epic_feature_retirement"],
+        json!({"registration":ids.registration,"role":"closure_gate"})
+    );
+    let context = graph_node(origin, workspace, token, closure, "/context").await;
+    assert!(
+        context["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["edge_type"] == "parent-child"
+                && e["source"] == json!(ids.epic)
+                && e["target"] == json!(closure))
+    );
+
+    let vetted: Value = (REPOSITORIES.iter().enumerate())
+        .map(|(i, repo)| (repo.to_string(), json!(commit(i))))
+        .collect();
+    let decision =
+        json!({"revision":1,"choice":"approve","vetted":vetted,"evidence":artifact(0xd0)});
+    let (_, decided) = settle("epic.retirement.decide", decision, "owner@localhost").await;
+    assert_eq!(disposition(&decided), "confirmed", "{decided}");
+    assert_eq!(node(ids.approval).await["task_state"], "completed");
+    assert_eq!(node(ids.cleanup).await["task_state"], "active");
+
+    let mut merges = serde_json::Map::new();
+    let mut builds = serde_json::Map::new();
+    for (i, repo) in REPOSITORIES.iter().enumerate() {
+        let sha = commit(100 + i);
+        let merge = json!({"kind":"merge","approval_revision":1,"evidence":artifact(0x10),
+            "repository":repo,"pull_request":format!("https://github.com/{repo}/pull/1"),"sha":sha});
+        let (_, merged) = settle("epic.retirement.evidence", merge, "owner@localhost").await;
+        assert_eq!(disposition(&merged), "confirmed", "{merged}");
+        let build = artifact(0x20 + i as u8);
+        let ordinary = json!({"kind":"ordinary","approval_revision":1,"evidence":build,
+            "repository":repo,"sha":sha,"passed":true,"flag_absent":true});
+        let (_, built) = settle("epic.retirement.evidence", ordinary, "owner@localhost").await;
+        assert_eq!(disposition(&built), "confirmed", "{built}");
+        merges.insert(repo.to_string(), json!(sha));
+        builds.insert(repo.to_string(), build);
+    }
+    let mut partial = builds.clone();
+    partial.remove(REPOSITORIES[4]);
+    let integrated = |builds: serde_json::Map<String, Value>| {
+        json!({"kind":"integrated","approval_revision":1,"evidence":artifact(0xee),
+            "revisions":merges.clone(),"builds":builds,"passed":true})
+    };
+    let (_, refused) = settle(
+        "epic.retirement.evidence",
+        integrated(partial),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(disposition(&refused), "rejected", "{refused}");
+    let (_, combined) = settle(
+        "epic.retirement.evidence",
+        integrated(builds),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(disposition(&combined), "confirmed", "{combined}");
+    let (_, pending) = settle("epic.retirement.close", json!({}), "owner@localhost").await;
+    assert_eq!(disposition(&pending), "rejected", "{pending}");
+
+    // Stand-in for the cleanup's normal delivery settlement.
+    let cleanup = node(ids.cleanup).await;
+    let settled = reqwest::Client::new()
+        .post(format!("{origin}/v1/workspaces/{workspace}/mutations"))
+        .bearer_auth(token)
+        .header("X-AQ-Graph-API-Version", "1")
+        .json(&json!({"idempotency_key":format!("settle-{}", ids.cleanup),"reason":"Cleanup settled",
+            "operations":[{"op":"update_node","id":ids.cleanup,"expected_version":cleanup["version"],
+                "patch":{"task_state":"completed"}}]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(settled.status().is_success());
+    let (op, closed) = settle("epic.retirement.close", json!({}), "owner@localhost").await;
+    assert_eq!(disposition(&closed), "confirmed", "{closed}");
+    let (_, replay) = send(
+        app,
+        &format!("/api/v1/operations/{op}"),
+        None,
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(
+        replay["data"]["receipt_refs"],
+        closed["data"]["receipt_refs"]
+    );
+    assert_eq!(node(ids.epic).await["task_state"], "completed");
+    let gate = node(closure).await;
+    assert_eq!(gate["task_state"], "completed");
+    assert_eq!(gate["verification"], "verified");
+    let state = &node(ids.registration).await["metadata"]["aq:epic_feature_retirement"];
+    assert_eq!(
+        state["closed"],
+        json!(Uuid::new_v5(&ids.registration, b"close"))
+    );
 }

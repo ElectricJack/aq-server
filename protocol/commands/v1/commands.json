@@ -768,6 +768,108 @@
       "cli": [
         "epic",
         "retirement",
+        "close"
+      ],
+      "grant": "epic.retirement.close",
+      "kind": "mutation",
+      "name": "epic.retirement.close",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:fa216fb90d25418b68ee5fa65067a986a2b9c54eb8208fa9d2a8f01b1f569748",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.close"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Close an approved epic after its cleanup, ordinary builds and integrated check",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "decide"
+      ],
+      "grant": "epic.retirement.decide",
+      "kind": "mutation",
+      "name": "epic.retirement.decide",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:64f9a2e0976fb24db51d5249bffe5d6f033c0afd09b75b988bc15cbb35e90a42",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.decide"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Approve vetted revisions or request changes; approval releases the cleanup task",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "evidence"
+      ],
+      "grant": "epic.retirement.evidence",
+      "kind": "mutation",
+      "name": "epic.retirement.evidence",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:23811448a013316d0e21264157bb368829b0b09b5d7a48a87e642c21ddfa6dd7",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.evidence"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Record a cleanup merge, ordinary build or integrated check for an approved epic",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
         "register"
       ],
       "grant": "epic.retirement.register",
@@ -794,6 +896,40 @@
         }
       },
       "summary": "Register an epic flag and adopt its blocked draft cleanup tasks",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "restore"
+      ],
+      "grant": "epic.retirement.restore",
+      "kind": "mutation",
+      "name": "epic.retirement.restore",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:8dbe87f337d0fae2192bd0c2a82132f974d9cb29ef99eb61cbc676aeeb6dc6f7",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.restore"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Restore a registration's deleted closure gate at its verified revision",
       "target": {
         "rule": "subject"
       }

@@ -17,6 +17,18 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         "epic.retirement.register" => {
             "Register an epic flag and adopt its blocked draft cleanup tasks"
         }
+        "epic.retirement.restore" => {
+            "Restore a registration's deleted closure gate at its verified revision"
+        }
+        "epic.retirement.decide" => {
+            "Approve vetted revisions or request changes; approval releases the cleanup task"
+        }
+        "epic.retirement.evidence" => {
+            "Record a cleanup merge, ordinary build or integrated check for an approved epic"
+        }
+        "epic.retirement.close" => {
+            "Close an approved epic after its cleanup, ordinary builds and integrated check"
+        }
         "feedback.link" => "Link a result comment thread to an existing task",
         "feedback.task_create" => "Create a task from a result comment thread",
         "knowledge.author" => "Create an unverified knowledge record in a project",

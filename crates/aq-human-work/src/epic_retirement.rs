@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 pub const KIND: &str = "epic.retirement.register";
 const META: &str = "aq:epic_feature_retirement";
+pub mod dispatch;
+pub mod settle;
 
 /// Require both draft identities to have settled under this owner's ordinary
 /// task creation journal. Graph metadata by itself is not an AQ principal.

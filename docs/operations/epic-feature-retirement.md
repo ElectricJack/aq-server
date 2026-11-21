@@ -15,7 +15,25 @@ python3 -c 'import json, sys; p = json.load(open(sys.argv[1])); p["expected_vers
     --operation-id "$operation_id" --params-file -
 ```
 
-Use `aq --local --origin http://127.0.0.1:28080 --json operations show "$operation_id"` to recover the operation and Graph receipt. The registration records the original task IDs and adds a protected closure guard. It preserves the draft approval at its previous revision and leaves the protected cleanup draft with the original blocker. This command exposes registration only. Decisions and closure for an AQ-owned registration require a separately authorized AQ action.
+Use `aq --local --origin http://127.0.0.1:28080 --json operations show "$operation_id"` to recover the operation and Graph receipt. The registration records the original task IDs and adds a protected closure guard. It preserves the draft approval at its previous revision and leaves the protected cleanup draft with the original blocker. Settle an AQ-owned registration with the owner actions below, never with the direct Graph workflow, which refuses such a registration.
+
+## Settle an AQ-owned registration through the AQ owner CLI
+
+Each action below is an owner-only AQ command on the same journal as registration: it binds the authenticated owner, the project scope and the configured Graph service, freezes one version-checked Graph batch before dispatch and replays it with `operations show`. Its subject is the registration record. Supply `registration_id`, `project_id` and the registration's current version as `expected_version`, with a fresh `operation_id` retained for replay. A changed registration, another owner's or project's registration, and a Graph-direct registration are refused. Every task and record the action touches is derived from the registration, so a request cannot name another target.
+
+```bash
+aq --local --origin http://127.0.0.1:28080 --json run epic.retirement.evidence \
+  --operation-id "$operation_id" --params-file evidence.json
+```
+
+| Command | Additional parameters | Effect |
+| --- | --- | --- |
+| `epic.retirement.restore` | `revision`: the closure gate's guarded revision from its Graph history | Undeletes the registration's own closure gate through Graph lifecycle restoration at that exact revision, which must be the service-verified draft gate with only its epic `parent-child` relationship, then verifies it again with the epic evidence. The gate keeps its ID, parent, metadata and draft state. |
+| `epic.retirement.decide` | `revision`, `choice`, `vetted`, `evidence` as in the decision manifest below | Records the verified owner decision. `approve` completes the approval task and activates the existing cleanup task once; `request_changes` leaves both draft. Requires the restored, verified closure gate. |
+| `epic.retirement.evidence` | `kind`, `approval_revision`, `evidence` and the kind's fields from the evidence table below | Records one verified merge, ordinary-build or integrated receipt against the approved decision. |
+| `epic.retirement.close` | none | Completes the closure gate and the epic with a verified closure receipt once every registered repository has a merge and a passing flag-free ordinary build at that SHA, the passing integrated check names exactly those merges and builds, the cleanup task has completed through normal delivery and no other epic task is open. |
+
+A refused action settles as `rejected` and the server logs the reason. The registration record's `aq:epic_feature_retirement` metadata names the current decision and the `merges`, `ordinary` and `integrated` receipts. Take the guarded revision from the gate's Graph history: it is the revision the service verified before the deletion. The decision manifest fields and the evidence kinds below are the same for both workflows.
 
 ## Run the direct Graph qualification workflow
 
