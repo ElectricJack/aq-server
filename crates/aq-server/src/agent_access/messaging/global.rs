@@ -81,6 +81,8 @@ async fn live_runtime(pool: &PgPool, conversation: Uuid) -> Runtime {
 pub(crate) struct Service {
     pool: PgPool,
     gate: Semaphore,
+    /// The effective owner attachment limits (`[supervisor_attachments]`).
+    limits: aq_supervisor_control::attachments::Limits,
 }
 impl Service {
     pub(crate) fn new(state: &AppState) -> Self {
@@ -98,6 +100,7 @@ impl Service {
                         .application_name("aq-supervisor-conversation"),
                 ),
             gate: Semaphore::new(2),
+            limits: state.config.supervisor_attachments,
         }
     }
     async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
@@ -108,6 +111,7 @@ impl Service {
 }
 pub fn routes(state: &AppState) -> Router<AppState> {
     let service = Arc::new(Service::new(state));
+    let max_file_bytes = service.limits.max_file_bytes;
     Router::new()
         .route("/api/human/conversations/global", get(reads::discovery))
         .route(
@@ -130,7 +134,12 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/human/conversations/{conversation}/attachments/{attachment}",
             get(attachments::download)
                 .put(attachments::upload)
-                .layer(DefaultBodyLimit::max(attachments::MAX_SIZE)),
+                .delete(attachments::unstage)
+                .layer(DefaultBodyLimit::max(max_file_bytes)),
+        )
+        .route(
+            "/api/human/conversations/{conversation}/attachments/{attachment}/metadata",
+            get(attachments::metadata),
         )
         .layer(DefaultBodyLimit::max(131072))
         .layer(Extension(service.clone()))

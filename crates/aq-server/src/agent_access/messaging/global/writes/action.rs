@@ -49,8 +49,11 @@ impl ActionKind for SendMessage {
         request: &ActionRequest,
         payload: &Create,
     ) -> std::result::Result<Scope, ApiError> {
-        Create::parse(&serde_json::to_vec(payload).map_err(|_| ApiError::invalid())?)
-            .map_err(ApiError::from)?;
+        Create::parse(
+            &serde_json::to_vec(payload).map_err(|_| ApiError::invalid())?,
+            self.0.limits.max_files_per_message,
+        )
+        .map_err(ApiError::from)?;
         if request.operation_id != payload.operation_id {
             return Err(ApiError::invalid());
         }
