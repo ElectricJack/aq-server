@@ -24,3 +24,6 @@ serde.workspace = true
 schemars = "1"
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v5"] }
+
+[dev-dependencies]
+tokio.workspace = true
