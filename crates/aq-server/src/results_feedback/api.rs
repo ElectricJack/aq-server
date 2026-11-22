@@ -48,7 +48,6 @@ impl Runtime {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/results", get(feed))
-        .route("/api/v1/results/{id}/revisions/{revision}", get(detail))
         .route(
             "/api/v1/results/{id}/revisions/{revision}/comments",
             get(comments).post(comment),
@@ -63,9 +62,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/results/{id}/evidence-waivers", post(waiver))
         .layer(DefaultBodyLimit::max(65536))
         .layer(Extension(Arc::new(Runtime::new())))
-}
-pub fn detail_routes() -> Router<AppState> {
-    Router::new().route("/api/v1/results/{id}/revisions/{revision}", get(detail))
 }
 fn envelope<T>(state: &AppState, scope: Scope, data: T) -> Envelope<T> {
     let now = Timestamp((state.clock)().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
@@ -254,7 +250,7 @@ async fn feed(
         json!({"items":items,"next_cursor":next}),
     )))
 }
-async fn detail(
+pub async fn detail(
     State(state): State<AppState>,
     RequireOwner(user): RequireOwner,
     path: std::result::Result<Path<(Uuid, String)>, axum::extract::rejection::PathRejection>,

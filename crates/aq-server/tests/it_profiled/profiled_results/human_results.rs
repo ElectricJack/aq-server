@@ -357,8 +357,10 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
         assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
     }
     // Another project's supervisor is refused the result and sees none listed.
-    let status = refused(supervised(&f, Some(other), &one).await);
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    for path in [one.clone(), one.replacen("/api/human/", "/api/v1/", 1)] {
+        let status = refused(supervised(&f, Some(other), &path).await);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    }
     let (status, page) = supervised(&f, Some(other), "/api/human/results").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(page["items"].as_array().unwrap().is_empty(), "{page}");
