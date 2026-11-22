@@ -1746,10 +1746,10 @@ mod playbook {
         // A budget hold, a never-granted hold, a policy hold, and the first
         // reason held again after its release.
         let reasons = [
-            "lineage_time_budget_exhausted",
+            "lineage_retry_budget_exhausted",
             "never_granted_retry_bound_exhausted",
             "replacement_project_revision_changed",
-            "lineage_time_budget_exhausted",
+            "lineage_retry_budget_exhausted",
         ];
         for (n, reason) in reasons.into_iter().enumerate() {
             sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,$4,$5,'held',to_timestamp($6))")
