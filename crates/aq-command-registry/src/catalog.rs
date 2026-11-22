@@ -550,12 +550,6 @@ pub fn catalog() -> Vec<CommandSpec> {
                 "Acknowledge a message as received or read",
             )
         },
-        owner(
-            "conversation.global",
-            op::MESSAGE_READ,
-            "The supervisor conversation",
-            "/api/human/conversations/global",
-        ),
         read(
             "conversation.messages",
             op::MESSAGE_READ,
@@ -916,12 +910,6 @@ pub fn catalog() -> Vec<CommandSpec> {
                 "/api/projects/{id}/revisions/{revision}",
                 &[("id", "project_id")],
             )),
-        ),
-        owner(
-            "conversation.project",
-            op::MESSAGE_READ,
-            "A project's supervisor conversation",
-            "/api/human/conversations/projects/{project}",
         ),
         owner(
             "worker.list",

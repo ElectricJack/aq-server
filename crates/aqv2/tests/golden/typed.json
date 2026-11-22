@@ -955,6 +955,52 @@
   },
   {
     "args": [
+      "conversation",
+      "messages",
+      "--conversation-id",
+      "00000000-0000-4000-8000-0000000000b8"
+    ],
+    "calls": [
+      {
+        "body": {
+          "params": {
+            "conversation_id": "00000000-0000-4000-8000-0000000000b8"
+          }
+        },
+        "method": "POST",
+        "path": "/api/v1/commands/conversation.messages"
+      }
+    ],
+    "mode": "channel"
+  },
+  {
+    "args": [
+      "conversation",
+      "messages",
+      "--conversation-id",
+      "00000000-0000-4000-8000-0000000000b8",
+      "--limit",
+      "3",
+      "--before",
+      "12.2"
+    ],
+    "calls": [
+      {
+        "body": {
+          "params": {
+            "before": "12.2",
+            "conversation_id": "00000000-0000-4000-8000-0000000000b8",
+            "limit": 3
+          }
+        },
+        "method": "POST",
+        "path": "/api/v1/commands/conversation.messages"
+      }
+    ],
+    "mode": "channel"
+  },
+  {
+    "args": [
       "whoami"
     ],
     "calls": [
@@ -1334,6 +1380,55 @@
         },
         "method": "POST",
         "path": "/api/v1/commands/task.cancel"
+      }
+    ],
+    "mode": "owner"
+  },
+  {
+    "args": [
+      "conversation",
+      "messages",
+      "--conversation-id",
+      "00000000-0000-4000-8000-0000000000b8",
+      "--limit",
+      "16",
+      "--after",
+      "0"
+    ],
+    "calls": [
+      {
+        "body": {
+          "params": {
+            "after": "0",
+            "conversation_id": "00000000-0000-4000-8000-0000000000b8",
+            "limit": 16
+          }
+        },
+        "method": "POST",
+        "path": "/api/v1/commands/conversation.messages"
+      }
+    ],
+    "mode": "owner"
+  },
+  {
+    "args": [
+      "conversation",
+      "messages",
+      "--conversation-id",
+      "00000000-0000-4000-8000-0000000000b8",
+      "--before",
+      "7"
+    ],
+    "calls": [
+      {
+        "body": {
+          "params": {
+            "before": "7",
+            "conversation_id": "00000000-0000-4000-8000-0000000000b8"
+          }
+        },
+        "method": "POST",
+        "path": "/api/v1/commands/conversation.messages"
       }
     ],
     "mode": "owner"

@@ -78,6 +78,9 @@ pub enum Command {
     /// Mailboxes: send, inbox, body, ack.
     #[command(subcommand)]
     Message(crate::typed::Message),
+    /// Supervisor conversations: read a conversation's messages.
+    #[command(subcommand)]
+    Conversation(crate::typed::Conversation),
     /// Inspect an operation by ID after an uncertain outcome.
     #[command(subcommand)]
     Operation(crate::typed::Operation),
@@ -343,6 +346,7 @@ impl Command {
         match self {
             Self::Discover { .. } => Render::Commands,
             Self::Whoami => Render::Whoami,
+            Self::Conversation(crate::typed::Conversation::Messages(_)) => Render::Messages,
             _ => Render::Json,
         }
     }

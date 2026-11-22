@@ -153,7 +153,7 @@ impl AppState {
 
 async fn harden(req: Request, next: Next) -> Response {
     let api = req.uri().path() == "/api" || req.uri().path().starts_with("/api/");
-    let mut resp = next.run(req).await;
+    let mut resp = aq_request_site::record(req, next).await; // for the refusal log
     let success = resp.status().is_success();
     let h = resp.headers_mut();
     h.insert(

@@ -346,37 +346,6 @@
     {
       "cli": [
         "conversation",
-        "global"
-      ],
-      "grant": "message.read",
-      "kind": "read",
-      "name": "conversation.global",
-      "owner_only": false,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {},
-            "required": [],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/human/conversations/global"
-          }
-        }
-      },
-      "summary": "The supervisor conversation",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "conversation",
         "messages"
       ],
       "grant": "message.read",
@@ -470,45 +439,6 @@
         }
       },
       "summary": "A conversation send operation",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "conversation",
-        "project"
-      ],
-      "grant": "message.read",
-      "kind": "read",
-      "name": "conversation.project",
-      "owner_only": false,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:60784403aa8cbeaac274d7d2407a5e6e47e698e8e7a7eb302605f9995f7dddb7",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "project": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "project"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/human/conversations/projects/{project}"
-          }
-        }
-      },
-      "summary": "A project's supervisor conversation",
       "target": {
         "rule": "own"
       }
