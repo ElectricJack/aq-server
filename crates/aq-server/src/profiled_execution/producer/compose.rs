@@ -169,7 +169,8 @@ pub async fn compile(
     harnesses.dedup_by(|a, b| a.harness == b.harness);
     #[cfg(feature = "project_environments")]
     if harnesses.is_empty() {
-        return Err(unlisted(state, binding.project_id, context, &environment).await);
+        let (task, project) = (context.revision.task_id, binding.project_id);
+        return Err(unlisted(state, task, project, &environment).await);
     }
     if harnesses.is_empty() || harnesses.len() > 16 {
         return Err(refused());
@@ -291,19 +292,15 @@ pub async fn compile(
 /// This node does not list `environment`: another node may take the task, or,
 /// when no node lists it, the task waits with that reason (spec 0017 §5.4).
 #[cfg(feature = "project_environments")]
-async fn unlisted(
-    state: &AppState,
-    project: Uuid,
-    context: &TaskContext,
-    environment: &str,
-) -> AppError {
+async fn unlisted(state: &AppState, task: Uuid, project: Uuid, environment: &str) -> AppError {
     let now = (state.clock)().timestamp_millis();
     if aq_role_settings::environments::listed(&state.store.pool, environment, now).await {
         return AppError::Conflict(format!("{INELIGIBLE}environment_not_on_node"));
     }
-    let environment = environment.to_owned();
-    let refusal = refusals::OfferRefusal::NoNodeHasEnvironment { environment };
-    crate::role_settings::offer_refused(state, context.revision.task_id, project, &refusal).await
+    let refusal = refusals::OfferRefusal::NoNodeHasEnvironment {
+        environment: environment.into(),
+    };
+    crate::role_settings::offer_refused(state, task, project, &refusal).await
 }
 fn digest<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
     aq_profiles::digest(value).map_err(|_| AppError::Internal)

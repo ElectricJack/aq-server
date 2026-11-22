@@ -280,8 +280,17 @@ async fn boot_definitions_and_admitted_versions_read_through_one_catalog() {
     // Nodes are told the admitted versions, not the boot allowlist.
     let nodes = serde_json::to_value(catalog.admitted_for_nodes()).unwrap();
     assert_eq!(nodes.as_array().unwrap().len(), 2, "{nodes}");
+    // Each names the definition a node lists for it, which the catalog resolves.
+    let mut first = nodes[0].clone();
+    let definition = first.as_object_mut().unwrap().remove("definition").unwrap();
+    let definition: aq_admission::ArtifactRef = serde_json::from_value(definition).unwrap();
     assert_eq!(
-        nodes[0],
+        (definition.id.as_str(), definition.version.as_str()),
+        ("example.web", "2")
+    );
+    assert!(catalog.definition(&definition).is_some());
+    assert_eq!(
+        first,
         json!({"id":"example.web","version":"2","digest":TEMPLATE,"image":format!("registry.example/web@{TEMPLATE}"),"harnesses":[{"harness":"codex","version":"1"}],"warm":["pnpm install"]})
     );
 }

@@ -7,13 +7,15 @@ description = "Spec 0017: environment versions in the database and the one catal
 
 [features]
 # Spec 0017: the whole crate, off by default (aq-server's `project_environments`).
-project_environments = ["dep:aq-project-policy", "dep:aq-role-settings"]
+project_environments = ["dep:aq-project-policy", "dep:aq-role-settings", "dep:aq-protocol", "dep:axum"]
 
 [dependencies]
 aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 aq-environment-templates = { path = "../aq-environment-templates" }
 aq-project-policy = { path = "../aq-project-policy", optional = true, features = ["project_environments"] }
+aq-protocol = { workspace = true, optional = true }
 aq-role-settings = { path = "../aq-role-settings", optional = true, features = ["project_environments"] }
+axum = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

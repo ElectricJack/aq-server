@@ -197,9 +197,7 @@ pub async fn catalog<'e>(
     let bodies = (state.config.profiled_execution.as_deref()).map(|c| &c.definition_bodies[..]);
     let defs = (bodies.unwrap_or_default().iter()).map(|d| (&d.artifact, d.body.as_str()));
     let boot = aq_environments::BootEnvironments::new(defs, state.config.templates.as_deref());
-    aq_environments::Catalog::load(db, &boot)
-        .await
-        .map_err(crate::error::db)
+    (aq_environments::Catalog::load(db, &boot).await).map_err(crate::error::db)
 }
 fn unavailable() -> AppError {
     AppError::Conflict("required public definition bytes unavailable".into())

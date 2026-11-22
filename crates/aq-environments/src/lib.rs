@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 mod store;
+pub mod worker;
 
 /// What the boot config holds: each definition's exact reference and body,
 /// and the operator's template allowlist.
@@ -50,6 +51,9 @@ pub struct AdmittedEnvironment {
     pub image: String,
     pub harnesses: Value,
     pub warm: Value,
+    /// The definition's reference `{id, version, digest}`: what a node lists
+    /// for placement, so the offer path retains exactly that body.
+    pub definition: Value,
 }
 
 pub struct Catalog<'a> {
@@ -134,6 +138,11 @@ impl<'a> Catalog<'a> {
                 image: v.image.clone(),
                 harnesses: v.harnesses.clone(),
                 warm: v.warm.clone(),
+                definition: serde_json::json!({
+                    "id": v.admitted.environment,
+                    "version": v.admitted.version,
+                    "digest": v.body_digest,
+                }),
             })
             .collect()
     }

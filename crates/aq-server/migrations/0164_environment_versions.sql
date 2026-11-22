@@ -31,12 +31,28 @@ CREATE TABLE environment_jobs (
     commit TEXT NOT NULL CHECK (commit ~ '^[0-9a-f]{40}$'),
     recipes JSONB NOT NULL CHECK (jsonb_typeof(recipes) = 'array'),
     run TEXT,
+    -- What the job builds on and publishes to, chosen when it was queued.
+    base_template TEXT NOT NULL CHECK (base_template ~ '^[^@]+@sha256:[0-9a-f]{64}$' AND octet_length(base_template) <= 512),
+    target_repository TEXT NOT NULL CHECK (octet_length(target_repository) BETWEEN 1 AND 256),
     state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed', 'completed')),
     claimed_by UUID,
+    -- A claim is a lease of `environment_limits.build_wall_ms`: once it runs
+    -- out another builder may claim the job, and the old claimer's late
+    -- completion is refused.
+    claimed_at TIMESTAMPTZ,
+    lease_until TIMESTAMPTZ,
     result JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX environment_jobs_queued ON environment_jobs(created_at) WHERE state = 'queued';
+
+-- The template digests each node has pulled and can run (rolling: each
+-- report replaces the node's previous set; only admitted digests are kept).
+CREATE TABLE environment_ready (
+    node_id UUID PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    digests JSONB NOT NULL CHECK (jsonb_typeof(digests) = 'array'),
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- NULL means never saved: the defaults of the running build apply.
 ALTER TABLE role_settings

@@ -168,6 +168,12 @@ async fn node_locked(
         .map_err(crate::error::db)?;
     current.ok_or(AppError::CredentialRevoked)
 }
+#[cfg(feature = "project_environments")]
+impl aq_environments::worker::Host<AppError> for AppState {
+    async fn node(&self, headers: &HeaderMap) -> Result<uuid::Uuid, AppError> {
+        Ok(authenticate_context(self, headers).await?.id())
+    }
+}
 /// Existing callers keep the Node snapshot API and its authentication behavior.
 pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Node, AppError> {
     Ok(authenticate_context(state, headers).await?.node)
