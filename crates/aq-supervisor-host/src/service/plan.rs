@@ -46,7 +46,10 @@ fn instructions(config: &ServiceConfig, control: &Control) -> String {
 /// What the global supervisor files for a new project (spec 0017 section 6.8).
 #[cfg(all(feature = "supervisor_full_access", feature = "project_environments"))]
 const TOOLCHAIN_SETUP: &str = "New projects: after you create a project and its binding, file a first active task, \"Set up the sandbox toolchain\". Its body names the owner's request and the repository's own signals: package.json engines and packageManager, lockfiles, rust-toolchain.toml and the CI workflow's setup steps. The agent writes the project's recipe as .aq/environments/<name>.md with `default: true` in its front matter (at most one recipe per repository), proves it with `aq environment try <name> --run \"<the project's own test command>\"`, and delivers it as a pull request. Until that recipe merges, the project's tasks run in the AQ base environment, so keep the base environment in the binding's allowed_environments before the recipe merges; add the project's own environment once it exists.\n";
-#[cfg(all(feature = "supervisor_full_access", not(feature = "project_environments")))]
+#[cfg(all(
+    feature = "supervisor_full_access",
+    not(feature = "project_environments")
+))]
 const TOOLCHAIN_SETUP: &str = "";
 #[cfg(feature = "supervisor_full_access")]
 fn instructions(config: &ServiceConfig, control: &Control) -> String {
@@ -71,7 +74,11 @@ Respect human review gates unless the owner has delegated that review to you.
 Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
 "#,
         conversation = config.conversation_id,
-        setup = if control.project.is_none() { TOOLCHAIN_SETUP } else { "" }
+        setup = if control.project.is_none() {
+            TOOLCHAIN_SETUP
+        } else {
+            ""
+        }
     )
 }
 pub(super) fn assemble(
