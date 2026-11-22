@@ -9,7 +9,7 @@ use crate::{BootEnvironments, Catalog};
 use aq_project_policy::ProjectConfig;
 use aq_protocol::{ApiError, BAD_REQUEST, CONFLICT, FORBIDDEN, INTERNAL, NOT_FOUND};
 use aq_role_settings::environments::EnvironmentLimits;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -23,10 +23,14 @@ use uuid::Uuid;
 
 /// The worker group whose nodes may claim and complete jobs.
 pub const BUILDERS: &str = "template-build";
-/// The transport bound on one request body. A result's logs are bounded by
-/// `environment_limits.log_bytes`; this only bounds what is read before that
-/// limit can be checked.
-const BODY_BYTES: usize = 8 * 1024 * 1024;
+/// The most bytes a Job result may take on the wire, from the Settings: its
+/// free text (logs, run output, toolchain output) totals at most `log_bytes`,
+/// and the rest it reports comes from its recipes (`max_recipe_bytes`). JSON
+/// escapes a byte into at most six (`\u0000`).
+fn result_bytes(limits: &EnvironmentLimits) -> usize {
+    let bytes = limits.log_bytes.saturating_add(limits.max_recipe_bytes);
+    usize::try_from(bytes.saturating_mul(6)).unwrap_or(usize::MAX)
+}
 
 /// How the host server authenticates a node: the node's id, or the host's
 /// own refusal `E` for the credential.
@@ -48,9 +52,12 @@ pub fn routes<S: Host<E>, E: IntoResponse + Send + 'static>(projects: &ProjectCo
         .route("/v1/worker/environments", get(admitted::<S, E>))
         .route("/v1/worker/environments/ready", post(ready::<S, E>))
         .route("/v1/worker/environments/claim", post(claim::<S, E>))
-        .route("/v1/worker/environments/complete", post(complete::<S, E>))
+        .route(
+            "/v1/worker/environments/complete",
+            // Bounded per request by `result_bytes`, read from the Settings.
+            post(complete::<S, E>).layer(DefaultBodyLimit::disable()),
+        )
         .layer(Extension(builders))
-        .layer(DefaultBodyLimit::max(BODY_BYTES))
 }
 type Builders = Arc<[Uuid]>;
 
@@ -88,17 +95,13 @@ enum Error {
     NotFound(&'static str),
     BadRequest(String),
     Conflict(&'static str),
+    TooLarge(String),
     Internal,
 }
-impl From<sqlx::Error> for Error {
-    fn from(_: sqlx::Error) -> Self {
-        Error::Internal
-    }
-}
-impl From<aq_role_settings::Error> for Error {
-    fn from(_: aq_role_settings::Error) -> Self {
-        Error::Internal
-    }
+/// A store or Settings failure: logged with what it was doing, never the request.
+fn internal(what: &str, node: Uuid, job: Option<Uuid>, e: impl std::fmt::Display) -> Error {
+    tracing::error!(%node, job_id = ?job, error = %e, "environment {what} failed");
+    Error::Internal
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -107,6 +110,7 @@ impl IntoResponse for Error {
             Error::NotFound(m) => (StatusCode::NOT_FOUND, NOT_FOUND, m.to_owned()),
             Error::BadRequest(m) => (StatusCode::BAD_REQUEST, BAD_REQUEST, m),
             Error::Conflict(m) => (StatusCode::CONFLICT, CONFLICT, m.to_owned()),
+            Error::TooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, BAD_REQUEST, m),
             Error::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 INTERNAL,
@@ -148,11 +152,11 @@ async fn builder<S: Host<E>, E: IntoResponse>(
 }
 
 async fn admitted<S: Host<E>, E: IntoResponse>(State(host): State<S>, headers: HeaderMap) -> Reply {
-    node(&host, &headers).await?;
+    let node = node(&host, &headers).await?;
     let boot = BootEnvironments::new([], None);
     let catalog = Catalog::load(host.as_ref(), &boot)
         .await
-        .map_err(|e| refused(e.into()))?;
+        .map_err(|e| refused(internal("read", node, None, e)))?;
     Ok(Json(json!({"environments": catalog.admitted_for_nodes()})).into_response())
 }
 
@@ -179,7 +183,7 @@ async fn ready<S: Host<E>, E: IntoResponse>(
     .bind(&report.ready)
     .fetch_one(host.as_ref())
     .await
-    .map_err(|e| refused(e.into()))?;
+    .map_err(|e| refused(internal("ready report", node, None, e)))?;
     Ok(Json(json!({"ready": kept})).into_response())
 }
 
@@ -202,7 +206,7 @@ async fn claim<S: Host<E>, E: IntoResponse>(
     let node = builder(&host, &builders, &headers).await?;
     let pool = host.as_ref();
     let limits = aq_role_settings::environment_limits(pool).await;
-    let (limits, _) = limits.map_err(|e| refused(e.into()))?;
+    let (limits, _) = limits.map_err(|e| refused(internal("claim", node, None, e)))?;
     let lease_ms = i64::try_from(limits.build_wall_ms).unwrap_or(i64::MAX);
     // The oldest job that is queued or whose lease ran out; a job whose
     // project has no binding (so no name) is never handed out.
@@ -219,7 +223,7 @@ async fn claim<S: Host<E>, E: IntoResponse>(
     .bind(lease_ms)
     .fetch_optional(pool)
     .await
-    .map_err(|e| refused(e.into()))?;
+    .map_err(|e| refused(internal("claim", node, None, e)))?;
     let Some((job_id, kind, project_id, project, commit, recipes, run, base_template, target)) =
         job
     else {
@@ -297,7 +301,11 @@ struct Run {
     output: String,
 }
 /// Whether `result` is a possible answer to a job of `kind`.
-fn check(result: &JobResult, kind: &str, limits: &EnvironmentLimits) -> Result<(), String> {
+fn check(
+    result: &JobResult,
+    (kind, run): (&str, bool),
+    limits: &EnvironmentLimits,
+) -> Result<(), String> {
     let digest = |d: &str| {
         d.strip_prefix("sha256:").is_some_and(|h| {
             h.len() == 64
@@ -305,14 +313,17 @@ fn check(result: &JobResult, kind: &str, limits: &EnvironmentLimits) -> Result<(
                     .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         })
     };
-    let log = |text: &str| u64::try_from(text.len()).is_ok_and(|n| n <= limits.log_bytes);
     match (&result.outcome, &result.failure) {
         (Outcome::Built, Some(_)) => return Err("a built outcome has no failure".into()),
         (Outcome::Failed, None) => return Err("a failed outcome names its failure".into()),
         _ => {}
     }
-    if kind == "try" && !result.builds.is_empty() {
-        return Err("a try job has no builds".into());
+    if (kind == "try" || result.outcome == Outcome::Failed) && !result.builds.is_empty() {
+        return Err("only a built build job has builds".into());
+    }
+    // A built try ran its command, when the job has one.
+    if kind == "try" && result.outcome == Outcome::Built && result.run.is_some() != run {
+        return Err("a built try job reports the run of its command, and only then".into());
     }
     if kind == "build" && result.run.is_some() {
         return Err("a build job has no run".into());
@@ -323,10 +334,12 @@ fn check(result: &JobResult, kind: &str, limits: &EnvironmentLimits) -> Result<(
     if !result.builds.iter().all(|b| digest(&b.digest)) {
         return Err("a build digest is sha256:<64 hex>".into());
     }
-    let logs = (result.failure.iter().map(|f| f.log.as_str()))
-        .chain(result.run.iter().map(|r| r.output.as_str()));
-    if !logs.into_iter().all(log) {
-        return Err("a log is longer than environment_limits.log_bytes".into());
+    let toolchain = (result.builds.iter()).flat_map(|b| b.toolchain.iter().map(|t| t.output.len()));
+    let text = (result.failure.iter().map(|f| f.log.len()))
+        .chain(result.run.iter().map(|r| r.output.len()))
+        .chain(toolchain);
+    if !u64::try_from(text.sum::<usize>()).is_ok_and(|n| n <= limits.log_bytes) {
+        return Err("the logs, run output and toolchain output are longer than environment_limits.log_bytes together".into());
     }
     Ok(())
 }
@@ -334,26 +347,48 @@ async fn complete<S: Host<E>, E: IntoResponse>(
     State(host): State<S>,
     Extension(builders): Extension<Builders>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Reply {
     let node = builder(&host, &builders, &headers).await?;
+    let limits = aq_role_settings::environment_limits(host.as_ref()).await;
+    let (limits, _) = limits.map_err(|e| refused(internal("complete", node, None, e)))?;
+    let bound = result_bytes(&limits);
+    let body = axum::body::to_bytes(body, bound).await.map_err(|_| {
+        refused(Error::TooLarge(format!(
+            "a job result is at most {bound} bytes (from environment_limits)"
+        )))
+    })?;
     let result: JobResult = parse(&body)?;
-    recorded(host.as_ref(), node, &result)
+    recorded(host.as_ref(), node, &result, &limits)
         .await
         .map_err(refused)?;
     Ok(Json(json!({"job_id": result.job_id, "recorded": true})).into_response())
 }
 /// Record `result` once; the same result again is the same answer.
-async fn recorded(pool: &PgPool, node: Uuid, result: &JobResult) -> Result<(), Error> {
-    let (limits, _) = aq_role_settings::environment_limits(pool).await?;
-    let mut tx = pool.begin().await?;
-    let row: Option<(String, String, Option<Uuid>, Option<Value>)> = sqlx::query_as(
-        "SELECT kind,state,claimed_by,result FROM environment_jobs WHERE job_id=$1 FOR UPDATE",
+async fn recorded(
+    pool: &PgPool,
+    node: Uuid,
+    result: &JobResult,
+    limits: &EnvironmentLimits,
+) -> Result<(), Error> {
+    let failed = |e| internal("complete", node, Some(result.job_id), e);
+    let mut tx = pool.begin().await.map_err(failed)?;
+    type Row = (
+        String,
+        Option<String>,
+        Uuid,
+        String,
+        Option<Uuid>,
+        Option<Value>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT kind,run,project_id,state,claimed_by,result FROM environment_jobs WHERE job_id=$1 FOR UPDATE",
     )
     .bind(result.job_id)
     .fetch_optional(&mut *tx)
-    .await?;
-    let (kind, state, claimed_by, stored) =
+    .await
+    .map_err(failed)?;
+    let (kind, run, project, state, claimed_by, stored) =
         row.ok_or(Error::NotFound("no such environment job"))?;
     if claimed_by != Some(node) {
         return Err(Error::Conflict("this node does not hold the job's claim"));
@@ -368,13 +403,29 @@ async fn recorded(pool: &PgPool, node: Uuid, result: &JobResult) -> Result<(), E
             false => Err(Error::Conflict("the job was completed with another result")),
         };
     }
-    check(result, &kind, &limits).map_err(Error::BadRequest)?;
-    let value = serde_json::to_value(result).map_err(|_| Error::Internal)?;
-    sqlx::query("UPDATE environment_jobs SET state='completed',result=$2 WHERE job_id=$1")
+    check(result, (&kind, run.is_some()), limits).map_err(Error::BadRequest)?;
+    let value = serde_json::to_value(result);
+    let value = value.map_err(|e| internal("complete", node, Some(result.job_id), e))?;
+    sqlx::query("UPDATE environment_jobs SET state='completed',completed_at=now(),result=$2 WHERE job_id=$1")
         .bind(result.job_id)
         .bind(value)
         .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
+        .await
+        .map_err(failed)?;
+    // Rolling records: the project keeps its newest `keep_versions`
+    // completed jobs of each kind; this one is the newest.
+    let keep = i64::try_from(limits.keep_versions).unwrap_or(i64::MAX);
+    sqlx::query(
+        "DELETE FROM environment_jobs WHERE job_id IN (SELECT job_id FROM (SELECT job_id,\
+         row_number() OVER (ORDER BY completed_at DESC,job_id DESC) AS n FROM environment_jobs \
+         WHERE project_id=$1 AND kind=$2 AND state='completed') o WHERE n>$3)",
+    )
+    .bind(project)
+    .bind(&kind)
+    .bind(keep)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
+    tx.commit().await.map_err(failed)?;
     Ok(())
 }

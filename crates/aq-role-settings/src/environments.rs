@@ -79,16 +79,57 @@ impl Default for EnvironmentLimits {
         }
     }
 }
+/// The longest duration limit: the server adds it to `now()` as a
+/// PostgreSQL interval (a claim's lease is `build_wall_ms`).
+pub const MAX_DURATION_MS: u64 = 3_155_695_200_000;
 impl EnvironmentLimits {
-    /// Every value at least 1 and within BIGINT; the message names the first that is not.
+    /// Every value at least 1 and within BIGINT, and a duration (`*_ms`)
+    /// within [`MAX_DURATION_MS`]; the message names the first that is not.
     pub fn validate(&self) -> Result<(), String> {
         let value = serde_json::to_value(self).map_err(|e| e.to_string())?;
         for (name, n) in value.as_object().into_iter().flatten() {
             let n = n.as_u64().unwrap_or_default();
-            if !(1..=i64::MAX as u64).contains(&n) {
-                return Err(format!("{name} is {n}; it must be at least 1"));
+            if n == 0 {
+                return Err(format!("{name} is 0; it must be at least 1"));
+            }
+            let (max, unit) = match name.ends_with("_ms") {
+                true => (
+                    MAX_DURATION_MS,
+                    " (100 years, a PostgreSQL interval from now)",
+                ),
+                false => (i64::MAX as u64, ""),
+            };
+            if n > max {
+                return Err(format!("{name} is {n}; it must be at most {max}{unit}"));
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_duration_limit_must_fit_an_interval_from_now() {
+        let mut limits = EnvironmentLimits::default();
+        assert_eq!(limits.validate(), Ok(()));
+        limits.build_wall_ms = MAX_DURATION_MS + 1;
+        let refused = limits.validate().unwrap_err();
+        assert!(
+            refused.starts_with("build_wall_ms is 3155695200001; it must be at most"),
+            "{refused}"
+        );
+        limits.build_wall_ms = MAX_DURATION_MS;
+        limits.log_bytes = i64::MAX as u64 + 1;
+        assert!(limits.validate().unwrap_err().starts_with("log_bytes is"));
+        limits.log_bytes = 0;
+        assert!(
+            limits
+                .validate()
+                .unwrap_err()
+                .starts_with("log_bytes is 0; it must be at least 1")
+        );
     }
 }

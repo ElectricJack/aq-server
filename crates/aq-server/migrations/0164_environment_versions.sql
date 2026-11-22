@@ -42,9 +42,15 @@ CREATE TABLE environment_jobs (
     claimed_at TIMESTAMPTZ,
     lease_until TIMESTAMPTZ,
     result JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Rolling records: completing a job deletes the project's completed jobs
+    -- of that kind beyond the newest `environment_limits.keep_versions`.
+    completed_at TIMESTAMPTZ
 );
 CREATE INDEX environment_jobs_queued ON environment_jobs(created_at) WHERE state = 'queued';
+-- The claim's other half: a claimed job whose lease ran out.
+CREATE INDEX environment_jobs_leased ON environment_jobs(lease_until) WHERE state = 'claimed';
+CREATE INDEX environment_jobs_completed ON environment_jobs(project_id, kind, completed_at) WHERE state = 'completed';
 
 -- The template digests each node has pulled and can run (rolling: each
 -- report replaces the node's previous set; only admitted digests are kept).

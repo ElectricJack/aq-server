@@ -341,3 +341,125 @@ async fn an_admitted_environment_is_offered_only_after_a_node_reports_it_ready()
         StatusCode::UNAUTHORIZED
     );
 }
+
+async fn limits(h: &Harness, limits: Value) {
+    let mut all = json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
+        "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
+        "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
+        "try_concurrency": 2, "keep_versions": 3});
+    for (k, v) in limits.as_object().unwrap() {
+        all[k] = v.clone();
+    }
+    sqlx::query("UPDATE role_settings SET environment_limits=$1 WHERE singleton")
+        .bind(all)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+}
+async fn claimed(h: &Harness, kind: &str) -> Uuid {
+    let id = job(h, kind).await;
+    let (status, body) = send(h, "/v1/worker/environments/claim", BUILDER, Some(json!({}))).await;
+    assert_eq!((status, &body["job_id"]), (StatusCode::OK, &json!(id)));
+    id
+}
+fn failed(job: Uuid, log: String) -> Value {
+    json!({"job_id": job, "outcome": "failed", "builds": [], "run": null,
+        "failure": {"recipe": "web", "step": "install", "log": log}})
+}
+
+/// The transport bound on a result comes from the Settings (`log_bytes`,
+/// `max_recipe_bytes`), and a result over it is refused in the ApiError shape.
+#[tokio::test]
+async fn a_result_over_the_bound_from_the_settings_is_refused() {
+    let h = harness().await;
+    limits(&h, json!({"log_bytes": 1000, "max_recipe_bytes": 1000})).await;
+    let complete = |body| send(&h, "/v1/worker/environments/complete", BUILDER, Some(body));
+    let id = claimed(&h, "build").await;
+    // 6 x (1000 + 1000) bytes on the wire at most.
+    let (status, body) = complete(failed(id, "x".repeat(20_000))).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(body["error"], "bad_request", "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("12000"),
+        "{body}"
+    );
+    // Under the transport bound but over `log_bytes`: refused as invalid.
+    assert_eq!(
+        complete(failed(id, "x".repeat(1001))).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, body) = complete(failed(id, "x".repeat(1000))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Raised in the Settings, the same large result is accepted.
+    limits(&h, json!({"log_bytes": 20_000})).await;
+    let id = claimed(&h, "build").await;
+    let (status, body) = complete(failed(id, "x".repeat(20_000))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_result_must_fit_its_job() {
+    let h = harness().await;
+    limits(&h, json!({"log_bytes": 100})).await;
+    let complete = |body| send(&h, "/v1/worker/environments/complete", BUILDER, Some(body));
+    let build = claimed(&h, "build").await;
+    // A failed build reports no builds.
+    let mut with_builds = failed(build, "boom".into());
+    with_builds["builds"] = built(build)["builds"].clone();
+    assert_eq!(complete(with_builds).await.0, StatusCode::BAD_REQUEST);
+    // Toolchain output counts against `log_bytes`.
+    let mut long = built(build);
+    long["builds"][0]["toolchain"][0]["output"] = json!("v".repeat(101));
+    assert_eq!(complete(long).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(complete(built(build)).await.0, StatusCode::OK);
+
+    // A built try with a command reports its run, and no builds.
+    let tried = claimed(&h, "try").await;
+    let no_run =
+        json!({"job_id": tried, "outcome": "built", "builds": [], "failure": null, "run": null});
+    assert_eq!(complete(no_run).await.0, StatusCode::BAD_REQUEST);
+    let mut with_builds = built(tried);
+    with_builds["run"] = json!({"exit": 0, "output": "ok"});
+    assert_eq!(complete(with_builds).await.0, StatusCode::BAD_REQUEST);
+    let ran = json!({"job_id": tried, "outcome": "built", "builds": [], "failure": null,
+        "run": {"exit": 0, "output": "ok"}});
+    assert_eq!(complete(ran).await.0, StatusCode::OK);
+}
+
+/// Rolling records: a project keeps its newest `keep_versions` completed
+/// jobs of each kind.
+#[tokio::test]
+async fn completing_more_than_keep_versions_jobs_keeps_only_the_newest() {
+    let h = harness().await;
+    limits(&h, json!({"keep_versions": 2})).await;
+    let tried = claimed(&h, "try").await;
+    let ran = json!({"job_id": tried, "outcome": "failed", "builds": [], "run": null,
+        "failure": {"recipe": "web", "step": "run", "log": "no"}});
+    send(&h, "/v1/worker/environments/complete", BUILDER, Some(ran)).await;
+    let mut done = vec![];
+    for _ in 0..3 {
+        let id = claimed(&h, "build").await;
+        let (status, body) = send(
+            &h,
+            "/v1/worker/environments/complete",
+            BUILDER,
+            Some(built(id)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        done.push(id);
+    }
+    let left: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT job_id FROM environment_jobs WHERE kind='build' ORDER BY completed_at",
+    )
+    .fetch_all(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(left, done[1..]);
+    let tries: i64 = sqlx::query_scalar("SELECT count(*) FROM environment_jobs WHERE kind='try'")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(tries, 1, "each kind keeps its own");
+}
