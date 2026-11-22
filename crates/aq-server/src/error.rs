@@ -20,6 +20,35 @@ pub(crate) struct RefusalContext {
     pub code: String,
 }
 
+/// Where a request is going, for the refusal log: its method and the matched
+/// route template (`/api/human/conversations/{conversation}/messages`). Never
+/// the raw path or the query string, which can carry ids and cursors.
+#[derive(Clone, Debug)]
+struct RequestSite {
+    method: axum::http::Method,
+    route: String,
+}
+tokio::task_local! {
+    static REQUEST_SITE: RequestSite;
+}
+/// Middleware: make the request's method and matched route template known to
+/// [`AppError`]'s refusal log for the rest of the request. A request that
+/// matched no route is logged as `(unmatched)`.
+pub(crate) async fn record_request_site(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| "(unmatched)".to_owned(), |p| p.as_str().to_owned());
+    let site = RequestSite {
+        method: req.method().clone(),
+        route,
+    };
+    REQUEST_SITE.scope(site, next.run(req)).await
+}
+
 #[derive(Debug)]
 pub enum AppError {
     Unauthenticated(String),
@@ -146,7 +175,10 @@ impl IntoResponse for AppError {
             status: self.status().as_u16(),
             code: body.error.clone(),
         };
-        tracing::warn!(status=context.status, code=%context.code, message=[body.message.as_str(), ""][(context.status != 409) as usize], "API request refused"); // only a conflict's text: others may repeat the caller's input
+        let (method, route) = REQUEST_SITE
+            .try_with(|site| (site.method.to_string(), site.route.clone()))
+            .unwrap_or_else(|_| ("(unknown)".into(), "(unknown)".into()));
+        tracing::warn!(%method, %route, status=context.status, code=%context.code, message=[body.message.as_str(), ""][(context.status != 409) as usize], "API request refused"); // only a conflict's text: others may repeat the caller's input
         let mut response = (self.status(), Json(body)).into_response();
         if matches!(self, AppError::Busy) {
             (response.headers_mut()).insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
@@ -212,5 +244,79 @@ impl From<StoreError> for AppError {
                 AppError::Internal
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Router, body::Body, http::Request, middleware::from_fn, routing::get};
+    use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl MakeWriter<'_> for Sink {
+        type Writer = Sink;
+        fn make_writer(&self) -> Sink {
+            self.clone()
+        }
+    }
+
+    async fn refused(app: Router, uri: &str) -> String {
+        let sink = Sink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let response = app
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        String::from_utf8(sink.0.lock().unwrap().clone()).unwrap()
+    }
+    async fn not_found() -> Result<(), AppError> {
+        Err(AppError::NotFound("missing".into()))
+    }
+
+    #[tokio::test]
+    async fn a_refusal_log_names_the_method_and_route_template_but_not_the_query() {
+        let app = Router::new()
+            .route("/things/{thing}/messages", get(not_found))
+            .layer(from_fn(record_request_site));
+        let id = "6f1c2b0e-7d58-4f0a-9a43-0c2f5a1e9b77";
+        let log = refused(
+            app,
+            &format!("/things/{id}/messages?before=41.2&token=sekrit"),
+        )
+        .await;
+        assert!(log.contains("API request refused"), "{log}");
+        assert!(log.contains("method=GET"), "{log}");
+        assert!(log.contains("route=/things/{thing}/messages"), "{log}");
+        for leaked in [id, "before", "41.2", "token", "sekrit", "?"] {
+            assert!(!log.contains(leaked), "{leaked} in {log}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refusal_without_a_matched_route_says_so() {
+        let app = Router::new()
+            .fallback(not_found)
+            .layer(from_fn(record_request_site));
+        let log = refused(app, "/nowhere/1234?cursor=9").await;
+        assert!(log.contains("route=(unmatched)"), "{log}");
+        assert!(!log.contains("nowhere") && !log.contains("cursor"), "{log}");
     }
 }

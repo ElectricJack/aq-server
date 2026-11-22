@@ -29,7 +29,7 @@ use std::{ffi::OsString, path::PathBuf, sync::OnceLock};
 use uuid::Uuid;
 
 pub use surface::Invocation;
-pub use typed::{Comment, Knowledge, Message, Operation, Question, Task, Wait};
+pub use typed::{Comment, Conversation, Knowledge, Message, Operation, Question, Task, Wait};
 
 pub type Result<T> = std::result::Result<T, Value>;
 pub fn error(code: &str, message: &str) -> Value {
@@ -193,6 +193,7 @@ async fn dispatch(ctx: &Ctx, command: &cli::Command) -> Result<Value> {
         C::Question(c) => typed::question(ctx, c).await,
         C::Wait(c) => typed::wait(ctx, c).await,
         C::Message(c) => typed::message(ctx, c).await,
+        C::Conversation(c) => typed::conversation(ctx, c).await,
         C::Operation(c) => typed::operation(ctx, c).await,
         C::External(tokens) => surface::external(ctx, tokens).await,
         C::Result(cli::ResultCommand::Command(rest)) => {
@@ -316,7 +317,7 @@ fn connect(cli: &cli::Cli, channel: Option<OsString>) -> Result<Ctx> {
 /// The CLI tokens of a command that is not typed in this binary.
 fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
     use cli::Command as C;
-    use typed::{Comment, Knowledge, Message, Operation, Question, Task, Wait};
+    use typed::{Comment, Conversation, Knowledge, Message, Operation, Question, Task, Wait};
     let (group, rest) = match command {
         C::External(tokens) => return Some(tokens.clone()),
         C::Task(Task::Other(rest)) => ("task", rest),
@@ -325,6 +326,7 @@ fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
         C::Question(Question::Other(rest)) => ("question", rest),
         C::Wait(Wait::Other(rest)) => ("wait", rest),
         C::Message(Message::Other(rest)) => ("message", rest),
+        C::Conversation(Conversation::Other(rest)) => ("conversation", rest),
         C::Operation(Operation::Other(rest)) => ("operation", rest),
         C::Result(cli::ResultCommand::Command(rest)) => ("result", rest),
         _ => return None,
@@ -362,6 +364,7 @@ pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
         "question",
         "wait",
         "message",
+        "conversation",
         "operation",
         "result",
     ] {

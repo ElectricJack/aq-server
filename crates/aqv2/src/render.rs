@@ -8,6 +8,8 @@ pub enum Render {
     Json,
     Commands,
     Whoami,
+    /// A conversation's messages page (`conversation messages`).
+    Messages,
 }
 /// Escape control characters (and nothing else).
 pub fn clean(text: &str) -> String {
@@ -54,6 +56,7 @@ pub fn render(kind: Render, value: &Value) -> String {
         },
         Render::Commands => commands(value),
         Render::Whoami => whoami(value),
+        Render::Messages => messages(value),
     }
 }
 fn commands(value: &Value) -> String {
@@ -100,6 +103,73 @@ fn commands(value: &Value) -> String {
                 format!("{} ({})", s(&c["grant"]), s(&c["reason"])),
             );
         }
+    }
+    out.trim_end().to_owned()
+}
+/// Unix milliseconds as `YYYY-MM-DD HH:MM:SS UTC`.
+fn utc(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rest = secs.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01 (proleptic Gregorian).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+/// A conversation's messages: one header line per message (cursor, author
+/// kind, time), then its body indented. The conversation's revision is not
+/// shown: it is not a message count.
+fn messages(value: &Value) -> String {
+    let mut out = String::new();
+    let items = value["items"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "conversation {} ({}), {} message{} in this page",
+        s(&value["conversation"]["id"]),
+        s(&value["conversation"]["label"]),
+        items.len(),
+        if items.len() == 1 { "" } else { "s" },
+    );
+    for item in items {
+        let time = item["created_at_ms"]
+            .as_i64()
+            .map_or_else(|| s(&item["created_at_ms"]), utc);
+        let _ = writeln!(
+            out,
+            "{}  {}  {}",
+            s(&item["cursor"]),
+            s(&item["author"]["kind"]),
+            time
+        );
+        for line in item["body"].as_str().unwrap_or_default().lines() {
+            let _ = writeln!(out, "  {}", clean(line));
+        }
+    }
+    if let Some(next) = value["next_cursor"]
+        .as_str()
+        .filter(|_| value["has_more"] == true)
+    {
+        let flag = if value["direction"] == "forward" {
+            "--after"
+        } else {
+            "--before"
+        };
+        let _ = writeln!(out, "more: {flag} {}", clean(next));
     }
     out.trim_end().to_owned()
 }

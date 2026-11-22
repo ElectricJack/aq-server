@@ -349,6 +349,7 @@ pub fn build_admin_router_with_optional_owners(
             admission::gate,
         ))
         .layer(from_fn(dashboard_api::errors::normalize_errors))
+        .layer(from_fn(error::record_request_site))
         .layer(from_fn(harden))
         .layer(axum::Extension(mounted));
     let app = if let Some(dashboard) = dashboard {
@@ -451,6 +452,7 @@ fn build_worker_router_inner(
             state.store.admission.clone(),
             admission::gate,
         ))
+        .layer(from_fn(error::record_request_site))
         .layer(from_fn(harden))
         .with_state(state.clone());
     commands::mount(router, state, commands::Listener::Machine)

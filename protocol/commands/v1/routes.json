@@ -19,6 +19,8 @@
     {"path": "/api/execution/replace-incarnation", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/execution/test-bulk", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/execution/test-control", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
+    {"path": "/api/human/conversations/global", "class": "owner_admin", "note": "The dashboard's supervisor conversation discovery (id, revision, runtime). Not a command: the CLI lists supervisors with `aq supervisor list` and reads messages with `aq conversation messages`."},
+    {"path": "/api/human/conversations/projects/{project}", "class": "owner_admin", "note": "The dashboard's per-project supervisor conversation discovery. Not a command: the CLI lists supervisors with `aq supervisor list` and reads messages with `aq conversation messages`."},
     {"path": "/api/human/conversations/{conversation}/attachments/{attachment}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/conversations/{conversation}/attachments/{attachment}/metadata", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
     {"path": "/api/human/operations/{operation}", "class": "owner_admin", "note": "Owner-only (RequireOwner/DashboardUser) administration or REST mutation outside the command surface."},
