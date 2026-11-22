@@ -108,7 +108,6 @@ async fn job(h: &Harness, kind: &str) -> Uuid {
         recipes: &recipes,
         run: (kind == "try").then_some("pnpm test"),
         base_template: &format!("registry.example/aq-template@{DIGEST}"),
-        target_repository: "registry.example/aq-template",
     };
     enqueue(&h.pool, &job).await.unwrap()
 }
@@ -160,7 +159,6 @@ async fn only_a_template_build_node_can_claim() {
             "job_id": id, "kind": "build", "project_id": h.project, "project": "example",
             "commit": "c".repeat(40), "recipes": ["web"], "run": null,
             "base_template": format!("registry.example/aq-template@{DIGEST}"),
-            "target_repository": "registry.example/aq-template",
             "limits": {"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
                 "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
                 "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,

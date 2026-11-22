@@ -27,16 +27,30 @@ type Row = (
     Value,
 );
 
+/// Newest first: by admission, then by a numeric version.
+macro_rules! newest {
+    ($sql:literal) => {
+        concat!($sql, " ORDER BY admitted_at DESC,(CASE WHEN version ~ '^[0-9]{1,18}$' THEN version::bigint END) DESC NULLS LAST,version DESC")
+    };
+}
 /// Every admitted version, newest first. Rolling records bound the rows.
 pub(crate) async fn versions<'e>(db: impl sqlx::PgExecutor<'e>) -> sqlx::Result<Vec<Version>> {
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows: Vec<Row> = sqlx::query_as(newest!(
         "SELECT environment_id,version,template_digest,image,provides,platform_text,toolchain,harnesses,warm \
-         FROM environment_versions ORDER BY admitted_at DESC,\
-         (CASE WHEN version ~ '^[0-9]{1,18}$' THEN version::bigint END) DESC NULLS LAST,version DESC",
-    )
+         FROM environment_versions"
+    ))
     .fetch_all(db)
     .await?;
     rows.into_iter().map(version).collect()
+}
+/// The newest AQ base template (a version with no project) as `repo@sha256:…`.
+pub(crate) async fn base<'e>(db: impl sqlx::PgExecutor<'e>) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar(newest!(
+        "SELECT split_part(image,'@',1)||'@'||template_digest FROM environment_versions \
+         WHERE project_id IS NULL"
+    ))
+    .fetch_optional(db)
+    .await
 }
 pub(crate) fn version(row: Row) -> sqlx::Result<Version> {
     let (id, version, template, image, provides, platform_text, toolchain, harnesses, warm) = row;

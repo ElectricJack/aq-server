@@ -41,23 +41,21 @@ async fn serve<
     (budget, seconds): (&Semaphore, u64),
     run: impl FnOnce(Uuid, Q) -> F,
 ) -> Response {
+    let busy = || AgentError("overloaded").into_response();
     let go = async {
-        let p = authenticate(s, h)
-            .await
-            .map_err(IntoResponse::into_response)?;
-        grant_check::require(s, h, &p, path, None).await?;
-        let project = field(&p.binding, "project_id").map_err(IntoResponse::into_response)?;
+        let project = project(s, h, path).await?;
         let q: Q = parse(body).map_err(|code| AgentError(code).into_response())?;
-        let _permit = budget
-            .try_acquire()
-            .map_err(|_| AgentError("overloaded").into_response())?;
-        let read = run(project, q);
-        tokio::time::timeout(std::time::Duration::from_secs(seconds), read)
-            .await
-            .map_err(|_| AgentError("overloaded").into_response())?
-            .map_err(refuse)
+        let _permit = budget.try_acquire().map_err(|_| busy())?;
+        let read = tokio::time::timeout(std::time::Duration::from_secs(seconds), run(project, q));
+        read.await.map_err(|_| busy())?.map_err(refuse)
     };
     go.await.map_or_else(|r: Response| r, ok)
+}
+/// The attempt's project once it holds the grant `path` needs (and `environment.try`'s).
+pub(crate) async fn project(s: &AppState, h: &HeaderMap, path: &str) -> Result<Uuid, Response> {
+    let p = (authenticate(s, h).await).map_err(IntoResponse::into_response)?;
+    grant_check::require(s, h, &p, path, None).await?;
+    field(&p.binding, "project_id").map_err(IntoResponse::into_response)
 }
 fn refuse(error: AppError) -> Response {
     use AppError::{BadRequest, Busy, IdentityUnavailable as Unavailable, Maintenance, NotFound};

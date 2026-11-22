@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(feature = "project_environments")]
+mod environment_try;
 async fn send(
     app: &Router,
     path: &str,

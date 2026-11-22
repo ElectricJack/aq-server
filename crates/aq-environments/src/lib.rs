@@ -12,6 +12,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod agent;
 mod store;
 pub mod worker;
 

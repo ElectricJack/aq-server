@@ -31,9 +31,9 @@ CREATE TABLE environment_jobs (
     commit TEXT NOT NULL CHECK (commit ~ '^[0-9a-f]{40}$'),
     recipes JSONB NOT NULL CHECK (jsonb_typeof(recipes) = 'array'),
     run TEXT,
-    -- What the job builds on and publishes to, chosen when it was queued.
+    -- The base the job builds on, chosen when it was queued; the builder
+    -- publishes to the repository its own builder config names.
     base_template TEXT NOT NULL CHECK (base_template ~ '^[^@]+@sha256:[0-9a-f]{64}$' AND octet_length(base_template) <= 512),
-    target_repository TEXT NOT NULL CHECK (octet_length(target_repository) BETWEEN 1 AND 256),
     state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed', 'completed')),
     claimed_by UUID,
     -- A claim is a lease of `environment_limits.build_wall_ms`: once it runs

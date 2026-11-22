@@ -1,4 +1,5 @@
-//! Spec 0017 §6.3, §6.6: the node routes. Builder nodes (the operator's
+//! Spec 0017 §6.3, §6.6: the node routes (and, from [`crate::agent`], the
+//! agent's `environment.try` routes). Builder nodes (the operator's
 //! `template-build` worker group, `[projects.worker_groups]` in the server
 //! config) claim and complete build and try jobs; every enrolled node reads
 //! the admitted environments and reports which templates it has pulled.
@@ -36,6 +37,13 @@ fn result_bytes(limits: &EnvironmentLimits) -> usize {
 /// own refusal `E` for the credential.
 pub trait Host<E: IntoResponse>: AsRef<PgPool> + Clone + Send + Sync + 'static {
     fn node(&self, headers: &HeaderMap) -> impl Future<Output = Result<Uuid, E>> + Send;
+    /// The attempt's project, once its agent credential holds the grant the
+    /// agent route `path` needs; otherwise the host's refusal.
+    fn agent(
+        &self,
+        headers: &HeaderMap,
+        path: &str,
+    ) -> impl Future<Output = Result<Uuid, Response>> + Send;
 }
 
 /// The routes, for the builders the operator's `projects` config lists in
@@ -58,6 +66,7 @@ pub fn routes<S: Host<E>, E: IntoResponse + Send + 'static>(projects: &ProjectCo
             post(complete::<S, E>).layer(DefaultBodyLimit::disable()),
         )
         .layer(Extension(builders))
+        .merge(crate::agent::routes::<S, E>())
 }
 type Builders = Arc<[Uuid]>;
 
@@ -69,12 +78,11 @@ pub struct NewJob<'a> {
     pub recipes: &'a [String],
     pub run: Option<&'a str>,
     pub base_template: &'a str,
-    pub target_repository: &'a str,
 }
 pub async fn enqueue<'e>(db: impl sqlx::PgExecutor<'e>, job: &NewJob<'_>) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO environment_jobs(job_id,kind,project_id,commit,recipes,run,base_template,target_repository) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING job_id",
+        "INSERT INTO environment_jobs(job_id,kind,project_id,commit,recipes,run,base_template) \
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING job_id",
     )
     .bind(Uuid::new_v4())
     .bind(job.kind)
@@ -83,7 +91,6 @@ pub async fn enqueue<'e>(db: impl sqlx::PgExecutor<'e>, job: &NewJob<'_>) -> sql
     .bind(json!(job.recipes))
     .bind(job.run)
     .bind(job.base_template)
-    .bind(job.target_repository)
     .fetch_one(db)
     .await
 }
@@ -196,7 +203,6 @@ type Claimed = (
     Value,
     Option<String>,
     String,
-    String,
 );
 async fn claim<S: Host<E>, E: IntoResponse>(
     State(host): State<S>,
@@ -217,22 +223,20 @@ async fn claim<S: Host<E>, E: IntoResponse>(
          ORDER BY j.created_at,j.job_id LIMIT 1 FOR UPDATE OF j SKIP LOCKED) \
          UPDATE environment_jobs j SET state='claimed',claimed_by=$1,claimed_at=now(),\
          lease_until=now()+make_interval(secs=>$2::double precision/1000) FROM next WHERE j.job_id=next.job_id \
-         RETURNING j.job_id,j.kind,j.project_id,next.project,j.commit,j.recipes,j.run,j.base_template,j.target_repository",
+         RETURNING j.job_id,j.kind,j.project_id,next.project,j.commit,j.recipes,j.run,j.base_template",
     )
     .bind(node)
     .bind(lease_ms)
     .fetch_optional(pool)
     .await
     .map_err(|e| refused(internal("claim", node, None, e)))?;
-    let Some((job_id, kind, project_id, project, commit, recipes, run, base_template, target)) =
-        job
-    else {
+    let Some((job_id, kind, project_id, project, commit, recipes, run, base_template)) = job else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     Ok(Json(json!({
         "job_id": job_id, "kind": kind, "project_id": project_id, "project": project,
         "commit": commit, "recipes": recipes, "run": run, "base_template": base_template,
-        "target_repository": target, "limits": limits,
+        "limits": limits,
     }))
     .into_response())
 }
