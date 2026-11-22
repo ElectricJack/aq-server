@@ -1163,6 +1163,23 @@ async fn environment_try_refusals_and_timeouts_are_named() {
         "{err}"
     );
     assert!(pending.drain().len() >= 2);
+    // A failed build or a failing command exits nonzero and keeps the result.
+    for result in [
+        json!({"outcome":"failed","builds":[],"run":null,"failure":{"recipe":"web","step":"install","log":"E: no pnpm"}}),
+        json!({"outcome":"built","builds":[],"failure":null,"run":{"exit":1,"output":"1 failing"}}),
+    ] {
+        let job = json!({"job_id":OPERATION,"state":"completed","result":result});
+        let reply = job.clone();
+        let fake = fake(move |method, _, _| match method {
+            "POST" => (StatusCode::OK, json!({"job_id":OPERATION})),
+            _ => (StatusCode::OK, reply.clone()),
+        })
+        .await;
+        let err = fake.run(&["environment", "try", "web"]).await.unwrap_err();
+        assert_eq!(err["code"], "environment_try_failed", "{err}");
+        assert_eq!(err["job"], job);
+        assert_eq!(aqv2::exit_code(&err), 1);
+    }
     // A malformed recipe name is the server's to refuse; flags are the CLI's.
     let err = pending.run(&["environment", "try"]).await.unwrap_err();
     assert_eq!(err["code"], "invalid_arguments");

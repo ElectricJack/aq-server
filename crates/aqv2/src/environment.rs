@@ -3,7 +3,8 @@
 //! one command in the image. The request goes to the agent route itself, not
 //! the command surface: the node's channel proxy commits and pushes the
 //! workspace for that route and adds the pushed `commit` to the body. The CLI
-//! then polls the job until it completes and prints the builder's Job result.
+//! then polls the job until it completes and prints the builder's Job result;
+//! a failed build or a nonzero `run.exit` is `environment_try_failed` (exit 1).
 use crate::{Ctx, Mode, REFUSED, Result, client, error, program};
 use clap::Subcommand;
 use serde_json::{Value, json};
@@ -95,6 +96,17 @@ pub async fn environment(ctx: &Ctx, c: &Environment) -> Result<Value> {
     loop {
         let value = client::read(&ctx.http, &format!("{TRY}/{job}"), &[]).await?;
         if value["state"] == "completed" {
+            // A failed build or a failing command exits nonzero, with the result.
+            let result = &value["result"];
+            let exit = result["run"]["exit"].as_i64();
+            if result["outcome"] == "failed" || exit.is_some_and(|e| e != 0) {
+                let mut e = error(
+                    "environment_try_failed",
+                    "The build failed or the command exited nonzero; the job's result is printed",
+                );
+                e["job"] = value;
+                return Err(e);
+            }
             return Ok(value);
         }
         let left = deadline.saturating_duration_since(Instant::now());

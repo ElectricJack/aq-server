@@ -122,6 +122,18 @@ async fn environment_try_queues_a_try_job_for_the_tasks_head() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "workspace_not_pushed", "{body}");
+    // Through the surface the agent wrote the body, so it cannot attest one.
+    let surface = json!({"params":{"name":"web","commit":"e".repeat(40)}});
+    let (status, body) = send(
+        &e.app,
+        "/api/v1/commands/environment.try",
+        Some(&e.token),
+        Some(surface),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_request", "{body}");
+    assert!(body["message"].as_str().unwrap().contains("node"), "{body}");
     for bad in [
         json!({"api_version":1,"name":"web","commit":"C".repeat(40)}),
         json!({"api_version":1,"name":"web","commit":"c".repeat(39)}),

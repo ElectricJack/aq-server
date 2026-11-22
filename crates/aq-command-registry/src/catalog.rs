@@ -1375,7 +1375,7 @@ pub fn catalog() -> Vec<CommandSpec> {
 /// proxy commits and pushes the workspace to the task's branch and adds the
 /// pushed `commit` to the body; a request without one (this surface, or an
 /// older node) is refused with `workspace_not_pushed`. `commit` is not a
-/// param: only the node names it.
+/// param: only the node names it, and `forward` refuses one.
 #[cfg(feature = "project_environments")]
 fn environments() -> [CommandSpec; 2] {
     let mut queue = mutation(
