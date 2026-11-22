@@ -55,31 +55,124 @@ pub async fn owner(tx: &mut Transaction<'_, Postgres>, actor: Uuid) -> Result<Re
     }
     Ok(owner)
 }
+/// A refusal of the supervisor read API. Its own error code, so a supervisor
+/// can tell it from a manual-session refusal.
+pub struct Refused(pub StatusCode, pub &'static str);
+impl IntoResponse for Refused {
+    fn into_response(self) -> Response {
+        (
+            self.0,
+            axum::Json(serde_json::json!({"error":"supervisor_refused","message":self.1})),
+        )
+            .into_response()
+    }
+}
+impl From<Error> for Refused {
+    fn from(e: Error) -> Self {
+        Self(e.0, e.1)
+    }
+}
+const OTHER_PROJECT: Refused = Refused(
+    StatusCode::FORBIDDEN,
+    "Project supervisor cannot read another project",
+);
+/// What a read path names, which decides how a project supervisor is scoped.
+#[derive(Debug, PartialEq)]
+enum Reads {
+    /// `.../projects/{id}/...`; `None` when the id is not a UUID.
+    Project(Option<Uuid>),
+    /// `/api/human/results`: a page the gate narrows to the project.
+    Results,
+    /// One result revision, by the result's or report's ID.
+    Result(Uuid),
+    /// Nothing a project supervisor can read.
+    Unserved,
+}
+fn reads(path: &str) -> Reads {
+    let path = path.strip_prefix("/v1/supervisor/read").unwrap_or(path);
+    let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["api", "human", "results"] => return Reads::Results,
+        ["api", "human" | "v1", "results", id, "revisions", _] => {
+            return id.parse().map_or(Reads::Unserved, Reads::Result);
+        }
+        _ => {}
+    }
+    match parts.iter().position(|p| *p == "projects") {
+        Some(at) => Reads::Project(parts.get(at + 1).and_then(|s| s.parse().ok())),
+        None => Reads::Unserved,
+    }
+}
+/// `query` with `project_id` set to `project`; `None` when it names another
+/// project (or hides the key behind an escape).
+fn narrowed(query: Option<&str>, project: Uuid) -> Option<String> {
+    let mut pairs = Vec::new();
+    let mut named = false;
+    for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key.contains(['%', '+']) {
+            return None;
+        }
+        if key == "project_id" {
+            if value.parse::<Uuid>().ok() != Some(project) {
+                return None;
+            }
+            named = true;
+        }
+        pairs.push(pair.to_string());
+    }
+    if !named {
+        pairs.push(format!("project_id={project}"));
+    }
+    Some(pairs.join("&"))
+}
+/// Whether the result (or report) `id` belongs to `project`.
+async fn in_project(
+    tx: &mut Transaction<'static, Postgres>,
+    id: Uuid,
+    project: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE r.report_id=$1 AND (l.execution_spec#>>'{lifecycle,project_id}')=$2::text) OR EXISTS(SELECT 1 FROM result_revision_pins WHERE (report_id=$1 OR result_id=$1) AND project_id=$2)")
+        .bind(id).bind(project).fetch_one(&mut **tx).await
+}
+/// What no supervisor read route serves.
+pub async fn unserved() -> Refused {
+    Refused(StatusCode::NOT_FOUND, "No such supervisor route")
+}
 pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) -> Response {
     if request.method() != Method::GET && request.method() != Method::HEAD {
-        return Error(
+        return Refused(
             StatusCode::FORBIDDEN,
             "Supervisor read endpoint accepts reads only",
         )
         .into_response();
     }
-    let permit = match auth(request.headers().clone()).await {
+    let mut permit = match auth(request.headers().clone()).await {
         Ok(p) => p,
-        Err(e) => return e.into_response(),
+        Err(e) => return Refused::from(e).into_response(),
     };
     if let Some(project) = permit.project {
-        let path = request.uri().path().split('/').collect::<Vec<_>>();
-        let id = path
-            .iter()
-            .position(|p| *p == "projects")
-            .and_then(|at| path.get(at + 1))
-            .and_then(|s| s.parse::<Uuid>().ok());
-        if id != Some(project) {
-            return Error(
-                StatusCode::FORBIDDEN,
-                "Project supervisor cannot read another project",
-            )
-            .into_response();
+        match reads(request.uri().path()) {
+            Reads::Project(id) if id == Some(project) => {}
+            Reads::Project(_) => return OTHER_PROJECT.into_response(),
+            Reads::Unserved => return unserved().await.into_response(),
+            Reads::Result(id) => match in_project(&mut permit.guard, id, project).await {
+                Ok(true) => {}
+                Ok(false) => return OTHER_PROJECT.into_response(),
+                Err(e) => return Refused::from(Error::from(e)).into_response(),
+            },
+            Reads::Results => {
+                let uri = request.uri().clone();
+                let Some(query) = narrowed(uri.query(), project) else {
+                    return OTHER_PROJECT.into_response();
+                };
+                let mut parts = uri.into_parts();
+                parts.path_and_query = format!("{}?{query}", request.uri().path()).parse().ok();
+                match axum::http::Uri::from_parts(parts) {
+                    Ok(uri) => *request.uri_mut() = uri,
+                    Err(_) => return OTHER_PROJECT.into_response(),
+                }
+            }
         }
     }
     request.extensions_mut().insert(permit.owner);
@@ -149,9 +242,79 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
     pool: sqlx::PgPool,
     clock: Clock,
 ) -> axum::Router<S> {
-    let auth = bearer(pool, clock, "graph.read");
-    axum::Router::new().nest(
-        "/v1/supervisor/read",
-        routes.layer(axum::middleware::from_fn_with_state(auth, gate)),
-    )
+    nest(routes, bearer(pool, clock, "graph.read"))
+}
+
+/// [`routes`] behind a given `auth`. The gate also covers the fallback: a
+/// bearer that passes it and asks for a path no route serves is refused as a
+/// supervisor request ([`unserved`]).
+pub fn nest<S: Clone + Send + Sync + 'static>(
+    routes: axum::Router<S>,
+    auth: Auth,
+) -> axum::Router<S> {
+    let routes = routes
+        .fallback(unserved)
+        .layer(axum::middleware::from_fn_with_state(auth, gate));
+    axum::Router::new().nest("/v1/supervisor/read", routes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn paths_say_what_a_project_supervisor_reads() {
+        let (a, rev) = (id(1), "0".repeat(64));
+        let project = format!("/api/human/projects/{a}/tasks/{}/work", id(2));
+        assert_eq!(reads(&project), Reads::Project(Some(a)));
+        assert_eq!(
+            reads(&format!("/v1/supervisor/read{project}")),
+            Reads::Project(Some(a))
+        );
+        assert_eq!(reads("/api/human/projects/x/tasks"), Reads::Project(None));
+        assert_eq!(reads("/api/human/results"), Reads::Results);
+        for family in ["human", "v1"] {
+            let path = format!("/api/{family}/results/{a}/revisions/{rev}");
+            assert_eq!(reads(&path), Reads::Result(a), "{path}");
+        }
+        // Anything else is not a supervisor route, however it is spelled.
+        for path in [
+            "/api/human/conversations/global",
+            "/api/human/results/not-a-uuid/revisions/r",
+            "/api/v1/results",
+            "/nope",
+            "/",
+        ] {
+            assert_eq!(reads(path), Reads::Unserved, "{path}");
+        }
+        let path = format!("/api/v1/results/{a}/revisions/{rev}/comments");
+        assert_eq!(reads(&path), Reads::Unserved, "{path}");
+    }
+
+    #[test]
+    fn a_result_page_is_narrowed_to_the_project() {
+        let (p, other) = (id(1), id(2));
+        assert_eq!(narrowed(None, p), Some(format!("project_id={p}")));
+        assert_eq!(
+            narrowed(Some("limit=5"), p),
+            Some(format!("limit=5&project_id={p}"))
+        );
+        assert_eq!(
+            narrowed(Some(&format!("project_id={p}&limit=5")), p),
+            Some(format!("project_id={p}&limit=5"))
+        );
+        for query in [
+            format!("project_id={other}"),
+            "project_id".to_string(),
+            "project_id=".to_string(),
+            format!("project%5Fid={other}"),
+            format!("project+id={other}"),
+        ] {
+            assert_eq!(narrowed(Some(&query), p), None, "{query}");
+        }
+    }
 }

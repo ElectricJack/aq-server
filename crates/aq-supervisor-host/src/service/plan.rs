@@ -55,7 +55,7 @@ const TOOLCHAIN_SETUP: &str = "";
 fn instructions(config: &ServiceConfig, control: &Control) -> String {
     let scope = if let Some(project) = control.project {
         format!(
-            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
+            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID, and read the project's results with result.list and result.show. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
             control.label
         )
     } else {

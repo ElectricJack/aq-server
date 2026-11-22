@@ -383,6 +383,31 @@ fn supervisor_reads_declare_the_owner_query() {
     }
 }
 
+/// A supervisor reads the results of a hold through the read nest (without
+/// full access; with it the owner bridge carries them).
+#[cfg(not(feature = "supervisor_full_access"))]
+#[test]
+fn a_supervisor_reads_results_through_the_read_nest() {
+    let r = Registry::new(&actions()).unwrap();
+    for (name, path) in [
+        ("result.list", "/v1/supervisor/read/api/human/results"),
+        (
+            "result.show",
+            "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}",
+        ),
+        (
+            "result.detail",
+            "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}",
+        ),
+    ] {
+        let c = r.get(name).unwrap();
+        let (owner, supervisor) = (c.owner.unwrap(), c.supervisor.unwrap());
+        assert_eq!(supervisor.path, path, "{name}");
+        assert_eq!(supervisor.method, "GET", "{name}");
+        assert_eq!(supervisor.rename, owner.rename, "{name}");
+    }
+}
+
 #[test]
 fn forward_refuses_an_undeclared_query_param() {
     let r = Registry::new(&actions()).unwrap();
