@@ -247,6 +247,17 @@ The recipe has not been reviewed when it is tried, so agent-written install
 steps run as root inside BuildKit before review. The owner accepted this risk
 (2026-11-21); §6.6 limits it.
 
+How the agent's work reaches the builder (owner, 2026-11-22, "option 1"): the
+node snapshots the attempt's workspace from the running sandbox, checks it with
+the credential scanner's pattern scan (not the full copy-back scan, which needs
+the login token), commits it and pushes it to `refs/heads/aq-try/<attempt-id>`
+on AQ's own git server. That ref is never published to GitHub and is deleted
+when the attempt ends; the task branch and the final result are untouched and
+keep the full scan. The accepted risk: a token an agent wrote into its
+workspace could sit briefly on AQ's internal git server and in a builder's
+temporary checkout. It cannot reach GitHub or a published image, because a try
+publishes nothing and its log is redacted.
+
 ### 6.3 Build before the merge, admit after it
 
 The delivery playbook decides when to build and admit. The server provides two
