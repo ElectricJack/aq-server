@@ -1698,6 +1698,152 @@ mod playbook {
         );
     }
 
+    /// Spec 0021 section 5.2: whatever its source, a hold tells the project's
+    /// supervisor once, with the facts and commands it needs.
+    fn assert_hold_facts(body: &str, ids: &[Uuid], reason: &str, outcome: &str, attempt: Uuid) {
+        for id in ids {
+            assert!(body.contains(&id.to_string()), "{id} in {body}");
+        }
+        assert!(body.contains(reason), "{reason} in {body}");
+        assert!(
+            body.contains(&format!("attempt {attempt}: outcome {outcome}")),
+            "the attempt and its outcome in {body}"
+        );
+        for command in [
+            "task.work",
+            "task.history",
+            "task.retry",
+            "attempt.abandon",
+            "task.edit",
+            "task.cancel",
+        ] {
+            assert!(body.contains(command), "{command} in {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_kind_of_task_hold_notifies_its_project_once_and_a_new_hold_notifies_again() {
+        use aq_playbook_domain::scheduling_notices::notify;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        let outcome: String = sqlx::query_scalar("SELECT convert_from(report_bytes,'UTF8')::jsonb->>'outcome' FROM profiled_result_reports WHERE report_id=$1")
+            .bind(env.report.report_id).fetch_one(&pool).await.unwrap();
+        let bodies = std::sync::Mutex::new(Vec::<String>::new());
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            bodies.lock().unwrap().push(body.to_owned());
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        let due = NOW as i64 + 600_001;
+        // A budget hold, a never-granted hold, a policy hold, and the first
+        // reason held again after its release.
+        let reasons = [
+            "lineage_time_budget_exhausted",
+            "never_granted_retry_bound_exhausted",
+            "replacement_project_revision_changed",
+            "lineage_time_budget_exhausted",
+        ];
+        for (n, reason) in reasons.into_iter().enumerate() {
+            sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,$4,$5,'held',to_timestamp($6))")
+                .bind(Uuid::new_v4()).bind(task).bind(project).bind(reason).bind(attempt).bind(NOW as f64 / 1000.0)
+                .execute(&pool).await.unwrap();
+            // Reading the task, and every later sweep, tells nobody again.
+            work_reasons(&env).await;
+            for _ in 0..3 {
+                notify(&pool, due, &send).await.unwrap();
+            }
+            let sent = bodies.lock().unwrap().clone();
+            assert_eq!(sent.len(), n + 1, "one notice per hold: {reason}");
+            assert_hold_facts(
+                &sent[n],
+                &[project, task, attempt],
+                reason,
+                &outcome,
+                attempt,
+            );
+            sqlx::query("UPDATE task_holds SET cleared_at=now(),cleared_by='claim_released' WHERE task_id=$1 AND cleared_at IS NULL")
+                .bind(task).execute(&pool).await.unwrap();
+            notify(&pool, due, &send).await.unwrap();
+            assert_eq!(
+                bodies.lock().unwrap().len(),
+                n + 1,
+                "a released hold is quiet"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delivery_hold_of_any_reason_notifies_once_and_never_after_the_playbook_did() {
+        use aq_playbook_domain::{delivery_decisions, scheduling_notices::notify};
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        let result = env.report.report_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        let outcome: String = sqlx::query_scalar("SELECT convert_from(report_bytes,'UTF8')::jsonb->>'outcome' FROM profiled_result_reports WHERE report_id=$1")
+            .bind(result).fetch_one(&pool).await.unwrap();
+        let reason = "policy_hold";
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held',$3,$4)")
+            .bind(result).bind(task).bind(reason).bind(NOW as i64).execute(&pool).await.unwrap();
+        let key = delivery_decisions::notify_key(&format!("{result}:{reason}")).unwrap();
+        let bodies = std::sync::Mutex::new(Vec::<String>::new());
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            bodies.lock().unwrap().push(body.to_owned());
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        let due = NOW as i64 + 600_001;
+        // The playbook's own notice for this hold is the one notice.
+        delivery_decisions::record_told(
+            &mut *pool.acquire().await.unwrap(),
+            project,
+            &key,
+            Uuid::new_v4(),
+            NOW as i64,
+        )
+        .await
+        .unwrap();
+        notify(&pool, due, &send).await.unwrap();
+        assert!(bodies.lock().unwrap().is_empty(), "no duplicate notice");
+        // Without it, the hold still reaches the supervisor, once.
+        sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+            .bind(project)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            notify(&pool, due, &send).await.unwrap();
+        }
+        let sent = bodies.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_hold_facts(
+            &sent[0],
+            &[project, task, attempt, result],
+            reason,
+            &outcome,
+            attempt,
+        );
+        assert!(
+            delivery_decisions::told(&mut *pool.acquire().await.unwrap(), project, &key)
+                .await
+                .unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn independent_review_reads_the_assigned_result_revision_and_retained_commit() {
         use aq_playbook_domain::delivery_store::{self, DeliveryPort, PgDelivery};
