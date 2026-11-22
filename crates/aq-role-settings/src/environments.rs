@@ -61,6 +61,9 @@ pub struct EnvironmentLimits {
     pub try_concurrency: u64,
     /// Admitted versions kept per environment and per base.
     pub keep_versions: u64,
+    /// Claims of one job whose lease ran out without a result; at the next
+    /// claim the server completes it as failed (step `fetch`) instead.
+    pub max_job_claims: u64,
 }
 impl Default for EnvironmentLimits {
     fn default() -> Self {
@@ -76,19 +79,29 @@ impl Default for EnvironmentLimits {
             log_bytes: 65_536,
             try_concurrency: 2,
             keep_versions: 3,
+            max_job_claims: 3,
         }
     }
 }
 /// The longest duration limit: the server adds it to `now()` as a
 /// PostgreSQL interval (a claim's lease is `build_wall_ms`).
 pub const MAX_DURATION_MS: u64 = 3_155_695_200_000;
+/// The shortest `build_wall_ms`: the builder keeps a tenth of it as its
+/// timeout margin, and redaction needs time.
+pub const MIN_BUILD_WALL_MS: u64 = 60_000;
 impl EnvironmentLimits {
-    /// Every value at least 1 and within BIGINT, and a duration (`*_ms`)
-    /// within [`MAX_DURATION_MS`]; the message names the first that is not.
+    /// Every value at least 1 and within BIGINT, a duration (`*_ms`) within
+    /// [`MAX_DURATION_MS`] and `build_wall_ms` at least [`MIN_BUILD_WALL_MS`];
+    /// the message names the first that is not.
     pub fn validate(&self) -> Result<(), String> {
         let value = serde_json::to_value(self).map_err(|e| e.to_string())?;
         for (name, n) in value.as_object().into_iter().flatten() {
             let n = n.as_u64().unwrap_or_default();
+            if name == "build_wall_ms" && n < MIN_BUILD_WALL_MS {
+                return Err(format!(
+                    "{name} is {n}; it must be at least {MIN_BUILD_WALL_MS} (the builder keeps a tenth of it as its timeout margin, and redaction needs time)"
+                ));
+            }
             if n == 0 {
                 return Err(format!("{name} is 0; it must be at least 1"));
             }
@@ -130,6 +143,28 @@ mod tests {
                 .validate()
                 .unwrap_err()
                 .starts_with("log_bytes is 0; it must be at least 1")
+        );
+    }
+
+    #[test]
+    fn build_wall_ms_below_the_minimum_is_refused() {
+        let mut limits = EnvironmentLimits {
+            build_wall_ms: MIN_BUILD_WALL_MS - 1,
+            ..Default::default()
+        };
+        let refused = limits.validate().unwrap_err();
+        assert!(
+            refused.starts_with("build_wall_ms is 59999; it must be at least 60000"),
+            "{refused}"
+        );
+        limits.build_wall_ms = MIN_BUILD_WALL_MS;
+        assert_eq!(limits.validate(), Ok(()));
+        limits.max_job_claims = 0;
+        assert!(
+            limits
+                .validate()
+                .unwrap_err()
+                .starts_with("max_job_claims is 0")
         );
     }
 }

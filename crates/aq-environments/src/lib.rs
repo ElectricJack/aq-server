@@ -13,6 +13,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 mod agent;
+#[cfg(feature = "delivery_playbook")]
+pub mod git;
 mod store;
 pub mod worker;
 

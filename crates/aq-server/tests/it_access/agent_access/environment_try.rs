@@ -27,17 +27,24 @@ async fn job(e: &Env, id: &Value) -> (StatusCode, Value) {
 fn attested(name: &str) -> Value {
     json!({"api_version":1,"name":name,"run":"pnpm test","commit":"c".repeat(40)})
 }
-/// The AQ base template: an admitted version with no project.
+/// The AQ base template: an admitted version with no project. The task's
+/// project gets its execution binding, whose repository a job fetches from.
 async fn base(e: &Env) {
     let digest = BASE.split_once('@').unwrap().1;
     sqlx::query("INSERT INTO environment_versions(environment_id,version,template_digest,image) VALUES('aq-base','1',$1,$2)")
         .bind(digest).bind(BASE).execute(&e.pool).await.unwrap();
+    bound(e, project(e)).await;
+}
+/// A project execution binding of `project`, with repository `project`.
+async fn bound(e: &Env, project: Uuid) {
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')")
+        .bind(project).bind(json!({"name": "example", "repository_id": project})).execute(&e.pool).await.unwrap();
 }
 async fn limits(e: &Env, try_concurrency: u64) {
     let limits = json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
         "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
         "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
-        "try_concurrency": try_concurrency, "keep_versions": 3});
+        "try_concurrency": try_concurrency, "keep_versions": 3, "max_job_claims": 3});
     sqlx::query("UPDATE role_settings SET environment_limits=$1 WHERE singleton")
         .bind(limits)
         .execute(&e.pool)
@@ -62,8 +69,18 @@ async fn environment_try_queues_a_try_job_for_the_tasks_head() {
     let (status, body) = post(&e, attested("web")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let id = body["job_id"].clone();
-    let row: (String, Uuid, String, Value, Option<String>, String, String) = sqlx::query_as(
-        "SELECT kind,project_id,commit,recipes,run,base_template,state FROM environment_jobs WHERE job_id=$1",
+    type Row = (
+        String,
+        Uuid,
+        Uuid,
+        String,
+        Value,
+        Option<String>,
+        String,
+        String,
+    );
+    let row: Row = sqlx::query_as(
+        "SELECT kind,project_id,repository_id,commit,recipes,run,base_template,state FROM environment_jobs WHERE job_id=$1",
     )
     .bind(Uuid::parse_str(id.as_str().unwrap()).unwrap())
     .fetch_one(&e.pool)
@@ -71,6 +88,7 @@ async fn environment_try_queues_a_try_job_for_the_tasks_head() {
     .unwrap();
     let expected = (
         "try".into(),
+        project(&e),
         project(&e),
         "c".repeat(40),
         json!(["web"]),
@@ -273,6 +291,7 @@ async fn environment_try_for_another_project_is_refused() {
     assert_eq!(queued(&e).await, 0);
     // Another project's job is not found, as an unknown one.
     let recipes = vec!["web".to_string()];
+    bound(&e, other).await;
     let theirs = aq_environments::worker::enqueue(
         &e.pool,
         &aq_environments::worker::NewJob {

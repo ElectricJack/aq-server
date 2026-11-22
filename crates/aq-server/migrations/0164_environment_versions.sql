@@ -28,6 +28,9 @@ CREATE TABLE environment_jobs (
     job_id UUID PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('build', 'try')),
     project_id UUID NOT NULL,
+    -- The project's repository as nodes key it (the binding's), taken when
+    -- the job was queued: the only one its fetch-only git grant reaches.
+    repository_id UUID NOT NULL,
     commit TEXT NOT NULL CHECK (commit ~ '^[0-9a-f]{40}$'),
     recipes JSONB NOT NULL CHECK (jsonb_typeof(recipes) = 'array'),
     run TEXT,
@@ -41,6 +44,9 @@ CREATE TABLE environment_jobs (
     -- completion is refused.
     claimed_at TIMESTAMPTZ,
     lease_until TIMESTAMPTZ,
+    -- Claims so far; past `environment_limits.max_job_claims` without a
+    -- result the server completes the job as failed.
+    claims INTEGER NOT NULL DEFAULT 0,
     result JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Rolling records: completing a job deletes the project's completed jobs

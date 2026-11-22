@@ -32,8 +32,8 @@ async fn environment_versions_migration_applies_and_is_idempotent() {
     // One row per environment version.
     assert!(version(&pool, "example.web", Some(project)).await.is_err());
     sqlx::query(
-        "INSERT INTO environment_jobs(job_id,kind,project_id,commit,recipes,state,base_template) \
-         VALUES($1,'build',$2,$3,'[\"web\"]','queued','registry.example/aq@'||$4)",
+        "INSERT INTO environment_jobs(job_id,kind,project_id,repository_id,commit,recipes,state,base_template) \
+         VALUES($1,'build',$2,$2,$3,'[\"web\"]','queued','registry.example/aq@'||$4)",
     )
     .bind(Uuid::new_v4())
     .bind(project)

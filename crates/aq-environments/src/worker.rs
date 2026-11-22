@@ -79,10 +79,13 @@ pub struct NewJob<'a> {
     pub run: Option<&'a str>,
     pub base_template: &'a str,
 }
+/// Queues `job` with its project's repository (the binding's, as nodes key
+/// it); a project without a binding has no job.
 pub async fn enqueue<'e>(db: impl sqlx::PgExecutor<'e>, job: &NewJob<'_>) -> sqlx::Result<Uuid> {
     sqlx::query_scalar(
-        "INSERT INTO environment_jobs(job_id,kind,project_id,commit,recipes,run,base_template) \
-         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING job_id",
+        "INSERT INTO environment_jobs(job_id,kind,project_id,commit,recipes,run,base_template,repository_id) \
+         SELECT $1,$2,$3,$4,$5,$6,$7,(binding->>'repository_id')::uuid \
+         FROM project_execution_bindings WHERE project_id=$3 RETURNING job_id",
     )
     .bind(Uuid::new_v4())
     .bind(job.kind)
@@ -199,6 +202,7 @@ type Claimed = (
     String,
     Uuid,
     String,
+    Uuid,
     String,
     Value,
     Option<String>,
@@ -214,31 +218,89 @@ async fn claim<S: Host<E>, E: IntoResponse>(
     let limits = aq_role_settings::environment_limits(pool).await;
     let (limits, _) = limits.map_err(|e| refused(internal("claim", node, None, e)))?;
     let lease_ms = i64::try_from(limits.build_wall_ms).unwrap_or(i64::MAX);
-    // The oldest job that is queued or whose lease ran out; a job whose
-    // project has no binding (so no name) is never handed out.
+    let max_claims = i64::try_from(limits.max_job_claims).unwrap_or(i64::MAX);
+    (exhausted(pool, &limits).await).map_err(|e| refused(internal("claim", node, None, e)))?;
+    // The oldest job that is queued or whose lease ran out, below its claim
+    // cap; a job whose project has no binding (so no name) is never handed out.
     let job: Option<Claimed> = sqlx::query_as(
         "WITH next AS (SELECT j.job_id,b.binding->>'name' AS project FROM environment_jobs j \
          JOIN project_execution_bindings b USING(project_id) \
-         WHERE j.state='queued' OR (j.state='claimed' AND j.lease_until<=now()) \
+         WHERE (j.state='queued' OR (j.state='claimed' AND j.lease_until<=now())) AND j.claims<$3 \
          ORDER BY j.created_at,j.job_id LIMIT 1 FOR UPDATE OF j SKIP LOCKED) \
-         UPDATE environment_jobs j SET state='claimed',claimed_by=$1,claimed_at=now(),\
+         UPDATE environment_jobs j SET state='claimed',claimed_by=$1,claimed_at=now(),claims=j.claims+1,\
          lease_until=now()+make_interval(secs=>$2::double precision/1000) FROM next WHERE j.job_id=next.job_id \
-         RETURNING j.job_id,j.kind,j.project_id,next.project,j.commit,j.recipes,j.run,j.base_template",
+         RETURNING j.job_id,j.kind,j.project_id,next.project,j.repository_id,j.commit,j.recipes,j.run,j.base_template",
     )
     .bind(node)
     .bind(lease_ms)
+    .bind(max_claims)
     .fetch_optional(pool)
     .await
     .map_err(|e| refused(internal("claim", node, None, e)))?;
-    let Some((job_id, kind, project_id, project, commit, recipes, run, base_template)) = job else {
+    let Some((
+        job_id,
+        kind,
+        project_id,
+        project,
+        repository_id,
+        commit,
+        recipes,
+        run,
+        base_template,
+    )) = job
+    else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     Ok(Json(json!({
         "job_id": job_id, "kind": kind, "project_id": project_id, "project": project,
-        "commit": commit, "recipes": recipes, "run": run, "base_template": base_template,
-        "limits": limits,
+        "repository_id": repository_id, "commit": commit, "recipes": recipes, "run": run,
+        "base_template": base_template, "limits": limits,
     }))
     .into_response())
+}
+/// Completes as failed, at `fetch`, every job whose lease ran out after
+/// `max_job_claims` claims: none of its builders reported a result, so one
+/// more claim would not either.
+async fn exhausted(pool: &PgPool, limits: &EnvironmentLimits) -> sqlx::Result<()> {
+    let max = i64::try_from(limits.max_job_claims).unwrap_or(i64::MAX);
+    let mut tx = pool.begin().await?;
+    let failed: Vec<(Uuid, Uuid, String, i64)> = sqlx::query_as(
+        "UPDATE environment_jobs SET state='completed',completed_at=now(),result=jsonb_build_object(\
+         'job_id',job_id,'outcome','failed','builds','[]'::jsonb,'run',NULL,'failure',jsonb_build_object(\
+         'recipe',COALESCE(recipes->>0,''),'step','fetch','log',format(\
+         'the job was claimed %s times without a result (environment_limits.max_job_claims is %s)',claims,$1::bigint))) \
+         WHERE state='claimed' AND lease_until<=now() AND claims>=$1 \
+         RETURNING job_id,project_id,kind,claims::bigint",
+    )
+    .bind(max)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (job_id, project, kind, claims) in failed {
+        tracing::warn!(%job_id, claims, "environment job claimed {claims} times without a result: completed as failed");
+        prune(&mut tx, project, &kind, limits).await?;
+    }
+    tx.commit().await
+}
+/// Rolling records: the project keeps its newest `keep_versions` completed
+/// jobs of `kind`.
+async fn prune(
+    tx: &mut sqlx::PgConnection,
+    project: Uuid,
+    kind: &str,
+    limits: &EnvironmentLimits,
+) -> sqlx::Result<()> {
+    let keep = i64::try_from(limits.keep_versions).unwrap_or(i64::MAX);
+    sqlx::query(
+        "DELETE FROM environment_jobs WHERE job_id IN (SELECT job_id FROM (SELECT job_id,\
+         row_number() OVER (ORDER BY completed_at DESC,job_id DESC) AS n FROM environment_jobs \
+         WHERE project_id=$1 AND kind=$2 AND state='completed') o WHERE n>$3)",
+    )
+    .bind(project)
+    .bind(kind)
+    .bind(keep)
+    .execute(tx)
+    .await?;
+    Ok(())
 }
 
 /// The Job result shape (`POST /v1/worker/environments/complete`).
@@ -291,6 +353,8 @@ struct Failure {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Step {
+    /// Written by the server for a job claimed past `max_job_claims`.
+    Fetch,
     Parse,
     Install,
     Check,
@@ -416,20 +480,10 @@ async fn recorded(
         .execute(&mut *tx)
         .await
         .map_err(failed)?;
-    // Rolling records: the project keeps its newest `keep_versions`
-    // completed jobs of each kind; this one is the newest.
-    let keep = i64::try_from(limits.keep_versions).unwrap_or(i64::MAX);
-    sqlx::query(
-        "DELETE FROM environment_jobs WHERE job_id IN (SELECT job_id FROM (SELECT job_id,\
-         row_number() OVER (ORDER BY completed_at DESC,job_id DESC) AS n FROM environment_jobs \
-         WHERE project_id=$1 AND kind=$2 AND state='completed') o WHERE n>$3)",
-    )
-    .bind(project)
-    .bind(&kind)
-    .bind(keep)
-    .execute(&mut *tx)
-    .await
-    .map_err(failed)?;
+    // This job is the project's newest completed one of its kind.
+    prune(&mut tx, project, &kind, limits)
+        .await
+        .map_err(failed)?;
     tx.commit().await.map_err(failed)?;
     Ok(())
 }

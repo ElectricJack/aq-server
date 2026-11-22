@@ -284,6 +284,7 @@ name = "aq-environments"
 version = "0.1.0"
 dependencies = [
  "aq-admission 0.1.13",
+ "aq-delivery",
  "aq-environment-templates",
  "aq-project-policy",
  "aq-protocol",

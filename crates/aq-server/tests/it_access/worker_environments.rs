@@ -25,8 +25,12 @@ const DIGEST: &str = "sha256:ddddddddddddddddddddddddddddddddddddddddddddddddddd
 
 struct Harness {
     worker: Router,
+    // The git tests serve `/v1/git` from it.
+    #[cfg_attr(not(feature = "delivery_playbook"), allow(dead_code))]
+    state: AppState,
     pool: PgPool,
     project: Uuid,
+    repository: Uuid,
     nodes: [Uuid; 3],
     _db: TestDb,
 }
@@ -40,9 +44,9 @@ async fn harness() -> Harness {
         sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,$2,$3,'0.3.3',2,now())")
             .bind(id).bind(token).bind(verifier(token)).execute(&pool).await.unwrap();
     }
-    let project = Uuid::new_v4();
+    let (project, repository) = (Uuid::new_v4(), Uuid::new_v4());
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')")
-        .bind(project).bind(json!({"name": "example"})).execute(&pool).await.unwrap();
+        .bind(project).bind(json!({"name": "example", "repository_id": repository})).execute(&pool).await.unwrap();
     let config: Config = toml::from_str(&format!(
         r#"
 format_version = 1
@@ -73,9 +77,11 @@ template-build = ["{}", "{}"]
         clock: Arc::new(chrono::Utc::now),
     };
     Harness {
-        worker: build_worker_router(state),
+        worker: build_worker_router(state.clone()),
+        state,
         pool,
         project,
+        repository,
         nodes,
         _db: db,
     }
@@ -157,12 +163,12 @@ async fn only_a_template_build_node_can_claim() {
         body,
         json!({
             "job_id": id, "kind": "build", "project_id": h.project, "project": "example",
-            "commit": "c".repeat(40), "recipes": ["web"], "run": null,
+            "repository_id": h.repository, "commit": "c".repeat(40), "recipes": ["web"], "run": null,
             "base_template": format!("registry.example/aq-template@{DIGEST}"),
             "limits": {"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
                 "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
                 "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
-                "try_concurrency": 2, "keep_versions": 3},
+                "try_concurrency": 2, "keep_versions": 3, "max_job_claims": 3},
         })
     );
 }
@@ -344,7 +350,7 @@ async fn limits(h: &Harness, limits: Value) {
     let mut all = json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
         "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
         "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
-        "try_concurrency": 2, "keep_versions": 3});
+        "try_concurrency": 2, "keep_versions": 3, "max_job_claims": 3});
     for (k, v) in limits.as_object().unwrap() {
         all[k] = v.clone();
     }
@@ -460,4 +466,237 @@ async fn completing_more_than_keep_versions_jobs_keeps_only_the_newest() {
         .await
         .unwrap();
     assert_eq!(tries, 1, "each kind keeps its own");
+}
+
+/// The claimed Job names the project's repository as nodes key it: the
+/// binding's `repository_id`, stored on the job when it was queued.
+#[tokio::test]
+async fn the_claim_names_the_jobs_repository() {
+    let h = harness().await;
+    let id = job(&h, "try").await;
+    let stored: Uuid =
+        sqlx::query_scalar("SELECT repository_id FROM environment_jobs WHERE job_id=$1")
+            .bind(id)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, h.repository);
+    let (status, body) = send(
+        &h,
+        "/v1/worker/environments/claim",
+        BUILDER,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["repository_id"], json!(h.repository), "{body}");
+}
+
+/// A job claimed `max_job_claims` times whose lease ran out each time is
+/// completed by the server as failed at `fetch`, never handed out again.
+#[tokio::test]
+async fn a_job_claimed_more_than_max_job_claims_times_completes_failed() {
+    let h = harness().await;
+    limits(&h, json!({"max_job_claims": 2})).await;
+    let id = job(&h, "try").await;
+    let claim = |token| send(&h, "/v1/worker/environments/claim", token, Some(json!({})));
+    let expire = || {
+        sqlx::query(
+            "UPDATE environment_jobs SET lease_until=now()-interval '1 second' WHERE job_id=$1",
+        )
+        .bind(id)
+        .execute(&h.pool)
+    };
+    for token in [BUILDER, SECOND_BUILDER] {
+        let (status, body) = claim(token).await;
+        assert_eq!((status, &body["job_id"]), (StatusCode::OK, &json!(id)));
+        expire().await.unwrap();
+    }
+    assert_eq!(claim(BUILDER).await.0, StatusCode::NO_CONTENT);
+    let (state, result): (String, Value) =
+        sqlx::query_as("SELECT state,result FROM environment_jobs WHERE job_id=$1")
+            .bind(id)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "completed");
+    let log = result["failure"]["log"].as_str().unwrap().to_owned();
+    assert!(log.contains("claimed 2 times without a result"), "{log}");
+    assert_eq!(
+        result,
+        json!({"job_id": id, "outcome": "failed", "builds": [], "run": null,
+            "failure": {"recipe": "web", "step": "fetch", "log": log}})
+    );
+    // The last claimer's late result is not the recorded one.
+    let late = json!({"job_id": id, "outcome": "built", "builds": [], "failure": null,
+        "run": {"exit": 0, "output": "ok"}});
+    let (status, body) = send(
+        &h,
+        "/v1/worker/environments/complete",
+        SECOND_BUILDER,
+        Some(late),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+/// The git route on the harness's server, serving aq-git through `fake`.
+#[cfg(feature = "delivery_playbook")]
+fn git_router(h: &Harness, fake: &aq_delivery::git_grant::fake::FakeGitHttp) -> Router {
+    let mut state = h.state.clone();
+    let mut config = (*state.config).clone();
+    config.delivery = Some(aq_delivery::github::DeliveryConfig {
+        git_http_socket: Some(fake.socket.clone()),
+        ..Default::default()
+    });
+    state.config = Arc::new(config);
+    build_worker_router(state)
+}
+/// A job for `commit` claimed by BUILDER.
+#[cfg(feature = "delivery_playbook")]
+async fn claimed_at(h: &Harness, commit: &str) -> Uuid {
+    let recipes = vec!["web".to_string()];
+    let job = NewJob {
+        kind: "build",
+        project_id: h.project,
+        commit,
+        recipes: &recipes,
+        run: None,
+        base_template: &format!("registry.example/aq-template@{DIGEST}"),
+    };
+    let id = enqueue(&h.pool, &job).await.unwrap();
+    let (status, body) = send(h, "/v1/worker/environments/claim", BUILDER, Some(json!({}))).await;
+    assert_eq!((status, &body["job_id"]), (StatusCode::OK, &json!(id)));
+    id
+}
+
+/// Spec 0017 §6.3: the builder fetches the job's commit through `/v1/git`
+/// with its node credential and `AQ-Environment-Job` instead of an attempt.
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_claim_holder_can_fetch_its_jobs_repository() {
+    use aq_delivery::git_grant::fake::{FakeGitHttp, git};
+    let h = harness().await;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeGitHttp::start(dir.path(), h.repository, "refs/heads/main").await;
+    let id = claimed_at(&h, &fake.base).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/v1/git/{}",
+        listener.local_addr().unwrap(),
+        h.repository
+    );
+    let router = git_router(&h, &fake);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(&work)
+        .args([
+            "-c",
+            &format!("http.extraHeader=Authorization: Bearer {BUILDER}"),
+        ])
+        .args(["-c", &format!("http.extraHeader=AQ-Environment-Job: {id}")])
+        .args(["fetch", "-q", &url, "refs/heads/main"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success(), "fetch: {out:?}");
+    assert_eq!(git(&work, &["rev-parse", "FETCH_HEAD"]), fake.base);
+    let seen = fake.seen.lock().unwrap().clone();
+    assert!(
+        seen.len() >= 2,
+        "advertisement and upload-pack: {}",
+        seen.len()
+    );
+    for headers in &seen {
+        let one = |name: &str| headers.get(name).map(|v| v.to_str().unwrap().to_owned());
+        assert_eq!(one("aq-repository"), Some(h.repository.to_string()));
+        assert_eq!(one("aq-base"), Some(fake.base.clone()));
+        assert!(one("aq-task-ref").unwrap().starts_with("refs/heads/aq/"));
+        assert!(one("authorization").is_none() && one("aq-environment-job").is_none());
+    }
+}
+
+/// The job grant is fetch-only, for the job's repository, for the node that
+/// holds the live claim: everything else is refused before aq-git.
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn the_job_grant_refuses_push_other_repositories_other_nodes_and_expired_claims() {
+    use aq_delivery::git_grant::fake::FakeGitHttp;
+    let h = harness().await;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeGitHttp::start(dir.path(), h.repository, "refs/heads/main").await;
+    let id = claimed_at(&h, &fake.base).await;
+    let router = git_router(&h, &fake);
+    let request = |method: &str, repository: Uuid, path: &str, token: &str, job: Uuid| {
+        let request = Request::builder()
+            .method(method)
+            .uri(format!("/v1/git/{repository}/{path}"))
+            .header("authorization", format!("Bearer {token}"))
+            .header("aq-environment-job", job.to_string())
+            .body(Body::empty())
+            .unwrap();
+        let router = router.clone();
+        async move { router.oneshot(request).await.unwrap().status() }
+    };
+    let fetch = "info/refs?service=git-upload-pack";
+    assert_eq!(
+        request("GET", h.repository, fetch, BUILDER, id).await,
+        StatusCode::OK
+    );
+    let reached = fake.seen.lock().unwrap().len();
+    let other = Uuid::new_v4();
+    for (method, repository, path, token, job) in [
+        (
+            "GET",
+            h.repository,
+            "info/refs?service=git-receive-pack",
+            BUILDER,
+            id,
+        ),
+        ("POST", h.repository, "git-receive-pack", BUILDER, id),
+        ("GET", other, fetch, BUILDER, id),
+        ("GET", h.repository, fetch, SECOND_BUILDER, id),
+        ("GET", h.repository, fetch, NODE, id),
+        ("GET", h.repository, fetch, BUILDER, Uuid::new_v4()),
+    ] {
+        let status = request(method, repository, path, token, job).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{method} {repository}/{path} {token}"
+        );
+    }
+    // An expired claim, and a completed job, grant nothing.
+    sqlx::query(
+        "UPDATE environment_jobs SET lease_until=now()-interval '1 second' WHERE job_id=$1",
+    )
+    .bind(id)
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        request("GET", h.repository, fetch, BUILDER, id).await,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query("UPDATE environment_jobs SET lease_until=now()+interval '1 hour',state='completed' WHERE job_id=$1")
+        .bind(id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request("GET", h.repository, fetch, BUILDER, id).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fake.seen.lock().unwrap().len(),
+        reached,
+        "nothing refused reached aq-git"
+    );
 }

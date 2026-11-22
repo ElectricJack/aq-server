@@ -327,7 +327,7 @@ async fn environment_limits_default_to_the_documented_values() {
     assert_eq!(revision, 0);
     assert_eq!(
         serde_json::to_value(limits).unwrap(),
-        json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096, "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000, "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536, "try_concurrency": 2, "keep_versions": 3})
+        json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096, "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000, "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536, "try_concurrency": 2, "keep_versions": 3, "max_job_claims": 3})
     );
     let changed = aq_role_settings::environments::EnvironmentLimits {
         keep_versions: 5,

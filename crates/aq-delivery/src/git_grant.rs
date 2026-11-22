@@ -419,6 +419,9 @@ pub async fn pushed_of(
     }))
 }
 
+/// aq-git's answer to one forwarded git request.
+pub type Served = Response<Incoming>;
+
 /// One `/v1/git/<repository>/<path>` request of the authenticated `node` for
 /// the attempt its `AQ-Attempt` header names, forwarded to aq-git's git
 /// socket under the attempt's recorded grant.
@@ -428,12 +431,12 @@ pub async fn serve<B>(
     node: Uuid,
     (repository, path): (Uuid, &str),
     request: Request<B>,
-) -> Result<Response<Incoming>, Refusal>
+) -> Result<Served, Refusal>
 where
     B: Body<Data = Bytes> + Send + Unpin + 'static,
     B::Error: Into<BoxError>,
 {
-    let push = route(request.method(), path, request.uri().query())?;
+    route(request.method(), path, request.uri().query())?;
     let attempt = (request.headers().get(ATTEMPT_HEADER))
         .and_then(|v| Uuid::try_parse(v.to_str().ok()?).ok())
         .ok_or(Refusal::BadRequest(
@@ -444,6 +447,24 @@ where
         .map_err(|_| Refusal::Unavailable)?;
     let grant = (grant.filter(|g| g.repository_id == repository))
         .ok_or(Refusal::Forbidden("no live git grant for this request"))?;
+    forward(pool, socket, &grant, (repository, path), request).await
+}
+
+/// Forwards one `/v1/git/<repository>/<path>` request to aq-git's git socket
+/// under `grant`, which the caller found live for the node and repository.
+/// A push may update only the grant's task ref from its lease.
+pub async fn forward<B>(
+    pool: &PgPool,
+    socket: &Path,
+    grant: &GitGrant,
+    (repository, path): (Uuid, &str),
+    request: Request<B>,
+) -> Result<Served, Refusal>
+where
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BoxError>,
+{
+    let push = route(request.method(), path, request.uri().query())?;
     let (limits, _) = aq_role_settings::delivery_limits(pool)
         .await
         .map_err(|_| Refusal::Unavailable)?;
@@ -465,7 +486,7 @@ where
                 "an encoded push body cannot be checked",
             ));
         }
-        let read = tokio::time::timeout_at(deadline, commands(&mut body, &grant)).await;
+        let read = tokio::time::timeout_at(deadline, commands(&mut body, grant)).await;
         body.prefix = Some(read.map_err(|_| Refusal::Unavailable)??);
     }
     let mut uri = format!("/{repository}/{path}");
@@ -498,7 +519,7 @@ where
 }
 
 /// Whether `method path?query` is a smart-HTTP route, and a push.
-fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
+pub fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
     match (method.as_str(), path, query) {
         ("GET", "info/refs", Some("service=git-upload-pack" | "service=git-receive-pack"))
         | ("POST", "git-upload-pack", None) => Ok(false),
