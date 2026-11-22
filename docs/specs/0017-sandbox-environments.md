@@ -55,8 +55,12 @@ What is wrong:
 - The live node runs one hand-built template, `b2851df8…` (2026-11-19). It has
   Rust, and Node and pnpm in `/usr/local/bin`, but no Playwright browsers and
   none of Chromium's system libraries. It is `aq-template-unadmitted`: the
-  credential scanner refuses on this host (a GnuTLS failure), so the live
-  templates were never admitted.
+  templates were hand-built and never admitted. The documented reason, a
+  GnuTLS refusal, is stale (fixed in aq-worker `cda108b`). Scanning the live
+  image today refuses two things: the `aq` CLI binary, whose `task-…`
+  identifiers match the scanner's `sk-` provider-key pattern (it has no left
+  boundary, `credential_scan.py:24`), and a Node compile cache left in `/tmp`
+  by a build step.
 - Building a template, adding it to the node's list and writing the
   environment definition are hand steps on the stack.
 - Nothing turns "this project needs Playwright" into a built environment.
@@ -179,7 +183,8 @@ its environment lacks:
 
 A recipe is a file in the project's repository, one per environment:
 `.aq/environments/<name>.md`. It is reviewed and merged like code (0016). The
-environment's id is `<project>/<name>`.
+environment's id is `<project>.<name>`, for example `aq-dashboard.web` (labels
+allow `[A-Za-z0-9-_.@:]`, so not `/`; `@` separates the version).
 
 ```markdown
 ---
@@ -242,40 +247,56 @@ The recipe has not been reviewed when it is tried, so agent-written install
 steps run as root inside BuildKit before review. The owner accepted this risk
 (2026-11-21); §6.6 limits it.
 
-### 6.3 Build at the pull request, admit at the merge
+### 6.3 Build before the merge, admit after it
 
-The delivery playbook decides when to build and admit. The server provides the
-operations through the host contract:
+The delivery playbook decides when to build and admit. The server provides two
+async host commands (the `delivery_commands` pattern: answer `accepted`,
+complete with one sealed `aq.environment.completed` event):
 
-- `environment.build`: build a recipe at a commit on the builder, run its
-  `Check` commands, scan, and return the digest, toolchain versions and
-  result. Runs outside attempt capacity.
-- `environment.admit`: add a built digest to the allowlist, write the
-  environment definition version (template digest, `provides`, platform text,
-  toolchain versions), add it to the project binding (§5.2) and publish the
-  digest to nodes.
+- `environment.build {subject}`: for the task's result head, build every recipe
+  under `.aq/environments/` whose canonical bytes differ from the project's
+  admitted version, run its `Check` commands, scan, and publish the image to
+  the registry by digest. Outcome `unchanged` (no recipe changed), `built`
+  (with one build per recipe: name, digest, recipe hash, toolchain versions)
+  or `failed` (the recipe, the failing step and a redacted log). Runs on the
+  builder, outside attempt capacity.
+- `environment.admit {subject, builds}`: record each build as the next
+  environment version (template digest, image reference, `provides`, platform
+  text, toolchain versions), add it to the project binding (§5.2), and make it
+  available to nodes. Outcome `admitted` or `refused`.
+
+The server needs no "changed files" fact: `environment.build` compares recipe
+bytes itself.
 
 The default delivery playbook and its Settings document gain:
 
-1. When a candidate changes a file under `.aq/environments/`, call
-   `environment.build` for each changed recipe and post the result as a GitHub
-   check through the App. It is a required check for those pull requests. A
-   failed build goes back to the task's agent like any failed check (0016).
-   Building before the merge means a broken recipe never merges. **(call)**
+1. On `aq.work.result_ready`, after `branch.publish`, call `environment.build`.
+   On `failed`, `work.return` the task to its agent with the failure, like a
+   failed check (0016). Building before the merge means a broken recipe never
+   merges. **(call)**
 2. The project's own CI stays on GitHub Actions. The proof that the project's
    tests pass in the new image is the agent's `environment.try` run (§6.2).
-   Turning on AQ's check runner is separate work. **(call)**
-3. On merge (`aq.integration.changed`), call `environment.admit` with the build
-   whose canonical recipe bytes equal the merged recipe's. Squash merges make a
-   new commit, so the match is by recipe content hash, not commit. With no
-   matching build, build first. **(call)**
+   AQ's own check runner is off on main (`checks: None`) and is separate work.
+   Nothing new is posted to GitHub. **(call)**
+3. When `pull_request.merge` completes with `merged`, call `environment.admit`
+   with the builds from step 1. A squash merge makes a new commit, but the
+   recipe bytes are the same, so the builds still match. **(call)**
+
+`aq.integration.changed` is not used: it reports the older candidate commands,
+not a merge into main.
 
 A failed build or admit leaves the previous environment version in place and
 reports the failing step. Nothing is half-registered.
 
-Nodes learn admitted digests from the server, pull the image, and list the
-digest in their inventory once they can run it. Until a node lists it, §5.4
-does not offer that environment there.
+Environment versions and the template allowlist move from the server's boot
+config to the database. Boot-config entries stay readable (they seed the AQ
+base and today's environment), and every reader goes through one accessor.
+
+Nodes fetch the admitted environments from the server over a new node route,
+pull each image by digest, and report which ones they can run. Until a node
+reports one, §5.4 does not offer that environment there. A node picks the
+template for each attempt from the offer's environment instead of one fixed
+template.
 
 ### 6.4 The AQ base template, and when it changes
 
@@ -285,9 +306,12 @@ Claude CLI bump) needs every project environment rebuilt on it, because a
 template advertises exact harness versions and placement requires the
 selected one (`aq-selection/src/placement.rs`).
 
+- A new base is a new `os_image` or `runtime_image` in the builder config;
+  the runtime bundle is copied last in every build.
 - Admitting a new base emits a new host-contract event,
-  `aq.environment.base_changed`. The delivery playbook reacts by building each
-  project's current recipes on the new base and admitting each that passes.
+  `aq.environment.base_changed {project}`, once per project. The delivery
+  playbook reacts by calling `environment.build` for the project's admitted
+  recipes on the new base and `environment.admit` for each that passes.
   **(call)**
 - A project whose rebuild fails stays on its previous environment and the old
   harness version, and the failure goes to the project's supervisor, which
@@ -323,6 +347,10 @@ deployments is a builder-config change, not a code change.
   the builder and the registry.
 - The base images a recipe builds on must be pullable from a registry the
   builder can reach.
+- A scanned archive is published with the pinned Skopeo image
+  (`copy --preserve-digests oci-archive:… docker://…`), as C3c and
+  amber-rapids-59 did, so the registry digest is the scanned digest. Nothing is
+  pushed before the scan passes.
 - Builds get open network access (apt, npm and the Playwright downloads need
   it) and a build cache separate per project, so a `try` build never reads
   another project's cache.
@@ -354,8 +382,8 @@ attempt still uses. Nothing finished may block a new build.
 
 | Project | default environment | provides |
 |---|---|---|
-| aq-server, aq-worker, aq-git, aq-graph, aq-playbooks | `<project>/rust` | rust, cpp, cmake, python |
-| aq-dashboard | `aq-dashboard/web` | node, pnpm, playwright, python |
+| aq-server, aq-worker, aq-git, aq-graph, aq-playbooks | `<project>.rust` | rust, cpp, cmake, python |
+| aq-dashboard | `aq-dashboard.web` | node, pnpm, playwright, python |
 
 The Rust repositories each get the same recipe: what today's template installs
 on top of the base.
@@ -372,8 +400,9 @@ on top of the base.
    `task.needs.set`, shown on task reads.
 4. aq-playbooks + aq-server: the router outputs `environment`; the default
    routing document implements §5.4's rule.
-5. aq-worker: the credential scanner works on this host (environment repair
-   only; any change to what it refuses goes to the owner first). The AQ base
+5. aq-worker: builds stop leaving a Node compile cache (environment repair).
+   The scanner's `sk-` pattern gets a left boundary so `task-…` no longer
+   matches; this changes what it refuses and needs the owner's approval (§9). The AQ base
    template is built and admitted from the existing recipe path.
 6. aq-worker + aq-server: the recipe format (§6.1), `environment.try` with its
    CLI (§6.2), and `environment.build` and `environment.admit` (§6.3), with
@@ -399,6 +428,10 @@ removed when the epic is confirmed.
    enough, or should Settings keep a list of known labels?
 2. Should `aq:needs` be settable only by filers and the router, or also by the
    agent of a running task (requesting a different environment for its retry)?
+3. The credential scanner refuses the `aq` CLI because `task-` contains `sk-`.
+   May its `sk-` pattern require a non-alphanumeric character (or the start of
+   the text) before `sk-`? Provider keys written as `sk-…` after a space, quote,
+   `=` or `:` still refuse.
 
 Answered 2026-11-21:
 
