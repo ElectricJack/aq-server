@@ -4,4 +4,4 @@ pub(crate) mod actions;
 mod api;
 pub mod contract;
 mod store;
-pub use api::routes;
+pub use api::{detail_routes, routes};

@@ -64,6 +64,9 @@ pub fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(65536))
         .layer(Extension(Arc::new(Runtime::new())))
 }
+pub fn detail_routes() -> Router<AppState> {
+    Router::new().route("/api/v1/results/{id}/revisions/{revision}", get(detail))
+}
 fn envelope<T>(state: &AppState, scope: Scope, data: T) -> Envelope<T> {
     let now = Timestamp((state.clock)().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     Envelope {

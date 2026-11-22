@@ -1931,6 +1931,21 @@ async fn project_supervisor_mail_history_and_reads_remain_scoped_and_stop_revoke
             Uuid::new_v4()
         );
         assert_eq!(read(cross).await.0, StatusCode::FORBIDDEN);
+        // Results: another project's is refused, and a path no supervisor
+        // route serves is the supervisor's own refusal.
+        let (id, digest) = (Uuid::new_v4(), "0".repeat(64));
+        for result in [
+            format!("/v1/supervisor/read/api/human/results/{id}/revisions/{digest}"),
+            format!("/v1/supervisor/read/api/v1/results/{id}/revisions/{digest}"),
+            format!("/v1/supervisor/read/api/human/results?project_id={other}"),
+        ] {
+            let (status, body) = read(result.clone()).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{result}: {body}");
+            assert_eq!(body["error"], "supervisor_refused", "{result}");
+        }
+        let (status, body) = read("/v1/supervisor/read/api/human/nope".into()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "supervisor_refused");
     }
     // With it, the owner bridge refuses another project.
     #[cfg(feature = "supervisor_full_access")]
