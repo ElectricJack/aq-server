@@ -307,18 +307,24 @@ pub async fn notification(
         "Recorded outcome: {}. Changes from the lineage base: {}. Retained head: {head}.",
         latest.outcome, latest.changed
     );
+    let mut check_log = None;
     if reason == "returns_exhausted"
         && let Some(pr) = crate::delivery_store::held_pr_evidence(db, origin.result_id).await?
     {
+        check_log = crate::delivery_store::held_check_log(db, origin.result_id).await?;
         evidence.push(' ');
         evidence.push_str(&pr);
     }
-    Ok((
-        key,
-        format!(
-            "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
-        ),
-    ))
+    let notice = format!(
+        "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
+    );
+    // Last, and cut to what the supervisor's mailbox accepts, so that a long
+    // log never costs the notice itself.
+    let notice = match check_log {
+        Some(log) => crate::delivery_store::with_log(notice, &log),
+        None => notice,
+    };
+    Ok((key, notice))
 }
 
 /// The once-only key of `supervisor.notify` in a project.

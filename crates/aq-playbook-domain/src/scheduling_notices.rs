@@ -147,10 +147,12 @@ pub async fn notify<E: std::fmt::Debug>(
             body.push(' ');
             body.push_str(&evidence);
         }
+        let mut check_log = None;
         if can_retry {
             if let Some(id) = report
                 && let Some(evidence) = crate::delivery_store::held_pr_evidence(&mut tx, id).await?
             {
+                check_log = crate::delivery_store::held_check_log(&mut tx, id).await?;
                 body.push_str(&format!(" {evidence} Compare this head and outcome with the previous attempt when deciding whether a bounded retry is justified."));
             }
             if let Some(url) = pr {
@@ -164,6 +166,10 @@ pub async fn notify<E: std::fmt::Debug>(
                 "params":{"project_id":project,"task_id":task,"expected_version":"<current version from task.work>"}
             });
             body.push_str(&format!(" If a replacement attempt is justified, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
+        }
+        // Last, so that the instructions above are never what is cut.
+        if let Some(log) = check_log {
+            body = crate::delivery_store::with_log(body, &log);
         }
         match send(&mut tx, Some(project), &body, now as u64).await {
             Ok(message) => {
