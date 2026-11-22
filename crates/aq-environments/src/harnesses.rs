@@ -126,41 +126,56 @@ impl Catalog<'_> {
         });
         configured.iter().cloned().chain(derived).collect()
     }
-    /// What a node lists: its configured entries, then the counterparts for
-    /// each version an attempt on it still uses, then those for the newest
-    /// version of each environment whose template it reported ready. Within
-    /// `bound` entries the newest-version ones are left out last first, and
-    /// named in the second value; an in-use entry is never left out.
+    /// What a node lists: its configured entries, then each counterpart a
+    /// live attempt on it runs (`running`, matched exactly), then those for
+    /// the newest version of each environment whose template it reported
+    /// ready. Within `bound` entries the newest-version ones are left out last
+    /// first, and named; an in-use entry is never left out. The third value
+    /// counts the in-use entries.
     pub fn listed(
         &self,
         configured: Vec<InstalledHarness>,
         ready: &[String],
-        used: &[(String, String)],
+        running: &[Running],
         bound: usize,
-    ) -> (Vec<InstalledHarness>, Vec<String>) {
+    ) -> (Vec<InstalledHarness>, Vec<String>, usize) {
         let (mut in_use, mut newest) = (Vec::new(), Vec::new());
         let mut seen = std::collections::BTreeSet::new();
         for v in &self.versions {
             let first = seen.insert(v.admitted.environment.as_str());
             let a = &v.admitted;
-            let using = (used.iter()).any(|(e, n)| *e == a.environment && *n == a.version);
-            let entries = configured.iter().filter_map(|e| self.counterpart(e, v));
-            if using {
-                in_use.extend(entries);
-            } else if first && ready.contains(&v.template) {
-                newest.extend(entries.map(|h| (format!("{}@{}", a.environment, a.version), h)));
+            for h in configured.iter().filter_map(|e| self.counterpart(e, v)) {
+                if running.iter().any(|r| r.runs(&h)) {
+                    in_use.push(h);
+                } else if first && ready.contains(&v.template) {
+                    newest.push((format!("{}@{}", a.environment, a.version), h));
+                }
             }
         }
-        let room = bound.saturating_sub(configured.len() + in_use.len());
+        let using = in_use.len();
+        let room = bound.saturating_sub(configured.len() + using);
         let mut left_out: Vec<String> = newest.iter().skip(room).map(|(e, _)| e.clone()).collect();
         left_out.dedup();
         let mut listed = configured;
         listed.extend(in_use);
         listed.extend(newest.into_iter().take(room).map(|(_, h)| h));
-        (listed, left_out)
+        (listed, left_out, using)
     }
 }
 
+/// The harness a live attempt runs, from its launch manifest.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Running {
+    pub harness: String,
+    pub adapter: ArtifactRef,
+    pub environment: ArtifactRef,
+}
+impl Running {
+    /// Whether `h` is exactly this harness, adapter and environment (digests too).
+    fn runs(&self, h: &InstalledHarness) -> bool {
+        self.harness == h.harness && self.adapter == h.adapter && self.environment == h.environment
+    }
+}
 /// [`Catalog::listed`] for `node`, from its last ready report and the
 /// environments its live attempts run in, within the snapshot's harness bound
 /// ([`aq_selection::MAX_NODE_HARNESSES`]). What the bound leaves out is logged.
@@ -181,19 +196,21 @@ pub async fn listed(
     let ready: Vec<String> = ready
         .and_then(|r| serde_json::from_value(r).ok())
         .unwrap_or_default();
-    let used: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT l.launch_manifest#>>'{harness,environment,id}',l.launch_manifest#>>'{harness,environment,version}' \
-         FROM execution_attempts a JOIN profiled_launches l USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task",
+    let running: Vec<Value> = sqlx::query_scalar(
+        "SELECT l.launch_manifest->'harness' FROM execution_attempts a \
+         JOIN profiled_launches l USING(attempt_id) WHERE a.node_id=$1 AND a.holds_task",
     )
     .bind(node)
     .fetch_all(&mut *conn)
     .await?;
-    let used: Vec<(String, String)> = used
-        .into_iter()
-        .filter_map(|(e, v)| Some((e?, v?)))
+    let running: Vec<Running> = (running.into_iter())
+        .filter_map(|h| serde_json::from_value(h).ok())
         .collect();
-    let bound = aq_selection::MAX_NODE_HARNESSES;
-    let (listed, left_out) = catalog.listed(configured, &ready, &used, bound);
+    let (bound, configured_count) = (aq_selection::MAX_NODE_HARNESSES, configured.len());
+    let (listed, left_out, in_use) = catalog.listed(configured, &ready, &running, bound);
+    if configured_count + in_use >= bound {
+        tracing::warn!(%node, configured = configured_count, in_use, bound, "node's configured and in-use harness entries reach its snapshot bound of {bound}");
+    }
     if !left_out.is_empty() {
         tracing::warn!(%node, environments = ?left_out, bound, "admitted environments not listed on node: its snapshot holds at most {bound} harnesses");
     }
@@ -222,7 +239,7 @@ mod tests {
             json!([]),
             None,
             json!([]),
-            json!([{"harness": "claude", "version": "2.1.318"}]),
+            json!([{"harness": "claude", "version": "2.1.318"}, {"harness": "codex", "version": "0.166.0"}]),
             json!([]),
         ))
         .unwrap()
@@ -271,7 +288,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         // Nothing ready: only the configured entries.
-        let (listed, left) = catalog.listed(configured.clone(), &[], &[], 16);
+        let (listed, left, _) = catalog.listed(configured.clone(), &[], &[], 16);
         assert_eq!(
             envs(&listed),
             ["confined-worktree@1", "confined-worktree@1"]
@@ -279,17 +296,24 @@ mod tests {
         assert!(left.is_empty());
         // Ready a@1 is not the newest a: not listed; a@2 and b@1 are, for the
         // docker-local entry only, with the derived adapter.
-        let (listed, _) = catalog.listed(configured.clone(), &ready(&['a', 'b', 'c']), &[], 16);
+        let (listed, _, _) = catalog.listed(configured.clone(), &ready(&['a', 'b', 'c']), &[], 16);
         assert_eq!(envs(&listed[2..]), ["a@2", "b@1"]);
         assert!(listed[2..].iter().all(|h| h.adapter.id == adapter.id && h.adapter.version.as_str().starts_with("1+")));
         assert_eq!(listed[2].adapter.version.as_str(), "1+a@2");
         // An attempt on a@1 keeps it listed, ahead of the newest, ready or not.
-        let used = [("a".to_string(), "1".to_string())];
-        let (listed, _) = catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 16);
+        let on = |h: &InstalledHarness| Running {
+            harness: h.harness.clone(),
+            adapter: h.adapter.clone(),
+            environment: h.environment.clone(),
+        };
+        let a1 = catalog.qualified(&configured)[3].clone();
+        assert_eq!(envs(std::slice::from_ref(&a1)), ["a@1"]);
+        let used = [on(&a1)];
+        let (listed, _, _) = catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 16);
         assert_eq!(envs(&listed[2..]), ["a@1", "a@2", "b@1"]);
         // A bound of 4 leaves out the last newest-version entry and names it;
         // a bound of 2 never leaves out the in-use one.
-        let (listed, left) = catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 4);
+        let (listed, left, _) = catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 4);
         assert_eq!(
             (envs(&listed[2..]), left),
             (
@@ -297,7 +321,8 @@ mod tests {
                 vec!["b@1".to_string()]
             )
         );
-        let (listed, left) = catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 2);
+        let (listed, left, using) =
+            catalog.listed(configured.clone(), &ready(&['a', 'c']), &used, 2);
         assert_eq!(
             (envs(&listed[2..]), left),
             (
@@ -305,6 +330,13 @@ mod tests {
                 vec!["a@2".to_string(), "b@1".into()]
             )
         );
+        assert_eq!(using, 1);
+        // An attempt on another digest under the same id and version (for
+        // example a boot environment's) pulls in no admitted counterpart.
+        let mut other = on(&a1);
+        other.environment.digest = boot_env.digest.clone();
+        let (listed, _, using) = catalog.listed(configured.clone(), &[], &[other], 16);
+        assert_eq!((listed.len(), using), (2, 0));
         // Qualified: every version's counterpart; each derived body resolves.
         let qualified = catalog.qualified(&configured);
         assert_eq!(envs(&qualified[2..]), ["a@2", "a@1", "b@1"]);
@@ -317,5 +349,49 @@ mod tests {
             );
         }
         assert_eq!(boot_adapter(&adapter, [&adapter]), None);
+    }
+
+    /// Fix round 1: only the entry each attempt runs is listed in use, so a
+    /// node with two configured harnesses and attempts in 8 environments
+    /// lists 2 + 8 entries, within the bound of 16.
+    #[test]
+    fn only_the_entry_an_attempt_runs_is_listed_in_use() {
+        let boot_env = r("confined-worktree", "env");
+        let body = |p: &str| {
+            json!({"environment": boot_env, "profile": p, "schema_version": 1}).to_string()
+        };
+        let (claude_body, codex_body) = (body("claude"), body("codex"));
+        let claude = r("aq.claude-result-local-adapter", &claude_body);
+        let codex = r("aq.codex-docker-result-local-adapter", &codex_body);
+        let definitions = vec![
+            (&claude, claude_body.as_str()),
+            (&codex, codex_body.as_str()),
+        ];
+        let boot = BootEnvironments::new(definitions, None);
+        let ids: Vec<String> = (0..8).map(|i| format!("e{i}")).collect();
+        let versions = (ids.iter()).map(|id| version(id, "1", 'a')).collect();
+        let catalog = Catalog::new(&boot, versions);
+        let mut codex_entry = entry(&codex, &boot_env);
+        (codex_entry.harness, codex_entry.cli_version) = ("codex".into(), "0.166.0".into());
+        let configured = vec![entry(&claude, &boot_env), codex_entry];
+        let qualified = catalog.qualified(&configured);
+        assert_eq!(
+            qualified.len(),
+            2 + 16,
+            "both harnesses in every environment"
+        );
+        let running: Vec<Running> = (qualified[2..].iter())
+            .filter(|h| h.harness == "claude")
+            .map(|h| Running {
+                harness: h.harness.clone(),
+                adapter: h.adapter.clone(),
+                environment: h.environment.clone(),
+            })
+            .collect();
+        assert_eq!(running.len(), 8);
+        let (listed, left, using) = catalog.listed(configured, &[], &running, 16);
+        assert_eq!((listed.len(), using), (2 + 8, 8));
+        assert!(listed[2..].iter().all(|h| h.harness == "claude"));
+        assert!(left.is_empty());
     }
 }

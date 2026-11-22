@@ -193,7 +193,8 @@ async fn a_retry_keeps_the_environment_of_the_attempt_it_replaces() {
     assert_eq!(placed(&c, second).await, roles::ENVIRONMENT);
 }
 
-const TEMPLATE: &str = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+pub(crate) const TEMPLATE: &str =
+    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 /// Admit `id` version `version` providing `provides`, as `environment.admit` will.
 async fn admit(c: &Case, id: &str, version: &str, provides: Value) {
     admit_on(&c.env.env.pool, c, id, version, provides).await
@@ -487,7 +488,7 @@ async fn admit_web(c: &Case, version: &str, harness: &aq_selection::InstalledHar
     .unwrap();
 }
 /// The node reports `digests` ready, as its poll does.
-async fn ready(c: &Case, digests: Value) {
+pub(crate) async fn ready(c: &Case, digests: Value) {
     let body = serde_json::to_vec(&json!({"ready": digests})).unwrap();
     let state = &c.env.env.state;
     let path = "/v1/worker/environments/ready";
@@ -526,7 +527,7 @@ async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
     listed
 }
 /// The binding allows and defaults to `example.web`; the profile pins none.
-async fn on_web(c: &mut Case) -> aq_selection::InstalledHarness {
+pub(crate) async fn on_web(c: &mut Case) -> aq_selection::InstalledHarness {
     let boot = docker_local(c).await;
     environments(c, roles::ENVIRONMENT).await;
     let env = &mut c.env.env;
