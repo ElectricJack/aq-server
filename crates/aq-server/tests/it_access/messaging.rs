@@ -55,6 +55,12 @@ pub(crate) struct Env {
     pub(crate) binding: Value,
     pub(crate) time: Arc<std::sync::atomic::AtomicI64>,
     node_token: String,
+    /// The state `app` and `admin` serve, for a test that rebuilds them.
+    #[cfg_attr(
+        not(all(feature = "project_environments", feature = "delivery_playbook")),
+        allow(dead_code)
+    )]
+    pub(crate) state: AppState,
 }
 pub(crate) async fn setup() -> Env {
     setup_with(None).await
@@ -231,6 +237,7 @@ enabled=true
         binding,
         time,
         node_token,
+        state,
     }
 }
 fn mailbox(e: &Env, session: bool) -> Value {

@@ -173,8 +173,15 @@ impl aq_environments::worker::Host<AppError> for AppState {
     async fn node(&self, headers: &HeaderMap) -> Result<uuid::Uuid, AppError> {
         Ok(authenticate_context(self, headers).await?.id())
     }
-    async fn agent(&self, h: &HeaderMap, p: &str) -> Result<uuid::Uuid, axum::response::Response> {
+    async fn agent(
+        &self,
+        h: &HeaderMap,
+        p: &str,
+    ) -> Result<(uuid::Uuid, uuid::Uuid), axum::response::Response> {
         crate::agent_access::results::project(self, h, p).await
+    }
+    fn git_socket(&self) -> Option<&std::path::Path> {
+        Some(&self.source_retention.as_ref()?.config.git_socket)
     }
 }
 /// Existing callers keep the Node snapshot API and its authentication behavior.

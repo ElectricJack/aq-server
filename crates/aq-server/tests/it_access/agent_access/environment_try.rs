@@ -1,11 +1,13 @@
-//! Spec 0017 §6.2 (feature `project_environments`): `environment.try` queues a
-//! `try` job for the commit the attempt's node pushed and attested. The node's
-//! channel proxy commits and pushes the workspace to `refs/heads/aq/<task>`
-//! and adds `"commit"` to the agent's body; without it the request is refused
-//! with `workspace_not_pushed`.
-use crate::messaging::{Env, send, setup_with};
+//! Spec 0017 §6.2 (features `project_environments` and `delivery_playbook`):
+//! `environment.try` queues a `try` job for the commit the attempt's node
+//! pushed and attested. The node's channel proxy commits and pushes the
+//! workspace to `refs/heads/aq-try/<attempt>` and adds `"commit"` to the
+//! agent's body; the server takes it only when it is that ref's head on
+//! aq-git. Otherwise the request is refused with `workspace_not_pushed`.
+use crate::messaging::{Env, send};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 const TRY: &str = "/v1/agent/environments/try";
@@ -26,6 +28,77 @@ async fn job(e: &Env, id: &Value) -> (StatusCode, Value) {
 }
 fn attested(name: &str) -> Value {
     json!({"api_version":1,"name":name,"run":"pnpm test","commit":"c".repeat(40)})
+}
+/// The fake aq-git control socket: `tip` is the head `ref.show` answers for
+/// the attempt's try ref (`None`: the ref is absent).
+struct Git {
+    tip: Arc<Mutex<Option<String>>>,
+    _dir: tempfile::TempDir,
+}
+impl Git {
+    fn at(&self, tip: Option<String>) {
+        *self.tip.lock().unwrap() = tip;
+    }
+}
+fn attempt(e: &Env) -> Uuid {
+    e.binding["attempt_id"].as_str().unwrap().parse().unwrap()
+}
+/// `messaging::setup_with`, served with an aq-git control socket whose
+/// `ref.show` answers `tip` for exactly the attempt's try ref of the recorded
+/// repository and generation (and absent for anything else). The attempt has
+/// pushed its try ref, at `"c" * 40`.
+async fn setup_with(grants: Option<Value>) -> (Env, Git) {
+    let mut e = crate::messaging::setup_with(grants).await;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let socket = dir.join("aq-git.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let tip = Arc::new(Mutex::new(Some("c".repeat(40))));
+    let (served, expected) = (tip.clone(), format!("refs/heads/aq-try/{}", attempt(&e)));
+    let repository = Uuid::new_v4();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        while let Ok((stream, _)) = listener.accept().await {
+            let mut reader = BufReader::new(stream);
+            let mut line = vec![];
+            reader.read_until(b'\n', &mut line).await.unwrap();
+            let r: Value = serde_json::from_slice(&line).unwrap();
+            assert_eq!(r["operation"], "ref.show", "{r}");
+            let ours = r["params"]["ref"] == expected.as_str()
+                && r["repository_id"] == repository.to_string()
+                && r["expected_binding_generation"] == 1;
+            let hex = served.lock().unwrap().clone().filter(|_| ours);
+            let oid = hex.map(|hex| json!({"algorithm":"sha1","hex":hex}));
+            let result = json!({"ref": r["params"]["ref"], "oid": oid});
+            let response = json!({"protocol_version":1,"request_id":r["request_id"],
+                "operation_id":r["operation_id"],"ok":true,"result":result});
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            reader.into_inner().write_all(&bytes).await.unwrap();
+        }
+    });
+    let config = aq_server::source_retention::SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
+        git_root: dir.join("git"),
+        git_socket: socket,
+        staging_root: dir.join("staging"),
+        max_staging_bytes: 4_194_304,
+        max_bundle_bytes: 1_048_576,
+        bulk_concurrency: 1,
+        incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
+    };
+    let runtime = aq_server::source_retention::Runtime::new(config).unwrap();
+    e.state.source_retention = Some(Arc::new(runtime));
+    e.app = aq_server::build_worker_router(e.state.clone());
+    sqlx::query("INSERT INTO environment_try_refs(attempt_id,repository_id,binding_generation) VALUES($1,$2,1)")
+        .bind(attempt(&e))
+        .bind(repository)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    (e, Git { tip, _dir: temp })
 }
 /// The AQ base template: an admitted version with no project. The task's
 /// project gets its execution binding, whose repository a job fetches from.
@@ -60,7 +133,7 @@ async fn queued(e: &Env) -> i64 {
 
 #[tokio::test]
 async fn environment_try_queues_a_try_job_for_the_tasks_head() {
-    let e = setup_with(granted()).await;
+    let (e, git) = setup_with(granted()).await;
     // No AQ base template admitted yet: nothing to build on.
     let (status, body) = post(&e, attested("web")).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -119,6 +192,7 @@ async fn environment_try_queues_a_try_job_for_the_tasks_head() {
         (StatusCode::OK, &json!("completed"), &result)
     );
     // A try without a run command builds the image only.
+    git.at(Some("d".repeat(40)));
     let (status, body) = post(
         &e,
         json!({"api_version":1,"name":"web","commit":"d".repeat(40)}),
@@ -186,7 +260,7 @@ async fn environment_try_queues_a_try_job_for_the_tasks_head() {
 
 #[tokio::test]
 async fn environment_try_needs_the_grant() {
-    let e = setup_with(Some(
+    let (e, _tip) = setup_with(Some(
         json!([{"operation":"comment.read","scope":"project:self"}]),
     ))
     .await;
@@ -217,7 +291,7 @@ async fn environment_try_needs_the_grant() {
     );
     assert_eq!(queued(&e).await, 0);
     // Below the project, the grant does not reach the project's builds.
-    let e = setup_with(Some(
+    let (e, _tip) = setup_with(Some(
         json!([{"operation":"environment.try","scope":"task:self"}]),
     ))
     .await;
@@ -232,7 +306,7 @@ async fn environment_try_needs_the_grant() {
 
 #[tokio::test]
 async fn environment_try_beyond_the_concurrency_limit_is_refused() {
-    let e = setup_with(granted()).await;
+    let (e, _tip) = setup_with(granted()).await;
     base(&e).await;
     limits(&e, 2).await;
     let first = post(&e, attested("web")).await.1["job_id"].clone();
@@ -271,7 +345,7 @@ async fn environment_try_beyond_the_concurrency_limit_is_refused() {
 
 #[tokio::test]
 async fn environment_try_for_another_project_is_refused() {
-    let e = setup_with(granted()).await;
+    let (e, _tip) = setup_with(granted()).await;
     base(&e).await;
     let other = Uuid::new_v4();
     let surface = json!({"params":{"name":"web","project_id":other}});
@@ -328,4 +402,30 @@ async fn environment_try_for_another_project_is_refused() {
         (status, &body["code"]),
         (StatusCode::FORBIDDEN, &json!("scope_denied"))
     );
+}
+
+#[tokio::test]
+async fn environment_try_requires_the_commit_at_the_try_ref_tip() {
+    let (e, git) = setup_with(granted()).await;
+    base(&e).await;
+    let not_pushed = |(status, body): (StatusCode, Value)| {
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "workspace_not_pushed", "{body}");
+    };
+    // An older checkpoint, another commit, or no try ref at all.
+    git.at(Some("d".repeat(40)));
+    not_pushed(post(&e, attested("web")).await);
+    git.at(None);
+    not_pushed(post(&e, attested("web")).await);
+    assert_eq!(queued(&e).await, 0);
+    git.at(Some("c".repeat(40)));
+    assert_eq!(post(&e, attested("web")).await.0, StatusCode::OK);
+    // Only the caller's own attempt's recorded push counts.
+    sqlx::query("UPDATE environment_try_refs SET attempt_id=$1")
+        .bind(Uuid::new_v4())
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    not_pushed(post(&e, attested("web")).await);
+    assert_eq!(queued(&e).await, 1);
 }

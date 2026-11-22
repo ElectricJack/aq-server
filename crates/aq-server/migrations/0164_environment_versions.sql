@@ -66,6 +66,16 @@ CREATE TABLE environment_ready (
     reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Attempts that pushed their try ref `refs/heads/aq-try/<attempt>` (spec 0017
+-- §6.2) on aq-git: the repository and binding generation it was pushed to.
+-- A sweep deletes the ref once the attempt ends, then the row.
+CREATE TABLE environment_try_refs (
+    attempt_id UUID PRIMARY KEY,
+    repository_id UUID NOT NULL,
+    binding_generation BIGINT NOT NULL CHECK (binding_generation > 0),
+    pushed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- NULL means never saved: the defaults of the running build apply.
 ALTER TABLE role_settings
     ADD COLUMN environment_limits JSONB,

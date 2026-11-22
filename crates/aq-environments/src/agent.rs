@@ -2,12 +2,13 @@
 //! task's pushed head, run on a builder (the `try` job of [`crate::worker`]).
 //!
 //! The agent cannot push: its node's channel proxy commits the workspace,
-//! pushes it to the task's branch `refs/heads/aq/<task>` and adds the pushed
-//! commit to the body as `"commit"` before it forwards the request. The node
-//! credential stands behind the channel, so the server takes that commit as
-//! attested and reads no repository; a commit aq-git lacks fails the job at
-//! the builder's fetch. A request without one (the command surface, an older
-//! node) is refused with `workspace_not_pushed`.
+//! force-pushes it to the attempt's try ref `refs/heads/aq-try/<attempt>`
+//! and adds the pushed commit to the body as `"commit"` before it forwards
+//! the request. The server takes the commit only when it is the head of the
+//! caller's own try ref on aq-git (with `delivery_playbook`, whose `/v1/git`
+//! the push goes through). A request without one, or with another commit
+//! (the command surface, an older node, an agent's own body), is refused
+//! with `workspace_not_pushed`.
 use crate::worker::{Host, NewJob, enqueue};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -76,7 +77,7 @@ async fn queued<S: Host<E>, E: IntoResponse>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Response, Response> {
-    let project = host.agent(headers, "/v1/agent/environments/try").await?;
+    let (project, attempt) = host.agent(headers, "/v1/agent/environments/try").await?;
     let request: Try = serde_json::from_slice(body)
         .map_err(|_| invalid("the body is {api_version, name, run?, commit}"))?;
     if request.api_version != 1 {
@@ -114,6 +115,11 @@ async fn queued<S: Host<E>, E: IntoResponse>(
             ));
         }
     };
+    if try_head(host, attempt).await?.as_deref() != Some(commit) {
+        let message = "the commit is not the head of this attempt's pushed workspace (refs/heads/aq-try/<attempt>): run `aq environment try` again";
+        let status = StatusCode::CONFLICT;
+        return Err(refuse(status, "workspace_not_pushed", message, false));
+    }
     let mut tx = pool.begin().await.map_err(internal)?;
     // One project's tries are counted and queued one request at a time.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('environment.try:'||$1::text,0))")
@@ -158,6 +164,24 @@ async fn queued<S: Host<E>, E: IntoResponse>(
     Ok(Json(json!({"job_id": job_id})).into_response())
 }
 
+/// The head of `attempt`'s try ref on aq-git; none without `/v1/git`.
+async fn try_head<S: Host<E>, E: IntoResponse>(
+    host: &S,
+    attempt: Uuid,
+) -> Result<Option<String>, Response> {
+    #[cfg(feature = "delivery_playbook")]
+    if let Some(socket) = host.git_socket() {
+        let head = crate::git::try_head(host.as_ref(), socket, attempt).await;
+        return head.map_err(|e| {
+            tracing::warn!(error = %e, %attempt, "try ref unreadable");
+            let message = "aq-git is unavailable; retry";
+            refuse(StatusCode::SERVICE_UNAVAILABLE, "overloaded", message, true)
+        });
+    }
+    let _ = (host, attempt);
+    Ok(None)
+}
+
 /// One of the project's try jobs: its state and, once completed, the
 /// builder's Job result. Another project's job is not found.
 async fn job<S: Host<E>, E: IntoResponse>(
@@ -167,7 +191,7 @@ async fn job<S: Host<E>, E: IntoResponse>(
 ) -> Response {
     let read = async {
         let path = "/v1/agent/environments/try/{job_id}";
-        let project = host.agent(&headers, path).await?;
+        let (project, _) = host.agent(&headers, path).await?;
         let id: Uuid = id.parse().map_err(|_| invalid("job_id is a UUID"))?;
         let row: Option<(String, Option<Value>)> = sqlx::query_as(
             "SELECT state,result FROM environment_jobs WHERE job_id=$1 AND project_id=$2 AND kind='try'",

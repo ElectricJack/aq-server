@@ -37,13 +37,16 @@ fn result_bytes(limits: &EnvironmentLimits) -> usize {
 /// own refusal `E` for the credential.
 pub trait Host<E: IntoResponse>: AsRef<PgPool> + Clone + Send + Sync + 'static {
     fn node(&self, headers: &HeaderMap) -> impl Future<Output = Result<Uuid, E>> + Send;
-    /// The attempt's project, once its agent credential holds the grant the
-    /// agent route `path` needs; otherwise the host's refusal.
+    /// The attempt's project and the attempt, once its agent credential
+    /// holds the grant the agent route `path` needs; otherwise the host's
+    /// refusal.
     fn agent(
         &self,
         headers: &HeaderMap,
         path: &str,
-    ) -> impl Future<Output = Result<Uuid, Response>> + Send;
+    ) -> impl Future<Output = Result<(Uuid, Uuid), Response>> + Send;
+    /// aq-git's control socket, when the server has one.
+    fn git_socket(&self) -> Option<&std::path::Path>;
 }
 
 /// The routes, for the builders the operator's `projects` config lists in

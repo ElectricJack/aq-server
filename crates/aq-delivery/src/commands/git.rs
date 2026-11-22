@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
 pub const TASK_BRANCH_PREFIX: &str = "refs/heads/aq/";
+/// Spec 0017 §6.2: the namespace of the attempts' try refs, never published.
+pub const TRY_PREFIX: &str = "refs/heads/aq-try/";
 
 /// A commit retained under a handle by `repo.retain_ref`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +194,28 @@ impl SocketGit {
         match oid["hex"].as_str() {
             None if oid.is_null() => Ok(None),
             Some(hex) if object_id(hex) => Ok(Some(hex.to_owned())),
+            _ => Err(GitFailure::protocol()),
+        }
+    }
+
+    /// Spec 0017 §6.2: deletes an attempt's try ref (`refs/heads/aq-try/…`)
+    /// from the central repository only (`ref.delete` with `remote: false`);
+    /// an absent ref is already deleted. Never touches GitHub.
+    pub async fn delete_try_ref(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<RefDeletion, GitFailure> {
+        if !reference.starts_with(TRY_PREFIX) {
+            return Err(GitFailure::protocol());
+        }
+        let params = json!({"ref": reference, "remote": false, "expected_old": null});
+        let result = self
+            .call(Uuid::new_v4(), "ref.delete", repo, params)
+            .await?;
+        match result["outcome"].as_str() {
+            Some("deleted") => Ok(RefDeletion::Deleted),
+            Some("already_absent") => Ok(RefDeletion::AlreadyAbsent),
             _ => Err(GitFailure::protocol()),
         }
     }

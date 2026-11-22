@@ -378,3 +378,246 @@ async fn one_task_in_two_projects_gets_delivery_and_all_three_offers_keep_their_
     assert_eq!(get_grant(&c, &credential, b.attempt_id).await.0, 404);
     assert_eq!(get_grant(&c, &credential, x.attempt_id).await.0, 404);
 }
+
+/// Spec 0017 §6.2 (with `project_environments`): an attempt's
+/// `refs/heads/aq-try/<attempt>`, the checkpoint `aq environment try` builds.
+#[cfg(feature = "project_environments")]
+mod try_ref {
+    use super::*;
+
+    /// A clone of `c`'s granted repository through `/v1/git`, served by the
+    /// worker router on a local port.
+    struct Cloned {
+        fake: FakeGitHttp,
+        attempt: Uuid,
+        task_ref: String,
+        try_ref: String,
+        url: String,
+        node: Vec<String>,
+        work: std::path::PathBuf,
+        _dir: tempfile::TempDir,
+        server: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for Cloned {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+    async fn cloned(c: &mut Case) -> Cloned {
+        let repository = c.env.frozen.project.binding.repository_id;
+        let git_root = (c.env.env.state.source_retention.as_ref().unwrap().config)
+            .git_root
+            .clone();
+        let fake = FakeGitHttp::start(&git_root, repository, "refs/heads/main").await;
+        let (offer, grant) = granted_offer(c, &fake).await;
+        let attempt = offer.offered.lifecycle_binding.attempt_id;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let router = aq_server::build_worker_router(c.env.env.state.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let node = vec![
+            format!("Authorization: Bearer {}", c.env.env.credential),
+            format!("AQ-Attempt: {attempt}"),
+            // A client's grant header is never forwarded.
+            format!("AQ-Try-Ref: refs/heads/aq-try/{}", Uuid::new_v4()),
+        ];
+        let url = format!("{origin}{}", grant.endpoint);
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        let out = client(
+            dir.path(),
+            &node,
+            &["clone", "-q", &url, work.to_str().unwrap()],
+        )
+        .await;
+        assert!(out.status.success(), "clone: {out:?}");
+        Cloned {
+            fake,
+            attempt,
+            task_ref: grant.task_ref,
+            try_ref: format!("refs/heads/aq-try/{attempt}"),
+            url,
+            node,
+            work,
+            _dir: dir,
+            server,
+        }
+    }
+    impl Cloned {
+        /// A new commit on the clone's base, so two of them are siblings.
+        fn commit(&self, text: &str) -> String {
+            git(&self.work, &["checkout", "-q", "--detach", &self.fake.base]);
+            std::fs::write(self.work.join("try.txt"), text).unwrap();
+            git(&self.work, &["add", "try.txt"]);
+            git(&self.work, &["commit", "-q", "-m", text]);
+            git(&self.work, &["rev-parse", "HEAD"])
+        }
+        async fn push(&self, refspecs: &[&str]) -> std::process::Output {
+            let mut args = vec!["push", "--porcelain", "--no-verify", "--force", &self.url];
+            args.extend_from_slice(refspecs);
+            client(&self.work, &self.node, &args).await
+        }
+        fn head(&self, reference: &str) -> Option<String> {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.fake.repository)
+                .args(["rev-parse", "--verify", "-q", reference])
+                .output()
+                .unwrap();
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        }
+        fn pushes(&self) -> usize {
+            let seen = self.fake.seen.lock().unwrap();
+            (seen.iter())
+                .filter(|h| {
+                    h.get("content-type")
+                        .is_some_and(|v| v == "application/x-git-receive-pack-request")
+                })
+                .count()
+        }
+    }
+    /// The owner cancels the offered attempt, which releases its task.
+    async fn end(c: &Case, attempt: Uuid) {
+        let state = &c.env.env.state;
+        let cancel =
+            crate::common::native_cancellation::cancel(state, attempt, Uuid::new_v4(), "ended");
+        let (status, body) = cancel.await;
+        assert_eq!(status, 200, "{body}");
+        let held: bool =
+            sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+                .bind(attempt)
+                .fetch_one(&c.env.env.pool)
+                .await
+                .unwrap();
+        assert!(!held, "the cancelled attempt no longer holds its task");
+    }
+    async fn recorded(c: &Case, attempt: Uuid) -> Option<(Uuid, i64)> {
+        sqlx::query_as(
+            "SELECT repository_id,binding_generation FROM environment_try_refs WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_optional(&c.env.env.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_attempt_can_force_push_its_own_try_ref() {
+        let mut c = setup().await;
+        let t = cloned(&mut c).await;
+        assert_eq!(recorded(&c, t.attempt).await, None, "nothing pushed yet");
+        // Created from nothing, then moved to a sibling (a forced update).
+        let first = t.commit("first try");
+        let out = t.push(&[&format!("HEAD:{}", t.try_ref)]).await;
+        assert!(out.status.success(), "create: {out:?}");
+        assert_eq!(t.head(&t.try_ref).as_deref(), Some(first.as_str()));
+        let second = t.commit("second try");
+        let out = t.push(&[&format!("HEAD:{}", t.try_ref)]).await;
+        assert!(out.status.success(), "force update: {out:?}");
+        assert_eq!(t.head(&t.try_ref).as_deref(), Some(second.as_str()));
+        assert_eq!(t.head(&t.task_ref), None, "the task ref is untouched");
+        let repository = c.env.frozen.project.binding.repository_id;
+        assert_eq!(recorded(&c, t.attempt).await, Some((repository, 1)));
+        // Every request reached aq-git with the server's own try ref and the
+        // unchanged task ref, never the client's header.
+        let seen = t.fake.seen.lock().unwrap().clone();
+        for headers in &seen {
+            let all = |name: &str| {
+                (headers.get_all(name).iter())
+                    .map(|v| v.to_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(all("aq-try-ref"), [t.try_ref.as_str()]);
+            assert_eq!(all("aq-task-ref"), [t.task_ref.as_str()]);
+        }
+        // The task ref keeps its lease rule after try pushes: the grant's lease
+        // is "absent", so its first push lands.
+        let out = t.push(&[&format!("HEAD:{}", t.task_ref)]).await;
+        assert!(out.status.success(), "task push: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn an_attempt_cannot_push_another_attempts_try_ref_or_relax_the_task_ref() {
+        let mut c = setup().await;
+        let t = cloned(&mut c).await;
+        let mine = t.commit("mine");
+        let out = t.push(&[&format!("HEAD:{}", t.task_ref)]).await;
+        assert!(out.status.success(), "task push: {out:?}");
+        let before = t.pushes();
+        let other = Uuid::new_v4();
+        let sibling = t.commit("sibling");
+        for refspecs in [
+            // Another attempt's try ref, a ref below or beside this one's.
+            vec![format!("HEAD:refs/heads/aq-try/{other}")],
+            vec![format!("HEAD:{}/x", t.try_ref)],
+            vec![format!("HEAD:refs/heads/aq-try/{}", t.attempt.simple())],
+            // Two refs at once.
+            vec![
+                format!("HEAD:{}", t.try_ref),
+                format!("HEAD:refs/heads/aq-try/{other}"),
+            ],
+        ] {
+            let refspecs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
+            refused(&t.push(&refspecs).await, "403");
+        }
+        // The task ref still needs its lease: a forced sibling over the
+        // pushed head (old = that head, lease = absent) is stale.
+        refused(&t.push(&[&format!("HEAD:{}", t.task_ref)]).await, "409");
+        refused(&t.push(&[&format!(":{}", t.task_ref)]).await, "403");
+        // The attempt's own try ref may not be deleted by a push.
+        let out = t.push(&[&format!("HEAD:{}", t.try_ref)]).await;
+        assert!(out.status.success(), "own try ref: {out:?}");
+        refused(&t.push(&[&format!(":{}", t.try_ref)]).await, "403");
+        assert_eq!(t.head(&t.try_ref).as_deref(), Some(sibling.as_str()));
+        assert_eq!(t.head(&t.task_ref).as_deref(), Some(mine.as_str()));
+        assert_eq!(t.head(&format!("refs/heads/aq-try/{other}")), None);
+        assert_eq!(
+            t.pushes(),
+            before + 1,
+            "only the own try push reached aq-git"
+        );
+        assert_eq!(recorded(&c, other).await, None);
+        // Once the attempt no longer holds its task, no push is served.
+        end(&c, t.attempt).await;
+        t.commit("late");
+        refused(&t.push(&[&format!("HEAD:{}", t.try_ref)]).await, "403");
+    }
+
+    #[tokio::test]
+    async fn the_try_ref_is_deleted_when_the_attempt_ends() {
+        let mut c = setup().await;
+        let t = cloned(&mut c).await;
+        t.commit("try");
+        let out = t.push(&[&format!("HEAD:{}", t.try_ref)]).await;
+        assert!(out.status.success(), "push: {out:?}");
+        let retention = c.env.env.state.source_retention.clone().unwrap();
+        let (pool, socket) = (&c.env.env.pool, &retention.config.git_socket);
+        // A live attempt keeps its try ref.
+        aq_environments::git::sweep(pool, socket).await;
+        assert!(t.head(&t.try_ref).is_some());
+        assert!(recorded(&c, t.attempt).await.is_some());
+        end(&c, t.attempt).await;
+        aq_environments::git::sweep(pool, socket).await;
+        assert_eq!(t.head(&t.try_ref), None, "deleted once the attempt ended");
+        // The record outlives a push that was in flight at the end
+        // (`git_transfer_timeout_ms`); deleting an absent ref is fine.
+        assert!(recorded(&c, t.attempt).await.is_some());
+        aq_environments::git::sweep(pool, socket).await;
+        sqlx::query(
+            "UPDATE environment_try_refs SET pushed_at=now()-interval '1 day' WHERE attempt_id=$1",
+        )
+        .bind(t.attempt)
+        .execute(pool)
+        .await
+        .unwrap();
+        aq_environments::git::sweep(pool, socket).await;
+        assert_eq!(recorded(&c, t.attempt).await, None);
+        assert_eq!(t.head(&t.task_ref), None);
+        assert_eq!(
+            t.head("refs/heads/main").as_deref(),
+            Some(t.fake.base.as_str())
+        );
+    }
+}
