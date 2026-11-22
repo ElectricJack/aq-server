@@ -661,8 +661,7 @@ async fn offers(
                 predecessor = %replacement.predecessor,
                 attempts_started = replacement.attempts_started,
                 lineage_elapsed_ms = replacement.elapsed_ms,
-                sandbox_ms_charged = replacement.sandbox_ms,
-                "replacement attempt admitted within the lineage budget"
+                "replacement attempt admitted within the retry budget"
             );
             // The failed predecessor's claim is released under its locks before
             // the successor's generation; a later refusal retries idempotently.

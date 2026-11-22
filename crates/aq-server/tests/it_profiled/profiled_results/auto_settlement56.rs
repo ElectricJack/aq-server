@@ -1491,7 +1491,7 @@ mod playbook {
         let attempt = env.report.binding.attempt_id;
         sqlx::query("UPDATE supervisor_controls c SET enabled=true, profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
             .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_time_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_retry_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
             .bind(Uuid::new_v4()).bind(task).bind(project).bind(attempt).bind(NOW as f64/1000.0).execute(&pool).await.unwrap();
         assert_eq!(
             aq_machine_control::holds::unclaimed_count(&pool, &[task, Uuid::new_v4()])
@@ -1508,7 +1508,7 @@ mod playbook {
             for id in [task, attempt, env.report.report_id] {
                 assert!(body.contains(&id.to_string()));
             }
-            assert!(body.contains("lineage_time_budget_exhausted"));
+            assert!(body.contains("lineage_retry_budget_exhausted"));
             count.fetch_add(1, Ordering::SeqCst);
             Ok::<_, ()>(Uuid::new_v4())
         };
@@ -2158,7 +2158,7 @@ mod playbook {
             .bind(result).execute(&pool).await.unwrap();
         sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
             .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'task_sandbox_minutes_budget_exhausted',$4,'returned',to_timestamp($5))")
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_cost_budget_exhausted',$4,'returned',to_timestamp($5))")
             .bind(Uuid::new_v4()).bind(task).bind(lineage.project_id).bind(attempt).bind(NOW as f64 / 1000.0).execute(&pool).await.unwrap();
         let reasons = work_reasons(&env).await;
         let evidence = format!("returned result {result}. Worker outcome: success.");
@@ -2192,7 +2192,7 @@ mod playbook {
             async |_, scope, body: &str, _| {
                 assert_eq!(scope, Some(lineage.project_id));
                 assert!(
-                    body.contains("task_sandbox_minutes_budget_exhausted")
+                    body.contains("lineage_cost_budget_exhausted")
                         && body.contains(&"4".repeat(40))
                         && body.contains("conflict")
                         && body.contains(&evidence)

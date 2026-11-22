@@ -6,31 +6,15 @@ use aq_profiles::SelectionPolicy;
 use aq_selection::BudgetSnapshot;
 use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
-pub(crate) type PinnedPolicy = (SelectionPolicy, u64);
 #[track_caller]
 fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
     AppError::Conflict("pinned native policy budget unavailable or exhausted".into())
 }
-pub(crate) fn remaining(
-    policy: &SelectionPolicy,
-    budget: &BudgetSnapshot,
-) -> Result<u64, AppError> {
-    policy.validate().map_err(|_| refused())?;
-    policy
-        .max_lineage_elapsed_ms
-        .checked_sub(budget.elapsed_ms.ok_or_else(|| refused())?)
-        .filter(|n| *n > 0)
-        .ok_or_else(|| refused())
-}
-fn decode(
-    reference: ArtifactRef,
-    body: &[u8],
-    budget: BudgetSnapshot,
-) -> Result<PinnedPolicy, AppError> {
+fn decode(reference: ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, AppError> {
     let policy = policy_of(&reference, body)?;
-    let remaining_lineage_ms = remaining(&policy, &budget)?;
-    Ok((policy, remaining_lineage_ms))
+    policy.validate().map_err(|_| refused())?;
+    Ok(policy)
 }
 fn policy_of(reference: &ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, AppError> {
     if body.is_empty()
@@ -47,7 +31,13 @@ fn policy_of(reference: &ArtifactRef, body: &[u8]) -> Result<SelectionPolicy, Ap
         id: String,
         selection_policy: SelectionPolicy,
     }
-    let level: PinnedLevel = serde_json::from_slice(body).map_err(|_| refused())?;
+    // An attempt offered before the lineage time budgets were removed pinned a
+    // policy that still has their keys; they are left out of what is read.
+    let mut pinned: Value = serde_json::from_slice(body).map_err(|_| refused())?;
+    if let Some(policy) = pinned.get_mut("selection_policy") {
+        aq_profiles::roles::drop_removed_keys(policy);
+    }
+    let level: PinnedLevel = serde_json::from_value(pinned).map_err(|_| refused())?;
     if reference.id.as_str() != format!("intelligence:{}", level.id) {
         return Err(refused());
     }
@@ -101,7 +91,7 @@ pub(crate) async fn pinned_policy(
 pub(crate) async fn load_locked(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,
-) -> Result<PinnedPolicy, AppError> {
+) -> Result<SelectionPolicy, AppError> {
     let row=sqlx::query("SELECT l.launch_binding,l.launch_manifest->'intelligence_profile' AS policy_ref,l.launch_manifest#>>'{bindings,project_id}' AS project,l.launch_manifest#>>'{bindings,graph_id}' AS workspace,l.launch_manifest#>>'{bindings,task_id}' AS task,d.decision#>'{inputs,budget}' AS budget FROM profiled_launches l JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE l.attempt_id=$1 FOR SHARE OF l,d").bind(binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(|| refused())?;
     if row.get::<Value, _>("launch_binding")
         != serde_json::to_value(binding).map_err(|_| AppError::Internal)?
@@ -125,14 +115,12 @@ pub(crate) async fn load_locked(
         " FOR SHARE OF a,x",
     )
     .await?;
-    decode(reference, &body, budget)
+    decode(reference, &body)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (ArtifactRef, Vec<u8>, BudgetSnapshot) {
-        let value: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/selection-v2.json")).unwrap();
+    fn fixture() -> (ArtifactRef, Vec<u8>) {
         // The level as an offer retains it: its id and the selection policy
         // in effect, under the identity `intelligence:<id>`.
         let id = "standard-high";
@@ -145,40 +133,39 @@ mod tests {
             version: aq_admission::Text::new("1").unwrap(),
             digest: aq_admission::Digest::of(&body),
         };
-        (
-            reference,
-            body,
-            serde_json::from_value(value["inputs"]["budget"].clone()).unwrap(),
-        )
+        (reference, body)
     }
     #[test]
-    fn actual_pinned_policy_keeps_known_elapsed_and_refuses_missing_or_exhausted() {
-        let (reference, body, mut budget) = fixture();
-        budget.elapsed_ms = Some(123);
-        let loaded = decode(reference.clone(), &body, budget.clone()).unwrap();
-        assert_eq!(loaded.1, loaded.0.max_lineage_elapsed_ms - 123);
-        budget.elapsed_ms = None;
-        assert!(decode(reference.clone(), &body, budget.clone()).is_err());
-        budget.elapsed_ms = Some(loaded.0.max_lineage_elapsed_ms);
-        assert!(decode(reference.clone(), &body, budget.clone()).is_err());
-        budget.elapsed_ms = Some(u64::MAX);
-        assert!(decode(reference, &body, budget).is_err());
+    fn a_policy_pinned_before_the_time_budgets_were_removed_still_loads_without_them() {
+        let (reference, body) = fixture();
+        let loaded = decode(reference, &body).unwrap();
+        let mut json: Value = serde_json::from_slice(&body).unwrap();
+        // What an attempt offered before spec 0021 retained.
+        json["selection_policy"]["max_lineage_elapsed_ms"] = 3_600_000.into();
+        json["selection_policy"]["max_lineage_sandbox_ms"] = 14_400_000.into();
+        json.sort_all_objects();
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let legacy = ArtifactRef {
+            digest: aq_admission::Digest::of(&bytes),
+            ..fixture().0
+        };
+        assert_eq!(decode(legacy, &bytes).unwrap(), loaded);
     }
     #[test]
     fn mismatched_definition_and_unsupported_legacy_policy_never_get_defaults() {
-        let (reference, body, budget) = fixture();
+        let (reference, body) = fixture();
         let mut changed = reference.clone();
         changed.digest = aq_admission::Digest::of(b"different");
-        assert!(decode(changed, &body, budget.clone()).is_err());
+        assert!(decode(changed, &body).is_err());
         let mut json: Value = serde_json::from_slice(&body).unwrap();
         json["selection_policy"] = Value::Null;
         let bytes = serde_json::to_vec(&json).unwrap();
         let mut legacy = reference.clone();
         legacy.digest = aq_admission::Digest::of(&bytes);
-        assert!(decode(legacy, &bytes, budget.clone()).is_err());
+        assert!(decode(legacy, &bytes).is_err());
         // A reference that names another level than the body does.
         let mut wrong = reference;
         wrong.id = aq_admission::Text::new("intelligence:another").unwrap();
-        assert!(decode(wrong, &body, budget).is_err());
+        assert!(decode(wrong, &body).is_err());
     }
 }

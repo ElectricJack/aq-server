@@ -15,7 +15,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub struct SelectionDefaults {
     pub max_attempts: u32,
     pub fallback_on: Vec<FallbackReason>,
-    pub max_lineage_elapsed_ms: u64,
     pub observation_max_age_ms: u64,
     pub allow_unknown_availability: bool,
     pub unknown_cost: UnknownCostPolicy,
@@ -24,9 +23,6 @@ pub struct SelectionDefaults {
     /// `None` is no cost limit. Goes together with `currency`.
     pub max_cost_microunits: Option<u64>,
     pub currency: Option<String>,
-    /// Sandbox time a task's charged attempts may be admitted for in total.
-    #[serde(default = "initial_sandbox_ms")]
-    pub max_lineage_sandbox_ms: u64,
     /// Owner- or service-stopped attempts (and lost or never-started ones) a
     /// task may have before a further one is charged as a normal attempt.
     #[serde(default = "initial_uncharged")]
@@ -48,9 +44,6 @@ fn initial_never_granted() -> u32 {
     SelectionDefaults::default().max_never_granted_offers
 }
 // Settings stored before these keys existed take the initial values.
-fn initial_sandbox_ms() -> u64 {
-    SelectionDefaults::default().max_lineage_sandbox_ms
-}
 fn initial_uncharged() -> u32 {
     SelectionDefaults::default().max_uncharged_continuations
 }
@@ -72,7 +65,6 @@ impl Default for SelectionDefaults {
                 FallbackReason::StaleUnknown,
                 FallbackReason::PolicyDenied,
             ],
-            max_lineage_elapsed_ms: 3_600_000,
             observation_max_age_ms: 30_000,
             allow_unknown_availability: false,
             unknown_cost: UnknownCostPolicy::AllowBounded,
@@ -80,11 +72,29 @@ impl Default for SelectionDefaults {
             require_hard_cost_enforcement: false,
             max_cost_microunits: None,
             currency: None,
-            max_lineage_sandbox_ms: 240 * 60_000,
             max_uncharged_continuations: 5,
             max_wake_attempts: 3,
             max_wake_lineage_elapsed_ms: 24 * 3_600_000,
             max_never_granted_offers: 8,
+        }
+    }
+}
+
+/// The two time budgets spec 0021 §5.1 removed: an attempt is bounded by its
+/// execution profile's `wall_time_ms`, retries by `max_attempts`. Nothing
+/// states them any more; a save or a profile document that does is refused as
+/// an unknown key.
+const REMOVED_KEYS: [&str; 2] = ["max_lineage_elapsed_ms", "max_lineage_sandbox_ms"];
+/// Drop the removed keys from a stored selection object (Settings' selection
+/// defaults, a profile's overrides in a stored snapshot, or the selection
+/// policy an attempt pinned). Those documents were written before the keys
+/// were removed and cannot be rewritten (a snapshot and a pinned policy are
+/// stored under their digest), so reading them leaves the keys out. Anything
+/// that is not a JSON object is left as it is.
+pub fn drop_removed_keys(stored: &mut serde_json::Value) {
+    if let Some(keys) = stored.as_object_mut() {
+        for key in REMOVED_KEYS {
+            keys.remove(key);
         }
     }
 }
@@ -103,8 +113,6 @@ pub struct SelectionOverrides {
     pub max_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_on: Option<Vec<FallbackReason>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_lineage_elapsed_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_max_age_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,8 +136,6 @@ pub struct SelectionOverrides {
     )]
     pub currency: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_lineage_sandbox_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_uncharged_continuations: Option<u32>,
 }
 impl SelectionOverrides {
@@ -145,10 +151,6 @@ impl SelectionOverrides {
         Self {
             max_attempts: keep(self.max_attempts, &defaults.max_attempts),
             fallback_on: keep(self.fallback_on, &defaults.fallback_on),
-            max_lineage_elapsed_ms: keep(
-                self.max_lineage_elapsed_ms,
-                &defaults.max_lineage_elapsed_ms,
-            ),
             observation_max_age_ms: keep(
                 self.observation_max_age_ms,
                 &defaults.observation_max_age_ms,
@@ -168,10 +170,6 @@ impl SelectionOverrides {
             ),
             max_cost_microunits: keep(self.max_cost_microunits, &defaults.max_cost_microunits),
             currency: keep(self.currency, &defaults.currency),
-            max_lineage_sandbox_ms: keep(
-                self.max_lineage_sandbox_ms,
-                &defaults.max_lineage_sandbox_ms,
-            ),
             max_uncharged_continuations: keep(
                 self.max_uncharged_continuations,
                 &defaults.max_uncharged_continuations,
@@ -188,7 +186,6 @@ impl SelectionDefaults {
         Self {
             max_attempts: s.max_attempts.unwrap_or(d.max_attempts),
             fallback_on: s.fallback_on.unwrap_or(d.fallback_on),
-            max_lineage_elapsed_ms: s.max_lineage_elapsed_ms.unwrap_or(d.max_lineage_elapsed_ms),
             observation_max_age_ms: s.observation_max_age_ms.unwrap_or(d.observation_max_age_ms),
             allow_unknown_availability: s
                 .allow_unknown_availability
@@ -202,7 +199,6 @@ impl SelectionDefaults {
                 .unwrap_or(d.require_hard_cost_enforcement),
             max_cost_microunits: s.max_cost_microunits.unwrap_or(d.max_cost_microunits),
             currency: s.currency.unwrap_or(d.currency),
-            max_lineage_sandbox_ms: s.max_lineage_sandbox_ms.unwrap_or(d.max_lineage_sandbox_ms),
             max_uncharged_continuations: s
                 .max_uncharged_continuations
                 .unwrap_or(d.max_uncharged_continuations),
@@ -225,8 +221,6 @@ impl SelectionDefaults {
             observation_max_age_ms: self.observation_max_age_ms,
             max_output_tokens,
             max_attempts: self.max_attempts,
-            max_lineage_elapsed_ms: self.max_lineage_elapsed_ms,
-            max_lineage_sandbox_ms: Some(self.max_lineage_sandbox_ms),
             max_uncharged_continuations: Some(self.max_uncharged_continuations),
             required_capabilities,
             budget: IntelligenceBudgetPolicy {

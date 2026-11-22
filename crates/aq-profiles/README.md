@@ -139,21 +139,20 @@ The selection policy has one set of defaults for all profiles
 |---|---|
 | `max_attempts` | `2` |
 | `fallback_on` | `[missing_credentials, unavailable, unsupported, stale_unknown, policy_denied]` |
-| `max_lineage_elapsed_ms` | `3600000` |
 | `observation_max_age_ms` | `30000` |
 | `allow_unknown_availability` | `false` |
 | `unknown_cost` | `allow_bounded` (or `deny`) |
 | `require_complete_accounting` | `false` |
 | `require_hard_cost_enforcement` | `false` |
 | `max_cost_microunits`, `currency` | none; they go together |
-| `max_lineage_sandbox_ms` | `14400000`: sandbox time a task's charged attempts may be admitted for in total |
 | `max_uncharged_continuations` | `5`: owner- or service-stopped, lost or never-started attempts a task may have before a further one is charged |
 | `max_wake_attempts` | `3`: launches a task may have spent for a waiting session to still be woken (defaults only) |
 | `max_wake_lineage_elapsed_ms` | `86400000`: time since a task's first offer within which a waiting session is still woken (defaults only) |
 | `max_never_granted_offers` | `8`: offers of a task that may expire without ever being granted before the task is held (defaults only) |
 
-`max_attempts`, `max_lineage_elapsed_ms`, `max_lineage_sandbox_ms` and
-`max_uncharged_continuations` are a task's retry budget. A launch pins them
+`max_attempts` and `max_uncharged_continuations` are a task's retry budget.
+Each attempt has its own time window, the execution profile's `wall_time_ms`;
+earlier attempts' time never counts against a retry. A launch pins them
 with its policy, and the server reads them from the last attempt's pinned
 policy when it decides on a replacement; it has no limits of its own. An
 owner retry of a task a limit holds starts every budget again, the
