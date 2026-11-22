@@ -19,20 +19,15 @@ pub async fn ran_in(pool: &PgPool, attempt: Uuid) -> Option<String> {
     .flatten()
 }
 /// Whether some node with an unexpired inventory lists `environment`
-/// (`name` or `name@version`) for one of its harnesses, or has reported the
-/// template of an admitted version of it ready. The environment's definition
-/// pins its template digest, so a node listing it can run that template.
+/// (`name` or `name@version`) for one of its harnesses. An admitted version
+/// is listed by the inventory a node stores after reporting its template
+/// ready (spec 0017 §6.3), which carries the definition pinning that digest.
 pub async fn listed(pool: &PgPool, environment: &str, now_ms: i64) -> bool {
     sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM intelligence_node_snapshots s, \
          jsonb_array_elements(s.snapshot->'harnesses') h \
          WHERE (s.snapshot->>'expires_at_ms')::bigint > $2 \
-         AND $1 IN (h#>>'{environment,id}', (h#>>'{environment,id}')||'@'||(h#>>'{environment,version}'))) \
-         OR EXISTS(SELECT 1 FROM environment_ready r \
-         JOIN intelligence_node_snapshots s USING(node_id) \
-         JOIN environment_versions v ON r.digests ? v.template_digest \
-         WHERE (s.snapshot->>'expires_at_ms')::bigint > $2 \
-         AND $1 IN (v.environment_id, v.environment_id||'@'||v.version))",
+         AND $1 IN (h#>>'{environment,id}', (h#>>'{environment,id}')||'@'||(h#>>'{environment,version}')))",
     )
     .bind(environment)
     .bind(now_ms)

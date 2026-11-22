@@ -385,3 +385,361 @@ async fn the_template_is_read_through_the_callers_transaction() {
     );
     tx.rollback().await.unwrap();
 }
+
+// Task 11c: a node lists an admitted environment it reported ready, and the
+// offer names that environment's definition and the result adapter derived
+// for it from the node's boot docker-local Claude adapter.
+
+const STARTUP_DIGEST: &str = "667d48a537baa35335fb3da1e589846e9d294a2bc24a8df58cf682181b15229a";
+const CONTRACT_DIGEST: &str = "4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9";
+/// The fields a derived Definition keeps from the boot one: the node refuses
+/// anything else.
+const KEPT: [&str; 9] = [
+    "schema_version",
+    "profile",
+    "runtime",
+    "client_manifest",
+    "client_executable",
+    "contract",
+    "recipe",
+    "permission_digest",
+    "reserved_client_bytes",
+];
+fn reference(id: &str, digest: &str) -> aq_admission::ArtifactRef {
+    serde_json::from_value(json!({"id": id, "version": "1", "digest": digest})).unwrap()
+}
+/// The fixture node's one harness runs with the docker-local Claude result
+/// adapter: its canonical Definition (pinning the node's boot environment)
+/// and the result startup instruction are in the boot definitions, and the
+/// configured and installed harness name it. Returns the boot entry.
+async fn docker_local(c: &mut Case) -> aq_selection::InstalledHarness {
+    let profile = &aq_admission::DOCKER_LOCAL_PROFILES[0];
+    let mut harness = c.env.input.node.harnesses[0].clone();
+    let old = harness.adapter.clone();
+    let mut body = json!({"schema_version": 1, "profile": profile.profile,
+        "runtime": profiled::artifact("runtime-code", b"runtime"), "environment": harness.environment,
+        "client_manifest": profiled::artifact("aq.agent-result-client-installation", b"manifest"),
+        "client_executable": profiled::artifact("client", b"client"),
+        "contract": reference("aq.agent-result-local", CONTRACT_DIGEST),
+        "recipe": reference(profile.recipe_id, profile.recipe_digest.unwrap()),
+        "permission_digest": aq_admission::Digest::of(b"plan"), "reserved_client_bytes": 67108864});
+    body.sort_all_objects();
+    let body = body.to_string();
+    harness.adapter = profiled::artifact(profile.adapter, body.as_bytes());
+    let env = &mut c.env.env;
+    let mut config = (*env.state.config).clone();
+    let mut profiled = (**config.profiled_execution.as_ref().unwrap()).clone();
+    profiled.definition_bodies.retain(|d| *d.artifact() != old);
+    let startup = include_str!("../../fixtures/agent-result-startup-v1.md");
+    for (artifact, body) in [
+        (harness.adapter.clone(), body),
+        (
+            reference("aq.agent-result-startup", STARTUP_DIGEST),
+            startup.into(),
+        ),
+    ] {
+        let definition = Definition::new(artifact, ArtifactKind::Definition, body).unwrap();
+        profiled.definition_bodies.push(definition);
+    }
+    profiled.revision += 1;
+    config.profiled_execution = Some(Arc::new(profiled));
+    let mut intelligence = config.intelligence.as_ref().unwrap().config.clone();
+    intelligence.revision += 1;
+    intelligence.qualified_harnesses = vec![harness.clone()];
+    config.intelligence = Some(Arc::new(intelligence.load().unwrap()));
+    env.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&env.state)
+        .await
+        .unwrap();
+    env.app = aq_server::build_admin_router(env.state.clone());
+    let (status, body) = selection::call(
+        &env.app,
+        "/api/intelligence/register",
+        Some(json!({})),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    c.env.input.node.harnesses = vec![harness.clone()];
+    let node = &c.env.input.node;
+    sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=$2 WHERE node_id=$1")
+        .bind(c.env.env.node)
+        .bind(json!(node))
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    harness
+}
+/// Admit `example.web` version `version`, whose template carries the
+/// fixture's harness, as `environment.admit` will.
+async fn admit_web(c: &Case, version: &str, harness: &aq_selection::InstalledHarness) {
+    let carried = json!([{"harness": harness.harness, "version": harness.cli_version}]);
+    sqlx::query(
+        "INSERT INTO environment_versions(environment_id,version,project_id,template_digest,image,provides,harnesses,warm,admitted_at) \
+         VALUES('example.web',$1,$2,$3,'registry.example/web@'||$3,'[]',$4,'[]',now())",
+    )
+    .bind(version)
+    .bind(c.env.lineage.project_id)
+    .bind(TEMPLATE)
+    .bind(carried)
+    .execute(&c.env.env.pool)
+    .await
+    .unwrap();
+}
+/// The node reports `digests` ready, as its poll does.
+async fn ready(c: &Case, digests: Value) {
+    let body = serde_json::to_vec(&json!({"ready": digests})).unwrap();
+    let state = &c.env.env.state;
+    let path = "/v1/worker/environments/ready";
+    let response =
+        crate::common::native_offer::post(state, &c.env.env.credential, path, body).await;
+    assert_eq!(response.status(), 200);
+}
+/// The definition reference nodes are told for the admitted `example.web`.
+async fn definition_of(c: &Case) -> aq_admission::ArtifactRef {
+    let catalog =
+        aq_server::profiled_execution::definitions::catalog(&c.env.env.state, &c.env.env.pool)
+            .await
+            .unwrap();
+    let nodes = serde_json::to_value(catalog.admitted_for_nodes()).unwrap();
+    serde_json::from_value(nodes[0]["definition"].clone()).unwrap()
+}
+/// What the inventory writer stores for the node's installed `harnesses`.
+async fn republish(c: &Case) -> Vec<aq_selection::InstalledHarness> {
+    let state = &c.env.env.state;
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    let configured = c.env.input.node.harnesses.clone();
+    let listed = aq_server::profiled_execution::definitions::listed(
+        state,
+        &mut conn,
+        c.env.env.node,
+        configured,
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE intelligence_node_snapshots SET snapshot=jsonb_set(snapshot,'{harnesses}',$2) WHERE node_id=$1")
+        .bind(c.env.env.node)
+        .bind(json!(listed))
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    listed
+}
+/// The binding allows and defaults to `example.web`; the profile pins none.
+async fn on_web(c: &mut Case) -> aq_selection::InstalledHarness {
+    let boot = docker_local(c).await;
+    environments(c, roles::ENVIRONMENT).await;
+    let env = &mut c.env.env;
+    env.body["allowed_environments"] = json!([roles::ENVIRONMENT, "example.web"]);
+    env.body["default_environment"] = json!("example.web");
+    let body = json!({"operation_id":Uuid::new_v4(),"expected_revision":3,"binding":env.body});
+    let (status, v) =
+        selection::call(&env.app, &selection::path(), Some(body), "owner@localhost").await;
+    assert_eq!(status, 200, "{v}");
+    unpin(c).await;
+    admit_web(c, "1", &boot).await;
+    boot
+}
+fn listed_now(c: &Case) -> impl std::future::Future<Output = bool> + '_ {
+    let now = (c.env.env.state.clock)().timestamp_millis();
+    aq_role_settings::environments::listed(&c.env.env.pool, "example.web", now)
+}
+
+/// Spec 0017 §6.3: the inventory writer lists an admitted environment for a
+/// node only once the node has reported its template ready, and only from
+/// its next inventory on.
+#[tokio::test]
+async fn a_node_lists_an_admitted_environment_only_after_reporting_it_ready() {
+    let mut p = crate::common::presence::setup().await;
+    let boot = docker_local(&mut p.c).await;
+    admit_web(&p.c, "1", &boot).await;
+    let state = p.c.env.env.state.clone();
+    let mut h = axum::http::HeaderMap::new();
+    let bearer = format!("Bearer {}", p.c.env.env.credential);
+    h.insert("authorization", bearer.parse().unwrap());
+    let auth = aq_server::worker_api::authenticate_context(&state, &h)
+        .await
+        .unwrap();
+    let stored = || async {
+        let snapshot: Value =
+            sqlx::query_scalar("SELECT snapshot FROM intelligence_node_snapshots WHERE node_id=$1")
+                .bind(p.c.env.env.node)
+                .fetch_one(&p.c.env.env.pool)
+                .await
+                .unwrap();
+        serde_json::from_value::<Vec<aq_selection::InstalledHarness>>(snapshot["harnesses"].clone())
+            .unwrap()
+    };
+    use aq_server::profiled_execution::presence::inventory::record;
+    record(&state, &auth, &p.request).await.unwrap();
+    assert_eq!(stored().await.len(), 1, "nothing reported ready");
+    assert!(!listed_now(&p.c).await);
+
+    ready(&p.c, json!([TEMPLATE])).await;
+    assert!(!listed_now(&p.c).await, "listed from the next inventory on");
+    let mut next = p.request.clone();
+    (next.operation_id, next.sequence) = (Uuid::new_v4(), next.sequence + 1);
+    record(&state, &auth, &next).await.unwrap();
+    let harnesses = stored().await;
+    assert_eq!(harnesses.len(), 2, "{harnesses:?}");
+    assert_eq!(harnesses[1].environment, definition_of(&p.c).await);
+    assert_eq!(harnesses[1].adapter.id, boot.adapter.id);
+    assert!(listed_now(&p.c).await);
+
+    // A report without it takes it off the next inventory.
+    ready(&p.c, json!([])).await;
+    (next.operation_id, next.sequence) = (Uuid::new_v4(), next.sequence + 1);
+    record(&state, &auth, &next).await.unwrap();
+    assert_eq!(stored().await.len(), 1);
+    assert!(!listed_now(&p.c).await);
+}
+
+/// The offer for an admitted environment carries its definition as
+/// `harness.environment` and the derived adapter as `harness.adapter`, with
+/// both bodies retained in the offer.
+#[tokio::test]
+async fn an_offer_for_an_admitted_environment_names_its_definition_and_adapter() {
+    let mut c = setup().await;
+    let boot = on_web(&mut c).await;
+    ready(&c, json!([TEMPLATE])).await;
+    let listed = republish(&c).await;
+    c.request.operation_id = Uuid::new_v4();
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert_eq!(page.offers.len(), 1, "{body}");
+    let offered = &page.offers[0].offered;
+    assert_eq!(
+        placed(&c, offered.offer.binding.attempt_id).await,
+        "example.web"
+    );
+    let harness = &offered.offer.manifest.harness;
+    assert_eq!(harness.environment, definition_of(&c).await);
+    assert_eq!(harness.adapter, listed[1].adapter);
+    assert_eq!(harness.adapter.id, boot.adapter.id);
+    assert_eq!(
+        (harness.harness.as_str(), harness.cli_version.as_str()),
+        (boot.harness.as_str(), boot.cli_version.as_str())
+    );
+    for artifact in [&harness.adapter, &harness.environment] {
+        let retained = offered.artifacts.iter().filter(|a| a.artifact == *artifact);
+        assert_eq!(retained.count(), 1, "{artifact:?} retained once");
+    }
+}
+
+/// The derived Definition is the boot one with only `environment` replaced
+/// by the admitted definition: field by field, in canonical bytes.
+#[tokio::test]
+async fn the_derived_definition_differs_from_the_boot_one_only_in_environment() {
+    let mut c = setup().await;
+    let boot = on_web(&mut c).await;
+    let state = &c.env.env.state;
+    let catalog = aq_server::profiled_execution::definitions::catalog(state, &c.env.env.pool)
+        .await
+        .unwrap();
+    let qualified = catalog.qualified(std::slice::from_ref(&boot));
+    assert_eq!(qualified.len(), 2, "{qualified:?}");
+    let derived = &qualified[1].adapter;
+    let body = |r| serde_json::from_str::<Value>(catalog.definition(r).unwrap()).unwrap();
+    let (old, new) = (body(&boot.adapter), body(derived));
+    let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(keys(&old), keys(&new));
+    for field in KEPT {
+        assert_eq!(old[field], new[field], "{field}");
+    }
+    assert_eq!(
+        keys(&old).len(),
+        KEPT.len() + 1,
+        "only `environment` besides"
+    );
+    assert_eq!(old["environment"], json!(boot.environment));
+    assert_eq!(new["environment"], json!(definition_of(&c).await));
+    // Canonical bytes (sorted keys, compact) under the boot id, at a revision.
+    let bytes = catalog.definition(derived).unwrap();
+    let mut canonical = new.clone();
+    canonical.sort_all_objects();
+    assert_eq!(bytes, canonical.to_string());
+    assert_eq!(derived.digest, aq_admission::Digest::of(bytes.as_bytes()));
+    assert_eq!(derived.id, boot.adapter.id);
+    assert_eq!(derived.version.as_str(), "1+example.web@1");
+}
+
+/// The admission fence accepts the offer, and the renewal and phase fences'
+/// qualified harnesses hold the entry it chose: a counterpart of the
+/// configured qualified harness for an admitted environment.
+#[tokio::test]
+async fn the_fence_accepts_an_offer_for_an_admitted_environment() {
+    let mut c = setup().await;
+    on_web(&mut c).await;
+    ready(&c, json!([TEMPLATE])).await;
+    republish(&c).await;
+    let attempt = offer(&mut c).await;
+    let choice: Value = sqlx::query_scalar(
+        "SELECT d.decision#>'{outcome,resolved,choice}' FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) WHERE l.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        choice["environment"],
+        json!(definition_of(&c).await),
+        "{choice}"
+    );
+    let qualified = || async {
+        let state = &c.env.env.state;
+        let configured = state
+            .config
+            .intelligence
+            .as_ref()
+            .unwrap()
+            .config
+            .qualified_harnesses
+            .clone();
+        let mut conn = c.env.env.pool.acquire().await.unwrap();
+        aq_server::profiled_execution::definitions::qualified(state, &mut conn, &configured)
+            .await
+            .unwrap()
+    };
+    let chosen = |h: &aq_selection::InstalledHarness| {
+        json!(h.adapter) == choice["adapter"]
+            && json!(h.environment) == choice["environment"]
+            && json!(h.qualification) == choice["qualification"]
+    };
+    assert!(qualified().await.iter().any(chosen));
+    sqlx::query("DELETE FROM environment_versions")
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert!(
+        !qualified().await.iter().any(chosen),
+        "not once its version is gone"
+    );
+}
+
+/// Spec 0017 §6.7: a pruned version takes its entries and derived Definition
+/// with it: the node no longer lists it and the task waits for a node.
+#[tokio::test]
+async fn a_pruned_environment_is_no_longer_listed_or_offered() {
+    let mut c = setup().await;
+    on_web(&mut c).await;
+    ready(&c, json!([TEMPLATE])).await;
+    let derived = republish(&c).await[1].adapter.clone();
+    assert!(listed_now(&c).await);
+    sqlx::query("DELETE FROM environment_versions")
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    assert_eq!(republish(&c).await.len(), 1);
+    assert!(!listed_now(&c).await);
+    let state = &c.env.env.state;
+    let catalog = aq_server::profiled_execution::definitions::catalog(state, &c.env.env.pool)
+        .await
+        .unwrap();
+    assert!(catalog.definition(&derived).is_none());
+    let reason = refused(&mut c, "no_node_has_environment").await;
+    assert_eq!(reason["environment"], "example.web", "{reason}");
+}

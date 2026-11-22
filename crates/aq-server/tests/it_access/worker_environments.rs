@@ -332,12 +332,25 @@ async fn an_admitted_environment_is_offered_only_after_a_node_reports_it_ready()
         json!({"ready": [DIGEST]}),
         "only admitted digests are kept"
     );
-    assert!(listed("example.web").await);
-    assert!(listed("example.web@1").await);
-    assert!(!listed("example.web@2").await);
+    let stored: Value =
+        sqlx::query_scalar("SELECT digests FROM environment_ready WHERE node_id=$1")
+            .bind(h.nodes[2])
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, json!([DIGEST]));
+    // The node lists it from its next inventory on (the inventory writer adds
+    // its harness entries: `it_native native_offers::environments`).
+    assert!(!listed("example.web").await);
     // Rolling: each report replaces the node's previous set.
     ready(json!([])).await;
-    assert!(!listed("example.web").await);
+    let stored: Value =
+        sqlx::query_scalar("SELECT digests FROM environment_ready WHERE node_id=$1")
+            .bind(h.nodes[2])
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, json!([]));
     assert_eq!(
         send(&h, "/v1/worker/environments", "aqn_unknown", None)
             .await

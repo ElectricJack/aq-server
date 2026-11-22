@@ -289,6 +289,7 @@ dependencies = [
  "aq-project-policy",
  "aq-protocol",
  "aq-role-settings",
+ "aq-selection",
  "axum",
  "serde",
  "serde_json",

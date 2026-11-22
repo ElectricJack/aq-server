@@ -13,6 +13,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 mod agent;
+mod harnesses;
+pub use harnesses::{boot_adapter, listed};
 #[cfg(feature = "delivery_playbook")]
 pub mod git;
 mod store;
@@ -64,6 +66,8 @@ pub struct Catalog<'a> {
     boot_templates: Vec<Admitted>,
     /// Newest first.
     versions: Vec<store::Version>,
+    /// The boot docker-local adapters derived for each version.
+    derived: Vec<harnesses::Derived>,
 }
 impl<'a> Catalog<'a> {
     /// Read on `db`: the fence passes its own transaction.
@@ -72,6 +76,10 @@ impl<'a> Catalog<'a> {
         boot: &BootEnvironments<'a>,
     ) -> sqlx::Result<Self> {
         Ok(Self::new(boot, store::versions(db).await?))
+    }
+    /// The boot config's alone, for a store without the versions table.
+    pub fn boot(boot: &BootEnvironments<'a>) -> Self {
+        Self::new(boot, Vec::new())
     }
     fn new(boot: &BootEnvironments<'a>, versions: Vec<store::Version>) -> Self {
         let boot_templates = (boot.templates.into_iter().flat_map(Allowlist::entries))
@@ -85,6 +93,7 @@ impl<'a> Catalog<'a> {
         Self {
             boot: boot.definitions.clone(),
             boot_templates,
+            derived: harnesses::derive_all(&boot.definitions, &versions),
             versions,
         }
     }
@@ -105,10 +114,13 @@ impl<'a> Catalog<'a> {
                 && v.admitted.version == reference.version.as_str()
                 && v.body_digest == reference.digest
         });
-        admitted.map(|v| v.body.as_str()).or_else(|| {
-            let boot = self.boot.iter().find(|(r, _)| *r == reference);
-            boot.map(|(_, body)| *body)
-        })
+        let derived = self.derived.iter().find(|d| d.artifact == *reference);
+        (admitted.map(|v| v.body.as_str()))
+            .or_else(|| derived.map(|d| d.body.as_str()))
+            .or_else(|| {
+                let boot = self.boot.iter().find(|(r, _)| *r == reference);
+                boot.map(|(_, body)| *body)
+            })
     }
     fn admitted(&self, environment: &str) -> Option<&store::Version> {
         self.versions
@@ -141,11 +153,8 @@ impl<'a> Catalog<'a> {
                 image: v.image.clone(),
                 harnesses: v.harnesses.clone(),
                 warm: v.warm.clone(),
-                definition: serde_json::json!({
-                    "id": v.admitted.environment,
-                    "version": v.admitted.version,
-                    "digest": v.body_digest,
-                }),
+                // The same reference its harness entries carry.
+                definition: serde_json::json!(harnesses::reference(v)),
             })
             .collect()
     }
