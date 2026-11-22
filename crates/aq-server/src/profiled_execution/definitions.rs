@@ -190,20 +190,14 @@ pub async fn retain_required(
 /// Spec 0017 §6.3: the boot config's definitions and template allowlist with
 /// the admitted environment versions, read through one catalog.
 #[cfg(feature = "project_environments")]
-pub async fn catalog(state: &AppState) -> Result<aq_environments::Catalog<'_>, AppError> {
-    let config = state.config.profiled_execution.as_deref();
-    let definitions = config.map_or_else(Vec::new, |c| {
-        (c.definition_bodies.iter())
-            .map(|d| (&d.artifact, d.body.as_str()))
-            .collect()
-    });
-    let templates = state.config.templates.as_deref();
-    let boot = aq_environments::BootEnvironments {
-        definitions,
-        templates,
-    };
-    let pool = &state.store.pool;
-    aq_environments::Catalog::load(pool, &boot)
+pub async fn catalog<'e>(
+    state: &AppState,
+    db: impl sqlx::PgExecutor<'e>,
+) -> Result<aq_environments::Catalog<'_>, AppError> {
+    let bodies = (state.config.profiled_execution.as_deref()).map(|c| &c.definition_bodies[..]);
+    let defs = (bodies.unwrap_or_default().iter()).map(|d| (&d.artifact, d.body.as_str()));
+    let boot = aq_environments::BootEnvironments::new(defs, state.config.templates.as_deref());
+    aq_environments::Catalog::load(db, &boot)
         .await
         .map_err(crate::error::db)
 }

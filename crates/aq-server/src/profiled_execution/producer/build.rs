@@ -326,7 +326,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         None
     };
     #[cfg(feature = "project_environments")]
-    let catalog = super::super::definitions::catalog(state).await?;
+    let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
     #[cfg(feature = "project_environments")]
     let body = |r: &ArtifactRef| catalog.definition(r);
     #[cfg(not(feature = "project_environments"))]

@@ -376,7 +376,7 @@ pub async fn apply_referenced(
     // The routing document is not part of a snapshot: saving it compiles
     // and activates nothing.
     #[cfg(feature = "delivery_playbook")]
-    let delivery = match &mutation.change {
+    let no_snapshot = match &mutation.change {
         Change::DeliveryDocument(markdown) => {
             let limit = state.limits.documents.max_document_bytes;
             if markdown.len() > limit {
@@ -394,10 +394,10 @@ pub async fn apply_referenced(
         _ => false,
     };
     #[cfg(not(feature = "delivery_playbook"))]
-    let delivery = false;
+    let no_snapshot = false;
     // The environment limits, too, compile and activate nothing.
     #[cfg(feature = "project_environments")]
-    let delivery = delivery
+    let no_snapshot = no_snapshot
         || match &mutation.change {
             Change::EnvironmentLimits(limits) => {
                 limits.validate().map_err(|message| invalid(&message))?;
@@ -417,9 +417,9 @@ pub async fn apply_referenced(
     } else if let Change::ObservationLimits(limits) = &mutation.change {
         limits.validate().map_err(|message| invalid(&message))?;
         None
-    } else if delivery {
-        // Like the routing document, the delivery settings compile and
-        // activate nothing.
+    } else if no_snapshot {
+        // Like the routing document, the delivery and environment settings
+        // compile and activate nothing.
         None
     } else {
         match compile(&set, &state.selection_defaults, &state.limits) {
@@ -730,7 +730,7 @@ async fn environment_limits_on(
     .fetch_one(conn)
     .await?;
     let limits = match stored {
-        Some(value) => serde_json::from_value(value).map_err(|_| Error::Internal)?,
+        Some(value) => serde_json::from_value(value).map_err(|e| sqlx::Error::Decode(e.into()))?,
         None => Default::default(),
     };
     Ok((limits, revision))

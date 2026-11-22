@@ -2,7 +2,6 @@
 use crate::Admitted;
 use aq_admission::Digest;
 use serde_json::{Value, json};
-use sqlx::PgPool;
 
 /// One admitted environment version and the definition body it reads as.
 pub(crate) struct Version {
@@ -29,12 +28,13 @@ type Row = (
 );
 
 /// Every admitted version, newest first. Rolling records bound the rows.
-pub(crate) async fn versions(pool: &PgPool) -> sqlx::Result<Vec<Version>> {
+pub(crate) async fn versions<'e>(db: impl sqlx::PgExecutor<'e>) -> sqlx::Result<Vec<Version>> {
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT environment_id,version,template_digest,image,provides,platform_text,toolchain,harnesses,warm \
-         FROM environment_versions ORDER BY admitted_at DESC,version DESC",
+         FROM environment_versions ORDER BY admitted_at DESC,\
+         (CASE WHEN version ~ '^[0-9]{1,18}$' THEN version::bigint END) DESC NULLS LAST,version DESC",
     )
-    .fetch_all(pool)
+    .fetch_all(db)
     .await?;
     rows.into_iter().map(version).collect()
 }

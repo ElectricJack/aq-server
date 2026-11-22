@@ -264,7 +264,7 @@ pub async fn facts(
     environment: &str,
     now_ms: u64,
 ) -> Result<Option<aq_selection::Placement>, AppError> {
-    let template = template(state, environment).await?;
+    let template = template(state, &state.store.pool, environment).await?;
     let book = crate::observations::catalog::rate_book(state);
     facts_in(
         &state.store.pool,
@@ -280,11 +280,16 @@ pub async fn facts(
     )
     .await
 }
-/// The template digest `environment` resolves to through the catalog (else the
-/// operator's allowlist); `None` when it names none or several.
-pub async fn template(state: &AppState, environment: &str) -> Result<Option<String>, AppError> {
+/// The template digest `environment` resolves to through the catalog, read on
+/// `db` (else the operator's allowlist); `None` when it names none or several.
+#[cfg_attr(not(feature = "project_environments"), allow(unused_variables))]
+pub async fn template<'e>(
+    state: &AppState,
+    db: impl sqlx::PgExecutor<'e>,
+    environment: &str,
+) -> Result<Option<String>, AppError> {
     #[cfg(feature = "project_environments")]
-    let catalog = super::definitions::catalog(state).await?;
+    let catalog = super::definitions::catalog(state, db).await?;
     #[cfg(feature = "project_environments")]
     let digest = (catalog.template(environment)).map(|a| a.digest.as_str().to_owned());
     #[cfg(not(feature = "project_environments"))]
@@ -538,7 +543,7 @@ pub(crate) async fn fence_locked(
         pool: &state.store.observation_pool,
         book: &book,
     };
-    let template = template(state, &project.environment).await?;
+    let template = template(state, &mut *tx, &project.environment).await?;
     let current = derive(
         tx,
         &ledger,

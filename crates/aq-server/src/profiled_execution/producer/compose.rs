@@ -90,7 +90,7 @@ pub async fn compile(
     let environment = execution.environment.clone();
     #[cfg(feature = "project_environments")]
     let (catalog, environment) = {
-        let catalog = super::super::definitions::catalog(state).await?;
+        let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
         let (pool, pinned) = (&state.store.pool, execution.environment.as_deref());
         match aq_environments::place(pool, &catalog, binding, pinned, metadata, predecessor).await {
             Ok(environment) => (catalog, environment),

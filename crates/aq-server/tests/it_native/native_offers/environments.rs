@@ -196,6 +196,15 @@ async fn a_retry_keeps_the_environment_of_the_attempt_it_replaces() {
 const TEMPLATE: &str = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 /// Admit `id` version `version` providing `provides`, as `environment.admit` will.
 async fn admit(c: &Case, id: &str, version: &str, provides: Value) {
+    admit_on(&c.env.env.pool, c, id, version, provides).await
+}
+async fn admit_on<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    c: &Case,
+    id: &str,
+    version: &str,
+    provides: Value,
+) {
     sqlx::query(
         "INSERT INTO environment_versions(environment_id,version,project_id,template_digest,image,provides,platform_text,harnesses,warm,admitted_at) \
          VALUES($1,$2,$3,$4,'registry.example/web@'||$4,$5,'Admitted platform.','[{\"harness\":\"codex\",\"version\":\"1\"}]','[\"pnpm install\"]',now())",
@@ -205,7 +214,7 @@ async fn admit(c: &Case, id: &str, version: &str, provides: Value) {
     .bind(c.env.lineage.project_id)
     .bind(TEMPLATE)
     .bind(provides)
-    .execute(&c.env.env.pool)
+    .execute(db)
     .await
     .unwrap();
 }
@@ -226,7 +235,7 @@ async fn boot_definitions_and_admitted_versions_read_through_one_catalog() {
     admit(&c, "example.web", "2", json!(["node", "python", "rust"])).await;
 
     let state = &c.env.env.state;
-    let catalog = aq_server::profiled_execution::definitions::catalog(state)
+    let catalog = aq_server::profiled_execution::definitions::catalog(state, &c.env.env.pool)
         .await
         .unwrap();
     let ids: Vec<(&str, &str)> = catalog.definitions().map(|(i, v, _)| (i, v)).collect();
@@ -340,5 +349,30 @@ async fn environment_limits_default_to_the_documented_values() {
         2,
     )
     .await;
-    assert!(refused.is_err(), "a zero limit is refused");
+    assert!(
+        matches!(&refused, Err(aq_role_settings::Error::Invalid(m)) if m.starts_with("try_concurrency is 0")),
+        "{refused:?}"
+    );
+}
+
+/// The fence re-derives the template inside its own transaction: the catalog
+/// is read on the connection it is given, so a version admitted in that
+/// transaction (and not yet committed) is seen there and nowhere else.
+#[tokio::test]
+async fn the_template_is_read_through_the_callers_transaction() {
+    let c = setup().await;
+    let state = &c.env.env.state;
+    let mut tx = c.env.env.pool.begin().await.unwrap();
+    admit_on(&mut *tx, &c, "example.web", "1", json!(["node"])).await;
+    use aq_server::profiled_execution::placement::template;
+    let inside = template(state, &mut *tx, "example.web").await.unwrap();
+    assert_eq!(inside.as_deref(), Some(&"d".repeat(64)[..]));
+    let outside = template(state, &c.env.env.pool, "example.web")
+        .await
+        .unwrap();
+    assert_eq!(
+        outside, None,
+        "uncommitted: another connection does not see it"
+    );
+    tx.rollback().await.unwrap();
 }

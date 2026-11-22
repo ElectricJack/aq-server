@@ -1,7 +1,8 @@
 //! Spec 0017 §6.3: environment versions live in the database, beside the
 //! boot config's definitions and template allowlist (which seed the AQ base
 //! and today's environment). Every reader of environment definitions and
-//! templates goes through one [`Catalog`].
+//! templates goes through one [`Catalog`]. Empty without `project_environments`.
+#![cfg(feature = "project_environments")]
 use aq_admission::{ArtifactRef, Digest};
 use aq_environment_templates::Allowlist;
 use aq_project_policy::{ProjectBinding, environments as env};
@@ -18,6 +19,18 @@ mod store;
 pub struct BootEnvironments<'a> {
     pub definitions: Vec<(&'a ArtifactRef, &'a str)>,
     pub templates: Option<&'a Allowlist>,
+}
+impl<'a> BootEnvironments<'a> {
+    pub fn new(
+        definitions: impl IntoIterator<Item = (&'a ArtifactRef, &'a str)>,
+        templates: Option<&'a Allowlist>,
+    ) -> Self {
+        let definitions = definitions.into_iter().collect();
+        Self {
+            definitions,
+            templates,
+        }
+    }
 }
 /// The template an environment runs: its image digest, and where to pull it
 /// (none for a boot allowlist entry, which nodes already list).
@@ -46,8 +59,12 @@ pub struct Catalog<'a> {
     versions: Vec<store::Version>,
 }
 impl<'a> Catalog<'a> {
-    pub async fn load(pool: &PgPool, boot: &BootEnvironments<'a>) -> sqlx::Result<Self> {
-        Ok(Self::new(boot, store::versions(pool).await?))
+    /// Read on `db`: the fence passes its own transaction.
+    pub async fn load<'e>(
+        db: impl sqlx::PgExecutor<'e>,
+        boot: &BootEnvironments<'a>,
+    ) -> sqlx::Result<Self> {
+        Ok(Self::new(boot, store::versions(db).await?))
     }
     fn new(boot: &BootEnvironments<'a>, versions: Vec<store::Version>) -> Self {
         let boot_templates = (boot.templates.into_iter().flat_map(Allowlist::entries))
