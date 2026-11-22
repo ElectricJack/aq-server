@@ -21,6 +21,30 @@ use tower::ServiceExt;
 use uuid::Uuid;
 #[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
 mod environment_try;
+/// Spec 0017 §6.2: with no git route for try pushes (no `delivery_playbook`,
+/// or no aq-git configured, as here), a try can never be verified, so it is
+/// refused as unavailable rather than "run it again".
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn environment_try_without_a_git_route_is_unavailable() {
+    let grant = json!([{"operation":"environment.try","scope":"project:self"}]);
+    let e = crate::messaging::setup_with(Some(grant)).await;
+    let path = "/v1/agent/environments/try";
+    for body in [
+        json!({"api_version":1,"name":"web","commit":"c".repeat(40)}),
+        json!({"api_version":1,"name":"web"}),
+    ] {
+        let (status, body) = crate::messaging::send(&e.app, path, Some(&e.token), Some(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "try_unavailable", "{body}");
+        assert_eq!(body["retryable"], false, "{body}");
+    }
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM environment_jobs")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+}
 async fn send(
     app: &Router,
     path: &str,

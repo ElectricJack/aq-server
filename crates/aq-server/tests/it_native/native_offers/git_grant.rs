@@ -614,6 +614,17 @@ mod try_ref {
         .unwrap();
         aq_environments::git::sweep(pool, socket).await;
         assert_eq!(recorded(&c, t.attempt).await, None);
+        // A deletion aq-git refuses for good (the binding changed) is not
+        // retried forever: the record goes, even inside the in-flight window.
+        let gone = Uuid::new_v4();
+        sqlx::query("INSERT INTO environment_try_refs(attempt_id,repository_id,binding_generation) VALUES($1,$2,2)")
+            .bind(gone)
+            .bind(c.env.frozen.project.binding.repository_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        aq_environments::git::sweep(pool, socket).await;
+        assert_eq!(recorded(&c, gone).await, None);
         assert_eq!(t.head(&t.task_ref), None);
         assert_eq!(
             t.head("refs/heads/main").as_deref(),

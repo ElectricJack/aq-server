@@ -259,15 +259,18 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|value| *value) => return,
             _ = ticks.tick() => {}
         }
-        // Spec 0017 §6.2: ended attempts' try refs leave aq-git.
+        // Spec 0017 §6.2: ended attempts' try refs leave aq-git, beside GC.
+        let tick = sweep.tick(&state);
         #[cfg(all(feature = "project_environments", feature = "delivery_playbook"))]
-        if let Some(r) = &state.source_retention {
-            aq_environments::git::sweep(&state.store.pool, &r.config.git_socket).await;
-        }
+        let tick = {
+            let git = state.source_retention.as_ref();
+            let git = git.map(|r| r.config.git_socket.as_path());
+            aq_environments::git::beside(&state.store.pool, git, tick)
+        };
         tokio::select! {
             biased;
             _ = stop.wait_for(|value| *value) => return,
-            result = sweep.tick(&state) => {
+            result = tick => {
                 if let Err(error) = result { tracing::warn!(?error, "source retention GC sweep deferred"); }
             }
         }

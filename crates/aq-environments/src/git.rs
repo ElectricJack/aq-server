@@ -98,11 +98,27 @@ async fn recorded(pool: &PgPool, attempt: Uuid) -> sqlx::Result<Option<GitTarget
 /// longer holds its task: stopped and settled, abandoned or cancelled). The
 /// record stays until Settings `git_transfer_timeout_ms` after its last push,
 /// so a push in flight as the attempt ended is deleted too; deleting an
-/// absent ref is fine. Failures are logged and retried by the next sweep.
+/// absent ref is fine. A transient failure is retried by the next sweep; a
+/// permanent one (the binding changed, the repository is gone) drops the
+/// record with one warning.
 pub async fn sweep(pool: &PgPool, socket: &Path) {
     if let Err(error) = swept(pool, socket).await {
         tracing::warn!(%error, "try ref sweep deferred");
     }
+}
+/// `tick` and, at the same time, a [`sweep`] on aq-git's control `socket`
+/// when the server has one; a slow aq-git delays neither.
+pub async fn beside<T>(
+    pool: &PgPool,
+    socket: Option<&Path>,
+    tick: impl std::future::Future<Output = T>,
+) -> T {
+    let swept = async {
+        if let Some(socket) = socket {
+            sweep(pool, socket).await;
+        }
+    };
+    tokio::join!(tick, swept).0
 }
 async fn swept(pool: &PgPool, socket: &Path) -> Result<(), String> {
     let (limits, _) = (aq_role_settings::delivery_limits(pool).await).map_err(|e| e.to_string())?;
@@ -123,11 +139,20 @@ async fn swept(pool: &PgPool, socket: &Path) -> Result<(), String> {
             binding_generation: u64::try_from(generation).unwrap_or_default(),
         };
         let reference = try_ref(attempt).unwrap_or_default();
-        if let Err(e) = git.delete_try_ref(&target, &reference).await {
-            tracing::warn!(%attempt, code = %e.code, "try ref not deleted yet");
-            continue;
-        }
-        if settled {
+        let forget = match git.delete_try_ref(&target, &reference).await {
+            Ok(_) => settled,
+            Err(e) if e.transient => {
+                tracing::warn!(%attempt, code = %e.code, "try ref not deleted yet");
+                false
+            }
+            // Retrying cannot help (for example the binding changed): forget it.
+            Err(e) => {
+                let message = &e.message;
+                tracing::warn!(%attempt, code = %e.code, %message, "try ref record dropped undeleted");
+                true
+            }
+        };
+        if forget {
             let forget = sqlx::query("DELETE FROM environment_try_refs WHERE attempt_id=$1");
             forget
                 .bind(attempt)

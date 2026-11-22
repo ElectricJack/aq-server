@@ -102,6 +102,8 @@ async fn queued<S: Host<E>, E: IntoResponse>(
             "run is one command of 1 to environment_limits.max_arg_bytes bytes",
         ));
     }
+    // Read first: without a git route no try can ever be verified.
+    let head = try_head(host, attempt).await?;
     let commit = match request.commit.as_deref() {
         Some(c) if sha1_hex(c) => c,
         Some(_) => return Err(invalid("commit is 40 lowercase hex digits")),
@@ -115,7 +117,7 @@ async fn queued<S: Host<E>, E: IntoResponse>(
             ));
         }
     };
-    if try_head(host, attempt).await?.as_deref() != Some(commit) {
+    if head.as_deref() != Some(commit) {
         let message = "the commit is not the head of this attempt's pushed workspace (refs/heads/aq-try/<attempt>): run `aq environment try` again";
         let status = StatusCode::CONFLICT;
         return Err(refuse(status, "workspace_not_pushed", message, false));
@@ -164,22 +166,29 @@ async fn queued<S: Host<E>, E: IntoResponse>(
     Ok(Json(json!({"job_id": job_id})).into_response())
 }
 
-/// The head of `attempt`'s try ref on aq-git; none without `/v1/git`.
+/// The head of `attempt`'s try ref on aq-git. A server without `/v1/git`
+/// (no `delivery_playbook`) or without aq-git refuses with `try_unavailable`.
 async fn try_head<S: Host<E>, E: IntoResponse>(
     host: &S,
     attempt: Uuid,
 ) -> Result<Option<String>, Response> {
+    let message = "this server has no git route for try pushes";
+    let unavailable = || refuse(StatusCode::CONFLICT, "try_unavailable", message, false);
     #[cfg(feature = "delivery_playbook")]
-    if let Some(socket) = host.git_socket() {
+    {
+        let socket = host.git_socket().ok_or_else(unavailable)?;
         let head = crate::git::try_head(host.as_ref(), socket, attempt).await;
-        return head.map_err(|e| {
+        head.map_err(|e| {
             tracing::warn!(error = %e, %attempt, "try ref unreadable");
             let message = "aq-git is unavailable; retry";
             refuse(StatusCode::SERVICE_UNAVAILABLE, "overloaded", message, true)
-        });
+        })
     }
-    let _ = (host, attempt);
-    Ok(None)
+    #[cfg(not(feature = "delivery_playbook"))]
+    {
+        let _ = (host, attempt);
+        Err(unavailable())
+    }
 }
 
 /// One of the project's try jobs: its state and, once completed, the
