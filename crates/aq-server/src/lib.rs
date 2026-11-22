@@ -153,7 +153,7 @@ impl AppState {
 
 async fn harden(req: Request, next: Next) -> Response {
     let api = req.uri().path() == "/api" || req.uri().path().starts_with("/api/");
-    let mut resp = next.run(req).await;
+    let mut resp = aq_request_site::record(req, next).await; // for the refusal log
     let success = resp.status().is_success();
     let h = resp.headers_mut();
     h.insert(
@@ -349,7 +349,6 @@ pub fn build_admin_router_with_optional_owners(
             admission::gate,
         ))
         .layer(from_fn(dashboard_api::errors::normalize_errors))
-        .layer(from_fn(error::record_request_site))
         .layer(from_fn(harden))
         .layer(axum::Extension(mounted));
     let app = if let Some(dashboard) = dashboard {
@@ -452,7 +451,6 @@ fn build_worker_router_inner(
             state.store.admission.clone(),
             admission::gate,
         ))
-        .layer(from_fn(error::record_request_site))
         .layer(from_fn(harden))
         .with_state(state.clone());
     commands::mount(router, state, commands::Listener::Machine)
