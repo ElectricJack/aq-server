@@ -1,8 +1,14 @@
 # 0017: Sandbox environments per project and per task
 
-Date: 2026-11-19. Contract for aq-server, aq-worker, aq-playbooks and
-aq-dashboard. Status: draft for owner review. Builds on 0014 (roles and
-profiles) and 0015 (multi-agent nodes).
+Date: 2026-11-19, revised 2026-11-21. Contract for aq-server, aq-worker,
+aq-playbooks and aq-dashboard. Status: draft for owner review. Builds on 0014
+(roles and profiles), 0015 (multi-agent nodes), 0016 (delivery by playbook)
+and 0019 (integrated delivery). Steps 2 and 3 (§8) are on main behind the
+compile-time feature `project_environments` (#206).
+
+The 2026-11-21 revision moves recipes from Settings documents into each
+project's repository (§6.1), so a toolchain is reviewed and delivered like
+code. That answers the old questions 3 and 4 (§9).
 
 ## 1. Intent
 
@@ -10,64 +16,92 @@ Owner, 2026-11-19, on learning that dashboard tasks cannot run their own tests
 in the sandbox: "the sandboxes need to be configurable for the tasks. Like some
 tasks might require a C++ compiler etc."
 
-A task must run in a sandbox that has the toolchain its work needs, and that
-choice must be configuration (documents and Settings), not code. Adding a
-toolchain for a project must not need a server release.
+Owner, 2026-11-21:
 
-## 2. What exists (origin/main, 2026-11-19)
+- "We kindof need to be able to have AQ automatically configure worker
+  templates for each project. Different projects will have different
+  toolchains."
+- "In my mind setting up a new project would usually go through the global
+  supervisor and I might expect it to create an intial task to intall whatever
+  tools are needed in a sandbox, then that image can be saved for that
+  project."
+- "As projects evolve we may find we need to add additional tools and that
+  needs to be possible with tasks."
+- On where a recipe lives: "A, recipe in the repo".
+- On where builds run: Docker Buildx, because "this system is already in
+  progress being deployed with kubernetes to GCP" (in a downstream fork) and
+  Buildx is the least work to carry there.
 
-The pieces are there; the wiring from "what a task needs" to "which sandbox"
-is not.
+A task must run in a sandbox that has the toolchain its work needs. The
+toolchain is a recipe in the project's repository: tasks create and change it,
+and it is reviewed and merged like code. AQ builds, scans and admits the image
+with no owner hand steps. Adding a toolchain must not need a server release.
+
+## 2. What exists (origin/main, 2026-11-21)
 
 | Piece | Where | What it does |
 |---|---|---|
-| Template recipe | aq-worker `packaging/sandbox/templates.md`, `aq-worker template build` | A parent image plus `install_steps`, built with BuildKit on a build node, scanned, and identified by its OCI digest. The digest is added to the vault allowlist. An explicit operator action; the runner never builds. |
-| Node template list | node `native.json` `executor.settings.host.docker_local.templates` | The `{digest, image}` pairs a node may run. |
-| Environment | server definition body (e.g. `aq-ms1-docker-local-claude`) | Pins one `template` digest, image reservations and premises. Its digest is chained into qualification. |
-| Execution profile | Settings document (0014 §5.3) | Names one `environment`, harnesses, credentials and limits. |
-| Role | Settings document (0014 §5.1) | Fixes the execution profile (0014 §5.5). |
-| Project binding | `project.set` | `allowed_environments` (refuses any other), `ceilings`. |
-| Build cache | node `build_cache` | Keyed per project and template variant, so a new template starts a new warm build. |
+| Template recipe | aq-worker `packaging/sandbox/templates.md`, `aq-worker template build` | A parent image plus `install_steps`, built through `docker buildx build --builder <name> --output type=oci` (`template_tool.py:249`), scanned for credentials, identified by its OCI manifest digest and added to the vault allowlist under a file lock. An explicit operator action. |
+| Node template list | node `native.json` `executor.settings.host.docker_local.templates` | The `{digest, image}` pairs a node may run. Already a list (`docker_local/config.rs:42`). |
+| Environment | server definition body (e.g. `aq-ms1-docker-local-claude`) | Pins one `template` digest. Since #206 may carry `provides`. |
+| Project binding | `project.set` | `allowed_environments` and, since #206, `default_environment`. |
+| Placement | `aq-project-policy::environments::place` (#206) | §5.4's default rule, in code until the router outputs `environment`. |
+| Task needs | Graph metadata `aq:needs` (#206) | Set on `task.create`, `task.graph.create` and the owner's `task.needs.set`. |
+| Build cache | node `build_cache` | Keyed per project and template variant. |
+| Delivery | 0016, 0019 | The GitHub App opens, checks and merges AQ's pull requests. Merges are gated by GitHub required checks. AQ's own check runner is off on main (`checks: None`, `playbooks/service.rs`). |
 
 What is wrong:
 
-- The live stack has exactly one template and one environment. It was built for
-  Rust (gcc, g++, make, cmake, python3, cargo/rustc). Node is in the image at
-  `/opt/aq/node` but only as the harnesses' pinned runtime, deliberately not on
-  `PATH`, with no package cache and no browsers. Dashboard tasks therefore
-  cannot run `npm test` or Playwright.
-- The environment is reachable only through role → execution profile. A role
-  says who does the work, not what toolchain the repository needs, so the only
-  way to give the dashboard Node today is a dashboard-specific role and
-  profile: a role per toolchain per project, which 0014 set out to remove.
-- Building a template, adding it to every node's list, writing the environment
-  definition and re-qualifying are all hand steps on the stack.
+- The live node runs one hand-built template, `b2851df8…` (2026-11-19). It has
+  Rust, and Node and pnpm in `/usr/local/bin`, but no Playwright browsers and
+  none of Chromium's system libraries. It is `aq-template-unadmitted`: the
+  credential scanner refuses on this host (a GnuTLS failure), so the live
+  templates were never admitted.
+- Building a template, adding it to the node's list and writing the
+  environment definition are hand steps on the stack.
+- Nothing turns "this project needs Playwright" into a built environment.
+
+Context qualification no longer applies: 0014 removed it from the server
+(`1ffdd416`, "the server holds no context measurement"), so a new template
+needs no re-measurement.
 
 ## 3. Goals
 
-1. A project declares the toolchain its tasks need, once, as a reviewed recipe.
-   Its tasks run in that environment by default.
+1. A project declares its toolchain as recipes in its own repository. Its tasks
+   run in its default environment.
 2. A task can need more than the project default (for example a docs task in a
    Rust project that must render diagrams with Node), and is placed in an
    environment that has it.
-3. The decision "which environment for this task" is policy: a Settings
-   document or the routing playbook decides it. Code provides the facts
-   (what each environment provides, what the task asks for) and refuses
-   impossible placements.
-4. Environments stay immutable and pinned: a task never installs a toolchain
-   at run time. A changed toolchain is a new recipe version, a new digest and a
-   new environment version.
-5. Adding or changing an environment is an owner-approved operation through
-   AQ, not a hand edit of the server config or node files.
+3. Any task may add or change a tool, in the same pull request as the code that
+   needs it, so code and toolchain never drift apart.
+4. A merged recipe change becomes an admitted environment with no owner step.
+5. Setting up a new project through the global supervisor ends with the
+   project having its own environment.
+6. The decision "which environment for this task", and when to build and
+   admit, is policy: the routing document and the delivery playbook. Code
+   provides facts and operations and refuses impossible placements.
+7. Environments stay immutable and pinned. A changed toolchain is a new recipe,
+   a new digest and a new environment version.
 
 ## 4. Not goals
 
-- Running untrusted recipes. Recipes stay trusted, owner-approved build
-  definitions (templates.md). A repository can propose one; it cannot apply one.
 - Installing toolchains inside a running attempt (no `apt-get` at run time, no
-  network-sourced toolchains per task).
-- Non-container confinement changes.
+  network-sourced toolchains per task). Task sandboxes keep their confinement:
+  `CapDrop: ALL`, `no-new-privileges`.
+- Snapshotting an agent's container as an image.
 - Per-task custom images. Tasks pick from the project's environments.
+- Boat and Cloudflare Containers. Both need one more step per admitted
+  template (a Boat saved snapshot, a push to Cloudflare's registry); the
+  allowlist's `materializations` field is reserved for it. A later revision.
+- Multi-architecture images (linux/amd64 only).
+
+Anti-goals:
+
+- With the feature on, an image that was not scanned and admitted runs a task.
+- A credential, login or workspace file ends up in an image.
+- A project's broken recipe stops its work. Its tasks keep the last admitted
+  environment until a fixed recipe merges.
+- A hard-coded limit. Every limit in §6.7 is a Setting.
 
 ## 5. Model
 
@@ -78,13 +112,16 @@ plain label that a recipe author chooses and documents, for example `rust`,
 `node`, `playwright`, `cpp`, `cmake`, `python`. It is a statement about the
 template, recorded with it, checked at build (§6.2), and shown in Settings.
 There is no global capability registry in code; the labels mean what the
-recipes that provide them install. **(call)**
+recipes that provide them install. **(call, built in #206)**
 
 ### 5.2 Project binding names its environments
 
 The binding's `allowed_environments` stays, and gains `default_environment`
 (one of them). A project's tasks run in `default_environment` unless §5.4
-places them elsewhere. **(call)**
+places them elsewhere. **(call, built in #206)**
+
+Admitting a project's environment (§6.3) adds it to `allowed_environments`, and
+sets `default_environment` when the recipe is the project's default (§6.1).
 
 ### 5.3 Execution profile no longer pins the environment
 
@@ -92,7 +129,7 @@ places them elsewhere. **(call)**
 absent (the normal case) the attempt runs in the environment chosen by §5.4.
 When present, it still pins one environment (for profiles that must not vary,
 for example a supervisor). Limits, harnesses and credentials stay on the
-profile. **(call)**
+profile. **(call, built in #206)**
 
 ### 5.4 Who chooses the environment
 
@@ -120,112 +157,241 @@ Code enforces, and only enforces:
 
 Retries and continuations keep the environment of the attempt they continue
 (they reuse its workspace and build cache). A fresh start (owner retry with
-`fresh`, PR #202) chooses again.
+`fresh`, PR #202) chooses again. An attempt already placed keeps its digest
+when a newer environment version is admitted.
 
 ### 5.5 What the agent is told
 
 The environment's platform text (0014 §6.1 step 1) lists its `provides` and
 the toolchain versions recorded at build (§6.2), so the agent knows what it
-can run and does not try to install what is missing. A task whose work turns
-out to need a capability its environment lacks reports `blocked` naming the
-capability. The task's `aq:needs` is then the place to fix it, and the routing
-playbook may read that outcome. **(call)**
+can run and does not try to install what is missing. When a task needs a tool
+its environment lacks:
+
+- if the tool belongs in the project, the agent adds it to the recipe in its
+  own pull request (§6.1) and proves it with `aq environment try` (§6.2);
+- if that is outside its task, it reports `blocked` naming the capability and
+  asks its supervisor, which files a toolchain task. The supervisor is the
+  point of contact. **(call)**
 
 ## 6. Recipes and builds
 
 ### 6.1 Where a recipe lives
 
-A recipe is a Settings document, one per environment, for example
-`environment/aq-dashboard-web`:
+A recipe is a file in the project's repository, one per environment:
+`.aq/environments/<name>.md`. It is reviewed and merged like code (0016). The
+environment's id is `<project>/<name>`.
 
 ```markdown
 ---
-id: aq-dashboard-web
-name: Web (Node 22, pnpm, Playwright)
-parent: aq-sandbox-os@sha256:...
+name: web
+default: true
 provides: [node, pnpm, playwright, python]
 ---
 ## Install
-- sh -c "install Node 22.x from the pinned tarball, verify sha256"
-- sh -c "corepack enable && corepack prepare pnpm@9.x --activate"
-- sh -c "npx playwright@1.x install --with-deps chromium"
+- sh -c "install Node 24.x from the pinned tarball, verify sha256"
+- sh -c "corepack enable && corepack prepare pnpm@10.34.5 --activate"
+- sh -c "npx playwright@1.64.1 install --with-deps chromium"
 
 ## Check
 - node --version
 - pnpm --version
 - npx playwright --version
+
+## Warm
+- pnpm install --frozen-lockfile
 ```
 
-`Install` becomes the template build's `install_steps` (argv arrays, as in
-templates.md). `Check` commands run in the finished image at build. Their output
-is recorded as the environment's toolchain versions (§5.5), and a failing check
-fails the build. **(call)**
+- `Install` becomes the template build's `install_steps` (argv arrays, as in
+  templates.md). Steps run as root at build time; that is the only place root
+  installs happen.
+- `Check` commands run in the finished image at build. Their output is recorded
+  as the environment's toolchain versions (§5.5), and a failing check fails the
+  build.
+- `Warm` is the build-cache warm command (§6.5).
+- `default: true` marks the project's default environment; at most one recipe
+  in a repository has it.
+- A recipe has no `parent`. AQ supplies it: the **AQ base template** (§6.4),
+  which holds the sandbox OS, git, tmux, bwrap and the `/opt/aq` runtime
+  bundle with the harnesses. The project controls its tools; AQ controls the
+  runtime and harness versions. **(call)**
+- Install steps must put tools on the agent's PATH, which the worker fixes to
+  `/usr/local/bin:/usr/bin:/bin` (`native/adapter/claude.rs:169`). A tool that
+  needs an environment variable (for example `PLAYWRIGHT_BROWSERS_PATH`) must
+  install where it works without one, or the build check must show the
+  variable reaches the agent. **(call)**
+- The existing recipe bounds apply (templates.md: steps, arguments, bytes,
+  control characters, credential-shaped strings), now as Settings (§6.7).
 
-A repository may carry a proposed recipe (for example `.aq/environment.md`).
-AQ never builds from it directly: an agent or the owner opens a Settings
-change from it, and the owner approves it like any other Settings document.
+### 6.2 Trying a recipe from a task
 
-### 6.2 Build and registration
+An agent can't install packages in its own sandbox, so it can't test install
+steps in place. The operation `environment.try` builds the recipe from the
+task's workspace on the builder (§6.6) and runs one command in the result.
 
-Approving a recipe version starts a build job (an operation, not policy):
+- CLI: `aq environment try <name> [--run "<command>"]`, scoped to the agent's
+  task and project.
+- It returns the build result, the `Check` output, the command's exit status
+  and output, and a build log that is bounded and redacted (the build tool
+  suppresses build output today because installers can print secrets).
+- The image is never admitted, never runs a task and is deleted afterwards.
+- This is how a toolchain task proves its work, for example
+  `aq environment try web --run "pnpm install --frozen-lockfile && pnpm test:e2e"`.
+  The agent records the result on its pull request.
 
-1. A node with the `template-build` role runs `aq-worker template build` for
-   the recipe (outside attempt capacity), then the `Check` commands, then the
-   existing scan.
-2. On success the digest is recorded with the recipe version, the check output
-   and `provides`.
-3. The server writes the environment definition version (template digest,
-   reservations, `provides`, platform text) and the qualification records that
-   depend on it. Today these are the hand steps of a rollout (the definition
-   digest chain); this makes them a server operation.
-4. Each node pulls or loads the image and reports the digest in its inventory
-   when it can run it. Until a node reports it, §5.4 does not offer that
-   environment there.
+The recipe has not been reviewed when it is tried, so agent-written install
+steps run as root inside BuildKit before review. The owner accepted this risk
+(2026-11-21); §6.6 limits it.
 
-A build failure leaves the previous environment version in place and reports
-the failing step. Nothing is half-registered.
+### 6.3 Build at the pull request, admit at the merge
 
-### 6.3 Build cache
+The delivery playbook decides when to build and admit. The server provides the
+operations through the host contract:
+
+- `environment.build`: build a recipe at a commit on the builder, run its
+  `Check` commands, scan, and return the digest, toolchain versions and
+  result. Runs outside attempt capacity.
+- `environment.admit`: add a built digest to the allowlist, write the
+  environment definition version (template digest, `provides`, platform text,
+  toolchain versions), add it to the project binding (§5.2) and publish the
+  digest to nodes.
+
+The default delivery playbook and its Settings document gain:
+
+1. When a candidate changes a file under `.aq/environments/`, call
+   `environment.build` for each changed recipe and post the result as a GitHub
+   check through the App. It is a required check for those pull requests. A
+   failed build goes back to the task's agent like any failed check (0016).
+   Building before the merge means a broken recipe never merges. **(call)**
+2. The project's own CI stays on GitHub Actions. The proof that the project's
+   tests pass in the new image is the agent's `environment.try` run (§6.2).
+   Turning on AQ's check runner is separate work. **(call)**
+3. On merge (`aq.integration.changed`), call `environment.admit` with the build
+   whose canonical recipe bytes equal the merged recipe's. Squash merges make a
+   new commit, so the match is by recipe content hash, not commit. With no
+   matching build, build first. **(call)**
+
+A failed build or admit leaves the previous environment version in place and
+reports the failing step. Nothing is half-registered.
+
+Nodes learn admitted digests from the server, pull the image, and list the
+digest in their inventory once they can run it. Until a node lists it, §5.4
+does not offer that environment there.
+
+### 6.4 The AQ base template, and when it changes
+
+The AQ base template is built from AQ's own recipe (aq-worker
+`packaging/sandbox`) and admitted the same way. A new base (for example a
+Claude CLI bump) needs every project environment rebuilt on it, because a
+template advertises exact harness versions and placement requires the
+selected one (`aq-selection/src/placement.rs`).
+
+- Admitting a new base emits a new host-contract event,
+  `aq.environment.base_changed`. The delivery playbook reacts by building each
+  project's current recipes on the new base and admitting each that passes.
+  **(call)**
+- A project whose rebuild fails stays on its previous environment and the old
+  harness version, and the failure goes to the project's supervisor, which
+  files a task. Other projects move on.
+- The old base and the environments built on it stay advertised while any
+  project still uses them (§6.7).
+
+### 6.5 Build cache
 
 The node's per-project build cache already keys by template variant. A
-project's `build_cache` warm command can differ per environment (Cargo for
-Rust, `pnpm install --frozen-lockfile` for web). It moves from the node config
-to the environment's recipe (`## Warm`), so it travels with the toolchain.
-**(call)**
+project's warm command can differ per environment (Cargo for Rust,
+`pnpm install --frozen-lockfile` for web). It moves from the node config to the
+recipe's `## Warm`, so it travels with the toolchain. **(call)**
+
+### 6.6 Where builds run
+
+Builds go through Docker Buildx with a named builder, as
+`aq-worker template build` does today. The tool needs only an OCI-archive
+export; it never loads the image into a Docker daemon. Moving between
+deployments is a builder-config change, not a code change.
+
+- **Local stack:** a `docker-container` builder on the host's Docker
+  (templates.md: `docker buildx create --name aq-templates --driver
+  docker-container --bootstrap default`).
+- **The downstream fork on GKE:** a `kubernetes`-driver builder. Buildx runs
+  BuildKit as pods, so cluster nodes need no Docker daemon. BuildKit runs on
+  its own node pool, rootless if the cluster allows the relaxed seccomp and
+  AppArmor that rootless BuildKit needs (GKE Standard does; Autopilot is
+  unverified). A Compute Engine VM with Docker, used as a remote builder, is
+  the alternative.
+- The machine that runs the build tool receives the exported archive (several
+  GB for a Playwright or Rust image) and scans it. Run it in the same region as
+  the builder and the registry.
+- The base images a recipe builds on must be pullable from a registry the
+  builder can reach.
+- Builds get open network access (apt, npm and the Playwright downloads need
+  it) and a build cache separate per project, so a `try` build never reads
+  another project's cache.
+- An escape from a build reaches the builder's host (the dev machine locally,
+  a builder node in the cluster). That is the accepted risk of §6.2.
+
+### 6.7 Settings and rolling records
+
+Settings, not constants: build wall time; build CPU and memory; the recipe
+bounds (64 install steps, 32 arguments per step, 4096 bytes per argument,
+16 prefetch entries and 1 MiB input today); the `try` log size; and how many
+admitted versions to keep per environment and per base. Old versions are
+pruned when a new one is admitted, keeping the last N, except a version an
+attempt still uses. Nothing finished may block a new build.
+
+### 6.8 A new project
+
+1. The global supervisor creates the project and its binding.
+2. It files a first task, "Set up the sandbox toolchain". The task body names
+   the owner's request and the repository's own signals: `package.json`
+   `engines` and `packageManager`, lockfiles, `rust-toolchain.toml`, and the CI
+   workflow's setup steps.
+3. The agent writes `.aq/environments/<name>.md` with `default: true`, proves it
+   with `aq environment try` running the project's own test commands, and
+   delivers it as a pull request.
+4. Until that merges, the project's tasks run in the AQ base template.
 
 ## 7. The live stack
 
-| Project | default_environment | provides |
+| Project | default environment | provides |
 |---|---|---|
-| aq-server, aq-worker, aq-git, aq-graph, aq-playbooks | `aq-rust` (today's template, renamed) | rust, cpp, cmake, python |
-| aq-dashboard | `aq-dashboard-web` (new) | node, pnpm, playwright, python |
+| aq-server, aq-worker, aq-git, aq-graph, aq-playbooks | `<project>/rust` | rust, cpp, cmake, python |
+| aq-dashboard | `aq-dashboard/web` | node, pnpm, playwright, python |
 
-`aq-rust` is today's `aq-ms1-docker-local-claude` with `provides` added, so
-nothing about running Rust tasks changes.
+The Rust repositories each get the same recipe: what today's template installs
+on top of the base.
 
 ## 8. Order of work
 
-1. **By hand, now (no code):** build `aq-dashboard-web` from a recipe with the
-   existing `aq-worker template build`, add it to the node template list, write
-   its environment definition, bind aq-dashboard to it through a dashboard
-   execution profile and role. This is the stopgap §2 calls wrong, kept only
-   until step 4.
-2. aq-server: `provides` on environments; `default_environment` on the
-   binding; the execution profile's `environment` becomes optional; holds
-   `environment_missing_capability` and `no_node_has_environment`.
-3. aq-server: task metadata `aq:needs` on `task.create` / `task.graph.create`
-   and `task.needs.set` for the owner before the first grant; shown on task
-   reads.
+1. ~~By hand, now: build `aq-dashboard-web` and bind it through a dashboard
+   profile and role.~~ Dropped: the live template already has Node and pnpm,
+   and §6 replaces the hand path. Playwright waits for step 5.
+2. **Done (#206, behind `project_environments`).** aq-server: `provides` on
+   environments; `default_environment` on the binding; optional profile
+   `environment`; the two holds.
+3. **Done (#206).** aq-server: `aq:needs` on task creation and
+   `task.needs.set`, shown on task reads.
 4. aq-playbooks + aq-server: the router outputs `environment`; the default
-   routing document implements §5.4's rule. Remove step 1's dashboard role
-   and profile.
-5. aq-server + aq-worker: the recipe Settings document and the build job (§6),
-   including writing environment definitions and qualification as an
-   operation.
-6. aq-dashboard: Settings › Environments (recipes, versions, build status,
+   routing document implements §5.4's rule.
+5. aq-worker: the credential scanner works on this host (environment repair
+   only; any change to what it refuses goes to the owner first). The AQ base
+   template is built and admitted from the existing recipe path.
+6. aq-worker + aq-server: the recipe format (§6.1), `environment.try` with its
+   CLI (§6.2), and `environment.build` and `environment.admit` (§6.3), with
+   admitted digests published to nodes.
+7. aq-playbooks: the delivery playbook's build check and admit-on-merge
+   (§6.3), and the base-change rebuild (§6.4); host contract additions.
+8. aq-server: the global supervisor's new-project setup task (§6.8).
+9. aq-dashboard: Settings › Environments (recipes, versions, build status,
    `provides`, which nodes can run each); task view shows `aq:needs` and the
    chosen environment.
-7. Move `build_cache` warm commands into recipes (§6.3).
+10. Move `build_cache` warm commands into recipes (§6.5).
+11. Pilot on the scratch project, then aq-dashboard, then the Rust projects.
+    The feature turns on when every AQ project has an admitted environment.
+    Then the hand-built `aq-template-unadmitted` images and their `native.json`
+    pins are removed. Until then, projects keep today's image. **(call)**
+
+New code is behind `project_environments`, merged to main, and the flag is
+removed when the epic is confirmed.
 
 ## 9. Questions for the owner
 
@@ -233,6 +399,10 @@ nothing about running Rust tasks changes.
    enough, or should Settings keep a list of known labels?
 2. Should `aq:needs` be settable only by filers and the router, or also by the
    agent of a running task (requesting a different environment for its retry)?
-3. Recipes as Settings documents (§6.1), with repository files only as
-   proposals. Agreed?
-4. Who may approve a recipe: owner only, or a playbook gate as for delivery?
+
+Answered 2026-11-21:
+
+- Recipes live in the repository, not in Settings (old question 3).
+- A recipe is approved by the pull request's review and merge under the
+  delivery playbook, like code (old question 4).
+- Builds run through Buildx with a named builder (§6.6).
