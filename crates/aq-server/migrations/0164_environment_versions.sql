@@ -1,0 +1,46 @@
+-- Spec 0017 §6.3, §6.7: environment versions and builder jobs move from the
+-- boot config into the database, and the environment limits are a Settings
+-- value. Additive: an older server keeps running on the migrated schema.
+--
+-- A base environment (the AQ base template) is a version with no project.
+CREATE TABLE environment_versions (
+    environment_id TEXT NOT NULL CHECK (environment_id ~ '^[A-Za-z0-9_.:-]{1,128}$'),
+    version TEXT NOT NULL CHECK (version ~ '^[A-Za-z0-9_.:-]{1,128}$'),
+    project_id UUID,
+    template_digest TEXT NOT NULL CHECK (template_digest ~ '^sha256:[0-9a-f]{64}$'),
+    image TEXT NOT NULL CHECK (octet_length(image) BETWEEN 1 AND 512),
+    provides JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(provides) = 'array'),
+    platform_text TEXT CHECK (octet_length(platform_text) <= 65536),
+    toolchain JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(toolchain) = 'array'),
+    warm JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(warm) = 'array'),
+    harnesses JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(harnesses) = 'array'),
+    recipe_sha256 TEXT CHECK (recipe_sha256 ~ '^[0-9a-f]{64}$'),
+    -- The base this version was built on; NULL for a base itself.
+    base_digest TEXT CHECK (base_digest ~ '^sha256:[0-9a-f]{64}$'),
+    admitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (environment_id, version)
+);
+CREATE INDEX environment_versions_project ON environment_versions(project_id, environment_id);
+
+-- One build or try for a builder node (`run` is a try's command, if any).
+-- Rows are rolling records.
+CREATE TABLE environment_jobs (
+    job_id UUID PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('build', 'try')),
+    project_id UUID NOT NULL,
+    commit TEXT NOT NULL CHECK (commit ~ '^[0-9a-f]{40}$'),
+    recipes JSONB NOT NULL CHECK (jsonb_typeof(recipes) = 'array'),
+    run TEXT,
+    state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed', 'completed')),
+    claimed_by UUID,
+    result JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX environment_jobs_queued ON environment_jobs(created_at) WHERE state = 'queued';
+
+-- NULL means never saved: the defaults of the running build apply.
+ALTER TABLE role_settings
+    ADD COLUMN environment_limits JSONB,
+    ADD COLUMN environment_limits_revision BIGINT NOT NULL DEFAULT 0;
+
+UPDATE meta SET value='164' WHERE key='state_format_version';

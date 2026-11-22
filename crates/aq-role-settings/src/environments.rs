@@ -34,3 +34,55 @@ pub async fn listed(pool: &PgPool, environment: &str, now_ms: i64) -> bool {
     .await
     .unwrap_or(true)
 }
+
+/// The environment limits (spec 0017 §6.7): a Settings value of their own,
+/// read at every use and sent to the builder inside each job. The defaults
+/// are the recipe bounds and build budget of the spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentLimits {
+    pub max_install_steps: u64,
+    pub max_step_args: u64,
+    pub max_arg_bytes: u64,
+    pub max_prefetch: u64,
+    pub max_recipe_bytes: u64,
+    pub build_wall_ms: u64,
+    pub build_cpu_millis: u64,
+    pub build_memory_bytes: u64,
+    /// The bytes of a build or `try` log kept after redaction.
+    pub log_bytes: u64,
+    /// Concurrent `try` jobs per project; one more is refused.
+    pub try_concurrency: u64,
+    /// Admitted versions kept per environment and per base.
+    pub keep_versions: u64,
+}
+impl Default for EnvironmentLimits {
+    fn default() -> Self {
+        Self {
+            max_install_steps: 64,
+            max_step_args: 32,
+            max_arg_bytes: 4096,
+            max_prefetch: 16,
+            max_recipe_bytes: 1_048_576,
+            build_wall_ms: 3_600_000,
+            build_cpu_millis: 4000,
+            build_memory_bytes: 8_589_934_592,
+            log_bytes: 65_536,
+            try_concurrency: 2,
+            keep_versions: 3,
+        }
+    }
+}
+impl EnvironmentLimits {
+    /// Every value at least 1 and within BIGINT; the message names the first that is not.
+    pub fn validate(&self) -> Result<(), String> {
+        let value = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        for (name, n) in value.as_object().into_iter().flatten() {
+            let n = n.as_u64().unwrap_or_default();
+            if !(1..=i64::MAX as u64).contains(&n) {
+                return Err(format!("{name} is {n}; it must be at least 1"));
+            }
+        }
+        Ok(())
+    }
+}

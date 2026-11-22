@@ -1,0 +1,17 @@
+[package]
+name = "aq-environments"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Spec 0017: environment versions in the database and the one catalog every reader of environment definitions and templates goes through"
+
+[dependencies]
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
+aq-environment-templates = { path = "../aq-environment-templates" }
+aq-project-policy = { path = "../aq-project-policy", features = ["project_environments"] }
+aq-role-settings = { path = "../aq-role-settings", features = ["project_environments"] }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+sqlx-postgres.workspace = true
+uuid.workspace = true

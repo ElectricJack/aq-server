@@ -187,6 +187,26 @@ pub async fn retain_required(
     }
     Ok(receipts)
 }
+/// Spec 0017 §6.3: the boot config's definitions and template allowlist with
+/// the admitted environment versions, read through one catalog.
+#[cfg(feature = "project_environments")]
+pub async fn catalog(state: &AppState) -> Result<aq_environments::Catalog<'_>, AppError> {
+    let config = state.config.profiled_execution.as_deref();
+    let definitions = config.map_or_else(Vec::new, |c| {
+        (c.definition_bodies.iter())
+            .map(|d| (&d.artifact, d.body.as_str()))
+            .collect()
+    });
+    let templates = state.config.templates.as_deref();
+    let boot = aq_environments::BootEnvironments {
+        definitions,
+        templates,
+    };
+    let pool = &state.store.pool;
+    aq_environments::Catalog::load(pool, &boot)
+        .await
+        .map_err(crate::error::db)
+}
 fn unavailable() -> AppError {
     AppError::Conflict("required public definition bytes unavailable".into())
 }

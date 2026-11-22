@@ -257,6 +257,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .ok_or_else(|| refused())?;
     let prepared = compiled.prepared.swap_remove(index);
     let policy = prepared.policy.clone();
+    #[cfg_attr(feature = "project_environments", allow(unused_variables))]
     let configuration = state
         .config
         .profiled_execution
@@ -324,35 +325,33 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     } else {
         None
     };
+    #[cfg(feature = "project_environments")]
+    let catalog = super::super::definitions::catalog(state).await?;
+    #[cfg(feature = "project_environments")]
+    let body = |r: &ArtifactRef| catalog.definition(r);
+    #[cfg(not(feature = "project_environments"))]
+    let body = |r: &ArtifactRef| {
+        let mut bodies = configuration.definition_bodies.iter();
+        bodies.find(|d| d.artifact() == r).map(|d| d.body())
+    };
     let review = if enrolled {
         aq_admission::outcome::ReviewRequirement::PolicyActor
     } else {
-        configuration
-            .definition_bodies
-            .iter()
-            .find(|d| d.artifact() == &validation)
-            .map(|d| super::super::settlement::review_requirement(d.body()))
-            .ok_or_else(|| refused())?
+        let review = body(&validation).map(super::super::settlement::review_requirement);
+        review.ok_or_else(|| refused())?
     };
     // Check every required actual body before writing any retained artifact.
-    let definitions = unique
-        .iter()
-        .map(|r| {
-            configuration
-                .definition_bodies
-                .iter()
-                .find(|d| d.artifact() == r)
-                .ok_or_else(|| refused())
-        })
+    let definitions = (unique.iter())
+        .map(|r| body(r).map(|b| (r, b)).ok_or_else(|| refused()))
         .collect::<Result<Vec<_>, _>>()?;
-    for definition in definitions {
+    for (artifact, body) in definitions {
         on_heap(|| {
             set.retain(
                 state,
                 OwnerKind::Composition,
                 ArtifactKind::Definition,
-                definition.artifact().clone(),
-                definition.body().as_bytes(),
+                artifact.clone(),
+                body.as_bytes(),
             )
         })
         .await?;

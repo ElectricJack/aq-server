@@ -264,7 +264,7 @@ pub async fn facts(
     environment: &str,
     now_ms: u64,
 ) -> Result<Option<aq_selection::Placement>, AppError> {
-    let template = template(state, environment);
+    let template = template(state, environment).await?;
     let book = crate::observations::catalog::rate_book(state);
     facts_in(
         &state.store.pool,
@@ -280,12 +280,19 @@ pub async fn facts(
     )
     .await
 }
-/// The template digest the operator's allowlist resolves `environment` to;
-/// `None` without an allowlist or when it names none or several.
-pub fn template(state: &AppState, environment: &str) -> Option<String> {
-    let allowlist = state.config.templates.as_deref()?;
-    let resolved = aq_environment_templates::resolve([environment], allowlist).ok()?;
-    (resolved.into_iter().next()).map(|r| r.template_digest.as_str().to_owned())
+/// The template digest `environment` resolves to through the catalog (else the
+/// operator's allowlist); `None` when it names none or several.
+pub async fn template(state: &AppState, environment: &str) -> Result<Option<String>, AppError> {
+    #[cfg(feature = "project_environments")]
+    let catalog = super::definitions::catalog(state).await?;
+    #[cfg(feature = "project_environments")]
+    let digest = (catalog.template(environment)).map(|a| a.digest.as_str().to_owned());
+    #[cfg(not(feature = "project_environments"))]
+    let digest = (state.config.templates.as_deref())
+        .and_then(|allowlist| aq_environment_templates::resolve([environment], allowlist).ok())
+        .and_then(|resolved| resolved.into_iter().next())
+        .map(|r| r.template_digest.as_str().to_owned());
+    Ok(digest)
 }
 
 pub async fn facts_in(
@@ -531,7 +538,7 @@ pub(crate) async fn fence_locked(
         pool: &state.store.observation_pool,
         book: &book,
     };
-    let template = template(state, &project.environment);
+    let template = template(state, &project.environment).await?;
     let current = derive(
         tx,
         &ledger,

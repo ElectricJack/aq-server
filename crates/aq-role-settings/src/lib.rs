@@ -29,6 +29,8 @@ pub use store::{
 };
 #[cfg(feature = "delivery_playbook")]
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
+#[cfg(feature = "project_environments")]
+pub use store::{environment_limits, save_environment_limits};
 
 /// Something outside this store that names one of its documents, such as a
 /// project binding's default role.
@@ -167,6 +169,9 @@ pub enum Change {
     /// The delivery limits. They are not part of a snapshot.
     #[cfg(feature = "delivery_playbook")]
     DeliveryLimits(delivery::DeliveryLimits),
+    /// The environment limits (spec 0017 §6.7). They are not part of a snapshot.
+    #[cfg(feature = "project_environments")]
+    EnvironmentLimits(environments::EnvironmentLimits),
 }
 /// A change with its fence and its retry identity.
 #[derive(Debug, Clone, PartialEq, Eq)]

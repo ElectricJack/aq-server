@@ -192,3 +192,153 @@ async fn a_retry_keeps_the_environment_of_the_attempt_it_replaces() {
     assert_ne!(second, first);
     assert_eq!(placed(&c, second).await, roles::ENVIRONMENT);
 }
+
+const TEMPLATE: &str = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+/// Admit `id` version `version` providing `provides`, as `environment.admit` will.
+async fn admit(c: &Case, id: &str, version: &str, provides: Value) {
+    sqlx::query(
+        "INSERT INTO environment_versions(environment_id,version,project_id,template_digest,image,provides,platform_text,harnesses,warm,admitted_at) \
+         VALUES($1,$2,$3,$4,'registry.example/web@'||$4,$5,'Admitted platform.','[{\"harness\":\"codex\",\"version\":\"1\"}]','[\"pnpm install\"]',now())",
+    )
+    .bind(id)
+    .bind(version)
+    .bind(c.env.lineage.project_id)
+    .bind(TEMPLATE)
+    .bind(provides)
+    .execute(&c.env.env.pool)
+    .await
+    .unwrap();
+}
+
+/// Spec 0017 §6.3: the boot config's definitions and template allowlist and
+/// the admitted versions in the database are read through one `Catalog`.
+#[tokio::test]
+async fn boot_definitions_and_admitted_versions_read_through_one_catalog() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    let allowlist = json!({"schema_version":1,"entries":[{"name":"web","version":"1","image_digest":format!("sha256:{}", "e".repeat(64))}]});
+    let mut config = (*c.env.env.state.config).clone();
+    config.templates = Some(Arc::new(
+        aq_environment_templates::Allowlist::parse(allowlist.to_string().as_bytes()).unwrap(),
+    ));
+    c.env.env.state.config = Arc::new(config);
+    admit(&c, "example.web", "1", json!(["node", "python"])).await;
+    admit(&c, "example.web", "2", json!(["node", "python", "rust"])).await;
+
+    let state = &c.env.env.state;
+    let catalog = aq_server::profiled_execution::definitions::catalog(state)
+        .await
+        .unwrap();
+    let ids: Vec<(&str, &str)> = catalog.definitions().map(|(i, v, _)| (i, v)).collect();
+    for id in [
+        ("web", "1"),
+        ("full", "1"),
+        ("example.web", "1"),
+        ("example.web", "2"),
+    ] {
+        assert!(ids.contains(&id), "{id:?} in {ids:?}");
+    }
+    let provided = |e| aq_project_policy::environments::provided(e, catalog.definitions());
+    assert_eq!(provided("web"), ["node"]);
+    assert_eq!(provided("example.web@2"), ["node", "python", "rust"]);
+    // The boot allowlist still pins `web`; a bare admitted id is its newest version.
+    assert_eq!(
+        catalog.template("web").unwrap().digest.as_str(),
+        "e".repeat(64)
+    );
+    let newest = catalog.template("example.web").unwrap();
+    assert_eq!(
+        (newest.version.as_str(), newest.digest.as_str()),
+        ("2", &"d".repeat(64)[..])
+    );
+    assert_eq!(catalog.template("example.web@1").unwrap().version, "1");
+    assert!(catalog.template("absent").is_none());
+    assert_eq!(
+        catalog.platform_text("example.web"),
+        Some("Admitted platform.")
+    );
+    assert_eq!(catalog.platform_text("web"), None);
+    // A version's definition body is retained by its exact reference.
+    let (_, _, body) = (catalog.definitions())
+        .find(|(i, v, _)| *i == "example.web" && *v == "1")
+        .unwrap();
+    let reference = aq_admission::ArtifactRef {
+        id: aq_admission::Text::new("example.web").unwrap(),
+        version: aq_admission::Text::new("1").unwrap(),
+        digest: aq_admission::Digest::of(body.as_bytes()),
+    };
+    assert_eq!(catalog.definition(&reference), Some(body));
+    // Nodes are told the admitted versions, not the boot allowlist.
+    let nodes = serde_json::to_value(catalog.admitted_for_nodes()).unwrap();
+    assert_eq!(nodes.as_array().unwrap().len(), 2, "{nodes}");
+    assert_eq!(
+        nodes[0],
+        json!({"id":"example.web","version":"2","digest":TEMPLATE,"image":format!("registry.example/web@{TEMPLATE}"),"harnesses":[{"harness":"codex","version":"1"}],"warm":["pnpm install"]})
+    );
+}
+
+/// A need only an admitted version provides holds the task until that
+/// version is admitted; then placement chooses it (no node runs it yet).
+#[tokio::test]
+async fn an_admitted_version_provides_its_labels_to_placement() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    let env = &mut c.env.env;
+    env.body["allowed_environments"] = json!([roles::ENVIRONMENT, "web", "full", "example.web"]);
+    let body = json!({"operation_id":Uuid::new_v4(),"expected_revision":3,"binding":env.body});
+    let (status, v) =
+        selection::call(&env.app, &selection::path(), Some(body), "owner@localhost").await;
+    assert_eq!(status, 200, "{v}");
+    unpin(&c).await;
+    needs(&c, &["python"]);
+    let reason = refused(&mut c, "environment_missing_capability").await;
+    assert_eq!(reason["missing"], json!(["python"]), "{reason}");
+
+    admit(&c, "example.web", "1", json!(["node", "python"])).await;
+    let reason = refused(&mut c, "no_node_has_environment").await;
+    assert_eq!(reason["environment"], "example.web", "{reason}");
+}
+
+/// Spec 0017 §6.7: the environment limits are a Settings value whose
+/// defaults are the documented numbers, and the owner's save replaces them.
+#[tokio::test]
+async fn environment_limits_default_to_the_documented_values() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let (limits, revision) = aq_role_settings::environment_limits(pool).await.unwrap();
+    assert_eq!(revision, 0);
+    assert_eq!(
+        serde_json::to_value(limits).unwrap(),
+        json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096, "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000, "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536, "try_concurrency": 2, "keep_versions": 3})
+    );
+    let changed = aq_role_settings::environments::EnvironmentLimits {
+        keep_versions: 5,
+        ..limits
+    };
+    let receipt = aq_role_settings::save_environment_limits(
+        pool,
+        c.env.actor,
+        &changed,
+        0,
+        Uuid::new_v4(),
+        1,
+    )
+    .await
+    .unwrap();
+    let (stored, revision) = aq_role_settings::environment_limits(pool).await.unwrap();
+    assert_eq!((stored, revision), (changed, receipt.revision));
+    let zero = aq_role_settings::environments::EnvironmentLimits {
+        try_concurrency: 0,
+        ..changed
+    };
+    let refused = aq_role_settings::save_environment_limits(
+        pool,
+        c.env.actor,
+        &zero,
+        revision,
+        Uuid::new_v4(),
+        2,
+    )
+    .await;
+    assert!(refused.is_err(), "a zero limit is refused");
+}

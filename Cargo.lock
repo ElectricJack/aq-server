@@ -280,6 +280,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-environments"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.1.13",
+ "aq-environment-templates",
+ "aq-project-policy",
+ "aq-role-settings",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "aq-history-caps"
 version = "0.1.0"
 dependencies = [
@@ -848,6 +863,7 @@ dependencies = [
  "aq-dashboard-contract",
  "aq-delivery",
  "aq-environment-templates",
+ "aq-environments",
  "aq-history-caps",
  "aq-human-cursor",
  "aq-human-http",

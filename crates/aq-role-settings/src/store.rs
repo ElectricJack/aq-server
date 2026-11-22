@@ -354,6 +354,8 @@ pub async fn apply_referenced(
         Change::DeliveryDocument(_) => state.delivery_revision,
         #[cfg(feature = "delivery_playbook")]
         Change::DeliveryLimits(_) => state.delivery_limits_revision,
+        #[cfg(feature = "project_environments")]
+        Change::EnvironmentLimits(_) => environment_limits_on(&mut tx).await?.1,
     };
     if current != mutation.expected_revision {
         return Err(conflict(
@@ -393,6 +395,16 @@ pub async fn apply_referenced(
     };
     #[cfg(not(feature = "delivery_playbook"))]
     let delivery = false;
+    // The environment limits, too, compile and activate nothing.
+    #[cfg(feature = "project_environments")]
+    let delivery = delivery
+        || match &mutation.change {
+            Change::EnvironmentLimits(limits) => {
+                limits.validate().map_err(|message| invalid(&message))?;
+                true
+            }
+            _ => false,
+        };
     let snapshot = if let Change::RoutingDocument(markdown) = &mutation.change {
         let limit = state.limits.documents.max_document_bytes;
         if markdown.len() > limit {
@@ -488,6 +500,16 @@ pub async fn apply_referenced(
         Change::DeliveryLimits(limits) => {
             sqlx::query(
                 "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",
+            )
+            .bind(revision)
+            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
+            .execute(&mut *tx)
+            .await?;
+        }
+        #[cfg(feature = "project_environments")]
+        Change::EnvironmentLimits(limits) => {
+            sqlx::query(
+                "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",
             )
             .bind(revision)
             .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
@@ -689,6 +711,46 @@ pub async fn observation_limits(
         None => Default::default(),
     };
     Ok((limits, revision))
+}
+/// The environment limits and their revision (spec 0017 §6.7); the defaults
+/// at revision 0 until first saved.
+#[cfg(feature = "project_environments")]
+pub async fn environment_limits(
+    pool: &PgPool,
+) -> Result<(crate::environments::EnvironmentLimits, i64)> {
+    environment_limits_on(&mut *pool.acquire().await?).await
+}
+#[cfg(feature = "project_environments")]
+async fn environment_limits_on(
+    conn: &mut PgConnection,
+) -> Result<(crate::environments::EnvironmentLimits, i64)> {
+    let (stored, revision): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT environment_limits,environment_limits_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    let limits = match stored {
+        Some(value) => serde_json::from_value(value).map_err(|_| Error::Internal)?,
+        None => Default::default(),
+    };
+    Ok((limits, revision))
+}
+/// Replace the environment limits; they are validated before anything is stored.
+#[cfg(feature = "project_environments")]
+pub async fn save_environment_limits(
+    pool: &PgPool,
+    actor: Uuid,
+    limits: &crate::environments::EnvironmentLimits,
+    expected_revision: i64,
+    operation_id: Uuid,
+    now_ms: i64,
+) -> Result<Receipt> {
+    let mutation = Mutation {
+        change: Change::EnvironmentLimits(*limits),
+        expected_revision,
+        operation_id,
+    };
+    apply(pool, actor, &mutation, now_ms).await
 }
 pub async fn save_limits(
     pool: &PgPool,
