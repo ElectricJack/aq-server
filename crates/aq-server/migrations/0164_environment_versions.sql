@@ -81,4 +81,29 @@ ALTER TABLE role_settings
     ADD COLUMN environment_limits JSONB,
     ADD COLUMN environment_limits_revision BIGINT NOT NULL DEFAULT 0;
 
+-- Host catalog 2.5.0 (profile 12): the asynchronous `environment.build` and
+-- `environment.admit` commands on the bridge tables, like the delivery
+-- commands (0146); a completion outcome is the operation's status.
+SET LOCAL lock_timeout = '5s';
+ALTER TABLE playbook_namespaces DROP CONSTRAINT playbook_namespaces_catalog_profile_check;
+ALTER TABLE playbook_namespaces ADD CHECK(catalog_profile IN (1,2,3,4,5,6,7,8,9,10,11,12));
+ALTER TABLE playbook_effects DROP CONSTRAINT playbook_effects_command_name_check;
+ALTER TABLE playbook_effects ADD CHECK (
+    command_name ~ '^ext\.[a-z][a-z0-9_]{1,31}\..+$'
+    OR command_name IN (
+        'message.send','decision.request','context.read','work.ensure','work.change',
+        'operation.cancel','findings.reconcile','judgment.request','check.request',
+        'candidate.prepare','candidate.publish','work.read','work.route','work.unroutable',
+        'judgment.assess','work.complete','work.return','work.hold','supervisor.notify',
+        'main.sync','branch.publish','pull_request.open','pull_request.await_checks',
+        'pull_request.merge','pull_request.close','work.activate',
+        'environment.build','environment.admit'
+    )
+);
+ALTER TABLE playbook_host_operations DROP CONSTRAINT playbook_host_operations_command_name_check;
+ALTER TABLE playbook_host_operations ADD CHECK (command_name IN ('judgment.request','check.request','work.ensure','decision.request','judgment.assess','main.sync','branch.publish','pull_request.open','pull_request.await_checks','pull_request.merge','pull_request.close','environment.build','environment.admit'));
+ALTER TABLE playbook_host_operations DROP CONSTRAINT playbook_host_operations_status_check;
+ALTER TABLE playbook_host_operations ADD CHECK (status IN ('running','assessed','failed','refused','passed','infrastructure_failure','completed','approved','rejected','expired','synced','published','conflict','opened','closed','timeout','merged','not_mergeable','unchanged','built','admitted'));
+SET LOCAL lock_timeout TO DEFAULT;
+
 UPDATE meta SET value='164' WHERE key='state_format_version';

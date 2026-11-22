@@ -802,7 +802,7 @@ impl Service {
             return Err(Error::Conflict);
         }
         let mut output = request.output(handle);
-        if self.profile == super::super::review_domain::CatalogProfile::Host11 {
+        if self.profile.has_notes() {
             output["note"] = json!(note.unwrap_or_default());
         }
         let result = self

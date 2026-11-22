@@ -129,6 +129,9 @@ enum Profile {
     Host10,
     #[serde(rename = "host_v11")]
     Host11,
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[serde(rename = "host_v12")]
+    Host12,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -235,6 +238,8 @@ impl Configuration {
             #[cfg(feature = "delivery_playbook")]
             Profile::Host10 => CatalogProfile::Host10,
             Profile::Host11 => CatalogProfile::Host11,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Profile::Host12 => CatalogProfile::Host12,
         };
         if self.installation_routing && !profile.has_routing() {
             return Err(

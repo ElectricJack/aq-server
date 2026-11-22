@@ -42,6 +42,11 @@ pub enum CatalogProfile {
     Host10,
     /// AQ host catalog 2.4.0: Host9 plus decision notes and draft-subtree activation.
     Host11,
+    /// AQ host catalog 2.5.0 (spec 0017): Host10's delivery lineage plus
+    /// Host11's changes and the environment commands. Compiled in only with
+    /// the cargo features `delivery_playbook` and `project_environments`.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    Host12,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
 pub const HOST9_FINGERPRINT: &str =
@@ -247,6 +252,36 @@ fn host11_registry() -> Registry {
 
 pub const WORK_ACTIVATE: &str = "work.activate";
 
+/// AQ host catalog 2.5.0.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const HOST12_VERSION: &str = "2.5.0";
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const HOST12_FINGERPRINT: &str =
+    "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f";
+/// The asynchronous environment commands: each completes by `aq.environment.completed`.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const ENVIRONMENT_COMMANDS: [&str; 2] = ["environment.build", "environment.admit"];
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+fn host12_registry() -> Registry {
+    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: Registry = serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.5.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.5.0 parses");
+            assert_eq!(
+                aq_playbook_host::model::digest(&(HOST12_VERSION, &registry))
+                    .ok()
+                    .as_deref(),
+                Some(HOST12_FINGERPRINT),
+                "vendored AQ host catalog 2.5.0 fingerprint",
+            );
+            registry
+        })
+        .clone()
+}
+
 pub const HOST8_VERSION: &str = "2.1.0";
 pub const HOST8_FINGERPRINT: &str =
     "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716";
@@ -348,6 +383,8 @@ impl CatalogProfile {
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => 10,
             Self::Host11 => 11,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => 12,
         }
     }
     /// Catalog 2.3.0 (Epic 0): always false without the feature
@@ -355,12 +392,27 @@ impl CatalogProfile {
     pub fn is_delivery(self) -> bool {
         #[cfg(feature = "delivery_playbook")]
         {
-            self == Self::Host10
+            self == Self::Host10 || self.has_environments()
         }
         #[cfg(not(feature = "delivery_playbook"))]
         {
             false
         }
+    }
+    /// Catalog 2.5.0 (spec 0017): always false without both features.
+    pub fn has_environments(self) -> bool {
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        {
+            self == Self::Host12
+        }
+        #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+        {
+            false
+        }
+    }
+    /// Catalog 2.4.0 and later: decision notes and `work.activate`.
+    pub fn has_notes(self) -> bool {
+        self == Self::Host11 || self.has_environments()
     }
     /// Catalog 2.2.0 and later: `work.read`, `work.route`, `work.unroutable`,
     /// `judgment.assess` and the event `aq.work.route_needed`.
@@ -388,7 +440,9 @@ impl CatalogProfile {
         self.is_host2() || self == Self::Monitoring6
     }
     pub fn from_number(number: i16) -> Option<Self> {
-        #[cfg(feature = "delivery_playbook")]
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        let delivery = [Self::Host10, Self::Host12];
+        #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
         let delivery = [Self::Host10];
         #[cfg(not(feature = "delivery_playbook"))]
         let delivery: [Self; 0] = [];
@@ -423,6 +477,8 @@ impl CatalogProfile {
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => "host_v10",
             Self::Host11 => "host_v11",
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => "host_v12",
         }
     }
     /// Why a configured namespace cannot open over the stored row
@@ -460,6 +516,19 @@ impl CatalogProfile {
             }
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => &HOST10_COMMANDS,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => {
+                static COMMANDS: std::sync::LazyLock<Vec<&'static str>> =
+                    std::sync::LazyLock::new(|| {
+                        [
+                            &HOST10_COMMANDS[..],
+                            &[WORK_ACTIVATE],
+                            &ENVIRONMENT_COMMANDS,
+                        ]
+                        .concat()
+                    });
+                &COMMANDS
+            }
             _ => &[],
         }
     }
@@ -492,6 +561,10 @@ impl CatalogProfile {
         #[cfg(feature = "delivery_playbook")]
         if self == Self::Host10 {
             return host10_registry();
+        }
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        if self == Self::Host12 {
+            return host12_registry();
         }
         let mut registry = crate::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
@@ -554,8 +627,12 @@ impl CatalogProfile {
             if self == Self::Monitoring6 {
                 allowed.insert("findings.reconcile".into());
             }
-            if self == Self::Host11 {
+            if self.has_notes() {
                 allowed.insert(WORK_ACTIVATE.into());
+            }
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            if self.has_environments() {
+                allowed.extend(ENVIRONMENT_COMMANDS.iter().map(|c| c.to_string()));
             }
             #[cfg(feature = "delivery_playbook")]
             if self.is_delivery() {

@@ -70,7 +70,8 @@ pub fn routing() -> SourceRecord {
 pub fn delivery() -> SourceRecord {
     let names =
         |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
-    let commands = names(&[
+    #[allow(unused_mut)]
+    let mut commands = names(&[
         "work.read",
         "work.complete",
         "work.return",
@@ -83,13 +84,16 @@ pub fn delivery() -> SourceRecord {
         "pull_request.merge",
         "pull_request.close",
     ]);
-    let events = names(&["aq.work.result_ready"]);
-    let registry = serde_json::from_str(docs::CATALOG_2_3_REGISTRY)
-        .expect("the catalog 2.3.0 registry parses");
-    let capabilities = draft::retain_registry(&registry, &commands, &events)
-        .map(|(_, capabilities)| capabilities)
-        .unwrap_or_default();
-    SourceRecord {
+    #[allow(unused_mut)]
+    let mut events = names(&["aq.work.result_ready"]);
+    // Spec 0017 §6.3-6.4: build and admit environments, and rebuild on a new
+    // base (`aq.environment.completed` comes with the commands).
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    {
+        commands.extend(names(&["environment.build", "environment.admit"]));
+        events.extend(names(&["aq.environment.base_changed"]));
+    }
+    let mut record = SourceRecord {
         id: DELIVERY.into(),
         kind: SourceKind::Builtin,
         binding: DELIVERY_BINDING.into(),
@@ -99,10 +103,15 @@ pub fn delivery() -> SourceRecord {
         judgment_purpose: Purpose::PlaybookCall,
         commands,
         events,
-        capabilities,
+        capabilities: BTreeSet::new(),
         facts: vec![],
         revision: 0,
-    }
+    };
+    let registry = crate::request::pinned_catalog(&record).expect("the delivery catalog parses");
+    record.capabilities = draft::retain_registry(&registry, &record.commands, &record.events)
+        .map(|(_, capabilities)| capabilities)
+        .unwrap_or_default();
+    record
 }
 
 #[cfg(test)]
@@ -131,7 +140,7 @@ mod tests {
         docs::catalog(&record.commands, &record.events).unwrap();
     }
 
-    #[cfg(feature = "delivery_playbook")]
+    #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
     #[test]
     fn the_delivery_record_may_settle_a_result_and_no_more() {
         let record = delivery();
@@ -201,7 +210,7 @@ mod tests {
     /// The worked delivery example of catalog 2.3.0 seals as a playbook of
     /// this record, against catalog 2.3.0, with the record's scope, binding and
     /// abilities (`project` is the one scope the contracts allow).
-    #[cfg(feature = "delivery_playbook")]
+    #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
         const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
@@ -223,6 +232,98 @@ mod tests {
             (playbook.id.as_str(), playbook.scope.as_str()),
             ("aq.delivery", "project")
         );
+        assert!(
+            playbook
+                .required_capabilities
+                .is_subset(&record.capabilities)
+        );
+    }
+
+    /// Spec 0017: catalog 2.5.0 adds the environment commands and the base
+    /// event, and keeps every 2.3.0 contract the record used.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[test]
+    fn the_delivery_record_builds_and_admits_environments_on_catalog_2_5_0() {
+        let record = delivery();
+        let commands: Vec<&str> = record.commands.iter().map(String::as_str).collect();
+        assert_eq!(
+            commands,
+            [
+                "branch.publish",
+                "environment.admit",
+                "environment.build",
+                "main.sync",
+                "pull_request.await_checks",
+                "pull_request.close",
+                "pull_request.merge",
+                "pull_request.open",
+                "supervisor.notify",
+                "work.complete",
+                "work.hold",
+                "work.read",
+                "work.return"
+            ]
+        );
+        let events: Vec<&str> = record.events.iter().map(String::as_str).collect();
+        assert_eq!(
+            events,
+            ["aq.environment.base_changed", "aq.work.result_ready"]
+        );
+        for command in &record.commands {
+            assert!(record.capabilities.contains(command), "{command}");
+        }
+        assert!(!record.capabilities.contains("work.route"));
+        let catalog = crate::request::pinned_catalog(&record).unwrap();
+        let v2_3: aq_playbooks_model::Registry =
+            serde_json::from_str(docs::CATALOG_2_3_REGISTRY).unwrap();
+        let v2_5: aq_playbooks_model::Registry =
+            serde_json::from_str(crate::request::CATALOG_2_5_REGISTRY).unwrap();
+        for name in &record.commands {
+            let expected = v2_3.commands.get(name).unwrap_or(&v2_5.commands[name]);
+            assert_eq!(&catalog.commands[name], expected, "{name}");
+        }
+        let kept = crate::request::catalog_for(&record, &catalog).unwrap();
+        assert!(kept.events.contains_key("aq.environment.completed"));
+        assert!(kept.events.contains_key("aq.delivery.completed"));
+        let workspace = crate::request::workspace_files(
+            &record,
+            "review",
+            &catalog,
+            &Default::default(),
+            "1",
+            None,
+        )
+        .unwrap();
+        let notes = &workspace["CATALOG.md"];
+        for name in [
+            "environment.build",
+            "aq.environment.base_changed",
+            "review_approved",
+        ] {
+            assert!(notes.contains(name), "{name}");
+        }
+    }
+
+    /// The published 2.5.0 delivery example seals as a playbook of this record.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[test]
+    fn the_environment_delivery_example_seals_as_the_delivery_record() {
+        const DIR: &str = "../../vendor/aq-host-catalog-2.5.0/examples/deliver-with-environments";
+        let read = |name: &str| {
+            std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        };
+        let record = delivery();
+        let catalog = crate::request::pinned_catalog(&record).unwrap();
+        let ws = draft::Workspace {
+            markdown: read("source.md"),
+            record: crate::request::engine_record(&record, "settings-1"),
+            catalog: crate::request::catalog_for(&record, &catalog).unwrap(),
+            facts: serde_json::from_str(&read("facts.json")).unwrap(),
+            draft: serde_json::from_str(&read("draft.json")).unwrap(),
+        };
+        let artifact = draft::seal(&ws).unwrap_or_else(|faults| panic!("{faults:?}"));
+        let playbook = &artifact.content.playbook;
+        assert_eq!(playbook.id.as_str(), "aq.delivery");
         assert!(
             playbook
                 .required_capabilities

@@ -27,6 +27,8 @@ mod playbook_coding;
 mod playbook_contract;
 #[cfg(feature = "delivery_playbook")]
 mod playbook_delivery_document;
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+mod playbook_environments;
 mod playbook_findings_triggers;
 mod playbook_host9;
 mod playbook_host_adapters;

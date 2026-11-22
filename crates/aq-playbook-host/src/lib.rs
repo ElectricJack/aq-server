@@ -1095,6 +1095,19 @@ pub fn accepts_command(registry: &Registry, contract: &CommandContract) -> bool 
         });
         return legacy.commands.get(&contract.name) == Some(contract);
     }
+    // Catalog 2.5.0 (spec 0017): the delivery source keeps the 2.3.0
+    // work.read it was authored against.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if contract.name == "work.read" && current.is_some_and(|c| c.version == "2.5.0") {
+        static HOST10: OnceLock<Registry> = OnceLock::new();
+        let delivery = HOST10.get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../vendor/aq-host-catalog-2.3.0/registry.json"
+            ))
+            .expect("vendored AQ host catalog 2.3.0 parses")
+        });
+        return delivery.commands.get(&contract.name) == Some(contract);
+    }
     false
 }
 
@@ -1141,7 +1154,13 @@ fn validate_registry(registry: &Registry) -> Result<(), Error> {
         "pull_request.close",
     ];
     let delivery = cfg!(feature = "delivery_playbook");
-    let admitted = |name: &str| COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name));
+    // Host catalog 2.5.0 (spec 0017), with both features.
+    let environments = delivery && cfg!(feature = "project_environments");
+    let admitted = |name: &str| {
+        COMMANDS.contains(&name)
+            || (delivery && DELIVERY.contains(&name))
+            || (environments && ["environment.build", "environment.admit"].contains(&name))
+    };
     let base_event_count = registry
         .events
         .keys()
