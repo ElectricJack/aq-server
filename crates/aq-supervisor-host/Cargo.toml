@@ -36,6 +36,7 @@ chrono.workspace = true
 test-support = []
 delivery_playbook = ["aq-server/delivery_playbook"]
 supervisor_full_access = ["aq-server/supervisor_full_access"]
+project_environments = ["aq-server/project_environments"]
 
 [dev-dependencies]
 aq-supervisor-host = { path = ".", features = ["test-support"] }
