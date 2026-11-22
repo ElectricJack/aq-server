@@ -251,10 +251,13 @@ async fn claim<S: Host<E>, E: IntoResponse>(
     else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    // `max_job_claims` is the server's own; the builder takes the rest.
+    let mut sent = json!(limits);
+    sent.as_object_mut().map(|l| l.remove("max_job_claims"));
     Ok(Json(json!({
         "job_id": job_id, "kind": kind, "project_id": project_id, "project": project,
         "repository_id": repository_id, "commit": commit, "recipes": recipes, "run": run,
-        "base_template": base_template, "limits": limits,
+        "base_template": base_template, "limits": sent,
     }))
     .into_response())
 }

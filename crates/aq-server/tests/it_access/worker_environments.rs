@@ -168,7 +168,7 @@ async fn only_a_template_build_node_can_claim() {
             "limits": {"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
                 "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
                 "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
-                "try_concurrency": 2, "keep_versions": 3, "max_job_claims": 3},
+                "try_concurrency": 2, "keep_versions": 3},
         })
     );
 }
@@ -490,6 +490,46 @@ async fn the_claim_names_the_jobs_repository() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["repository_id"], json!(h.repository), "{body}");
+}
+
+/// The Job's `limits` are exactly the fields the builder's template tool
+/// takes (its `LIMIT_FIELDS`): the Setting without the server's own
+/// `max_job_claims`, as before that limit existed.
+#[tokio::test]
+async fn the_jobs_limits_are_the_fields_the_builder_takes() {
+    let h = harness().await;
+    job(&h, "build").await;
+    let (status, body) = send(
+        &h,
+        "/v1/worker/environments/claim",
+        BUILDER,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut sent: Vec<&str> = body["limits"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    sent.sort_unstable();
+    assert_eq!(
+        sent,
+        [
+            "build_cpu_millis",
+            "build_memory_bytes",
+            "build_wall_ms",
+            "keep_versions",
+            "log_bytes",
+            "max_arg_bytes",
+            "max_install_steps",
+            "max_prefetch",
+            "max_recipe_bytes",
+            "max_step_args",
+            "try_concurrency"
+        ]
+    );
 }
 
 /// A job claimed `max_job_claims` times whose lease ran out each time is
