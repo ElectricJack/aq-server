@@ -2133,6 +2133,74 @@ mod playbook {
             .is_err()
         );
         tx.rollback().await.unwrap();
+
+        // A failed required check also carries the redacted tail of its job
+        // log, for the exact head it was read at (spec 0021 section 5.3).
+        let failed = record("pull_request.await_checks", "failed", result).await;
+        sqlx::query("UPDATE playbook_host_operations SET completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(failed)
+            .bind(NOW as i64 + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let log: String = (0..2000)
+            .map(|i| format!("== unit ==\nline {i:04} of the failed job\n"))
+            .chain(["FAILED test_flaky\n".to_owned()])
+            .collect();
+        let pull_request = |head: String, log: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,checks_log_head,checks_log_tail,updated_at_ms) VALUES($1,228,'https://example.test/pr/228','open','mergeable','failed','[\"unit\"]',$2,$3,$4) ON CONFLICT(task_id) DO UPDATE SET checks_log_head=$2,checks_log_tail=$3")
+                    .bind(task).bind(head).bind(log).bind(NOW as i64)
+                    .execute(&pool).await.unwrap();
+            }
+        };
+        pull_request("4".repeat(40), log.clone()).await;
+        let shown = |reasons: &[Value]| {
+            reasons.iter().any(|r| {
+                r["message"].as_str().is_some_and(|m| {
+                    m.contains("recorded failed from pull_request.await_checks")
+                        && m.contains("untrusted")
+                        && m.contains("FAILED test_flaky")
+                })
+            })
+        };
+        assert!(shown(&work_reasons(&env).await), "task.work shows the tail");
+        let mut tx = pool.begin().await.unwrap();
+        let (_, body) = aq_playbook_domain::delivery_decisions::notification(
+            &mut tx,
+            &port,
+            Some(origin),
+            lineage.project_id,
+            &notice,
+        )
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+        assert!(
+            body.contains("FAILED test_flaky"),
+            "the notice shows the tail"
+        );
+        assert!(
+            body.len() <= aq_playbook_domain::delivery_store::SUPERVISOR_MESSAGE_BYTES,
+            "a long tail is cut to fit the notice, not the notice dropped: {}",
+            body.len()
+        );
+        assert!(body.contains("Use task.retry"), "the instructions stay");
+        // A tail read for another head is not this result's.
+        pull_request("5".repeat(40), log).await;
+        assert!(!shown(&work_reasons(&env).await));
+        sqlx::query("DELETE FROM delivery_pull_requests WHERE task_id=$1")
+            .bind(task)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
+            .bind(failed)
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let merge = record("pull_request.merge", "running", result).await;
         assert_eq!(held_report(&pool, task).await.unwrap(), None);
         assert!(!work_reasons(&env).await.iter().any(|r| {
