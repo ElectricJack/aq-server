@@ -402,7 +402,7 @@ on top of the base.
    routing document implements §5.4's rule.
 5. aq-worker: builds stop leaving a Node compile cache (environment repair).
    The scanner's `sk-` pattern gets a left boundary so `task-…` no longer
-   matches; this changes what it refuses and needs the owner's approval (§9). The AQ base
+   matches; approved by the owner 2026-11-22 (§9). The AQ base
    template is built and admitted from the existing recipe path.
 6. aq-worker + aq-server: the recipe format (§6.1), `environment.try` with its
    CLI (§6.2), and `environment.build` and `environment.admit` (§6.3), with
@@ -428,10 +428,6 @@ removed when the epic is confirmed.
    enough, or should Settings keep a list of known labels?
 2. Should `aq:needs` be settable only by filers and the router, or also by the
    agent of a running task (requesting a different environment for its retry)?
-3. The credential scanner refuses the `aq` CLI because `task-` contains `sk-`.
-   May its `sk-` pattern require a non-alphanumeric character (or the start of
-   the text) before `sk-`? Provider keys written as `sk-…` after a space, quote,
-   `=` or `:` still refuse.
 
 Answered 2026-11-21:
 
@@ -439,3 +435,9 @@ Answered 2026-11-21:
 - A recipe is approved by the pull request's review and merge under the
   delivery playbook, like code (old question 4).
 - Builds run through Buildx with a named builder (§6.6).
+
+Answered 2026-11-22:
+
+- The credential scanner's `sk-` pattern requires the start of the text or a
+  non-alphanumeric byte before `sk-`, so `task-…` identifiers no longer match;
+  provider keys after a space, quote, `=`, `:` or a newline still refuse.
