@@ -678,7 +678,6 @@ mod tests {
         let one = Limits {
             max_uncharged_continuations: 1,
             max_attempts: 1,
-            ..budget()
         };
         let mut stopped = forgiven.clone().map(released).map(exempt).to_vec();
         stopped.push(exempt(long(now)));
@@ -739,15 +738,14 @@ mod tests {
             assess(&history, &wide, now),
             Assessment::Replace(_)
         ));
-        for (limits, code) in [(
-            Limits {
-                max_attempts: 2,
-                ..wide
-            },
-            "lineage_retry_budget_exhausted",
-        )] {
-            assert_eq!(assess(&history, &limits, now), Assessment::Blocked(code));
-        }
+        let limits = Limits {
+            max_attempts: 2,
+            ..wide
+        };
+        assert_eq!(
+            assess(&history, &limits, now),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
+        );
         // No uncharged continuation is allowed: an owner stop is charged like any attempt.
         let stopped = [released(exempt(failed_prior(0))), failed_prior(5 * MIN)];
         let two = Limits {
