@@ -219,7 +219,6 @@ async fn uncertain_predecessor_is_never_released() {
         attempts_started: 1,
         exempt_attempts: 0,
         elapsed_ms: 0,
-        sandbox_ms: 60_000,
         stop_receipt: artifact("synthetic-stop-owner-receipt", b"synthetic-stop"),
         retained_source_receipt: artifact("synthetic-source-owner-receipt", b"synthetic-source"),
         effect_reconciliation_receipt: artifact(

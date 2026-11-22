@@ -223,21 +223,7 @@ async fn prepare_inner(
     )?;
     let deadline = issued
         .checked_add(
-            after
-                .input
-                .offer
-                .offered
-                .offer
-                .manifest
-                .resources
-                .wall_time_ms
-                .min(
-                    after
-                        .policy
-                        .max_lineage_elapsed_ms
-                        .checked_sub(facts::lineage_elapsed(&after)?)
-                        .ok_or_else(|| refused())?,
-                ),
+            after.input.offer.offered.offer.manifest.resources.wall_time_ms,
         )
         .filter(|d| *d <= i64::MAX as u64)
         .ok_or_else(|| refused())?;

@@ -371,10 +371,9 @@ fn candidates(section: &Section<'_>) -> Parsed<Vec<Candidate>> {
     }
     Ok(out)
 }
-const SELECTION_KEYS: [&str; 12] = [
+const SELECTION_KEYS: [&str; 10] = [
     "max_attempts",
     "fallback_on",
-    "max_lineage_elapsed_ms",
     "observation_max_age_ms",
     "allow_unknown_availability",
     "unknown_cost",
@@ -382,7 +381,6 @@ const SELECTION_KEYS: [&str; 12] = [
     "require_hard_cost_enforcement",
     "max_cost_microunits",
     "currency",
-    "max_lineage_sandbox_ms",
     "max_uncharged_continuations",
 ];
 /// The word that states "no cost limit" for the two cost keys.
@@ -410,7 +408,6 @@ fn selection(section: &Section<'_>) -> Parsed<SelectionOverrides> {
     Ok(SelectionOverrides {
         max_attempts: fields.optional("max_attempts", attempts)?,
         fallback_on: fields.optional("fallback_on", names)?,
-        max_lineage_elapsed_ms: fields.optional("max_lineage_elapsed_ms", number)?,
         observation_max_age_ms: fields.optional("observation_max_age_ms", number)?,
         allow_unknown_availability: fields.optional("allow_unknown_availability", flag)?,
         unknown_cost: fields.optional("unknown_cost", named)?,
@@ -418,7 +415,6 @@ fn selection(section: &Section<'_>) -> Parsed<SelectionOverrides> {
         require_hard_cost_enforcement: fields.optional("require_hard_cost_enforcement", flag)?,
         max_cost_microunits: fields.optional("max_cost_microunits", cost)?,
         currency: fields.optional("currency", currency)?,
-        max_lineage_sandbox_ms: fields.optional("max_lineage_sandbox_ms", number)?,
         max_uncharged_continuations: fields.optional("max_uncharged_continuations", attempts)?,
     })
 }
@@ -574,7 +570,6 @@ impl Intelligence {
                 format!("[{}]", names.join(", "))
             }),
         );
-        item("max_lineage_elapsed_ms", number(&s.max_lineage_elapsed_ms));
         item("observation_max_age_ms", number(&s.observation_max_age_ms));
         item(
             "allow_unknown_availability",
@@ -600,7 +595,6 @@ impl Intelligence {
                 .as_ref()
                 .map(|c| c.as_deref().map_or(NONE.into(), scalar)),
         );
-        item("max_lineage_sandbox_ms", number(&s.max_lineage_sandbox_ms));
         item(
             "max_uncharged_continuations",
             s.max_uncharged_continuations.map(|n| n.to_string()),

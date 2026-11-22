@@ -352,9 +352,11 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let (policy, _) =
-        super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
-    if policy.max_lineage_elapsed_ms != h.proposal.choice.maximum_lineage_elapsed_ms
+    let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
+    // The protocol's lineage time window is the attempt's own: its execution
+    // profile's wall time, which the offer's manifest carries.
+    if offer.offered.offer.manifest.resources.wall_time_ms
+        != h.proposal.choice.maximum_lineage_elapsed_ms
         || offer.offered.offer.manifest.model.spending_budget.is_some()
         || policy.budget.max_cost_microunits.is_some()
         || policy.budget.require_complete_accounting
@@ -372,13 +374,9 @@ async fn load_for_locked(
             .binding
             .ceilings
             .require_hard_cost_enforcement
-        // A first attempt starts its lineage at zero; a B4 replacement carries
-        // the lineage time already used, which must leave time remaining.
-        || decision
-            .inputs
-            .budget
-            .elapsed_ms
-            .is_none_or(|elapsed| elapsed >= policy.max_lineage_elapsed_ms)
+        // A first attempt starts its lineage at zero. A B4 replacement carries
+        // the lineage time already used, which limits nothing: each attempt
+        // has its own window.
         || (decision.inputs.replacement.is_none() && decision.inputs.budget.elapsed_ms != Some(0))
     {
         return Err(refused());

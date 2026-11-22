@@ -37,7 +37,6 @@ pub struct Pinned {
     pub source: source_exports::LinkedExport,
     pub context: Value,
     pub policy: SelectionPolicy,
-    pub remaining_lineage_ms: u64,
     pub installation: MaterialReceipt,
     pub material: MaterialLease,
     pub hot: HotState,
@@ -228,7 +227,7 @@ pub async fn load_locked(
     if !aq_agent_api::valid("ContextSnapshot", &context) {
         return Err(invalid());
     }
-    let (policy, remaining_lineage_ms) =
+    let policy =
         crate::profiled_execution::continuation_policy::load_locked(tx, &request.binding).await?;
     if policy.budget.max_cost_microunits.is_some()
         || policy.budget.require_complete_accounting
@@ -263,7 +262,6 @@ pub async fn load_locked(
         source,
         context,
         policy,
-        remaining_lineage_ms,
         installation,
         material,
         hot,

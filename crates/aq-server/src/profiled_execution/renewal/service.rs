@@ -65,15 +65,7 @@ pub async fn renew(
         .ok_or_else(|| refused())?
         .expires_at_ms;
     let hard = after.original.execution_deadline_ms;
-    let lineage = after
-        .original
-        .body
-        .clock
-        .server_time_ms
-        .checked_add(after.remaining_lineage_ms)
-        .ok_or_else(|| refused())?;
     let ceiling = hard
-        .min(lineage)
         .min(observed.ceiling()?)
         .min(facts.inventory_expires_at_ms);
     let stored = if let Some(stored) = history::lookup(&mut tx, auth.id(), request).await? {

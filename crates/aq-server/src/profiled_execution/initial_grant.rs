@@ -111,7 +111,6 @@ struct Locked {
     decision: Decision,
     material: MaterialLease,
     ceiling: u64,
-    remaining_lineage_ms: u64,
 }
 async fn original(
     tx: &mut Transaction<'_, Postgres>,
@@ -435,8 +434,7 @@ async fn locked(
         return Err(refused());
     }
     crate::intelligence::fence_current_registry(state, tx).await?;
-    let (_, remaining_lineage_ms) =
-        super::continuation_policy::load_locked(tx, &request.binding).await?;
+    super::continuation_policy::load_locked(tx, &request.binding).await?;
     Ok(Locked {
         material: lease.clone(),
         offer,
@@ -447,7 +445,6 @@ async fn locked(
         original: old,
         decision,
         ceiling,
-        remaining_lineage_ms,
     })
 }
 /// Current authenticated runtime claims installed bytes; the daemon verifies
@@ -527,16 +524,7 @@ pub async fn prepare(
         let issued = now(state)?;
         graph.validate_for(&after.graph, issued)?;
         let deadline = issued
-            .checked_add(
-                after
-                    .offer
-                    .offered
-                    .offer
-                    .manifest
-                    .resources
-                    .wall_time_ms
-                    .min(after.remaining_lineage_ms),
-            )
+            .checked_add(after.offer.offered.offer.manifest.resources.wall_time_ms)
             .filter(|v| *v <= i64::MAX as u64)
             .ok_or_else(|| refused())?;
         let expiry = after.ceiling.min(deadline);
