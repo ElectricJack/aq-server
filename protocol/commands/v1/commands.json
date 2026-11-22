@@ -4228,6 +4228,35 @@
             "method": "GET",
             "path": "/api/v1/results/{id}/revisions/{revision}"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:cb6374690ea58e94849a65d4dcf17e7d02fca207074ca9bc38dd5ff5a2862f55",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "result_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "result_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}"
+          }
         }
       },
       "summary": "One result in the feed",
@@ -4438,6 +4467,42 @@
           "route": {
             "method": "GET",
             "path": "/api/human/results"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "The last result of the previous page",
+                "format": "uuid",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/results"
           }
         }
       },
@@ -4691,6 +4756,44 @@
           "route": {
             "method": "GET",
             "path": "/api/human/results/{id}/revisions/{revision}"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "result_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "result_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}"
           }
         }
       },
