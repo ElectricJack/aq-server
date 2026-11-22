@@ -84,6 +84,17 @@ pub struct PullRequestObserved {
     /// `none`, `pending`, `passed` or `failed`.
     pub checks_state: &'static str,
     pub checks_failed: Vec<String>,
+    /// The redacted log tail of the failed checks on the head that was
+    /// checked, when the forge gave one.
+    pub checks_log: Option<CheckLog>,
+}
+
+/// The tail of the failed jobs' logs (spec 0021 section 5.3) and the pull
+/// request head it was read for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckLog {
+    pub head: String,
+    pub tail: String,
 }
 
 /// A command's one completion: a catalog outcome and its output.
@@ -261,6 +272,7 @@ impl Delivery {
                         mergeable: "unknown",
                         checks_state: "none",
                         checks_failed: vec![],
+                        checks_log: None,
                     },
                 )
             }
@@ -275,6 +287,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_log: None,
             }),
             // GitHub answers 422 when the head branch is not there.
             Err(GitHubApiError::Invalid { .. }) => Completion::refused("not_published"),
@@ -295,9 +308,17 @@ impl Delivery {
         required: Option<&[String]>,
         now_ms: i64,
         deadline_at_ms: i64,
+        log_bytes: u64,
     ) -> CheckPoll {
-        self.check_result_head(target, pr, required, now_ms, deadline_at_ms, None)
-            .await
+        self.check_result_head(
+            target,
+            pr,
+            required,
+            (now_ms, deadline_at_ms),
+            log_bytes,
+            None,
+        )
+        .await
     }
 
     async fn check_result_head(
@@ -305,8 +326,8 @@ impl Delivery {
         target: &DeliveryTarget,
         pr: u64,
         required: Option<&[String]>,
-        now_ms: i64,
-        deadline_at_ms: i64,
+        (now_ms, deadline_at_ms): (i64, i64),
+        log_bytes: u64,
         expected_head: Option<CheckHead<'_>>,
     ) -> CheckPoll {
         let repo = &target.github;
@@ -322,6 +343,7 @@ impl Delivery {
             mergeable: "unknown",
             checks_state: "none",
             checks_failed: vec![],
+            checks_log: None,
         });
         let decided = 'decide: {
             let Some(p) = &observed else {
@@ -402,6 +424,18 @@ impl Delivery {
                     ChecksState::Failed => "failed",
                     ChecksState::Pending => "pending",
                 };
+                // The log is a courtesy to the supervisor: a read that fails
+                // leaves the failed check recorded without a tail.
+                if checks.state == ChecksState::Failed && log_bytes > 0 {
+                    let log = self
+                        .github
+                        .failed_check_log(repo, &checked.head_sha, &checks.failed, log_bytes)
+                        .await;
+                    s.checks_log = log.ok().flatten().map(|tail| CheckLog {
+                        head: checked.head_sha.clone(),
+                        tail,
+                    });
+                }
             }
             match checks.state {
                 ChecksState::Failed => Some(Completion::new(
@@ -525,6 +559,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "passed",
                 checks_failed: vec![],
+                checks_log: None,
             }),
         )
     }
@@ -578,6 +613,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_log: None,
             }),
         )
     }
@@ -735,8 +771,8 @@ impl Delivery {
                         target,
                         pr,
                         required.as_deref(),
-                        now_ms,
-                        deadline,
+                        (now_ms, deadline),
+                        request["check_log_bytes"].as_u64().unwrap_or(0),
                         text("result_head").map(|sha| CheckHead {
                             sha,
                             target_is_frozen: frozen_target.is_some(),

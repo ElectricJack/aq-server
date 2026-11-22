@@ -137,6 +137,77 @@ impl GitHubClient {
     }
 }
 
+impl GitHubClient {
+    /// The last `keep + 1` bytes (at most) of a text download that `path`
+    /// answers with a redirect, such as a job's logs. The redirect target is a
+    /// signed URL: it is fetched once, without the installation token, and
+    /// read as a stream so that a long log is never held whole.
+    pub async fn send_text_tail(
+        &self,
+        path: &str,
+        auth: Auth<'_>,
+        keep: usize,
+    ) -> GitHubResult<Vec<u8>> {
+        let transport = |e: reqwest::Error| GitHubApiError::Transport(e.without_url().to_string());
+        let url = self.url(path)?;
+        let secret = match auth {
+            Auth::App(jwt) => jwt,
+            Auth::Installation(token) => token.secret(),
+        };
+        let mut authorization = HeaderValue::try_from(format!("Bearer {secret}"))
+            .map_err(|_| GitHubApiError::InvalidInput("credential is not a header value"))?;
+        authorization.set_sensitive(true);
+        let first = self
+            .http
+            .get(url.clone())
+            .header(AUTHORIZATION, authorization)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = first.status();
+        let response = if status.is_redirection() {
+            let target = first
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|location| url.join(location).ok())
+                .filter(|t| {
+                    matches!(t.scheme(), "http" | "https")
+                        && t.username().is_empty()
+                        && t.password().is_none()
+                })
+                .ok_or_else(|| GitHubApiError::Protocol("unusable log redirect".into()))?;
+            self.http
+                .get(target)
+                .header(reqwest::header::RANGE, format!("bytes=-{}", keep + 1))
+                .send()
+                .await
+                .map_err(transport)?
+        } else {
+            first
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let headers = response.headers().clone();
+            let body = response.bytes().await.map_err(transport)?;
+            return Err(map_error(status, &headers, &body, Utc::now()));
+        }
+        let mut response = response;
+        let window = keep + 1;
+        let mut tail: Vec<u8> = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(transport)? {
+            tail.extend_from_slice(&chunk);
+            if tail.len() > 2 * window {
+                tail.drain(..tail.len() - window);
+            }
+        }
+        if tail.len() > window {
+            tail.drain(..tail.len() - window);
+        }
+        Ok(tail)
+    }
+}
+
 /// GitHub's `message`, followed by any `errors[].message` details.
 fn message(body: &[u8]) -> String {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
