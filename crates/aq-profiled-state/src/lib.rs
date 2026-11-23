@@ -2,6 +2,7 @@
 //! legacy fixture wire/state. No HTTP handler accepts this stored projection.
 pub mod authority_cache;
 pub mod hot;
+pub mod inline_artifact;
 pub mod source_export;
 use aq_session_protocol::{ArtifactRef, ProfiledGrant, ProfiledOffer, Validate};
 use aq_worker_protocol::{GraphBinding, SourceBinding};
