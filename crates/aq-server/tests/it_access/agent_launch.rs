@@ -110,10 +110,10 @@ enabled=true
 }
 pub(crate) struct Launch {
     pub(crate) binding: Value,
-    profile: Value,
-    context: Value,
-    identity: Value,
-    attempt: Value,
+    pub(crate) profile: Value,
+    pub(crate) context: Value,
+    pub(crate) identity: Value,
+    pub(crate) attempt: Value,
 }
 impl Launch {
     pub(crate) fn new(
@@ -138,6 +138,14 @@ impl Launch {
         if context != original_context {
             binding["context_digest"] = json!(tokens::verifier(&context.to_string()));
         }
+        Self::from_captured(node, binding, profile, context)
+    }
+    pub(crate) fn from_captured(
+        node: Uuid,
+        binding: Value,
+        profile: Value,
+        context: Value,
+    ) -> Self {
         let boot = binding["boot_id"].clone();
         let identity = json!({"node_id":node,"boot_id":boot});
         let attempt = json!({"attempt_id":binding["attempt_id"],"session_id":binding["session_id"],"generation":1});
