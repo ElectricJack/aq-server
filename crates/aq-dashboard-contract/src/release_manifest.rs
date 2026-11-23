@@ -121,6 +121,10 @@ impl<Files> Manifest<Files> {
             );
             return Ok(());
         }
+        self.validate_release()?;
+        self.validate_requirements()
+    }
+    fn validate_release(&self) -> Result<()> {
         ensure!(
             self.version
                 .as_ref()
@@ -141,6 +145,9 @@ impl<Files> Manifest<Files> {
             }),
             "dashboard toolchain missing or invalid"
         );
+        Ok(())
+    }
+    fn validate_requirements(&self) -> Result<()> {
         // Unknown required contracts are refused by ContractVersion's strict
         // deserializer, shared with the actual bootstrap response contract.
         ensure!(

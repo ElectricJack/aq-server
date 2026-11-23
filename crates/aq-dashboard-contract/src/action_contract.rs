@@ -120,17 +120,25 @@ pub enum RequestError {
     TooLarge,
 }
 impl ActionRequest {
-    pub fn check(&self, max_bytes: usize) -> Result<(), RequestError> {
-        if self.operation_id.is_nil()
-            || !valid_kind(&self.kind)
-            || !self.subject.valid()
-            || self.expected_versions.len() > 32
-            || self
+    fn valid_identity(&self) -> bool {
+        !self.operation_id.is_nil() && valid_kind(&self.kind) && self.subject.valid()
+    }
+    fn valid_versions(&self) -> bool {
+        self.expected_versions.len() <= 32
+            && self
                 .expected_versions
                 .iter()
-                .any(|(k, v)| !safe(k, 128) || !revision(v))
-            || self.reason.as_deref().is_some_and(|v| !safe(v, 1024))
-        {
+                .all(|(key, value)| safe(key, 128) && revision(value))
+    }
+    fn valid_fields(&self) -> bool {
+        let valid_reason = self
+            .reason
+            .as_deref()
+            .is_none_or(|reason| safe(reason, 1024));
+        self.valid_identity() && self.valid_versions() && valid_reason
+    }
+    pub fn check(&self, max_bytes: usize) -> Result<(), RequestError> {
+        if !self.valid_fields() {
             return Err(RequestError::Invalid);
         }
         let len = serde_json::to_vec(self)
@@ -178,11 +186,8 @@ impl Outcome {
     pub fn conflict(current_versions: BTreeMap<String, String>) -> Self {
         Self {
             disposition: Disposition::Conflict,
-            receipt_refs: vec![],
-            affected_entities: vec![],
             current_versions,
-            reason: None,
-            activation: None,
+            ..Self::unknown()
         }
     }
     /// A definite refusal that changed nothing, with its reason code.
@@ -198,9 +203,7 @@ impl Outcome {
             disposition: Disposition::Confirmed,
             receipt_refs,
             affected_entities,
-            current_versions: BTreeMap::new(),
-            reason: None,
-            activation: None,
+            ..Self::unknown()
         }
     }
 }
