@@ -852,7 +852,7 @@ async fn task_retry_creates_replacement_attempt() {
         sqlx::query("UPDATE owner_task_retry_intents SET next_check_at=to_timestamp(1) WHERE operation_id=$1")
             .bind(operation).execute(&pool).await.unwrap();
     };
-    let wait_for_check = |n| async {
+    let wait_for_check = async |n| {
         tokio::time::timeout(std::time::Duration::from_secs(12), async {
             loop {
                 let count: i32 = sqlx::query_scalar(
@@ -878,7 +878,7 @@ async fn task_retry_creates_replacement_attempt() {
       CREATE TRIGGER fail_retry_receipt BEFORE UPDATE ON dashboard_operations
       FOR EACH ROW EXECUTE FUNCTION fail_retry_receipt();")
         .execute(&pool).await.unwrap();
-    let set_role = |role| async {
+    let set_role = async |role| {
         sqlx::query("UPDATE users SET role=$2 WHERE id=(SELECT principal_id FROM dashboard_operations WHERE operation_id=$1)")
             .bind(operation).bind(role).execute(&pool).await.unwrap();
     };
