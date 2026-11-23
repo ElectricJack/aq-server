@@ -90,12 +90,14 @@ pub(super) async fn report(
                 let _permit = permit;
                 crate::profiled_execution::material::provisioning_bindings(
                     &registry,
-                    node_id,
-                    boot,
-                    &delivery,
-                    observed,
-                    observed_expires,
-                    None,
+                    aq_intelligence_config::material::ProvisioningSnapshot {
+                        node_id,
+                        boot_id: boot,
+                        delivery: &delivery,
+                        observed_at_ms: observed,
+                        expires_at_ms: observed_expires,
+                        backend_kind: None,
+                    },
                 )
             }),
         )

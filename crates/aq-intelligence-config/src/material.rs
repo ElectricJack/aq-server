@@ -118,18 +118,30 @@ pub fn normalize_claude_token(bytes: Zeroizing<Vec<u8>>) -> anyhow::Result<Zeroi
     Ok(Zeroizing::new(bytes[..end].to_vec()))
 }
 
+pub struct ProvisioningSnapshot<'a> {
+    pub node_id: Uuid,
+    pub boot_id: Uuid,
+    pub delivery: &'a aq_selection::DeliveryCapability,
+    pub observed_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub backend_kind: Option<aq_selection::BackendKind>,
+}
+
 /// Trusted daemon facts only. Call outside SQL locks, then fence the exact
 /// admitted runtime, registry and observation age in the write transaction.
 /// File presence yields preparation readiness, never installed availability.
 pub fn provisioning_bindings(
     registry: &LoadedRegistry,
-    node: Uuid,
-    boot: Uuid,
-    delivery: &aq_selection::DeliveryCapability,
-    observed: u64,
-    expires: u64,
-    backend_kind: Option<aq_selection::BackendKind>,
+    snapshot: ProvisioningSnapshot<'_>,
 ) -> Vec<aq_selection::CredentialBinding> {
+    let ProvisioningSnapshot {
+        node_id: node,
+        boot_id: boot,
+        delivery,
+        observed_at_ms: observed,
+        expires_at_ms: expires,
+        backend_kind,
+    } = snapshot;
     if !valid_delivery_target(node, boot, delivery) || !valid_delivery_window(observed, expires) {
         return Vec::new();
     }

@@ -38,12 +38,14 @@ impl Readers {
                         };
                         let result = crate::profiled_execution::material::provisioning_bindings(
                             &job.registry,
-                            job.node,
-                            job.boot,
-                            &job.delivery,
-                            job.observed,
-                            job.expires,
-                            None,
+                            aq_intelligence_config::material::ProvisioningSnapshot {
+                                node_id: job.node,
+                                boot_id: job.boot,
+                                delivery: &job.delivery,
+                                observed_at_ms: job.observed,
+                                expires_at_ms: job.expires,
+                                backend_kind: None,
+                            },
                         );
                         let _ = job.reply.send(result);
                     }
