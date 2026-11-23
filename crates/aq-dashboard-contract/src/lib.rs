@@ -1,5 +1,6 @@
 //! dashboard-read-1 projections. These read claims never grant execution/control.
 pub mod action_contract;
+pub mod capabilities;
 pub mod feedback_contract;
 pub mod result_metadata;
 pub mod review_view;

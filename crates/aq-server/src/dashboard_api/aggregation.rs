@@ -156,12 +156,11 @@ fn attention(
 }
 
 pub(super) async fn overview(
-    state: &AppState,
-    runtime: &Runtime,
-    user: &User,
+    request: &DashboardRequest,
     scope: Scope,
     mounted: MountedOwners,
 ) -> Result<Envelope<Overview>> {
+    let (state, runtime, user) = request.parts();
     let a = auth(state, runtime, user).await?;
     if !a.owner {
         fence(state, runtime, user, &a).await?;

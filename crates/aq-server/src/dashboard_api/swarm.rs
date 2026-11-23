@@ -2,7 +2,6 @@
 //! only; nothing here grants placement.
 use super::{
     contract::*,
-    runtime::Runtime,
     service::{auth, envelope, fence, stamp, tx},
     *,
 };
@@ -15,17 +14,13 @@ fn projects_of(state: &AppState) -> Vec<Uuid> {
         .map(|c| c.enabled_projects())
         .unwrap_or_default()
 }
-pub(super) async fn swarm(
-    state: &AppState,
-    runtime: &Runtime,
-    user: &User,
-    scope: Scope,
-) -> Result<Envelope<Swarm>> {
+pub(super) async fn swarm(request: &DashboardRequest, scope: Scope) -> Result<Envelope<Swarm>> {
+    let (state, runtime, user) = request.parts();
     let a = auth(state, runtime, user).await?;
     if !a.owner {
         return Err(AppError::Forbidden("swarm requires owner".into()).into());
     }
-    let cap = super::capacity::capacity(state, runtime, user, scope.clone()).await?;
+    let cap = super::capacity::capacity(request, scope.clone()).await?;
     let ids: Vec<Uuid> = cap.data.nodes.iter().map(|n| n.node.id).collect();
     let now = stamp(state)?;
     let mut tx = tx(runtime).await?;
