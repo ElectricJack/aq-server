@@ -158,11 +158,30 @@ async fn command(
     )
     .await
     .map_err(|_| Error("overloaded"))??;
-    let initial = pending(&request, &p.profile["retry_budget"], false, 0, 0, false)?;
+    let admitted_status = admit(&state, &headers, &p, &request, &hash, mapped, creations).await?;
+    if headers.get("Prefer").is_some_and(|v| v == "respond-async") {
+        return Ok(bounded_status_response(&p, admitted_status));
+    }
+    // No authority transaction or connection is held across HTTP.
+    let body = dispatch::recoverable_run(&state, op, &request, &p.profile["retry_budget"]).await?;
+    Ok(bounded_status_response(&p, body))
+}
+// Keep admission and its authority locks in one transaction, completed before dispatch.
+async fn admit(
+    state: &AppState,
+    headers: &HeaderMap,
+    p: &Principal,
+    request: &Value,
+    hash: &str,
+    mapped: Value,
+    creations: usize,
+) -> Result<Value> {
+    let op = id(request, "operation_id")?;
+    let initial = pending(request, &p.profile["retry_budget"], false, 0, 0, false)?;
     p.bound(&initial)?;
     let mut admitted_status = initial.clone();
     let mut tx = state.store.pool.begin().await?;
-    let current = authenticate_locked(&state, &headers, &mut tx).await?;
+    let current = authenticate_locked(state, headers, &mut tx).await?;
     if current.binding != p.binding
         || current.version != p.version
         || current.revision != p.revision
@@ -195,7 +214,7 @@ async fn command(
         admitted_status = row.get("status");
     } else {
         let retained=sqlx::query("SELECT count(*)::bigint AS count,COALESCE(sum(retained_bytes),0)::bigint AS bytes FROM agent_graph_operations WHERE attempt_id=$1").bind(id(&p.binding,"attempt_id")?).fetch_one(&mut *tx).await?;
-        let retained_bytes = (canonical(&request)?.len()
+        let retained_bytes = (canonical(request)?.len()
             + canonical(&mapped)?.len()
             + canonical(&p.profile["retry_budget"])?.len()
             + 32768) as i64;
@@ -208,26 +227,22 @@ async fn command(
         {
             return Err(Error("scope_denied"));
         }
-        sqlx::query("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,reserved_creations,retained_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10,$11)").bind(op).bind(id(&p.binding,"attempt_id")?).bind(id(&p.binding,"node_id")?).bind(&request).bind(hash).bind(mapped).bind(&p.profile["retry_budget"]).bind(&initial).bind(now(&state) as i64).bind(creations as i32).bind(retained_bytes).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,reserved_creations,retained_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10,$11)").bind(op).bind(id(&p.binding,"attempt_id")?).bind(id(&p.binding,"node_id")?).bind(request).bind(hash).bind(mapped).bind(&p.profile["retry_budget"]).bind(&initial).bind(now(state) as i64).bind(creations as i32).bind(retained_bytes).execute(&mut *tx).await?;
     }
-    if current.expires <= now(&state) {
+    if current.expires <= now(state) {
         return Err(Error("session_expired"));
     }
     lock_attempt(
-        &state,
+        state,
         &mut tx,
         id(&p.binding, "attempt_id")?,
         id(&p.binding, "node_id")?,
     )
     .await?;
     tx.commit().await?;
-    if headers.get("Prefer").is_some_and(|v| v == "respond-async") {
-        return Ok(bounded_status_response(&p, admitted_status));
-    }
-    // No authority transaction or connection is held across HTTP.
-    let body = dispatch::recoverable_run(&state, op, &request, &p.profile["retry_budget"]).await?;
-    Ok(bounded_status_response(&p, body))
+    Ok(admitted_status)
 }
+
 async fn agent_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -351,69 +366,125 @@ async fn recover_rows(
     if active.is_none() {
         return Err(Error("unauthorized"));
     }
-    let mut after = 0i64;
-    let mut upper:i64=sqlx::query_scalar("SELECT COALESCE(max(operation_seq),0)::bigint FROM agent_graph_operations WHERE node_id=$1 AND attempt_id=$2").bind(node.id).bind(attempt).fetch_one(&mut *tx).await?;
-    let limit = request["limit"].as_u64().unwrap_or(64) as usize;
-    if request["mode"] == "list" && !request["cursor"].is_null() {
-        let token = request["cursor"].as_str().ok_or(Error("cursor_invalid"))?;
-        let row=sqlx::query("SELECT after_sequence,upper_sequence,query_digest FROM agent_operation_cursors WHERE verifier=$1 AND node_id=$2 AND attempt_id=$3 AND expires_at_ms>$4").bind(crate::tokens::verifier(token)).bind(node.id).bind(attempt).bind(now(state) as i64).fetch_optional(&mut *tx).await?.ok_or(Error("cursor_invalid"))?;
-        if row.get::<String, _>("query_digest")
-            != digest(&json!({"node":node.id,"attempt":request["attempt"],"limit":limit}))?
-        {
-            return Err(Error("cursor_invalid"));
-        }
-        after = row.get("after_sequence");
-        upper = row.get("upper_sequence");
-    }
-    let mut rows = if request["mode"] == "lookup" {
-        let ids: Vec<Uuid> = request["operation_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().parse().unwrap())
-            .collect();
-        let rows=sqlx::query("SELECT * FROM agent_graph_operations WHERE operation_id=ANY($1) AND node_id=$2 AND attempt_id=$3 ORDER BY operation_seq").bind(&ids).bind(node.id).bind(attempt).fetch_all(&mut *tx).await?;
-        if rows.len() != ids.len() {
-            return Err(Error("operation_unknown"));
-        }
-        rows
-    } else {
-        sqlx::query("SELECT * FROM agent_graph_operations WHERE node_id=$1 AND attempt_id=$2 AND operation_seq>$3 AND operation_seq<=$4 ORDER BY operation_seq LIMIT $5").bind(node.id).bind(attempt).bind(after).bind(upper).bind(limit as i64+1).fetch_all(&mut *tx).await?
+    let query = RecoveryQuery {
+        node: node.id,
+        attempt,
+        request,
+        limit: request["limit"].as_u64().unwrap_or(64) as usize,
     };
-    for row in &rows {
-        let req: Value = row.get("request");
-        for field in ["attempt_id", "session_id", "generation"] {
-            if req["binding"][field] != request["attempt"][field] {
-                return Err(Error("operation_unknown"));
-            }
-        }
-    }
-    let more = rows.len() > limit;
-    rows.truncate(limit);
+    let (after, upper) = query.window(state, &mut tx).await?;
+    let mut rows = query.rows(&mut tx, after, upper).await?;
+    let more = rows.len() > query.limit;
+    rows.truncate(query.limit);
     let next = if more {
-        sqlx::query("DELETE FROM agent_operation_cursors WHERE expires_at_ms<=$1")
-            .bind(now(state) as i64)
-            .execute(&mut *tx)
-            .await?;
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM agent_operation_cursors WHERE node_id=$1 AND attempt_id=$2",
-        )
-        .bind(node.id)
-        .bind(attempt)
-        .fetch_one(&mut *tx)
-        .await?;
-        if count >= 128 {
-            return Err(Error("overloaded"));
-        }
-        let token = secret("aqc_");
-        sqlx::query("INSERT INTO agent_operation_cursors(verifier,node_id,attempt_id,query_digest,after_sequence,upper_sequence,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(crate::tokens::verifier(&token)).bind(node.id).bind(attempt).bind(digest(&json!({"node":node.id,"attempt":request["attempt"],"limit":limit}))?).bind(rows.last().unwrap().get::<i64,_>("operation_seq")).bind(upper).bind(now(state).saturating_add(300000) as i64).execute(&mut *tx).await?;
-        Some(token)
+        let after = rows.last().unwrap().get("operation_seq");
+        Some(query.save_cursor(state, &mut tx, after, upper).await?)
     } else {
         None
     };
     tx.commit().await?;
     Ok((rows, next, more))
 }
+/// Scope shared by the recovery page and its opaque continuation cursor.
+struct RecoveryQuery<'a> {
+    node: Uuid,
+    attempt: Uuid,
+    request: &'a Value,
+    limit: usize,
+}
+impl RecoveryQuery<'_> {
+    fn digest(&self) -> Result<String> {
+        digest(&json!({"node":self.node,"attempt":self.request["attempt"],"limit":self.limit}))
+    }
+    fn require_attempt(&self, binding: &Value) -> Result<()> {
+        for field in ["attempt_id", "session_id", "generation"] {
+            if binding[field] != self.request["attempt"][field] {
+                return Err(Error("operation_unknown"));
+            }
+        }
+        Ok(())
+    }
+    async fn window(
+        &self,
+        state: &AppState,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(i64, i64)> {
+        // A resumed page uses its retained upper bound, so later admissions
+        // cannot change the membership of an in-progress listing.
+        let upper: i64 = sqlx::query_scalar("SELECT COALESCE(max(operation_seq),0)::bigint FROM agent_graph_operations WHERE node_id=$1 AND attempt_id=$2")
+            .bind(self.node).bind(self.attempt).fetch_one(&mut **tx).await?;
+        if self.request["mode"] != "list" || self.request["cursor"].is_null() {
+            return Ok((0, upper));
+        }
+        let token = self.request["cursor"]
+            .as_str()
+            .ok_or(Error("cursor_invalid"))?;
+        let row = sqlx::query("SELECT after_sequence,upper_sequence,query_digest FROM agent_operation_cursors WHERE verifier=$1 AND node_id=$2 AND attempt_id=$3 AND expires_at_ms>$4")
+            .bind(crate::tokens::verifier(token)).bind(self.node).bind(self.attempt).bind(now(state) as i64).fetch_optional(&mut **tx).await?.ok_or(Error("cursor_invalid"))?;
+        if row.get::<String, _>("query_digest") != self.digest()? {
+            return Err(Error("cursor_invalid"));
+        }
+        Ok((row.get("after_sequence"), row.get("upper_sequence")))
+    }
+    async fn rows(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        after: i64,
+        upper: i64,
+    ) -> Result<Vec<sqlx::postgres::PgRow>> {
+        let rows = if self.request["mode"] == "lookup" {
+            let ids: Vec<Uuid> = self.request["operation_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().parse().unwrap())
+                .collect();
+            let rows = sqlx::query("SELECT * FROM agent_graph_operations WHERE operation_id=ANY($1) AND node_id=$2 AND attempt_id=$3 ORDER BY operation_seq")
+                .bind(&ids).bind(self.node).bind(self.attempt).fetch_all(&mut **tx).await?;
+            if rows.len() != ids.len() {
+                return Err(Error("operation_unknown"));
+            }
+            rows
+        } else {
+            sqlx::query("SELECT * FROM agent_graph_operations WHERE node_id=$1 AND attempt_id=$2 AND operation_seq>$3 AND operation_seq<=$4 ORDER BY operation_seq LIMIT $5")
+                .bind(self.node).bind(self.attempt).bind(after).bind(upper).bind(self.limit as i64+1).fetch_all(&mut **tx).await?
+        };
+        // Validate the lookahead row too, before truncating or minting a cursor.
+        for row in &rows {
+            let request: Value = row.get("request");
+            self.require_attempt(&request["binding"])?;
+        }
+        Ok(rows)
+    }
+    async fn save_cursor(
+        &self,
+        state: &AppState,
+        tx: &mut Transaction<'_, Postgres>,
+        after: i64,
+        upper: i64,
+    ) -> Result<String> {
+        // The caller holds the authenticated node lock throughout quota admission.
+        sqlx::query("DELETE FROM agent_operation_cursors WHERE expires_at_ms<=$1")
+            .bind(now(state) as i64)
+            .execute(&mut **tx)
+            .await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM agent_operation_cursors WHERE node_id=$1 AND attempt_id=$2",
+        )
+        .bind(self.node)
+        .bind(self.attempt)
+        .fetch_one(&mut **tx)
+        .await?;
+        if count >= 128 {
+            return Err(Error("overloaded"));
+        }
+        let token = secret("aqc_");
+        sqlx::query("INSERT INTO agent_operation_cursors(verifier,node_id,attempt_id,query_digest,after_sequence,upper_sequence,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)")
+            .bind(crate::tokens::verifier(&token)).bind(self.node).bind(self.attempt).bind(self.digest()?).bind(after).bind(upper).bind(now(state).saturating_add(300000) as i64).execute(&mut **tx).await?;
+        Ok(token)
+    }
+}
+
 fn recovery_response(
     request: &Value,
     rows: Vec<Value>,
@@ -478,6 +549,82 @@ mod tests {
             admission_budget(0, i64::MAX, 1).unwrap_err().0,
             "overloaded"
         );
+    }
+    fn recovery_request() -> Value {
+        json!({
+            "attempt": {
+                "attempt_id": Uuid::from_u128(1),
+                "session_id": Uuid::from_u128(2),
+                "generation": 3
+            },
+            "mode": "list",
+            "cursor": null,
+            "limit": 1
+        })
+    }
+    fn recovery_query(request: &Value) -> RecoveryQuery<'_> {
+        RecoveryQuery {
+            node: Uuid::from_u128(4),
+            attempt: id(&request["attempt"], "attempt_id").unwrap(),
+            request,
+            limit: request["limit"].as_u64().unwrap() as usize,
+        }
+    }
+    #[test]
+    fn recovery_cursor_digest_preserves_format_and_binds_scope() {
+        let request = recovery_request();
+        let query = recovery_query(&request);
+        let hash = query.digest().unwrap();
+        // Retained cursors must keep using the exact pre-refactor digest input.
+        assert_eq!(
+            hash,
+            digest(&json!({"node":Uuid::from_u128(4),"attempt":request["attempt"],"limit":1}))
+                .unwrap()
+        );
+        let mut continued = request.clone();
+        continued["cursor"] = json!("opaque-cursor");
+        continued["request_id"] = json!(Uuid::from_u128(5));
+        assert_eq!(hash, recovery_query(&continued).digest().unwrap());
+        for (field, value) in [
+            ("attempt_id", json!(Uuid::from_u128(6))),
+            ("session_id", json!(Uuid::from_u128(7))),
+            ("generation", json!(4)),
+        ] {
+            let mut changed = request.clone();
+            changed["attempt"][field] = value;
+            assert_ne!(hash, recovery_query(&changed).digest().unwrap(), "{field}");
+        }
+        let mut changed = request.clone();
+        changed["limit"] = json!(2);
+        assert_ne!(hash, recovery_query(&changed).digest().unwrap());
+        let mut another_node = recovery_query(&request);
+        another_node.node = Uuid::from_u128(8);
+        assert_ne!(hash, another_node.digest().unwrap());
+    }
+    #[test]
+    fn recovery_refuses_each_mismatched_attempt_field() {
+        let request = recovery_request();
+        let query = recovery_query(&request);
+        let mut binding = request["attempt"].clone();
+        binding["project_id"] = json!(Uuid::from_u128(9));
+        assert!(query.require_attempt(&binding).is_ok());
+        for (field, value) in [
+            ("attempt_id", json!(Uuid::from_u128(6))),
+            ("session_id", json!(Uuid::from_u128(7))),
+            ("generation", json!(4)),
+        ] {
+            let mut changed = binding.clone();
+            changed[field] = value;
+            assert_eq!(
+                query.require_attempt(&changed).unwrap_err().0,
+                "operation_unknown"
+            );
+            changed.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                query.require_attempt(&changed).unwrap_err().0,
+                "operation_unknown"
+            );
+        }
     }
     #[tokio::test]
     async fn oversized_postadmission_status_reports_unknown_with_existing_identity() {
