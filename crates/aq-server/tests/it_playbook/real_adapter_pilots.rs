@@ -23,13 +23,11 @@ use aq_server::{
         review_domain::{CatalogProfile, HOST7_CAPABILITIES, HOST8_FINGERPRINT, HOST8_VERSION},
         service::*,
     },
-    protected_storage::{KeyFile, Keyring, ProtectionConfig},
 };
 use aq_worker_protocol::{ObjectAlgorithm, ObjectId};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -469,20 +467,8 @@ struct Pilot {
     retention: aq_playbook_host::retention::Retention,
 }
 
-fn keyring() -> Arc<Keyring> {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Keyring::load(&ProtectionConfig {
-        active_key_id: "test".into(),
-        keys: vec![KeyFile {
-            id: "test".into(),
-            file: path,
-        }],
-    })
-    .unwrap();
-    Arc::new(keys)
+fn keyring() -> Arc<aq_server::protected_storage::Keyring> {
+    Arc::new(super::playbook_fixtures::keyring())
 }
 
 fn protected_factory(

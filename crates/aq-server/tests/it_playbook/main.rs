@@ -28,6 +28,7 @@ mod playbook_contract;
 #[cfg(feature = "delivery_playbook")]
 mod playbook_delivery_document;
 mod playbook_findings_triggers;
+mod playbook_fixtures;
 mod playbook_host9;
 mod playbook_host_adapters;
 mod playbook_host_integration;
