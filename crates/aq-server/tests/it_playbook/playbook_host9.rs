@@ -2653,9 +2653,11 @@ mod delivery {
             let task_id = json!({"task": task.to_string()});
             let branch = format!("refs/heads/aq/{task}");
 
+            // One pass each: a pass's order among same-instant operations is their ids'.
             let publish = h.accepted("branch.publish", task_id.clone()).await;
+            assert_eq!(h.pass().await, 1);
             let open = h.accepted("pull_request.open", task_id.clone()).await;
-            assert_eq!(h.pass().await, 2);
+            assert_eq!(h.pass().await, 1);
             let done = h.completions().await;
             assert_eq!(
                 done[0],
