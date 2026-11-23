@@ -628,6 +628,16 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         .unwrap()
     };
     assert!(held().await, "a closed launch keeps its claim");
+    let history_live = || async {
+        sqlx::query_as::<_, (bool, bool)>(
+            "SELECT sealed_attempt_live($1),EXISTS(SELECT 1 FROM sealed_live_attempt_ids WHERE attempt_id=$1)",
+        )
+        .bind(attempt)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(history_live().await, (true, true));
     let state = &c.case.env.env.state;
     let abandon = |email: &'static str, body: serde_json::Value| async move {
         let response = aq_server::build_admin_router(state.clone())
@@ -664,6 +674,11 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         "the stop proof is the closure receipt"
     );
     assert!(!held().await, "the claim is released");
+    assert_eq!(
+        history_live().await,
+        (false, false),
+        "the same closure discharges live history after verified abandonment"
+    );
     let (status, replay) = abandon("owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
