@@ -39,6 +39,49 @@ pub async fn run(args: &[String]) -> Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
+    let ToolRequest {
+        request,
+        bound,
+        operation,
+    } = prepare(&client, &url, name, args)?;
+    let response = request
+        .header(reqwest::header::AUTHORIZATION, bearer)
+        .send()
+        .await
+        .context("supervisor tool transport failed")?;
+    let status = response.status();
+    ensure!(
+        response.content_length().is_none_or(|n| n <= bound),
+        "tool response byte bound"
+    );
+    let bytes = response.bytes().await?;
+    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
+    let value: Value = serde_json::from_slice(&bytes)?;
+    if status.is_success() && matches!(name.as_str(), "task.create" | "task.graph.create") {
+        record_action(&value, operation)?;
+    }
+    let output = if name == "commands" && args.len() == 2 {
+        describe(find_command(&value, &args[1]).context("command is not available")?)?
+    } else {
+        value
+    };
+    serde_json::to_writer(std::io::stdout(), &output)?;
+    println!();
+    ensure!(status.is_success(), "AQ refused the supervisor command");
+    Ok(())
+}
+struct ToolRequest {
+    request: reqwest::RequestBuilder,
+    bound: u64,
+    operation: Option<uuid::Uuid>,
+}
+
+fn prepare(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    name: &str,
+    args: &[String],
+) -> Result<ToolRequest> {
     let mut operation = None;
     // Owner attachment contents are larger than command responses.
     let mut bound = 2097152;
@@ -66,43 +109,32 @@ pub async fn run(args: &[String]) -> Result<()> {
             .post(url.join(&format!("api/v1/commands/{name}"))?)
             .json(&body)
     };
-    let response = request
-        .header(reqwest::header::AUTHORIZATION, bearer)
-        .send()
-        .await
-        .context("supervisor tool transport failed")?;
-    let status = response.status();
-    ensure!(
-        response.content_length().is_none_or(|n| n <= bound),
-        "tool response byte bound"
-    );
-    let bytes = response.bytes().await?;
-    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
-    let value: Value = serde_json::from_slice(&bytes)?;
-    if status.is_success()
-        && matches!(name.as_str(), "task.create" | "task.graph.create")
-        && value["data"]["disposition"] == "confirmed"
-        && let Some(id) = operation
-        && let Ok(path) = std::env::var("AQ_SUPERVISOR_ACTIONS_FILE")
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut out = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(path)?;
-        ensure!(out.metadata()?.len() < 4096, "action receipt bound");
-        writeln!(out, "{id}")?;
+    Ok(ToolRequest {
+        request,
+        bound,
+        operation,
+    })
+}
+
+fn record_action(value: &Value, operation: Option<uuid::Uuid>) -> Result<()> {
+    if value["data"]["disposition"] != "confirmed" {
+        return Ok(());
     }
-    let output = if name == "commands" && args.len() == 2 {
-        describe(find_command(&value, &args[1]).context("command is not available")?)?
-    } else {
-        value
+    let Some(id) = operation else {
+        return Ok(());
     };
-    serde_json::to_writer(std::io::stdout(), &output)?;
-    println!();
-    ensure!(status.is_success(), "AQ refused the supervisor command");
+    let Ok(path) = std::env::var("AQ_SUPERVISOR_ACTIONS_FILE") else {
+        return Ok(());
+    };
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut out = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(0o600)
+        .open(path)?;
+    ensure!(out.metadata()?.len() < 4096, "action receipt bound");
+    writeln!(out, "{id}")?;
     Ok(())
 }
 fn find_command<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {

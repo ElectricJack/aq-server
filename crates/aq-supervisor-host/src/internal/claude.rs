@@ -105,7 +105,12 @@ fn native(
         None => arguments(&candidate.model, effort, &settings),
     };
     let args = args.ok_or_else(setup)?;
-    let mut command = native_command(executable, args, home, cwd, identity);
+    let mut command = native_command(
+        executable,
+        args,
+        crate::subscription::CommandHome { home, cwd },
+        identity,
+    );
     if effort == Some("off") {
         command.env("MAX_THINKING_TOKENS", "0");
     }

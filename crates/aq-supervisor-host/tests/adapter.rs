@@ -14,18 +14,7 @@ fn native_recipe_uses_scoped_route_stdin_and_no_provider_material() {
     m.model.model = aq_session_protocol::Text::new("fixture-model").unwrap();
     m.model.reasoning = aq_session_protocol::Text::new("high").unwrap();
     m.model.spending_budget = None;
-    let recipe = native_recipe(
-        &m.harness,
-        &m.model,
-        false,
-        Paths {
-            executable: Path::new("/runtime/codex"),
-            workspace: Path::new("/workspace"),
-            private_home: Path::new("/homes/test"),
-        },
-        12345,
-    )
-    .unwrap();
+    let recipe = recipe_for(&m, false).unwrap();
     assert_eq!(recipe.arguments.last().unwrap(), "-");
     assert!(
         recipe
@@ -55,20 +44,26 @@ fn native_recipe_uses_scoped_route_stdin_and_no_provider_material() {
             .keys()
             .any(|k| k.contains("KEY") || k.contains("TOKEN"))
     );
-    assert!(
-        native_recipe(
-            &m.harness,
-            &m.model,
-            true,
-            Paths {
-                executable: Path::new("/runtime/codex"),
-                workspace: Path::new("/workspace"),
-                private_home: Path::new("/homes/test")
-            },
-            12345
-        )
-        .is_err()
-    );
+    assert!(recipe_for(&m, true).is_err());
+}
+
+fn recipe_for(
+    m: &LaunchManifest,
+    terminal_input_enabled: bool,
+) -> anyhow::Result<aq_codex_mapper::Recipe> {
+    native_recipe(
+        aq_codex_mapper::Settings {
+            harness: &m.harness,
+            model: &m.model,
+            terminal_input_enabled,
+        },
+        Paths {
+            executable: Path::new("/runtime/codex"),
+            workspace: Path::new("/workspace"),
+            private_home: Path::new("/homes/test"),
+        },
+        12345,
+    )
 }
 
 /// The `internal` mode's Codex runner, driven through one `tick` against a fake

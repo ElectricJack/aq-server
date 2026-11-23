@@ -132,8 +132,10 @@ impl Harness {
         let mut command = crate::subscription::native_command(
             executable,
             args,
-            &place.home,
-            &place.cwd,
+            crate::subscription::CommandHome {
+                home: &place.home,
+                cwd: &place.cwd,
+            },
             identity,
         );
         command

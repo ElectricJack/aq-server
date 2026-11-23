@@ -76,7 +76,12 @@ fn native(
         overrides.extend(agent_overrides(place));
     }
     let args = exec_finish(args, overrides);
-    let mut command = native_command(executable, args, home, cwd, run.identity);
+    let mut command = native_command(
+        executable,
+        args,
+        crate::subscription::CommandHome { home, cwd },
+        run.identity,
+    );
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
