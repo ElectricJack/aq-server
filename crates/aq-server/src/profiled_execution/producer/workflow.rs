@@ -2,7 +2,7 @@
 //! ordered projects, failed-attempt replacement within budget, and an exact
 //! commit frozen at offer time. It never calls a model provider.
 use super::{
-    artifacts::{RetainedSet, canonical},
+    artifacts::{ArtifactBody, RetainedSet, canonical},
     build, compose, fairness, now, on_heap, publication, refused,
 };
 use crate::{
@@ -173,14 +173,13 @@ async fn reservation(
             .checked_add(7 * 86_400_000)
             .ok_or_else(|| refused())?,
     );
+    let artifact_body = ArtifactBody::new(
+        ArtifactKind::Context,
+        observed.artifact.clone(),
+        &observed.bytes,
+    );
     proposals
-        .retain(
-            state,
-            OwnerKind::SourceRetention,
-            ArtifactKind::Context,
-            observed.artifact.clone(),
-            &observed.bytes,
-        )
+        .retain(state, OwnerKind::SourceRetention, artifact_body)
         .await?;
     let binding = &compiled.frozen.project.binding;
     let identity = source::repository_identity(
