@@ -1037,6 +1037,12 @@ fn reconcile_delivery<S: Storage>(
     let (candidates, next_after) = page;
     let mut count = 0;
     for intent in candidates {
+        if routing_expired_before_dispatch(&intent) {
+            let at = host.transition_time(now_ms).max(now_ms);
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+            count += 1;
+            continue;
+        }
         let Some(answer) = host.reconcile_delivery(&intent) else {
             continue;
         };
@@ -1050,7 +1056,7 @@ fn reconcile_delivery<S: Storage>(
             continue;
         }
         let at = host.transition_time(now_ms).max(now_ms);
-        if intent.status != IntentStatus::Rejected {
+        if !close || intent.reason.as_deref() != Some(DELIVERY_ADMISSION_EXPIRED) {
             engine
                 .record_result(&intent.id, answer, at)
                 .map_err(engine_error)?;
@@ -1123,30 +1129,56 @@ pub const DELIVERY_RECOVERY_COMMANDS: [&str; 11] = [
     "supervisor.notify",
 ];
 
+/// Rejected routing commands can have external effects. Retire only an expiry
+/// the engine recorded before ever handing the command to the host.
+fn routing_expired_before_dispatch(intent: &Intent) -> bool {
+    matches!(
+        intent.command.name.as_str(),
+        "work.route" | "work.unroutable"
+    ) && intent.status == IntentStatus::Rejected
+        && intent.dispatch_sequence.is_none()
+        && intent.reason.as_deref() == Some("command deadline expired before dispatch")
+}
+
 fn reconcilable_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
     let mut found = Vec::new();
     for id in ids {
-        let Some(intent) = state.intents.get(id).filter(|intent| {
-            DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
-                && (matches!(
-                    intent.status,
-                    IntentStatus::Dispatched | IntentStatus::Unknown
-                ) || (intent.status == IntentStatus::Prepared
-                    && intent.dispatch_sequence.is_some())
-                    || (intent.status == IntentStatus::Rejected
-                        && intent.reason.as_deref() == Some(DELIVERY_ADMISSION_EXPIRED)))
-                && !intent.cancel_requested
-        }) else {
+        let Some(intent) = state
+            .intents
+            .get(id)
+            .filter(|intent| !intent.cancel_requested)
+        else {
             continue;
         };
         let Some(run) = state.runs.get(&intent.run) else {
             continue;
         };
-        let authority = &intent.authority;
-        let scope = model::digest(&(&authority.actor, &authority.scope))?;
         if run.status.terminal()
             || !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id)
-            || state.execution_denied.contains(&run.artifact)
+        {
+            continue;
+        }
+        let blocked_rejection =
+            run.status == runner::RunStatus::Blocked && intent.status == IntentStatus::Rejected;
+        if blocked_rejection && routing_expired_before_dispatch(intent) {
+            found.push(intent.clone());
+            continue;
+        }
+        if !DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
+            || !(blocked_rejection
+                || (intent.status == IntentStatus::Rejected
+                    && intent.reason.as_deref() == Some(DELIVERY_ADMISSION_EXPIRED))
+                || matches!(
+                    intent.status,
+                    IntentStatus::Dispatched | IntentStatus::Unknown
+                )
+                || (intent.status == IntentStatus::Prepared && intent.dispatch_sequence.is_some()))
+        {
+            continue;
+        }
+        let authority = &intent.authority;
+        let scope = model::digest(&(&authority.actor, &authority.scope))?;
+        if state.execution_denied.contains(&run.artifact)
             || state
                 .authority_revocations
                 .get(&scope)
