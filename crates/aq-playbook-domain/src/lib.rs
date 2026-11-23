@@ -21,6 +21,7 @@ mod delivery_review;
 pub mod delivery_runs;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
+pub mod grants;
 #[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;

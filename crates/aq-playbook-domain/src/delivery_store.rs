@@ -382,7 +382,8 @@ pub async fn settlement_wait(
 ) -> Result<Option<(Uuid, Uuid, String, bool)>> {
     Ok(sqlx::query_as(
         "SELECT h.report_id,e.operation_id,e.command_name,
-           g.revoked_at_ms IS NULL AND g.expires_at_ms>$4 AND g.revision=e.grant_revision
+           (g.revoked_at_ms IS NULL AND g.expires_at_ms>$4 AND g.revision=e.grant_revision)
+             OR playbook_delivery_resume_current(e.operation_id,$4)
          FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
          JOIN playbook_effects e ON e.receipt->>'result_id'=h.report_id::text
            AND e.receipt->>'task'=a.task_id::text AND e.namespace_id=$1 AND e.generation=$2

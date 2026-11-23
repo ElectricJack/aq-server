@@ -341,6 +341,79 @@ async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
     }
     assert_eq!(h.settled().len(), 4);
     assert_eq!(h.decision(revoked.result_id).await, None);
+
+    h.service
+        .grant(
+            h.f.actor,
+            Uuid::new_v4(),
+            h.scope.clone(),
+            h.clock() + 60_000,
+        )
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "a general grant cannot resume a pending effect"
+    );
+
+    let operation: Uuid = sqlx::query_scalar(
+        "SELECT operation_id FROM playbook_effects WHERE status='pending' AND receipt->>'result_id'=$1",
+    )
+    .bind(revoked.result_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    use tower::ServiceExt;
+    let driver = std::sync::Arc::new(driver);
+    let app = aq_server::build_admin_router_with_playbooks(h.f.state.clone(), Some(driver.clone()));
+    let approve =
+        |grant: Uuid, op: Uuid| {
+            app.clone().oneshot(
+            axum::http::Request::post("/api/playbooks/grants")
+                .header("x-aq-request", "1")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({
+                    "grant_id": grant, "scope": h.scope, "expires_at_ms": h.clock() + 60_000,
+                    "resume_delivery_operation_id": op
+                }).to_string()))
+                .unwrap(),
+        )
+        };
+    let grant = Uuid::new_v4();
+    assert_eq!(approve(grant, Uuid::new_v4()).await.unwrap().status(), 404);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    h.service.revoke(h.f.actor, grant).await.unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "revoking the renewed grant fences the effect"
+    );
+
+    assert_eq!(
+        approve(Uuid::new_v4(), operation).await.unwrap().status(),
+        200
+    );
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.decision(revoked.result_id).await.unwrap().0, "returned");
+    assert_eq!(h.settled().len(), 5);
+    let (after, original): (String, Uuid) =
+        sqlx::query_as("SELECT status,grant_id FROM playbook_effects WHERE operation_id=$1")
+            .bind(operation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((after.as_str(), original), ("returned", h.grant));
     driver.stop().await.unwrap();
 }
 

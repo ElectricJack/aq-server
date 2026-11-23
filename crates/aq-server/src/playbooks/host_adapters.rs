@@ -250,7 +250,7 @@ impl Service {
         if let Some(owner) = owner {
             self.runtime(&ns, owner)?;
         }
-        let row = sqlx::query("SELECT command_name,request_digest,status,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 FOR UPDATE")
+        let row = sqlx::query("SELECT command_name,request_digest,status,receipt,operation_id FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 FOR UPDATE")
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
             .bind(&intent.id)
@@ -260,7 +260,19 @@ impl Service {
             let status: String = row.get("status");
             // Resuming a pending effect performs it, so it needs live authority.
             let live = status == PENDING && owner.is_some();
-            let scope = self.grant_locked(&mut tx, id, revision, live).await?;
+            let resumed =
+                live && matches!(
+                    intent.command.name.as_str(),
+                    "work.complete" | "work.return"
+                ) && aq_playbook_domain::grants::delivery_resume_current(
+                    &mut tx,
+                    row.get("operation_id"),
+                    self.now()?,
+                )
+                .await?;
+            let scope = self
+                .grant_locked(&mut tx, id, revision, live && !resumed)
+                .await?;
             self.intent_authority(intent, id, revision, &scope)?;
             if row.get::<String, _>("request_digest") != identity
                 || row.get::<String, _>("command_name") != intent.command.name
