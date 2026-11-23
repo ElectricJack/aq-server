@@ -21,6 +21,7 @@ http-body-util = { workspace = true, optional = true }
 hyper = { version = "1", features = ["client", "http1", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 jsonwebtoken = { workspace = true, optional = true }
+nix.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

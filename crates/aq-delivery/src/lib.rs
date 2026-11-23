@@ -19,6 +19,7 @@ pub mod repository_onboarding;
 pub mod result_patch;
 pub mod result_work;
 pub mod source_checks;
+pub mod source_transport;
 use aq_worker_protocol::{
     CentralRetentionReceipt, ObjectId, SourceRole, TransferManifest, Validate,
 };
