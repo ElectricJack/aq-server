@@ -4,6 +4,7 @@
 //! Attempts with a Git grant are settled by the delivery playbook.
 use super::facts;
 use super::{completion, owner::*};
+use crate::execution::authority::{self, Policy};
 use crate::{AppState, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
@@ -97,7 +98,7 @@ pub async fn settle_after_record(
             }
             // Once possibly dispatched, only the SAME payload is replayed.
             AutoDisposition::Prepared | AutoDisposition::Possible => {
-                return dispatch(state, tx, row).await.map(Some);
+                return dispatch(state, tx, row, &r).await.map(Some);
             }
             AutoDisposition::Held => conflict = s.reason.filter(|reason| terminal_conflict(reason)),
         }
@@ -122,7 +123,7 @@ pub async fn settle_after_record(
         Verdict::Hold(reason) => held(reason),
         Verdict::Complete => {
             let row = prepare_locked(state, &mut tx, &r, evidence, time, "Default policy").await?;
-            return dispatch(state, tx, &row).await.map(Some);
+            return dispatch(state, tx, &row, &r).await.map(Some);
         }
     };
     sqlx::query("INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,reason,evidence,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$7) ON CONFLICT(report_id) DO UPDATE SET disposition=EXCLUDED.disposition,reason=EXCLUDED.reason,evidence=EXCLUDED.evidence,updated_at_ms=EXCLUDED.updated_at_ms")
@@ -443,6 +444,7 @@ async fn dispatch(
     state: &AppState,
     mut tx: Transaction<'_, Postgres>,
     row: &sqlx::postgres::PgRow,
+    result: &results::RecordedResult,
 ) -> Result<AutoSettlement> {
     let rt = state.agent_access.as_deref().ok_or_else(unavailable)?;
     let time = now(state)?;
@@ -483,6 +485,14 @@ async fn dispatch(
         }
     }
     let mut tx = begin(state).await?;
+    // The result admission path also takes these locks before the settlement row.
+    authority::load_locked(
+        state,
+        &mut tx,
+        &result.report.binding.session,
+        Policy::IdentityOnly,
+    )
+    .await?;
     let current = lock_row(&mut tx, report_id)
         .await?
         .ok_or(crate::error::AppError::Internal)?;
@@ -554,7 +564,7 @@ async fn playbook_locked<'a>(
     Option<sqlx::postgres::PgRow>,
     bool,
 )> {
-    use crate::execution::authority::{self, hot::HotState};
+    use crate::execution::authority::hot::HotState;
     let mut tx = begin(state).await?;
     let r = results::load_locked(state, &mut tx, report_id).await?;
     if !super::super::has_delivery_grant(&mut *tx, r.report.binding.attempt_id).await? {
@@ -570,7 +580,7 @@ async fn playbook_locked<'a>(
         state,
         &mut tx,
         &r.report.binding.session,
-        authority::Policy::IdentityOnly,
+        Policy::IdentityOnly,
     )
     .await?;
     let hot = sqlx::query_scalar::<_, Value>(
@@ -611,7 +621,7 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
                 || (s.disposition == AutoDisposition::Prepared && fenced) =>
         {
             return Ok(settled(
-                &dispatch(state, tx, existing.as_ref().ok_or_else(unavailable)?).await?,
+                &dispatch(state, tx, existing.as_ref().ok_or_else(unavailable)?, &r).await?,
             ));
         }
         Some(s)
@@ -629,7 +639,7 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
     }
     let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
     let row = prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;
-    Ok(settled(&dispatch(state, tx, &row).await?))
+    Ok(settled(&dispatch(state, tx, &row, &r).await?))
 }
 
 /// Catalog 2.3.0 `work.return`: refuses `report_id` for rework with the
