@@ -91,6 +91,14 @@ fn config(dir: &tempfile::TempDir) -> Arc<Loaded> {
 }
 async fn setup() -> Case {
     let mut f = Box::pin(phase::prepared_terminal()).await;
+    // The genuine offer and Prepared evidence already exist. Issue, start and
+    // register against that same owner clock, then advance it at test boundaries.
+    let observed = (f.c.env.env.state.clock)().timestamp_millis();
+    let at = Arc::new(AtomicI64::new(observed));
+    let clock = at.clone();
+    f.c.env.env.state.clock = Arc::new(move || {
+        chrono::DateTime::from_timestamp_millis(clock.load(Ordering::SeqCst)).unwrap()
+    });
     let execution = phase::issue(&f).await;
     let started = phase::started_request(&f, &execution);
     let ack = aq_server::profiled_execution::phase_terminal::started::record(
@@ -107,15 +115,7 @@ async fn setup() -> Case {
         std::fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let at = Arc::new(AtomicI64::new(
-        chrono::Utc::now()
-            .timestamp_millis()
-            .max(ack.original.recorded_at_ms as i64 + 1),
-    ));
-    let clock = at.clone();
-    f.c.env.env.state.clock = Arc::new(move || {
-        chrono::DateTime::from_timestamp_millis(clock.load(Ordering::SeqCst)).unwrap()
-    });
+    at.fetch_max(ack.original.recorded_at_ms as i64 + 1, Ordering::SeqCst);
     let mut cfg = (*f.c.env.env.state.config).clone();
     cfg.terminals = Some(config(&dir));
     f.c.env.env.state.config = Arc::new(cfg);

@@ -786,9 +786,20 @@ async fn concurrent_controller_retries_share_one_durable_lease_and_stale_generat
         service::mutate(&f.state, f.actor, &request),
         service::mutate(&f.state, f.actor, &request)
     );
+    // A bounded row-lock wait may tell one caller to retry the same operation.
+    // At least one concurrent caller must commit the lease before any retry.
+    assert!(a.is_ok() || b.is_ok(), "neither caller acquired the lease");
+    let retry_busy = |result| async {
+        match result {
+            Err(aq_server::error::AppError::Busy) => {
+                service::mutate(&f.state, f.actor, &request).await.unwrap()
+            }
+            other => other.unwrap(),
+        }
+    };
     assert_eq!(
-        serde_json::to_value(a.unwrap()).unwrap(),
-        serde_json::to_value(b.unwrap()).unwrap()
+        serde_json::to_value(retry_busy(a).await).unwrap(),
+        serde_json::to_value(retry_busy(b).await).unwrap()
     );
     let stale = service::Mutation::Control(aq_session_api::AcquireControlRequest {
         terminal: r.terminal.clone(),
