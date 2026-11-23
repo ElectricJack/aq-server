@@ -905,54 +905,66 @@ async fn offers(
             }
             observed => observed?,
         };
-        let built = on_heap(|| {
-            build::assemble(build::Assembly {
-                state,
-                runtime: &runtime,
-                compiled,
-                decision,
-                task: &task,
-                context: &context,
-                ready: &ready,
-                source,
-                source_operation,
-                logical_identity: &token.request().logical_identity,
-                generation,
-                enrolled,
-                supports_git_author,
+        let stage = Uuid::new_v4();
+        let assemble = async {
+            let built = on_heap(|| {
+                build::assemble(build::Assembly {
+                    stage,
+                    state,
+                    runtime: &runtime,
+                    compiled,
+                    decision,
+                    task: &task,
+                    context: &context,
+                    ready: &ready,
+                    source,
+                    source_operation,
+                    logical_identity: &token.request().logical_identity,
+                    generation,
+                    enrolled,
+                    supports_git_author,
+                })
             })
-        })
-        .await?;
-        if !built
-            .native
-            .offered
-            .offer
-            .manifest
-            .harness
-            .required_capabilities
-            .iter()
-            .any(|c| c.version == 1 && modes.contains(&c.id.as_str()))
-        {
-            return Err(refused());
-        }
-        let limits = &built.native.offered.offer.manifest.resources;
-        if limits.memory_bytes > request.available.memory_bytes
-            || limits.cpu_millis > request.available.cpu_millis
-            || fact.bundle_bytes() > request.available.disk_bytes
-        {
-            return Err(refused());
-        }
-        let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
-        // A definitive database rollback permits retry with the same artifacts and expiry.
-        let publish =
-            || publication::publish(state, auth, &built, &token, &fact, &inspection, slot);
-        let mut offer = on_heap(publish).await;
-        for delay in [50, 150] {
-            if !matches!(offer, Err(AppError::Busy)) {
-                break;
+            .await?;
+            if !built
+                .native
+                .offered
+                .offer
+                .manifest
+                .harness
+                .required_capabilities
+                .iter()
+                .any(|c| c.version == 1 && modes.contains(&c.id.as_str()))
+            {
+                return Err(refused());
             }
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            offer = on_heap(publish).await;
+            let limits = &built.native.offered.offer.manifest.resources;
+            if limits.memory_bytes > request.available.memory_bytes
+                || limits.cpu_millis > request.available.cpu_millis
+                || fact.bundle_bytes() > request.available.disk_bytes
+            {
+                return Err(refused());
+            }
+            let inspection =
+                on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
+            // A definitive database rollback permits retry with the same artifacts and expiry.
+            let publish =
+                || publication::publish(state, auth, &built, &token, &fact, &inspection, slot);
+            let mut offer = on_heap(publish).await;
+            for delay in [50, 150] {
+                if !matches!(offer, Err(AppError::Busy)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                offer = on_heap(publish).await;
+            }
+            offer
+        };
+        let offer = Box::pin(assemble).await;
+        if let Err(error) =
+            aq_history_caps::offer_stage::close(&state.store.pool, stage, now(state)?).await
+        {
+            tracing::warn!(%stage, %error, "offer staging cleanup deferred until expiry");
         }
         let offer = offer?;
         aq_machine_control::recent::forget(auth.id()).await;

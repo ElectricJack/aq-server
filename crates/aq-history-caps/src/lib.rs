@@ -7,6 +7,8 @@
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+pub mod offer_stage;
+
 const LIVE_SCHEMA: &str =
     "SELECT to_regprocedure('sealed_history_usage(text,uuid,bigint,uuid)') IS NOT NULL";
 const LEGACY_STAGING: &str = "SELECT (COALESCE((SELECT sum((manifest->>'manifest_bytes')::BIGINT+(manifest->>'bundle_bytes')::BIGINT) FROM source_transfers WHERE NOT staging_released),0)+COALESCE((SELECT sum(reserved_bytes) FROM source_bases),0)+COALESCE((SELECT sum(charged_bytes) FROM profiled_source_exports),0))::BIGINT";

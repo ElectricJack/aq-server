@@ -126,6 +126,45 @@ async fn publication_retries_the_same_assembly_after_a_slot_lock_timeout() {
 }
 
 #[tokio::test]
+async fn a_refused_publication_releases_staging_and_retains_the_artifacts() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(110110)")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(poll_slot(&c, 1).await.is_empty());
+    // Keep the publication lock through every bounded retry of this assembly.
+    common::native_offer::assembled(&c).await;
+    let (stages, closed, pins, objects, attempts): (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM admission_offer_stages),
+                (SELECT count(*) FROM admission_offer_stages WHERE closed_at_ms IS NOT NULL),
+                (SELECT count(*) FROM admission_offer_stage_pins),
+                (SELECT count(*) FROM admission_artifacts WHERE offer_staged),
+                (SELECT count(*) FROM execution_attempts WHERE node_id=$1 AND holds_task)",
+    )
+    .bind(c.env.env.node)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((stages, closed, pins, attempts), (1, 1, 0, 0));
+    assert!(objects > 0, "finished assemblies retain their exact bytes");
+    lock.commit().await.unwrap();
+    let next = offered(&c, 1).await;
+    let claim: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(next.offered.offer.binding.attempt_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        claim,
+        "the normal next poll can admit one replacement offer"
+    );
+}
+
+#[tokio::test]
 async fn running_siblings_redeliver_to_their_slot_restart_and_release_independently() {
     let mut c = setup().await;
     let node = c.env.env.node;
