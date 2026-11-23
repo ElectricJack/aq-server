@@ -1,11 +1,14 @@
 //! Pure bounded relay planning only. No SQL, authentication, node transport or PTY.
 //! Effects become available only after the embedding Journal acknowledges CAS.
 pub mod api;
+pub mod cache;
 pub mod draft;
 pub mod epoch;
 mod epoch_ledger;
 mod input_ledger;
+pub mod mutation;
 pub mod output;
+pub mod presentation;
 mod replay_authority;
 mod validation;
 use aq_session_api as human;

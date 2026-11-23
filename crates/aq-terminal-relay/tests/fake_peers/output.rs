@@ -281,3 +281,55 @@ fn snapshot_barrier_retires_old_frames_before_output_quota_charging() {
     assert!(!replay.is_new_frame(&p, &frame(&t, 1, vec![2])).unwrap());
     assert!(!replay.frame(&p, frame(&t, 1, vec![2]), 102).unwrap());
 }
+
+#[test]
+fn cache_observes_the_admitted_watch_and_drops_expired_uploads() {
+    use aq_terminal_relay::{
+        api::{Mutation, MutationReply, ViewQuery},
+        cache::{ReplayCache, Watch},
+        mutation::Admission,
+    };
+    let (ledger, mut store, viewer, peer) = setup(remote_peer());
+    let id = id(940);
+    let request = Mutation::Watch(api::WatchRequest {
+        terminal: ledger.terminal().clone(),
+        operation_id: id,
+        expected_session_revision: 1,
+        expires_at_ms: 1000,
+        after_sequence: None,
+    });
+    let admission = Admission {
+        access: &viewer,
+        token: Uuid::nil(),
+        clock: 0,
+    };
+    let (plan, reply) = request
+        .admit(&ledger, admission, || {
+            panic!("watch does not mint a control lease")
+        })
+        .unwrap();
+    assert!(matches!(reply, MutationReply::Watch {subscription_id,..} if subscription_id == id));
+    let ledger = apply(plan, &mut store).ledger;
+    let cache = ReplayCache::default();
+    cache.reserve(&ledger, 1000, 0).unwrap();
+    let query = ViewQuery {
+        subscription_id: id,
+        after_sequence: 0,
+    };
+    let watch = Watch::new(&ledger, viewer.clone(), &query, 1).unwrap();
+    assert_eq!(watch.expires_at().unwrap(), 1000);
+    assert_eq!(watch.access_expires_at(), viewer.valid_until_ms);
+    assert!(cache.view(&watch).unwrap().is_some());
+    let stranger = access(ledger.terminal(), "other viewer");
+    assert!(matches!(
+        Watch::new(&ledger, stranger, &query, 1),
+        Err(Error::Forbidden)
+    ));
+    assert!(
+        cache
+            .frame(&peer, frame(ledger.terminal(), 1, vec![42]), 1000)
+            .unwrap()
+            .is_none()
+    );
+    assert!(cache.view(&watch).unwrap().is_none());
+}

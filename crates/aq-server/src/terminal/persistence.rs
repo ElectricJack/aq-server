@@ -52,12 +52,7 @@ pub fn digest(value: &impl Serialize) -> Result<String> {
             .into(),
     )
 }
-#[derive(Clone, Copy)]
-pub enum Right {
-    Inspect,
-    Control,
-    Both,
-}
+pub use aq_terminal_relay::mutation::Right;
 pub struct Scopes {
     pub inspect: Option<Access>,
     pub control: Option<Access>,
