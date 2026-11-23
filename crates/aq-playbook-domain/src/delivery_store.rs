@@ -53,6 +53,15 @@ pub struct Latest {
     pub base: String,
 }
 
+impl Latest {
+    /// Compare result identities after the caller has looked up the event's task.
+    pub(crate) fn matches_event(&self, event: &ResultReady) -> bool {
+        self.project_id == event.project_id
+            && self.attempt_id == event.attempt_id
+            && self.result_id == event.result_id
+    }
+}
+
 /// What the host reads of the server's execution records. A port, so that
 /// the emission and `work.read` can be tested without recording a result.
 #[async_trait::async_trait]
@@ -70,11 +79,10 @@ pub trait DeliveryPort: Send + Sync {
     /// Lock the event's attempt and verify its current result before an effect.
     /// Fixture ports use the equivalent identity check against their own store.
     async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
-        Ok(self.latest(event.task_id).await?.is_some_and(|latest| {
-            latest.project_id == event.project_id
-                && latest.attempt_id == event.attempt_id
-                && latest.result_id == event.result_id
-        }))
+        Ok(self
+            .latest(event.task_id)
+            .await?
+            .is_some_and(|latest| latest.matches_event(event)))
     }
 
     /// Whether the server runs tasks of `project` (it has an execution binding).
@@ -147,49 +155,20 @@ impl DeliveryPort for PgDelivery {
         };
         let (attempt, report): (Uuid, serde_json::Value) =
             (row.get("attempt_id"), row.get("report"));
-        // Spec 0016 §5.1: the pushed task ref, confirmed at its head when the
-        // report was recorded, from the commit the attempt was offered.
-        let start: Option<String> = sqlx::query_scalar(
-            "SELECT execution_spec#>>'{source,resolved_object,hex}' FROM profiled_launches WHERE attempt_id=$1",
-        )
-        .bind(attempt)
-        .fetch_optional(&mut *conn)
-        .await?
-        .flatten();
-        // A push whose lease no longer held names no head: its outcome is
-        // `push_conflict`, so the policy can send the task back.
-        let pushed: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT head FROM delivery_pushed_results WHERE report_id=$1")
-                .bind(row.get::<Uuid, _>("report_id"))
-                .fetch_optional(&mut *conn)
-                .await?;
-        let conflict = matches!(pushed, Some((None,)));
-        let head = pushed.and_then(|(head,)| head).unwrap_or_default();
-        let start = if head.is_empty() {
-            String::new()
-        } else {
-            start.unwrap_or_default()
-        };
-        // The lineage's original base; past the handoff bound it is unknown,
-        // and a result with a source then counts as changed.
-        let base = match start.is_empty() {
-            true => None,
-            false => aq_machine_control::lineage_base(conn, task, &start)
-                .await
-                .map_err(|_| crate::Error::Unknown)?,
-        };
+        let result = row.get("report_id");
+        let source = retained_source(conn, task, attempt, result).await?;
         Ok(Some(Latest {
             workspace_id: row.get("workspace_id"),
             project_id: row.get("project_id"),
             attempt_id: attempt,
-            result_id: row.get("report_id"),
-            outcome: match conflict {
+            result_id: result,
+            outcome: match source.push_conflict {
                 true => "push_conflict".to_owned(),
                 false => report["outcome"].as_str().unwrap_or("").to_owned(),
             },
-            changed: !head.is_empty() && base.as_deref() != Some(head.as_str()),
-            head,
-            base: base.unwrap_or_default(),
+            changed: source.changed(),
+            head: source.head,
+            base: source.base.unwrap_or_default(),
         }))
     }
 
@@ -237,6 +216,63 @@ impl DeliveryPort for PgDelivery {
         .fetch_one(&self.0)
         .await?)
     }
+}
+
+struct RetainedSource {
+    head: String,
+    base: Option<String>,
+    push_conflict: bool,
+}
+
+impl RetainedSource {
+    fn changed(&self) -> bool {
+        !self.head.is_empty() && self.base.as_deref() != Some(self.head.as_str())
+    }
+}
+
+/// Spec 0016 §5.1: the pushed task ref and the lineage's original base.
+/// Keep source reads on the caller's connection, in their original order.
+async fn retained_source(
+    db: &mut PgConnection,
+    task: Uuid,
+    attempt: Uuid,
+    result: Uuid,
+) -> Result<RetainedSource> {
+    let start: Option<String> = sqlx::query_scalar(
+        "SELECT execution_spec#>>'{source,resolved_object,hex}' FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(&mut *db)
+    .await?
+    .flatten();
+    // A push whose lease no longer held names no head: its outcome is
+    // `push_conflict`, so the policy can send the task back.
+    let pushed: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT head FROM delivery_pushed_results WHERE report_id=$1")
+            .bind(result)
+            .fetch_optional(&mut *db)
+            .await?;
+    let push_conflict = matches!(pushed, Some((None,)));
+    let head = pushed.and_then(|(head,)| head).unwrap_or_default();
+    let start = if head.is_empty() {
+        String::new()
+    } else {
+        start.unwrap_or_default()
+    };
+    // Past the handoff bound the base is unknown, and a result with a
+    // source then counts as changed.
+    let base = if start.is_empty() {
+        None
+    } else {
+        aq_machine_control::lineage_base(db, task, &start)
+            .await
+            .map_err(|_| crate::Error::Unknown)?
+    };
+    Ok(RetainedSource {
+        head,
+        base,
+        push_conflict,
+    })
 }
 
 /// The facts of a task's latest result for `work.read`. `latest` is `None`
@@ -814,40 +850,7 @@ async fn due(
         .into_iter()
         .filter(|p| !decided.contains(&p.result_id))
     {
-        let row = sqlx::query("SELECT emitted_result_id,emitted_at_ms,emitted_facts FROM delivery_tasks WHERE task_id=$1 FOR UPDATE")
-            .bind(p.task_id)
-            .fetch_optional(&mut *db)
-            .await?;
-        let mut emission = ResultEmission::default();
-        if let Some(row) = &row {
-            emission.emitted_result = row.get("emitted_result_id");
-            emission.emitted_at_ms = row.get("emitted_at_ms");
-            emission.emitted_facts = row.get("emitted_facts");
-        }
-        if emission.emitted_result == Some(p.result_id) {
-            let exact = match emission.emitted_facts.as_deref() {
-                Some(facts) => {
-                    let event = result_event_id(namespace, &p, emission.emitted_at_ms, facts)?;
-                    event_outstanding(db, namespace, event).await?
-                }
-                None => None,
-            };
-            emission.run_unfinished = match exact {
-                Some(outstanding) => outstanding,
-                None => sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
-                     AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
-                     AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
-                )
-                .bind(namespace.0)
-                .bind(namespace.1)
-                .bind(p.task_id.to_string())
-                .bind(emission.emitted_at_ms)
-                .bind(now_ms - run_bound_ms)
-                .fetch_one(&mut *db)
-                .await?,
-            };
-        }
+        let emission = emission(db, namespace, &p, (now_ms, run_bound_ms)).await?;
         let moving = result_facts(db, p.task_id, p.project_id, None).await?;
         let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());
         if result_ready_due(&emission, p.result_id, &facts, now_ms, repeat_ms) {
@@ -861,6 +864,51 @@ async fn due(
         }
     }
     Ok(out)
+}
+
+/// Read the task's emission under its row lock, then check whether its run
+/// still suppresses a repeat. Keep both reads on the caller's connection.
+async fn emission(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    pending: &Pending,
+    (now_ms, run_bound_ms): (i64, i64),
+) -> Result<ResultEmission> {
+    let row = sqlx::query("SELECT emitted_result_id,emitted_at_ms,emitted_facts FROM delivery_tasks WHERE task_id=$1 FOR UPDATE")
+        .bind(pending.task_id)
+        .fetch_optional(&mut *db)
+        .await?;
+    let mut emission = ResultEmission::default();
+    if let Some(row) = &row {
+        emission.emitted_result = row.get("emitted_result_id");
+        emission.emitted_at_ms = row.get("emitted_at_ms");
+        emission.emitted_facts = row.get("emitted_facts");
+    }
+    if emission.emitted_result == Some(pending.result_id) {
+        let exact = match emission.emitted_facts.as_deref() {
+            Some(facts) => {
+                let event = result_event_id(namespace, pending, emission.emitted_at_ms, facts)?;
+                event_outstanding(db, namespace, event).await?
+            }
+            None => None,
+        };
+        emission.run_unfinished = match exact {
+            Some(outstanding) => outstanding,
+            None => sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
+                 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
+                 AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
+            )
+            .bind(namespace.0)
+            .bind(namespace.1)
+            .bind(pending.task_id.to_string())
+            .bind(emission.emitted_at_ms)
+            .bind(now_ms - run_bound_ms)
+            .fetch_one(&mut *db)
+            .await?,
+        };
+    }
+    Ok(emission)
 }
 
 /// Records that `aq.work.result_ready` was sent for `due` at `now_ms`.

@@ -151,7 +151,7 @@ fn validate_provenance_profile(
     {
         return Err(refused());
     }
-    let fact = receipt
+    let registry_matches_provenance = receipt
         .confirmation
         .facts
         .iter()
@@ -162,23 +162,16 @@ fn validate_provenance_profile(
                 preflight_registry,
                 current_registry,
                 ..
-            } => Some((
-                selected_registry,
-                accepted_registry,
-                preflight_registry,
-                current_registry,
-            )),
+            } => Some(
+                selected_registry == &p.selected_registry
+                    && accepted_registry == &p.accepted_registry
+                    && preflight_registry == &p.preflight_registry
+                    && current_registry == &p.current_registry,
+            ),
             _ => None,
         })
         .ok_or_else(|| refused())?;
-    if fact
-        != (
-            &p.selected_registry,
-            &p.accepted_registry,
-            &p.preflight_registry,
-            &p.current_registry,
-        )
-    {
+    if !registry_matches_provenance {
         return Err(refused());
     }
     Ok(())
