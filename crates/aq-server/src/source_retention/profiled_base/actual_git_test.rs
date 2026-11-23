@@ -39,28 +39,6 @@ async fn seed_repository(
     };
     (seed, base)
 }
-async fn start_git(runtime: &Runtime) -> tokio::process::Child {
-    let mut child = tokio::process::Command::new(std::env::var("AQ_TEST_GIT_CANDIDATE").unwrap())
-        .arg("--state-dir")
-        .arg(&runtime.config.git_root)
-        .arg("--git-executable")
-        .arg(std::env::var("AQ_TEST_GIT_EXECUTABLE").unwrap())
-        .arg("--listen")
-        .arg(&runtime.config.git_socket)
-        .arg("serve")
-        .kill_on_drop(true)
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    for _ in 0..500 {
-        if runtime.config.git_socket.exists() {
-            break;
-        }
-        assert!(child.try_wait().unwrap().is_none());
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    child
-}
 async fn reserve_fixture(
     runtime: &Runtime,
     seed: &std::path::Path,
@@ -109,7 +87,12 @@ async fn real_export_exact_retry_and_fresh_inspection_preserve_original_fact() {
         git_deadline_ms: 30_000,
     };
     let runtime = std::sync::Arc::new(Runtime::new(settings).unwrap());
-    let mut child = start_git(&runtime).await;
+    let child = aq_delivery::source_transport::test_peer::TestGit::start(
+        &runtime.config.git_root,
+        &runtime.config.git_socket,
+        500,
+    )
+    .await;
     let token = reserve_fixture(&runtime, &seed, base).await;
     let db = TestDb::create().await;
     let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
@@ -147,8 +130,7 @@ async fn real_export_exact_retry_and_fresh_inspection_preserve_original_fact() {
     std::fs::write(bundle, b"corrupt after verified export").unwrap();
     assert!(verify_export(&state, &token).await.is_err());
     assert_eq!(first.canonical_bytes().unwrap(), original);
-    child.kill().await.unwrap();
-    child.wait().await.unwrap();
+    child.stop().await;
     // The synthetic token deliberately does not claim durable SQL ownership,
     // task admission, attempt creation, worker hydration, or provider launch.
 }

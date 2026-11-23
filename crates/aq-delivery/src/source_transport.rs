@@ -1,5 +1,7 @@
 //! Exact aq-git source transfer manifests, observations and import acknowledgements.
 pub mod files;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_peer;
 use aq_worker_protocol::{CentralRetentionReceipt, ObjectId, SourceBinding, TransferManifest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
