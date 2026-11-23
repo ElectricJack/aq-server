@@ -392,22 +392,7 @@ async fn content(
         )
         .await;
     match content {
-        Ok(content) => {
-            let total = content.bytes().len();
-            let Some(range) = range else {
-                return Ok(body::response(content, permit, None));
-            };
-            // Only a clip render is seekable; images keep the 416 contract.
-            let clip = content.descriptor.mime == media::Mime::Mp4;
-            match byte_range(&range, total).filter(|_| clip) {
-                Some(span) => Ok(body::response(content, permit, Some(span))),
-                None => Ok((
-                    StatusCode::RANGE_NOT_SATISFIABLE,
-                    [(header::CONTENT_RANGE, format!("bytes */{total}"))],
-                )
-                    .into_response()),
-            }
-        }
+        Ok(content) => Ok(content_response(content, permit, range.as_deref())),
         Err(Error::Expired) => Ok(typed_failure(
             StatusCode::GONE,
             media::ContentError::MediaExpired,
@@ -431,6 +416,34 @@ async fn content(
         Err(error) => Err(mapped(error)),
     }
 }
+
+fn content_response(
+    content: super::Content,
+    permit: OwnedSemaphorePermit,
+    range: Option<&str>,
+) -> Response {
+    let total = content.bytes().len();
+    let Some(range) = range else {
+        return body::response(content, permit, None);
+    };
+    // Only a clip render is seekable; images keep the 416 contract.
+    let clip = content.descriptor.mime == media::Mime::Mp4;
+    match byte_range(range, total).filter(|_| clip) {
+        Some(span) => body::response(content, permit, Some(span)),
+        None => {
+            let response = (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [(header::CONTENT_RANGE, format!("bytes */{total}"))],
+            )
+                .into_response();
+            // Release the reader before waking the next admitted request.
+            drop(content);
+            drop(permit);
+            response
+        }
+    }
+}
+
 /// One `bytes=` range (`a-b`, `a-` or `-n`) as a non-empty half-open span.
 fn byte_range(value: &str, total: usize) -> Option<std::ops::Range<usize>> {
     let spec = value.strip_prefix("bytes=")?;
@@ -460,7 +473,7 @@ fn byte_range(value: &str, total: usize) -> Option<std::ops::Range<usize>> {
 }
 #[cfg(test)]
 mod range_tests {
-    use super::byte_range;
+    use super::*;
     #[test]
     fn single_byte_ranges_parse_and_clamp() {
         assert_eq!(byte_range("bytes=0-9", 100), Some(0..10));
@@ -477,6 +490,71 @@ mod range_tests {
             "bytes= 0-1",
         ] {
             assert_eq!(byte_range(bad, 100), None, "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn content_ranges_keep_reader_and_admission_guards_until_frames_drop() {
+        use http_body_util::BodyExt;
+        let directory = tempfile::tempdir().unwrap();
+        let root = super::super::files::Root::open(directory.path(), Uuid::new_v4()).unwrap();
+        let artifact = Uuid::new_v4();
+        for (mime, range, status, expected) in [
+            (media::Mime::Png, None, StatusCode::OK, &b"0123456789"[..]),
+            (
+                media::Mime::Mp4,
+                Some("bytes=2-4"),
+                StatusCode::PARTIAL_CONTENT,
+                &b"234"[..],
+            ),
+            (
+                media::Mime::Png,
+                Some("bytes=2-4"),
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                &b""[..],
+            ),
+            (
+                media::Mime::Mp4,
+                Some("bytes=10-"),
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                &b""[..],
+            ),
+        ] {
+            let bytes = b"0123456789".to_vec();
+            let digest = media::Digest::of(&bytes);
+            let content = super::super::Content {
+                descriptor: media::Variant {
+                    digest: digest.clone(),
+                    bytes: bytes.len() as u64,
+                    mime,
+                    width: 1,
+                    height: 1,
+                },
+                receipt_digest: digest,
+                bytes,
+                _guard: root.active(artifact, false).unwrap(),
+            };
+            let budget = Arc::new(Semaphore::new(1));
+            let response = content_response(content, slot(&budget).unwrap(), range);
+            assert_eq!(response.status(), status);
+            if status == StatusCode::RANGE_NOT_SATISFIABLE {
+                assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+                assert_eq!(budget.available_permits(), 1);
+                assert!(root.active(artifact, true).is_ok());
+                continue;
+            }
+            if status == StatusCode::PARTIAL_CONTENT {
+                assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 2-4/10");
+            }
+            let mut body = response.into_body();
+            let frame = body.frame().await.unwrap().unwrap();
+            assert_eq!(frame.data_ref().unwrap().as_ref(), expected);
+            drop(body);
+            assert_eq!(budget.available_permits(), 0);
+            assert!(root.active(artifact, true).is_err());
+            drop(frame);
+            assert_eq!(budget.available_permits(), 1);
+            assert!(root.active(artifact, true).is_ok());
         }
     }
 }

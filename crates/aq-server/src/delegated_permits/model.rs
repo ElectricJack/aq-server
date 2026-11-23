@@ -30,28 +30,23 @@ impl CredentialKey {
         permit_id: Uuid,
         boot: Uuid,
     ) -> Result<PermitCredential> {
-        if permit_id.is_nil() || boot.is_nil() {
-            return Err(ContractError::InvalidShape);
-        }
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_slice())
-            .map_err(|_| ContractError::InvalidShape)?;
-        mac.update(b"aq.delegated-permit.incarnation/v1\0");
-        mac.update(permit_id.as_bytes());
-        mac.update(boot.as_bytes());
-        let bytes = Zeroizing::new(mac.finalize().into_bytes().to_vec());
-        let token = Zeroizing::new(format!("aqp_{}", URL_SAFE_NO_PAD.encode(bytes.as_slice())));
-        serde_json::from_value(serde_json::Value::String(token.to_string()))
-            .map_err(|_| ContractError::InvalidShape)
+        self.derive_credential(b"aq.delegated-permit.incarnation/v1\0", &[permit_id, boot])
     }
 
     pub fn credential(&self, permit_id: Uuid) -> Result<PermitCredential> {
-        if permit_id.is_nil() {
+        self.derive_credential(b"aq.delegated-permit.credential/v1\0", &[permit_id])
+    }
+
+    fn derive_credential(&self, domain: &[u8], ids: &[Uuid]) -> Result<PermitCredential> {
+        if ids.iter().any(Uuid::is_nil) {
             return Err(ContractError::InvalidShape);
         }
         let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_slice())
             .map_err(|_| ContractError::InvalidShape)?;
-        mac.update(b"aq.delegated-permit.credential/v1\0");
-        mac.update(permit_id.as_bytes());
+        mac.update(domain);
+        for id in ids {
+            mac.update(id.as_bytes());
+        }
         let bytes = Zeroizing::new(mac.finalize().into_bytes().to_vec());
         let token = Zeroizing::new(format!("aqp_{}", URL_SAFE_NO_PAD.encode(bytes.as_slice())));
         serde_json::from_value(serde_json::Value::String(token.to_string()))
@@ -162,5 +157,49 @@ impl PermitRecord {
 
     pub fn revoke(&mut self) {
         self.revoked = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_derivation_preserves_retained_v1_bytes() {
+        let key = CredentialKey::new([7; 32]);
+        let permit = Uuid::from_u128(1);
+        let boot = Uuid::from_u128(6);
+        // Digests pin both domain separators and UUID byte order without
+        // retaining bearer credentials in the source.
+        for (credential, expected) in [
+            (
+                key.credential(permit).unwrap(),
+                [
+                    0xce, 0xeb, 0x8a, 0x00, 0xd4, 0xc4, 0x14, 0x61, 0xc6, 0x4e, 0x36, 0xf1, 0xa6,
+                    0x99, 0xc2, 0x52, 0xf6, 0x1e, 0xcd, 0xa3, 0x02, 0xca, 0x53, 0x85, 0xf0, 0x52,
+                    0x7f, 0x75, 0x9e, 0x6b, 0xac, 0xac,
+                ],
+            ),
+            (
+                key.incarnation_credential(permit, boot).unwrap(),
+                [
+                    0x74, 0xbf, 0xe7, 0xd4, 0x11, 0x5b, 0xd6, 0x36, 0x79, 0xcd, 0xf1, 0x08, 0x3f,
+                    0x27, 0x3d, 0x44, 0xc5, 0xb8, 0x46, 0x03, 0x54, 0x8b, 0x00, 0x06, 0xc2, 0xcd,
+                    0x93, 0x94, 0xa5, 0x44, 0xcc, 0x9b,
+                ],
+            ),
+        ] {
+            let encoded = credential.expose().strip_prefix("aqp_").unwrap();
+            assert_eq!(URL_SAFE_NO_PAD.decode(encoded).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn credential_derivation_rejects_nil_bindings() {
+        let key = CredentialKey::new([7; 32]);
+        let id = Uuid::from_u128(1);
+        assert!(key.credential(Uuid::nil()).is_err());
+        assert!(key.incarnation_credential(Uuid::nil(), id).is_err());
+        assert!(key.incarnation_credential(id, Uuid::nil()).is_err());
     }
 }
