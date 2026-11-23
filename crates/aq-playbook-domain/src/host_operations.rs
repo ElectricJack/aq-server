@@ -9,6 +9,31 @@ use sqlx::{PgConnection, PgExecutor, Row};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+/// Identifies the accepted command whose operation is being completed.
+pub struct OperationKey<'a> {
+    pub operation: Uuid,
+    pub command: &'a str,
+    pub intent_id: &'a str,
+}
+impl<'a> OperationKey<'a> {
+    pub fn new(operation: Uuid, command: &'a str, intent_id: &'a str) -> Self {
+        Self {
+            operation,
+            command,
+            intent_id,
+        }
+    }
+}
+pub struct OperationRequest<'a> {
+    pub check: Option<&'a str>,
+    pub body: &'a Value,
+}
+impl<'a> OperationRequest<'a> {
+    pub fn new(check: Option<&'a str>, body: &'a Value) -> Self {
+        Self { check, body }
+    }
+}
+
 /// Records one host decision under the caller's namespace lock.
 pub async fn record_effect(
     db: &mut PgConnection,

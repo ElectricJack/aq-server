@@ -314,11 +314,11 @@ impl DeliveryRuns<'_> {
 
         delivery::run_step(
             self.pool,
-            commands.as_ref(),
-            target.as_ref(),
-            operation,
-            command,
-            request,
+            delivery::DeliveryRuntime {
+                service: commands.as_ref(),
+                target: target.as_ref(),
+            },
+            delivery::FrozenCommand::new(operation, command, request),
             now,
         )
         .await

@@ -34,6 +34,7 @@ aq-human-work = { path = "../aq-human-work", version = "=0.1.0" }
 schemars = "1"
 aq-review-protocol = { path = "../aq-review-protocol", version = "=0.1.0" }
 aq-playbook-host = { path = "../aq-playbook-host", version = "=0.1.3" }
+aq-observation-ledger = { path = "../aq-observation-ledger", version = "=0.1.0" }
 aq-observation-admission = { path = "../aq-observation-admission", version = "=0.1.0" }
 aq-terminal-relay = { path = "../aq-terminal-relay", version = "=0.1.0" }
 aq-terminal-relay-protocol = { path = "../aq-terminal-relay-protocol", version = "=0.1.0" }
@@ -55,7 +56,8 @@ aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version
 aq-row-retention = { path = "../aq-row-retention" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-playbook-domain = { path = "../aq-playbook-domain" }
-aq-delivery = { path = "../aq-delivery" }
+aq-delegated-permits = { path = "../aq-delegated-permits" }
+aq-delivery = { path = "../aq-delivery", features = ["source_observation"] }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }

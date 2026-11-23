@@ -40,6 +40,28 @@ struct FileEntry {
     image_digest: String,
 }
 
+impl FileEntry {
+    fn into_entry(self) -> Result<Entry, &'static str> {
+        fn bounded(s: &str) -> bool {
+            !s.is_empty() && s.len() <= 128 && !s.contains('@') && !s.chars().any(char::is_control)
+        }
+        let hex = self
+            .image_digest
+            .strip_prefix("sha256:")
+            .ok_or("template image_digest must be sha256:<hex>")?;
+        let digest = serde_json::from_value::<Digest>(serde_json::Value::String(hex.into()))
+            .map_err(|_| "template image_digest must be sha256:<64 lowercase hex>")?;
+        if !bounded(&self.name) || !bounded(&self.version) {
+            return Err("template name or version invalid");
+        }
+        Ok(Entry {
+            name: self.name,
+            version: self.version,
+            digest,
+        })
+    }
+}
+
 impl Allowlist {
     pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
         if bytes.len() as u64 > MAX_ALLOWLIST_BYTES {
@@ -56,29 +78,7 @@ impl Allowlist {
         let entries = file
             .entries
             .into_iter()
-            .map(|e| {
-                let bounded = |s: &str| {
-                    !s.is_empty()
-                        && s.len() <= 128
-                        && !s.contains('@')
-                        && !s.chars().any(char::is_control)
-                };
-                let hex = e
-                    .image_digest
-                    .strip_prefix("sha256:")
-                    .ok_or("template image_digest must be sha256:<hex>")?;
-                let digest =
-                    serde_json::from_value::<Digest>(serde_json::Value::String(hex.into()))
-                        .map_err(|_| "template image_digest must be sha256:<64 lowercase hex>")?;
-                if !bounded(&e.name) || !bounded(&e.version) {
-                    return Err("template name or version invalid");
-                }
-                Ok(Entry {
-                    name: e.name,
-                    version: e.version,
-                    digest,
-                })
-            })
+            .map(FileEntry::into_entry)
             .collect::<Result<_, _>>()?;
         Ok(Self { entries })
     }

@@ -68,13 +68,7 @@ impl Default for Identity {
     }
 }
 
-pub async fn native(
-    c: &Config,
-    directory: &Path,
-    home: &Path,
-    credential: &Path,
-    startup: &[u8],
-) -> Result<()> {
+pub async fn native(c: &Config, home: &Path, credential: &Path, startup: &[u8]) -> Result<()> {
     let identity = Identity::NATIVE;
     unsafe {
         libc::umask(0o077);
@@ -99,33 +93,15 @@ pub async fn native(
         &c.workspace,
         &output,
     )?;
-    let mut overrides = exec_overrides(Some(c.model.reasoning.as_str()));
-    overrides.push(format!(
-        "developer_instructions={}",
-        quote(&settings.instructions)
-    ));
-    for (key, value) in [
-        (
-            "AQ_SUPERVISOR_CREDENTIAL_FILE",
-            credential.to_string_lossy().into_owned(),
-        ),
-        ("AQ_SUPERVISOR_ORIGIN", settings.server_origin.clone()),
-        (
-            "AQ_SUPERVISOR_ACTIONS_FILE",
-            actions.to_string_lossy().into_owned(),
-        ),
-    ] {
-        overrides.push(format!(
-            "shell_environment_policy.set.{key}={}",
-            quote(&value)
-        ));
-    }
-    overrides.extend(service_tier(&settings.options)?);
+    let overrides =
+        supervisor_overrides(settings, c.model.reasoning.as_str(), credential, &actions)?;
     let mut command = native_command(
         &executable,
         exec_finish(args, overrides),
-        home,
-        &c.workspace,
+        CommandHome {
+            home,
+            cwd: &c.workspace,
+        },
         identity,
     );
     let mut child = command.spawn()?;
@@ -152,7 +128,38 @@ pub async fn native(
         ],
     )?;
 
-    publish(c, directory, credential, &text, &actions).await
+    publish(c, credential, &text, &actions).await
+}
+
+fn supervisor_overrides(
+    settings: &crate::config::Subscription,
+    reasoning: &str,
+    credential: &Path,
+    actions: &Path,
+) -> Result<Vec<String>> {
+    let mut overrides = exec_overrides(Some(reasoning));
+    overrides.push(format!(
+        "developer_instructions={}",
+        quote(&settings.instructions)
+    ));
+    for (key, value) in [
+        (
+            "AQ_SUPERVISOR_CREDENTIAL_FILE",
+            credential.to_string_lossy().into_owned(),
+        ),
+        ("AQ_SUPERVISOR_ORIGIN", settings.server_origin.clone()),
+        (
+            "AQ_SUPERVISOR_ACTIONS_FILE",
+            actions.to_string_lossy().into_owned(),
+        ),
+    ] {
+        overrides.push(format!(
+            "shell_environment_policy.set.{key}={}",
+            quote(&value)
+        ));
+    }
+    overrides.extend(service_tier(&settings.options)?);
+    Ok(overrides)
 }
 
 /// JSON string literal for a `--config` value.
@@ -278,10 +285,12 @@ pub(crate) fn recover_login(secret_file: &Path, leftover: &Path, identity: Ident
             let at = login["last_refresh"].as_str()?;
             chrono::DateTime::parse_from_rfc3339(at).ok()
         };
-        if before["tokens"]["account_id"] == after["tokens"]["account_id"]
-            && candidate.as_slice() != current.as_slice()
-            && refreshed(&after) > refreshed(&before)
-        {
+        let same_account = before["tokens"]["account_id"] == after["tokens"]["account_id"];
+        let changed = candidate.as_slice() != current.as_slice();
+        if !same_account || !changed {
+            return Ok(());
+        }
+        if refreshed(&after) > refreshed(&before) {
             replace_login(secret_file, &candidate)?;
         }
         Ok(())
@@ -407,16 +416,21 @@ pub(crate) fn exec_finish(mut args: Vec<String>, overrides: Vec<String>) -> Vec<
     args
 }
 
+pub(crate) struct CommandHome<'a> {
+    pub(crate) home: &'a Path,
+    pub(crate) cwd: &'a Path,
+}
+
 /// The native child: a clean environment, `home` as its Codex home, `cwd` as
 /// its directory, stdin piped, its own session, and (in production) the
 /// unprivileged identity with no new privileges and no core dumps.
 pub(crate) fn native_command(
     executable: &std::fs::File,
     args: Vec<String>,
-    home: &Path,
-    cwd: &Path,
+    directories: CommandHome<'_>,
     identity: Identity,
 ) -> std::process::Command {
+    let CommandHome { home, cwd } = directories;
     use std::os::fd::AsRawFd;
     let fd = executable.as_raw_fd();
     let path = std::path::PathBuf::from(format!("/proc/self/fd/{fd}"));
@@ -437,12 +451,13 @@ pub(crate) fn native_command(
     unsafe {
         command.pre_exec(move || {
             crate::adapter::new_session()?;
-            if libc::fcntl(fd, libc::F_SETFD, 0) < 0
-                || (drop_privileges
-                    && (libc::setgroups(0, std::ptr::null()) != 0
-                        || libc::setgid(run_as) != 0
-                        || libc::setuid(run_as) != 0))
-                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if drop_privileges {
+                drop_to(run_as)?;
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
                 || libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
             {
                 return Err(std::io::Error::last_os_error());
@@ -451,6 +466,17 @@ pub(crate) fn native_command(
         });
     }
     command
+}
+
+fn drop_to(uid: u32) -> std::io::Result<()> {
+    if unsafe {
+        libc::setgroups(0, std::ptr::null()) != 0
+            || libc::setgid(uid) != 0
+            || libc::setuid(uid) != 0
+    } {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Replaces the login tokens of each auth document in `text`.
@@ -519,13 +545,7 @@ fn read_message(path: &Path) -> Result<String> {
     }
     Ok(body)
 }
-async fn publish(
-    c: &Config,
-    _directory: &Path,
-    credential: &Path,
-    body: &str,
-    actions: &Path,
-) -> Result<()> {
+async fn publish(c: &Config, credential: &Path, body: &str, actions: &Path) -> Result<()> {
     let pool = sqlx::PgPool::connect(&c.database_url).await?;
     let existing: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM central_supervisor_replies WHERE dispatch_id=$1)",
@@ -536,18 +556,7 @@ async fn publish(
     if existing {
         return Ok(());
     }
-    let mut refs = Vec::new();
-    if let Ok(bytes) = protected_read_native(actions, Identity::NATIVE.run_as) {
-        let text = std::str::from_utf8(&bytes)?;
-        for line in text.lines() {
-            if let Ok(id) = line.parse::<uuid::Uuid>()
-                && refs.len() < 4
-                && !refs.contains(&id)
-            {
-                refs.push(id);
-            }
-        }
-    }
+    let refs = action_receipts(actions)?;
     let request = json!({"operation_id":uuid::Uuid::new_v4(),"message_id":uuid::Uuid::new_v4(),"dispatch_id":c.central.dispatch_id,"body":body,"attachments":refs.into_iter().map(|id|json!({"type":"action_receipt","operation_id":id})).collect::<Vec<_>>()});
     let token = Zeroizing::new(protected_read_native(credential, Identity::NATIVE.run_as)?);
     let mut bearer = reqwest::header::HeaderValue::from_str(&format!(
@@ -580,4 +589,23 @@ async fn publish(
         }
     }
     anyhow::bail!("supervisor reply confirmation unavailable")
+}
+
+fn action_receipts(actions: &Path) -> Result<Vec<uuid::Uuid>> {
+    let Ok(bytes) = protected_read_native(actions, Identity::NATIVE.run_as) else {
+        return Ok(Vec::new());
+    };
+    let mut receipts = Vec::new();
+    for id in std::str::from_utf8(&bytes)?
+        .lines()
+        .filter_map(|line| line.parse::<uuid::Uuid>().ok())
+    {
+        if !receipts.contains(&id) {
+            receipts.push(id);
+        }
+        if receipts.len() == 4 {
+            break;
+        }
+    }
+    Ok(receipts)
 }

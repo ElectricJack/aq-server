@@ -200,14 +200,11 @@ pub async fn place(
     };
     let provides = |e: &str| catalog.provides(e);
     let needs = env::needs(metadata);
-    env::place(
-        binding,
+    let fixed = env::FixedEnvironments {
         pinned,
-        kept.as_deref().or(routed),
-        &needs,
-        provides,
-    )
-    .map_err(
+        kept: kept.as_deref().or(routed),
+    };
+    env::place(binding, fixed, &needs, provides).map_err(
         |env::Missing {
              environment,
              missing,

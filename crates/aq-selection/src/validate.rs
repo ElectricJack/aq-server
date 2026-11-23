@@ -60,6 +60,12 @@ impl AvailabilityObservation {
                 && self.scope.credential_revision > 0,
             "observation identity/sequence",
         )?;
+        self.validate_scope()?;
+        self.validate_timing()?;
+        self.validate_source()
+    }
+
+    fn validate_scope(&self) -> Result<()> {
         text(&self.scope.provider)?;
         text(&self.scope.account_reference)?;
         text(&self.scope.endpoint_reference)?;
@@ -69,14 +75,20 @@ impl AvailabilityObservation {
         ensure(
             self.scope.node_id.is_none_or(|id| !id.is_nil()),
             "observation node",
-        )?;
+        )
+    }
+
+    fn validate_timing(&self) -> Result<()> {
         ensure(
             self.received_at_ms > 0
                 && self.expires_at_ms > self.received_at_ms
                 && self.expires_at_ms - self.received_at_ms <= 3_600_000
                 && self.cooldown_until_ms <= self.expires_at_ms,
             "observation timing",
-        )?;
+        )
+    }
+
+    fn validate_source(&self) -> Result<()> {
         match &self.source {
             ObservationSource::Operator { principal_id } => {
                 ensure(!principal_id.is_nil(), "operator provenance")?
@@ -130,21 +142,7 @@ pub(crate) fn validate_launch(
 }
 /// The checks of the inputs themselves.
 fn common(input: &SelectionInputs) -> Result<()> {
-    lineage(&input.project.lineage)?;
-    target(&input.project.target)?;
-    target(&input.node.target)?;
-    ensure(
-        input.project.target == input.node.target && input.project.lineage == input.budget.lineage,
-        "snapshot subject mismatch",
-    )?;
-    ensure(
-        input.now_ms > 0
-            && input.project.revision > 0
-            && input.node.revision > 0
-            && input.registry_revision > 0
-            && input.budget.revision > 0,
-        "snapshot revisions",
-    )?;
+    validate_subject(input)?;
     if let Some(p) = &input.placement {
         placement(p)?;
     }
@@ -161,53 +159,10 @@ fn common(input: &SelectionInputs) -> Result<()> {
             limit.iter().try_for_each(|v| text(v))?;
         }
     }
-    bounds(&input.project.allowed_environments, 32)?;
-    ensure(
-        !input.project.allowed_environments.is_empty()
-            && input
-                .project
-                .allowed_environments
-                .iter()
-                .collect::<BTreeSet<_>>()
-                .len()
-                == input.project.allowed_environments.len(),
-        "project environment allowlist",
-    )?;
-    for environment in &input.project.allowed_environments {
-        text(environment)?;
-    }
-    let c = &input.project.ceilings;
-    ensure(
-        c.context_bytes > 0
-            && c.context_bytes <= 1_048_576
-            && c.wall_time_ms > 0
-            && c.memory_bytes > 0
-            && c.cpu_millis > 0
-            && c.process_limit > 0
-            && c.cost_limit_microunits.is_some() == c.currency.is_some(),
-        "project ceilings",
-    )?;
-    if let Some(currency) = &c.currency {
-        ensure(
-            currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
-            "currency",
-        )?;
-    }
-    bounds(&input.project.permission_ceiling, 128)?;
-    bounds(&input.node.harnesses, crate::MAX_NODE_HARNESSES)?;
-    bounds(&input.node.credential_bindings, 32)?;
-    bounds(&input.credentials, 32)?;
-    bounds(&input.observations, 128)?;
-    bounds(&input.estimates, 128)?;
-    bounds(&input.launches, 16)?;
-    validate_installation(
-        &input.credentials,
-        &input.node.credential_bindings,
-        input.node.material_delivery.as_ref(),
-        &input.node.harnesses,
-        &input.observations,
-        input.now_ms,
-    )?;
+    validate_environments(&input.project.allowed_environments)?;
+    validate_ceilings(&input.project.ceilings)?;
+    validate_arrays(input)?;
+    validate_installation(input)?;
     if let Some(replacement) = &input.replacement {
         lineage(&replacement.lineage)?;
         ensure(
@@ -225,15 +180,75 @@ fn common(input: &SelectionInputs) -> Result<()> {
     )
 }
 
+fn validate_subject(input: &SelectionInputs) -> Result<()> {
+    lineage(&input.project.lineage)?;
+    target(&input.project.target)?;
+    target(&input.node.target)?;
+    ensure(
+        input.project.target == input.node.target && input.project.lineage == input.budget.lineage,
+        "snapshot subject mismatch",
+    )?;
+    ensure(
+        input.now_ms > 0
+            && input.project.revision > 0
+            && input.node.revision > 0
+            && input.registry_revision > 0
+            && input.budget.revision > 0,
+        "snapshot revisions",
+    )
+}
+
+fn validate_environments(environments: &[String]) -> Result<()> {
+    bounds(environments, 32)?;
+    ensure(
+        !environments.is_empty()
+            && environments.iter().collect::<BTreeSet<_>>().len() == environments.len(),
+        "project environment allowlist",
+    )?;
+    environments
+        .iter()
+        .try_for_each(|environment| text(environment))
+}
+
+fn validate_ceilings(c: &ResourceCeilings) -> Result<()> {
+    ensure(
+        (1..=1_048_576).contains(&c.context_bytes)
+            && c.wall_time_ms > 0
+            && c.memory_bytes > 0
+            && c.cpu_millis > 0
+            && c.process_limit > 0
+            && c.cost_limit_microunits.is_some() == c.currency.is_some(),
+        "project ceilings",
+    )?;
+    if let Some(currency) = &c.currency {
+        ensure(
+            currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
+            "currency",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_arrays(input: &SelectionInputs) -> Result<()> {
+    bounds(&input.project.permission_ceiling, 128)?;
+    bounds(&input.node.harnesses, crate::MAX_NODE_HARNESSES)?;
+    bounds(&input.node.credential_bindings, 32)?;
+    bounds(&input.credentials, 32)?;
+    bounds(&input.observations, 128)?;
+    bounds(&input.estimates, 128)?;
+    bounds(&input.launches, 16)
+}
+
 /// Structural checks shared by subject adapters; these never authenticate facts.
-pub(crate) fn validate_installation(
-    credential_rows: &[AuthorizedCredential],
-    bindings: &[CredentialBinding],
-    delivery: Option<&DeliveryCapability>,
-    harness_rows: &[InstalledHarness],
-    observation_rows: &[AvailabilityObservation],
-    now_ms: u64,
-) -> Result<()> {
+fn validate_installation(input: &SelectionInputs) -> Result<()> {
+    validate_credentials(&input.credentials)?;
+    validate_delivery(input.node.material_delivery.as_ref())?;
+    validate_bindings(&input.node.credential_bindings)?;
+    validate_harnesses(&input.node.harnesses)?;
+    validate_observations(&input.observations, input.now_ms)
+}
+
+fn validate_credentials(credential_rows: &[AuthorizedCredential]) -> Result<()> {
     let mut credentials = BTreeSet::new();
     for credential in credential_rows {
         ensure(
@@ -257,31 +272,23 @@ pub(crate) fn validate_installation(
             "credential revision/identity conflict",
         )?;
     }
+    Ok(())
+}
+
+fn validate_delivery(delivery: Option<&DeliveryCapability>) -> Result<()> {
     if let Some(delivery) = delivery {
         text(delivery.adapter.id.as_str())?;
         text(delivery.adapter.version.as_str())?;
         ensure(delivery.version > 0, "delivery protocol version")?;
     }
+    Ok(())
+}
+
+fn validate_bindings(bindings: &[CredentialBinding]) -> Result<()> {
     let mut installed_credentials = BTreeSet::new();
     for binding in bindings {
         if let Some(preparation) = &binding.preparation {
-            for reference in [
-                &preparation.owner,
-                &preparation.credential_profile,
-                &preparation.delivery.adapter,
-            ] {
-                text(reference.id.as_str())?;
-                text(reference.version.as_str())?;
-            }
-            target(&preparation.target)?;
-            ensure(
-                preparation.credential_revision > 0
-                    && preparation.delivery.version > 0
-                    && preparation.observed_at_ms > 0
-                    && preparation.expires_at_ms > preparation.observed_at_ms
-                    && preparation.expires_at_ms - preparation.observed_at_ms <= 120_000,
-                "preparation evidence bounds",
-            )?;
+            validate_preparation(preparation)?;
         }
         ensure(
             binding.credential_revision > 0
@@ -292,6 +299,30 @@ pub(crate) fn validate_installation(
             "credential evidence revision/duplicate",
         )?;
     }
+    Ok(())
+}
+
+fn validate_preparation(preparation: &ProvisioningReadiness) -> Result<()> {
+    for reference in [
+        &preparation.owner,
+        &preparation.credential_profile,
+        &preparation.delivery.adapter,
+    ] {
+        text(reference.id.as_str())?;
+        text(reference.version.as_str())?;
+    }
+    target(&preparation.target)?;
+    ensure(
+        preparation.credential_revision > 0
+            && preparation.delivery.version > 0
+            && preparation.observed_at_ms > 0
+            && preparation.expires_at_ms > preparation.observed_at_ms
+            && preparation.expires_at_ms - preparation.observed_at_ms <= 120_000,
+        "preparation evidence bounds",
+    )
+}
+
+fn validate_harnesses(harness_rows: &[InstalledHarness]) -> Result<()> {
     let mut harnesses = BTreeSet::new();
     for harness in harness_rows {
         text(&harness.harness)?;
@@ -311,6 +342,10 @@ pub(crate) fn validate_installation(
                 .map_err(|e| SelectionError::Invalid(e.to_string()))?;
         }
     }
+    Ok(())
+}
+
+fn validate_observations(observation_rows: &[AvailabilityObservation], now_ms: u64) -> Result<()> {
     let mut observations = BTreeSet::new();
     for observation in observation_rows {
         observation.validate()?;

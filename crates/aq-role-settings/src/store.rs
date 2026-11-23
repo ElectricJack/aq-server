@@ -228,14 +228,20 @@ pub async fn release_finished_pins(conn: &mut PgConnection) -> Result<u64> {
     .await?;
     Ok(released.rows_affected())
 }
+#[derive(Clone, Copy)]
+struct Version {
+    revision: i64,
+    now_ms: i64,
+}
+
 /// Store `snapshot`, make it the active one at `revision`, and roll.
 async fn activate(
     conn: &mut PgConnection,
     snapshot: &Snapshot,
-    revision: i64,
+    version: Version,
     limits: &StoreLimits,
-    now_ms: i64,
 ) -> Result<()> {
+    let Version { revision, now_ms } = version;
     sqlx::query(
         "INSERT INTO role_snapshots(digest,snapshot,created_at_ms,activated_revision) VALUES($1,$2,$3,$4)
          ON CONFLICT(digest) DO UPDATE SET activated_revision=EXCLUDED.activated_revision",
@@ -255,385 +261,40 @@ async fn activate(
     roll_snapshots(conn, snapshot.digest(), limits.snapshots_kept).await
 }
 
-/// Apply one change (see the crate documentation). `Error::Problems` when the
-/// resulting set is not valid, `Error::Conflict` when `expected_revision` is
-/// stale or the operation id was used for another request.
-pub async fn apply(
-    pool: &PgPool,
-    actor: Uuid,
-    mutation: &Mutation,
-    now_ms: i64,
-) -> Result<Receipt> {
-    apply_referenced(pool, actor, mutation, now_ms, None).await
-}
-/// [`apply`], with the references from outside this store that a delete must
-/// respect. They are read in the change's transaction, after its lock, so a
-/// reference saved under [`check_binding`] is always seen.
-pub async fn apply_referenced(
-    pool: &PgPool,
-    actor: Uuid,
-    mutation: &Mutation,
-    now_ms: i64,
-    references: Option<References>,
-) -> Result<Receipt> {
-    if mutation.operation_id.is_nil() {
-        return Err(invalid("Enter a valid operation ID"));
-    }
-    if mutation.expected_revision < 0 {
-        return Err(invalid("Invalid revision"));
-    }
-    let request_digest = aq_profiles::digest(&serde_json::json!({
-        "change": mutation.change,
-        "expected_revision": mutation.expected_revision,
-    }))
-    .map_err(|_| Error::Internal)?;
-    let mut tx = pool.begin().await?;
-    let mut state = read_settings(&mut tx, Lock::Update).await?;
-    let replayed = sqlx::query(
-        "SELECT actor_id,request_digest,receipt FROM role_settings_operations WHERE operation_id=$1",
-    )
-    .bind(mutation.operation_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(row) = replayed {
-        if row.get::<Uuid, _>("actor_id") != actor
-            || row.get::<String, _>("request_digest") != request_digest
-        {
-            return Err(conflict("Operation ID already used for another request"));
-        }
-        return serde_json::from_value(row.get("receipt")).map_err(|_| Error::Internal);
-    }
-    let mut set = documents(&mut tx, None).await?;
-    let revision = state.revision + 1;
-    let mut problems = Vec::new();
-    let current = match &mutation.change {
-        Change::Save { kind, id, .. } | Change::Delete { kind, id } => {
-            let at = set.iter().position(|d| d.kind == *kind && d.id == *id);
-            let current = at.map_or(0, |at| set[at].revision);
-            match (&mutation.change, at) {
-                (Change::Save { markdown, .. }, _) => {
-                    if let Some(stated) = stated_id(*kind, markdown).filter(|stated| stated != id) {
-                        problems.push(Problem {
-                            document: format!("{} document `{id}`", kind.label()),
-                            field: "id".into(),
-                            message: format!(
-                                "is `{stated}`; a document saved as `{id}` must have that id"
-                            ),
-                        });
-                    }
-                    let document = Document {
-                        kind: *kind,
-                        id: id.clone(),
-                        markdown: markdown.clone(),
-                        revision,
-                        updated_at_ms: now_ms,
-                    };
-                    match at {
-                        Some(at) => set[at] = document,
-                        None => set.push(document),
-                    }
-                }
-                (_, Some(at)) => {
-                    set.remove(at);
-                }
-                (_, None) => {
-                    return Err(Error::NotFound(format!(
-                        "No {} `{id}` exists",
-                        kind.label()
-                    )));
-                }
-            }
-            current
-        }
-        Change::SelectionDefaults(defaults) => {
-            let current = state.selection_defaults_revision;
-            state.selection_defaults = defaults.clone();
-            current
-        }
-        Change::Limits(limits) => {
-            let current = state.limits_revision;
-            state.limits = *limits;
-            current
-        }
-        Change::RoutingDocument(_) => state.routing_revision,
-        Change::ObservationLimits(_) => observation_limits(&mut tx).await?.1,
-        #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryDocument(_) => state.delivery_revision,
-        #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryLimits(_) => state.delivery_limits_revision,
-        #[cfg(feature = "project_environments")]
-        Change::EnvironmentLimits(_) => environment_limits_on(&mut tx).await?.1,
-    };
-    if current != mutation.expected_revision {
-        return Err(conflict(
-            "This changed since it was read; reload before saving",
-        ));
-    }
-    if let (Change::Delete { kind, id }, Some(read)) = (&mutation.change, references) {
-        for reference in read(&mut tx).await? {
-            if reference.kind == *kind && reference.id == *id {
-                problems.push(Problem {
-                    document: format!("{} `{id}`", kind.label()),
-                    field: String::new(),
-                    message: format!("is {}", reference.by),
-                });
-            }
-        }
-    }
-    // The routing document is not part of a snapshot: saving it compiles
-    // and activates nothing.
-    #[cfg(feature = "delivery_playbook")]
-    let no_snapshot = match &mutation.change {
-        Change::DeliveryDocument(markdown) => {
-            let limit = state.limits.documents.max_document_bytes;
-            if markdown.len() > limit {
-                return Err(invalid(&format!(
-                    "The delivery document is {} bytes, over the limit of {limit} bytes",
-                    markdown.len()
-                )));
-            }
-            true
-        }
-        Change::DeliveryLimits(limits) => {
-            limits.validate().map_err(|message| invalid(&message))?;
-            true
-        }
-        _ => false,
-    };
-    #[cfg(not(feature = "delivery_playbook"))]
-    let no_snapshot = false;
-    // The environment limits, too, compile and activate nothing.
-    #[cfg(feature = "project_environments")]
-    let no_snapshot = no_snapshot
-        || match &mutation.change {
-            Change::EnvironmentLimits(limits) => {
-                limits.validate().map_err(|message| invalid(&message))?;
-                true
-            }
-            _ => false,
-        };
-    let snapshot = if let Change::RoutingDocument(markdown) = &mutation.change {
-        let limit = state.limits.documents.max_document_bytes;
-        if markdown.len() > limit {
-            return Err(invalid(&format!(
-                "The routing document is {} bytes, over the limit of {limit} bytes",
-                markdown.len()
-            )));
-        }
-        None
-    } else if let Change::ObservationLimits(limits) = &mutation.change {
-        limits.validate().map_err(|message| invalid(&message))?;
-        None
-    } else if no_snapshot {
-        // Like the routing document, the delivery and environment settings
-        // compile and activate nothing.
-        None
-    } else {
-        match compile(&set, &state.selection_defaults, &state.limits) {
-            Ok(snapshot) if problems.is_empty() => Some(snapshot),
-            Ok(_) => return Err(Error::Problems(problems)),
-            Err(more) => {
-                problems.extend(more);
-                return Err(Error::Problems(problems));
-            }
-        }
-    };
-    match &mutation.change {
-        Change::Save { kind, id, markdown } => {
-            sqlx::query(
-                "INSERT INTO role_documents(kind,id,markdown,revision,updated_at_ms) VALUES($1,$2,$3,$4,$5)
-                 ON CONFLICT(kind,id) DO UPDATE SET markdown=EXCLUDED.markdown,revision=EXCLUDED.revision,updated_at_ms=EXCLUDED.updated_at_ms",
-            )
-            .bind(kind_name(*kind))
-            .bind(id)
-            .bind(markdown)
-            .bind(revision)
-            .bind(now_ms)
-            .execute(&mut *tx)
-            .await?;
-        }
-        Change::Delete { kind, id } => {
-            sqlx::query("DELETE FROM role_documents WHERE kind=$1 AND id=$2")
-                .bind(kind_name(*kind))
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        Change::SelectionDefaults(defaults) => {
-            sqlx::query(
-                "UPDATE role_settings SET selection_defaults=$1,selection_defaults_revision=$2 WHERE singleton",
-            )
-            .bind(serde_json::to_value(defaults).map_err(|_| Error::Internal)?)
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        }
-        Change::Limits(limits) => {
-            sqlx::query("UPDATE role_settings SET limits=$1,limits_revision=$2 WHERE singleton")
-                .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
-                .bind(revision)
-                .execute(&mut *tx)
-                .await?;
-        }
-        Change::RoutingDocument(markdown) => {
-            sqlx::query(
-                "UPDATE role_settings SET revision=$1,routing_markdown=$2,routing_revision=$1 WHERE singleton",
-            )
-            .bind(revision)
-            .bind(markdown)
-            .execute(&mut *tx)
-            .await?;
-        }
-        Change::ObservationLimits(limits) => {
-            sqlx::query(
-                "UPDATE role_settings SET revision=$1,observation_limits=$2,observation_limits_revision=$1 WHERE singleton",
-            )
-            .bind(revision)
-            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
-            .execute(&mut *tx)
-            .await?;
-        }
-        #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryDocument(markdown) => {
-            sqlx::query(
-                "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton",
-            )
-            .bind(revision)
-            .bind(markdown)
-            .execute(&mut *tx)
-            .await?;
-        }
-        #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryLimits(limits) => {
-            sqlx::query(
-                "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",
-            )
-            .bind(revision)
-            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
-            .execute(&mut *tx)
-            .await?;
-        }
-        #[cfg(feature = "project_environments")]
-        Change::EnvironmentLimits(limits) => {
-            sqlx::query(
-                "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",
-            )
-            .bind(revision)
-            .bind(serde_json::to_value(limits).map_err(|_| Error::Internal)?)
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-    let digest = match &snapshot {
-        Some(snapshot) => {
-            activate(&mut tx, snapshot, revision, &state.limits, now_ms).await?;
-            snapshot.digest().to_owned()
-        }
-        None => state.active_digest.clone().unwrap_or_default(),
-    };
-    let receipt = Receipt { revision, digest };
-    sqlx::query(
-        "INSERT INTO role_settings_operations(operation_id,actor_id,request_digest,receipt,revision,created_at_ms) VALUES($1,$2,$3,$4,$5,$6)",
-    )
-    .bind(mutation.operation_id)
-    .bind(actor)
-    .bind(&request_digest)
-    .bind(serde_json::to_value(&receipt).map_err(|_| Error::Internal)?)
-    .bind(revision)
-    .bind(now_ms)
-    .execute(&mut *tx)
-    .await?;
-    // Receipts are a rolling set too: a repeat is recognised while its id is
-    // among the most recent `operations_kept`; later it is a new request.
-    sqlx::query(
-        "DELETE FROM role_settings_operations WHERE operation_id NOT IN
-         (SELECT operation_id FROM role_settings_operations ORDER BY revision DESC LIMIT $1)",
-    )
-    .bind(i64::from(state.limits.operations_kept))
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(receipt)
-}
+mod mutation;
+pub use mutation::{apply, apply_referenced};
+
 /// Create or replace one document. `expected_revision` is the document's
 /// revision as last read, 0 when it does not exist yet.
-#[allow(clippy::too_many_arguments)]
-pub async fn save(
-    pool: &PgPool,
-    actor: Uuid,
-    kind: Kind,
-    id: &str,
-    markdown: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
+pub async fn save(edit: Edit<'_>, kind: Kind, id: &str, markdown: &str) -> Result<Receipt> {
     let change = Change::Save {
         kind,
         id: id.into(),
         markdown: markdown.into(),
     };
-    let mutation = Mutation {
-        change,
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(change).await
 }
 /// Delete one document. Refused with the problems when something still
 /// refers to it.
-pub async fn delete(
-    pool: &PgPool,
-    actor: Uuid,
-    kind: Kind,
-    id: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
+pub async fn delete(edit: Edit<'_>, kind: Kind, id: &str) -> Result<Receipt> {
     let change = Change::Delete {
         kind,
         id: id.into(),
     };
-    let mutation = Mutation {
-        change,
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(change).await
 }
 pub async fn save_selection_defaults(
-    pool: &PgPool,
-    actor: Uuid,
+    edit: Edit<'_>,
     defaults: &SelectionDefaults,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
 ) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::SelectionDefaults(defaults.clone()),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(Change::SelectionDefaults(defaults.clone()))
+        .await
 }
 /// Replace the routing document (spec 0014 §5.2: it has its own place in
 /// Settings). `expected_revision` is its revision as last read, 0 before the
 /// first save.
-pub async fn save_routing_document(
-    pool: &PgPool,
-    actor: Uuid,
-    markdown: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::RoutingDocument(markdown.into()),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+pub async fn save_routing_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::RoutingDocument(markdown.into())).await
 }
 /// The routing document and its revision; empty at revision 0 until saved.
 pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
@@ -653,20 +314,8 @@ pub async fn document_of(pool: &PgPool, source: &str) -> Result<Option<(String, 
 /// Replace the delivery document (spec 0016 §8). `expected_revision` is its
 /// revision as last read, 0 before the first save.
 #[cfg(feature = "delivery_playbook")]
-pub async fn save_delivery_document(
-    pool: &PgPool,
-    actor: Uuid,
-    markdown: &str,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::DeliveryDocument(markdown.into()),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+pub async fn save_delivery_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::DeliveryDocument(markdown.into())).await
 }
 /// The delivery document and its revision; empty at revision 0 until saved,
 /// which means no delivery policy.
@@ -679,19 +328,10 @@ pub async fn delivery_document(pool: &PgPool) -> Result<(String, i64)> {
 /// ([`delivery::DeliveryLimits::validate`]) before anything is stored.
 #[cfg(feature = "delivery_playbook")]
 pub async fn save_delivery_limits(
-    pool: &PgPool,
-    actor: Uuid,
+    edit: Edit<'_>,
     limits: &delivery::DeliveryLimits,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
 ) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::DeliveryLimits(*limits),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+    edit.apply(Change::DeliveryLimits(*limits)).await
 }
 /// The delivery limits and their revision; the defaults at revision 0 until
 /// saved.
@@ -759,20 +399,8 @@ pub async fn save_environment_limits(
     };
     apply(pool, actor, &mutation, now_ms).await
 }
-pub async fn save_limits(
-    pool: &PgPool,
-    actor: Uuid,
-    limits: &StoreLimits,
-    expected_revision: i64,
-    operation_id: Uuid,
-    now_ms: i64,
-) -> Result<Receipt> {
-    let mutation = Mutation {
-        change: Change::Limits(*limits),
-        expected_revision,
-        operation_id,
-    };
-    apply(pool, actor, &mutation, now_ms).await
+pub async fn save_limits(edit: Edit<'_>, limits: &StoreLimits) -> Result<Receipt> {
+    edit.apply(Change::Limits(*limits)).await
 }
 
 /// Install each shipped default document that was never installed in this
@@ -838,9 +466,11 @@ pub async fn activate_stored(pool: &PgPool, now_ms: i64) -> Result<(Option<Strin
         activate(
             &mut tx,
             &snapshot,
-            state.revision + 1,
+            Version {
+                revision: state.revision + 1,
+                now_ms,
+            },
             &state.limits,
-            now_ms,
         )
         .await?;
         tx.commit().await?;
@@ -911,8 +541,10 @@ pub async fn check_binding(
     };
     crate::tasks::check_binding(
         snapshot.as_ref(),
-        default_role,
-        default_intelligence,
+        crate::tasks::BindingDefaults {
+            role: default_role,
+            intelligence: default_intelligence,
+        },
         role_notes,
         state.limits.documents.max_document_bytes,
     )

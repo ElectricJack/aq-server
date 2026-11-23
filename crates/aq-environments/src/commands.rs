@@ -56,9 +56,12 @@ pub async fn recipes_at(
     for directory in RECIPES.iter().map(Some).chain([None]) {
         let params = json!({"oid": {"algorithm": "sha1", "hex": oid}, "limit": 1000});
         let id = Uuid::new_v4();
-        let Git::Ok(listed) =
-            aq_git(Some(socket), id, "tree", repository, generation, params).await
-        else {
+        let context = aq_delivery::OperationContext {
+            operation_id: id,
+            repository_id: repository,
+            binding_generation: generation,
+        };
+        let Git::Ok(listed) = aq_git(Some(socket), context, "tree", params).await else {
             return None;
         };
         let entries = listed["entries"].as_array()?;

@@ -4,6 +4,7 @@ pub(crate) mod existing;
 pub mod journal;
 pub(crate) mod json;
 mod registry;
+mod scoped;
 use super::{DashboardUser, contract::Scope, errors::ApiError};
 use crate::{AppState, store::User};
 use aq_agent_grants::store::DraftReservation;
@@ -46,7 +47,11 @@ impl AdmissionReceipt {
         // An outer deadline cannot turn an old admission into disclosure authority.
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            adapter.authorize_lookup(&state, &user, &value.scope, Some(&value.data)),
+            adapter.authorize_lookup(
+                &state,
+                &user,
+                registry::LookupTarget::live(&value.scope, &value.data),
+            ),
         )
         .await
         .ok()?
@@ -67,10 +72,7 @@ enum RequestOrigin<'a> {
 }
 
 pub(crate) fn operation_status(operation: &Operation) -> StatusCode {
-    if matches!(
-        operation.disposition,
-        Disposition::Pending | Disposition::Unknown
-    ) {
+    if operation.disposition.unresolved() {
         StatusCode::ACCEPTED
     } else {
         StatusCode::OK
@@ -84,24 +86,22 @@ pub fn routes(registry: Arc<Registry>) -> Router<AppState> {
         .layer(DefaultBodyLimit::max(65536))
         .layer(Extension(registry))
 }
+type ActionRoute = (State<AppState>, DashboardUser, Extension<Arc<Registry>>);
 async fn post_action(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(registry): Extension<Arc<Registry>>,
+    (State(state), DashboardUser(user), Extension(registry)): ActionRoute,
     receipt: Option<Extension<AdmissionReceipt>>,
     body: Result<Json<json::UniqueJson>, axum::extract::rejection::JsonRejection>,
 ) -> Result<(StatusCode, Json<OperationResponse>), ApiError> {
     let Json(json::UniqueJson(raw)) = body.map_err(|e| ApiError::for_status(e.status()))?;
     let request: ActionRequest = serde_json::from_value(raw).map_err(|_| ApiError::invalid())?;
-    let operation = submit_observed(
-        &state,
-        &registry,
-        &user,
-        request,
-        receipt.as_ref().map(|r| &r.0),
-        RequestOrigin::Union,
-    )
-    .await?;
+    let operation = registry
+        .for_user(&state, &user)
+        .submit_observed(
+            request,
+            receipt.as_ref().map(|r| &r.0),
+            RequestOrigin::Union,
+        )
+        .await?;
     let status = operation_status(&operation);
     let response = response(&state, operation);
     if let Some(receipt) = receipt {
@@ -110,9 +110,7 @@ async fn post_action(
     Ok((status, Json(response)))
 }
 async fn get_operation(
-    State(state): State<AppState>,
-    DashboardUser(user): DashboardUser,
-    Extension(registry): Extension<Arc<Registry>>,
+    (State(state), DashboardUser(user), Extension(registry)): ActionRoute,
     path: Result<Path<Uuid>, axum::extract::rejection::PathRejection>,
 ) -> Result<Json<OperationResponse>, ApiError> {
     let Path(id) = path.map_err(|_| ApiError::invalid())?;
@@ -134,16 +132,10 @@ async fn get_operation(
             let digest = canonical_digest(&request, &scope)?;
             // Import metadata only. The admission dispatch flag is intentionally ignored:
             // the native owner already owns any effect under this immutable ID.
-            let (operation, _) = journal::admit(
-                &state,
-                user.id,
-                &request,
-                scope.clone(),
-                digest,
-                created,
-                None,
-            )
-            .await?;
+            let (operation, _) =
+                journal::NewEntry::pending(&request, scope.clone(), digest, created)
+                    .admit(&state, user.id, None)
+                    .await?;
             journal::Lookup {
                 kind: request.kind,
                 scope,
@@ -156,17 +148,11 @@ async fn get_operation(
         .map_err(|_| ApiError::for_status(StatusCode::NOT_FOUND))?;
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        adapter.authorize_lookup(&state, &user, &lookup.scope, lookup.operation.as_ref()),
+        adapter.authorize_lookup(&state, &user, lookup.target()),
     )
     .await
     .map_err(|_| ApiError::unavailable())?
-    .map_err(|error| {
-        if matches!(error.status().as_u16(), 401 | 403 | 404) {
-            ApiError::for_status(StatusCode::NOT_FOUND)
-        } else {
-            error
-        }
-    })?;
+    .map_err(neutral_lookup)?;
     let operation = lookup.operation.ok_or_else(|| journal::retired(id))?;
     let operation = reconcile(&state, &user, adapter.as_ref(), operation)
         .await
@@ -188,10 +174,7 @@ pub(crate) fn response(state: &AppState, operation: Operation) -> OperationRespo
         request_id: Uuid::new_v4(),
         server_time: Timestamp(now.clone()),
         scope: operation.scope.clone(),
-        pending_operations: if matches!(
-            operation.disposition,
-            Disposition::Pending | Disposition::Unknown
-        ) {
+        pending_operations: if operation.disposition.unresolved() {
             vec![operation.operation_id]
         } else {
             vec![]
@@ -210,131 +193,16 @@ pub(crate) fn response(state: &AppState, operation: Operation) -> OperationRespo
         },
     }
 }
-/// Creation-only machine registries pass an authenticated opaque session identity.
-pub(crate) async fn submit_scoped(
-    state: &AppState,
-    registry: &Registry,
-    user: &User,
-    request: ActionRequest,
-    admission: Option<AgentAdmission<'_>>,
-) -> Result<Operation, ApiError> {
-    let origin = admission.map_or(RequestOrigin::Union, RequestOrigin::Agent);
-    submit_observed(state, registry, user, request, None, origin).await
-}
-pub(crate) async fn lookup_scoped(
-    state: &AppState,
-    registry: &Registry,
-    user: &User,
-    id: Uuid,
-) -> Result<Operation, ApiError> {
-    let lookup = journal::lookup_for_authorization(&state.store.pool, user.id, id)
-        .await?
-        .ok_or_else(|| ApiError::for_status(StatusCode::NOT_FOUND))?;
-    let adapter = registry
-        .get(&lookup.kind)
-        .map_err(|_| ApiError::for_status(StatusCode::NOT_FOUND))?;
-    adapter
-        .authorize_lookup(state, user, &lookup.scope, lookup.operation.as_ref())
-        .await
-        .map_err(neutral_lookup)?;
-    let op = lookup.operation.ok_or_else(|| journal::retired(id))?;
-    reconcile(state, user, adapter.as_ref(), op)
-        .await
-        .map_err(neutral_lookup)
-}
-/// Resolve an exact replay before checking permissions against changed Graph facts.
-pub(crate) async fn replay_scoped(
-    state: &AppState,
-    registry: &Registry,
-    user: &User,
-    request: &ActionRequest,
-    scope: &Scope,
-) -> Result<Option<Operation>, ApiError> {
-    request.validate()?;
-    let Some(existing) =
-        journal::lookup_for_authorization(&state.store.pool, user.id, request.operation_id).await?
-    else {
-        return Ok(None);
-    };
-    if existing.kind != request.kind || existing.scope != *scope {
-        return Err(ApiError::for_status(StatusCode::CONFLICT));
-    }
-    if let Some(op) = existing.operation
-        && canonical_digest(request, scope)? != op.request_digest
-    {
-        return Err(ApiError::for_status(StatusCode::CONFLICT));
-    }
-    lookup_scoped(state, registry, user, request.operation_id)
-        .await
-        .map(Some)
-}
 pub(crate) async fn submit_legacy(
     state: &AppState,
     registry: &Registry,
     user: &User,
     request: ActionRequest,
 ) -> Result<Operation, ApiError> {
-    submit_observed(state, registry, user, request, None, RequestOrigin::Legacy).await
-}
-async fn submit_observed(
-    state: &AppState,
-    registry: &Registry,
-    user: &User,
-    request: ActionRequest,
-    receipt: Option<&AdmissionReceipt>,
-    origin: RequestOrigin<'_>,
-) -> Result<Operation, ApiError> {
-    let legacy = matches!(origin, RequestOrigin::Legacy);
-    if legacy {
-        // Native supervisor bodies allow JSON escaping within the shipped 128 KiB envelope.
-        request.validate_with_limit(131072)?;
-    } else {
-        request.validate()?;
-    }
-    let adapter = registry.get(&request.kind)?;
-    let scope = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        adapter.authorize(state, user, &request),
-    )
-    .await
-    .map_err(|_| ApiError::unavailable())??;
-    let digest = canonical_digest(&request, &scope)?;
-    let (original, dispatch) = journal::admit(
-        state,
-        user.id,
-        &request,
-        scope,
-        digest,
-        (state.clock)(),
-        match origin {
-            RequestOrigin::Agent(admission) => Some(admission),
-            _ => None,
-        },
-    )
-    .await?;
-    if let Some(receipt) = receipt {
-        receipt.pin(state, user, adapter.clone());
-        receipt.record(response(state, original.clone()));
-    }
-    if !dispatch {
-        return reconcile(state, user, adapter.as_ref(), original).await;
-    }
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        adapter.execute(state, user, &request),
-    )
-    .await
-    .unwrap_or_else(|_| Outcome::unknown());
-    let completed = finish(state, user, original, outcome).await?;
-    if !legacy {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            adapter.authorize_lookup(state, user, &completed.scope, Some(&completed)),
-        )
+    registry
+        .for_user(state, user)
+        .submit_observed(request, None, RequestOrigin::Legacy)
         .await
-        .map_err(|_| ApiError::unavailable().operation(completed.operation_id))??;
-    }
-    Ok(completed)
 }
 pub(crate) async fn finish(
     state: &AppState,
@@ -370,10 +238,7 @@ async fn reconcile(
     original: Operation,
 ) -> Result<Operation, ApiError> {
     let scope = original.scope.clone();
-    let completed = if matches!(
-        original.disposition,
-        Disposition::Pending | Disposition::Unknown
-    ) {
+    let completed = if original.disposition.unresolved() {
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             adapter.reconcile(state, user, &original),
@@ -391,22 +256,17 @@ async fn reconcile(
     // lookup authority after journal/native IO and validation of returned refs.
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        adapter.authorize_lookup(state, user, &scope, Some(&completed)),
+        adapter.authorize_lookup(
+            state,
+            user,
+            registry::LookupTarget::live(&scope, &completed),
+        ),
     )
     .await
     .map_err(|_| ApiError::unavailable())??;
     Ok(completed)
 }
 
-#[cfg(test)]
-async fn submit(
-    state: &AppState,
-    registry: &Registry,
-    user: &User,
-    request: ActionRequest,
-) -> Result<Operation, ApiError> {
-    submit_observed(state, registry, user, request, None, RequestOrigin::Union).await
-}
 fn canonical_digest(request: &ActionRequest, scope: &Scope) -> Result<String, ApiError> {
     use sha2::{Digest, Sha256};
     let mut canonical = serde_json::json!({"request":request,"scope":scope});

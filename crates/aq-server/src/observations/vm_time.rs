@@ -85,6 +85,13 @@ pub async fn record(
     Ok(())
 }
 
+/// The time of a placement decision and its own, possibly unstarted, reservation.
+#[derive(Clone, Copy)]
+pub struct SpendObservation {
+    pub now_ms: u64,
+    pub exclude_attempt: Option<Uuid>,
+}
+
 /// Read in the placement/fence transaction. Missing attempt facts are
 /// unaccounted, including an old sandbox whose stop is still unknown. The
 /// fence's own reservation may not have created its VM yet.
@@ -92,9 +99,12 @@ pub async fn node(
     conn: &mut sqlx::PgConnection,
     node: Uuid,
     limit: &aq_admission_sandbox::sandbox::Money,
-    now_ms: u64,
-    exclude_attempt: Option<Uuid>,
+    observed: SpendObservation,
 ) -> Result<Option<aq_admission_sandbox::sandbox::Money>> {
+    let SpendObservation {
+        now_ms,
+        exclude_attempt,
+    } = observed;
     let window = month(now_ms, limit.micros)?;
     if limit.currency != "USD" {
         return Ok(None);

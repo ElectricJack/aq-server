@@ -115,19 +115,13 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
     let mut f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
     let dir = tempfile::tempdir().unwrap();
-    let token = dir.path().join("graph-token");
-    std::fs::write(&token, "dashboard-mount-fixture-service-token").unwrap();
-    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
-    f.state.agent_access = Some(Arc::new(
-        Runtime::new(&AgentAccessConfig {
-            graph_url: "http://127.0.0.1:9".into(),
-            graph_token_file: token,
-            mutation_actor_id: None,
-            credential_ttl_ms: 120000,
-        })
-        .await
-        .unwrap(),
-    ));
+    mount_graph(
+        &mut f,
+        dir.path(),
+        "http://127.0.0.1:9".into(),
+        "dashboard-mount-fixture-service-token",
+    )
+    .await;
     let standalone = aq_server::dashboard_api::routes(f.state.clone()).with_state(f.state.clone());
     let (_, standalone_bootstrap) = read(&standalone, "/api/v1/bootstrap", "owner@localhost").await;
     for name in [
@@ -143,20 +137,7 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
         );
     }
     assert!(cap(&standalone_bootstrap, "search.read"));
-    let key = dir.path().join("review-key");
-    std::fs::write(&key, [23u8; 32]).unwrap();
-    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Arc::new(
-        Keyring::load(&ProtectionConfig {
-            active_key_id: "test".into(),
-            keys: vec![KeyFile {
-                id: "test".into(),
-                file: key,
-            }],
-        })
-        .unwrap(),
-    );
-    let reviews = Arc::new(aq_server::reviews::Service::new(f.state.clone(), keys));
+    let reviews = review_service(&f, dir.path());
     let app =
         aq_server::build_admin_router_with_policy_owners(f.state.clone(), None, Some(reviews));
     let (status, b) = read(&app, "/api/v1/bootstrap", "owner@localhost").await;
@@ -180,41 +161,7 @@ async fn configured_graph_and_injected_review_owner_are_visible_only_to_owner() 
             .0,
         StatusCode::OK
     );
-    let viewer = Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'viewer@localhost','viewer','dev','viewer@localhost',now())").bind(viewer).execute(&f.db.pool().await).await.unwrap();
-    let (_, b) = read(&app, "/api/v1/bootstrap", "viewer@localhost").await;
-    assert!(cap(&b, "search.read"));
-    for name in [
-        "human.graph.read",
-        "human.overview.tasks.read",
-        "tasks.read",
-        "knowledge.read",
-        "decisions.read",
-        "decisions.resolve",
-        "results.read",
-        "results.comment",
-        "results.feedback",
-        "playbooks.inspect",
-    ] {
-        assert!(!cap(&b, name), "{name}")
-    }
-    assert_eq!(
-        read(&app, "/api/human/results", "viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        read(
-            &app,
-            &format!(
-                "/api/human/projects/{}/tasks",
-                f.selection.lineage.project_id
-            ),
-            "viewer@localhost"
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
+    assert_viewer_capabilities(&f, &app).await;
 }
 #[tokio::test]
 async fn unsupported_saved_graph_adapter_is_refused_before_upstream_io() {
@@ -234,19 +181,13 @@ async fn unsupported_saved_graph_adapter_is_refused_before_upstream_io() {
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, graph).await.unwrap() });
     let dir = tempfile::tempdir().unwrap();
-    let token = dir.path().join("token");
-    std::fs::write(&token, "graph-adapter-scope-fixture-service-token").unwrap();
-    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
-    f.state.agent_access = Some(Arc::new(
-        Runtime::new(&AgentAccessConfig {
-            graph_url: origin,
-            graph_token_file: token,
-            mutation_actor_id: None,
-            credential_ttl_ms: 120000,
-        })
-        .await
-        .unwrap(),
-    ));
+    mount_graph(
+        &mut f,
+        dir.path(),
+        origin,
+        "graph-adapter-scope-fixture-service-token",
+    )
+    .await;
     let project = f.selection.lineage.project_id;
     let pool = f.db.pool().await;
     sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{graph_adapter_reference}','\"other.graph.adapter\"'::jsonb),revision=revision+1 WHERE project_id=$1").bind(project).execute(&pool).await.unwrap();
@@ -272,4 +213,83 @@ async fn unsupported_saved_graph_adapter_is_refused_before_upstream_io() {
         "supported adapter reaches the configured upstream"
     );
     server.abort();
+}
+
+async fn mount_graph(
+    f: &mut common::profiled::Fixture,
+    dir: &std::path::Path,
+    origin: String,
+    credential: &str,
+) {
+    let token = dir.join("graph-token");
+    std::fs::write(&token, credential).unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+    f.state.agent_access = Some(Arc::new(
+        Runtime::new(&AgentAccessConfig {
+            graph_url: origin,
+            graph_token_file: token,
+            mutation_actor_id: None,
+            credential_ttl_ms: 120000,
+        })
+        .await
+        .unwrap(),
+    ));
+}
+
+fn review_service(
+    f: &common::profiled::Fixture,
+    dir: &std::path::Path,
+) -> Arc<aq_server::reviews::Service> {
+    let key = dir.join("review-key");
+    std::fs::write(&key, [23u8; 32]).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let keys = Arc::new(
+        Keyring::load(&ProtectionConfig {
+            active_key_id: "test".into(),
+            keys: vec![KeyFile {
+                id: "test".into(),
+                file: key,
+            }],
+        })
+        .unwrap(),
+    );
+    Arc::new(aq_server::reviews::Service::new(f.state.clone(), keys))
+}
+
+async fn assert_viewer_capabilities(f: &common::profiled::Fixture, app: &Router) {
+    let viewer = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'viewer@localhost','viewer','dev','viewer@localhost',now())").bind(viewer).execute(&f.db.pool().await).await.unwrap();
+    let (_, b) = read(app, "/api/v1/bootstrap", "viewer@localhost").await;
+    assert!(cap(&b, "search.read"));
+    for name in [
+        "human.graph.read",
+        "human.overview.tasks.read",
+        "tasks.read",
+        "knowledge.read",
+        "decisions.read",
+        "decisions.resolve",
+        "results.read",
+        "results.comment",
+        "results.feedback",
+        "playbooks.inspect",
+    ] {
+        assert!(!cap(&b, name), "{name}")
+    }
+    assert_eq!(
+        read(app, "/api/human/results", "viewer@localhost").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        read(
+            app,
+            &format!(
+                "/api/human/projects/{}/tasks",
+                f.selection.lineage.project_id
+            ),
+            "viewer@localhost"
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
 }

@@ -13,35 +13,18 @@
 //! only ever settles by reconciliation, never by a second publish.
 use super::*;
 use crate::delivery::PublicationPolicy;
+pub use aq_playbook_domain::publication_evidence::{EvidencePolicy, ReviewEvidence};
+use aq_playbook_domain::publication_evidence::{EvidenceRef, EvidenceSet};
 use aq_worker_protocol::{ObjectAlgorithm, ObjectId};
 use serde::{Deserialize, Serialize};
 
-const CANDIDATE_REF: &str = "aq.candidate/";
-const PUBLICATION_REF: &str = "aq.publication/";
+use aq_playbook_domain::integration_receipts::{
+    CANDIDATE_REF, IntegrationReceipts, PUBLICATION_REF,
+};
 const SOURCE_REF: &str = "aq.source/";
-const CHECK_EVIDENCE: &str = "check-receipt:";
-const JUDGMENT_EVIDENCE: &str = "judgment:";
-const REVIEW_EVIDENCE: &str = "aq.review.decision/";
 const MAX_SOURCES: usize = 64;
-const MAX_EVIDENCE: usize = 64;
 const MAX_CONFLICT_PATHS: usize = 32;
 const MAX_RECONCILE: i32 = 64;
-
-/// Evidence a project's integration policy requires before publication.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvidencePolicy {
-    /// Check ids that each need a passing D6 check receipt.
-    pub checks: Vec<String>,
-    /// An approving review decision from an authorized issuer.
-    pub review: bool,
-    /// A D6 judgment assessed with one of these choices; empty = none needed.
-    pub judgment_choices: Vec<String>,
-}
-impl EvidencePolicy {
-    fn names_nothing(&self) -> bool {
-        self.checks.is_empty() && !self.review && self.judgment_choices.is_empty()
-    }
-}
 
 /// The project's revisioned repository binding and policies.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +33,18 @@ pub struct IntegrationBinding {
     pub binding_generation: u64,
     pub publication: PublicationPolicy,
     pub evidence: EvidencePolicy,
+}
+
+impl IntegrationBinding {
+    fn prepare_call(&self, operation: Uuid, base: ObjectId, sources: Vec<Uuid>) -> PrepareCall {
+        PrepareCall {
+            operation,
+            repository_id: self.repository_id,
+            binding_generation: self.binding_generation,
+            base,
+            sources,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,15 +115,6 @@ pub enum ReconcileReply {
     Unresolved,
 }
 
-/// A review decision as its owning service reports it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReviewEvidence {
-    pub subject: Value,
-    pub approved: bool,
-    /// The decision's issuer holds review authority for this project.
-    pub issuer_authorized: bool,
-}
-
 /// D1 delivery port. Authority never comes from here: it comes from the grant.
 #[async_trait::async_trait]
 pub trait Integration: Send + Sync {
@@ -173,6 +159,97 @@ fn destination(id: &str) -> Option<(&str, ObjectId)> {
 }
 
 /// What a receipt row records, besides the intent identity.
+struct SettledIntegration {
+    result: HostResult,
+    reason: Option<String>,
+    detail: Value,
+}
+struct RefusedIntegration<'a> {
+    candidate_operation: Uuid,
+    binding: Option<&'a IntegrationBinding>,
+    reason: &'a str,
+    output: &'a Value,
+}
+struct Publication<'a> {
+    port: &'a dyn Integration,
+    call: &'a PublishCall,
+    output: Value,
+}
+struct PublicationResume<'a> {
+    intent: &'a Intent,
+    identity: &'a str,
+    operation: Uuid,
+    plan: Value,
+    output: Value,
+}
+struct IntegrationAttempt<'a> {
+    effect: EffectIdentity<'a>,
+    operation: Uuid,
+    output: Value,
+}
+struct CandidateReceipt<'a> {
+    operation: Uuid,
+    output: &'a Value,
+}
+impl<'a> CandidateReceipt<'a> {
+    fn refused(
+        &self,
+        binding: Option<&'a IntegrationBinding>,
+        reason: &'a str,
+    ) -> RefusedIntegration<'a> {
+        RefusedIntegration {
+            candidate_operation: self.operation,
+            binding,
+            reason,
+            output: self.output,
+        }
+    }
+    fn pending(
+        &self,
+        operation: Uuid,
+        binding: &'a IntegrationBinding,
+        request: Value,
+    ) -> Receipt<'a> {
+        Receipt {
+            operation,
+            candidate_operation: self.operation,
+            binding: Some(binding),
+            state: PENDING,
+            reason: None,
+            request: merged(self.output, request),
+            detail: Value::Null,
+        }
+    }
+}
+struct PublicationCandidate<'a> {
+    id: &'a str,
+    operation: Uuid,
+    binding: &'a IntegrationBinding,
+    input: &'a Value,
+}
+struct VerifiedPublication {
+    candidate: ObjectId,
+    expected_old: ObjectId,
+    evidence: Vec<String>,
+}
+impl PublicationCandidate<'_> {
+    fn publish_call(
+        &self,
+        operation: Uuid,
+        verified: VerifiedPublication,
+    ) -> (PublishCall, Vec<String>) {
+        let call = PublishCall {
+            operation,
+            repository_id: self.binding.repository_id,
+            binding_generation: self.binding.binding_generation,
+            candidate_operation: self.operation,
+            candidate: verified.candidate,
+            publication: self.binding.publication.clone(),
+            expected_old: verified.expected_old,
+        };
+        (call, verified.evidence)
+    }
+}
 struct Receipt<'a> {
     operation: Uuid,
     candidate_operation: Uuid,
@@ -299,44 +376,32 @@ impl Service {
             &intent.id,
         )?;
         let output = &result.output;
-        self.seal_event(
-            tx,
-            "aq.integration.changed",
-            event_id,
-            self.operation(intent)?,
-            &intent.id,
-            &output["subject"],
-            json!({"outcome": result.outcome, "reference": output["reference"], "subject": output["subject"]}),
-        )
+        self.seal_event(tx, HostEvent { contract: "aq.integration.changed", event_id, operation: self.operation(intent)?, causation: &intent.id, subject: &output["subject"], payload: json!({"outcome": result.outcome, "reference": output["reference"], "subject": output["subject"]}) })
         .await
     }
 
     /// Single-phase refusal: final effect row, refused receipt and event.
-    #[allow(clippy::too_many_arguments)]
     async fn refuse_fresh(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
-        identity: &str,
-        candidate_operation: Uuid,
-        binding: Option<&IntegrationBinding>,
-        reason: &str,
-        output: &Value,
+        effect: EffectIdentity<'_>,
+        refusal: RefusedIntegration<'_>,
     ) -> Result<HostResult> {
+        let RefusedIntegration {
+            candidate_operation,
+            binding,
+            reason,
+            output,
+        } = refusal;
+        let (id, intent) = (effect.grant, effect.intent);
         let result = HostResult {
             outcome: "refused".into(),
             output: output.clone(),
         };
         self.record(
             &mut tx,
-            id,
-            revision,
-            intent,
-            identity,
-            &result.outcome,
-            &result.output,
+            effect,
+            EffectReceipt::new(&result.outcome, &result.output),
         )
         .await?;
         self.insert_receipt(
@@ -364,40 +429,22 @@ impl Service {
         &self,
         intent: &Intent,
         identity: &str,
-        result: HostResult,
-        reason: Option<&str>,
-        detail: Value,
+        settlement: SettledIntegration,
     ) -> Result<HostResult> {
+        let SettledIntegration {
+            result,
+            reason,
+            detail,
+        } = settlement;
         self.validated(intent, &result.outcome, &result.output)?;
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
-        let row = sqlx::query("SELECT request_digest,status,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 FOR UPDATE")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(Error::Unknown)?;
-        if row.get::<String, _>("request_digest") != identity {
-            return Err(Error::Conflict);
-        }
-        let status: String = row.get("status");
-        if status != PENDING {
-            let retained = HostResult {
-                outcome: status,
-                output: row.get("receipt"),
-            };
+        let effects = Effects(&self.namespace);
+        if let Some(retained) = effects.completed(&mut tx, intent, identity).await? {
             tx.commit().await?;
             return Ok(retained);
         }
-        sqlx::query("UPDATE playbook_effects SET status=$4,receipt=$5 WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 AND status='pending'")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(&result.outcome)
-            .bind(&result.output)
-            .execute(&mut *tx)
-            .await?;
+        effects.complete(&mut tx, intent, &result).await?;
         let updated = sqlx::query("UPDATE playbook_integration_receipts SET state=$2,reason=$3,detail=$4,settled_at_ms=$5 WHERE operation_id=$1 AND state IN ('pending','ambiguous')")
             .bind(self.operation(intent)?)
             .bind(&result.outcome)
@@ -414,17 +461,50 @@ impl Service {
         Ok(result)
     }
 
+    async fn record_integration_plan(
+        &self,
+        mut tx: Transaction<'_, Postgres>,
+        effect: EffectIdentity<'_>,
+        receipt: Receipt<'_>,
+    ) -> Result<()> {
+        self.record(
+            &mut tx,
+            effect,
+            EffectReceipt::new(PENDING, &receipt.request["call"]),
+        )
+        .await?;
+        self.insert_receipt(&mut tx, effect.intent, receipt).await?;
+        self.commit_fresh(tx, effect.grant, effect.intent).await
+    }
+
+    async fn candidate_sources(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        ports: &HostPorts,
+        items: &Value,
+    ) -> Result<Option<Vec<Uuid>>> {
+        let mut receipts = Vec::new();
+        for item in items.as_array().into_iter().flatten() {
+            receipts.push(self.source_receipt(tx, ports, item).await?);
+        }
+        let Some(sources) = receipts.into_iter().collect::<Option<Vec<_>>>() else {
+            return Ok(None);
+        };
+        let unique: std::collections::BTreeSet<_> = sources.iter().collect();
+        let valid_length = (1..=MAX_SOURCES).contains(&sources.len());
+        Ok((valid_length && unique.len() == sources.len()).then_some(sources))
+    }
+
     // --------------------------------------------------------- candidate.prepare
 
     pub(super) async fn candidate_prepare(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let operation = self.operation(intent)?;
         let reference = format!("{CANDIDATE_REF}{operation}");
         // A candidate is immutable: revision 1 for its whole life.
@@ -440,9 +520,15 @@ impl Service {
                 serde_json::from_value(plan).map_err(|_| Error::Unknown)?
             }
             Stage::Fresh => {
+                let receipt = CandidateReceipt {
+                    operation,
+                    output: &output,
+                };
                 let refuse = |tx, binding, reason| {
                     self.refuse_fresh(
-                        tx, id, revision, intent, &identity, operation, binding, reason, &output,
+                        tx,
+                        command.retained(&identity),
+                        receipt.refused(binding, reason),
                     )
                 };
                 let Some(port) = &ports.integration else {
@@ -455,99 +541,29 @@ impl Service {
                 };
                 let input = &intent.input;
                 let base = text(&input["base"], "id").ok().and_then(base_oid);
-                let mut sources = Some(vec![]);
-                for item in input["sources"].as_array().into_iter().flatten() {
-                    let receipt = self.source_receipt(&mut tx, ports, item).await?;
-                    match (receipt, sources.as_mut()) {
-                        (Some(r), Some(list)) => list.push(r),
-                        _ => sources = None,
-                    }
-                }
+                let sources = self
+                    .candidate_sources(&mut tx, ports, &input["sources"])
+                    .await?;
                 let (Some(base), Some(sources)) = (base, sources) else {
                     return refuse(tx, Some(&binding), "invalid_request").await;
                 };
-                let unique: std::collections::BTreeSet<_> = sources.iter().collect();
-                if sources.is_empty()
-                    || sources.len() > MAX_SOURCES
-                    || unique.len() != sources.len()
-                {
-                    return refuse(tx, Some(&binding), "invalid_request").await;
-                }
-                let call = PrepareCall {
-                    operation,
-                    repository_id: binding.repository_id,
-                    binding_generation: binding.binding_generation,
-                    base,
-                    sources,
-                };
+                let call = binding.prepare_call(operation, base, sources);
                 let plan = serde_json::to_value(&call)?;
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-                    .await?;
-                self.insert_receipt(
-                    &mut tx,
-                    intent,
-                    Receipt {
-                        operation,
-                        candidate_operation: operation,
-                        binding: Some(&binding),
-                        state: PENDING,
-                        reason: None,
-                        request: merged(&output, json!({"call": plan})),
-                        detail: Value::Null,
-                    },
+                self.record_integration_plan(
+                    tx,
+                    command.retained(&identity),
+                    receipt.pending(operation, &binding, json!({"call": plan})),
                 )
                 .await?;
-                self.commit_fresh(tx, id, intent).await?;
+
                 call
             }
         };
         let port = ports.integration.as_ref().ok_or(Error::Unknown)?;
         // A failed call leaves the intent pending; re-dispatch re-sends it.
         let reply = port.prepare(&call).await.map_err(|_| Error::Unknown)?;
-        let (outcome, reason, detail) = match reply {
-            PrepareReply::Prepared { candidate } => {
-                ("prepared", None, json!({"candidate": candidate}))
-            }
-            PrepareReply::Conflict {
-                step,
-                paths,
-                truncated,
-                count,
-            } => {
-                let kept: Vec<_> = paths
-                    .iter()
-                    .filter(|p| p.len() <= 1024)
-                    .take(MAX_CONFLICT_PATHS)
-                    .collect();
-                let truncated = truncated || kept.len() != paths.len();
-                (
-                    "conflict",
-                    Some("conflicted".to_string()),
-                    json!({"step": step, "paths": kept, "truncated": truncated, "count": count}),
-                )
-            }
-            PrepareReply::Refused { reason } => (
-                "refused",
-                Some(token(&reason, "prepare_failed")),
-                Value::Null,
-            ),
-        };
-        // Catalog 2.1.0 (Host8): `prepared` carries the prepared candidate's
-        // OID, which policies bind check.request `source` to. 2.0.0 has none.
-        let output = match &detail["candidate"] {
-            candidate if outcome == "prepared" && self.profile.has_prepared_source() => {
-                let candidate: ObjectId =
-                    serde_json::from_value(candidate.clone()).map_err(|_| Error::Unknown)?;
-                merged(&output, json!({"source": catalog_oid(&candidate)}))
-            }
-            _ => output,
-        };
-        let result = HostResult {
-            outcome: outcome.into(),
-            output,
-        };
-        self.settle_integration(intent, &identity, result, reason.as_deref(), detail)
-            .await
+        let settlement = reply.settlement(output, self.profile.has_prepared_source())?;
+        self.settle_integration(intent, &identity, settlement).await
     }
 
     // --------------------------------------------------------- candidate.publish
@@ -555,12 +571,11 @@ impl Service {
     pub(super) async fn candidate_publish(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (tx, stage, identity) = self.begin(Some(owner), command).await?;
         let operation = self.operation(intent)?;
         let reference = format!("{PUBLICATION_REF}{operation}");
         let input = &intent.input;
@@ -571,42 +586,54 @@ impl Service {
                 return Ok(result);
             }
             Stage::Pending(plan) => {
-                let state: String = sqlx::query_scalar(
-                    "SELECT state FROM playbook_integration_receipts WHERE operation_id=$1",
-                )
-                .bind(operation)
-                .fetch_one(&mut *tx)
-                .await?;
-                tx.commit().await?;
-                let call: PublishCall = serde_json::from_value(plan).map_err(|_| Error::Unknown)?;
-                let port = ports.integration.as_ref().ok_or(Error::Unknown)?;
-                return if state == "ambiguous" {
-                    self.publish_reconcile(intent, &identity, port.as_ref(), &call, output)
-                        .await
-                } else {
-                    // Never acknowledged either way: the same operation id is
-                    // re-sent and D1's dispatch fence never pushes it twice.
-                    self.publish_send(intent, &identity, port.as_ref(), &call, output)
-                        .await
-                };
+                return self
+                    .resume_publication(
+                        tx,
+                        PublicationResume {
+                            intent,
+                            identity: &identity,
+                            operation,
+                            plan,
+                            output,
+                        },
+                        ports,
+                    )
+                    .await;
             }
             Stage::Fresh => {}
         }
+        self.fresh_publication(
+            tx,
+            IntegrationAttempt {
+                effect: command.retained(&identity),
+                operation,
+                output,
+            },
+            ports,
+        )
+        .await
+    }
+
+    async fn fresh_publication(
+        &self,
+        mut tx: Transaction<'_, Postgres>,
+        attempt: IntegrationAttempt<'_>,
+        ports: &HostPorts,
+    ) -> Result<HostResult> {
+        let IntegrationAttempt {
+            effect,
+            operation,
+            output,
+        } = attempt;
+        let input = &effect.intent.input;
         let candidate_id = text(&input["candidate"], "id")?;
         let candidate_op = handle(candidate_id, CANDIDATE_REF);
-        let refuse = |tx, binding, reason| {
-            self.refuse_fresh(
-                tx,
-                id,
-                revision,
-                intent,
-                &identity,
-                candidate_op.unwrap_or(Uuid::nil()),
-                binding,
-                reason,
-                &output,
-            )
+        let receipt = CandidateReceipt {
+            operation: candidate_op.unwrap_or(Uuid::nil()),
+            output: &output,
         };
+        let refuse =
+            |tx, binding, reason| self.refuse_fresh(tx, effect, receipt.refused(binding, reason));
         let Some(port) = &ports.integration else {
             return refuse(tx, None, "unavailable").await;
         };
@@ -619,26 +646,129 @@ impl Service {
             Some(b) if !b.evidence.names_nothing() => b,
             _ => return refuse(tx, None, "policy_unavailable").await,
         };
+        let candidate = PublicationCandidate {
+            id: candidate_id,
+            operation: candidate_op,
+            binding: &binding,
+            input,
+        };
+        let verified = match self
+            .verified_publication(&mut tx, port.as_ref(), &candidate)
+            .await?
+        {
+            Ok(verified) => verified,
+            Err(reason) => return refuse(tx, Some(&binding), reason).await,
+        };
+        let (call, evidence) = candidate.publish_call(operation, verified);
+        let plan = serde_json::to_value(&call)?;
+        self.record_integration_plan(
+            tx,
+            effect,
+            receipt.pending(
+                operation,
+                &binding,
+                json!({"call": plan, "evidence": evidence}),
+            ),
+        )
+        .await?;
+
+        self.publish_send(
+            effect.intent,
+            effect.identity,
+            Publication {
+                port: port.as_ref(),
+                call: &call,
+                output,
+            },
+        )
+        .await
+    }
+
+    async fn resume_publication(
+        &self,
+        mut tx: Transaction<'_, Postgres>,
+        pending: PublicationResume<'_>,
+        ports: &HostPorts,
+    ) -> Result<HostResult> {
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM playbook_integration_receipts WHERE operation_id=$1",
+        )
+        .bind(pending.operation)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let call: PublishCall = serde_json::from_value(pending.plan).map_err(|_| Error::Unknown)?;
+        let port = ports.integration.as_ref().ok_or(Error::Unknown)?;
+        let publication = Publication {
+            port: port.as_ref(),
+            call: &call,
+            output: pending.output,
+        };
+        if state == "ambiguous" {
+            self.publish_reconcile(pending.intent, pending.identity, publication)
+                .await
+        } else {
+            // An unacknowledged operation is sent again under the original dispatch fence.
+            self.publish_send(pending.intent, pending.identity, publication)
+                .await
+        }
+    }
+
+    async fn verified_publication(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        port: &dyn Integration,
+        candidate: &PublicationCandidate<'_>,
+    ) -> Result<std::result::Result<VerifiedPublication, &'static str>> {
+        let (oid, expected) = match self.publication_target(tx, candidate).await? {
+            Ok(target) => target,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        let verification = EvidenceSet::new(
+            &candidate.binding.evidence,
+            &candidate.input["evidence"],
+            candidate.id,
+            catalog_oid(&oid),
+        );
+        let evidence = self.verify_evidence(tx, port, verification).await?;
+        Ok(evidence.map(|evidence| VerifiedPublication {
+            candidate: oid,
+            expected_old: expected,
+            evidence,
+        }))
+    }
+
+    async fn publication_target(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        candidate: &PublicationCandidate<'_>,
+    ) -> Result<std::result::Result<(ObjectId, ObjectId), &'static str>> {
+        let PublicationCandidate {
+            operation: candidate_op,
+            binding,
+            input,
+            ..
+        } = *candidate;
         let Some(candidate) = sqlx::query("SELECT state,repository_id,binding_generation,detail FROM playbook_integration_receipts WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND command_name='candidate.prepare'")
             .bind(candidate_op)
             .bind(self.namespace.namespace_id)
             .bind(self.namespace.generation)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?
         else {
-            return refuse(tx, Some(&binding), "candidate_unknown").await;
+            return Ok(Err("candidate_unknown"));
         };
         if input["candidate"]["revision"].as_i64() != Some(1) {
-            return refuse(tx, Some(&binding), "candidate_stale").await;
+            return Ok(Err("candidate_stale"));
         }
         if candidate.get::<String, _>("state") != "prepared" {
-            return refuse(tx, Some(&binding), "candidate_not_ready").await;
+            return Ok(Err("candidate_not_ready"));
         }
         if candidate.get::<Option<Uuid>, _>("repository_id") != Some(binding.repository_id)
             || candidate.get::<Option<i64>, _>("binding_generation")
                 != Some(binding.binding_generation as i64)
         {
-            return refuse(tx, Some(&binding), "binding_changed").await;
+            return Ok(Err("binding_changed"));
         }
         let detail: Option<Value> = candidate.get("detail");
         let candidate_oid: ObjectId =
@@ -647,64 +777,21 @@ impl Service {
         let Some((target, expected_old)) =
             text(&input["destination"], "id").ok().and_then(destination)
         else {
-            return refuse(tx, Some(&binding), "invalid_request").await;
+            return Ok(Err("invalid_request"));
         };
         if target != binding.publication.target {
-            return refuse(tx, Some(&binding), "destination_mismatch").await;
+            return Ok(Err("destination_mismatch"));
         }
-        let evidence = match self
-            .verify_evidence(
-                &mut tx,
-                port.as_ref(),
-                &binding.evidence,
-                &input["evidence"],
-                candidate_id,
-                &candidate_oid,
-            )
-            .await?
-        {
-            Ok(evidence) => evidence,
-            Err(reason) => return refuse(tx, Some(&binding), reason).await,
-        };
-        let call = PublishCall {
-            operation,
-            repository_id: binding.repository_id,
-            binding_generation: binding.binding_generation,
-            candidate_operation: candidate_op,
-            candidate: candidate_oid,
-            publication: binding.publication.clone(),
-            expected_old,
-        };
-        let plan = serde_json::to_value(&call)?;
-        self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-            .await?;
-        self.insert_receipt(
-            &mut tx,
-            intent,
-            Receipt {
-                operation,
-                candidate_operation: candidate_op,
-                binding: Some(&binding),
-                state: PENDING,
-                reason: None,
-                request: merged(&output, json!({"call": plan, "evidence": evidence})),
-                detail: Value::Null,
-            },
-        )
-        .await?;
-        self.commit_fresh(tx, id, intent).await?;
-        self.publish_send(intent, &identity, port.as_ref(), &call, output)
-            .await
+        Ok(Ok((candidate_oid, expected_old)))
     }
 
     async fn publish_send(
         &self,
         intent: &Intent,
         identity: &str,
-        port: &dyn Integration,
-        call: &PublishCall,
-        output: Value,
+        publication: Publication<'_>,
     ) -> Result<HostResult> {
+        let Publication { port, call, output } = publication;
         // A transport failure after dispatch is indistinguishable from a lost
         // acknowledgement.
         let reply = port.publish(call).await.unwrap_or(PublishReply::Ambiguous);
@@ -737,8 +824,16 @@ impl Service {
             outcome: outcome.into(),
             output,
         };
-        self.settle_integration(intent, identity, result, reason.as_deref(), detail)
-            .await
+        self.settle_integration(
+            intent,
+            identity,
+            SettledIntegration {
+                result,
+                reason,
+                detail,
+            },
+        )
+        .await
     }
 
     /// Settles an ambiguous publication by asking D1 what happened, under a
@@ -747,10 +842,9 @@ impl Service {
         &self,
         intent: &Intent,
         identity: &str,
-        port: &dyn Integration,
-        call: &PublishCall,
-        output: Value,
+        publication: Publication<'_>,
     ) -> Result<HostResult> {
+        let Publication { port, call, output } = publication;
         let attempt: Option<i32> = sqlx::query_scalar("UPDATE playbook_integration_receipts SET reconcile_attempts=reconcile_attempts+1 WHERE operation_id=$1 AND state='ambiguous' AND reconcile_attempts < $2 RETURNING reconcile_attempts")
             .bind(call.operation)
             .bind(MAX_RECONCILE)
@@ -789,8 +883,16 @@ impl Service {
             outcome: outcome.into(),
             output,
         };
-        self.settle_integration(intent, identity, result, reason.as_deref(), detail)
-            .await
+        self.settle_integration(
+            intent,
+            identity,
+            SettledIntegration {
+                result,
+                reason,
+                detail,
+            },
+        )
+        .await
     }
 
     /// Resolves every evidence item in its owning store. Returns the verified
@@ -800,211 +902,111 @@ impl Service {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         port: &dyn Integration,
-        policy: &EvidencePolicy,
-        evidence: &Value,
-        candidate: &str,
-        candidate_oid: &ObjectId,
+        mut verification: EvidenceSet<'_>,
     ) -> Result<std::result::Result<Vec<String>, &'static str>> {
-        let ids: Option<Vec<&str>> = evidence
-            .as_array()
-            .and_then(|items| items.iter().map(|e| e["id"].as_str()).collect());
-        let Some(ids) = ids else {
-            return Ok(Err("invalid_request"));
+        let ids = match verification.references() {
+            Ok(ids) => ids,
+            Err(reason) => return Ok(Err(reason)),
         };
-        let unique: std::collections::BTreeSet<_> = ids.iter().collect();
-        if ids.len() > MAX_EVIDENCE || unique.len() != ids.len() {
-            return Ok(Err("invalid_request"));
-        }
-        let source = catalog_oid(candidate_oid);
-        let (workspace, project) = (self.namespace.workspace_id, self.namespace.project_id);
-        let mut passed_checks = std::collections::BTreeSet::new();
-        let (mut reviewed, mut judged) = (false, false);
         for id in &ids {
-            if let Some(op) = handle(id, CHECK_EVIDENCE) {
-                let Some(row) = self.evidence_row(tx, op, "check.request").await? else {
-                    return Ok(Err("evidence_unknown"));
-                };
-                let (status, request, check_id): (String, Value, Option<String>) =
-                    (row.get("status"), row.get("request"), row.get("check_id"));
-                if status == "running" {
-                    return Ok(Err("evidence_pending"));
+            let verdict = match EvidenceRef::parse(id) {
+                EvidenceRef::Check(op) => {
+                    let row =
+                        EvidenceSet::receipt(tx, &self.namespace, op, "check.request").await?;
+                    verification.check(row)?
                 }
-                if request["execution_profile"].as_str() != Some(CHECK_EXECUTION_PROFILE) {
-                    return Ok(Err("evidence_unauthorized"));
+                EvidenceRef::Judgment(op) => {
+                    let row =
+                        EvidenceSet::receipt(tx, &self.namespace, op, "judgment.request").await?;
+                    verification.judgment(row)
                 }
-                if !same_subject(&request["subject"], candidate, 1)
-                    || request["source"]["format"] != source["format"]
-                    || request["source"]["hex"] != source["hex"]
-                {
-                    return Ok(Err("evidence_stale"));
+                EvidenceRef::Work => {
+                    let row = verification.work_row(tx, &self.namespace, id).await?;
+                    verification.work(row)
                 }
-                if status != "passed" {
-                    return Ok(Err("evidence_failed"));
+                EvidenceRef::Review(decision) => {
+                    let row = port
+                        .review(
+                            self.namespace.workspace_id,
+                            self.namespace.project_id,
+                            decision,
+                        )
+                        .await?;
+                    verification.review(row)
                 }
-                passed_checks.insert(check_id.ok_or(Error::Unknown)?);
-            } else if let Some(op) = handle(id, JUDGMENT_EVIDENCE) {
-                let Some(row) = self.evidence_row(tx, op, "judgment.request").await? else {
-                    return Ok(Err("evidence_unknown"));
-                };
-                if policy.judgment_choices.is_empty() {
-                    return Ok(Err("evidence_unauthorized"));
-                }
-                let (status, request, output): (String, Value, Option<Value>) =
-                    (row.get("status"), row.get("request"), row.get("output"));
-                if status == "running" {
-                    return Ok(Err("evidence_pending"));
-                }
-                if !same_subject(&request["subject"], candidate, 1) {
-                    return Ok(Err("evidence_stale"));
-                }
-                let output = output.unwrap_or(Value::Null);
-                let profile = request["credential_profile"].as_str().unwrap_or("");
-                if status == "assessed"
-                    && (profile.is_empty()
-                        || output["provenance"]["credential_profile"].as_str() != Some(profile))
-                {
-                    return Ok(Err("evidence_unauthorized"));
-                }
-                let choice = output["choice"].as_str().unwrap_or("");
-                if status != "assessed" || !policy.judgment_choices.iter().any(|c| c == choice) {
-                    return Ok(Err("evidence_failed"));
-                }
-                judged = true;
-            } else if id.starts_with(WORK_REF) {
-                // D11: Host7 review work. Its disposition came from the review
-                // recorded on the task (`aq:review_disposition`), never inferred.
-                let row = sqlx::query("SELECT status,request,output FROM playbook_host_operations WHERE namespace_id=$1 AND generation=$2 AND command_name='work.ensure' AND request->>'reference'=$3")
-                    .bind(self.namespace.namespace_id)
-                    .bind(self.namespace.generation)
-                    .bind(id)
-                    .fetch_optional(&mut **tx)
-                    .await?;
-                let Some(row) = row else {
-                    return Ok(Err("evidence_unknown"));
-                };
-                let (status, request, output): (String, Value, Option<Value>) =
-                    (row.get("status"), row.get("request"), row.get("output"));
-                if !matches!(request["kind"].as_str(), Some("review" | "fidelity_review")) {
-                    return Ok(Err("evidence_unauthorized"));
-                }
-                if status == "running" {
-                    return Ok(Err("evidence_pending"));
-                }
-                if !same_subject(&request["motivation"], candidate, 1) {
-                    return Ok(Err("evidence_stale"));
-                }
-                if status != "completed"
-                    || output.as_ref().map(|o| &o["disposition"]) != Some(&json!("accepted"))
-                {
-                    return Ok(Err("evidence_failed"));
-                }
-                reviewed = true;
-            } else if let Some(decision) = handle(id, REVIEW_EVIDENCE) {
-                let Some(review) = port.review(workspace, project, decision).await? else {
-                    return Ok(Err("evidence_unknown"));
-                };
-                if !review.issuer_authorized {
-                    return Ok(Err("evidence_unauthorized"));
-                }
-                if !same_subject(&review.subject, candidate, 1) {
-                    return Ok(Err("evidence_stale"));
-                }
-                if !review.approved {
-                    return Ok(Err("evidence_failed"));
-                }
-                reviewed = true;
-            } else {
-                // Caller-asserted evidence ("approved", "check:passed", ...)
-                // has no owning store.
-                return Ok(Err("evidence_unknown"));
+                EvidenceRef::Unknown => Err("evidence_unknown"),
+            };
+            if let Err(reason) = verdict {
+                return Ok(Err(reason));
             }
         }
-        let covered = policy.checks.iter().all(|c| passed_checks.contains(c))
-            && (!policy.review || reviewed)
-            && (policy.judgment_choices.is_empty() || judged);
-        if !covered {
-            return Ok(Err("evidence_missing"));
+        Ok(verification.finish(ids))
+    }
+
+    fn integration_receipts(&self) -> IntegrationReceipts<'_> {
+        IntegrationReceipts {
+            namespace: &self.namespace,
+            pool: &self.pool,
         }
-        Ok(Ok(ids.iter().map(|s| s.to_string()).collect()))
     }
-
-    async fn evidence_row(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        operation: Uuid,
-        command: &str,
-    ) -> Result<Option<sqlx::postgres::PgRow>> {
-        Ok(sqlx::query("SELECT status,request,output,check_id FROM playbook_host_operations WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND command_name=$4")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(command)
-            .fetch_optional(&mut **tx)
-            .await?)
-    }
-
-    async fn receipt_row(&self, reference: &str) -> Result<Option<sqlx::postgres::PgRow>> {
-        let (command, operation) = if let Some(op) = handle(reference, CANDIDATE_REF) {
-            ("candidate.prepare", op)
-        } else if let Some(op) = handle(reference, PUBLICATION_REF) {
-            ("candidate.publish", op)
-        } else {
-            return Ok(None);
-        };
-        Ok(sqlx::query("SELECT operation_id,command_name,state,reason,candidate_operation_id,repository_id,binding_generation,request,detail,reconcile_attempts FROM playbook_integration_receipts WHERE operation_id=$1 AND namespace_id=$2 AND generation=$3 AND command_name=$4")
-            .bind(operation)
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(command)
-            .fetch_optional(&self.pool)
-            .await?)
-    }
-
-    /// operation.get for candidate and publication references; `None` for
-    /// any other handle.
+    /// operation.get for candidate and publication references.
     pub(super) async fn integration_get(&self, reference: &str) -> Result<Option<HostResult>> {
-        let Some(row) = self.receipt_row(reference).await? else {
-            return Ok(None);
-        };
-        let request: Value = row.get("request");
-        let pointer = json!({"reference": request["reference"], "subject": request["subject"]});
-        let state: String = row.get("state");
-        let completed = |outcome: &str, disposition: &str| HostResult {
-            outcome: "completed".into(),
-            output: json!({"outcome": outcome, "output": merged(&pointer, json!({"disposition": disposition}))}),
-        };
-        Ok(Some(match state.as_str() {
-            PENDING => HostResult {
-                outcome: "running".into(),
-                output: pointer,
-            },
-            "ambiguous" => HostResult {
-                outcome: "indeterminate".into(),
-                output: pointer,
-            },
-            "prepared" | "published" => completed("completed", "accepted"),
-            "conflict" => completed("completed", "failed"),
-            _ => completed("refused", "failed"),
-        }))
+        self.integration_receipts().operation(reference).await
     }
-
-    /// Inspection: the typed receipt behind a candidate or publication
-    /// reference in this namespace generation.
+    /// The retained receipt in this namespace generation.
     pub async fn integration_receipt(&self, reference: &str) -> Result<Option<Value>> {
-        let Some(row) = self.receipt_row(reference).await? else {
-            return Ok(None);
+        self.integration_receipts().inspect(reference).await
+    }
+}
+
+impl PrepareReply {
+    fn settlement(self, output: Value, has_source: bool) -> Result<SettledIntegration> {
+        let (outcome, reason, detail) = match self {
+            PrepareReply::Prepared { candidate } => {
+                ("prepared", None, json!({"candidate": candidate}))
+            }
+            PrepareReply::Conflict {
+                step,
+                paths,
+                truncated,
+                count,
+            } => {
+                let kept: Vec<_> = paths
+                    .iter()
+                    .filter(|p| p.len() <= 1024)
+                    .take(MAX_CONFLICT_PATHS)
+                    .collect();
+                let truncated = truncated || kept.len() != paths.len();
+                (
+                    "conflict",
+                    Some("conflicted".to_string()),
+                    json!({"step": step, "paths": kept, "truncated": truncated, "count": count}),
+                )
+            }
+            PrepareReply::Refused { reason } => (
+                "refused",
+                Some(token(&reason, "prepare_failed")),
+                Value::Null,
+            ),
         };
-        Ok(Some(json!({
-            "operation": row.get::<Uuid, _>("operation_id"),
-            "command": row.get::<String, _>("command_name"),
-            "state": row.get::<String, _>("state"),
-            "reason": row.get::<Option<String>, _>("reason"),
-            "candidate_operation": row.get::<Uuid, _>("candidate_operation_id"),
-            "repository_id": row.get::<Option<Uuid>, _>("repository_id"),
-            "binding_generation": row.get::<Option<i64>, _>("binding_generation"),
-            "request": row.get::<Value, _>("request"),
-            "detail": row.get::<Option<Value>, _>("detail"),
-            "reconcile_attempts": row.get::<i32, _>("reconcile_attempts"),
-        })))
+        // Catalog 2.1.0 (Host8): `prepared` carries the prepared candidate's
+        // OID, which policies bind check.request `source` to. 2.0.0 has none.
+        let output = match &detail["candidate"] {
+            candidate if outcome == "prepared" && has_source => {
+                let candidate: ObjectId =
+                    serde_json::from_value(candidate.clone()).map_err(|_| Error::Unknown)?;
+                merged(&output, json!({"source": catalog_oid(&candidate)}))
+            }
+            _ => output,
+        };
+        let result = HostResult {
+            outcome: outcome.into(),
+            output,
+        };
+        Ok(SettledIntegration {
+            result,
+            reason,
+            detail,
+        })
     }
 }

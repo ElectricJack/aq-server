@@ -202,9 +202,14 @@ pub async fn save_role(
         .unwrap()
         .map_or(0, |d| d.revision);
     let op = uuid::Uuid::new_v4();
-    aq_role_settings::save(pool, actor, Kind::Role, id, &markdown, revision, op, 1)
-        .await
-        .unwrap();
+    aq_role_settings::save(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, op),
+        Kind::Role,
+        id,
+        &markdown,
+    )
+    .await
+    .unwrap();
 }
 /// Delete the role `id` as the owner `actor` would in Settings.
 pub async fn delete_role(pool: &sqlx::PgPool, actor: uuid::Uuid, id: &str) {
@@ -215,7 +220,11 @@ pub async fn delete_role(pool: &sqlx::PgPool, actor: uuid::Uuid, id: &str) {
         .expect("stored role")
         .revision;
     let op = uuid::Uuid::new_v4();
-    aq_role_settings::delete(pool, actor, Kind::Role, id, revision, op, 1)
-        .await
-        .unwrap();
+    aq_role_settings::delete(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, op),
+        Kind::Role,
+        id,
+    )
+    .await
+    .unwrap();
 }

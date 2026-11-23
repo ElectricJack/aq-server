@@ -394,6 +394,26 @@ pub async fn confirm_pushed(
     if row.get::<bool, _>("recorded") {
         return Ok(());
     }
+    let task_ref = confirm_head(&row, git, pushed_at).await?;
+    sqlx::query(
+        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
+         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
+    )
+    .bind(report)
+    .bind(attempt)
+    .bind(&task_ref)
+    .bind(pushed_at.map(|p| &p.head))
+    .execute(pool)
+    .await
+    .map_err(|_| PushedRefusal::Unavailable)?;
+    Ok(())
+}
+
+async fn confirm_head(
+    row: &sqlx::postgres::PgRow,
+    git: &SocketGit,
+    pushed_at: Option<&PushedRef>,
+) -> Result<String, PushedRefusal> {
     let task_ref: String = row.get("task_ref");
     if pushed_at.is_some_and(|p| p.reference != task_ref) {
         return Err(PushedRefusal::Refused(
@@ -420,18 +440,7 @@ pub async fn confirm_pushed(
         }
         _ => {}
     }
-    sqlx::query(
-        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
-         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
-    )
-    .bind(report)
-    .bind(attempt)
-    .bind(&task_ref)
-    .bind(pushed_at.map(|p| &p.head))
-    .execute(pool)
-    .await
-    .map_err(|_| PushedRefusal::Unavailable)?;
-    Ok(())
+    Ok(task_ref)
 }
 
 /// [`confirm_pushed`] of what a result request's headers name, if anything.

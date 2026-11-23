@@ -120,7 +120,8 @@ impl Service {
             ),
             _ => None,
         };
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let command = HostIntent::new(id, revision, intent);
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -136,7 +137,7 @@ impl Service {
                     json!({"reason": format!("unknown_{what}"), "step": "subject"}),
                 );
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, refused)
+                    .settle_fresh(tx, command.retained(&identity), refused)
                     .await;
             }
             // A build answers by its completion event only.
@@ -159,7 +160,8 @@ impl Service {
         let operation = self.operation(intent)?;
         let accepted = host_result("accepted", json!({"handle": operation.to_string()}));
         let (outcome, output) = (&accepted.outcome, &accepted.output);
-        self.record(&mut tx, id, revision, intent, &identity, outcome, output)
+        let receipt = EffectReceipt::new(outcome, output);
+        self.record(&mut tx, command.retained(&identity), receipt)
             .await?;
         let project = request["project"].as_str().unwrap_or("unknown");
         let subject = task.map_or_else(|| project.to_owned(), |t| t.to_string());

@@ -5,7 +5,10 @@
 //! for the caller's principal becomes a flag, typed by its schema. The catalog
 //! is a hint (see `catalog.rs`): a command or param this binary does not know
 //! still goes through `--param`, and the server validates either way.
+mod help;
 use crate::{Result, catalog, error, program};
+pub use help::help;
+use help::tokens;
 use serde_json::{Map, Value, json};
 use std::fmt::Write;
 use std::sync::OnceLock;
@@ -99,14 +102,18 @@ fn kind(schema: &Value) -> Kind {
         _ => {}
     }
     // A union whose every non-null branch is text is text ("self" or a UUID).
-    let branches = schema["anyOf"].as_array().or(schema["oneOf"].as_array());
-    if let Some(branches) = branches {
-        let mut real = branches.iter().filter(|b| b["type"] != "null").peekable();
-        if real.peek().is_some() && real.all(|b| matches!(kind(b), Kind::Text | Kind::Choice(_))) {
-            return Kind::Text;
-        }
+    if text_union(schema) {
+        Kind::Text
+    } else {
+        Kind::Any
     }
-    Kind::Any
+}
+fn text_union(schema: &Value) -> bool {
+    let Some(branches) = schema["anyOf"].as_array().or(schema["oneOf"].as_array()) else {
+        return false;
+    };
+    let mut real = branches.iter().filter(|b| b["type"] != "null").peekable();
+    real.peek().is_some() && real.all(|b| matches!(kind(b), Kind::Text | Kind::Choice(_)))
 }
 fn hint(schema: &Value) -> String {
     let range = |unit: &str| match (schema["minimum"].as_i64(), schema["maximum"].as_i64()) {
@@ -165,20 +172,24 @@ pub fn flags(name: &str, principal: &str) -> Vec<Flag> {
     // (the server takes it out of the payload and builds the subject).
     let subject =
         &catalog::entry(name).map_or(&Value::Null, |e| &e["principals"][principal])["subject"];
-    if let Some(param) = subject["id_param"].as_str()
-        && subject["id_param_schema"].is_object()
-        && !flags.iter().any(|f| f.param == param)
+    if let Some(flag) =
+        subject_flag(subject).filter(|subject| !flags.iter().any(|f| f.param == subject.param))
     {
-        flags.push(Flag {
-            param: param.to_owned(),
-            schema: &subject["id_param_schema"],
-            required: true,
-        });
+        flags.push(flag);
     }
     flags.sort_by_key(|f| !f.required);
     flags
 }
 
+fn subject_flag(subject: &'static Value) -> Option<Flag> {
+    let param = subject["id_param"].as_str()?;
+    subject["id_param_schema"].as_object()?;
+    Some(Flag {
+        param: param.into(),
+        schema: &subject["id_param_schema"],
+        required: true,
+    })
+}
 fn invalid(message: &str) -> Value {
     error("invalid_arguments", message)
 }
@@ -209,179 +220,62 @@ fn value(flag: &Flag, text: &str) -> Result<Value> {
 pub fn split(flags: &[Flag], args: &[String]) -> Result<(Map<String, Value>, Vec<String>)> {
     let mut params = Map::new();
     let mut rest = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        i += 1;
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
         if arg == "--" {
-            rest.extend_from_slice(&args[i - 1..]);
+            rest.push(arg.clone());
+            rest.extend(args.cloned());
             break;
         }
-        let (name, inline) = match arg.strip_prefix("--").map(|a| a.split_once('=')) {
-            Some(Some((name, v))) => (name, Some(v)),
-            Some(None) => (&arg[2..], None),
-            None => ("", None),
-        };
-        let Some(flag) = flags.iter().find(|f| f.name() == name) else {
+        let (name, inline) = arg.strip_prefix("--").map_or(("", None), |flag| {
+            flag.split_once('=')
+                .map_or((flag, None), |(name, v)| (name, Some(v)))
+        });
+        if let Some(flag) = flags.iter().find(|f| f.name() == name) {
+            let text = flag.argument(inline, &mut args)?;
+            flag.insert(&mut params, text)?;
+        } else {
             rest.push(arg.clone());
-            continue;
-        };
-        let kind = kind(flag.schema);
-        let text = match inline {
-            Some(v) => v.to_owned(),
-            None if kind == Kind::Boolean => match args.get(i).map(String::as_str) {
-                Some(v @ ("true" | "false")) => {
-                    i += 1;
-                    v.to_owned()
-                }
-                _ => "true".into(),
-            },
-            None => {
-                let v = args.get(i).ok_or_else(|| {
-                    invalid(&format!("--{name} takes a value ({})", hint(flag.schema)))
-                })?;
-                i += 1;
-                v.clone()
-            }
-        };
-        let v = value(flag, &text)?;
-        if kind == Kind::TextList {
-            let list = params.entry(flag.param.clone()).or_insert(json!([]));
-            list.as_array_mut().expect("list").push(v);
-        } else if params.insert(flag.param.clone(), v).is_some() {
-            return Err(invalid(&format!("--{name} is given twice")));
         }
     }
     Ok((params, rest))
 }
-fn tokens(entry: &Value) -> String {
-    let cli: Vec<&str> = entry["cli"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
-    cli.join(" ")
-}
-/// `aq <tokens> --help`: what the command does, who may run it and its flags.
-pub fn help(name: &str, principal: &str) -> Option<String> {
-    let entry = catalog::entry(name)?;
-    let program = program();
-    let mut out = String::new();
-    let _ = writeln!(out, "{}", entry["summary"].as_str().unwrap_or_default());
-    let _ = writeln!(out);
-    let mut facts = vec![entry["kind"].as_str().unwrap_or("command").to_owned()];
-    if let Some(grant) = entry["grant"].as_str() {
-        facts.push(format!("needs {grant}"));
-    }
-    if entry["owner_only"] == true {
-        facts.push("owner only".into());
-    }
-    let _ = writeln!(out, "Command: {name} ({})", facts.join(", "));
-    let available: Vec<&str> = entry["principals"]
-        .as_object()
-        .into_iter()
-        .flat_map(|p| p.keys())
-        .map(String::as_str)
-        .collect();
-    if !available.contains(&principal) {
-        let _ = writeln!(
-            out,
-            "Not available to the {principal}; it is a command of the {}.",
-            available.join(" and the ")
-        );
-        return Some(out);
-    }
-    let flags = flags(name, principal);
-    let action = entry["principals"][principal]["body"] == "action_request";
-    // With a subject rule the subject follows from the params.
-    let derived = entry["principals"][principal]["subject"].is_object();
-    let mut usage = format!("{program} {}", tokens(entry));
-    for f in flags.iter().filter(|f| f.required) {
-        let _ = write!(usage, " --{} <{}>", f.name(), hint(f.schema));
-    }
-    if action && !derived {
-        usage.push_str(" --subject TYPE:ID[:REVISION]");
-    }
-    let needs = |field: &str| {
-        schema(name, principal)
-            .and_then(|s| s["required"].as_array())
-            .is_some_and(|r| r.iter().any(|v| v == field))
-    };
-    if !action && needs("reason") {
-        usage.push_str(" --reason <text>");
-    }
-    if flags.iter().any(|f| !f.required) {
-        usage.push_str(" [flags]");
-    }
-    let _ = writeln!(out, "Usage:   {usage}");
-    if schema(name, principal).is_none() {
-        let _ = writeln!(
-            out,
-            "\nIts params are not described in this binary; `{program} run {name} --describe` prints the published entry."
-        );
-    } else if !flags.is_empty() {
-        let _ = writeln!(out, "\nParams:");
-        let width = flags.iter().map(|f| f.name().len()).max().unwrap_or(0);
-        for f in &flags {
-            let mut notes = vec![hint(f.schema)];
-            if f.required {
-                notes.push("required".into());
-            }
-            if let Some(d) = f.schema.get("default").filter(|d| !d.is_null()) {
-                notes.push(format!("default {}", d.to_string().trim_matches('"')));
-            }
-            let mut line = format!("  --{:<width$}  {}", f.name(), notes.join(", "));
-            if let Some(d) = f.schema["description"].as_str() {
-                let _ = write!(line, ". {d}");
-            }
-            let _ = writeln!(out, "{line}");
+impl Flag {
+    fn argument<'a>(
+        &self,
+        inline: Option<&'a str>,
+        args: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
+    ) -> Result<&'a str> {
+        if let Some(value) = inline {
+            return Ok(value);
         }
-    }
-    // Params that share a name with one of `run`'s flags have no flag.
-    let shadowed: Vec<String> = schema(name, principal)
-        .and_then(|s| s["properties"].as_object())
-        .into_iter()
-        .flat_map(|p| p.keys())
-        // A route-backed command's body takes `--reason` itself.
-        .filter(|p| RESERVED.contains(&p.as_str()) && *p != "operation_id")
-        .filter(|p| action || *p != "reason")
-        .map(|p| format!("--param {p}=…"))
-        .collect();
-    if !shadowed.is_empty() {
-        let _ = writeln!(
-            out,
-            "\nGiven by name (the flag of the same name is `run`'s own): {}",
-            shadowed.join(", ")
-        );
-    }
-    let _ = writeln!(out, "\nAlso:");
-    let _ = writeln!(
-        out,
-        "  --param KEY=VALUE|KEY:=JSON   any param by name (repeatable); --params-file FILE|- for a JSON object"
-    );
-    if entry["kind"] == "mutation" {
-        if action {
-            let _ = writeln!(
-                out,
-                "  --subject TYPE:ID[:REVISION]  what the action changes{}; --expect TYPE=REVISION for other versions",
-                if derived {
-                    " (taken from the params when omitted)"
-                } else {
-                    ""
-                }
-            );
+        if kind(self.schema) == Kind::Boolean {
+            return Ok(args
+                .next_if(|v| matches!(v.as_str(), "true" | "false"))
+                .map_or("true", String::as_str));
         }
-        let _ = writeln!(
-            out,
-            "  --reason TEXT, --operation-id ID (a fresh ID is used when omitted)"
-        );
+        args.next().map(String::as_str).ok_or_else(|| {
+            invalid(&format!(
+                "--{} takes a value ({})",
+                self.name(),
+                hint(self.schema)
+            ))
+        })
     }
-    let _ = writeln!(
-        out,
-        "  --json                        one JSON document; --describe prints the published entry"
-    );
-    Some(out)
+    fn insert(&self, params: &mut Map<String, Value>, text: &str) -> Result<()> {
+        let parsed = value(self, text)?;
+        if kind(self.schema) == Kind::TextList {
+            params
+                .entry(self.param.clone())
+                .or_insert(json!([]))
+                .as_array_mut()
+                .expect("list")
+                .push(parsed);
+        } else if params.insert(self.param.clone(), parsed).is_some() {
+            return Err(invalid(&format!("--{} is given twice", self.name())));
+        }
+        Ok(())
+    }
 }
 /// The commands whose CLI tokens start with `words`, one line each. Empty
 /// when `words` is not the start of any command.

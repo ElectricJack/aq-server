@@ -178,18 +178,28 @@ fn case_file(index: usize, case: &Value) -> String {
     format!("{:02}-{slug}.json", index + 1)
 }
 
+/// The document and versioned facts the authoring agent reads.
+pub struct WorkspaceSource<'a> {
+    pub markdown: &'a str,
+    pub facts: &'a BTreeMap<String, Value>,
+    pub facts_version: &'a str,
+}
+
 /// Every file of the workspace, by relative path: the document, the host's
 /// record, catalog and facts, the guide, the language reference, the catalog
 /// in words, the worked examples and, when one is in effect, the previous
 /// playbook. `facts_version` is recorded with every fact the draft reads.
 pub fn workspace_files(
     record: &SourceRecord,
-    markdown: &str,
+    source: WorkspaceSource<'_>,
     catalog: &Registry,
-    facts: &BTreeMap<String, Value>,
-    facts_version: &str,
     previous: Option<&PreviousPlaybook>,
 ) -> Result<BTreeMap<String, String>> {
+    let WorkspaceSource {
+        markdown,
+        facts,
+        facts_version,
+    } = source;
     let mut files = BTreeMap::new();
     let mut put = |path: &str, text: String| files.insert(path.to_owned(), text);
     put(draft::SOURCE_FILE, markdown.to_owned());
@@ -279,7 +289,17 @@ mod tests {
     fn files(previous: Option<&PreviousPlaybook>) -> BTreeMap<String, String> {
         let facts = BTreeMap::from([("owner".to_string(), json!("user:owner-1"))]);
         let catalog = docs::catalog_registry();
-        workspace_files(&notify(), "Ask for it.\n", &catalog, &facts, "v1", previous).unwrap()
+        workspace_files(
+            &notify(),
+            WorkspaceSource {
+                markdown: "Ask for it.\n",
+                facts: &facts,
+                facts_version: "v1",
+            },
+            &catalog,
+            previous,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -306,10 +326,12 @@ mod tests {
         wrong.commands.insert("work.delete".into());
         let made = workspace_files(
             &wrong,
-            "",
+            WorkspaceSource {
+                markdown: "",
+                facts: &BTreeMap::new(),
+                facts_version: "v1",
+            },
             &docs::catalog_registry(),
-            &BTreeMap::new(),
-            "v1",
             None,
         );
         assert!(matches!(made, Err(Error::Invalid(_))));

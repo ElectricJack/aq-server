@@ -554,14 +554,11 @@ async fn run_with_listeners_and_dashboard(
     };
     let admin_app = match unopened {
         None => build(policy_slot.lock().await.as_ref()),
-        Some((config, failure)) => playbooks::runtime::open_later(
-            state.clone(),
-            config,
-            failure,
-            build,
-            policy_slot.clone(),
-            rx.clone(),
-        ),
+        Some(failed) => playbooks::runtime::DeferredMount {
+            slot: policy_slot.clone(),
+            stop: rx.clone(),
+        }
+        .open_later(state.clone(), failed, build),
     };
     let worker_app = build_worker_router_inner(state, None, Some(admin_app.clone()));
     let serving = tokio::try_join!(

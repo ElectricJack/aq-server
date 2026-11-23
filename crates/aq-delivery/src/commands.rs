@@ -11,6 +11,10 @@
 //! back as [`Step::Retry`], and the caller (the host's operation loop) calls
 //! it again with the same operation id, which aq-git and GitHub both treat as
 //! the same operation. Time is a parameter (`now_ms`), never read here.
+mod checks;
+mod run;
+pub use checks::CheckRequest;
+pub use run::FrozenCommand;
 mod git;
 mod host;
 
@@ -19,8 +23,8 @@ pub use git::{
     TRY_PREFIX, object_id,
 };
 pub use host::{
-    Accepting, due_operations, frozen_request, onboarded_target, published_head, pull_request_text,
-    run_step,
+    Accepting, DeliveryRuntime, DueOperations, due_operations, frozen_request, onboarded_target,
+    published_head, pull_request_text, run_step,
 };
 
 use crate::github::GitHubApiError;
@@ -146,11 +150,6 @@ pub struct CheckPoll {
     pub observed: Option<PullRequestObserved>,
 }
 
-struct CheckHead<'a> {
-    sha: &'a str,
-    target_is_frozen: bool,
-}
-
 /// One attempt at a command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -167,6 +166,32 @@ enum MergeAttempt {
     Unconfirmed(Step),
 }
 
+/// The task branch and the idempotency key for one operation on it.
+#[derive(Clone, Copy)]
+pub struct TaskOperation<'a> {
+    pub operation: Uuid,
+    pub target: &'a DeliveryTarget,
+    pub task: Uuid,
+}
+impl<'a> TaskOperation<'a> {
+    pub fn new(operation: Uuid, target: &'a DeliveryTarget, task: Uuid) -> Self {
+        Self {
+            operation,
+            target,
+            task,
+        }
+    }
+}
+pub struct OpenPullRequest<'a> {
+    pub title: &'a str,
+    pub body: &'a str,
+    pub known_pr: Option<u64>,
+}
+#[derive(Clone, Copy)]
+pub struct MergeGuard<'a> {
+    pub method: MergeMethod,
+    pub expected_head: &'a str,
+}
 /// The commands, over a forge adapter and aq-git.
 #[derive(Clone)]
 pub struct Delivery {
@@ -218,12 +243,15 @@ impl Delivery {
     /// branch was last published at (`None` when it was never).
     pub async fn branch_publish(
         &self,
-        operation: Uuid,
-        target: &DeliveryTarget,
-        task: Uuid,
+        branch: TaskOperation<'_>,
         expected_old: Option<&str>,
         expected_source: Option<&str>,
     ) -> Step {
+        let TaskOperation {
+            operation,
+            target,
+            task,
+        } = branch;
         let published = self
             .git
             .publish_ref(
@@ -254,20 +282,13 @@ impl Delivery {
         &self,
         target: &DeliveryTarget,
         task: Uuid,
-        title: &str,
-        body: &str,
+        request: OpenPullRequest<'_>,
     ) -> Step {
-        self.open_result(target, task, title, body, None).await
-    }
-
-    async fn open_result(
-        &self,
-        target: &DeliveryTarget,
-        task: Uuid,
-        title: &str,
-        body: &str,
-        known_pr: Option<u64>,
-    ) -> Step {
+        let OpenPullRequest {
+            title,
+            body,
+            known_pr,
+        } = request;
         let opened = match known_pr {
             Some(pr) => self.github.pull_request(&target.github, pr).await,
             None => {
@@ -315,196 +336,33 @@ impl Delivery {
         })
     }
 
-    /// One look at a pull request for `pull_request.await_checks`. The
-    /// completion is one of `closed`, `conflict`, `failed`, `passed` or, once
-    /// `now_ms` has reached `deadline_at_ms` with nothing decided, `timeout`;
-    /// a decision that is made wins over a deadline that has also passed. A
-    /// read that fails counts as nothing decided; the deadline still ends the
-    /// wait.
-    pub async fn await_checks_step(
-        &self,
-        target: &DeliveryTarget,
-        pr: u64,
-        required: Option<&[String]>,
-        now_ms: i64,
-        deadline_at_ms: i64,
-        log_bytes: u64,
-    ) -> CheckPoll {
-        self.check_result_head(
-            target,
-            pr,
-            required,
-            (now_ms, deadline_at_ms),
-            log_bytes,
-            None,
-        )
-        .await
-    }
-
-    async fn check_result_head(
-        &self,
-        target: &DeliveryTarget,
-        pr: u64,
-        required: Option<&[String]>,
-        (now_ms, deadline_at_ms): (i64, i64),
-        log_bytes: u64,
-        expected_head: Option<CheckHead<'_>>,
-    ) -> CheckPoll {
-        let repo = &target.github;
-        let observed = self.github.pull_request(repo, pr).await.ok();
-        let mut seen = observed.as_ref().map(|p| PullRequestObserved {
-            number: p.number,
-            url: Some(p.url.clone()),
-            state: match p.state {
-                PullRequestState::Open => "open",
-                PullRequestState::Closed => "closed",
-                PullRequestState::Merged => "merged",
-            },
-            mergeable: "unknown",
-            checks_state: "none",
-            checks_failed: vec![],
-            checks_log: None,
-        });
-        let decided = 'decide: {
-            let Some(p) = &observed else {
-                break 'decide None;
-            };
-            if p.state == PullRequestState::Closed
-                || (p.state == PullRequestState::Merged && expected_head.is_none())
-            {
-                break 'decide Some(Completion::closed());
-            }
-            let head = expected_head
-                .as_ref()
-                .map_or(p.head_sha.as_str(), |head| head.sha);
-            let repair_behind = expected_head
-                .as_ref()
-                .is_some_and(|head| head.target_is_frozen);
-            if p.number != pr || p.base_branch != target.default_branch || p.head_sha != head {
-                break 'decide None;
-            }
-            if p.state == PullRequestState::Open {
-                if let Some(repair) = check_repair(p.mergeability, repair_behind, &mut seen) {
-                    break 'decide Some(repair);
-                }
-                if p.mergeability == Mergeability::Behind {
-                    break 'decide None;
-                }
-            }
-            let Ok(checks) = self.github.checks(repo, pr, required).await else {
-                break 'decide None;
-            };
-            let checked = &checks.pull_request;
-            if checked.number != pr
-                || checked.base_branch != target.default_branch
-                || checked.head_sha != head
-            {
-                break 'decide None;
-            }
-            match checked.state {
-                PullRequestState::Closed => break 'decide Some(Completion::closed()),
-                PullRequestState::Merged if expected_head.is_none() => {
-                    break 'decide Some(Completion::closed());
-                }
-                // An already-merged PR needs green checks for the exact result
-                // head before recovery. Its base may have moved again since merge.
-                PullRequestState::Merged if checks.state != ChecksState::Passed => {
-                    break 'decide None;
-                }
-                PullRequestState::Merged => {
-                    if let Some(s) = seen.as_mut() {
-                        s.state = "merged";
-                    }
-                }
-                PullRequestState::Open if p.state == PullRequestState::Merged => {
-                    break 'decide None;
-                }
-                PullRequestState::Open => {
-                    if let Some(repair) =
-                        check_repair(checked.mergeability, repair_behind, &mut seen)
-                    {
-                        break 'decide Some(repair);
-                    }
-                    if checked.base_sha != p.base_sha
-                        || checked.mergeability == Mergeability::Behind
-                    {
-                        break 'decide None;
-                    }
-                }
-            }
-            if let Some(s) = seen.as_mut() {
-                s.checks_failed = checks
-                    .failed
-                    .iter()
-                    .take(FAILED_NAMES)
-                    .map(|n| n.chars().take(NAME_BYTES).collect())
-                    .collect();
-                s.checks_state = match checks.state {
-                    ChecksState::Passed => "passed",
-                    ChecksState::Failed => "failed",
-                    ChecksState::Pending => "pending",
-                };
-                // The log is a courtesy to the supervisor: a read that fails
-                // leaves the failed check recorded without a tail.
-                if checks.state == ChecksState::Failed && log_bytes > 0 {
-                    let log = self
-                        .github
-                        .failed_check_log(repo, &checked.head_sha, &checks.failed, log_bytes)
-                        .await;
-                    s.checks_log = log.ok().flatten().map(|tail| CheckLog {
-                        head: checked.head_sha.clone(),
-                        tail,
-                    });
-                }
-            }
-            match checks.state {
-                ChecksState::Failed => Some(Completion::new(
-                    "failed",
-                    json!({"names": seen.as_ref().map(|s| s.checks_failed.clone()).unwrap_or_default()}),
-                )),
-                ChecksState::Passed => Some(Completion::new("passed", json!({}))),
-                ChecksState::Pending => None,
-            }
-        };
-        let completion = decided
-            .or_else(|| (now_ms >= deadline_at_ms).then(|| Completion::new("timeout", json!({}))));
-        CheckPoll {
-            completion,
-            observed: seen,
-        }
-    }
-
     /// `pull_request.merge`: merges with `method` if the head is still
     /// `expected_head_sha`, then deletes the task's branch on the remote and in
     /// central aq-git. A merge that is already done is not done twice, so a
     /// retry after a failed deletion only deletes.
-    #[allow(clippy::too_many_arguments)]
     pub async fn pull_request_merge(
         &self,
-        operation: Uuid,
-        target: &DeliveryTarget,
-        task: Uuid,
+        scope: TaskOperation<'_>,
         pr: u64,
-        method: MergeMethod,
-        expected_head_sha: &str,
+        guard: MergeGuard<'_>,
     ) -> Step {
-        if let MergeAttempt::Unconfirmed(step) = self
-            .merge_on_github(target, pr, method, expected_head_sha)
-            .await
+        if let MergeAttempt::Unconfirmed(step) = self.merge_on_github(scope.target, pr, guard).await
         {
             return step;
         }
-        self.finish_merge(operation, target, task, pr, expected_head_sha)
-            .await
+        self.finish_merge(scope, pr, guard.expected_head).await
     }
 
     async fn merge_on_github(
         &self,
         target: &DeliveryTarget,
         pr: u64,
-        method: MergeMethod,
-        expected_head: &str,
+        guard: MergeGuard<'_>,
     ) -> MergeAttempt {
+        let MergeGuard {
+            method,
+            expected_head,
+        } = guard;
         let done = |completion| MergeAttempt::Unconfirmed(Step::Done(completion));
         let merged = self
             .github
@@ -551,14 +409,12 @@ impl Delivery {
         }
     }
 
-    async fn finish_merge(
-        &self,
-        operation: Uuid,
-        target: &DeliveryTarget,
-        task: Uuid,
-        pr: u64,
-        expected_head: &str,
-    ) -> Step {
+    async fn finish_merge(&self, scope: TaskOperation<'_>, pr: u64, expected_head: &str) -> Step {
+        let TaskOperation {
+            operation,
+            target,
+            task,
+        } = scope;
         if let Err(e) = self
             .git
             .delete_ref(
@@ -586,24 +442,20 @@ impl Delivery {
 
     /// `pull_request.close`: closes the pull request without merging it and
     /// deletes the task's branch on the remote and in central aq-git.
-    pub async fn pull_request_close(
-        &self,
-        operation: Uuid,
-        target: &DeliveryTarget,
-        task: Uuid,
-        pr: u64,
-    ) -> Step {
-        self.close_result(operation, target, task, pr, None).await
+    pub async fn pull_request_close(&self, scope: TaskOperation<'_>, pr: u64) -> Step {
+        self.close_result(scope, pr, None).await
     }
-
     async fn close_result(
         &self,
-        operation: Uuid,
-        target: &DeliveryTarget,
-        task: Uuid,
+        scope: TaskOperation<'_>,
         pr: u64,
         expected_head: Option<&str>,
     ) -> Step {
+        let TaskOperation {
+            operation,
+            target,
+            task,
+        } = scope;
         let closed = match self.github.close(&target.github, pr).await {
             Ok(p) => p,
             // No such pull request: nothing is open, which is what was asked.
@@ -673,159 +525,6 @@ fn merge_method(method: &str) -> MergeMethod {
         "rebase" => MergeMethod::Rebase,
         _ => MergeMethod::Merge,
     }
-}
-
-impl Delivery {
-    /// One step of `command` from the request the host froze when it accepted
-    /// it: `task`, `pull_request`, `expected_old`, `title`, `body`, `method`,
-    /// `expected_head_sha`, `required` and `deadline_at_ms`. `None` when the
-    /// request does not fit the command (the host recorded it wrongly).
-    /// `operation` is aq-git's idempotency key, so every step of one operation
-    /// repeats the same effect rather than a new one.
-    pub async fn step(
-        &self,
-        operation: Uuid,
-        command: &str,
-        request: &Value,
-        target: &DeliveryTarget,
-        now_ms: i64,
-    ) -> Option<Run> {
-        let task = request["task"]
-            .as_str()
-            .and_then(|t| Uuid::parse_str(t).ok());
-        let pr = request["pull_request"].as_u64();
-        let text = |field: &str| request[field].as_str();
-        let done = |step: Step| {
-            Some(Run {
-                step: Some(step),
-                observed: None,
-            })
-        };
-        match (command, task) {
-            ("main.sync", _) => done(self.main_sync(operation, target).await),
-            ("branch.publish", Some(task)) => {
-                if let Some(pr) = pr {
-                    match self.github.pull_request(&target.github, pr).await {
-                        Ok(pull)
-                            if pull.state == PullRequestState::Merged
-                                && Some(pull.head_sha.as_str()) == text("result_head") =>
-                        {
-                            return done(Step::Done(Completion::new(
-                                "published",
-                                json!({"head": pull.head_sha}),
-                            )));
-                        }
-                        Ok(pull) if pull.state == PullRequestState::Open => {}
-                        Ok(_) => return done(Step::Done(Completion::refused("no_branch"))),
-                        Err(_) => {
-                            return done(Step::Retry("observe the retained pull request".into()));
-                        }
-                    }
-                }
-                done(
-                    self.branch_publish(
-                        operation,
-                        target,
-                        task,
-                        text("expected_old"),
-                        text("result_head"),
-                    )
-                    .await,
-                )
-            }
-            ("pull_request.open", Some(task)) => done(
-                self.open_result(target, task, text("title")?, text("body")?, pr)
-                    .await,
-            ),
-            ("pull_request.merge", Some(task)) => {
-                let method = merge_method(text("method")?);
-                done(match pr {
-                    Some(pr) => {
-                        self.pull_request_merge(
-                            operation,
-                            target,
-                            task,
-                            pr,
-                            method,
-                            text("expected_head_sha")?,
-                        )
-                        .await
-                    }
-                    None => Step::Done(Completion::refused("no_pull_request")),
-                })
-            }
-            ("pull_request.close", _) => done(match (task, pr) {
-                (Some(task), Some(pr)) => {
-                    self.close_result(operation, target, task, pr, text("result_head"))
-                        .await
-                }
-                // No pull request is open for the task.
-                _ => Step::Done(Completion::closed()),
-            }),
-            ("pull_request.await_checks", _) => {
-                let Some(pr) = pr else {
-                    return done(Step::Done(Completion::closed()));
-                };
-                let required: Option<Vec<String>> = request["required"]
-                    .as_array()
-                    .filter(|names| !names.is_empty())
-                    .map(|names| {
-                        names
-                            .iter()
-                            .filter_map(|n| n.as_str().map(str::to_owned))
-                            .collect()
-                    });
-                let deadline = request["deadline_at_ms"].as_i64()?;
-                let frozen_target = request.get("check_target");
-                if let Some(frozen) = frozen_target
-                    && *frozen != serde_json::to_value(target).ok()?
-                {
-                    return Some(Run {
-                        step: (now_ms >= deadline)
-                            .then(|| Step::Done(Completion::new("timeout", json!({})))),
-                        observed: None,
-                    });
-                }
-                let poll = self
-                    .check_result_head(
-                        target,
-                        pr,
-                        required.as_deref(),
-                        (now_ms, deadline),
-                        request["check_log_bytes"].as_u64().unwrap_or(0),
-                        text("result_head").map(|sha| CheckHead {
-                            sha,
-                            target_is_frozen: frozen_target.is_some(),
-                        }),
-                    )
-                    .await;
-                Some(Run {
-                    step: poll.completion.map(Step::Done),
-                    observed: poll.observed,
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-/// Catalog 2.3.0's conflict outcome already returns the result for an update
-/// from main. A behind repair requires both a frozen head and delivery target.
-fn check_repair(
-    mergeability: Mergeability,
-    repair_behind: bool,
-    observed: &mut Option<PullRequestObserved>,
-) -> Option<Completion> {
-    match mergeability {
-        Mergeability::Conflict => {
-            if let Some(seen) = observed {
-                seen.mergeable = "conflicting";
-            }
-        }
-        Mergeability::Behind if repair_behind => return Some(Completion::behind_base()),
-        _ => return None,
-    }
-    Some(Completion::new("conflict", json!({})))
 }
 
 /// `text` cut to at most `bytes` bytes at a character boundary.

@@ -3,8 +3,7 @@
 //! answer is the outcome file it leaves there. This module writes the files,
 //! reads the outcome back as untrusted data, and turns the harness's event
 //! stream into a clipped transcript. It knows nothing about what the work is.
-use super::{Failure, Place, failure};
-use crate::subscription::Identity;
+use super::{Failure, Place, Run, failure};
 use aq_internal_work::{
     AGENT_OUTCOME, AGENT_TMP, AgentWork, Reason, TRANSCRIPT_BYTES, TRANSCRIPT_ITEM_BYTES,
     workspace_path,
@@ -46,9 +45,10 @@ pub(super) fn prepare(
     root: &Path,
     cwd: &Path,
     work: &AgentWork,
-    libexec: &Path,
-    identity: Identity,
+    run: Run<'_>,
 ) -> std::io::Result<Place> {
+    let identity = run.identity;
+    let libexec = &run.config.libexec;
     materialize(cwd, work)?;
     let tmp = cwd.join(TMP);
     std::fs::create_dir(&tmp)?;
@@ -128,18 +128,7 @@ fn materialize(cwd: &Path, work: &AgentWork) -> std::io::Result<()> {
         let mut dir = cwd.to_path_buf();
         for segment in dirs.split('/').filter(|s| !s.is_empty()) {
             dir.push(segment);
-            match std::fs::create_dir(&dir) {
-                Ok(()) => {
-                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-                }
-                // Made for an earlier file; never a link, the workspace is new.
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if !std::fs::symlink_metadata(&dir)?.is_dir() {
-                        return Err(e);
-                    }
-                }
-                Err(e) => return Err(e),
-            }
+            create_workspace_dir(&dir)?;
         }
         let file = dir.join(name);
         std::fs::OpenOptions::new()
@@ -153,34 +142,30 @@ fn materialize(cwd: &Path, work: &AgentWork) -> std::io::Result<()> {
     Ok(())
 }
 
+fn create_workspace_dir(dir: &Path) -> std::io::Result<()> {
+    match std::fs::create_dir(dir) {
+        Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)),
+        // A directory made for an earlier file is reused.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if std::fs::symlink_metadata(dir)?.is_dir() {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// The text of [`AGENT_OUTCOME`] in the workspace `cwd`, or `None` when the
 /// agent wrote none. Every component is opened without following links, so
 /// a link anywhere on the path refuses the outcome instead of reading what it
 /// points to. More than `limit` bytes, not a regular file, or not UTF-8 is
 /// refused too, with the reason.
 pub(super) fn read_outcome(cwd: &Path, limit: u64) -> Result<Option<String>, String> {
-    let directory = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    let mut at = open_at(None, cwd.as_os_str().as_bytes(), directory)
-        .map_err(|_| "the workspace could not be read".to_owned())?;
-    let mut segments = AGENT_OUTCOME.split('/').peekable();
-    while let Some(segment) = segments.next() {
-        let last = segments.peek().is_none();
-        let flags = match last {
-            true => libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-            false => directory,
-        };
-        at = match open_at(Some(&at), segment.as_bytes(), flags) {
-            Ok(fd) => fd,
-            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
-            Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
-                return Err(format!(
-                    "the outcome path {AGENT_OUTCOME} is a link or not a file"
-                ));
-            }
-            Err(_) => return Err("the outcome file could not be opened".into()),
-        };
-    }
-    let mut file = std::fs::File::from(at);
+    let Some(mut file) = open_outcome(cwd)? else {
+        return Ok(None);
+    };
     let meta = file
         .metadata()
         .map_err(|_| "the outcome file could not be read".to_owned())?;
@@ -207,6 +192,36 @@ pub(super) fn read_outcome(cwd: &Path, limit: u64) -> Result<Option<String>, Str
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| "the outcome file is not UTF-8".into())
+}
+
+fn open_outcome(cwd: &Path) -> Result<Option<std::fs::File>, String> {
+    let directory = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let mut at = open_at(None, cwd.as_os_str().as_bytes(), directory)
+        .map_err(|_| "the workspace could not be read".to_owned())?;
+    let mut segments = AGENT_OUTCOME.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        let last = segments.peek().is_none();
+        let Some(next) = open_segment(&at, segment, last)? else {
+            return Ok(None);
+        };
+        at = next;
+    }
+    Ok(Some(std::fs::File::from(at)))
+}
+
+fn open_segment(parent: &OwnedFd, segment: &str, last: bool) -> Result<Option<OwnedFd>, String> {
+    let flags = match last {
+        true => libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        false => libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+    };
+    match open_at(Some(parent), segment.as_bytes(), flags) {
+        Ok(fd) => Ok(Some(fd)),
+        Err(e) if e.raw_os_error() == Some(libc::ENOENT) => Ok(None),
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => Err(format!(
+            "the outcome path {AGENT_OUTCOME} is a link or not a file"
+        )),
+        Err(_) => Err("the outcome file could not be opened".into()),
+    }
 }
 
 fn open_at(dir: Option<&OwnedFd>, name: &[u8], flags: i32) -> std::io::Result<OwnedFd> {
@@ -261,12 +276,17 @@ impl Lines {
             self.skipping = false;
             chunk = &chunk[end + 1..];
         }
-        if !self.skipping {
-            self.line.extend_from_slice(chunk);
-            if self.line.len() > MAX_LINE {
-                self.line = Vec::new();
-                self.skipping = true;
-            }
+        self.append_fragment(chunk);
+    }
+
+    fn append_fragment(&mut self, chunk: &[u8]) {
+        if self.skipping {
+            return;
+        }
+        self.line.extend_from_slice(chunk);
+        if self.line.len() > MAX_LINE {
+            self.line = Vec::new();
+            self.skipping = true;
         }
     }
 
@@ -275,6 +295,22 @@ impl Lines {
             each(&std::mem::take(&mut self.line));
         }
     }
+}
+
+/// Delivers complete native event lines, including a final unterminated line.
+pub(super) async fn stream_events(
+    command: std::process::Command,
+    prompt: String,
+    session: &super::Session,
+    each: &mut (dyn FnMut(&[u8]) + Send),
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut lines = Lines::default();
+    let result = super::execute_into(command, prompt, session, &mut |chunk| {
+        lines.feed(chunk, each)
+    })
+    .await;
+    lines.end(each);
+    result
 }
 
 /// How much of one text an item keeps before it is redacted and clipped to

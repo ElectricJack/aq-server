@@ -347,18 +347,7 @@ fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
 /// level, and under each typed group the registry commands that share it.
 pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
     let program = program();
-    let mut groups = String::new();
-    let mut line = String::from(" ");
-    for g in flags::groups() {
-        if line.len() + g.len() > 76 {
-            groups.push_str(&line);
-            groups.push('\n');
-            line = String::from(" ");
-        }
-        line.push(' ');
-        line.push_str(&g);
-    }
-    groups.push_str(&line);
+    let groups = registry_groups();
     command = command.after_help(format!(
         "{}\n\nRegistry command groups (`{program} GROUP` lists a group, `{program} COMMAND --help` a command's flags):\n{groups}",
         cli::AFTER_HELP
@@ -374,19 +363,40 @@ pub fn with_registry_help(mut command: clap::Command) -> clap::Command {
         "operation",
         "result",
     ] {
-        let lines = flags::group(&[group.to_owned()]);
-        if lines.is_empty() {
+        let Some(text) = registry_group_help(group, program) else {
             continue;
-        }
-        let width = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
-        let mut text =
-            format!("Registry commands (`{program} COMMAND --help` shows a command's flags):\n");
-        for (tokens, summary) in lines {
-            text.push_str(&format!("  {tokens:<width$}  {summary}\n"));
-        }
+        };
         command = command.mut_subcommand(group, |c| c.after_help(text.trim_end().to_owned()));
     }
     command
+}
+fn registry_groups() -> String {
+    let mut groups = String::new();
+    let mut line = String::from(" ");
+    for g in flags::groups() {
+        if line.len() + g.len() > 76 {
+            groups.push_str(&line);
+            groups.push('\n');
+            line = String::from(" ");
+        }
+        line.push(' ');
+        line.push_str(&g);
+    }
+    groups.push_str(&line);
+    groups
+}
+fn registry_group_help(group: &str, program: &str) -> Option<String> {
+    let lines = flags::group(&[group.to_owned()]);
+    if lines.is_empty() {
+        return None;
+    }
+    let width = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
+    let mut text =
+        format!("Registry commands (`{program} COMMAND --help` shows a command's flags):\n");
+    for (tokens, summary) in lines {
+        text.push_str(&format!("  {tokens:<width$}  {summary}\n"));
+    }
+    Some(text)
 }
 pub async fn run(cli: cli::Cli) -> Result<Value> {
     if let Some(operation) = cli.commands.command.unsupported() {

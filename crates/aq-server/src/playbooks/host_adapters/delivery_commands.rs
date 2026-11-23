@@ -104,11 +104,11 @@ impl Service {
     pub(super) async fn delivery_command(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let id = command.grant;
+        let intent = command.intent;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -122,15 +122,19 @@ impl Service {
             Ok(prepared) => prepared,
             Err(answer) => {
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, answer)
+                    .settle_fresh(tx, command.retained(&identity), answer)
                     .await;
             }
         };
         let operation = self.operation(intent)?;
         let accepted = host_result("accepted", json!({"handle": operation.to_string()}));
         let (outcome, output) = (&accepted.outcome, &accepted.output);
-        self.record(&mut tx, id, revision, intent, &identity, outcome, output)
-            .await?;
+        self.record(
+            &mut tx,
+            command.retained(&identity),
+            EffectReceipt::new(outcome, output),
+        )
+        .await?;
         runs.enqueue(&mut tx, operation, intent, prepared, self.now()?)
             .await?;
         self.commit_fresh(tx, id, intent).await?;
@@ -161,8 +165,17 @@ impl Service {
         let mut commands = DELIVERY_COMMANDS.to_vec();
         #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
         commands.extend(aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS);
-        let due = delivery::due_operations(&mut tx, namespace, generation, &commands, limit, now);
-        let due = due.await?;
+        let due = delivery::due_operations(
+            &mut tx,
+            delivery::DueOperations {
+                namespace,
+                generation,
+                commands: &commands,
+                limit,
+                now_ms: now,
+            },
+        )
+        .await?;
         tx.commit().await?;
         let mut completed = 0;
         for operation in due {
@@ -191,8 +204,8 @@ impl Service {
             else {
                 return Ok(false);
             };
-            self.complete_operation(operation, &op.command, &op.intent_id, result, None)
-                .await?;
+            let key = OperationKey::new(operation, &op.command, &op.intent_id);
+            self.complete_operation(key, result, None).await?;
             return Ok(true);
         }
         if !DELIVERY_COMMANDS.contains(&op.command.as_str()) {
@@ -211,9 +224,7 @@ impl Service {
         };
         let result = host_result(completion.outcome, completion.output);
         self.complete_operation(
-            operation,
-            &op.command,
-            &op.intent_id,
+            OperationKey::new(operation, &op.command, &op.intent_id),
             result,
             completion.diagnostic,
         )

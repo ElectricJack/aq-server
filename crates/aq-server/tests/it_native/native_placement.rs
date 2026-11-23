@@ -295,7 +295,7 @@ async fn sandbox_facts_pin_template_and_hold_for_preferred_peer() {
                 ..Default::default()
             };
             let mut conn = pool.acquire().await.unwrap();
-            aq_server::node_storage::record(&mut conn, &id.to_string(), Some(id), &report, 1)
+            aq_server::node_storage::record(&mut conn, Some(id), &report, 1)
                 .await
                 .unwrap();
         }

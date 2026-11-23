@@ -194,19 +194,15 @@ async fn unchanged_main_refreshes_at_completion_and_publishes_an_offer() {
         main_freshness_ms: 1_000,
         ..Default::default()
     };
-    aq_role_settings::save_delivery_limits(
-        pool,
-        f.case.env.actor,
-        &limits,
-        0,
-        Uuid::new_v4(),
-        now() as i64,
-    )
-    .await
-    .unwrap();
+    let edit =
+        aq_role_settings::Writer::new(pool, f.case.env.actor, now() as i64).edit(0, Uuid::new_v4());
+    aq_role_settings::save_delivery_limits(edit, &limits)
+        .await
+        .unwrap();
 
     let scope = Scope::new(project, repo, 1, "refs/heads/main");
-    let first = main_sync::retain(pool, &f.socket, &scope, limits.git_transfer_timeout_ms, now)
+    let first = main_sync::MainFollower::new(pool, &f.socket, now)
+        .current(&scope)
         .await
         .unwrap();
     assert_eq!(first.head, f.base);
@@ -260,7 +256,12 @@ async fn unchanged_main_refreshes_at_completion_and_publishes_an_offer() {
     assert_eq!(grant_base, f.base);
     assert_eq!(task_ref, aq_delivery::commands::task_branch(task));
     let observed_at = observation["observed_at_ms"].as_u64().unwrap();
-    assert!(renewed.proves(&scope, &grant_base, first.retention_handle, observed_at));
+    let observed = main_sync::ObservedHead {
+        head: &grant_base,
+        handle: first.retention_handle,
+        observed_at_ms: observed_at,
+    };
+    assert!(renewed.proves(&scope, observed));
     println!(
         "followed-main offer proof base={grant_base} handle={} old_sync={} poll_start={poll_started_at_ms} new_sync={} source_observed={observed_at}",
         first.retention_handle, first.synced_at_ms, renewed.synced_at_ms

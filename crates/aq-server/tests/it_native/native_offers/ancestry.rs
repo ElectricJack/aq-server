@@ -621,9 +621,12 @@ async fn settings_can_stop_requiring_landed_results() {
         require_landed_results: false,
         ..Default::default()
     };
-    aq_role_settings::save_delivery_limits(pool, f.case.env.actor, &limits, 0, Uuid::new_v4(), 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_delivery_limits(
+        aq_role_settings::Writer::new(pool, f.case.env.actor, 1).edit(0, Uuid::new_v4()),
+        &limits,
+    )
+    .await
+    .unwrap();
     let offered = f.offer().await;
     assert_eq!(
         offered.offered.lifecycle_binding.task_id,

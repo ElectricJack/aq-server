@@ -143,8 +143,8 @@ pub async fn compile(
         .collect();
     let (project, repository) = (binding.project_id, binding.repository_id);
     let requested = roles::requested_permissions(launch.role, project, repository);
-    let effective =
-        roles::effective_permissions(launch.role, project, repository, &ceilings, &ceilings);
+    let effective = requested.effective(&ceilings, &ceilings);
+    let requested = requested.into_permissions();
     let projection = context_projection::project(
         context,
         project,

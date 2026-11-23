@@ -20,56 +20,13 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
     let source = f.profiled.source.clone();
     let project = f.selection.lineage.project_id;
     let handle = Uuid::new_v4();
-    let runtime_ref = super::profiled::artifact("synthetic-source-reader", b"runtime");
-    let qualification =
-        super::profiled::artifact("synthetic-source-reader-qualification", b"qualification");
-    let features = vec![aq_admission::transport::Feature::ArtifactTransferV1];
-    let config = ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            backend_kind: None,
-            runtime: runtime_ref.clone(),
-            qualification,
-            capabilities: vec![],
-            features: features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![ProjectPolicy {
-            project_id: project,
-            enabled: true,
-            priority: 0,
-            source: SourceSelection::Immutable {
-                object: aq_admission::ObjectId {
-                    format: ObjectFormat::Sha1,
-                    hex: source.base.hex.clone(),
-                },
-            },
-            retention_handle: handle,
-            placement: None,
-            agent_grants: None,
-        }],
-    };
+    let runtime = reader_runtime();
+    let config = profiled_config(&f, handle, runtime.clone());
     let policy = config.project_policy_record(project).unwrap();
     let mut cfg = (*f.state.config).clone();
     cfg.profiled_execution = Some(Arc::new(config));
     f.state.config = Arc::new(cfg);
-    let max_bundle = 65536;
-    f.state.source_retention = Some(Arc::new(
-        Runtime::new(SourceRetentionConfig {
-            keep_per_task: 2,
-            max_age: 30 * 86400,
-            git_socket: dir.path().join("absent.sock"),
-            git_root: dir.path().join("git"),
-            staging_root: dir.path().join("stage"),
-            max_bundle_bytes: max_bundle,
-            max_staging_bytes: max_bundle + 1_048_576 + 4096,
-            bulk_concurrency: 1,
-            incomplete_ttl_secs: 60,
-            git_deadline_ms: 30_000,
-        })
-        .unwrap(),
-    ));
+    f.state.source_retention = Some(Arc::new(retention_runtime(dir.path())));
     let admission = SourceAdmission {
         schema_version: 1,
         project_id: project,
@@ -85,50 +42,10 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
         observed_at_ms: NOW - 10,
         expires_at_ms: NOW + 29990,
     };
-    let mut value = serde_json::json!({"schema_version":1,"admission":admission,"retention_handle":handle,"evidence":{"commit_inspection":{"oid":{"algorithm":"sha1","hex":source.base.hex},"tree":{"algorithm":"sha1","hex":"b".repeat(40)}},"retention_inspection":{"version":1,"id":handle,"repository_id":source.repository_id,"binding_generation":source.binding_generation,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/synthetic","oid":source.base.hex}],"release_operation":null,"release_reason":null}}});
-    value.sort_all_objects();
-    let bytes = serde_json::to_vec(&value).unwrap();
-    let artifact = ArtifactRef {
-        id: Text::new(format!(
-            "aq.source-admission-observation/{}",
-            Digest::of(&bytes).as_str()
-        ))
-        .unwrap(),
-        version: Text::new("1").unwrap(),
-        digest: Digest::of(&bytes),
-    };
+    let (bytes, artifact) = observation(&source, handle, &admission);
     let spec = typed_spec(&mut f, &admission, &artifact);
     policies::install(&f.state).await.unwrap();
-    use tower::ServiceExt;
-    let registration = aq_admission::transport::Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: aq_admission::transport::WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: runtime_ref,
-        capabilities: vec![],
-        features,
-    };
-    let response = aq_server::build_worker_router(f.state.clone())
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/v1/worker/profiled/register")
-                .header("authorization", format!("Bearer {}", f.credential))
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::to_vec(&aq_admission::transport::TransportDocument::Register(
-                        registration,
-                    ))
-                    .unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
+    register_worker(&f, runtime).await;
     insert_typed(&f, &spec).await;
     policies::install(&f.state).await.unwrap();
     artifacts::retain(
@@ -158,6 +75,110 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
         source_observation: artifact,
     };
     (f, request, dir)
+}
+fn reader_runtime() -> QualifiedRuntime {
+    let runtime_ref = super::profiled::artifact("synthetic-source-reader", b"runtime");
+    let qualification =
+        super::profiled::artifact("synthetic-source-reader-qualification", b"qualification");
+    let features = vec![aq_admission::transport::Feature::ArtifactTransferV1];
+    QualifiedRuntime {
+        backend_kind: None,
+        runtime: runtime_ref,
+        qualification,
+        capabilities: vec![],
+        features,
+        material_delivery: None,
+    }
+}
+fn profiled_config(f: &Fixture, handle: Uuid, runtime: QualifiedRuntime) -> ProfiledConfig {
+    let source = &f.profiled.source;
+    let project = f.selection.lineage.project_id;
+    ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![runtime],
+        projects: vec![ProjectPolicy {
+            project_id: project,
+            enabled: true,
+            priority: 0,
+            source: SourceSelection::Immutable {
+                object: aq_admission::ObjectId {
+                    format: ObjectFormat::Sha1,
+                    hex: source.base.hex.clone(),
+                },
+            },
+            retention_handle: handle,
+            placement: None,
+            agent_grants: None,
+        }],
+    }
+}
+fn retention_runtime(dir: &std::path::Path) -> Runtime {
+    let max_bundle = 65536;
+    Runtime::new(SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
+        git_socket: dir.join("absent.sock"),
+        git_root: dir.join("git"),
+        staging_root: dir.join("stage"),
+        max_bundle_bytes: max_bundle,
+        max_staging_bytes: max_bundle + 1_048_576 + 4096,
+        bulk_concurrency: 1,
+        incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
+    })
+    .unwrap()
+}
+fn observation(
+    source: &aq_worker_protocol::SourceBinding,
+    handle: Uuid,
+    admission: &SourceAdmission,
+) -> (Vec<u8>, ArtifactRef) {
+    let mut value = serde_json::json!({"schema_version":1,"admission":admission,"retention_handle":handle,"evidence":{"commit_inspection":{"oid":{"algorithm":"sha1","hex":source.base.hex},"tree":{"algorithm":"sha1","hex":"b".repeat(40)}},"retention_inspection":{"version":1,"id":handle,"repository_id":source.repository_id,"binding_generation":source.binding_generation,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/synthetic","oid":source.base.hex}],"release_operation":null,"release_reason":null}}});
+    value.sort_all_objects();
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let artifact = ArtifactRef {
+        id: Text::new(format!(
+            "aq.source-admission-observation/{}",
+            Digest::of(&bytes).as_str()
+        ))
+        .unwrap(),
+        version: Text::new("1").unwrap(),
+        digest: Digest::of(&bytes),
+    };
+    (bytes, artifact)
+}
+async fn register_worker(f: &Fixture, runtime: QualifiedRuntime) {
+    use tower::ServiceExt;
+    let registration = aq_admission::transport::Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: aq_admission::transport::WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        runtime: runtime.runtime,
+        capabilities: vec![],
+        features: runtime.features,
+    };
+    let response = aq_server::build_worker_router(f.state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/v1/worker/profiled/register")
+                .header("authorization", format!("Bearer {}", f.credential))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&aq_admission::transport::TransportDocument::Register(
+                        registration,
+                    ))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
 }
 pub fn typed_spec(
     f: &mut Fixture,

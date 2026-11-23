@@ -227,11 +227,27 @@ dependencies = [
  "anyhow",
  "aq-admission 0.1.13",
  "aq-lifecycle-api",
+ "aq-review-protocol",
  "schemars",
  "semver",
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "aq-delegated-permits"
+version = "0.1.0"
+dependencies = [
+ "aq-admission 0.3.3",
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -254,6 +270,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonwebtoken",
+ "nix",
  "rand 0.8.8",
  "reqwest",
  "rsa",
@@ -430,6 +447,7 @@ dependencies = [
 name = "aq-login-store"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aq-admission 0.1.13",
  "aq-intelligence-config",
  "aq-selection",
@@ -497,9 +515,11 @@ dependencies = [
  "aq-lifecycle-api",
  "aq-notifications",
  "axum",
+ "nix",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "uuid",
@@ -540,6 +560,20 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aq-observation-ledger"
+version = "0.1.0"
+dependencies = [
+ "aq-accounting",
+ "aq-stall-ladder",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -716,6 +750,7 @@ version = "0.1.0"
 dependencies = [
  "aq-delivery",
  "aq-profiles",
+ "aq-selection",
  "serde",
  "serde_json",
  "uuid",
@@ -882,6 +917,7 @@ dependencies = [
  "aq-central-authority",
  "aq-command-registry",
  "aq-dashboard-contract",
+ "aq-delegated-permits",
  "aq-delivery",
  "aq-environment-templates",
  "aq-environments",
@@ -898,6 +934,7 @@ dependencies = [
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
+ "aq-observation-ledger",
  "aq-phase-terminal-protocol",
  "aq-playbook-authoring",
  "aq-playbook-domain",

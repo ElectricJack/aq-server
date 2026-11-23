@@ -291,8 +291,10 @@ async fn graph(state: &AppState, input: &Input) -> Result<ReadProvenance, AppErr
     }
     ReadProvenance::capture(
         &input.spec.task,
-        &ready,
-        &context,
+        aq_profiled_state::native_offer::GraphReads {
+            ready: &ready,
+            context: &context,
+        },
         projection.artifact.digest,
         time,
     )

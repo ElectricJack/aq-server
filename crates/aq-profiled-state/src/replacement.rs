@@ -271,22 +271,42 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
         return Blocked("replacement_lineage_history_unknown");
     }
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
+    if let Err(code) = verify_history(&ordered) {
+        return Blocked(code);
+    }
+    let predecessor = ordered[ordered.len() - 1];
+    if !failed(predecessor, now) {
+        return Blocked("replacement_predecessor_not_failed");
+    }
+    let receipts = match predecessor.receipts() {
+        Ok(receipts) => receipts,
+        Err(code) => return Blocked(code),
+    };
+    let budget = match lineage_budget(&ordered, limits, now, charge_budget) {
+        Ok(budget) => budget,
+        Err(code) => return Blocked(code),
+    };
+    Assessment::Replace(Box::new(Replacement {
+        predecessor: predecessor.attempt_id,
+        attempts_started: budget.started,
+        exempt_attempts: budget.exempt,
+        elapsed_ms: budget.elapsed_ms,
+        stop_receipt: receipts.stop.clone(),
+        retained_source_receipt: receipts.retained.clone(),
+        effect_reconciliation_receipt: receipts.effects.clone(),
+        needs_release: predecessor.holds_task,
+    }))
+}
+
+fn verify_history(ordered: &[&Prior]) -> Result<(), &'static str> {
     if ordered.iter().any(|p| p.accepted) {
-        return Blocked("task_already_settled_accepted");
+        return Err("task_already_settled_accepted");
     }
     if ordered.iter().filter(|p| p.holds_task).count() > 1 {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
-    for prior in &ordered {
-        if !prior.stop.known_stopped() {
-            return Blocked("replacement_prior_execution_uncertain");
-        }
-        if !matches!(prior.effects, Effects::Quiescent { .. })
-            || prior.needs_reconciliation
-            || prior.completion.is_some()
-        {
-            return Blocked("replacement_effects_unreconciled");
-        }
+    for prior in ordered {
+        prior.verify_settlement()?;
     }
     let predecessor = ordered[ordered.len() - 1];
     // Every earlier attempt must have released its claim through this owner.
@@ -294,32 +314,65 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
         .iter()
         .any(|p| p.holds_task || !p.released)
     {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
     if !predecessor.holds_task && !predecessor.released {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
-    if !failed(predecessor, now) {
-        return Blocked("replacement_predecessor_not_failed");
+    Ok(())
+}
+struct ReplacementReceipts<'a> {
+    stop: &'a ArtifactRef,
+    retained: &'a ArtifactRef,
+    effects: &'a ArtifactRef,
+}
+impl Prior {
+    fn verify_settlement(&self) -> Result<(), &'static str> {
+        if !self.stop.known_stopped() {
+            return Err("replacement_prior_execution_uncertain");
+        }
+        let settled = !self.needs_reconciliation && self.completion.is_none();
+        if !settled || self.effects.receipt().is_none() {
+            return Err("replacement_effects_unreconciled");
+        }
+        Ok(())
     }
-    let (Stop::Stopped { receipt: stop } | Stop::NotStarted { receipt: stop }) = &predecessor.stop
-    else {
-        return Blocked("replacement_prior_execution_uncertain");
-    };
-    let Retention::Retained { receipt: retained } = &predecessor.retention else {
-        return Blocked("replacement_source_retention_unknown");
-    };
-    let Effects::Quiescent { receipt: effects } = &predecessor.effects else {
-        return Blocked("replacement_effects_unreconciled");
-    };
+    fn receipts(&self) -> Result<ReplacementReceipts<'_>, &'static str> {
+        Ok(ReplacementReceipts {
+            stop: self
+                .stop
+                .receipt()
+                .ok_or("replacement_prior_execution_uncertain")?,
+            retained: self
+                .retention
+                .receipt()
+                .ok_or("replacement_source_retention_unknown")?,
+            effects: self
+                .effects
+                .receipt()
+                .ok_or("replacement_effects_unreconciled")?,
+        })
+    }
+}
+struct LineageBudget {
+    started: u32,
+    exempt: u32,
+    elapsed_ms: u64,
+}
+fn lineage_budget(
+    ordered: &[&Prior],
+    limits: &Limits,
+    now: u64,
+    charge_budget: bool,
+) -> Result<LineageBudget, &'static str> {
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
-    let exempt = uncharged(&ordered, limits);
+    let exempt = uncharged(ordered, limits);
     let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
     if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
-        return Blocked("lineage_retry_budget_exhausted");
+        return Err("lineage_retry_budget_exhausted");
     }
-    if charge_budget && launch_retry_after_ordered(&ordered).is_some_and(|(_, next)| now < next) {
-        return Blocked(LAUNCH_BACKOFF);
+    if charge_budget && launch_retry_after_ordered(ordered).is_some_and(|(_, next)| now < next) {
+        return Err(LAUNCH_BACKOFF);
     }
     // Lineage time is recorded, never charged: each attempt has its own window (its execution
     // profile's wall time) and a retry is limited by `max_attempts` alone. It is the sum of the
@@ -332,16 +385,11 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
                 .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
         })
         .fold(0u64, u64::saturating_add);
-    Assessment::Replace(Box::new(Replacement {
-        predecessor: predecessor.attempt_id,
-        attempts_started,
-        exempt_attempts,
+    Ok(LineageBudget {
+        started: attempts_started,
+        exempt: exempt_attempts,
         elapsed_ms,
-        stop_receipt: stop.clone(),
-        retained_source_receipt: retained.clone(),
-        effect_reconciliation_receipt: effects.clone(),
-        needs_release: predecessor.holds_task,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -751,14 +799,14 @@ mod tests {
 
     /// Owner decision 2026-11-18: an owner override of a budget hold starts the budget again.
     /// Attempts before it are charged to nothing: not attempts and not time.
+    fn long(offered: u64) -> Prior {
+        let mut prior = failed_prior(offered);
+        prior.execution_deadline_ms = Some(offered + 100 * MIN);
+        prior
+    }
     #[test]
-    fn an_owner_override_gives_a_fresh_budget_and_never_lifts_a_safety_hold() {
+    fn an_owner_override_gives_a_fresh_budget() {
         let now = 30 * HOUR;
-        let long = |offered: u64| {
-            let mut p = failed_prior(offered);
-            p.execution_deadline_ms = Some(offered + 100 * MIN);
-            p
-        };
         // Three attempts: the retry budget is used up.
         let history = [released(long(0)), released(long(HOUR)), long(29 * HOUR)];
         assert_eq!(
@@ -794,6 +842,15 @@ mod tests {
             assess(&stopped, &one, now + HOUR),
             Assessment::Replace(_)
         ));
+    }
+    #[test]
+    fn an_owner_override_never_lifts_a_safety_hold() {
+        let now = 30 * HOUR;
+        let forgiven =
+            [released(long(0)), released(long(HOUR)), long(29 * HOUR)].map(|mut prior| {
+                prior.forgiven = true;
+                prior
+            });
         // What happened to the task still refuses, override or not.
         let unsafe_last = |edit: fn(&mut Prior)| {
             let mut h = forgiven.clone();

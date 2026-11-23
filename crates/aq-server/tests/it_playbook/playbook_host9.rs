@@ -16,6 +16,8 @@ use serde_json::Value;
 use std::{collections::BTreeSet, time::Duration};
 use uuid::Uuid;
 
+mod fixture;
+
 const DEADLINE: Duration = Duration::from_secs(5);
 const ADDED: [&str; 4] = [
     "work.read",
@@ -61,19 +63,7 @@ fn host9_registry_matches_the_pinned_manifest() {
         "../../../../vendor/aq-host-catalog-2.2.0-source.json"
     ))
     .unwrap();
-    assert_eq!(pin["catalog_fingerprint"], HOST9_FINGERPRINT);
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/aq-host-catalog-2.2.0");
-    let files = pin["files"].as_array().unwrap();
-    assert_eq!(files.len(), std::fs::read_dir(&root).unwrap().count());
-    for file in files {
-        let bytes = std::fs::read(root.join(file["path"].as_str().unwrap())).unwrap();
-        assert_eq!(file["bytes"], bytes.len());
-        assert_eq!(
-            file["sha256"].as_str().unwrap(),
-            hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes))
-        );
-    }
+    fixture::assert_pinned_files(&pin, HOST9_FINGERPRINT, "aq-host-catalog-2.2.0");
 }
 
 struct Idle;
@@ -98,9 +88,11 @@ impl DomainHost for Idle {
 async fn a_host8_coding_artifact_installs_in_a_host9_namespace() {
     let registry: Registry = CatalogProfile::Host9.registry();
     let owner = Owner::start_registered(
-        "host9-coding".into(),
-        aq_playbook_host::Limits::default(),
-        registry,
+        aq_playbook_host::Registration::new(
+            "host9-coding".into(),
+            aq_playbook_host::Limits::default(),
+            registry,
+        ),
         || Ok(MemoryStorage::default()),
         |_| Ok(Idle),
     )
@@ -2047,12 +2039,9 @@ mod delivery {
         async fn limits(&self, limits: DeliveryLimits) {
             let now = self.clock();
             let saved = aq_role_settings::save_delivery_limits(
-                &self.pool().await,
-                self.f.actor,
+                aq_role_settings::Writer::new(&self.pool().await, self.f.actor, now)
+                    .edit(0, Uuid::new_v4()),
                 &limits,
-                0,
-                Uuid::new_v4(),
-                now,
             )
             .await;
             saved.unwrap();

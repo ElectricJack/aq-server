@@ -192,10 +192,12 @@ mod tests {
         assert!(catalog.events.contains_key("aq.work.result_ready"));
         let workspace = crate::request::workspace_files(
             &record,
-            "review",
+            crate::request::WorkspaceSource {
+                markdown: "review",
+                facts: &Default::default(),
+                facts_version: "1",
+            },
             &catalog,
-            &Default::default(),
-            "1",
             None,
         )
         .unwrap();
@@ -290,10 +292,12 @@ mod tests {
         assert!(kept.events.contains_key("aq.delivery.completed"));
         let workspace = crate::request::workspace_files(
             &record,
-            "review",
+            crate::request::WorkspaceSource {
+                markdown: "review",
+                facts: &Default::default(),
+                facts_version: "1",
+            },
             &catalog,
-            &Default::default(),
-            "1",
             None,
         )
         .unwrap();
@@ -325,10 +329,12 @@ mod tests {
         }
         let workspace = crate::request::workspace_files(
             &record,
-            "route",
+            crate::request::WorkspaceSource {
+                markdown: "route",
+                facts: &Default::default(),
+                facts_version: "1",
+            },
             &catalog,
-            &Default::default(),
-            "1",
             None,
         )
         .unwrap();

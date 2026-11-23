@@ -653,8 +653,7 @@ async fn settled_history_does_not_change_the_holds_or_the_usage() {
         &mut pool.acquire().await.unwrap(),
         &[n],
         &[p],
-        NOW as u64,
-        Some((1 << 40, 1 << 20)),
+        aq_history_caps::Snapshot::new(NOW as u64, Some((1 << 40, 1 << 20))),
     )
     .await
     .unwrap();

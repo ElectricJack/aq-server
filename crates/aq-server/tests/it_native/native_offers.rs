@@ -309,10 +309,12 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
         &mut conn,
         "desk",
         aq_machine_control::DesiredState::Stopped,
-        1,
-        who,
-        Uuid::new_v4(),
-        now,
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: who,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
     )
     .await
     .unwrap();
@@ -330,10 +332,12 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
         &mut conn,
         "desk",
         aq_machine_control::DesiredState::Running,
-        2,
-        who,
-        Uuid::new_v4(),
-        now,
+        aq_machine_control::OwnerChange {
+            expected_generation: 2,
+            actor: who,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
     )
     .await
     .unwrap();
@@ -511,9 +515,19 @@ async fn stop_committed_after_the_gate_publishes_no_offer() {
             aq_machine_control::DesiredState::Stopped,
             (c.env.env.state.clock)(),
         );
-        aq_machine_control::set_desired(&mut conn, "desk", stopped, 1, owner, Uuid::new_v4(), now)
-            .await
-            .unwrap();
+        aq_machine_control::set_desired(
+            &mut conn,
+            "desk",
+            stopped,
+            aq_machine_control::OwnerChange {
+                expected_generation: 1,
+                actor: owner,
+                operation_id: Uuid::new_v4(),
+                now,
+            },
+        )
+        .await
+        .unwrap();
         c.observation_resume.add_permits(1);
     };
     let ((status, body), ()) = tokio::join!(poll(&c), stop);
@@ -630,9 +644,19 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
             aq_machine_control::DesiredState::Stopped,
             (c.env.env.state.clock)(),
         );
-        aq_machine_control::set_desired(&mut stop, "desk", stopped, 1, owner, Uuid::new_v4(), now)
-            .await
-            .unwrap();
+        aq_machine_control::set_desired(
+            &mut stop,
+            "desk",
+            stopped,
+            aq_machine_control::OwnerChange {
+                expected_generation: 1,
+                actor: owner,
+                operation_id: Uuid::new_v4(),
+                now,
+            },
+        )
+        .await
+        .unwrap();
         c.observation_resume.add_permits(1);
         let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes WHERE id=$1%')";
         tokio::time::timeout(std::time::Duration::from_secs(5), async {

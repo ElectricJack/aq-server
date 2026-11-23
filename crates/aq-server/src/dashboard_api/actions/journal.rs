@@ -23,12 +23,7 @@ fn retained(row: &sqlx::postgres::PgRow, principal: Uuid) -> Result<Operation, A
         .try_get::<Option<DateTime<Utc>>, _>("retired_at")?
         .is_some()
     {
-        return Err(ApiError::new(
-            StatusCode::GONE,
-            "operation_retired",
-            "This operation is retired; its ID cannot be reused",
-        )
-        .operation(row.try_get("operation_id")?));
+        return Err(retired(row.try_get("operation_id")?));
     }
     serde_json::from_value(row.try_get("response")?).map_err(|_| ApiError::unavailable())
 }
@@ -87,76 +82,119 @@ pub(in crate::dashboard_api) async fn lookup(
     id: Uuid,
 ) -> Result<Operation, ApiError> {
     let mut tx = transaction(pool).await?;
-    let row=sqlx::query("SELECT operation_id,principal_id,response,retired_at FROM dashboard_operations WHERE operation_id=$1 AND principal_id=$2")
+    let row = sqlx::query("SELECT operation_id,principal_id,response,retired_at FROM dashboard_operations WHERE operation_id=$1 AND principal_id=$2")
         .bind(id).bind(principal).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::for_status(StatusCode::NOT_FOUND))?;
     retained(&row, principal)
 }
-pub(super) async fn admit(
-    state: &AppState,
-    principal: Uuid,
-    request: &ActionRequest,
-    scope: Scope,
-    digest: String,
-    now: DateTime<Utc>,
-    admission: Option<AgentAdmission<'_>>,
-) -> Result<(Operation, bool), ApiError> {
-    let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let operation = Operation {
-        operation_id: request.operation_id,
-        disposition: Disposition::Pending,
-        request_digest: digest.clone(),
-        scope: scope.clone(),
-        created_at: stamp.clone(),
-        updated_at: stamp,
-        subject_refs: vec![request.subject.clone()],
-        receipt_refs: vec![],
-        affected_entities: vec![],
-        recovery: Recovery::LookupOriginal,
-        current_versions: Default::default(),
-        reason: None,
-        activation: None,
-    };
-    let response = serde_json::to_value(&operation).map_err(|_| ApiError::unavailable())?;
-    let mut tx = transaction(&state.store.pool).await?;
-    let expires = if let Some(admission) = &admission {
-        let expires = admission
-            .caller
-            .recheck_locked(state, admission.headers, &mut tx)
-            .await
-            .map_err(agent_error)?;
-        grant_store::lock_operation(&mut tx, request.operation_id).await?;
-        let legacy: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM agent_graph_operations WHERE operation_id=$1)",
-        )
-        .bind(request.operation_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if legacy {
-            return Err(ApiError::for_status(StatusCode::CONFLICT));
+pub(super) struct NewEntry<'a> {
+    request: &'a ActionRequest,
+    kind: &'a str,
+    operation: Operation,
+    at: DateTime<Utc>,
+}
+impl<'a> NewEntry<'a> {
+    pub(super) fn pending(
+        request: &'a ActionRequest,
+        scope: Scope,
+        digest: String,
+        now: DateTime<Utc>,
+    ) -> Self {
+        let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let operation = Operation::pending(request, scope, digest, stamp);
+        Self {
+            request,
+            kind: &request.kind,
+            operation,
+            at: now,
         }
-        Some(expires)
-    } else {
-        None
-    };
-    let inserted=sqlx::query("INSERT INTO dashboard_operations(operation_id,principal_id,kind,scope,request_digest,disposition,response,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING")
-        .bind(request.operation_id).bind(principal).bind(&request.kind).bind(serde_json::json!(scope)).bind(&digest).bind(response).bind(now).execute(&mut *tx).await?.rows_affected()==1;
-    if inserted {
-        if request.kind == "task.retry"
-            && let Scope::Project { project_id } = scope
+    }
+    pub(super) async fn admit(
+        self,
+        state: &AppState,
+        principal: Uuid,
+        admission: Option<AgentAdmission<'_>>,
+    ) -> Result<(Operation, bool), ApiError> {
+        let response =
+            serde_json::to_value(&self.operation).map_err(|_| ApiError::unavailable())?;
+        let mut tx = transaction(&state.store.pool).await?;
+        let expires = match &admission {
+            Some(agent) => Some(
+                agent
+                    .lock_operation(state, &mut tx, self.operation.operation_id)
+                    .await?,
+            ),
+            None => None,
+        };
+        if !self.insert(&mut tx, principal, response).await? {
+            return Ok((self.previous(&mut tx, principal).await?, false));
+        }
+        if self.kind == "task.retry"
+            && let Scope::Project { project_id } = &self.operation.scope
         {
             aq_machine_control::owner_retry::admit(
                 &mut tx,
-                request.operation_id,
-                project_id,
-                &request.subject.id,
-                serde_json::to_value(request).map_err(|_| ApiError::invalid())?,
-                now,
+                self.operation.operation_id,
+                *project_id,
+                &self.request.subject.id,
+                serde_json::to_value(self.request).map_err(|_| ApiError::invalid())?,
+                self.at,
             )
             .await?;
         }
-        if let Some(reservation) = admission.and_then(|a| a.reservation) {
+        self.reserve(&mut tx, principal, admission.and_then(|a| a.reservation))
+            .await?;
+        if expires.is_some_and(|expires| expires <= crate::execution::api::now(state)) {
+            return Err(agent_error(aq_agent_grants::RefusalCode::SessionExpired));
+        }
+        // Only a successful commit grants permission to dispatch the new operation.
+        tx.commit()
+            .await
+            .map_err(|_| ApiError::unavailable().operation(self.operation.operation_id))?;
+        Ok((self.operation, true))
+    }
+    async fn insert(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        principal: Uuid,
+        response: serde_json::Value,
+    ) -> Result<bool, ApiError> {
+        let inserted = sqlx::query("INSERT INTO dashboard_operations(operation_id,principal_id,kind,scope,request_digest,disposition,response,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING")
+            .bind(self.operation.operation_id)
+            .bind(principal)
+            .bind(self.kind)
+            .bind(serde_json::json!(self.operation.scope))
+            .bind(&self.operation.request_digest)
+            .bind(response)
+            .bind(self.at)
+            .execute(&mut **tx).await?.rows_affected() == 1;
+        Ok(inserted)
+    }
+    async fn previous(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        principal: Uuid,
+    ) -> Result<Operation, ApiError> {
+        let row = sqlx::query("SELECT operation_id,principal_id,request_digest,response,retired_at FROM dashboard_operations WHERE operation_id=$1")
+        .bind(self.operation.operation_id).fetch_one(&mut **tx).await?;
+        if row.try_get::<Uuid, _>("principal_id")? != principal {
+            return Err(ApiError::for_status(StatusCode::NOT_FOUND));
+        }
+        if row.try_get::<String, _>("request_digest")? != self.operation.request_digest {
+            return Err(
+                ApiError::for_status(StatusCode::CONFLICT).operation(self.operation.operation_id)
+            );
+        }
+        retained(&row, principal)
+    }
+    async fn reserve(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        principal: Uuid,
+        reservation: Option<DraftReservation>,
+    ) -> Result<(), ApiError> {
+        if let Some(reservation) = reservation {
             if principal != reservation.ids.attempt_id
-                || scope
+                || self.operation.scope
                     != (Scope::Project {
                         project_id: reservation.ids.project_id,
                     })
@@ -164,39 +202,48 @@ pub(super) async fn admit(
                 return Err(ApiError::invalid());
             }
             grant_store::reserve(
-                &mut tx,
-                request.operation_id,
+                tx,
+                self.operation.operation_id,
                 reservation,
-                now.timestamp_millis(),
+                self.at.timestamp_millis(),
             )
             .await
-            .map_err(|err| match err {
-                ReserveError::QuotaExceeded => {
-                    agent_error(aq_agent_grants::RefusalCode::QuotaExceeded)
-                }
-                ReserveError::Conflict => ApiError::for_status(StatusCode::CONFLICT),
-                ReserveError::Store(error) => ApiError::from(error),
-            })?;
+            .map_err(reservation_error)?;
         }
-        if expires.is_some_and(|expires| expires <= crate::execution::api::now(state)) {
-            return Err(agent_error(aq_agent_grants::RefusalCode::SessionExpired));
-        }
-        // An ambiguous commit is never a dispatch license. Caller retains the
-        // original ID and queries again; a committed row remains Pending.
-        tx.commit()
+        Ok(())
+    }
+}
+impl AgentAdmission<'_> {
+    async fn lock_operation(
+        &self,
+        state: &AppState,
+        tx: &mut Transaction<'_, Postgres>,
+        operation: Uuid,
+    ) -> Result<u64, ApiError> {
+        let expires = self
+            .caller
+            .recheck_locked(state, self.headers, tx)
             .await
-            .map_err(|_| ApiError::unavailable().operation(request.operation_id))?;
-        return Ok((operation, true));
+            .map_err(agent_error)?;
+        grant_store::lock_operation(tx, operation).await?;
+        let legacy: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agent_graph_operations WHERE operation_id=$1)",
+        )
+        .bind(operation)
+        .fetch_one(&mut **tx)
+        .await?;
+        if legacy {
+            return Err(ApiError::for_status(StatusCode::CONFLICT));
+        }
+        Ok(expires)
     }
-    let row=sqlx::query("SELECT operation_id,principal_id,request_digest,response,retired_at FROM dashboard_operations WHERE operation_id=$1")
-        .bind(request.operation_id).fetch_one(&mut *tx).await?;
-    if row.try_get::<Uuid, _>("principal_id")? != principal {
-        return Err(ApiError::for_status(StatusCode::NOT_FOUND));
+}
+fn reservation_error(err: ReserveError) -> ApiError {
+    match err {
+        ReserveError::QuotaExceeded => agent_error(aq_agent_grants::RefusalCode::QuotaExceeded),
+        ReserveError::Conflict => ApiError::for_status(StatusCode::CONFLICT),
+        ReserveError::Store(error) => ApiError::from(error),
     }
-    if row.try_get::<String, _>("request_digest")? != digest {
-        return Err(ApiError::for_status(StatusCode::CONFLICT).operation(request.operation_id));
-    }
-    Ok((retained(&row, principal)?, false))
 }
 fn agent_error(code: aq_agent_grants::RefusalCode) -> ApiError {
     let status = StatusCode::from_u16(code.status()).unwrap_or(StatusCode::FORBIDDEN);
@@ -210,7 +257,7 @@ pub(super) async fn finish(
     now: DateTime<Utc>,
 ) -> Result<(), ApiError> {
     let mut tx = transaction(pool).await?;
-    let rows=sqlx::query("UPDATE dashboard_operations SET response=$3,disposition=$4,updated_at=GREATEST(updated_at,$5) WHERE operation_id=$1 AND principal_id=$2 AND disposition IN ('pending','unknown') AND retired_at IS NULL")
+    let rows = sqlx::query("UPDATE dashboard_operations SET response=$3,disposition=$4,updated_at=GREATEST(updated_at,$5) WHERE operation_id=$1 AND principal_id=$2 AND disposition IN ('pending','unknown') AND retired_at IS NULL")
         .bind(operation.operation_id).bind(principal).bind(serde_json::json!(operation)).bind(serde_json::to_value(operation.disposition).map_err(|_|ApiError::unavailable())?.as_str().ok_or_else(ApiError::unavailable)?).bind(now).execute(&mut *tx).await?.rows_affected();
     if rows != 1 {
         return Err(ApiError::unavailable());
@@ -222,7 +269,7 @@ pub(super) async fn finish(
 /// immutable tombstone remains under the same unique operation ID forever.
 pub async fn retire(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, ApiError> {
     let mut tx = transaction(pool).await?;
-    let rows=sqlx::query("UPDATE dashboard_operations SET response=NULL,retired_at=$1 WHERE retired_at IS NULL AND disposition IN ('confirmed','conflict','rejected') AND updated_at <= $1-interval '90 days'")
+    let rows = sqlx::query("UPDATE dashboard_operations SET response=NULL,retired_at=$1 WHERE retired_at IS NULL AND disposition IN ('confirmed','conflict','rejected') AND updated_at <= $1-interval '90 days'")
         .bind(now).execute(&mut *tx).await?.rows_affected();
     tx.commit().await?;
     Ok(rows)

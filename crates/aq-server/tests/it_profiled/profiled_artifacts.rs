@@ -5,6 +5,8 @@ use aq_server::profiled_execution::artifacts::{self, OwnerKind, Retain};
 use common::profiled::{NOW, artifact, fixture, insert};
 use serde_json::json;
 use uuid::Uuid;
+mod ranged;
+pub(super) mod transfer;
 #[tokio::test]
 async fn immutable_definition_identity_conflict_is_named_and_preserves_retained_bytes() {
     let f = fixture().await;
@@ -96,10 +98,14 @@ async fn retained_bytes_have_real_replayable_immutable_receipt_and_exact_project
     assert_eq!(proof.artifact_id, id);
     assert_eq!(proof.project_id, project);
     assert_eq!(
-        artifacts::link_locked(&mut tx, attempt, project, &[id], NOW, NOW + 30_000)
-            .await
-            .unwrap()
-            .len(),
+        artifacts::link_locked(
+            &mut tx,
+            artifacts::LinkScope::new(attempt, project, NOW..NOW + 30_000),
+            &[id]
+        )
+        .await
+        .unwrap()
+        .len(),
         1
     );
     tx.commit().await.unwrap();
@@ -111,20 +117,12 @@ async fn retained_bytes_have_real_replayable_immutable_receipt_and_exact_project
     ] {
         assert!(sqlx::query(sql).bind(id).execute(&pool).await.is_err());
     }
-    let mut tx = pool.begin().await.unwrap();
-    assert!(
-        artifacts::link_locked(&mut tx, attempt, Uuid::new_v4(), &[id], NOW, NOW + 30_000)
-            .await
-            .is_err()
-    );
-    tx.rollback().await.unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    assert!(
-        artifacts::link_locked(&mut tx, attempt, project, &[id], NOW, NOW + 60_001)
-            .await
-            .is_err()
-    );
-    tx.rollback().await.unwrap();
+    for (owner, until) in [(Uuid::new_v4(), NOW + 30_000), (project, NOW + 60_001)] {
+        let mut tx = pool.begin().await.unwrap();
+        let scope = artifacts::LinkScope::new(attempt, owner, NOW..until);
+        assert!(artifacts::link_locked(&mut tx, scope, &[id]).await.is_err());
+        tx.rollback().await.unwrap();
+    }
 }
 #[tokio::test]
 async fn missing_or_forged_receipt_cannot_commit_and_source_bundle_cannot_use_inline_owner() {
@@ -161,77 +159,31 @@ async fn finite_project_history_refuses_new_rows_without_evicting_or_blocking_ex
     let f = fixture().await;
     let project = f.selection.lineage.project_id;
     let a = artifact("synthetic-context", b"x");
+    let input = |id| Retain {
+        artifact_id: id,
+        project_id: project,
+        owner: OwnerKind::GraphSnapshot,
+        artifact: a.clone(),
+        kind: ArtifactKind::Context,
+        bytes: b"x",
+        retain_until_ms: NOW + 60_000,
+    };
     let first = Uuid::new_v4();
     for n in 0..511 {
         let id = if n == 0 { first } else { Uuid::new_v4() };
-        artifacts::retain(
-            &f.state,
-            Retain {
-                artifact_id: id,
-                project_id: project,
-                owner: OwnerKind::GraphSnapshot,
-                artifact: a.clone(),
-                kind: ArtifactKind::Context,
-                bytes: b"x",
-                retain_until_ms: NOW + 60_000,
-            },
-        )
-        .await
-        .unwrap();
+        artifacts::retain(&f.state, input(id)).await.unwrap();
     }
-    let left = Retain {
-        artifact_id: Uuid::new_v4(),
-        project_id: project,
-        owner: OwnerKind::GraphSnapshot,
-        artifact: a.clone(),
-        kind: ArtifactKind::Context,
-        bytes: b"x",
-        retain_until_ms: NOW + 60_000,
-    };
-    let right = Retain {
-        artifact_id: Uuid::new_v4(),
-        project_id: project,
-        owner: OwnerKind::GraphSnapshot,
-        artifact: a.clone(),
-        kind: ArtifactKind::Context,
-        bytes: b"x",
-        retain_until_ms: NOW + 60_000,
-    };
     let (left, right) = tokio::join!(
-        artifacts::retain(&f.state, left),
-        artifacts::retain(&f.state, right)
+        artifacts::retain(&f.state, input(Uuid::new_v4())),
+        artifacts::retain(&f.state, input(Uuid::new_v4()))
     );
     assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
     assert!(
-        artifacts::retain(
-            &f.state,
-            Retain {
-                artifact_id: Uuid::new_v4(),
-                project_id: project,
-                owner: OwnerKind::GraphSnapshot,
-                artifact: a.clone(),
-                kind: ArtifactKind::Context,
-                bytes: b"x",
-                retain_until_ms: NOW + 60_000
-            }
-        )
-        .await
-        .is_err()
+        artifacts::retain(&f.state, input(Uuid::new_v4()))
+            .await
+            .is_err()
     );
-    artifacts::retain(
-        &f.state,
-        Retain {
-            artifact_id: first,
-            project_id: project,
-            owner: OwnerKind::GraphSnapshot,
-            artifact: a,
-            kind: ArtifactKind::Context,
-            bytes: b"x",
-            retain_until_ms: NOW + 60_000,
-        },
-    )
-    .await
-    .unwrap();
+    artifacts::retain(&f.state, input(first)).await.unwrap();
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM admission_artifacts WHERE owner_key=$1")
             .bind(project.to_string())
@@ -243,204 +195,10 @@ async fn finite_project_history_refuses_new_rows_without_evicting_or_blocking_ex
 
 #[tokio::test]
 async fn assigned_native_http_ranges_require_exact_sealed_binding_and_live_offer() {
-    use aq_admission::{
-        RetainedArtifact,
-        transport::{ArtifactFetch, Feature, Register, WorkerIdentity},
-    };
-    use aq_server::{
-        execution::authority::hot::HotState,
-        profiled_execution::{
-            artifact_api,
-            config::{ProfiledConfig, QualifiedRuntime},
-            registration::{self, NativeRegistration},
-        },
-    };
-    use axum::{
-        Router,
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use http_body_util::BodyExt;
-    use std::sync::{Arc, atomic::Ordering};
-    use tower::ServiceExt;
-    async fn post(app: Router, body: &ArtifactFetch, token: &str) -> axum::response::Response {
-        app.oneshot(
-            Request::post("/v1/worker/profiled/artifact")
-                .header("content-type", "application/json")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::from(serde_json::to_vec(body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-    }
-    let mut f = fixture().await;
-    let project = f.selection.lineage.project_id;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-runtime", b"runtime"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1],
-    };
-    let qualification = artifact("synthetic-runtime-qualification", b"qualified");
-    let mut cfg = (*f.state.config).clone();
-    cfg.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            backend_kind: None,
-            runtime: request.runtime.clone(),
-            qualification: qualification.clone(),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(cfg);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
-    let metadata = NativeRegistration {
-        schema_version: 1,
-        semantic_digest: registration::semantic_digest(&request).unwrap(),
-        request,
-        qualification,
-        configuration_revision: 1,
-        registered_at_ms: NOW,
-    };
-    let pool = f.db.pool().await;
-    sqlx::query("UPDATE execution_nodes SET state=jsonb_set(state,'{native}',$2) WHERE node_id=$1")
-        .bind(f.node.node_id)
-        .bind(json!(metadata))
-        .execute(&pool)
-        .await
-        .unwrap();
-    let attempt = insert(&f).await;
-    let hot = HotState::from_compat(&f.profiled).unwrap();
-    sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)").bind(attempt).bind(json!(hot)).execute(&pool).await.unwrap();
-    let body = b"retained context";
-    let id = Uuid::new_v4();
-    let reference = artifact("synthetic-context", body);
-    let retained = artifacts::retain(
-        &f.state,
-        Retain {
-            artifact_id: id,
-            project_id: project,
-            owner: OwnerKind::GraphSnapshot,
-            artifact: reference.clone(),
-            kind: ArtifactKind::Context,
-            bytes: body,
-            retain_until_ms: NOW + 60_000,
-        },
-    )
-    .await
-    .unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(f.node.node_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    artifacts::link_locked(&mut tx, attempt, project, &[id], NOW, NOW + 30_000)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    let worker = aq_server::build_worker_router(f.state.clone());
-    let mut request = ArtifactFetch {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        binding: f.profiled.offer.binding.clone(),
-        artifact: reference,
-        offset: 0,
-        length: 5,
-    };
-    let mut collected = vec![];
-    for offset in [0, 5, 10, 15] {
-        request.offset = offset;
-        let response = post(worker.clone(), &request, &f.credential).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["cache-control"], "no-store");
-        assert_eq!(
-            response.headers()[artifact_api::OFFSET_HEADER],
-            offset.to_string()
-        );
-        let descriptor: RetainedArtifact = serde_json::from_slice(
-            &URL_SAFE_NO_PAD
-                .decode(response.headers()[artifact_api::RETENTION_HEADER].as_bytes())
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(json!(descriptor), json!(retained));
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        assert!(bytes.len() <= 5);
-        collected.extend_from_slice(&bytes);
-    }
-    assert_eq!(collected, body);
-    retained.verify(&collected, NOW).unwrap();
-    request.offset = body.len() as u64;
-    assert_eq!(
-        post(worker.clone(), &request, &f.credential).await.status(),
-        StatusCode::BAD_REQUEST
-    );
-    request.offset = 0;
-    let original = request.binding.graph_access_profile_digest.clone();
-    request.binding.graph_access_profile_digest = Digest::of(b"wrong-graph-binding");
-    assert_eq!(
-        post(worker.clone(), &request, &f.credential).await.status(),
-        StatusCode::CONFLICT
-    );
-    request.binding.graph_access_profile_digest = original;
-    assert_eq!(
-        post(worker.clone(), &request, "wrong-credential")
-            .await
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let mut held = pool.begin().await.unwrap();
-    sqlx::query("SELECT artifact_id FROM admission_artifacts WHERE artifact_id=$1 FOR UPDATE")
-        .bind(id)
-        .execute(&mut *held)
-        .await
-        .unwrap();
-    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *held)
-        .await
-        .unwrap();
-    let credential = f.credential.clone();
-    let pending = tokio::spawn(async move { post(worker, &request, &credential).await });
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))")
-            .bind(blocker).fetch_one(&pool).await.unwrap();
-        if waiting {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "fetch did not reach retained artifact lock"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    f.time.store((NOW + 30_000) as i64, Ordering::SeqCst);
-    held.commit().await.unwrap();
-    let response = pending.await.unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert!(
-        !response
-            .headers()
-            .contains_key(artifact_api::RETENTION_HEADER)
-    );
+    let case = ranged::Case::setup().await;
+    case.assert_range_download().await;
+    case.assert_refusals().await;
+    case.assert_expiry_while_blocked().await;
 }
 
 #[tokio::test]

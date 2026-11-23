@@ -95,10 +95,13 @@ async fn read_inner(
     let ids: Vec<Uuid> = if let Some((id, _)) = exact {
         vec![id]
     } else {
-        let (v2, after) = (page.profile.is_some(), page.after);
-        sql::page_ids(&mut tx, v2, page.project_id, after, i64::from(limit) + 1)
-            .await
-            .map_err(db)?
+        let query = sql::ReportPage {
+            with_v2: page.profile.is_some(),
+            project: page.project_id,
+            after: page.after,
+            limit: i64::from(limit) + 1,
+        };
+        sql::page_ids(&mut tx, query).await.map_err(db)?
     };
     let more = ids.len() > limit as usize;
     let mut found = Collector::new(page.profile, page.project_id, exact.map(|(_, r)| r));

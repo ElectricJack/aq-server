@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
+mod artifacts;
+
 struct Budget {
     work: Semaphore,
     control: Semaphore,
@@ -59,15 +61,18 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
             "/api/playbooks/admissions/{id}/retry",
             post(retry_admission),
         )
-        .route("/api/playbooks/events/{id}/retry", post(retry_event))
-        .route("/api/playbooks/events/{id}/hold", post(retry_event))
+        .route(
+            "/api/playbooks/events/{id}/retry",
+            post(retry_event::<false>),
+        )
+        .route("/api/playbooks/events/{id}/hold", post(retry_event::<true>))
         .route("/api/playbooks/drive", post(drive))
         .route("/api/playbooks/recover", post(recover))
         .route("/api/playbooks/runs/{id}/cancel", post(cancel))
         .route("/api/playbooks/runs/{id}", get(inspect_run))
         .route("/api/playbooks/stop", post(stop))
         .layer(DefaultBodyLimit::max(65536))
-        .merge(artifact_routes())
+        .merge(artifacts::routes())
         .layer(Extension(driver.clone()))
         .layer(middleware::from_fn_with_state(
             Arc::new(Budget {
@@ -79,11 +84,11 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         // Inspection reads have their own queued gate, not the work budget.
         .merge(super::inspection::routes(driver))
 }
-fn owner(driver: &Driver, id: Uuid) -> Result<()> {
+fn owner(driver: &Driver, id: Uuid) -> Result<&Driver> {
     if driver.service.namespace.owner_user_id != id {
         return Err(Error::Forbidden);
     }
-    Ok(())
+    Ok(driver)
 }
 
 async fn decisions(
@@ -199,8 +204,7 @@ async fn revoke(
     Path(id): Path<Uuid>,
     Json(_): Json<Empty>,
 ) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    d.service.revoke(user.id, id).await?;
+    owner(&d, user.id)?.service.revoke(user.id, id).await?;
     Ok(Json(json!({"grant_id":id,"disposition":"revoked"})))
 }
 async fn prepare(
@@ -245,18 +249,16 @@ async fn retry_admission(
     }
     Ok(Json(status))
 }
-async fn retry_event(
+async fn retry_event<const HOLD: bool>(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
     Path(id): Path<Uuid>,
-    uri: axum::http::Uri,
     Json(_): Json<Empty>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
-    let hold = uri.path().ends_with("/hold");
-    d.service.retry_event(user.id, id, hold).await?;
+    d.service.retry_event(user.id, id, HOLD).await?;
     Ok(Json(
-        json!({"event_id":id,"disposition":if hold {"held"} else {"pending"}}),
+        json!({"event_id":id,"disposition":if HOLD {"held"} else {"pending"}}),
     ))
 }
 async fn drive(
@@ -281,8 +283,7 @@ async fn cancel(
     Path(id): Path<String>,
     Json(_): Json<Empty>,
 ) -> Result<impl IntoResponse> {
-    owner(&d, user.id)?;
-    d.cancel_run(id).await?;
+    owner(&d, user.id)?.cancel_run(id).await?;
     Ok(Json(json!({"disposition":"requested"})))
 }
 async fn stop(
@@ -330,159 +331,4 @@ async fn inspect_run(
 ) -> Result<impl IntoResponse> {
     owner(&d, user.id)?;
     Ok(Json(d.inspect_run(id).await?))
-}
-
-/// D9 artifact routes. Artifacts are sent as JSON and re-encoded canonically;
-/// the digest check then proves the bytes are the sealed, immutable artifact.
-fn artifact_routes() -> Router<AppState> {
-    Router::new()
-        .route("/api/playbooks/artifacts", post(install_artifact))
-        .route("/api/playbooks/artifacts/validate", post(validate_artifact))
-        .route(
-            "/api/playbooks/bindings/{id}/activate",
-            post(activate_binding),
-        )
-        .route(
-            "/api/playbooks/bindings/{id}/deactivate",
-            post(deactivate_binding),
-        )
-        .route(
-            "/api/playbooks/bindings/{id}/rollback",
-            post(rollback_binding),
-        )
-        .route("/api/playbooks/coding/default", post(coding_default))
-        .layer(DefaultBodyLimit::max(2 * artifacts::MAX_ARTIFACT_BYTES))
-}
-use super::{
-    artifacts::{self, DriverCatalog, PgLedger},
-    coding::CodingPolicy,
-};
-fn ledger(d: &Driver) -> PgLedger {
-    PgLedger {
-        pool: d.service.pool.clone(),
-        namespace_id: d.service.namespace.namespace_id,
-    }
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArtifactBody {
-    artifact: Value,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InstallBody {
-    op_id: String,
-    artifact: Value,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ActivateBody {
-    op_id: String,
-    artifact: String,
-    grant_id: Uuid,
-    grant_revision: i64,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RollbackBody {
-    op_id: String,
-    grant_id: Uuid,
-    grant_revision: i64,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodingDefaultBody {
-    op_id: String,
-    policy: CodingPolicy,
-    grant_id: Uuid,
-    grant_revision: i64,
-}
-async fn validate_artifact(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Json(r): Json<ArtifactBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    let bytes = artifacts::bytes_of(&r.artifact)?;
-    let artifact = artifacts::validate(d.service.registry(), &bytes)?;
-    Ok(Json(artifacts::summary(&artifact)))
-}
-async fn install_artifact(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Json(r): Json<InstallBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    let bytes = artifacts::bytes_of(&r.artifact)?;
-    // Install needs no activation authority; the grant fields are unused.
-    let catalog = DriverCatalog {
-        driver: &d,
-        grant: Uuid::nil(),
-        revision: 0,
-    };
-    Ok(Json(
-        artifacts::install(&catalog, &ledger(&d), &r.op_id, &bytes).await?,
-    ))
-}
-async fn activate_binding(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Path(id): Path<String>,
-    Json(r): Json<ActivateBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    let catalog = DriverCatalog {
-        driver: &d,
-        grant: r.grant_id,
-        revision: r.grant_revision,
-    };
-    Ok(Json(
-        artifacts::activate(&catalog, &ledger(&d), &r.op_id, &id, &r.artifact).await?,
-    ))
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DeactivateBody {
-    revision: u64,
-}
-async fn deactivate_binding(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Path(id): Path<String>,
-    Json(r): Json<DeactivateBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    d.deactivate_binding(id, r.revision).await?;
-    Ok(Json(json!({"deactivated": true})))
-}
-async fn rollback_binding(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Path(id): Path<String>,
-    Json(r): Json<RollbackBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    let catalog = DriverCatalog {
-        driver: &d,
-        grant: r.grant_id,
-        revision: r.grant_revision,
-    };
-    Ok(Json(
-        artifacts::rollback(&catalog, &ledger(&d), &r.op_id, &id).await?,
-    ))
-}
-async fn coding_default(
-    RequireOwner(user): RequireOwner,
-    Extension(d): Extension<Arc<Driver>>,
-    Json(r): Json<CodingDefaultBody>,
-) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    let catalog = DriverCatalog {
-        driver: &d,
-        grant: r.grant_id,
-        revision: r.grant_revision,
-    };
-    Ok(Json(
-        artifacts::install_coding_default(&catalog, &ledger(&d), &r.op_id, &r.policy).await?,
-    ))
 }

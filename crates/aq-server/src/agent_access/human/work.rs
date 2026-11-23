@@ -3,6 +3,7 @@
 //! Readiness combines Graph dependencies, execution holds and current scheduler observations.
 use super::*;
 
+type OwnerRoute = (State<AppState>, Extension<Arc<ReadRuntime>>, RequireOwner);
 const HISTORY_LIMIT: u16 = 25;
 
 pub(super) async fn executions(pool: &PgPool, project: Uuid, tasks: &[Uuid]) -> Result<Vec<Value>> {
@@ -42,12 +43,113 @@ async fn hierarchy_of(s: &AppState, w: Uuid, id: Uuid, raw: &Value) -> Result<(V
     Ok((found.blocking, found.complete))
 }
 
+struct TaskWork<'a> {
+    state: &'a AppState,
+    pool: &'a PgPool,
+    record: &'a ProjectRecord,
+    project: Uuid,
+    id: Uuid,
+}
+impl TaskWork<'_> {
+    async fn recorded_hold(&self, open: bool) -> Result<Option<Value>> {
+        // R6: the task's recorded hold; observing the task closed or retired clears it.
+        if !open {
+            aq_machine_control::holds::clear_closed(self.pool, self.id, (self.state.clock)()).await;
+        }
+        let held = aq_machine_control::holds::current(self.pool, self.project, self.id).await;
+        let mut held = held.map_err(|_| unavailable())?;
+        if let Some(hold) = held
+            .as_mut()
+            .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
+        {
+            self.refresh_budget_reason(hold).await?;
+        }
+        Ok(aq_human_work::recorded_hold(self.pool, self.project, self.id, held.as_ref()).await)
+    }
+    async fn refresh_budget_reason(
+        &self,
+        h: &mut aq_machine_control::holds::Current,
+    ) -> Result<()> {
+        let current = self.record.revision;
+        let pinned = aq_profiled_state::replacement_sql::predecessor_project_revision(
+            self.pool,
+            h.attempt_id,
+        )
+        .await
+        .map_err(|_| unavailable())?;
+        if pinned == Some(current) {
+            return Ok(());
+        }
+        let now =
+            u64::try_from((self.state.clock)().timestamp_millis()).map_err(|_| unavailable())?;
+        if let Some(code) =
+            crate::profiled_execution::replacement::retry_hold(self.state, self.id, now, current)
+                .await?
+        {
+            h.reason = code.into();
+        }
+        Ok(())
+    }
+    async fn add_routing(&self, data: &mut Value, node: &Value) {
+        let ready = data["readiness"]["state"].as_str().unwrap_or_default();
+        // Optional field: when it cannot be computed the read still succeeds without it.
+        match crate::routing::view(self.state, self.id, node, ready).await {
+            Ok(Some(routing)) => data["routing"] = routing,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(task = %self.id, class = error_class(&error), "task routing view omitted")
+            }
+        }
+    }
+    async fn offer_hold(&self, open: bool, execution: &Value) -> Option<Value> {
+        let no_attempt = open && execution.is_null();
+        if no_attempt && crate::role_settings::tables(self.state) {
+            return aq_role_settings::refusals::shown(self.pool, self.id).await;
+        }
+        None
+    }
+    async fn role_hold(&self, node: &Value) -> Result<Option<Value>> {
+        // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
+        let role = aq_role_settings::tasks::effective_role(
+            &node["metadata"],
+            &self.record.binding.default_role,
+        );
+        let role_hold = crate::role_settings::hold(self.state, self.pool, &role).await?;
+        // Spec 0014 §5.2: so is a task whose level has no document.
+        if role_hold.is_some() {
+            return Ok(role_hold);
+        }
+        crate::role_settings::level_hold(self.state, self.pool, &self.record.binding, node).await
+    }
+    #[cfg(feature = "delivery_playbook")]
+    async fn delivery_hold(
+        &self,
+        hold: Option<&aq_human_work::Hold>,
+        open: bool,
+        at_ms: i64,
+    ) -> Option<Value> {
+        match (hold, open) {
+            (Some(h), true) if h.stopped => {
+                let namespace = self
+                    .state
+                    .config
+                    .playbooks
+                    .as_deref()
+                    .filter(|pb| {
+                        pb.profile.is_delivery()
+                            && (pb.installation_routing || pb.namespace.project_id == self.project)
+                    })
+                    .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
+                aq_human_work::delivery::waiting(self.pool, namespace, h, at_ms).await
+            }
+            _ => None,
+        }
+    }
+}
 /// `GET .../tasks/{node}/work`: readiness with blocker explanation, parent and
 /// the attached execution for one task.
 pub(super) async fn work(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
+    (State(s), Extension(r), RequireOwner(u)): OwnerRoute,
     Path((p, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Envelope>> {
     if id.is_nil() {
@@ -66,51 +168,18 @@ pub(super) async fn work(
     // QA P1-01: a stopped attempt that keeps the claim is `held`, not running.
     let hold = aq_human_work::attempt_hold(&r.pool, &execution["attempt_id"]).await;
     let hold = hold.map_err(|_| unavailable())?;
-    // R6: the task's recorded hold; observing the task closed or retired clears it.
+    let task = TaskWork {
+        state: &s,
+        pool: &r.pool,
+        project: p,
+        id,
+        record: &a.record,
+    };
     let open = root["task_state"] == "active" && root["retired"] != true;
-    if !open {
-        aq_machine_control::holds::clear_closed(&r.pool, id, (s.clock)()).await;
-    }
-    let held = aq_machine_control::holds::current(&r.pool, p, id).await;
-    let mut held = held.map_err(|_| unavailable())?;
-    if let Some(h) = held
-        .as_mut()
-        .filter(|h| aq_machine_control::holds::is_budget_hold(&h.reason))
-    {
-        let current = a.record.revision;
-        let pinned =
-            aq_profiled_state::replacement_sql::predecessor_project_revision(&r.pool, h.attempt_id)
-                .await
-                .map_err(|_| unavailable())?;
-        if pinned != Some(current) {
-            let now = u64::try_from((s.clock)().timestamp_millis()).map_err(|_| unavailable())?;
-            if let Some(code) =
-                crate::profiled_execution::replacement::retry_hold(&s, id, now, current).await?
-            {
-                h.reason = code.into();
-            }
-        }
-    }
-    let held = aq_human_work::recorded_hold(&r.pool, p, id, held.as_ref()).await;
-    // Spec 0014 §5.5: a task whose effective role is disabled or gone is held.
-    let role = aq_role_settings::tasks::effective_role(
-        &raw["node"]["metadata"],
-        &a.record.binding.default_role,
-    );
-    let role_hold = crate::role_settings::hold(&s, &r.pool, &role).await?;
-    // Spec 0014 §5.2: so is a task whose level has no document.
-    let level_hold = match role_hold {
-        Some(_) => None,
-        None => {
-            let binding = &a.record.binding;
-            crate::role_settings::level_hold(&s, &r.pool, binding, &raw["node"]).await?
-        }
-    };
+    let held = task.recorded_hold(open).await?;
+    let role_hold = task.role_hold(&raw["node"]).await?;
     // Spec 0014 §6.1: and one whose last offer was refused before any attempt.
-    let offer_hold = match open && execution.is_null() && crate::role_settings::tables(&s) {
-        true => aq_role_settings::refusals::shown(&r.pool, id).await,
-        false => None,
-    };
+    let offer_hold = task.offer_hold(open, &execution).await;
     let graph_wait = match (&hold, open) {
         (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
         _ => None,
@@ -118,21 +187,7 @@ pub(super) async fn work(
     #[cfg(feature = "delivery_playbook")]
     let graph_wait = aq_human_work::delivery::completion_wait(
         graph_wait,
-        match (&hold, open) {
-            (Some(h), true) if h.stopped => {
-                let namespace = s
-                    .config
-                    .playbooks
-                    .as_deref()
-                    .filter(|pb| {
-                        pb.profile.is_delivery()
-                            && (pb.installation_routing || pb.namespace.project_id == p)
-                    })
-                    .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-                aq_human_work::delivery::waiting(&r.pool, namespace, h, a.requested).await
-            }
-            _ => None,
-        },
+        task.delivery_hold(hold.as_ref(), open, a.requested).await,
     );
     let recovery = match (&hold, open) {
         (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
@@ -142,7 +197,6 @@ pub(super) async fn work(
         .into_iter()
         .chain(recovery)
         .chain(role_hold)
-        .chain(level_hold)
         .chain(offer_hold)
         .chain(graph_wait)
         .chain(aq_human_work::launch_retry_wait(&r.pool, id, (s.clock)().timestamp_millis()).await)
@@ -151,13 +205,15 @@ pub(super) async fn work(
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),
     };
-    let mut readiness = aq_human_work::readiness_in(
+    let mut readiness = aq_human_work::readiness(
         root["task_state"].as_str(),
         hold.as_ref(),
-        held.collect(),
-        blockers,
-        hierarchy,
-        complete,
+        held,
+        aq_human_work::TaskDependencies {
+            blockers,
+            hierarchy,
+            complete,
+        },
     );
     aq_swarm_settings::admission::show_task_wait(
         &mut readiness,
@@ -172,15 +228,7 @@ pub(super) async fn work(
         "readiness":readiness,"parent":parent,"execution":execution});
     crate::role_settings::show(&mut data, &raw["node"], &a.record.binding.default_role);
     aq_human_work::show_no_change_settlement(&mut data, &r.pool, id).await;
-    let ready = data["readiness"]["state"].as_str().unwrap_or_default();
-    // Optional field: when it cannot be computed the read still succeeds without it.
-    match crate::routing::view(&s, id, &raw["node"], ready).await {
-        Ok(Some(routing)) => data["routing"] = routing,
-        Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(task = %id, class = error_class(&error), "task routing view omitted")
-        }
-    }
+    task.add_routing(&mut data, &raw["node"]).await;
     finish(&s, &r, a, data).await
 }
 
@@ -190,12 +238,46 @@ pub(super) struct HistoryPage {
     cursor: Option<String>,
 }
 
+impl HistoryPage {
+    async fn read(s: &AppState, w: Uuid, id: Uuid, query: &[(String, String)]) -> Result<Value> {
+        // The node read fences kind: history is only served for live tasks.
+        let raw = runtime(s)?
+            .human_get(&format!("/v1/workspaces/{w}/nodes/{id}"), &[], 1_000_000)
+            .await?;
+        if raw["id"] != json!(id) {
+            return Err(unavailable());
+        }
+        node(&raw, w, "task")?;
+        runtime(s)?
+            .human_get(
+                &format!("/v1/workspaces/{w}/nodes/{id}/history"),
+                query,
+                1_000_000,
+            )
+            .await
+    }
+}
+async fn history_prior(s: &AppState, scope: (Uuid, Uuid), rows: &[Value]) -> Result<Option<Value>> {
+    let (w, id) = scope;
+    // QA P1-08: say what changed; the oldest revision diffs against Graph's prior one.
+    Ok(match aq_human_work::predecessor(rows, id) {
+        Some(n) => runtime(s)?
+            .human_get(
+                &format!("/v1/workspaces/{w}/nodes/{id}/revisions/{n}"),
+                &[],
+                1_000_000,
+            )
+            .await
+            .ok()
+            .filter(|v| contract::upstream_valid("RevisionSnapshot", v))
+            .map(|v| v["node"].clone()),
+        None => None,
+    })
+}
 /// `GET .../tasks/{node}/history`: Graph history entries (newest page from the
 /// service order) plus the task's recorded attempts for the inspector timeline.
 pub(super) async fn history(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
+    (State(s), Extension(r), RequireOwner(u)): OwnerRoute,
     Path((p, id)): Path<(Uuid, Uuid)>,
     q: std::result::Result<Query<HistoryPage>, axum::extract::rejection::QueryRejection>,
 ) -> Result<Json<Envelope>> {
@@ -221,21 +303,7 @@ pub(super) async fn history(
             r.cursors.decode(&token, &binding, stamp(&s))?,
         ));
     }
-    // The node read fences kind: history is only served for live tasks.
-    let raw = runtime(&s)?
-        .human_get(&format!("/v1/workspaces/{w}/nodes/{id}"), &[], 1_000_000)
-        .await?;
-    if raw["id"] != json!(id) {
-        return Err(unavailable());
-    }
-    node(&raw, w, "task")?;
-    let page = runtime(&s)?
-        .human_get(
-            &format!("/v1/workspaces/{w}/nodes/{id}/history"),
-            &query,
-            1_000_000,
-        )
-        .await?;
+    let page = HistoryPage::read(&s, w, id, &query).await?;
     if !contract::upstream_valid("HistoryPage", &page) {
         return Err(unavailable());
     }
@@ -243,27 +311,23 @@ pub(super) async fn history(
     if rows.len() > usize::from(HISTORY_LIMIT) {
         return Err(unavailable());
     }
-    // QA P1-08: say what changed; the oldest revision diffs against Graph's prior one.
-    let prior = match aq_human_work::predecessor(rows, id) {
-        Some(n) => runtime(&s)?
-            .human_get(
-                &format!("/v1/workspaces/{w}/nodes/{id}/revisions/{n}"),
-                &[],
-                1_000_000,
-            )
-            .await
-            .ok()
-            .filter(|v| contract::upstream_valid("RevisionSnapshot", v))
-            .map(|v| v["node"].clone()),
-        None => None,
-    };
+    let prior = history_prior(&s, (w, id), rows).await?;
     let service = s
         .agent_access
         .as_ref()
         .and_then(|rt| rt.mutation_actor.as_deref());
-    let items = aq_human_work::history::items(&r.pool, service, (p, w), id, rows, prior.as_ref())
-        .await
-        .ok_or_else(unavailable)?;
+    let items = aq_human_work::history::items(
+        &r.pool,
+        service,
+        (p, w),
+        aq_human_work::history::TaskHistory {
+            task: id,
+            rows,
+            prior: prior.as_ref(),
+        },
+    )
+    .await
+    .ok_or_else(unavailable)?;
     let next = match page["next_cursor"].as_str() {
         Some(c) => Some(r.cursors.encode(&binding, c, stamp(&s))?),
         None => None,
@@ -285,9 +349,7 @@ pub(super) async fn history(
 /// structural subtree (Graph tree, depth 5). Delivery is owned by D1 and is
 /// reported as unavailable rather than fabricated.
 pub(super) async fn summary(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
+    (State(s), Extension(r), RequireOwner(u)): OwnerRoute,
     Path((p, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Envelope>> {
     if id.is_nil() {

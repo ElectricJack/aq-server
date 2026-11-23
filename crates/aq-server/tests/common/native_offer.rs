@@ -483,9 +483,12 @@ pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::roles::Sel
     edit(&mut defaults);
     let revision = settings.selection_defaults_revision;
     let (actor, op) = (c.env.actor, Uuid::new_v4());
-    aq_role_settings::save_selection_defaults(pool, actor, &defaults, revision, op, 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_selection_defaults(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, op),
+        &defaults,
+    )
+    .await
+    .unwrap();
     c.env.snapshot = super::roles::active(pool).await;
 }
 /// The published attempt fails: synthetic stopped, retained and quiescent

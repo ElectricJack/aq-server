@@ -58,13 +58,13 @@ impl Service {
     pub(in crate::playbooks) async fn work_decide(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
         retained_only: bool,
     ) -> Result<HostResult> {
-        let (command, input) = (intent.command.name.as_str(), &intent.input);
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let id = command.grant;
+        let intent = command.intent;
+        let input = &intent.input;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let subject = match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -78,32 +78,20 @@ impl Service {
             }
             Stage::Fresh if retained_only => return Err(Error::Unknown),
             Stage::Fresh => {
-                if let Some(origin) =
-                    delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?
-                    && !origin.names_result(input)
-                {
-                    let refused = decisions::refused("stale_result");
-                    return self
-                        .settle_fresh(tx, id, revision, intent, &identity, refused)
-                        .await;
-                }
-                let early = match self.named(input).await? {
-                    Err(reason) => Err(decisions::refused(reason)),
-                    Ok(named) => {
-                        let decided = decisions::decision(&mut tx, named.1).await?;
-                        decisions::already(command, decided.as_deref()).map_or(Ok(named), Err)
-                    }
-                };
+                let early = self.pending_decision(&mut tx, intent).await?;
                 let named = match early {
                     Ok(named) => named,
                     Err(answer) => {
-                        let settled =
-                            self.settle_fresh(tx, id, revision, intent, &identity, answer);
+                        let settled = self.settle_fresh(tx, command.retained(&identity), answer);
                         return settled.await;
                     }
                 };
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, input)
-                    .await?;
+                self.record(
+                    &mut tx,
+                    command.retained(&identity),
+                    EffectReceipt::new(PENDING, input),
+                )
+                .await?;
                 self.commit_fresh(tx, id, intent).await?;
                 named
             }
@@ -112,12 +100,30 @@ impl Service {
             &*self.settlement,
             &self.pool,
             || self.now(),
-            command,
+            &intent.command.name,
             input,
             subject,
         )
         .await?;
         self.finish(intent, &identity, answer).await
+    }
+
+    async fn pending_decision(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        intent: &Intent,
+    ) -> Result<std::result::Result<(Uuid, Uuid), HostResult>> {
+        let input = &intent.input;
+        let origin = delivery_runs::origin(tx, &self.namespace, &intent.run).await?;
+        if origin.is_some_and(|o| !o.names_result(input)) {
+            return Ok(Err(decisions::refused("stale_result")));
+        }
+        let named = match self.named(input).await? {
+            Ok(named) => named,
+            Err(reason) => return Ok(Err(decisions::refused(reason))),
+        };
+        let decided = decisions::decision(tx, named.1).await?;
+        Ok(decisions::already(&intent.command.name, decided.as_deref()).map_or(Ok(named), Err))
     }
 
     /// `work.hold`: the hold on the task's latest result, unless a decision
@@ -126,11 +132,10 @@ impl Service {
     pub(super) async fn work_hold(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let intent = command.intent;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         if let Some(retained) = Self::single_phase(stage)? {
             tx.commit().await?;
             return Ok(retained);
@@ -140,7 +145,7 @@ impl Service {
         let named = self.named(&intent.input).await?;
         decisions::hold(&mut tx, named, &intent.input, self.now()?).await?;
         let held = decisions::held();
-        (self.settle_fresh(tx, id, revision, intent, &identity, held)).await
+        (self.settle_fresh(tx, command.retained(&identity), held)).await
     }
 
     /// `supervisor.notify`: `text` to the project's supervisor conversation
@@ -151,22 +156,17 @@ impl Service {
     pub(super) async fn supervisor_notify(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let intent = command.intent;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         if let Some(retained) = Self::single_phase(stage)? {
             tx.commit().await?;
             return Ok(retained);
         }
         let input = &intent.input;
         let project = Uuid::parse_str(text(input, "project")?).map_err(|_| Error::Invalid)?;
-        if project != self.namespace.project_id
-            && !(self.installation_routing && self.delivery.bound(project).await?)
-        {
-            return Err(Error::Forbidden);
-        }
+        self.authorize_notification_project(project).await?;
         let origin = delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?;
         let (key, body) =
             decisions::notification(&mut tx, self.delivery.as_ref(), origin, project, input)
@@ -185,7 +185,17 @@ impl Service {
             decisions::record_told(&mut tx, project, &key, message, now).await?;
         }
         let answer = decisions::notified(told);
-        (self.settle_fresh(tx, id, revision, intent, &identity, answer)).await
+        (self.settle_fresh(tx, command.retained(&identity), answer)).await
+    }
+
+    async fn authorize_notification_project(&self, project: Uuid) -> Result<()> {
+        if project == self.namespace.project_id {
+            return Ok(());
+        }
+        if self.installation_routing && self.delivery.bound(project).await? {
+            return Ok(());
+        }
+        Err(Error::Forbidden)
     }
 
     /// A single-phase command's retained answer, or `None` for a fresh one.

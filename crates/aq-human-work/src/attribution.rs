@@ -12,21 +12,36 @@ pub async fn records(
     service: Option<&str>,
     data: &mut Value,
 ) -> Result<(), sqlx::Error> {
-    fn records<'a>(v: &'a mut Value, out: &mut Vec<&'a mut serde_json::Map<String, Value>>) {
-        match v {
-            Value::Array(items) => items.iter_mut().for_each(|i| records(i, out)),
-            Value::Object(o) => {
-                if o.contains_key("created_by") && o.get("id").is_some_and(Value::is_string) {
-                    out.push(o)
-                } else {
-                    o.values_mut().for_each(|i| records(i, out))
-                }
-            }
-            _ => {}
-        }
-    }
     let mut found = Vec::new();
-    records(data, &mut found);
+    collect_records(data, &mut found);
+    attribute_tasks(pool, scope, &mut found).await?;
+    if let Some(service) = service {
+        attribute_service(pool, service, found).await?;
+    }
+    Ok(())
+}
+
+type Record = serde_json::Map<String, Value>;
+
+fn collect_records<'a>(v: &'a mut Value, out: &mut Vec<&'a mut Record>) {
+    match v {
+        Value::Array(items) => items.iter_mut().for_each(|i| collect_records(i, out)),
+        Value::Object(o) => {
+            if o.contains_key("created_by") && o.get("id").is_some_and(Value::is_string) {
+                out.push(o)
+            } else {
+                o.values_mut().for_each(|i| collect_records(i, out))
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn attribute_tasks(
+    pool: &PgPool,
+    scope: (Uuid, Uuid),
+    found: &mut [&mut Record],
+) -> Result<(), sqlx::Error> {
     let tasks: Vec<Uuid> = found
         .iter()
         .filter(|node| node["kind"] == "task")
@@ -35,22 +50,27 @@ pub async fn records(
     if !tasks.is_empty() {
         let authors = crate::task_git_author::for_tasks(pool, scope.0, scope.1, &tasks).await?;
         for node in found.iter_mut().filter(|node| node["kind"] == "task") {
-            if let Some((_, name, email, parent)) =
-                authors.iter().find(|(id, ..)| node["id"] == json!(id))
-            {
-                node.insert("requested_by".into(), json!({"name":name, "email":email}));
+            let author = authors.iter().find(|(id, ..)| node["id"] == json!(id));
+            if let Some((_, name, email, parent)) = author {
+                node.insert("requested_by".into(), json!({"name":name,"email":email}));
                 if parent.is_none() {
                     node.insert("created_by".into(), json!(email));
                 }
             }
         }
     }
-    let Some(service) = service else {
-        return Ok(());
-    };
-    let by_service =
-        |o: &serde_json::Map<String, Value>, k: &str| o.get(k) == Some(&json!(service));
-    found.retain(|o| by_service(o, "created_by") || by_service(o, "last_verified_by"));
+    Ok(())
+}
+
+async fn attribute_service(
+    pool: &PgPool,
+    service: &str,
+    mut found: Vec<&mut Record>,
+) -> Result<(), sqlx::Error> {
+    found.retain(|o| {
+        o.get("created_by").and_then(Value::as_str) == Some(service)
+            || o.get("last_verified_by").and_then(Value::as_str) == Some(service)
+    });
     let ids: Vec<Uuid> = found
         .iter()
         .filter_map(|o| o["id"].as_str()?.parse().ok())
@@ -61,22 +81,22 @@ pub async fn records(
     let rows: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as("SELECT n.id,(SELECT u.email FROM users u WHERE u.id=COALESCE((SELECT d.owner_id FROM dashboard_operations d WHERE d.operation_id=n.id),(SELECT h.actor_id FROM human_graph_operations h WHERE h.operation_id=n.id))),(SELECT u.email FROM dashboard_operations d JOIN users u ON u.id=d.owner_id WHERE d.kind='knowledge.verify' AND d.disposition IN ('confirmed','unknown') AND d.response->'subject_refs'->0->>'id'=n.id::text ORDER BY d.updated_at DESC LIMIT 1) FROM unnest($1::uuid[]) AS n(id)")
         .bind(&ids).fetch_all(pool).await?;
     for o in found {
-        let row = rows.iter().find(|row| o["id"] == json!(row.0));
-        for (key, human) in [
-            (
-                "created_by",
-                (o["kind"] != "task")
-                    .then(|| row.and_then(|r| r.1.as_ref()))
-                    .flatten(),
-            ),
-            ("last_verified_by", row.and_then(|r| r.2.as_ref())),
-        ] {
-            if let Some(email) = human.filter(|_| by_service(o, key)) {
-                o.insert(key.into(), json!(email));
-            }
+        let Some((_, creator, verifier)) = rows.iter().find(|row| o["id"] == json!(row.0)) else {
+            continue;
+        };
+        if o["kind"] != "task" {
+            replace_service(o, "created_by", service, creator.as_deref());
         }
+        replace_service(o, "last_verified_by", service, verifier.as_deref());
     }
     Ok(())
+}
+
+fn replace_service(record: &mut Record, key: &str, service: &str, human: Option<&str>) {
+    if let Some(email) = human.filter(|_| record.get(key).and_then(Value::as_str) == Some(service))
+    {
+        record.insert(key.into(), json!(email));
+    }
 }
 /// QA P1-07: Graph names AQ's one mutation identity as every AQ write's actor.
 /// An entry in a change set that an owner's journalled operation confirmed

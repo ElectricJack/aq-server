@@ -516,9 +516,11 @@ async fn check_eligibility_current(
         &latest,
         request,
         &state.config.projects,
-        &observation,
-        node_live,
-        (state.clock)().timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &observation,
+            node_live,
+            (state.clock)().timestamp_millis().max(1) as u64,
+        ),
     );
     if latest.revision != record.revision {
         result
@@ -593,9 +595,11 @@ pub(crate) async fn fence_for_offer(
         &record,
         &request,
         &state.config.projects,
-        &frozen.binding_observation,
-        live,
-        now.timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &frozen.binding_observation,
+            live,
+            now.timestamp_millis().max(1) as u64,
+        ),
     );
     if aq_profiles::digest(&state.config.projects).map_err(|_| AppError::Internal)?
         != frozen.worker_membership_digest

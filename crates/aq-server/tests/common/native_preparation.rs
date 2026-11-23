@@ -297,9 +297,7 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
         &f.state,
         &mut tx,
         &f.profiled.offer.binding.session,
-        &token,
-        &fact,
-        &inspection,
+        source_exports::LinkEvidence::new(&token, &fact, &inspection),
     )
     .await
     .unwrap();

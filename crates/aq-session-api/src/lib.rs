@@ -23,7 +23,7 @@ pub struct Source {
     pub digest: String,
     pub revision: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Permission {
     pub operation: String,
@@ -243,141 +243,171 @@ pub fn decode(bytes: &[u8]) -> Result<ContractDocument, String> {
     let value = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
     bound_value(&value, 0, false)?;
     validate_fields(&value, None)?;
-    match &doc {
-        ContractDocument::Input(r) if r.expected_controller_generation == 0 => {
-            return Err("controller generation must be positive".into());
-        }
-        ContractDocument::Resize(r) if r.expected_controller_generation == 0 || r.sequence == 0 => {
-            return Err("controller and resize sequence must be positive".into());
-        }
-        ContractDocument::ResolveInput(r) if r.expected_controller_generation == 0 => {
-            return Err("controller generation must be positive".into());
-        }
-        ContractDocument::InputReceipt(r)
-            if matches!(r.disposition, InputDisposition::DeliveryUnknown) && !r.input_paused =>
-        {
-            return Err("unknown input must pause input".into());
-        }
-        ContractDocument::Input(r) if r.bytes.is_empty() || r.bytes.len() > 4096 => {
-            return Err("input must contain 1..4096 bytes".into());
-        }
-        ContractDocument::Message(r) if r.text.is_empty() || r.text.len() > 4096 => {
-            return Err("message must contain 1..4096 UTF-8 bytes".into());
-        }
-        ContractDocument::Resize(r)
-            if r.columns == 0 || r.rows == 0 || r.columns > 1000 || r.rows > 1000 =>
-        {
-            return Err("dimensions must be 1..1000".into());
-        }
-        ContractDocument::ProfileExplanation(r) => {
-            if r.schema_version != API_VERSION {
-                return Err("unsupported schema version".into());
-            }
-            if r.valid
-                && (r.omissions.iter().any(|o| o.required) || !r.denied_requirements.is_empty())
-            {
-                return Err("valid explanation denies required content".into());
-            }
-            if r.estimated_tokens.is_some() != r.tokenizer_version.is_some() {
-                return Err("token estimate requires tokenizer provenance".into());
-            }
-            if r.required_bytes
-                .checked_add(r.optional_bytes)
-                .filter(|n| *n <= 16_777_216)
-                .is_none()
-            {
-                return Err("context budget exceeds 16 MiB".into());
-            }
-            if r.valid && r.selection.selected_candidate_id.is_none() {
-                return Err("valid explanation requires selection".into());
-            }
-            unique(
-                r.selection
-                    .candidates
-                    .iter()
-                    .map(|c| c.candidate_id.clone()),
-            )?;
-            unique(r.flattened_modules.iter().map(|m| m.identity.clone()))?;
-            for permissions in [
-                &r.requested_permissions,
-                &r.effective_permissions,
-                &r.denied_requirements,
-            ] {
-                unique(
-                    permissions
-                        .iter()
-                        .map(|p| format!("{}\0{}", p.operation, p.scope_reference)),
-                )?;
-            }
-            for p in &r.effective_permissions {
-                if !r
-                    .requested_permissions
-                    .iter()
-                    .any(|q| p.operation == q.operation && p.scope_reference == q.scope_reference)
-                {
-                    return Err("effective permission was not requested".into());
-                }
-                if r.denied_requirements
-                    .iter()
-                    .any(|q| p.operation == q.operation && p.scope_reference == q.scope_reference)
-                {
-                    return Err("permission is both effective and denied".into());
-                }
-            }
-            if let Some(id) = &r.selection.selected_candidate_id
-                && r.selection
-                    .candidates
-                    .iter()
-                    .filter(|c| {
-                        &c.candidate_id == id && matches!(c.eligibility, Eligibility::Eligible)
-                    })
-                    .count()
-                    != 1
-            {
-                return Err("selection must identify one eligible candidate".into());
-            }
-            for c in &r.selection.candidates {
-                for o in &c.observations {
-                    if o.sequence == 0 || o.expires_at_ms <= o.observed_at_ms {
-                        return Err("observation expiry precedes observation".into());
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    use aq_session_protocol::Validate;
-    match &doc {
-        ContractDocument::Watch(r) => r.terminal.validate(),
-        ContractDocument::WatchView(r) => {
-            r.terminal.validate().map_err(|e| e.to_string())?;
-            if r.columns == 0 || r.rows == 0 || r.columns > 1000 || r.rows > 1000 {
-                return Err("dimensions must be 1..1000".into());
-            }
-            if matches!(r.coverage, Coverage::Complete) && (r.truncated || !r.gaps.is_empty()) {
-                return Err("complete coverage cannot contain loss".into());
-            }
-            if matches!(r.coverage, Coverage::Gapped) && r.gaps.is_empty() && !r.truncated {
-                return Err("gapped coverage requires loss marker".into());
-            }
-            for gap in &r.gaps {
-                gap.validate().map_err(|e| e.to_string())?;
-                if gap.terminal != r.terminal {
-                    return Err("gap targets different terminal".into());
-                }
-            }
-            Ok(())
-        }
-        ContractDocument::AcquireControl(r) => r.terminal.validate(),
-        ContractDocument::Input(r) => r.terminal.validate(),
-        ContractDocument::Resize(r) => r.terminal.validate(),
-        ContractDocument::ResolveInput(r) => r.terminal.validate(),
-        ContractDocument::InputReceipt(r) => r.terminal.validate(),
-        ContractDocument::Message(r) => r.session.validate(),
-        _ => Ok(()),
-    }
-    .map_err(|e| e.to_string())?;
+    validate_contract(&doc)?;
     Ok(doc)
+}
+
+fn check_dimensions(columns: u16, rows: u16) -> Result<(), String> {
+    check(
+        (1..=1000).contains(&columns) && (1..=1000).contains(&rows),
+        "dimensions must be 1..1000",
+    )
+}
+
+fn check(condition: bool, message: &str) -> Result<(), String> {
+    condition.then_some(()).ok_or_else(|| message.to_owned())
+}
+
+fn validate_contract(doc: &ContractDocument) -> Result<(), String> {
+    use aq_session_protocol::Validate;
+    let terminal = match doc {
+        ContractDocument::ProfileValidate(_) | ContractDocument::ProfileExplain(_) => return Ok(()),
+        ContractDocument::ProfileExplanation(r) => return r.check(),
+        ContractDocument::Watch(r) => &r.terminal,
+        ContractDocument::WatchView(r) => return r.check(),
+        ContractDocument::AcquireControl(r) => &r.terminal,
+        ContractDocument::Input(r) => {
+            check_controller_generation(r.expected_controller_generation)?;
+            check(
+                (1..=4096).contains(&r.bytes.len()),
+                "input must contain 1..4096 bytes",
+            )?;
+            &r.terminal
+        }
+        ContractDocument::Resize(r) => {
+            check(
+                r.expected_controller_generation > 0 && r.sequence > 0,
+                "controller and resize sequence must be positive",
+            )?;
+            check_dimensions(r.columns, r.rows)?;
+            &r.terminal
+        }
+        ContractDocument::ResolveInput(r) => {
+            check_controller_generation(r.expected_controller_generation)?;
+            &r.terminal
+        }
+        ContractDocument::InputReceipt(r) => {
+            check(
+                r.disposition != InputDisposition::DeliveryUnknown || r.input_paused,
+                "unknown input must pause input",
+            )?;
+            &r.terminal
+        }
+        ContractDocument::Message(r) => {
+            check(
+                (1..=4096).contains(&r.text.len()),
+                "message must contain 1..4096 UTF-8 bytes",
+            )?;
+            return r.session.validate().map_err(|e| e.to_string());
+        }
+    };
+    terminal.validate().map_err(|e| e.to_string())
+}
+
+fn check_controller_generation(generation: u64) -> Result<(), String> {
+    check(generation > 0, "controller generation must be positive")
+}
+
+impl ProfileExplanation {
+    fn check(&self) -> Result<(), String> {
+        if self.schema_version != API_VERSION {
+            return Err("unsupported schema version".into());
+        }
+        let missing_required =
+            self.omissions.iter().any(|o| o.required) || !self.denied_requirements.is_empty();
+        check(
+            !self.valid || !missing_required,
+            "valid explanation denies required content",
+        )?;
+        self.check_budget()?;
+        if self.valid && self.selection.selected_candidate_id.is_none() {
+            return Err("valid explanation requires selection".into());
+        }
+        unique(
+            self.selection
+                .candidates
+                .iter()
+                .map(|c| c.candidate_id.clone()),
+        )?;
+        unique(self.flattened_modules.iter().map(|m| m.identity.clone()))?;
+        self.check_permissions()?;
+        self.selection.check()
+    }
+
+    fn check_budget(&self) -> Result<(), String> {
+        check(
+            self.estimated_tokens.is_some() == self.tokenizer_version.is_some(),
+            "token estimate requires tokenizer provenance",
+        )?;
+        check(
+            self.required_bytes
+                .checked_add(self.optional_bytes)
+                .is_some_and(|n| n <= 16_777_216),
+            "context budget exceeds 16 MiB",
+        )
+    }
+
+    fn check_permissions(&self) -> Result<(), String> {
+        for permissions in [
+            &self.requested_permissions,
+            &self.effective_permissions,
+            &self.denied_requirements,
+        ] {
+            unique(
+                permissions
+                    .iter()
+                    .map(|p| format!("{}\0{}", p.operation, p.scope_reference)),
+            )?;
+        }
+        for p in &self.effective_permissions {
+            if !self.requested_permissions.contains(p) {
+                return Err("effective permission was not requested".into());
+            }
+            if self.denied_requirements.contains(p) {
+                return Err("permission is both effective and denied".into());
+            }
+        }
+        Ok(())
+    }
+}
+impl Selection {
+    fn check(&self) -> Result<(), String> {
+        if let Some(id) = &self.selected_candidate_id {
+            let selected = self.candidates.iter().find(|c| &c.candidate_id == id);
+            check(
+                selected.is_some_and(|c| matches!(c.eligibility, Eligibility::Eligible)),
+                "selection must identify one eligible candidate",
+            )?;
+        }
+        let observations = self.candidates.iter().flat_map(|c| &c.observations);
+        for observation in observations {
+            if observation.sequence == 0 || observation.expires_at_ms <= observation.observed_at_ms
+            {
+                return Err("observation expiry precedes observation".into());
+            }
+        }
+        Ok(())
+    }
+}
+impl WatchView {
+    fn check(&self) -> Result<(), String> {
+        use aq_session_protocol::Validate;
+        self.terminal.validate().map_err(|e| e.to_string())?;
+        check_dimensions(self.columns, self.rows)?;
+        let lost = self.truncated || !self.gaps.is_empty();
+        match self.coverage {
+            Coverage::Complete => check(!lost, "complete coverage cannot contain loss")?,
+            Coverage::Gapped => check(lost, "gapped coverage requires loss marker")?,
+            Coverage::Unknown => {}
+        }
+        for gap in &self.gaps {
+            gap.validate().map_err(|e| e.to_string())?;
+            if gap.terminal != self.terminal {
+                return Err("gap targets different terminal".into());
+            }
+        }
+        Ok(())
+    }
 }
 fn unique(values: impl Iterator<Item = String>) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -400,46 +430,66 @@ fn validate_fields(v: &serde_json::Value, key: Option<&str>) -> Result<(), Strin
                 validate_fields(v, None)?;
             }
         }
-        serde_json::Value::String(s) => {
-            let k = key.unwrap_or("");
-            if s.trim().is_empty() || (k != "text" && s.chars().any(char::is_control)) {
-                return Err("empty or control-bearing reference".into());
-            }
-            if (k == "digest" || k.ends_with("_digest"))
-                && (s.len() != 64
-                    || !s
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-            {
-                return Err("digest must be lowercase SHA256".into());
-            }
-            if k.ends_with("_id") && Uuid::parse_str(s).is_ok_and(|id| id.is_nil()) {
-                return Err("nil identity".into());
-            }
-            if k == "scope_reference"
-                && (s.len() > 512 || !s.contains(':') || s.split(':').any(str::is_empty))
-            {
-                return Err("scope must be a bounded logical reference".into());
-            }
-        }
-        serde_json::Value::Number(n) => {
-            let k = key.unwrap_or("");
-            if (k.ends_with("_at_ms")
-                || k == "expected_project_revision"
-                || k == "expected_session_revision"
-                || k == "session_revision"
-                || k == "generation"
-                || k == "assignment_generation"
-                || k == "epoch")
-                && n.as_u64() == Some(0)
-            {
-                return Err("required revision/time must be positive".into());
-            }
+        serde_json::Value::String(s) => validate_string(key.unwrap_or(""), s)?,
+        serde_json::Value::Number(n)
+            if positive_field(key.unwrap_or("")) && n.as_u64() == Some(0) =>
+        {
+            return Err("required revision/time must be positive".into());
         }
         _ => {}
     }
     Ok(())
 }
+fn validate_string(k: &str, s: &str) -> Result<(), String> {
+    check(!s.trim().is_empty(), "empty or control-bearing reference")?;
+    if k != "text" {
+        check(
+            !s.chars().any(char::is_control),
+            "empty or control-bearing reference",
+        )?;
+    }
+    if digest_field(k) {
+        check(valid_digest(s), "digest must be lowercase SHA256")?;
+    }
+    if k.ends_with("_id") {
+        check(
+            !Uuid::parse_str(s).is_ok_and(|id| id.is_nil()),
+            "nil identity",
+        )?;
+    }
+    if k == "scope_reference" {
+        check(valid_scope(s), "scope must be a bounded logical reference")?;
+    }
+    Ok(())
+}
+
+fn valid_scope(s: &str) -> bool {
+    s.len() <= 512 && s.contains(':') && s.split(':').all(|part| !part.is_empty())
+}
+
+fn valid_digest(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn positive_field(name: &str) -> bool {
+    name.ends_with("_at_ms")
+        || matches!(
+            name,
+            "expected_project_revision"
+                | "expected_session_revision"
+                | "session_revision"
+                | "generation"
+                | "assignment_generation"
+                | "epoch"
+        )
+}
+
+fn digest_field(name: &str) -> bool {
+    name == "digest" || name.ends_with("_digest")
+}
+
 fn bound_value(v: &serde_json::Value, depth: usize, input_bytes: bool) -> Result<(), String> {
     if depth > 24 {
         return Err("nesting exceeds 24".into());
@@ -469,71 +519,69 @@ fn bound_value(v: &serde_json::Value, depth: usize, input_bytes: bool) -> Result
 /// Independently versioned JSON Schema with conservative publication bounds.
 pub fn schema() -> serde_json::Value {
     let mut v = serde_json::to_value(schemars::schema_for!(ContractDocument)).unwrap();
-    fn walk(v: &mut serde_json::Value) {
-        match v {
-            serde_json::Value::Object(o) => {
-                for v in o.values_mut() {
-                    walk(v);
-                }
-                if o.get("type").and_then(|v| v.as_str()) == Some("string") {
-                    o.entry("maxLength").or_insert(4096.into());
-                    o.entry("minLength").or_insert(1.into());
-                    o.insert(
-                        "x-maxUtf8Bytes".into(),
-                        o.get("maxLength").cloned().unwrap_or(4096.into()),
-                    );
-                }
-                if o.get("type").and_then(|v| v.as_str()) == Some("array") {
-                    o.entry("maxItems").or_insert(128.into());
-                }
-            }
-            serde_json::Value::Array(a) => {
-                for v in a {
-                    walk(v);
-                }
-            }
-            _ => {}
-        }
-    }
-    walk(&mut v);
-    if let Some(defs) = v.get_mut("$defs").and_then(|v| v.as_object_mut()) {
-        for (definition_name, def) in defs.iter_mut() {
-            if let Some(properties) = def.get_mut("properties").and_then(|v| v.as_object_mut()) {
-                for (name, field) in properties {
-                    if field.get("format").and_then(|v| v.as_str()) == Some("uuid") {
-                        field["not"] =
-                            serde_json::json!({"const":"00000000-0000-0000-0000-000000000000"});
-                    }
-                    if name == "expected_controller_generation"
-                        && definition_name != "AcquireControlRequest"
-                    {
-                        field["minimum"] = 1.into();
-                    }
-                    if name == "columns" || name == "rows" {
-                        field["minimum"] = 1.into();
-                        field["maximum"] = 1000.into();
-                    }
-                    if name.ends_with("_at_ms")
-                        || name == "expected_project_revision"
-                        || name == "expected_session_revision"
-                        || name == "session_revision"
-                        || name == "generation"
-                        || name == "assignment_generation"
-                        || name == "epoch"
-                    {
-                        field["minimum"] = 1.into();
-                    }
-                    if (name == "digest" || name.ends_with("_digest")) && field.is_object() {
-                        field["pattern"] = "^[0-9a-f]{64}$".into();
-                        field["minLength"] = 64.into();
-                        field["maxLength"] = 64.into();
-                        field["x-maxUtf8Bytes"] = 64.into();
-                    }
-                }
-            }
+    walk_schema(&mut v);
+    if let Some(definitions) = v.get_mut("$defs").and_then(|v| v.as_object_mut()) {
+        for (name, schema) in definitions {
+            bound_definition(name, schema);
         }
     }
     v
+}
+fn walk_schema(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(o) => {
+            for v in o.values_mut() {
+                walk_schema(v);
+            }
+            if o.get("type").and_then(|v| v.as_str()) == Some("string") {
+                o.entry("maxLength").or_insert(4096.into());
+                o.entry("minLength").or_insert(1.into());
+                o.insert(
+                    "x-maxUtf8Bytes".into(),
+                    o.get("maxLength").cloned().unwrap_or(4096.into()),
+                );
+            }
+            if o.get("type").and_then(|v| v.as_str()) == Some("array") {
+                o.entry("maxItems").or_insert(128.into());
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for v in a {
+                walk_schema(v);
+            }
+        }
+        _ => {}
+    }
+}
+fn bound_definition(name: &str, schema: &mut serde_json::Value) {
+    if let Some(fields) = schema.get_mut("properties").and_then(|v| v.as_object_mut()) {
+        for (field, schema) in fields {
+            bound_field(name, field, schema);
+        }
+    }
+}
+
+fn bound_field(definition_name: &str, name: &str, field: &mut serde_json::Value) {
+    if field.get("format").and_then(|v| v.as_str()) == Some("uuid") {
+        field["not"] = serde_json::json!({"const":"00000000-0000-0000-0000-000000000000"});
+    }
+    match name {
+        "expected_controller_generation" if definition_name != "AcquireControlRequest" => {
+            field["minimum"] = 1.into()
+        }
+        "columns" | "rows" => {
+            field["minimum"] = 1.into();
+            field["maximum"] = 1000.into();
+        }
+        name if positive_field(name) => field["minimum"] = 1.into(),
+        _ => {}
+    }
+    if digest_field(name) && field.is_object() {
+        field["pattern"] = "^[0-9a-f]{64}$".into();
+        field["minLength"] = 64.into();
+        field["maxLength"] = 64.into();
+        field["x-maxUtf8Bytes"] = 64.into();
+    }
 }
 
 impl aq_session_protocol::Validate for ContractDocument {

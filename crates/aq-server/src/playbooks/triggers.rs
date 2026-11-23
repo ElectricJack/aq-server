@@ -122,12 +122,12 @@ impl Service {
         for row in rows {
             // Raise waiting tasks once per version before deciding whether to ask again.
             if let Some(at) = row.escalation(now) {
-                self.routing_failure(
+                self.routing_failure(aq_playbook_domain::route_effect::RoutingFailure {
                     at,
-                    "unrouted",
-                    row.emission.wanted_version,
-                    &serde_json::Value::Null,
-                )
+                    outcome: "unrouted",
+                    version: row.emission.wanted_version,
+                    input: &serde_json::Value::Null,
+                })
                 .await?;
             }
             let offers = match options.as_ref().filter(|_| not_offered(&row)) {
@@ -240,6 +240,15 @@ impl Service {
     ) -> Result<()> {
         aq_playbook_host::model::validate_event(event, self.registry())
             .map_err(|_| Error::Invalid)?;
-        self.seal_outbox(tx, id, event, self.now()?, None).await
+        self.seal_outbox(
+            tx,
+            super::host_adapters::OutboxEntry {
+                row_id: id,
+                event,
+                at: self.now()?,
+                retention: None,
+            },
+        )
+        .await
     }
 }

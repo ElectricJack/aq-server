@@ -91,7 +91,9 @@ impl Service {
         let (pool, now_ms) = (&self.pool, (self.now)());
         let candidates = self.resolve(request, now_ms).await?;
         let candidates = candidates.as_deref().map_err(String::as_str);
-        store::submit_as(pool, id, request, candidates, now_ms).await
+        store::Queue::at(pool, now_ms)
+            .submit_as(id, request, candidates)
+            .await
     }
 
     /// Settings (or the request's override) pick the profile; the profile
@@ -163,7 +165,9 @@ impl Service {
         let now_ms = (self.now)();
         let candidates = self.resolve(&row.request, now_ms).await?;
         let candidates = candidates.as_deref().map_err(String::as_str);
-        store::submit_retry(&self.pool, &row.request, candidates, lineage, now_ms).await
+        store::Queue::at(&self.pool, now_ms)
+            .submit_retry(&row.request, candidates, lineage)
+            .await
     }
 
     /// The `/escalate` of a supervisor: the owner gets the failed run, with
@@ -222,7 +226,15 @@ impl Service {
             .collect::<std::result::Result<Vec<AvailabilityObservation>, _>>()
             .map_err(|_| Error::Corrupt)?;
         let now = u64::try_from(now_ms).unwrap_or(0);
-        let resolved = resolve(snapshot, registry, &observations, profile, now);
+        let resolved = resolve(
+            snapshot,
+            registry,
+            ObservedAt {
+                observations: &observations,
+                now_ms: now,
+            },
+            profile,
+        );
         Ok(resolved
             .map(|resolved| resolved.candidates)
             .map_err(|_| format!("intelligence profile {profile:?} has no usable candidate")))
@@ -285,10 +297,18 @@ impl Service {
         let (id, index) = (claimed.id, claimed.candidate_index);
         match checked {
             Ok((answer, usage)) => {
-                store::complete(pool, id, index, &answer, usage.as_ref(), now()).await
+                store::Queue::at(pool, now())
+                    .complete(
+                        store::CandidateAttempt::new(id, index),
+                        &answer,
+                        usage.as_ref(),
+                    )
+                    .await
             }
             Err((reason, detail)) => {
-                store::fail_candidate(pool, id, index, reason, &detail, now()).await
+                store::Queue::at(pool, now())
+                    .fail_candidate(store::CandidateAttempt::new(id, index), reason, &detail)
+                    .await
             }
         }
     }
@@ -343,7 +363,8 @@ impl Service {
     ) {
         while !*stop.borrow() {
             while self.enabled && running.len() < API_CONCURRENCY {
-                let claimed = store::claim(&self.pool, Way::Api, &[], &self.runner, (self.now)());
+                let claimed =
+                    store::Queue::at(&self.pool, (self.now)()).claim(Way::Api, &[], &self.runner);
                 match claimed.await {
                     Ok(Some(claimed)) => {
                         let service = Arc::clone(self);
