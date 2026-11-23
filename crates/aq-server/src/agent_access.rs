@@ -49,16 +49,9 @@ pub(crate) async fn settlement_post(
     workspace: Uuid,
     bytes: Vec<u8>,
 ) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
-    settlement_transport(rt, workspace, bytes, false).await
+    settlement_graph_request(rt, workspace, bytes, false).await
 }
-pub(crate) async fn settlement_lookup(
-    rt: &Runtime,
-    workspace: Uuid,
-    bytes: Vec<u8>,
-) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
-    settlement_transport(rt, workspace, bytes, true).await
-}
-async fn settlement_transport(
+pub(crate) async fn settlement_graph_request(
     rt: &Runtime,
     workspace: Uuid,
     bytes: Vec<u8>,

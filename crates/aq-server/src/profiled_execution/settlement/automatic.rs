@@ -462,13 +462,10 @@ async fn dispatch(
     };
     let payload = payload.as_slice();
     let request = |lookup| async move {
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            if lookup {
-                crate::agent_access::settlement_lookup(rt, workspace, payload.to_vec()).await
-            } else {
-                crate::agent_access::settlement_post(rt, workspace, payload.to_vec()).await
-            }
-        })
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            crate::agent_access::settlement_graph_request(rt, workspace, payload.to_vec(), lookup),
+        )
         .await
     };
     let mut lookup = !first_send;
