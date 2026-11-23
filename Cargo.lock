@@ -254,6 +254,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonwebtoken",
+ "nix",
  "rand 0.8.8",
  "reqwest",
  "rsa",
@@ -515,6 +516,20 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aq-observation-ledger"
+version = "0.1.0"
+dependencies = [
+ "aq-accounting",
+ "aq-stall-ladder",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-postgres",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -872,6 +887,7 @@ dependencies = [
  "aq-notifications",
  "aq-observation-admission",
  "aq-observation-api",
+ "aq-observation-ledger",
  "aq-phase-terminal-protocol",
  "aq-playbook-authoring",
  "aq-playbook-domain",
