@@ -1,4 +1,5 @@
 //! dashboard-actions-1 request, operation and outcome types.
+pub mod receipts;
 use super::{Envelope, Scope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
