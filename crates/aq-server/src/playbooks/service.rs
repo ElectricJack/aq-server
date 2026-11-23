@@ -334,11 +334,7 @@ impl Service {
         Ok(at)
     }
     pub(super) async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('statement_timeout','2000ms',true),set_config('lock_timeout','500ms',true)")
-            .execute(&mut *tx)
-            .await?;
-        Ok(tx)
+        aq_playbook_domain::bridge_tx(&self.pool).await
     }
     pub(super) async fn owner(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
         let role: Option<String> =

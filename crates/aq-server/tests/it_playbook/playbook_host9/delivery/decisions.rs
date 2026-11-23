@@ -198,6 +198,153 @@ async fn a_lost_settlement_answer_leaves_work_complete_pending_until_a_replay() 
 }
 
 #[tokio::test]
+async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    let h = delivery(false).await;
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    h.answers(Settled::Pending);
+    let (task, pending) = h.stopped(h.scope.project_id, "failed");
+    let source = builtin::delivery();
+    let catalog = request::pinned_catalog(&source).unwrap();
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("work.return");
+    step["op"]["input"]["fields"]["update_from_main"] = json!({"op":"literal","value":false});
+    step["edges"] = json!({"returned":"delivered", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Return an already stopped result to the queue.".into(),
+        record: request::engine_record(&source, "delivery-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let factory = move || {
+        use aq_playbook_host::{
+            Error, postgres_client as pg, postgres_storage as store, protected,
+        };
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    };
+    let driver = Driver::start(h.service.clone(), Default::default(), factory.clone())
+        .await
+        .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if !h.settled().is_empty() {
+            break;
+        }
+    }
+    let pool = h.pool().await;
+    let retained = || {
+        sqlx::query_as::<_, (String, Uuid, String)>(
+        "SELECT intent_id,operation_id,status FROM playbook_effects WHERE command_name='work.return'",
+    ).fetch_one(&pool)
+    };
+    let (intent, operation, status) = retained().await.unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(h.decision(pending.result_id).await, None);
+    driver.stop().await.unwrap();
+
+    h.later(15_000);
+    h.answers(Settled::Returned);
+    let driver = Driver::start(h.service.clone(), Default::default(), factory)
+        .await
+        .unwrap();
+    driver.recover().await.unwrap();
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        retained().await.unwrap(),
+        (intent, operation, "returned".into())
+    );
+    assert_eq!(h.decision(pending.result_id).await.unwrap().0, "returned");
+    let returns: i64 =
+        sqlx::query_scalar("SELECT returns::bigint FROM delivery_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(returns, 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    assert_eq!(h.settled(), vec![("policy".into(), pending.result_id); 2]);
+
+    // A final receipt also survives losing the answer before the engine sees it.
+    let (_, lost) = h.stopped(h.scope.project_id, "failed");
+    driver.test_lose_next_host_reply("work.return");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.decision(lost.result_id).await.is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.decision(lost.result_id).await.unwrap().0, "returned");
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(runs.items.iter().all(|run| run.status == "completed"));
+    assert_eq!(h.settled().len(), 3);
+
+    // An admitted decision can wait for authority. It must never run on a revoked grant.
+    h.answers(Settled::Pending);
+    let (_, revoked) = h.stopped(h.scope.project_id, "failed");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.settled()
+            .iter()
+            .any(|(_, result)| *result == revoked.result_id)
+        {
+            break;
+        }
+    }
+    assert_eq!(h.settled().len(), 4);
+    h.service.revoke(h.f.actor, h.grant).await.unwrap();
+    h.answers(Settled::Returned);
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.settled().len(), 4);
+    assert_eq!(h.decision(revoked.result_id).await, None);
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     let h = delivery(false).await;
     h.answers(Settled::Returned);

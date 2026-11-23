@@ -373,6 +373,33 @@ pub async fn result_wait(
     .await?)
 }
 
+/// The still-pending delivery decision on the claim's exact result.
+pub async fn settlement_wait(
+    db: &mut PgConnection,
+    (namespace, generation): (Uuid, i64),
+    attempt: Uuid,
+    now_ms: i64,
+) -> Result<Option<(Uuid, Uuid, String, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,e.operation_id,e.command_name,
+           g.revoked_at_ms IS NULL AND g.expires_at_ms>$4 AND g.revision=e.grant_revision
+         FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+         JOIN playbook_effects e ON e.receipt->>'result_id'=h.report_id::text
+           AND e.receipt->>'task'=a.task_id::text AND e.namespace_id=$1 AND e.generation=$2
+         JOIN playbook_grants g ON g.grant_id=e.grant_id AND g.namespace_id=$1 AND g.generation=$2
+         WHERE h.attempt_id=$3 AND a.holds_task AND e.status='pending'
+           AND e.command_name IN ('work.complete','work.return')
+           AND NOT playbook_run_finished($1,$2,e.run_id)
+         ORDER BY e.created_at_ms DESC,e.intent_id LIMIT 1",
+    )
+    .bind(namespace)
+    .bind(generation)
+    .bind(attempt)
+    .bind(now_ms)
+    .fetch_optional(db)
+    .await?)
+}
+
 /// The latest refused publication for the claimed task, result and retained head.
 /// Older hosts recorded only the catalog reason. A later success supersedes all refusals.
 pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {

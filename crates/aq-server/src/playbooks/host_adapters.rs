@@ -170,7 +170,9 @@ impl Service {
                 self.work_activate(owner, id, revision, intent).await
             }
             #[cfg(feature = "delivery_playbook")]
-            "work.complete" | "work.return" => self.work_decide(owner, id, revision, intent).await,
+            "work.complete" | "work.return" => {
+                self.work_decide(owner, id, revision, intent, false).await
+            }
             #[cfg(feature = "delivery_playbook")]
             "work.hold" => self.work_hold(owner, id, revision, intent).await,
             #[cfg(feature = "delivery_playbook")]

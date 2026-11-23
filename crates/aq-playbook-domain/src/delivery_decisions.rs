@@ -19,7 +19,8 @@ use crate::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool};
+use std::{sync::Mutex, time::Duration};
 use uuid::Uuid;
 
 /// What the server's settlement did to a result for `work.complete` or
@@ -48,6 +49,91 @@ pub trait DeliverySettlement: Send + Sync {
     async fn complete(&self, result: Uuid) -> Result<Settled>;
     /// Refuses `result` for rework with the playbook's `reason` code.
     async fn send_back(&self, result: Uuid, reason: &str) -> Result<Settled>;
+}
+
+/// Rotate through admitted decisions, including final receipts for which the
+/// engine may have lost the answer. Only the engine owner drives a replay.
+#[derive(Default)]
+pub struct Recovery(Mutex<String>);
+
+impl Recovery {
+    pub async fn tick(
+        &self,
+        pool: &PgPool,
+        namespace: &crate::Namespace,
+        owner: &aq_playbook_host::Owner,
+        deadline: Duration,
+        now_ms: i64,
+    ) -> Result<()> {
+        let after = self.0.lock().map_err(|_| Error::Unknown)?.clone();
+        let intents = recovery_batch(pool, namespace, &after).await?;
+        *self.0.lock().map_err(|_| Error::Unknown)? = intents.last().cloned().unwrap_or_default();
+        if !intents.is_empty() {
+            owner
+                .call(
+                    aq_playbook_host::Request::ReconcileDelivery { intents, now_ms },
+                    deadline,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+async fn recovery_batch(
+    pool: &PgPool,
+    namespace: &crate::Namespace,
+    after: &str,
+) -> Result<Vec<String>> {
+    let mut tx = crate::bridge_tx(pool).await?;
+    let ids = sqlx::query_scalar(
+        "SELECT intent_id FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 \
+         AND intent_id>$3 AND command_name IN ('work.complete','work.return') \
+         AND NOT playbook_run_finished($1,$2,run_id) ORDER BY intent_id LIMIT 4",
+    )
+    .bind(namespace.namespace_id)
+    .bind(namespace.generation)
+    .bind(after)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(ids)
+}
+
+/// Settle an admitted decision, then project its answer into delivery. The
+/// native settlement and the projection both replay by result identity.
+pub async fn settle(
+    port: &dyn DeliverySettlement,
+    pool: &PgPool,
+    now: impl FnOnce() -> Result<i64>,
+    command: &str,
+    input: &Value,
+    (task, result): (Uuid, Uuid),
+) -> Result<HostResult> {
+    let reason = input["reason"].as_str();
+    let resolution = match command {
+        "work.complete" => port.complete(result).await?,
+        "work.return" => {
+            port.send_back(result, reason.ok_or(Error::Invalid)?)
+                .await?
+        }
+        _ => return Err(Error::Invalid),
+    };
+    let (answer, decision) = settled(command, resolution).ok_or(Error::Unknown)?;
+    if let Some(decision) = decision {
+        let d = Decision {
+            task,
+            result,
+            decision,
+            reason,
+            detail: input["detail"].as_str(),
+            update_from_main: input["update_from_main"].as_bool(),
+        };
+        let mut tx = crate::bridge_tx(pool).await?;
+        record(&mut tx, &d, now()?).await?;
+        tx.commit().await?;
+    }
+    Ok(answer)
 }
 
 /// The task and result a decision command names.

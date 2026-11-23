@@ -124,7 +124,7 @@ pub(super) async fn work(
                         && (pb.installation_routing || pb.namespace.project_id == p)
                 })
                 .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-            aq_human_work::delivery::waiting(&r.pool, namespace, h).await
+            aq_human_work::delivery::waiting(&r.pool, namespace, h, a.requested).await
         }
         _ => None,
     });

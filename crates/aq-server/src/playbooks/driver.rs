@@ -1,5 +1,5 @@
 //! One explicitly started owner and bounded service quanta. Never start another
-//! owner because a request timed out. No automatic external mutation retries.
+//! owner because a request timed out. Only admitted delivery decisions replay.
 use super::{domain::*, service::*};
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
@@ -15,12 +15,6 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-fn host_error(error: aq_playbook_host::Error) -> Error {
-    match error {
-        aq_playbook_host::Error::Overloaded => Error::Overloaded,
-        _ => Error::Unknown,
-    }
-}
 /// An engine answer to a new event or admission: an unknown outcome or a
 /// storage failure is `Unknown` (left pending, delivered again); a refusal
 /// is `Invalid` (held).
@@ -64,6 +58,18 @@ impl DomainHost for MailHost {
     }
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
+    }
+    #[cfg(feature = "delivery_playbook")]
+    fn reconcile_delivery(&mut self, intent: &Intent) -> Option<DispatchResult> {
+        let (id, revision) = grant_actor(&intent.authority).ok()?;
+        let answer = self
+            .handle
+            .block_on(
+                self.service
+                    .work_decide(&self.runtime, id, revision, intent, true),
+            )
+            .ok()?;
+        Some(host_result(answer, intent))
     }
     fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
         self.dispatch_adapter(intent, false)
@@ -339,6 +345,8 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    #[cfg(feature = "delivery_playbook")]
+    delivery_recovery: aq_playbook_domain::delivery_decisions::Recovery,
     /// Order binding mutations with their bridge projections.
     binding_gate: tokio::sync::Mutex<()>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
@@ -440,7 +448,7 @@ impl Driver {
             },
         )
         .await
-        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|e| (e.to_string(), Error::from(e)))
         .map_err(|(why, error)| (error, why))?;
         let taken = proof.lock().map_err(|_| Error::Unknown);
         let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
@@ -451,6 +459,8 @@ impl Driver {
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_recovery: Default::default(),
             binding_gate: tokio::sync::Mutex::new(()),
             deadline,
             tick_deadline,
@@ -509,7 +519,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         // G11 X30/X32 read model only: a registry failure leaves the run's
         // definition view null and never refuses an owner-committed install.
         if self.service.register_definition(&registered).await.is_err() {
@@ -556,7 +566,7 @@ impl Driver {
             .await
             .map_err(|error| match error {
                 aq_playbook_host::Error::Invalid => Error::Invalid,
-                other => host_error(other),
+                other => Error::from(other),
             })?;
         let current = Request::Binding {
             binding: binding.clone(),
@@ -590,7 +600,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         let known: Option<KeyedAdmissionReceipt> = serde_json::from_value(value)?;
         let receipt = if let Some(receipt) = known {
             receipt
@@ -779,7 +789,7 @@ impl Driver {
                         self.deadline,
                     )
                     .await
-                    .map_err(host_error),
+                    .map_err(Error::from),
             );
         }
         if self.service.profile == super::review_domain::CatalogProfile::Monitoring6
@@ -838,12 +848,23 @@ impl Driver {
         }
         let now_ms = self.service_clock();
         let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
-        let cancelled = cancel.await.map_err(host_error);
+        let cancelled = cancel.await.map_err(Error::from);
         partial.defer("cancelling effects", cancelled.clone());
         cancelled?;
+        #[cfg(feature = "delivery_playbook")]
+        if self.service.profile.is_delivery() {
+            let recovery = self.delivery_recovery.tick(
+                &self.service.pool,
+                &self.service.namespace,
+                &self.owner,
+                self.tick_deadline,
+                self.service_clock(),
+            );
+            partial.defer("reconciling delivery decisions", recovery.await);
+        }
         let now_ms = self.service_clock();
         let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
-        let tick = ticked.await.map_err(host_error);
+        let tick = ticked.await.map_err(Error::from);
         partial.defer("ticking runs", tick.clone());
         let tick = tick?;
         if self.owner.has_plugin_artifacts() {
@@ -932,7 +953,7 @@ impl Driver {
             // missing record fails the fan-out), or `EventStatus` does not.
             Err(aq_playbook_host::Error::NotFound(what)) if what == key => true,
             Err(aq_playbook_host::Error::Invalid) => true,
-            Err(error) => return Err(host_error(error)),
+            Err(error) => return Err(Error::from(error)),
         };
         if complete {
             self.service.complete_event(&self.runtime, id).await?;
@@ -981,7 +1002,7 @@ impl Driver {
             // engine no longer finds it. Cancelling it stays the no-op it is
             // for a terminal run.
             Err(aq_playbook_host::Error::Engine(_)) if self.finished(run).await? => Ok(()),
-            Err(error) => Err(host_error(error)),
+            Err(error) => Err(Error::from(error)),
         }
     }
     async fn finished(&self, run: String) -> Result<bool> {
@@ -1030,7 +1051,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         match active.as_bool() {
             Some(true) => self.service.binding_activated(&binding, &artifact).await,
             Some(false) => self.service.binding_deactivated(&binding).await,
@@ -1054,7 +1075,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         match result.as_bool() {
             Some(true) => self.service.binding_deactivated(&binding).await,
             Some(false) => Err(Error::Conflict),
@@ -1164,7 +1185,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
     }
 }

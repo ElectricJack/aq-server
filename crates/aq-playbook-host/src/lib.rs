@@ -50,6 +50,11 @@ pub trait DomainHost: Host {
     fn transition_time(&self, now_ms: i64) -> i64 {
         now_ms
     }
+    /// Resume only an effect already admitted by the domain owner, or read
+    /// its final receipt. An absent admission or authority returns None.
+    fn reconcile_delivery(&mut self, _intent: &Intent) -> Option<DispatchResult> {
+        None
+    }
     fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
         DispatchResult::Unknown {
             reason: "plugin contract is unavailable".into(),
@@ -217,6 +222,10 @@ pub enum Request {
     Recover {
         now_ms: i64,
     },
+    ReconcileDelivery {
+        intents: Vec<String>,
+        now_ms: i64,
+    },
     Binding {
         binding: String,
     },
@@ -269,6 +278,9 @@ impl Request {
                 event_key, limit, ..
             } => valid(event_key) && (1..=64).contains(limit),
             Self::Recover { .. } | Self::CancelEffects { .. } => true,
+            Self::ReconcileDelivery { intents, .. } => {
+                (1..=4).contains(&intents.len()) && intents.iter().all(|id| valid(id))
+            }
             Self::EventStatus { event_key } => valid(event_key),
             Self::Inspect { query } => query.validate().is_ok() && query.limit <= 32,
             Self::Activate {
@@ -819,6 +831,10 @@ fn execute<S: Storage>(
         Request::Recover { now_ms } => {
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
         }
+        Request::ReconcileDelivery { intents, now_ms } => {
+            let count = reconcile_delivery(engine, host, &intents, now_ms)?;
+            serde_json::json!({"reconciled": count})
+        }
         Request::Install { artifact } => {
             let registry = artifact.content.registry.clone();
             engine.install(*artifact).map_err(engine_error)?;
@@ -974,6 +990,84 @@ fn execute<S: Storage>(
         Request::Stop => Value::Null,
     };
     Ok(value)
+}
+
+fn reconcile_delivery<S: Storage>(
+    engine: &Engine<S>,
+    host: &mut impl DomainHost,
+    ids: &[String],
+    now_ms: i64,
+) -> Result<usize, Error> {
+    use runner::transition::{TransitionOutcome, TransitionRequest};
+    let mut candidates = Vec::new();
+    let mut plan = |state: &mut runner::State| {
+        candidates = admitted_delivery(state, ids)?;
+        Ok(false)
+    };
+    let request = &mut TransitionRequest {
+        operation: "read_admitted_delivery",
+        plan: &mut plan,
+    };
+    match engine
+        .store
+        .transition_v1(&engine.namespace, &engine.owner, request)
+        .map_err(engine_error)?
+    {
+        TransitionOutcome::Unsupported => {
+            candidates = admitted_delivery(&engine.snapshot().map_err(engine_error)?, ids)
+                .map_err(engine_error)?;
+        }
+        TransitionOutcome::Unchanged => {}
+        TransitionOutcome::Committed { .. } => return Err(Error::Unknown),
+    }
+    let mut count = 0;
+    for intent in candidates {
+        // The deadline applies to admission. The host must establish that this
+        // particular effect was already admitted before it can resume it.
+        if let Some(answer @ DispatchResult::Completed { .. }) = host.reconcile_delivery(&intent) {
+            let at = host.transition_time(now_ms).max(now_ms);
+            engine
+                .record_result(&intent.id, answer, at)
+                .map_err(engine_error)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
+    let mut found = Vec::new();
+    for id in ids {
+        let Some(intent) = state.intents.get(id).filter(|intent| {
+            matches!(
+                intent.command.name.as_str(),
+                "work.complete" | "work.return"
+            ) && (matches!(
+                intent.status,
+                IntentStatus::Dispatched | IntentStatus::Unknown
+            ) || (intent.status == IntentStatus::Prepared
+                && intent.dispatch_sequence.is_some()))
+                && !intent.cancel_requested
+        }) else {
+            continue;
+        };
+        let Some(run) = state.runs.get(&intent.run) else {
+            continue;
+        };
+        let authority = &intent.authority;
+        let scope = model::digest(&(&authority.actor, &authority.scope))?;
+        if run.status.terminal()
+            || state.execution_denied.contains(&run.artifact)
+            || state
+                .authority_revocations
+                .get(&scope)
+                .is_some_and(|revoked| !revoked.is_disjoint(&intent.command.capabilities))
+        {
+            continue;
+        }
+        found.push(intent.clone());
+    }
+    Ok(found)
 }
 
 /// Run-local pins remain available to the owner even after an extension
