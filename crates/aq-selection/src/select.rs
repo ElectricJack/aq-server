@@ -29,10 +29,8 @@ pub fn select_for_offer(
             startup_bytes: l.startup_bytes,
         })
         .collect();
-    #[cfg_attr(not(feature = "project_environments"), allow(unused_mut))]
     let mut profile = CoreProfile::launch(launch);
     // Spec 0017 §5.4: the frozen binding allows exactly the placed environment.
-    #[cfg(feature = "project_environments")]
     if profile.environments.is_empty() {
         profile.environments = &input.project.allowed_environments;
     }

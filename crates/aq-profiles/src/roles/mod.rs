@@ -210,3 +210,17 @@ pub struct Execution {
     pub credentials: BTreeMap<String, String>,
     pub limits: Limits,
 }
+
+impl Execution {
+    /// Environments this profile pins, or an empty slice if project placement decides.
+    pub fn pinned_environments(&self) -> &[String] {
+        #[cfg(feature = "project_environments")]
+        {
+            self.environment.as_slice()
+        }
+        #[cfg(not(feature = "project_environments"))]
+        {
+            std::slice::from_ref(&self.environment)
+        }
+    }
+}
