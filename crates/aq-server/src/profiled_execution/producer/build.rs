@@ -408,14 +408,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     };
     let profile = policy
         .resolve_profile(
-            &model,
             &compiled.projection.context,
-            &compiled.role,
-            &aq_profiles::GraphRetryBudget {
-                max_attempts: 1,
-                max_elapsed_ms: 5000,
-                initial_delay_ms: 1,
-                max_delay_ms: 1,
+            aq_profiles::GraphProfileSelection {
+                model: &model,
+                role: &compiled.role,
+                retry: &aq_profiles::GraphRetryBudget {
+                    max_attempts: 1,
+                    max_elapsed_ms: 5000,
+                    initial_delay_ms: 1,
+                    max_delay_ms: 1,
+                },
             },
         )
         .map_err(|_| refused())?;

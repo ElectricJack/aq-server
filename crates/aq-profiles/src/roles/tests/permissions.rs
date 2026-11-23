@@ -24,47 +24,30 @@ fn permissions_take_the_scope_of_the_project_or_its_repository() {
         format!("repository:{repository}"),
     ));
     let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
-    let developer = snapshot.role("developer").unwrap();
-    let effective = effective_permissions(developer, project, repository, &live, &live);
+    let developer = requested_permissions(snapshot.role("developer").unwrap(), project, repository);
+    let effective = developer.effective(&live, &live);
     assert_eq!(pairs(&effective), pairs(&live));
 
     // A reviewer does not write source, whatever the ceilings allow.
-    let reviewer = snapshot.role("reviewer").unwrap();
-    assert_eq!(
-        pairs(&effective_permissions(
-            reviewer, project, repository, &live, &live
-        )),
-        pairs(&live[..2])
-    );
+    let reviewer = requested_permissions(snapshot.role("reviewer").unwrap(), project, repository);
+    assert_eq!(pairs(&reviewer.effective(&live, &live)), pairs(&live[..2]));
     // Both the project's ceilings and the caller must hold the exact permission.
     assert_eq!(
-        pairs(&effective_permissions(
-            developer,
-            project,
-            repository,
-            &live[1..],
-            &live
-        )),
+        pairs(&developer.effective(&live[1..], &live)),
         pairs(&live[1..])
     );
     assert_eq!(
-        pairs(&effective_permissions(
-            developer,
-            project,
-            repository,
-            &live,
-            &live[..1]
-        )),
+        pairs(&developer.effective(&live, &live[..1])),
         pairs(&live[..1])
     );
-    assert!(effective_permissions(developer, project, repository, &live, &[]).is_empty());
+    assert!(developer.effective(&live, &[]).is_empty());
     // A ceiling for another project or with the wrong scope kind grants nothing.
     let foreign = vec![
         permission("task.read", format!("project:{}", Uuid::from_u128(8))),
         permission("source.write", format!("project:{project}")),
         permission("knowledge.read", format!("repository:{repository}")),
     ];
-    assert!(effective_permissions(developer, project, repository, &foreign, &live).is_empty());
+    assert!(developer.effective(&foreign, &live).is_empty());
 }
 #[test]
 fn wait_operations_require_attempt_scoped_permissions() {
@@ -79,6 +62,7 @@ fn wait_operations_require_attempt_scoped_permissions() {
         "wait.register".into(),
         "wait.show".into(),
     ];
+    let requested = requested_permissions(&waiter, project, repository);
     let ceiling = vec![
         permission("task.read", format!("project:{project}")),
         permission("wait.register", "attempt:self".into()),
@@ -86,9 +70,7 @@ fn wait_operations_require_attempt_scoped_permissions() {
         permission("wait.show", format!("project:{project}")),
     ];
     assert_eq!(
-        pairs(&effective_permissions(
-            &waiter, project, repository, &ceiling, &ceiling
-        )),
+        pairs(&requested.effective(&ceiling, &ceiling)),
         [
             ("wait.register".to_string(), "attempt:self".to_string()),
             ("task.read".to_string(), format!("project:{project}")),

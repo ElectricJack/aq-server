@@ -151,15 +151,20 @@ pub struct GraphRetryBudget {
     pub initial_delay_ms: u64,
     pub max_delay_ms: u64,
 }
+/// Concrete role, model and retry policy used to derive a profile identity.
+pub struct GraphProfileSelection<'a> {
+    pub role: &'a str,
+    pub model: &'a ResolvedGraphModel,
+    pub retry: &'a GraphRetryBudget,
+}
 impl GraphAccessPolicy {
     pub fn resolve_profile(
         &self,
-        model: &ResolvedGraphModel,
         context: &serde_json::Value,
-        role: &str,
-        retry: &GraphRetryBudget,
+        selection: GraphProfileSelection<'_>,
     ) -> Result<serde_json::Value> {
         self.validate_context(context)?;
+        let GraphProfileSelection { role, model, retry } = selection;
         for value in [&model.provider, &model.model, &model.native_reasoning] {
             text(value)?;
         }
@@ -253,8 +258,17 @@ mod tests {
     fn two_models_share_one_policy_and_resolve_distinct_profiles() {
         let context = context();
         let policy = policy(&context, vec![Uuid::from_u128(3)]);
-        let resolve =
-            |name| (policy.resolve_profile(&model(name), &context, "developer", &RETRY)).unwrap();
+        let resolve = |name| {
+            (policy.resolve_profile(
+                &context,
+                GraphProfileSelection {
+                    role: "developer",
+                    model: &model(name),
+                    retry: &RETRY,
+                },
+            ))
+            .unwrap()
+        };
         let (first, second) = (resolve("model-a"), resolve("model-b"));
         assert_eq!(first["model"]["model"], "model-a");
         assert_ne!(first["profile_id"], second["profile_id"]);
