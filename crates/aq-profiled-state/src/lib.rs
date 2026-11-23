@@ -44,6 +44,12 @@ pub enum Stop {
     Stopped { receipt: ArtifactRef },
 }
 impl Stop {
+    fn receipt(&self) -> Option<&ArtifactRef> {
+        match self {
+            Self::NotStarted { receipt } | Self::Stopped { receipt } => Some(receipt),
+            _ => None,
+        }
+    }
     pub fn known_stopped(&self) -> bool {
         matches!(self, Self::NotStarted { .. } | Self::Stopped { .. })
     }
@@ -62,6 +68,24 @@ pub enum Effects {
     Unknown,
     Pending { count: u32 },
     Quiescent { receipt: ArtifactRef },
+}
+impl Retention {
+    fn receipt(&self) -> Option<&ArtifactRef> {
+        if let Self::Retained { receipt } = self {
+            Some(receipt)
+        } else {
+            None
+        }
+    }
+}
+impl Effects {
+    fn receipt(&self) -> Option<&ArtifactRef> {
+        if let Self::Quiescent { receipt } = self {
+            Some(receipt)
+        } else {
+            None
+        }
+    }
 }
 /// Receipt references are admitted only by their owning runtime validators.
 /// Deserialization by itself does not verify a receipt or release a task claim.
@@ -94,6 +118,11 @@ impl ProfiledState {
         if self.schema_version != 1 {
             return Err("profiled state version");
         }
+        self.validate_bindings()?;
+        self.validate_grant()?;
+        self.validate_receipts()
+    }
+    fn validate_bindings(&self) -> Result<(), &'static str> {
         self.offer.validate().map_err(|_| "profiled offer")?;
         if !matches!(
             self.offer.binding.session,
@@ -103,48 +132,41 @@ impl ProfiledState {
         }
         aq_worker_protocol::Validate::validate(&self.source).map_err(|_| "source binding")?;
         aq_worker_protocol::Validate::validate(&self.graph).map_err(|_| "graph binding")?;
-        if self.offer.manifest.bindings.graph_id != self.graph.workspace_id
-            || self
-                .offer
-                .manifest
-                .bindings
-                .graph_access_profile
-                .id
-                .as_str()
-                != self.graph.profile_id
-            || self
-                .offer
-                .manifest
-                .bindings
-                .graph_access_profile
-                .version
-                .as_str()
-                != self.graph.profile_revision
-            || self.offer.binding.graph_access_profile_digest.as_str() != self.graph.profile_digest
-        {
+        let profile = &self.offer.manifest.bindings.graph_access_profile;
+        let graph_matches = self.offer.manifest.bindings.graph_id == self.graph.workspace_id
+            && profile.id.as_str() == self.graph.profile_id
+            && profile.version.as_str() == self.graph.profile_revision
+            && self.offer.binding.graph_access_profile_digest.as_str() == self.graph.profile_digest;
+        if !graph_matches {
             return Err("graph binding mismatch");
         }
+        Ok(())
+    }
+    fn validate_grant(&self) -> Result<(), &'static str> {
         if self.cancellation_id.is_some_and(|id| id.is_nil()) {
             return Err("nil cancellation");
         }
         if let Some(grant) = &self.grant {
             grant.validate().map_err(|_| "profiled grant")?;
-            if grant.binding != self.offer.binding
-                || self
-                    .execution_deadline_ms
-                    .is_none_or(|d| d == 0 || grant.expires_at_ms > d)
-            {
+            let in_window = self
+                .execution_deadline_ms
+                .is_some_and(|d| d != 0 && grant.expires_at_ms <= d);
+            if grant.binding != self.offer.binding || !in_window {
                 return Err("grant binding/deadline");
             }
         }
-        if self.status == Status::Granted
-            && (self.grant.is_none()
-                || self.revoked
-                || self.cancellation_id.is_some()
-                || self.stop.known_stopped())
-        {
+        if self.status == Status::Granted && !self.has_live_grant() {
             return Err("inconsistent granted authority");
         }
+        Ok(())
+    }
+    fn has_live_grant(&self) -> bool {
+        self.grant.is_some()
+            && !self.revoked
+            && self.cancellation_id.is_none()
+            && !self.stop.known_stopped()
+    }
+    fn validate_receipts(&self) -> Result<(), &'static str> {
         match &self.stop {
             Stop::NotStarted { receipt } | Stop::Stopped { receipt } => reference(receipt)?,
             _ => {}

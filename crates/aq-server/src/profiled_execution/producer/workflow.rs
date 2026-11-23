@@ -716,8 +716,10 @@ async fn offers(
         }
         super::observation::ReadProvenance::capture(
             &task,
-            &ready,
-            &context,
+            aq_profiled_state::native_offer::GraphReads {
+                ready: &ready,
+                context: &context,
+            },
             compiled.projection.artifact.digest.clone(),
             now(state)?,
         )

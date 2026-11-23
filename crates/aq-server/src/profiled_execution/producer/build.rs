@@ -740,8 +740,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     state_projection.validate().map_err(|_| refused())?;
     let read_provenance = super::observation::ReadProvenance::capture(
         task,
-        ready,
-        context,
+        aq_profiled_state::native_offer::GraphReads { ready, context },
         compiled.projection.artifact.digest.clone(),
         time,
     )

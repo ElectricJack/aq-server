@@ -20,97 +20,117 @@ pub fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// The value of `key` among a conclusion's leading `;`-separated fields.
-fn leading<'a>(conclusion: &'a str, key: &str) -> Option<&'a str> {
-    conclusion.split(';').take(4).find_map(|f| field(f, key))
+#[derive(Clone, Copy)]
+enum ConclusionField {
+    Changes,
+    Outcome,
+}
+impl ConclusionField {
+    fn leading(self, conclusion: &str) -> Option<&str> {
+        let key = match self {
+            Self::Changes => "changes",
+            Self::Outcome => "outcome",
+        };
+        conclusion
+            .split(';')
+            .take(4)
+            .find_map(|part| field(part, key))
+    }
 }
 /// Review I-2, R1-I1: the conclusion claims changes (its `Changes:` value names a
 /// path). An older worker writes the copied-back files there.
 pub fn claims_changes(conclusion: &str) -> bool {
-    leading(conclusion, "changes").is_some_and(names_paths)
+    ConclusionField::Changes
+        .leading(conclusion)
+        .is_some_and(names_paths)
 }
 /// Owner ruling 4a, R1-M2: the conclusion opens with `Outcome: blocked`.
 pub fn blocked(conclusion: &str) -> bool {
-    leading(conclusion, "outcome").is_some_and(said_blocked)
+    ConclusionField::Outcome
+        .leading(conclusion)
+        .is_some_and(said_blocked)
 }
 /// An `Outcome:` value whose first word is `blocked`.
 pub fn said_blocked(value: &str) -> bool {
-    first_word(value).eq_ignore_ascii_case("blocked")
-}
-
-/// A token without its wrapping backticks or emphasis and its trailing `.` `;` `,`.
-fn bare(token: &str) -> &str {
-    const WRAP: [char; 3] = ['*', '_', '`'];
-    token
-        .trim_matches(WRAP)
-        .trim_end_matches(['.', ';', ','])
-        .trim_matches(WRAP)
-}
-fn first_word(value: &str) -> &str {
     value
         .split_whitespace()
-        .map(bare)
-        .find(|t| !t.is_empty())
-        .unwrap_or_default()
+        .map(|word| Token(word).bare().0)
+        .find(|word| !word.is_empty())
+        .is_some_and(|word| word.eq_ignore_ascii_case("blocked"))
 }
-/// A file name `name.ext`: `ext` 1-8 alphanumerics with a letter; `name` at least two
-/// characters, starting with two before any dot (`a.k.a`, `e.g` are words), of
-/// letters, digits, `-`, `_` and `.`, and not a bare number or version.
-fn file_name(segment: &str) -> bool {
-    let Some((name, ext)) = segment.rsplit_once('.') else {
-        return false;
-    };
-    let number = |s: &str| {
-        s.trim_start_matches(['v', 'V'])
+
+struct Token<'a>(&'a str);
+impl Token<'_> {
+    /// A token without its wrapping backticks or emphasis and its trailing `.` `;` `,`.
+    fn bare(self) -> Self {
+        const WRAP: [char; 3] = ['*', '_', '`'];
+        Self(
+            self.0
+                .trim_matches(WRAP)
+                .trim_end_matches(['.', ';', ','])
+                .trim_matches(WRAP),
+        )
+    }
+    /// Review R3-I1: a path token is (a) a file name, (b) a slash path whose last
+    /// segment is a file name, (c) a slash path ending in `/` whose first segment has
+    /// two or more characters, or (d) a slash path with a segment containing `-`, `_`
+    /// or a digit, or a segment that is a file or dot name. Letter-only slash words
+    /// (`none/nil`, `and/or`, `CI/CD`, `I/O`) are not paths, and nothing with `://` is.
+    fn is_path(self) -> bool {
+        let token = self.0;
+        let allowed = |c| name_char(c) || c == '/';
+        if token.contains("://") || !token.chars().all(allowed) {
+            return false;
+        }
+        let Some((_, last)) = token.rsplit_once('/') else {
+            return Token(token).file_name();
+        };
+        let directory =
+            last.is_empty() && token.split('/').next().unwrap_or_default().chars().count() >= 2;
+        Token(last).file_name() || directory || token.split('/').map(Token).any(Token::distinctive)
+    }
+
+    fn valid_stem(&self) -> bool {
+        let first = self.0.split('.').next().unwrap_or_default();
+        first.chars().count() >= 2 && self.0.chars().all(name_char) && !self.is_version()
+    }
+    fn is_version(&self) -> bool {
+        self.0
+            .trim_start_matches(['v', 'V'])
             .chars()
             .all(|c| c.is_ascii_digit() || c == '.')
-    };
-    name.chars().count() >= 2
-        && name
-            .split('.')
-            .next()
-            .is_some_and(|s| s.chars().count() >= 2)
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || "-_.".contains(c))
-        && !number(name)
-        && (1..=8).contains(&ext.len())
-        && ext.chars().all(|c| c.is_ascii_alphanumeric())
-        && ext.chars().any(|c| c.is_ascii_alphabetic())
-}
-/// A dotfile or dot-directory segment (`.github`, `.config`).
-fn dot_name(segment: &str) -> bool {
-    segment.strip_prefix('.').is_some_and(|rest| {
-        rest.chars().count() >= 2
-            && rest
-                .chars()
-                .all(|c| c.is_alphanumeric() || "-_.".contains(c))
-    })
-}
-/// Review R3-I1: a path token is (a) a file name, (b) a slash path whose last
-/// segment is a file name, (c) a slash path ending in `/` whose first segment has
-/// two or more characters, or (d) a slash path with a segment containing `-`, `_`
-/// or a digit, or a segment that is a file or dot name. Letter-only slash words
-/// (`none/nil`, `and/or`, `CI/CD`, `I/O`) are not paths, and nothing with `://` is.
-fn path_like(token: &str) -> bool {
-    if token.contains("://")
-        || !token
-            .chars()
-            .all(|c| c.is_alphanumeric() || "-_./".contains(c))
-    {
-        return false;
     }
-    if !token.contains('/') {
-        return file_name(token);
+    fn valid_extension(&self) -> bool {
+        (1..=8).contains(&self.0.len())
+            && self.0.chars().all(|c| c.is_ascii_alphanumeric())
+            && self.0.chars().any(|c| c.is_ascii_alphabetic())
     }
-    let segments: Vec<&str> = token.split('/').collect();
-    let last = segments[segments.len() - 1];
-    file_name(last)
-        || (last.is_empty() && segments[0].chars().count() >= 2)
-        || segments.iter().any(|s| {
-            s.chars()
-                .any(|c| c == '-' || c == '_' || c.is_ascii_digit())
-                || (s.contains('.') && (file_name(s) || dot_name(s)))
-        })
+
+    /// A file name `name.ext`: `ext` 1-8 alphanumerics with a letter; `name` at least two
+    /// characters, starting with two before any dot (`a.k.a`, `e.g` are words), of
+    /// letters, digits, `-`, `_` and `.`, and not a bare number or version.
+    fn file_name(&self) -> bool {
+        let Some((name, ext)) = self.0.rsplit_once('.') else {
+            return false;
+        };
+        Token(name).valid_stem() && Token(ext).valid_extension()
+    }
+    /// A dotfile or dot-directory segment (`.github`, `.config`).
+    fn dot_name(&self) -> bool {
+        self.0
+            .strip_prefix('.')
+            .is_some_and(|rest| rest.chars().count() >= 2 && rest.chars().all(name_char))
+    }
+    fn distinctive(self) -> bool {
+        let marked = self
+            .0
+            .chars()
+            .any(|c| matches!(c, '-' | '_') || c.is_ascii_digit());
+        marked || self.file_name() || self.dot_name()
+    }
+}
+fn name_char(c: char) -> bool {
+    c.is_alphanumeric() || "-_.".contains(c)
 }
 
 /// Review R2-I1, R3-I1: a `Changes:` value claims changes only when it consists
@@ -127,11 +147,11 @@ pub fn names_paths(value: &str) -> bool {
         .iter()
         .find_map(|b| value.strip_prefix(b))
         .unwrap_or(value);
-    let tokens: Vec<&str> = value
+    let mut tokens = value
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|t| !t.is_empty())
-        .collect();
-    !tokens.is_empty() && tokens.iter().all(|t| path_like(bare(t)))
+        .peekable();
+    tokens.peek().is_some() && tokens.all(|token| Token(token).bare().is_path())
 }
 
 #[cfg(test)]
