@@ -119,42 +119,88 @@ fn digest(value: &impl Serialize) -> Result<String, Error> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+pub struct ReadAt<'a> {
+    pub pool: &'a PgPool,
+    pub cursors: &'a CursorCodec,
+    pub now_ms: i64,
+}
+
+type PageKey = (DateTime<Utc>, Uuid);
+#[derive(Clone, Copy)]
+struct PageWindow {
+    limit: u16,
+    before: Option<PageKey>,
+}
+
+impl Query {
+    fn limit(&self) -> Result<u16, Error> {
+        let limit = self.limit.unwrap_or(50);
+        let valid_state = self
+            .state
+            .as_deref()
+            .is_none_or(|s| super::STATES[..4].contains(&s));
+        let valid_query = self.q.as_deref().is_none_or(|q| {
+            !q.trim().is_empty() && q.chars().count() <= 256 && !q.chars().any(char::is_control)
+        });
+        ((1..=64).contains(&limit) && valid_state && valid_query)
+            .then_some(limit)
+            .ok_or(Error::Invalid)
+    }
+
+    async fn fetch(
+        &self,
+        workspaces: &BTreeSet<Uuid>,
+        window: PageWindow,
+        graph_read: impl AsyncFnOnce(Value) -> Result<Value, Error>,
+    ) -> Result<GraphPage, Error> {
+        if workspaces.is_empty() {
+            return Ok(GraphPage {
+                items: vec![],
+                unavailable_workspaces: BTreeSet::new(),
+                has_more: false,
+            });
+        }
+        let raw = graph_read(json!({
+            "workspace_ids":workspaces,"limit":window.limit,"q":self.q,"state":self.state,"before":window.before,
+        })).await?;
+        serde_json::from_value(raw).map_err(|_| Error::Unavailable)
+    }
+}
+
+impl Owner<'_> {
+    fn binding(
+        &self,
+        scope: &[ProjectBinding],
+        query: &Query,
+        limit: u16,
+    ) -> Result<Binding, Error> {
+        Ok(Binding {
+            principal: self.id,
+            authorization_partition: digest(&(&self.email, &self.issuer, &self.subject, scope))?,
+            scope: json!({"kind":"all_authorized"}),
+            filters: json!({"q":query.q,"state":query.state}),
+            sort: "updated_at desc,id desc".into(),
+            page_size: limit,
+            resource: "work-task-list".into(),
+        })
+    }
+}
+
 pub async fn read(
-    pool: &PgPool,
-    cursors: &CursorCodec,
+    at: ReadAt<'_>,
     owner: Owner<'_>,
     query: Query,
-    now_ms: i64,
     graph_read: impl AsyncFnOnce(Value) -> Result<Value, Error>,
 ) -> Result<Reply, Error> {
-    let limit = query.limit.unwrap_or(50);
-    if !(1..=64).contains(&limit)
-        || query
-            .state
-            .as_ref()
-            .is_some_and(|s| !super::STATES[..4].contains(&s.as_str()))
-        || query.q.as_ref().is_some_and(|q| {
-            q.trim().is_empty() || q.chars().count() > 256 || q.chars().any(char::is_control)
-        })
-    {
-        return Err(Error::Invalid);
-    }
-    let now = u64::try_from(now_ms).map_err(|_| Error::Unavailable)?;
-    let scope = projects(pool, &owner).await?;
-    let binding = Binding {
-        principal: owner.id,
-        authorization_partition: digest(&(&owner.email, &owner.issuer, &owner.subject, &scope))?,
-        scope: json!({"kind":"all_authorized"}),
-        filters: json!({"q":query.q,"state":query.state}),
-        sort: "updated_at desc,id desc".into(),
-        page_size: limit,
-        resource: "work-task-list".into(),
-    };
+    let limit = query.limit()?;
+    let now = u64::try_from(at.now_ms).map_err(|_| Error::Unavailable)?;
+    let scope = projects(at.pool, &owner).await?;
+    let binding = owner.binding(&scope, &query, limit)?;
     let position = query
         .cursor
         .as_deref()
         .map(|token| {
-            cursors
+            at.cursors
                 .decode(token, &binding, now)
                 .map_err(|_| Error::Changed)
         })
@@ -168,92 +214,109 @@ pub async fn read(
         .filter(|p| p.graph_configured())
         .map(|p| p.workspace_id)
         .collect();
-    let page = if workspaces.is_empty() {
-        GraphPage {
-            items: vec![],
-            unavailable_workspaces: BTreeSet::new(),
-            has_more: false,
-        }
-    } else {
-        let raw = graph_read(json!({
-            "workspace_ids":workspaces,"limit":limit,"q":query.q,"state":query.state,"before":before,
-        })).await?;
-        serde_json::from_value::<GraphPage>(raw).map_err(|_| Error::Unavailable)?
-    };
-    let visible = validate(&page, &workspaces, limit, before, query.state.as_deref())?;
+    let window = PageWindow { limit, before };
+    let page = query.fetch(&workspaces, window, graph_read).await?;
+    let visible = page.validate(&workspaces, window, query.state.as_deref())?;
     let graph_scope = digest(&page.unavailable_workspaces)?;
-    if position.is_some_and(|p| p.snapshot != graph_scope) || projects(pool, &owner).await? != scope
+    if position.is_some_and(|p| p.snapshot != graph_scope)
+        || projects(at.pool, &owner).await? != scope
     {
         return Err(Error::Changed);
     }
-    let next_cursor = if page.has_more {
-        let last = page.items.last().ok_or(Error::Unavailable)?;
-        let key =
-            serde_json::to_string(&(last.updated_at, last.id)).map_err(|_| Error::Unavailable)?;
-        Some(
-            cursors
+    let next_cursor = page
+        .last_key()?
+        .map(|key| {
+            at.cursors
                 .encode(binding.position(&graph_scope, &key, now..now + CURSOR_TTL_MS))
-                .map_err(|_| Error::Unavailable)?,
-        )
-    } else {
-        None
-    };
-    let unavailable_projects = scope
-        .iter()
-        .filter(|p| !p.graph_configured() || page.unavailable_workspaces.contains(&p.workspace_id))
-        .count();
-    let projects = scope
-        .into_iter()
-        .filter(|p| p.graph_configured() && visible.contains(&p.workspace_id))
-        .map(|p| Project {
-            id: p.id,
-            workspace_id: p.workspace_id,
-            name: p.name,
+                .map_err(|_| Error::Unavailable)
         })
-        .collect();
-    Ok(Reply {
-        contract: "human-work-task-list-1",
-        items: page.items,
-        projects,
-        unavailable_projects,
-        next_cursor,
-    })
+        .transpose()?;
+    Ok(page.reply(scope, visible, next_cursor))
 }
 
-fn validate(
-    page: &GraphPage,
-    workspaces: &BTreeSet<Uuid>,
-    limit: u16,
-    before: Option<(DateTime<Utc>, Uuid)>,
-    state: Option<&str>,
-) -> Result<HashSet<Uuid>, Error> {
-    if page.items.len() > usize::from(limit)
-        || (page.has_more && page.items.len() != usize::from(limit))
-        || !page.unavailable_workspaces.is_subset(workspaces)
-    {
-        return Err(Error::Unavailable);
+impl GraphPage {
+    fn last_key(&self) -> Result<Option<String>, Error> {
+        if !self.has_more {
+            return Ok(None);
+        }
+        let last = self.items.last().ok_or(Error::Unavailable)?;
+        serde_json::to_string(&(last.updated_at, last.id))
+            .map(Some)
+            .map_err(|_| Error::Unavailable)
     }
-    let mut last = before;
-    let mut ids = HashSet::new();
-    let mut visible = HashSet::new();
-    for item in &page.items {
-        let key = (item.updated_at, item.id);
-        if item.id.is_nil()
-            || !ids.insert(item.id)
-            || last.is_some_and(|previous| key >= previous)
-            || !workspaces.contains(&item.workspace_id)
-            || page.unavailable_workspaces.contains(&item.workspace_id)
-            || item.title.trim().is_empty()
-            || item.title.len() > 512
-            || !super::STATES[..4].contains(&item.task_state.as_str())
-            || state.is_some_and(|state| item.task_state != state)
-        {
+    fn reply(
+        self,
+        scope: Vec<ProjectBinding>,
+        visible: HashSet<Uuid>,
+        next_cursor: Option<String>,
+    ) -> Reply {
+        let unavailable_projects = scope
+            .iter()
+            .filter(|p| {
+                !p.graph_configured() || self.unavailable_workspaces.contains(&p.workspace_id)
+            })
+            .count();
+        let projects = scope
+            .into_iter()
+            .filter(|p| p.graph_configured() && visible.contains(&p.workspace_id))
+            .map(|p| Project {
+                id: p.id,
+                workspace_id: p.workspace_id,
+                name: p.name,
+            })
+            .collect();
+        Reply {
+            contract: "human-work-task-list-1",
+            items: self.items,
+            projects,
+            unavailable_projects,
+            next_cursor,
+        }
+    }
+
+    fn visible_workspace(&self, workspaces: &BTreeSet<Uuid>, id: Uuid) -> bool {
+        workspaces.contains(&id) && !self.unavailable_workspaces.contains(&id)
+    }
+
+    fn within_limit(&self, limit: u16) -> bool {
+        let len = self.items.len();
+        len <= usize::from(limit) && (!self.has_more || len == usize::from(limit))
+    }
+    fn validate(
+        &self,
+        workspaces: &BTreeSet<Uuid>,
+        window: PageWindow,
+        state: Option<&str>,
+    ) -> Result<HashSet<Uuid>, Error> {
+        if !self.within_limit(window.limit) || !self.unavailable_workspaces.is_subset(workspaces) {
             return Err(Error::Unavailable);
         }
-        visible.insert(item.workspace_id);
-        last = Some(key);
+        let mut last = window.before;
+        let mut ids = HashSet::new();
+        let mut visible = HashSet::new();
+        for item in &self.items {
+            let key = (item.updated_at, item.id);
+            let sorted = last.is_none_or(|previous| key < previous);
+            let visible_workspace = self.visible_workspace(workspaces, item.workspace_id);
+            let new_item = sorted && ids.insert(item.id);
+            let valid_item = visible_workspace && new_item && item.matches(state);
+            if !valid_item {
+                return Err(Error::Unavailable);
+            }
+            visible.insert(item.workspace_id);
+            last = Some(key);
+        }
+        Ok(visible)
     }
-    Ok(visible)
+}
+
+impl Task {
+    fn matches(&self, state: Option<&str>) -> bool {
+        let title = !self.title.trim().is_empty() && self.title.len() <= 512;
+        let valid_state = super::STATES[..4].contains(&self.task_state.as_str())
+            && state.is_none_or(|s| self.task_state == s);
+        !self.id.is_nil() && title && valid_state
+    }
 }
 
 /// Final current-role and binding fence, with one bounded project batch query.
@@ -280,11 +343,7 @@ pub async fn fence_records(
         .await
         .map_err(|_| Error::Unavailable)?
         .ok_or(Error::Changed)?;
-    if user.get::<String, _>("role") != "owner"
-        || user.get::<String, _>("email") != actor.email
-        || user.get::<Option<&str>, _>("issuer") != actor.issuer
-        || user.get::<Option<&str>, _>("subject") != actor.subject
-    {
+    if !actor.matches(&user) {
         return Err(Error::Changed);
     }
     let ids: Vec<Uuid> = records
@@ -309,4 +368,14 @@ pub async fn fence_records(
     }
     tx.commit().await.map_err(|_| Error::Unavailable)?;
     Ok(())
+}
+
+impl Owner<'_> {
+    fn matches(&self, user: &sqlx::postgres::PgRow) -> bool {
+        let identity = user.get::<Option<&str>, _>("issuer") == self.issuer
+            && user.get::<Option<&str>, _>("subject") == self.subject;
+        identity
+            && user.get::<String, _>("role") == "owner"
+            && user.get::<String, _>("email") == self.email
+    }
 }

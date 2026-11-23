@@ -132,13 +132,15 @@ pub(super) async fn work(
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),
     };
-    let mut readiness = aq_human_work::readiness_in(
+    let mut readiness = aq_human_work::readiness(
         root["task_state"].as_str(),
         hold.as_ref(),
-        held.collect(),
-        blockers,
-        hierarchy,
-        complete,
+        held,
+        aq_human_work::TaskDependencies {
+            blockers,
+            hierarchy,
+            complete,
+        },
     );
     aq_swarm_settings::admission::show_task_wait(
         &mut readiness,
@@ -242,9 +244,18 @@ pub(super) async fn history(
         .agent_access
         .as_ref()
         .and_then(|rt| rt.mutation_actor.as_deref());
-    let items = aq_human_work::history::items(&r.pool, service, (p, w), id, rows, prior.as_ref())
-        .await
-        .ok_or_else(unavailable)?;
+    let items = aq_human_work::history::items(
+        &r.pool,
+        service,
+        (p, w),
+        aq_human_work::history::TaskHistory {
+            task: id,
+            rows,
+            prior: prior.as_ref(),
+        },
+    )
+    .await
+    .ok_or_else(unavailable)?;
     let next = match page["next_cursor"].as_str() {
         Some(c) => Some(r.cursors.encode(&binding, c, stamp(&s))?),
         None => None,

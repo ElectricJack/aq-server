@@ -371,9 +371,11 @@ async fn create_on_node(
     super::enqueue::metadata(
         &mut payload["operations"][0]["metadata"],
         request.priority,
-        &request.role,
-        &request.intelligence_hint,
-        &request.task_type,
+        [
+            &request.role,
+            &request.intelligence_hint,
+            &request.task_type,
+        ],
     );
     #[cfg(feature = "project_environments")]
     super::enqueue::needs(&mut payload["operations"][0]["metadata"], &request.needs);
