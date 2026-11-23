@@ -147,11 +147,9 @@ fn token(path: &std::path::Path) -> Result<HeaderValue, Error> {
         .open(path)
         .map_err(|_| Error::Credential)?;
     let metadata = file.metadata().map_err(|_| Error::Credential)?;
-    if !metadata.is_file()
-        || metadata.mode() & 0o077 != 0
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
-        || metadata.nlink() != 1
-    {
+    let private = metadata.uid() == nix::unistd::geteuid().as_raw() && metadata.mode() & 0o077 == 0;
+    let regular = metadata.is_file() && metadata.nlink() == 1;
+    if !private || !regular {
         return Err(Error::Credential);
     }
     let mut bytes = Zeroizing::new(Vec::new());
@@ -161,15 +159,20 @@ fn token(path: &std::path::Path) -> Result<HeaderValue, Error> {
     if bytes.len() > 16384 {
         return Err(Error::Credential);
     }
-    let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    token_header(&bytes)
+}
+fn token_header(bytes: &[u8]) -> Result<HeaderValue, Error> {
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-    let pieces: Vec<_> = bytes.split(|b| *b == b'.').collect();
-    if pieces.len() != 3
-        || pieces.iter().any(|p| p.is_empty())
-        || bytes
-            .iter()
-            .any(|b| !(b.is_ascii_alphanumeric() || b"-_.".contains(b)))
-    {
+    let mut parts = bytes.split(|b| *b == b'.');
+    for _ in 0..3 {
+        let part = parts.next().ok_or(Error::Credential)?;
+        let base64url = |b: &u8| b.is_ascii_alphanumeric() || b"-_".contains(b);
+        if part.is_empty() || !part.iter().all(base64url) {
+            return Err(Error::Credential);
+        }
+    }
+    if parts.next().is_some() {
         return Err(Error::Credential);
     }
     let mut value = HeaderValue::from_bytes(bytes).map_err(|_| Error::Credential)?;
@@ -198,12 +201,10 @@ impl Write for Bounded {
     }
 }
 fn valid_limits(limits: &Limits) -> bool {
-    !(limits.max_request_bytes == 0
-        || limits.max_request_bytes > 1048576
-        || limits.max_response_bytes == 0
-        || limits.max_response_bytes > 8388608
-        || limits.timeout.is_zero()
-        || limits.timeout > Duration::from_secs(30))
+    (1..=1048576).contains(&limits.max_request_bytes)
+        && (1..=8388608).contains(&limits.max_response_bytes)
+        && !limits.timeout.is_zero()
+        && limits.timeout <= Duration::from_secs(30)
 }
 fn builder(limits: &Limits) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
@@ -213,6 +214,33 @@ fn builder(limits: &Limits) -> reqwest::ClientBuilder {
         .timeout(limits.timeout)
         .connect_timeout(limits.timeout.min(Duration::from_secs(5)))
 }
+fn valid_socket_path(socket: &std::path::Path) -> bool {
+    socket.is_absolute()
+        && socket.as_os_str().len() <= 107
+        && !socket
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+fn parse_origin(origin: &str) -> Result<Url, Error> {
+    let url = Url::parse(origin).map_err(|_| Error::Configuration)?;
+    let no_userinfo = url.username().is_empty() && url.password().is_none();
+    let bare_path = url.path() == "/" && url.query().is_none() && url.fragment().is_none();
+    if !no_userinfo || !bare_path {
+        return Err(Error::Configuration);
+    }
+    if url.host().is_none() {
+        return Err(Error::Configuration);
+    }
+    Ok(url)
+}
+fn valid_api_path(path: &str) -> bool {
+    let valid_segments = !path.contains("//") && !path.split('/').any(|s| matches!(s, "." | ".."));
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b"/-_.".contains(&b);
+    path.starts_with("/api/") && path.len() <= 2048 && valid_segments && path.bytes().all(allowed)
+}
+fn valid_query(query: &[(&str, &str)]) -> bool {
+    query.len() <= 16 && query.iter().all(|(k, v)| k.len() <= 64 && v.len() <= 4096)
+}
 impl Client {
     /// A client for the sandbox AQ channel (spec 0006 §4.1, §5): plain HTTP/1.1
     /// over a local Unix socket. It sends no credential and no `Origin`; the
@@ -220,13 +248,7 @@ impl Client {
     /// socket path must be absolute. Every other rule (bounds, no redirects,
     /// no proxies, no retries) is the same as [`Client::new`].
     pub fn channel(socket: &std::path::Path, limits: Limits) -> Result<Self, Error> {
-        if !valid_limits(&limits)
-            || !socket.is_absolute()
-            || socket.as_os_str().len() > 107
-            || socket
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if !valid_limits(&limits) || !valid_socket_path(socket) {
             return Err(Error::Configuration);
         }
         let http = builder(&limits)
@@ -249,16 +271,7 @@ impl Client {
         if !valid_limits(&limits) {
             return Err(Error::Configuration);
         }
-        let url = Url::parse(origin).map_err(|_| Error::Configuration)?;
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-            || url.host().is_none()
-        {
-            return Err(Error::Configuration);
-        }
+        let url = parse_origin(origin)?;
         let builder = builder(&limits);
         let (auth_header, builder) = match authentication {
             Authentication::CfAccessTokenFile(path) => {
@@ -277,7 +290,7 @@ impl Client {
             Authentication::LoopbackDevelopment => (None, loopback_builder(builder, &url)?),
             #[cfg(any(test, feature = "loopback-development"))]
             Authentication::LoopbackDevelopmentEmail(email) => {
-                if email.is_empty() || email.len() > 320 || email.chars().any(char::is_control) {
+                if !(1..=320).contains(&email.len()) || email.chars().any(char::is_control) {
                     return Err(Error::Configuration);
                 }
                 let mut value = HeaderValue::from_str(&email).map_err(|_| Error::Configuration)?;
@@ -299,16 +312,7 @@ impl Client {
         })
     }
     fn endpoint(&self, path: &str, query: &[(&str, &str)]) -> Result<Url, Error> {
-        if !path.starts_with("/api/")
-            || path.len() > 2048
-            || path.contains("//")
-            || path.split('/').any(|s| s == "." || s == "..")
-            || path
-                .bytes()
-                .any(|b| !b.is_ascii_alphanumeric() && !b"/-_.".contains(&b))
-            || query.len() > 16
-            || query.iter().any(|(k, v)| k.len() > 64 || v.len() > 4096)
-        {
+        if !valid_api_path(path) || !valid_query(query) {
             return Err(Error::Configuration);
         }
         let mut url = self.origin.join(path).map_err(|_| Error::Configuration)?;
@@ -328,70 +332,57 @@ impl Client {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<R, Error> {
-        let url = self.endpoint(path, query)?;
-        self.request(reqwest::Method::GET, url, None).await
+        let request = self.request_builder(reqwest::Method::GET, self.endpoint(path, query)?);
+        self.request(request).await
     }
+
     pub async fn post_json<T: Serialize, R: DeserializeOwned>(
         &self,
         path: &str,
         body: &T,
     ) -> Result<R, Error> {
-        let url = self.endpoint(path, &[])?;
-        let mut writer = Bounded {
-            bytes: vec![],
-            limit: self.limits.max_request_bytes,
-        };
-        serde_json::to_writer(&mut writer, body).map_err(|_| Error::RequestBound)?;
-        self.request(reqwest::Method::POST, url, Some(writer.bytes))
-            .await
+        self.request(self.post_request(path, body)?).await
     }
+
     /// Same transport and budgets as get_json, including bounded non-2xx JSON.
     pub async fn get_json_response(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<JsonResponse, Error> {
-        self.request_raw(
-            reqwest::Method::GET,
-            self.endpoint(path, query)?,
-            None,
-            false,
-        )
-        .await?
-        .json()
+        let request = self.request_builder(reqwest::Method::GET, self.endpoint(path, query)?);
+        self.request_raw(request, false).await?.json()
     }
+
     /// Single submission; callers must inspect status and the typed error envelope.
     pub async fn post_json_response<T: Serialize>(
         &self,
         path: &str,
         body: &T,
     ) -> Result<JsonResponse, Error> {
+        self.request_raw(self.post_request(path, body)?, false)
+            .await?
+            .json()
+    }
+
+    fn post_request<T: Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<reqwest::RequestBuilder, Error> {
         let url = self.endpoint(path, &[])?;
         let mut writer = Bounded {
             bytes: vec![],
             limit: self.limits.max_request_bytes,
         };
         serde_json::to_writer(&mut writer, body).map_err(|_| Error::RequestBound)?;
-        self.request_raw(reqwest::Method::POST, url, Some(writer.bytes), false)
-            .await?
-            .json()
+        Ok(self
+            .request_builder(reqwest::Method::POST, url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(writer.bytes))
     }
-    async fn request<R: DeserializeOwned>(
-        &self,
-        method: reqwest::Method,
-        url: Url,
-        body: Option<Vec<u8>>,
-    ) -> Result<R, Error> {
-        let raw = self.request_raw(method, url, body, true).await?;
-        serde_json::from_slice(&raw.bytes).map_err(|_| Error::Response)
-    }
-    async fn request_raw(
-        &self,
-        method: reqwest::Method,
-        url: Url,
-        body: Option<Vec<u8>>,
-        reject_errors: bool,
-    ) -> Result<RawResponse, Error> {
+
+    fn request_builder(&self, method: reqwest::Method, url: Url) -> reqwest::RequestBuilder {
         let mut headers = HeaderMap::new();
         if let Some((name, value)) = &self.auth_header {
             headers.insert(name.clone(), value.clone());
@@ -409,18 +400,32 @@ impl Client {
                 headers.insert(reqwest::header::ORIGIN, origin.clone());
             }
         }
-        let mut request = self.http.request(method, url).headers(headers);
-        if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-        }
+        self.http.request(method, url).headers(headers)
+    }
+
+    async fn request<R: DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<R, Error> {
+        let raw = self.request_raw(request, true).await?;
+        serde_json::from_slice(&raw.bytes).map_err(|_| Error::Response)
+    }
+
+    async fn request_raw(
+        &self,
+        request: reqwest::RequestBuilder,
+        reject_errors: bool,
+    ) -> Result<RawResponse, Error> {
         // No automatic retry even for transport ambiguity. Caller owns stable op IDs
         // and explicit receipt/unknown reconciliation; input can never be blindly sent.
-        let mut response = request.send().await.map_err(|_| Error::Transport)?;
+        let response = request.send().await.map_err(|_| Error::Transport)?;
         if reject_errors && !response.status().is_success() {
             return Err(Error::Status(response.status().as_u16()));
         }
+        self.read_response(response).await
+    }
+
+    async fn read_response(&self, mut response: reqwest::Response) -> Result<RawResponse, Error> {
         let status = response.status().as_u16();
         if response
             .content_length()
