@@ -21,10 +21,10 @@ pub struct Permit {
 impl Permit {
     pub fn validate(&self) -> Result<()> {
         self.terminal.validate().map_err(|_| Error::Invalid)?;
-        if self.epoch_id.is_nil()
-            || self.lease_id.is_nil()
-            || self.controller_generation == 0
-            || self.expires_at_ms == 0
+        if self.epoch_id.is_nil() || self.lease_id.is_nil() {
+            return Err(Error::Invalid);
+        }
+        if [self.controller_generation, self.expires_at_ms].contains(&0)
             || self.derivation_version != VERSION
         {
             return Err(Error::Invalid);
@@ -43,11 +43,19 @@ impl Command {
     pub fn validate(&self) -> Result<()> {
         self.permit.validate()?;
         self.input.validate().map_err(|_| Error::Invalid)?;
-        if self.input.lease.terminal != self.permit.terminal
-            || self.input.lease.lease_id != self.permit.lease_id
-            || self.input.lease.generation != self.permit.controller_generation
-            || self.input.deadline_ms > self.permit.expires_at_ms
-            || self.input.operation_id != operation_id(&self.permit, self.sequence)?
+        let lease = &self.input.lease;
+        let permit = &self.permit;
+        if (&lease.terminal, lease.lease_id, lease.generation)
+            != (
+                &permit.terminal,
+                permit.lease_id,
+                permit.controller_generation,
+            )
+        {
+            return Err(Error::Stale);
+        }
+        if self.input.deadline_ms > permit.expires_at_ms
+            || self.input.operation_id != operation_id(permit, self.sequence)?
         {
             return Err(Error::Stale);
         }
