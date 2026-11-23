@@ -1,5 +1,6 @@
 //! Dashboard release metadata and protocol vocabulary, independent of user grants.
 //! The caller supplies its bounded asset-map deserializer as `Files`.
+pub mod assets;
 use crate::{ApiVersion, ContractVersion};
 use anyhow::{Result, ensure};
 use serde::Deserialize;
