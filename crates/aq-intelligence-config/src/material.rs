@@ -40,49 +40,64 @@ pub fn read_configured(
         .get(index)
         .and_then(Option::as_ref)
         .ok_or(MaterialError::Unavailable)?;
-    let path = registry
+    let config = registry
         .config
         .credentials
         .get(index)
-        .and_then(|c| c.secret_file.as_ref())
         .ok_or(MaterialError::Unavailable)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| MaterialError::Unavailable)?;
-    let metadata = file.metadata().map_err(|_| MaterialError::Unavailable)?;
-    if !metadata.is_file()
-        || metadata.mode() & 0o077 != 0
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
-    {
-        return Err(MaterialError::Unavailable);
-    }
-    let mut bytes = Zeroizing::new(Vec::new());
-    file.take(65_537)
-        .read_to_end(&mut bytes)
-        .map_err(|_| MaterialError::Unavailable)?;
-    if bytes.is_empty() || bytes.len() > 65_536 {
-        return Err(MaterialError::Unavailable);
-    }
-    if hex::encode(sha2::Sha256::digest(&bytes)) != *expected {
+    let path = config
+        .secret_file
+        .as_ref()
+        .ok_or(MaterialError::Unavailable)?;
+    let bytes = read_protected_file(path)
+        .map_err(|_| MaterialError::Unavailable)?
+        .ok_or(MaterialError::Unavailable)?;
+    if fingerprint(&bytes) != *expected {
         return Err(MaterialError::Changed);
     }
     // A Claude subscription login (version 0 here) is delivered exactly like
     // an imported one: trailing CR/LF trimmed, any other shape refused. Other
     // credentials (API keys included) stay byte-exact. The fingerprint
     // above stays over the configured file's bytes (rotation check).
-    if registry
-        .config
-        .credentials
-        .get(index)
-        .is_some_and(is_claude_setup_token)
-    {
+    if is_claude_setup_token(config) {
         let bytes = normalize_claude_token(bytes).map_err(|_| MaterialError::Unavailable)?;
         return Ok(ProtectedMaterial(bytes));
     }
     Ok(ProtectedMaterial(bytes))
 }
+pub(super) fn fingerprint(bytes: &[u8]) -> String {
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+pub(super) fn read_protected_file(
+    path: &std::path::Path,
+) -> Result<Option<Zeroizing<Vec<u8>>>, &'static str> {
+    let opened = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
+        .open(path);
+    let file = match opened {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("cannot open protected credential file"),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| "credential metadata unavailable")?;
+    let private = metadata.mode() & 0o077 == 0 && metadata.uid() == nix::unistd::geteuid().as_raw();
+    if !metadata.is_file() || !private {
+        return Err("credential must be an owner-only regular file");
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read protected credential")?;
+    if bytes.is_empty() || bytes.len() > 65_536 {
+        return Err("credential byte bound");
+    }
+    Ok(Some(bytes))
+}
+
 pub fn is_claude_setup_token(c: &crate::CredentialConfig) -> bool {
     c.kind == aq_selection::CredentialKind::SubscriptionLogin
         && c.credential.provider.as_str() == "anthropic"
@@ -115,38 +130,21 @@ pub fn provisioning_bindings(
     expires: u64,
     backend_kind: Option<aq_selection::BackendKind>,
 ) -> Vec<aq_selection::CredentialBinding> {
-    if node.is_nil()
-        || boot.is_nil()
-        || observed == 0
-        || expires <= observed
-        || expires - observed > 120_000
-        || delivery.version != 1
-    {
-        return vec![];
+    if !valid_delivery_target(node, boot, delivery) || !valid_delivery_window(observed, expires) {
+        return Vec::new();
     }
     registry
         .credentials
         .iter()
         .enumerate()
         .filter_map(|(index, c)| {
-            let cfg = registry.config.credentials.get(index)?;
-            let owner = c.material_owner.as_ref()?;
-            if !c.enabled
-                || !c.provisionable
-                || cfg.delivery_mode.is_none()
-                || !cfg.allows(node)
-                || aq_selection::credential_backend_policy(&cfg.allowed_backends, backend_kind)
-                    .is_err()
-                || read_configured(registry, index).is_err()
-            {
-                return None;
-            }
+            let owner = registry.delivery_owner(index, node, backend_kind)?;
             Some(aq_selection::CredentialBinding {
                 credential_revision: c.revision,
                 credential_profile: c.profile.clone(),
                 available: false,
                 preparation: Some(aq_selection::ProvisioningReadiness {
-                    owner: owner.clone(),
+                    owner,
                     credential_profile: c.profile.clone(),
                     credential_revision: c.revision,
                     target: aq_selection::ExecutionTarget::Worker {
@@ -164,7 +162,46 @@ pub fn provisioning_bindings(
         .collect()
 }
 
+fn valid_delivery_target(
+    node: Uuid,
+    boot: Uuid,
+    delivery: &aq_selection::DeliveryCapability,
+) -> bool {
+    !node.is_nil() && !boot.is_nil() && delivery.version == 1
+}
+fn valid_delivery_window(observed: u64, expires: u64) -> bool {
+    observed > 0
+        && expires
+            .checked_sub(observed)
+            .is_some_and(|age| (1..=120_000).contains(&age))
+}
+impl crate::CredentialConfig {
+    fn permits_delivery(&self, node: Uuid, backend: Option<aq_selection::BackendKind>) -> bool {
+        self.delivery_mode.is_some()
+            && self.allows(node)
+            && aq_selection::credential_backend_policy(&self.allowed_backends, backend).is_ok()
+    }
+}
+
 impl LoadedRegistry {
+    fn delivery_owner(
+        &self,
+        index: usize,
+        node: Uuid,
+        backend_kind: Option<aq_selection::BackendKind>,
+    ) -> Option<aq_selection::ArtifactRef> {
+        let c = self.credentials.get(index)?;
+        let cfg = self.config.credentials.get(index)?;
+        let owner = c.material_owner.as_ref()?;
+        if !c.enabled || !c.provisionable {
+            return None;
+        }
+        if !cfg.permits_delivery(node, backend_kind) {
+            return None;
+        }
+        read_configured(self, index).ok()?;
+        Some(owner.clone())
+    }
     /// Deterministic eligible server login for owner-requested docker-local delivery.
     /// Callers must separately authenticate actual enrollment and fence revocation.
     pub fn subscription_for(
