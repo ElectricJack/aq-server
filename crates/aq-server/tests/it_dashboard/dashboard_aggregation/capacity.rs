@@ -169,7 +169,7 @@ async fn disk(pool: &sqlx::PgPool, boat: Uuid, now: u64, used: u64) {
         ..Default::default()
     };
     let mut conn = pool.acquire().await.unwrap();
-    aq_server::node_storage::record(&mut conn, &boat.to_string(), Some(boat), &report, now - 1)
+    aq_server::node_storage::record(&mut conn, Some(boat), &report, now - 1)
         .await
         .unwrap();
 }

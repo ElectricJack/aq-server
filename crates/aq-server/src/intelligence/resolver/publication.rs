@@ -82,10 +82,8 @@ impl<'a> Publication<'a> {
         self.subject
             .insert(
                 &mut tx,
-                self.operation_id,
-                &self.payload,
-                &decision,
-                encoded,
+                (self.operation_id, &self.payload),
+                (&decision, encoded),
             )
             .await?;
         check_time(self.state, &decision)?;

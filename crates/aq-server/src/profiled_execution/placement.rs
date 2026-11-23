@@ -869,7 +869,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut conn = pool.acquire().await.unwrap();
-                crate::node_storage::record(&mut conn, &id.to_string(), Some(id), &report, 1)
+                crate::node_storage::record(&mut conn, Some(id), &report, 1)
                     .await
                     .unwrap();
             }

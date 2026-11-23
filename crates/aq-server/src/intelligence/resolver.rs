@@ -224,5 +224,5 @@ pub(crate) async fn fence_preparation_input_principal(
         .get::<String, _>("bound_project")
         .parse()
         .map_err(|_| AppError::Internal)?;
-    principal::fence_subject(state, tx, row.get("decision_id"), project, bound).await
+    principal::fence_subject(state, tx, row.get("decision_id"), (project, bound)).await
 }

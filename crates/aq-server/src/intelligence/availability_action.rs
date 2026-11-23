@@ -27,6 +27,16 @@ pub(crate) struct AvailabilityChange {
     #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
     pub expected_generation: String,
 }
+impl AvailabilityChange {
+    fn applies_to(&self, request: &ActionRequest) -> bool {
+        let subject = &request.subject;
+        let matches_subject = (subject.entity_type.as_str(), subject.id.as_str()) == SUBJECT
+            && subject.revision.is_none();
+        let matches_operation =
+            request.operation_id == self.operation_id && request.expected_versions.is_empty();
+        matches_subject && matches_operation && generation(&self.expected_generation).is_some()
+    }
+}
 pub(crate) struct SetAvailability;
 pub(crate) fn register(r: &mut Registry) {
     r.register(SetAvailability).expect("availability adapter");
@@ -58,13 +68,7 @@ impl ActionKind for SetAvailability {
         p: &AvailabilityChange,
     ) -> Result<Scope, ApiError> {
         existing::owner(state, user).await?;
-        let s = &request.subject;
-        if request.operation_id != p.operation_id
-            || (s.entity_type.as_str(), s.id.as_str()) != SUBJECT
-            || s.revision.is_some()
-            || !request.expected_versions.is_empty()
-            || generation(&p.expected_generation).is_none()
-        {
+        if !p.applies_to(request) {
             return Err(ApiError::invalid());
         }
         if state.config.intelligence.is_none() {
