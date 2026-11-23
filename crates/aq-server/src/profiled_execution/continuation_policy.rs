@@ -50,18 +50,30 @@ async fn pinned_body(
     reference: &ArtifactRef,
     lock: &str,
 ) -> Result<Vec<u8>, AppError> {
-    let rows=sqlx::query(&format!("SELECT a.descriptor,a.body FROM profiled_launch_artifacts x JOIN admission_artifacts a USING(artifact_id) WHERE x.attempt_id=$1 AND a.descriptor->>'kind'='definition' AND a.descriptor#>>'{{artifact,id}}'=$2 AND a.descriptor#>>'{{artifact,version}}'=$3 ORDER BY a.artifact_id LIMIT 2{lock}")).bind(attempt).bind(reference.id.as_str()).bind(reference.version.as_str()).fetch_all(&mut *conn).await.map_err(|_|AppError::Internal)?;
-    if rows.len() != 1 {
+    let rows = sqlx::query(&format!("SELECT a.descriptor,a.body FROM profiled_launch_artifacts x JOIN admission_artifacts a USING(artifact_id) WHERE x.attempt_id=$1 AND a.descriptor->>'kind'='definition' AND a.descriptor#>>'{{artifact,id}}'=$2 AND a.descriptor#>>'{{artifact,version}}'=$3 ORDER BY a.artifact_id LIMIT 2{lock}"))
+        .bind(attempt)
+        .bind(reference.id.as_str())
+        .bind(reference.version.as_str())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let [row] = rows.as_slice() else {
         return Err(refused());
-    }
-    let descriptor: RetainedArtifact =
-        serde_json::from_value(rows[0].get("descriptor")).map_err(|_| refused())?;
-    let body: Vec<u8> = rows[0]
-        .get::<Option<Vec<u8>>, _>("body")
-        .ok_or_else(|| refused())?;
+    };
+    verified_body(reference, row.get("descriptor"), row.get("body"))
+}
+
+fn verified_body(
+    reference: &ArtifactRef,
+    descriptor: Value,
+    body: Option<Vec<u8>>,
+) -> Result<Vec<u8>, AppError> {
+    let descriptor: RetainedArtifact = serde_json::from_value(descriptor).map_err(|_| refused())?;
+    let body = body.ok_or_else(|| refused())?;
     if descriptor.artifact != *reference {
         return Err(refused());
     }
+    // Historical integrity is checked at retention, not against today's clock.
     descriptor
         .verify(&body, descriptor.retained_at_ms)
         .map_err(|_| refused())?;
@@ -167,5 +179,46 @@ mod tests {
         let mut wrong = reference;
         wrong.id = aq_admission::Text::new("intelligence:another").unwrap();
         assert!(decode(wrong, &body).is_err());
+    }
+
+    #[test]
+    fn retained_policy_body_requires_the_exact_pin_and_intact_history() {
+        let (reference, body) = fixture();
+        let descriptor = serde_json::to_value(RetainedArtifact {
+            artifact: reference.clone(),
+            kind: aq_admission::ArtifactKind::Definition,
+            bytes: body.len() as u64,
+            retention_receipt: reference.clone(),
+            retained_at_ms: 1,
+            retain_until_ms: 2,
+        })
+        .unwrap();
+        assert_eq!(
+            verified_body(&reference, descriptor.clone(), Some(body.clone())).unwrap(),
+            body
+        );
+        assert!(verified_body(&reference, descriptor.clone(), None).is_err());
+        assert!(verified_body(&reference, Value::Null, Some(body.clone())).is_err());
+        for (field, value) in [
+            ("id", Value::from("intelligence:another")),
+            ("version", Value::from("2")),
+            (
+                "digest",
+                serde_json::json!(aq_admission::Digest::of(b"different")),
+            ),
+        ] {
+            let mut pin = serde_json::to_value(&reference).unwrap();
+            pin[field] = value;
+            let different = serde_json::from_value(pin).unwrap();
+            assert!(verified_body(&different, descriptor.clone(), Some(body.clone())).is_err());
+        }
+        for (field, value) in [("bytes", 1), ("retain_until_ms", 1)] {
+            let mut invalid = descriptor.clone();
+            invalid[field] = value.into();
+            assert!(verified_body(&reference, invalid, Some(body.clone())).is_err());
+        }
+        let mut corrupt = body;
+        corrupt[0] ^= 1;
+        assert!(verified_body(&reference, descriptor, Some(corrupt)).is_err());
     }
 }
