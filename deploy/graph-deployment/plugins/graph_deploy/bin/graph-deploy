@@ -200,6 +200,27 @@ def merge_evidence(binding):
         raise Refused("merge_source_unavailable") from None
 
 
+def retain_merge_claim(db, evidence):
+    operation, revision = evidence["operation_id"], evidence["merge_sha"]
+    retained = db.execute(
+        "SELECT * FROM merge_claim WHERE operation_id=?", (operation,)
+    ).fetchone()
+    pull, observed = evidence["pull_request"], evidence["observed_at_ms"]
+    if retained:
+        if (retained["revision"], retained["pull_request"], retained["observed_at_ms"]) != (
+            revision, pull, observed
+        ):
+            raise Refused("merge_evidence_changed")
+        if retained["resolution"] != "pending":
+            return False
+    else:
+        db.execute("""
+            INSERT INTO merge_claim (operation_id, revision, pull_request, observed_at_ms)
+            VALUES (?, ?, ?, ?)
+        """, (operation, revision, pull, observed))
+    return True
+
+
 def claim_merge(db, root, binding):
     if not binding.get("merge_source"):
         raise Refused("automatic_deployment_disabled")
@@ -212,22 +233,8 @@ def claim_merge(db, root, binding):
     for evidence in merge_evidence(binding):
         operation = evidence["operation_id"]
         revision = evidence["merge_sha"]
-        retained = db.execute(
-            "SELECT * FROM merge_claim WHERE operation_id=?", (operation,)
-        ).fetchone()
-        pull, observed = evidence["pull_request"], evidence["observed_at_ms"]
-        if retained:
-            if (retained["revision"], retained["pull_request"], retained["observed_at_ms"]) != (
-                revision, pull, observed
-            ):
-                raise Refused("merge_evidence_changed")
-            if retained["resolution"] != "pending":
-                continue
-        else:
-            db.execute("""
-                INSERT INTO merge_claim (operation_id, revision, pull_request, observed_at_ms)
-                VALUES (?, ?, ?, ?)
-            """, (operation, revision, pull, observed))
+        if not retain_merge_claim(db, evidence):
+            continue
         existing = db.execute(
             "SELECT generation FROM deployment WHERE revision=?", (revision,)
         ).fetchone()
@@ -262,6 +269,20 @@ def observe(db, request):
     return snapshot(row)
 
 
+def dispatch(db, root, command, request, binding):
+    if command == "ext.graph_deploy.submit":
+        return submit(db, root, request)
+    if command == "ext.graph_deploy.observe":
+        return observe(db, request)
+    if command == "ext.graph_deploy.request":
+        if "scheduled" not in request:
+            return submit(db, root, request)
+        if request["scheduled"]:
+            return claim_merge(db, root, binding)
+        return response("ignored", None)
+    raise Refused("unknown_command")
+
+
 def invoke(call):
     if call["protocol"] != "aq.plugin/1":
         raise Refused("invalid_protocol")
@@ -288,19 +309,7 @@ def invoke(call):
                 raise Refused("idempotency_conflict")
             return cached["response"]
         try:
-            if command == "ext.graph_deploy.submit":
-                result = submit(db, root, request)
-            elif command == "ext.graph_deploy.observe":
-                result = observe(db, request)
-            elif command == "ext.graph_deploy.request":
-                if "scheduled" not in request:
-                    result = submit(db, root, request)
-                elif request["scheduled"]:
-                    result = claim_merge(db, root, call["binding"])
-                else:
-                    result = response("ignored", None)
-            else:
-                raise Refused("unknown_command")
+            result = dispatch(db, root, command, request, call["binding"])
         except Refused as exc:
             result = response("refused", {"reason": str(exc)})
         encoded = json.dumps(result, sort_keys=True)
@@ -347,22 +356,7 @@ class Docker:
             if "sha256:" + file_digest(stream, "sha256").hexdigest() != row["image_archive_digest"]:
                 raise Refused("image_archive_mismatch")
             stream.seek(0)
-            with tarfile.open(fileobj=stream) as layout:
-                index = json.loads(archive_member(layout, "index.json"))
-                if [entry["digest"] for entry in index["manifests"]] != [row["image_digest"]]:
-                    raise Refused("image_provenance_mismatch")
-                manifest = verified_blob(layout, row["image_digest"])
-                image = verified_blob(layout, row["image_id"])
-                docker_manifest = json.loads(archive_member(layout, "manifest.json"))
-                if (manifest["config"]["digest"] != row["image_id"]
-                        or len(docker_manifest) != 1 or docker_manifest[0]["RepoTags"]
-                        or docker_manifest[0]["Config"] != blob_path(row["image_id"])):
-                    raise Refused("image_provenance_mismatch")
-            labels = image["config"]["Labels"] or {}
-            if (labels.get("org.opencontainers.image.source") != SOURCE
-                    or labels.get("org.opencontainers.image.revision") != row["revision"]
-                    or (image["os"], image["architecture"]) != ("linux", "amd64")):
-                raise Refused("image_provenance_mismatch")
+            verify_image_archive(stream, row)
             stream.seek(0)
             loaded = subprocess.run(
                 [*self.cli, "image", "load"],
@@ -425,6 +419,25 @@ def verified_blob(layout, digest):
     return json.loads(data)
 
 
+def verify_image_archive(stream, row):
+    with tarfile.open(fileobj=stream) as layout:
+        index = json.loads(archive_member(layout, "index.json"))
+        if [entry["digest"] for entry in index["manifests"]] != [row["image_digest"]]:
+            raise Refused("image_provenance_mismatch")
+        manifest = verified_blob(layout, row["image_digest"])
+        image = verified_blob(layout, row["image_id"])
+        docker_manifest = json.loads(archive_member(layout, "manifest.json"))
+        if (manifest["config"]["digest"] != row["image_id"]
+                or len(docker_manifest) != 1 or docker_manifest[0]["RepoTags"]
+                or docker_manifest[0]["Config"] != blob_path(row["image_id"])):
+            raise Refused("image_provenance_mismatch")
+    labels = image["config"]["Labels"] or {}
+    if (labels.get("org.opencontainers.image.source") != SOURCE
+            or labels.get("org.opencontainers.image.revision") != row["revision"]
+            or (image["os"], image["architecture"]) != ("linux", "amd64")):
+        raise Refused("image_provenance_mismatch")
+
+
 def update(db, row, state, diagnostic="", provider_id="", observed_digest=""):
     db.execute("""
         UPDATE deployment SET state=?, diagnostic=?, provider_id=?, observed_digest=?,
@@ -432,33 +445,37 @@ def update(db, row, state, diagnostic="", provider_id="", observed_digest=""):
     """, (state, diagnostic, provider_id, observed_digest, now(), row["generation"]))
 
 
+def reconcile_current(db, docker, row, current):
+    provider = current["Id"]
+    if current["Image"] != row["image_id"] or current["Config"]["Image"] != row["image_id"]:
+        update(db, row, "failed", "running_image_mismatch", provider)
+        return
+    state = current["State"]
+    if state["Status"] == "created":
+        docker.run("start", provider)
+    elif state["Status"] == "running" and state["Health"]["Status"] == "healthy":
+        update(db, row, "healthy", provider_id=provider, observed_digest=row["image_digest"])
+        return
+    elif state["Status"] in ("exited", "dead") or state["Health"]["Status"] == "unhealthy":
+        if row["retry_provider_id"] != provider:
+            update(db, row, "failed", "graph_unhealthy", provider)
+            return
+        # Only an explicit retry may replace a definitively failed instance.
+        docker.verify_target()
+        docker.run("rm", "-f", provider)
+        docker.start(row)
+        update(db, row, "running", "waiting_for_health")
+        return
+    if now() - row["dispatch_at_ms"] >= START_TIMEOUT_MS:
+        update(db, row, "failed", "health_timeout", provider)
+    else:
+        update(db, row, "running", "waiting_for_health", provider)
+
+
 def reconcile(db, docker, row):
     current = docker.container()
     if current and current["Config"]["Labels"].get(OP_LABEL) == row["operation_id"]:
-        provider = current["Id"]
-        if current["Image"] != row["image_id"] or current["Config"]["Image"] != row["image_id"]:
-            update(db, row, "failed", "running_image_mismatch", provider)
-            return
-        state = current["State"]
-        if state["Status"] == "created":
-            docker.run("start", provider)
-        elif state["Status"] == "running" and state["Health"]["Status"] == "healthy":
-            update(db, row, "healthy", provider_id=provider, observed_digest=row["image_digest"])
-            return
-        elif state["Status"] in ("exited", "dead") or state["Health"]["Status"] == "unhealthy":
-            if row["retry_provider_id"] != provider:
-                update(db, row, "failed", "graph_unhealthy", provider)
-                return
-            # Only an explicit retry may replace a definitively failed instance.
-            docker.verify_target()
-            docker.run("rm", "-f", provider)
-            docker.start(row)
-            update(db, row, "running", "waiting_for_health")
-            return
-        if now() - row["dispatch_at_ms"] >= START_TIMEOUT_MS:
-            update(db, row, "failed", "health_timeout", provider)
-        else:
-            update(db, row, "running", "waiting_for_health", provider)
+        reconcile_current(db, docker, row, current)
         return
 
     if row["state"] == "healthy" or row["provider_id"]:
@@ -478,6 +495,19 @@ def reconcile(db, docker, row):
     update(db, row, "running", "waiting_for_health")
 
 
+def stage_queued_image(docker, row):
+    if row["state"] == "queued":
+        # Archive verification/import can outlast an AQ call. Recheck the
+        # desired generation under the write lock before touching the target.
+        try:
+            docker.stage_image(row)
+        except Refused as exc:
+            return str(exc)
+        except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.TimeoutExpired):
+            return "image_staging_failed"
+    return None
+
+
 def tick(root):
     docker = Docker(root, config(root))
     with (root / "controller.lock").open("a") as lock, closing(open_state(root, timeout=5)) as db:
@@ -485,16 +515,7 @@ def tick(root):
         row = latest(db)
         if row is None or row["state"] == "failed":
             return
-        staging_failure = None
-        if row["state"] == "queued":
-            # Archive verification/import can outlast an AQ call. Recheck the
-            # desired generation under the write lock before touching the target.
-            try:
-                docker.stage_image(row)
-            except Refused as exc:
-                staging_failure = str(exc)
-            except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.TimeoutExpired):
-                staging_failure = "image_staging_failed"
+        staging_failure = stage_queued_image(docker, row)
         with db:
             db.execute("BEGIN IMMEDIATE")
             desired = latest(db)
