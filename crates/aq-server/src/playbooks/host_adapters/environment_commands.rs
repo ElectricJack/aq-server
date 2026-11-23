@@ -62,7 +62,7 @@ impl EnvironmentOps for ServerEnvironments {
             Err(AppError::BadRequest(_) | AppError::NotFound(_)) => Bound::Refused,
             // A binding naming an absent or revoked worker never validates;
             // other conflicts (a concurrent change, a peer down) pass.
-            Err(AppError::Conflict(m)) if m.contains("absent or revoked worker identity") => {
+            Err(AppError::Conflict(m)) if m == crate::project_bindings::ABSENT_WORKER => {
                 Bound::Refused
             }
             Err(_) => Bound::Retry,
@@ -79,6 +79,10 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<HostResult> {
+        // A replay answers from what was retained, before aq-git is read.
+        if let Some(result) = self.host_retained(id, revision, intent).await? {
+            return Ok(result);
+        }
         let (input, build) = (&intent.input, intent.command.name == "environment.build");
         let ours = |p: Uuid| p == self.namespace.project_id || self.installation_routing;
         // Exactly one of `subject` and `project`, which the schema cannot say.

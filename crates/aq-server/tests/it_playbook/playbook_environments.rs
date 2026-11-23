@@ -364,9 +364,13 @@ mod commands {
             result
         }
         async fn try_run(&self, name: &str, input: Value) -> Result<HostResult> {
+            self.try_run_as(&format!("{name}-{}", Uuid::new_v4()), name, input)
+                .await
+        }
+        async fn try_run_as(&self, id: &str, name: &str, input: Value) -> Result<HostResult> {
             let registry = CatalogProfile::Host12.registry();
             let intent = Intent {
-                id: format!("{name}-{}", Uuid::new_v4()),
+                id: id.into(),
                 run: "synthetic-run".into(),
                 step: name.replace('.', "-"),
                 invocation: 1,
@@ -903,6 +907,24 @@ mod commands {
             .await;
         h.merged(task, 5_000).await;
         let input = json!({"subject": H::subject(task), "builds": built["output"]["builds"]});
+        // The fixture's attempt holds its task, running version 1 of
+        // `acme.web` (its sealed manifest re-pointed for this test).
+        let attempt = common::profiled::insert(&h.f).await;
+        let guard =
+            |on: &str| format!("ALTER TABLE profiled_launches {on} TRIGGER profiled_launch_guard");
+        sqlx::query(&guard("DISABLE"))
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE profiled_launches SET launch_manifest=jsonb_set(jsonb_set(launch_manifest,'{harness,environment,id}','\"acme.web\"'),'{harness,environment,version}','\"1\"') WHERE attempt_id=$1")
+            .bind(attempt)
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        sqlx::query(&guard("ENABLE"))
+            .execute(&h.pool)
+            .await
+            .unwrap();
         assert_eq!(h.admit(input).await["outcome"], "admitted");
         let kept: Vec<String> = h
             .versions("acme.web")
@@ -910,44 +932,11 @@ mod commands {
             .into_iter()
             .map(|v| v.0)
             .collect();
-        assert_eq!(kept, ["3", "4"], "the newest keep_versions");
-        // A version a live attempt runs is never pruned. The fixture's attempt
-        // holds its task in the environment its launch manifest names.
-        let attempt = common::profiled::insert(&h.f).await;
-        let running: Value = sqlx::query_scalar("SELECT launch_manifest#>'{harness,environment}' FROM profiled_launches WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&h.pool)
-            .await
-            .unwrap();
-        let (id, in_use) = (
-            running["id"].as_str().unwrap(),
-            running["version"].as_str().unwrap(),
+        assert_eq!(
+            kept,
+            ["1", "3", "4"],
+            "the newest keep_versions, and the one in use"
         );
-        // The one in use is the oldest.
-        for (age, version) in [(3, in_use), (2, "n1"), (1, "n2")] {
-            sqlx::query("INSERT INTO environment_versions(environment_id,version,project_id,template_digest,image,admitted_at) VALUES($1,$2,$3,$4,'registry.example/x@'||$4,now()-make_interval(secs=>$5))")
-                .bind(id)
-                .bind(version)
-                .bind(h.project)
-                .bind(digest('t'))
-                .bind(age as f64)
-                .execute(&h.pool)
-                .await
-                .unwrap();
-        }
-        let mut tx = h.pool.begin().await.unwrap();
-        environments::prune(&mut tx, id, 1).await.unwrap();
-        tx.commit().await.unwrap();
-        let left: Vec<String> = sqlx::query_scalar(
-            "SELECT version FROM environment_versions WHERE environment_id=$1 ORDER BY version",
-        )
-        .bind(id)
-        .fetch_all(&h.pool)
-        .await
-        .unwrap();
-        let mut expected = vec![in_use.to_string(), "n2".into()];
-        expected.sort();
-        assert_eq!(left, expected, "the newest one, and the one in use");
     }
 
     async fn keep_versions(h: &H, keep: u64) {
@@ -1110,5 +1099,27 @@ mod commands {
         .await;
         let (_, recipes, ..) = h.jobs().await.pop().unwrap();
         assert_eq!(recipes, json!(["web"]));
+    }
+
+    /// Fix round 2: a retained build answers its replay from the record,
+    /// without reading aq-git (here unreachable).
+    #[tokio::test]
+    async fn a_retained_build_replays_its_result_with_aq_git_unreachable() {
+        let h = harness(false).await;
+        let task = h.task('c');
+        h.tree(&oid('c'), &[("web", 'e')]);
+        let input = json!({"subject": H::subject(task)});
+        let first = h
+            .try_run_as("replayed-build", "environment.build", input.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.outcome, "accepted");
+        h.ops.trees.lock().unwrap().clear();
+        let again = h
+            .try_run_as("replayed-build", "environment.build", input)
+            .await
+            .unwrap();
+        assert_eq!((again.outcome, again.output), (first.outcome, first.output));
+        assert_eq!(h.jobs().await.len(), 1, "no second job");
     }
 }
