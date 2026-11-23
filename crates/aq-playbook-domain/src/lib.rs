@@ -6,6 +6,7 @@ pub mod check_cancellations;
 pub mod coding;
 pub mod context_reads;
 pub mod daily_schedules;
+pub mod decision_effects;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
 #[cfg(feature = "delivery_playbook")]
@@ -24,10 +25,15 @@ pub mod host_operations;
 pub mod host_requests;
 pub mod host_values;
 pub mod inspection;
+pub mod integration_receipts;
+pub mod intent_store;
 pub mod judgment_admission;
 pub mod loaded_definitions;
+pub mod manual_admission;
+pub mod namespace_store;
 pub mod playbook_view;
 pub mod plugin_effects;
+pub mod publication_evidence;
 pub mod review_domain;
 pub mod route_effect;
 pub mod route_store;
@@ -345,6 +351,12 @@ pub fn message_input(intent: &Intent) -> Result<MessageInput> {
     if intent.command != message_contract() {
         return Err(Error::Forbidden);
     }
+    validate_intent_identity(intent)?;
+    let input: MessageInput = serde_json::from_value(intent.input.clone())?;
+    input.validate()?;
+    Ok(input)
+}
+pub fn validate_intent_identity(intent: &Intent) -> Result<()> {
     if intent.input_digest != digest(&intent.input)? {
         return Err(Error::Invalid);
     }
@@ -353,9 +365,7 @@ pub fn message_input(intent: &Intent) -> Result<MessageInput> {
     if !names_valid || intent.deadline_at_ms <= 0 {
         return Err(Error::Invalid);
     }
-    let input: MessageInput = serde_json::from_value(intent.input.clone())?;
-    input.validate()?;
-    Ok(input)
+    Ok(())
 }
 pub fn digest(value: &impl Serialize) -> Result<String> {
     aq_playbook_host::model::digest(value).map_err(|_| Error::Invalid)

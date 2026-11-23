@@ -168,8 +168,10 @@ impl Service {
         let mut tx = self.tx().await?;
         let ns = self.namespace_locked(&mut tx).await?;
         self.runtime(&ns, owner)?;
-        let scope = self.grant_locked(&mut tx, id, revision, false).await?;
-        self.intent_authority(intent, id, revision, &scope)?;
+        let scope = self
+            .grant_locked(&mut tx, GrantRevision::new(id, revision), false)
+            .await?;
+        self.intent_authority(intent, GrantRevision::new(id, revision), &scope)?;
         let cancellations = Cancellations::new(&self.namespace, &intent.id, &identity);
         match cancellations.stage(&mut tx, &key, || self.now()).await? {
             CancelStage::Retained(disposition) => return Ok(disposition),

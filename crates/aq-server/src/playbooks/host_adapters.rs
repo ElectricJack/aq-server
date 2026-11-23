@@ -287,9 +287,17 @@ impl Service {
         let retained = Effects(&self.namespace).lock(&mut tx, intent).await?;
         let live = owner.is_some() && retained.as_ref().is_none_or(|r| r.status == PENDING);
         let scope = self
-            .grant_locked(&mut tx, command.grant, command.revision, live)
+            .grant_locked(
+                &mut tx,
+                GrantRevision::new(command.grant, command.revision),
+                live,
+            )
             .await?;
-        self.intent_authority(intent, command.grant, command.revision, &scope)?;
+        self.intent_authority(
+            intent,
+            GrantRevision::new(command.grant, command.revision),
+            &scope,
+        )?;
         let stage = match retained {
             Some(row) => Some(Stage::restore(row, intent, &identity)?),
             None if owner.is_none() => None,

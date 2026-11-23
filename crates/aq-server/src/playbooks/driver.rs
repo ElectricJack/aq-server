@@ -80,11 +80,12 @@ impl Host for MailHost {
         self.handle
             .block_on(self.service.authorize_contract(
                 &self.runtime,
-                id,
-                revision,
-                contract,
-                authority,
-                self.mode == HostMode::Dispatch,
+                ContractAuthorization {
+                    grant: GrantRevision::new(id, revision),
+                    contract,
+                    authority,
+                    live: self.mode == HostMode::Dispatch,
+                },
             ))
             .is_ok()
     }
@@ -100,8 +101,7 @@ impl Host for MailHost {
             };
             let result = self.handle.block_on(self.service.request_decision(
                 &self.runtime,
-                id,
-                revision,
+                GrantRevision::new(id, revision),
                 intent,
             ));
             #[cfg(feature = "test-support")]
@@ -124,8 +124,7 @@ impl Host for MailHost {
             };
             return decision_dispatch(self.handle.block_on(self.service.operation_get(
                 &self.runtime,
-                id,
-                revision,
+                GrantRevision::new(id, revision),
                 intent,
             )));
         }
@@ -165,10 +164,10 @@ impl Host for MailHost {
                     reason: "grant binding refused".into(),
                 };
             };
-            return match self
-                .handle
-                .block_on(self.service.reconcile_decision(id, revision, intent))
-            {
+            return match self.handle.block_on(
+                self.service
+                    .reconcile_decision(GrantRevision::new(id, revision), intent),
+            ) {
                 Ok(Some(result)) => decision_dispatch(Ok(result)),
                 _ => DispatchResult::Unknown {
                     reason: "no exact retained decision owner result".into(),
@@ -241,10 +240,11 @@ impl Host for MailHost {
         if intent.command.name == "decision.request" {
             return self
                 .handle
-                .block_on(
-                    self.service
-                        .cancel_decision(&self.runtime, id, revision, intent),
-                )
+                .block_on(self.service.cancel_decision(
+                    &self.runtime,
+                    GrantRevision::new(id, revision),
+                    intent,
+                ))
                 .unwrap_or(CancellationResult::Unknown);
         }
         self.handle
@@ -617,7 +617,10 @@ impl Driver {
             {
                 Ok(value) => value,
                 Err(aq_playbook_host::Error::Stale(_)) => {
-                    let _ = self.service.hold(&self.runtime, false, id, "stale").await;
+                    let _ = self
+                        .service
+                        .hold(&self.runtime, HeldItem::Admission(id), "stale")
+                        .await;
                     return Err(Error::Unknown);
                 }
                 Err(error) => return Err(delivery_error(error)),
@@ -710,8 +713,11 @@ impl Driver {
             // engine answers duplicate when it is delivered again.
             if let Err(error) = result {
                 let reason = (error == Error::Unknown).then_some("uncertain");
-                let hold =
-                    (self.service).hold(&self.runtime, false, *id, reason.unwrap_or("refused"));
+                let hold = (self.service).hold(
+                    &self.runtime,
+                    HeldItem::Admission(*id),
+                    reason.unwrap_or("refused"),
+                );
                 hold.await?;
             }
         }
@@ -832,7 +838,9 @@ impl Driver {
                 // a refusal is that row's outcome: hold it and go on.
                 Err(Error::Unknown) | Ok(()) => {}
                 Err(_) => {
-                    let held = self.service.hold(&self.runtime, true, *id, "refused");
+                    let held = self
+                        .service
+                        .hold(&self.runtime, HeldItem::Event(*id), "refused");
                     held.await?
                 }
             }
@@ -893,7 +901,10 @@ impl Driver {
             };
             let receipt = match self.owner.call(request, self.deadline).await {
                 Err(aq_playbook_host::Error::Stale(_)) => {
-                    return self.service.hold(&self.runtime, true, id, "stale").await;
+                    return self
+                        .service
+                        .hold(&self.runtime, HeldItem::Event(id), "stale")
+                        .await;
                 }
                 result => serde_json::from_value(result.map_err(delivery_error)?)?,
             };
