@@ -2,7 +2,9 @@
 //! the saved commit, and owner/service handoffs are not charged to the lineage
 //! budgets. Synthetic SQL owners and a synthetic central aq-git peer; no
 //! provider and no real Git export.
-use crate::profiled_results::auto_settlement56::{auto_env_source, evidence_rows, head_of};
+use crate::profiled_results::auto_settlement56::{
+    CheckedSource, ReportSetup, auto_env_source, evidence_rows, head_of,
+};
 use crate::profiled_results::auto_settlement56::{git_peer, ready_candidate};
 use crate::{
     common::{self, profiled::NOW, source_exports::setup},
@@ -493,11 +495,10 @@ async fn quiet_successor(
     let env = Box::pin(auto_env_source(
         "required",
         axum::http::StatusCode::OK,
-        true,
-        None,
-        None,
-        false,
-        None,
+        ReportSetup {
+            changed: false,
+            ..ReportSetup::default()
+        },
     ))
     .await;
     let saved = admitted(&env).await.resolved_object.hex;
@@ -506,8 +507,15 @@ async fn quiet_successor(
         "the successor changed nothing itself"
     );
     let (checkpoint, validator) = (env.checkpoint.clone(), env.validator.clone());
-    env.check(env.source, &checkpoint, &validator, "passed")
-        .await;
+    env.check(
+        CheckedSource {
+            id: env.source,
+            checkpoint: &checkpoint,
+        },
+        &validator,
+        "passed",
+    )
+    .await;
     let pool = env.f.db.pool().await;
     let source = admitted(&env).await;
     sqlx::query("UPDATE project_execution_bindings SET binding=jsonb_set(binding,'{publication}',$2) WHERE project_id=$1")
