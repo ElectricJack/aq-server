@@ -165,6 +165,7 @@ mod finalize;
 use aq_delivery::source_transport::{GitManifest, RetentionRecord, successful_reply};
 mod upload;
 use base::{base_download, base_status, provision_base};
+pub(crate) use confirmation::first_confirmed_locked;
 pub use confirmation::{RecordedSourceConfirmation, load_confirmed_locked};
 use finalize::finalize;
 use upload::{begin, chunk, status};

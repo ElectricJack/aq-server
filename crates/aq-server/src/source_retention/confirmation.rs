@@ -135,3 +135,18 @@ impl RecordedSourceConfirmation {
         )
     }
 }
+
+/// First server-confirmed source in the report's signed receipt order.
+pub(crate) async fn first_confirmed_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    recorded: &crate::profiled_execution::results::RecordedResult,
+) -> Result<Option<(Uuid, RecordedSourceConfirmation)>> {
+    for &operation in &recorded.report.source_receipt_ids {
+        match load_confirmed_locked(tx, operation, recorded).await {
+            Ok(source) => return Ok(Some((operation, source))),
+            Err(AppError::Conflict(_)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}

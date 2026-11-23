@@ -115,17 +115,9 @@ async fn saved_source(
     };
     let mut tx = pool.begin().await.map_err(internal)?;
     let record = super::results::load_locked(state, &mut tx, report).await?;
-    let mut source = None;
-    for op in &record.report.source_receipt_ids {
-        match crate::source_retention::load_confirmed_locked(&mut tx, *op, &record).await {
-            Ok(_) => {
-                source = Some(*op);
-                break;
-            }
-            Err(AppError::Conflict(_)) => {}
-            Err(e) => return Err(e),
-        }
-    }
+    let source = crate::source_retention::first_confirmed_locked(&mut tx, &record)
+        .await?
+        .map(|(operation, _)| operation);
     tx.rollback().await.map_err(internal)?;
     let (Some(source), true) = (source, record.spec.task.task_id == task) else {
         tracing::warn!(%predecessor, "handoff has no confirmed saved source; using the original base");

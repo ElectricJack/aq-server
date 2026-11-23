@@ -20,6 +20,7 @@ mod refs;
 use refs::{branch, destination_key, oid};
 mod policy;
 mod protocol;
+pub mod publication_evidence;
 mod reconcile;
 pub mod repository_onboarding;
 pub mod result_patch;
