@@ -321,6 +321,7 @@ dependencies = [
 name = "aq-human-work"
 version = "0.1.0"
 dependencies = [
+ "aq-admission 0.1.13",
  "aq-human-cursor",
  "aq-machine-control",
  "aq-playbook-domain",

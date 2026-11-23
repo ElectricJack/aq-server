@@ -134,8 +134,13 @@ pub(super) async fn work(
             _ => None,
         },
     );
+    let recovery = match (&hold, open) {
+        (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
+        _ => None,
+    };
     let held = held
         .into_iter()
+        .chain(recovery)
         .chain(role_hold)
         .chain(level_hold)
         .chain(offer_hold)

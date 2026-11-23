@@ -328,6 +328,63 @@ pub async fn attempt_hold(
     Ok(state.map(|state| Hold::from_authority(attempt, &state)))
 }
 
+/// Recovery evidence for the exact attempt that still holds the task.
+pub async fn attempt_recovery_wait(pool: &PgPool, h: &Hold) -> Option<Value> {
+    if !h.stopped && h.status != "cancelling" {
+        return None;
+    }
+    let (stop, closure, has_result): (Option<String>, Option<Vec<u8>>, bool) = sqlx::query_as(
+        "SELECT a.state#>>'{stop,kind}', c.request_bytes,
+            EXISTS(SELECT 1 FROM profiled_result_reports r WHERE r.attempt_id=e.attempt_id)
+         FROM execution_attempts e JOIN profiled_authority_hot a USING(attempt_id)
+         LEFT JOIN profiled_launch_closures c USING(attempt_id)
+         WHERE e.attempt_id=$1 AND e.holds_task",
+    )
+    .bind(h.attempt_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let proof = closure.and_then(|bytes| {
+        serde_json::from_slice::<aq_admission::granted_closure::Request>(&bytes)
+            .ok()
+            .filter(|request| request.binding.attempt_id == h.attempt_id)
+            .map(|request| request.evidence.proves_never_started())
+    });
+    recovery_reason(h.attempt_id, stop.as_deref(), proof, has_result)
+}
+
+fn recovery_reason(
+    attempt: Uuid,
+    stop: Option<&str>,
+    proof: Option<bool>,
+    has_result: bool,
+) -> Option<Value> {
+    let (code, owner, wake, message) = match (stop, proof, has_result) {
+        (Some("unknown"), Some(false), _) => (
+            "closure_does_not_prove_nonstart",
+            "aq_operator",
+            "original_launch_evidence_reconciled",
+            "The host stopped and the harness may have run. The AQ operator needs to reconcile the original attempt's result and effects before its claim can be released.",
+        ),
+        (Some("unknown"), Some(true), _) => (
+            "closed_launch_settlement_pending",
+            "aq_scheduler",
+            "closed_launch_settlement",
+            "AQ will check the original launch closure, retained source, and effects before freeing the claim.",
+        ),
+        (Some("stopped"), _, false) => (
+            "stopped_result_recovery_pending",
+            "aq_worker",
+            "stopped_result_reconciled",
+            "The attempt stopped without a recorded result. The worker needs to reconcile the retained workspace and the stopped result.",
+        ),
+        _ => return None,
+    };
+    Some(
+        json!({"code":code,"attempt_id":attempt,"blocker_owner":owner,"wake_condition":wake,"message":message}),
+    )
+}
+
 /// The original Graph operation stays visible while AQ verifies its receipt.
 pub async fn graph_completion_wait(pool: &PgPool, hold: &Hold) -> Option<Value> {
     let (result, operation, reason, next): (Uuid, Uuid, Option<String>, Option<i64>) = sqlx::query_as(
@@ -646,9 +703,15 @@ pub fn readiness_in(
     } else {
         Vec::new()
     };
+    let closed_launch = held.iter().any(|reason| {
+        matches!(
+            reason["code"].as_str(),
+            Some("closure_does_not_prove_nonstart" | "closed_launch_settlement_pending")
+        )
+    });
     let state = match task_state {
         Some(s @ ("completed" | "canceled" | "draft")) => s,
-        _ if hold.is_some_and(Hold::running) => "running",
+        _ if !closed_launch && hold.is_some_and(Hold::running) => "running",
         _ if hold.is_some() || !held.is_empty() => "held",
         _ if open || !hierarchy.is_empty() => "waiting",
         _ if !complete => "unknown",
@@ -1123,6 +1186,31 @@ mod tests {
         let r = readiness(Some("canceled"), Some(&cancelled), None, vec![], true);
         assert_eq!(r["state"], "canceled");
         assert_eq!(r["reasons"][0]["code"], "cancelled_attempt_holds_task");
+    }
+
+    #[test]
+    fn closed_launch_shows_the_owner_and_the_event_that_can_release_it() {
+        let attempt = Uuid::new_v4();
+        let hold = Hold::from_authority(attempt, &authority("cancelling", "unknown", Value::Null));
+        let absent = recovery_reason(attempt, Some("unknown"), None, false);
+        assert_eq!(
+            readiness(Some("active"), Some(&hold), absent, vec![], true)["state"],
+            "running"
+        );
+
+        let reason = recovery_reason(attempt, Some("unknown"), Some(false), false).unwrap();
+        let result = readiness(Some("active"), Some(&hold), Some(reason), vec![], true);
+        assert_eq!(result["state"], "held");
+        assert_eq!(result["reasons"][0]["attempt_id"], json!(attempt));
+        assert_eq!(result["reasons"][0]["blocker_owner"], "aq_operator");
+        assert_eq!(
+            result["reasons"][0]["wake_condition"],
+            "original_launch_evidence_reconciled"
+        );
+
+        let stopped = recovery_reason(attempt, Some("stopped"), None, false).unwrap();
+        assert_eq!(stopped["blocker_owner"], "aq_worker");
+        assert!(recovery_reason(attempt, Some("stopped"), None, true).is_none());
     }
 
     #[cfg(feature = "delivery_playbook")]

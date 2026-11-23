@@ -11,6 +11,7 @@ delivery_playbook = ["aq-playbook-domain/delivery_playbook"]
 project_environments = ["aq-project-policy/project_environments"]
 
 [dependencies]
+aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-playbook-domain = { path = "../aq-playbook-domain", optional = true }
 aq-human-cursor = { path = "../aq-human-cursor" }
