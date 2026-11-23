@@ -72,32 +72,31 @@ impl Mode {
 }
 
 async fn configure_phase(case: &mut Case, mode: Mode) -> (Option<Value>, Option<ArtifactRef>) {
-    if mode.uses_phase() {
-        let (mut config, inventory_qualification) =
-            phase::configure(case, mode.executes_phase()).await;
-        config["prepare_inputs"] = json!(mode.prepares_inputs());
-        if mode.executes_phase() {
-            config["prepare_execution"] = json!(true);
-            if mode.loses_execution_reply() {
-                config["history_after_lost_execution"] = json!(true);
-            }
-            if mode.starts_host() {
-                config["synthetic_host"] = phase_host::configuration();
-            }
-            if mode.reports_terminal() {
-                phase_terminal::configure(case).await;
-                config["report_terminal"] = json!(true);
-                if mode.relays_output() {
-                    phase_output::configure(case).await;
-                    config["relay_output"] = json!(true);
-                    config["await_synthetic_assessment"] = json!(true);
-                }
-            }
-        }
-        (Some(config), inventory_qualification)
-    } else {
-        (None, None)
+    if !mode.uses_phase() {
+        return (None, None);
     }
+    let (mut config, inventory_qualification) =
+        phase::configure(case, mode.executes_phase()).await;
+    config["prepare_inputs"] = json!(mode.prepares_inputs());
+    if mode.executes_phase() {
+        config["prepare_execution"] = json!(true);
+    }
+    if mode.loses_execution_reply() {
+        config["history_after_lost_execution"] = json!(true);
+    }
+    if mode.starts_host() {
+        config["synthetic_host"] = phase_host::configuration();
+    }
+    if mode.reports_terminal() {
+        phase_terminal::configure(case).await;
+        config["report_terminal"] = json!(true);
+    }
+    if mode.relays_output() {
+        phase_output::configure(case).await;
+        config["relay_output"] = json!(true);
+        config["await_synthetic_assessment"] = json!(true);
+    }
+    (Some(config), inventory_qualification)
 }
 
 async fn verify_legacy_grant(
@@ -190,6 +189,38 @@ async fn verify_legacy_grant(
         .fetch_one(&case.env.env.pool)
         .await
         .unwrap()
+    );
+}
+
+async fn diagnose_worker_history(
+    case: &Case,
+    worker_root: &std::path::Path,
+    identity: &aq_admission::transport::WorkerIdentity,
+) {
+    // A rejected delivery does not imply that the server issued no grant.
+    // Retain only bounded historical metadata, never material or credentials.
+    let issued: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('operation_id',r.operation_id,'request_digest',r.request_digest,'grant_id',r.response#>'{body,grant,grant_id}','binding',r.response#>'{body,grant,binding}','versions',r.response->'versions','original_clock',r.response#>'{body,clock}','grant_expiry',r.response#>'{body,grant,expires_at_ms}','execution_deadline_ms',r.response->'execution_deadline_ms','holds_task',a.holds_task,'hot_status',h.state->'status') FROM profiled_execution_receipts r JOIN execution_attempts a ON a.attempt_id::text=r.response#>>'{body,grant,binding,attempt_id}' JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id WHERE r.node_id=$1 AND r.kind='prepare' AND r.response->>'kind'='grant' ORDER BY r.operation_id LIMIT 2")
+        .bind(identity.node_id).fetch_all(&case.env.env.pool).await.unwrap();
+    eprintln!(
+        "bounded central issued-grant history (not live worker permission): {}",
+        json!(issued)
+    );
+    let clocks: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('now',decision#>'{inputs,now_ms}','budget_expiry',decision#>'{inputs,budget,expires_at_ms}','selection_expiry',decision#>'{outcome,resolved,expires_at_ms}') FROM intelligence_decisions ORDER BY decision#>>'{inputs,now_ms}' DESC LIMIT 5").fetch_all(&case.env.env.pool).await.unwrap();
+    eprintln!("bounded original decision clocks: {}", json!(clocks));
+    let snapshot: Value = serde_json::from_slice(
+        &std::fs::read(worker_root.join("journal/journal.json")).unwrap(),
+    )
+    .unwrap();
+    let attempts = snapshot["state"]["attempts"].as_object().unwrap();
+    let a = attempts.values().next().cloned().unwrap_or(Value::Null);
+    let downloads = a["downloads"].as_object().cloned().unwrap_or_default();
+    let completed = downloads
+        .values()
+        .filter(|d| !d["receipt"].is_null())
+        .count();
+    eprintln!(
+        "bounded worker timing: {}",
+        json!({"server_now_ms":chrono::Utc::now().timestamp_millis(),"preparation_clock":a["preparation"]["delivery"]["original"]["clock"],"sent_ns":a["preparation"]["sent_ns"],"received_ns":a["preparation"]["received_ns"],"deadline_ns":a["preparation"]["deadline_ns"],"download_count":downloads.len(),"completed_count":completed,"last_completion_ns":downloads.values().filter_map(|d|d["completed_ns"].as_u64()).max()})
     );
 }
 
@@ -415,31 +446,7 @@ async fn run_worker(mode: Mode) {
         if execute_phase {
             phase::diagnostics(case).await;
         }
-        // A rejected delivery does not imply that the server issued no grant.
-        // Retain only bounded historical metadata, never material or credentials.
-        let issued: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('operation_id',r.operation_id,'request_digest',r.request_digest,'grant_id',r.response#>'{body,grant,grant_id}','binding',r.response#>'{body,grant,binding}','versions',r.response->'versions','original_clock',r.response#>'{body,clock}','grant_expiry',r.response#>'{body,grant,expires_at_ms}','execution_deadline_ms',r.response->'execution_deadline_ms','holds_task',a.holds_task,'hot_status',h.state->'status') FROM profiled_execution_receipts r JOIN execution_attempts a ON a.attempt_id::text=r.response#>>'{body,grant,binding,attempt_id}' JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id WHERE r.node_id=$1 AND r.kind='prepare' AND r.response->>'kind'='grant' ORDER BY r.operation_id LIMIT 2")
-            .bind(identity.node_id).fetch_all(&case.env.env.pool).await.unwrap();
-        eprintln!(
-            "bounded central issued-grant history (not live worker permission): {}",
-            json!(issued)
-        );
-        let clocks: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('now',decision#>'{inputs,now_ms}','budget_expiry',decision#>'{inputs,budget,expires_at_ms}','selection_expiry',decision#>'{outcome,resolved,expires_at_ms}') FROM intelligence_decisions ORDER BY decision#>>'{inputs,now_ms}' DESC LIMIT 5").fetch_all(&case.env.env.pool).await.unwrap();
-        eprintln!("bounded original decision clocks: {}", json!(clocks));
-        let snapshot: Value = serde_json::from_slice(
-            &std::fs::read(worker_root.join("journal/journal.json")).unwrap(),
-        )
-        .unwrap();
-        let attempts = snapshot["state"]["attempts"].as_object().unwrap();
-        let a = attempts.values().next().cloned().unwrap_or(Value::Null);
-        let downloads = a["downloads"].as_object().cloned().unwrap_or_default();
-        let completed = downloads
-            .values()
-            .filter(|d| !d["receipt"].is_null())
-            .count();
-        eprintln!(
-            "bounded worker timing: {}",
-            json!({"server_now_ms":chrono::Utc::now().timestamp_millis(),"preparation_clock":a["preparation"]["delivery"]["original"]["clock"],"sent_ns":a["preparation"]["sent_ns"],"received_ns":a["preparation"]["received_ns"],"deadline_ns":a["preparation"]["deadline_ns"],"download_count":downloads.len(),"completed_count":completed,"last_completion_ns":downloads.values().filter_map(|d|d["completed_ns"].as_u64()).max()})
-        );
+        diagnose_worker_history(case, &worker_root, &identity).await;
     }
     assert_eq!(
         result["phase"],

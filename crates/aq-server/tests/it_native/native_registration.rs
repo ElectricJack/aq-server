@@ -9,6 +9,42 @@ use common::profiled::{NOW, artifact, fixture};
 use std::sync::Arc;
 use uuid::Uuid;
 
+fn registration_request(
+    identity: &aq_worker_protocol::NodeIdentity,
+    runtime_bytes: &[u8],
+) -> Register {
+    Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: identity.node_id,
+            boot_id: identity.boot_id,
+        },
+        runtime: artifact("synthetic-native-runtime", runtime_bytes),
+        capabilities: vec![],
+        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
+    }
+}
+
+async fn authenticate(f: &common::profiled::Fixture) -> aq_server::worker_api::AuthenticatedNode {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {}", f.credential).parse().unwrap(),
+    );
+    aq_server::worker_api::authenticate_context(&f.state, &headers)
+        .await
+        .unwrap()
+}
+
+async fn execution_node_state(pool: &sqlx::PgPool, node: Uuid) -> serde_json::Value {
+    sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 async fn install_allowlist(
     state: &mut aq_server::AppState,
     request: &Register,
@@ -89,17 +125,7 @@ async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
 #[tokio::test]
 async fn configured_allowlist_does_not_synthesize_registration_and_admitted_identity_is_exact() {
     let mut f = fixture().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"synthetic-code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
+    let request = registration_request(&f.node, b"synthetic-code");
     let qualification = artifact(
         "synthetic-runtime-qualification",
         b"synthetic-qualification",
@@ -142,12 +168,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
         .unwrap();
     // Old exact acknowledgments remain readable, but cannot reinstall a
     // fixture incarnation or make the native runtime eligible for fixture offers.
-    let before: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let before = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(
         serde_json::to_value(f.state.store.execution_register(&legacy).await.unwrap()).unwrap(),
         serde_json::to_value(historical).unwrap()
@@ -162,12 +183,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
             .await
             .is_err()
     );
-    let after: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let after = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(before, after);
     assert!(
         f.state
@@ -277,31 +293,14 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     use tower::ServiceExt;
     let mut f = fixture().await;
     let pool = f.db.pool().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
+    let request = registration_request(&f.node, b"code");
     install_allowlist(
         &mut f.state,
         &request,
         artifact("synthetic-qualification", b"qualification"),
     )
     .await;
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        format!("Bearer {}", f.credential).parse().unwrap(),
-    );
-    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
-        .await
-        .unwrap();
+    let auth = authenticate(&f).await;
     let router = aq_server::build_worker_router(f.state.clone());
     let http_request = |token: &str, body: Vec<u8>| {
         HttpRequest::builder()
@@ -384,12 +383,7 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
     registration::register(&f.state, &auth, &request)
         .await
         .unwrap();
-    let current: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-            .bind(f.node.node_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let current = execution_node_state(&pool, f.node.node_id).await;
     assert_eq!(
         current["identity"]["boot_id"],
         changed.identity.boot_id.to_string()
@@ -445,31 +439,14 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
 async fn registration_receipt_cap_is_per_boot() {
     let mut f = fixture().await;
     let pool = f.db.pool().await;
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-native-runtime", b"code"),
-        capabilities: vec![],
-        features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
-    };
+    let request = registration_request(&f.node, b"code");
     install_allowlist(
         &mut f.state,
         &request,
         artifact("synthetic-qualification", b"qualification"),
     )
     .await;
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(
-        axum::http::header::AUTHORIZATION,
-        format!("Bearer {}", f.credential).parse().unwrap(),
-    );
-    let auth = aq_server::worker_api::authenticate_context(&f.state, &headers)
-        .await
-        .unwrap();
+    let auth = authenticate(&f).await;
     // Receipts are append-only, so the filled history is inserted directly.
     sqlx::query("INSERT INTO native_registration_receipts(node_id,operation_id,request_digest,response) SELECT $1,gen_random_uuid(),repeat('a',64),jsonb_build_object('identity',jsonb_build_object('boot_id',$2::text)) FROM generate_series(1,1024)")
         .bind(f.node.node_id)

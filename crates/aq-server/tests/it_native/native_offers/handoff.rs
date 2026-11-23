@@ -124,31 +124,11 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     registered(json!(stop_capable)).await;
     stopped::record(state, &auth, &stop).await.unwrap();
 
-    // The worker's checkpoint transfer, centrally retained (validation only).
     let binding = &start.binding;
-    let aq_session_protocol::SessionIdentity::Remote {
-        node_id,
-        session_id,
-        ..
-    } = binding.session
-    else {
+    let aq_session_protocol::SessionIdentity::Remote { node_id, .. } = binding.session else {
         unreachable!()
     };
-    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let repository = c.env.frozen.project.binding.repository_id;
-    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
-    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
-        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
-        "resolved_spec_digest":binding.execution_spec_digest,
-        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
-        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
-    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
-        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
-    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
-        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
-    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
-        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
-        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
+    let source = retain_checkpoint(c, binding, checkpoint).await;
     sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
         .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
     let report = ResultReport {
@@ -202,6 +182,39 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     };
     assert_eq!(r.exempt_attempts, 1, "an owner stop is not charged");
     replacement::release(state, task, &r).await.unwrap();
+}
+
+async fn retain_checkpoint(
+    c: &Case,
+    binding: &aq_admission::LaunchBinding,
+    checkpoint: &str,
+) -> Uuid {
+    let pool = &c.env.env.pool;
+    // The worker's checkpoint transfer, centrally retained (validation only).
+    let aq_session_protocol::SessionIdentity::Remote {
+        node_id,
+        session_id,
+        ..
+    } = binding.session
+    else {
+        unreachable!()
+    };
+    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let repository = c.env.frozen.project.binding.repository_id;
+    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
+    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
+        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
+        "resolved_spec_digest":binding.execution_spec_digest,
+        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
+        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
+    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
+        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
+    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
+        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
+    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
+        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
+        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
+    source
 }
 
 async fn export_of(c: &Case, attempt: Uuid) -> (Uuid, Value) {
