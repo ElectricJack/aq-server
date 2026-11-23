@@ -144,9 +144,7 @@ struct Setup {
     namespace: Uuid,
     artifact_path: PathBuf,
 }
-async fn setup() -> Setup {
-    let f = fixture().await;
-    insert(&f).await;
+async fn install_access_binding(f: &Fixture) {
     // Explicit synthetic known-task access binding, as required by the actual
     // AQ11 owner service. This does not issue agent credentials or launch.
     let binding = &f.profiled.offer.binding;
@@ -161,6 +159,12 @@ async fn setup() -> Setup {
     let access = json!({"workspace_id":f.selection.lineage.workspace_id,"project_id":f.selection.lineage.project_id,"task_id":f.selection.lineage.task_id,"session_id":session_id,"attempt_id":binding.attempt_id,"generation":assignment_generation});
     sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,'{}','{}')")
         .bind(binding.attempt_id).bind(f.node.node_id).bind(access).execute(&f.db.pool().await).await.unwrap();
+}
+
+async fn setup() -> Setup {
+    let f = fixture().await;
+    insert(&f).await;
+    install_access_binding(&f).await;
     let dir = tempfile::tempdir().unwrap();
     let peer = peer(dir.path()).await;
     private(
