@@ -159,6 +159,10 @@ pub struct Route {
     /// `classification`: reference, fields, labels, flags, rationale).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgment: Option<serde_json::Value>,
+    /// The environment the routing document chose (spec 0017 §5.4); none
+    /// keeps a continuation's own, else placement's default rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -184,6 +188,9 @@ pub struct CompactRoute {
     /// a later attempt ended is routed again (spec 0011 §4).
     #[serde(default)]
     pub a: u64,
+    /// The routed environment ([`Route::environment`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
 }
 
 /// Restrictions a route places on selection. An empty `harnesses` or
@@ -214,6 +221,7 @@ impl Route {
             s: self.source,
             n: sequence,
             a: self.ended_attempts,
+            e: self.environment.clone(),
         };
         let bytes = serde_json::to_vec(&compact)
             .map_err(|e| Error::Metadata {
@@ -376,6 +384,7 @@ mod tests {
             source: Source::Router,
             ended_attempts: 0,
             judgment: None,
+            environment: None,
         }
     }
 

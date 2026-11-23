@@ -1,7 +1,7 @@
 //! The sources the server defines itself (spec 0013 section 7).
 use crate::{SourceKind, SourceRecord};
 use aq_internal_work::Purpose;
-use aq_playbooks_compiler::{docs, draft};
+use aq_playbooks_compiler::draft;
 use std::collections::BTreeSet;
 
 /// The id of the source whose document says who takes each task.
@@ -36,11 +36,7 @@ pub fn routing() -> SourceRecord {
         "work.unroutable",
     ]);
     let events = names(&["aq.work.route_needed"]);
-    // What those commands need, the reconciliation of the judgment included.
-    let capabilities = draft::retain_registry(&docs::catalog_registry(), &commands, &events)
-        .map(|(_, capabilities)| capabilities)
-        .unwrap_or_default();
-    SourceRecord {
+    let mut record = SourceRecord {
         id: ROUTING.into(),
         kind: SourceKind::Builtin,
         binding: ROUTING_BINDING.into(),
@@ -49,10 +45,16 @@ pub fn routing() -> SourceRecord {
         judgment_purpose: Purpose::RoutingClassification,
         commands,
         events,
-        capabilities,
+        capabilities: BTreeSet::new(),
         facts: vec![ROUTING_OPTIONS.into()],
         revision: 0,
-    }
+    };
+    // What those commands need, the reconciliation of the judgment included.
+    let registry = crate::request::pinned_catalog(&record).expect("the routing catalog parses");
+    record.capabilities = draft::retain_registry(&registry, &record.commands, &record.events)
+        .map(|(_, capabilities)| capabilities)
+        .unwrap_or_default();
+    record
 }
 
 /// The record of the `delivery` source: on `aq.work.result_ready` it reads
@@ -117,6 +119,7 @@ pub fn delivery() -> SourceRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aq_playbooks_compiler::docs;
 
     #[test]
     fn the_routing_record_may_do_what_routing_needs_and_no_more() {
@@ -302,6 +305,38 @@ mod tests {
         ] {
             assert!(notes.contains(name), "{name}");
         }
+    }
+
+    /// Spec 0017 §5.4: the routing record is authored against catalog 2.5.0,
+    /// whose `work.read` gives needs and environments and whose `work.route`
+    /// takes the chosen environment; its other commands are 2.2.0's.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[test]
+    fn the_routing_record_chooses_environments_on_catalog_2_5_0() {
+        let record = routing();
+        let catalog = crate::request::pinned_catalog(&record).unwrap();
+        let v2_2 = docs::catalog_registry();
+        for name in &record.commands {
+            let contract = &catalog.commands[name];
+            match name.as_str() {
+                "work.read" | "work.route" => assert_eq!(contract.version, "2.5.0"),
+                _ => assert_eq!(contract, &v2_2.commands[name], "{name}"),
+            }
+        }
+        let workspace = crate::request::workspace_files(
+            &record,
+            "route",
+            &catalog,
+            &Default::default(),
+            "1",
+            None,
+        )
+        .unwrap();
+        let notes = &workspace["CATALOG.md"];
+        for name in ["default_environment", "environment", "judgment.assess"] {
+            assert!(notes.contains(name), "{name}");
+        }
+        assert!(!notes.contains("environment.build"));
     }
 
     /// The published 2.5.0 delivery example seals as a playbook of this record.

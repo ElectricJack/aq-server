@@ -3,6 +3,8 @@
 //! are `aq_playbook_domain::host9`.
 use super::*;
 use aq_playbook_domain::host9::{self, Provenance, WorkFacts};
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+use aq_playbook_domain::host10;
 use aq_routing::{Route, Source, Written, classify::Options};
 
 /// What the routing commands need of the server besides the graph.
@@ -17,6 +19,9 @@ pub trait RoutingPort: Send + Sync {
     async fn options(&self) -> Result<Options>;
     /// Writes the router's route for the task at `version`, or clears it.
     async fn write(&self, at: (Uuid, Uuid, u64), route: Option<&Route>) -> Result<Written>;
+    /// The project's environments (spec 0017 §5.4).
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    async fn environments(&self, project: Uuid) -> Result<host10::Environments>;
 }
 
 /// Production port: the server's routing, bindings and attempt history.
@@ -70,6 +75,18 @@ impl RoutingPort for ServerRouting {
             None => crate::routing::clear(&self.0, workspace, task, version, Source::Router).await,
         };
         written.map_err(|_| Error::Unknown)
+    }
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    async fn environments(&self, project: Uuid) -> Result<host10::Environments> {
+        let (state, unknown) = (&self.0, |_| Error::Unknown);
+        let binding = (crate::project_bindings::current(state, project).await).map_err(unknown)?;
+        let catalog = crate::profiled_execution::definitions::catalog(state, &state.store.pool);
+        let catalog = catalog.await.map_err(unknown)?;
+        let allowed = binding.binding.allowed_environments.iter();
+        Ok(host10::Environments {
+            default: binding.binding.default_environment.unwrap_or_default(),
+            allowed: allowed.map(|e| (e.clone(), catalog.provides(e))).collect(),
+        })
     }
 }
 
@@ -127,8 +144,8 @@ impl Service {
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
         #[cfg(feature = "delivery_playbook")]
-        if name == "work.read" && self.profile.is_delivery() && intent.command.version == "2.3.0" {
-            return self.read_delivery(tx, input).await;
+        if name == "work.read" && self.profile.is_delivery() && intent.command.version != "1.0.0" {
+            return self.read_delivery(tx, input, &intent.command.version).await;
         }
         let id = text(&input["subject"], "id")?;
         let asked = input["subject"]["revision"]
@@ -184,7 +201,19 @@ impl Service {
             source_revision,
             ended_attempts: routing.attempts(task).await?.1,
         };
-        let Some(route) = host9::route_from_input(input, &options, from) else {
+        let route = host9::route_from_input(input, &options, from);
+        // Spec 0017 §5.4: a routed environment is one the project allows
+        // that provides every need.
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        let route = match route.as_ref().and_then(|r| r.environment.as_deref()) {
+            Some(e) => {
+                let needs = host10::needs(&node["metadata"]);
+                let refusal = routing.environments(project).await?.refusal(e, &needs);
+                route.filter(|_| refusal.is_none())
+            }
+            None => route,
+        };
+        let Some(route) = route else {
             let offers = host9::options_digest(&options);
             self.route_settled(
                 tx,
@@ -218,6 +247,7 @@ impl Service {
         &self,
         tx: &mut Transaction<'_, Postgres>,
         input: &Value,
+        _version: &str,
     ) -> Result<HostResult> {
         use aq_playbook_domain::delivery_store as store;
         let (ports, id) = (self.ports()?, text(&input["subject"], "id")?);
@@ -241,6 +271,13 @@ impl Service {
         let (charged, ended) = ports.routing.attempts(task).await?;
         let facts = (self.namespace_work(tx, task).await?, charged, ended);
         let output = store::observed(tx, task, at, latest.as_ref(), &node, facts).await?;
+        #[cfg(feature = "project_environments")]
+        let output = match _version {
+            "2.5.0" => {
+                (ports.routing.environments(at.1).await?).read_output(output, &node["metadata"])
+            }
+            _ => output,
+        };
         Ok(host_result("observed", output))
     }
 

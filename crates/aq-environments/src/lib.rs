@@ -182,13 +182,15 @@ fn matches(admitted: &Admitted, environment: &str) -> bool {
 }
 
 /// Spec 0017 §5.4: the default rule of [`env::place`], fed the profile's pin,
-/// the environment the `predecessor` attempt ran in, and what the catalog's
-/// definitions provide. `Err` is the hold the task's work read shows.
+/// the environment the `predecessor` attempt ran in or else the one the
+/// router chose (`routed`), and what the catalog's definitions provide. `Err`
+/// is the hold the task's work read shows.
 pub async fn place(
     pool: &PgPool,
     catalog: &Catalog<'_>,
     binding: &ProjectBinding,
     pinned: Option<&str>,
+    routed: Option<&str>,
     metadata: &Value,
     predecessor: Option<Uuid>,
 ) -> Result<String, OfferRefusal> {
@@ -198,7 +200,14 @@ pub async fn place(
     };
     let provides = |e: &str| catalog.provides(e);
     let needs = env::needs(metadata);
-    env::place(binding, pinned, kept.as_deref(), &needs, provides).map_err(
+    env::place(
+        binding,
+        pinned,
+        kept.as_deref().or(routed),
+        &needs,
+        provides,
+    )
+    .map_err(
         |env::Missing {
              environment,
              missing,

@@ -218,7 +218,8 @@ pub(crate) async fn activate<S: Server>(
     }
     let inputs = Inputs {
         grant_capabilities: record.capabilities.clone(),
-        catalog: request::pinned_catalog(&record)?,
+        // The 2.2.0 catalog the retained Host9 artifact was sealed against.
+        catalog: crate::compiler::docs::catalog_registry(),
         record,
         markdown,
         facts,
@@ -331,7 +332,7 @@ mod tests {
             grant_capabilities: record.capabilities.clone(),
             record,
             markdown: example("source.md").into(),
-            catalog: request::pinned_catalog(&builtin::routing()).unwrap(),
+            catalog: docs::catalog_registry(),
             facts: serde_json::from_str(example("facts.json")).unwrap(),
             facts_version: "settings-7".into(),
             previous: None,

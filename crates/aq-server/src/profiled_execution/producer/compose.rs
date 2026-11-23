@@ -92,7 +92,17 @@ pub async fn compile(
     let (catalog, environment) = {
         let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
         let (pool, pinned) = (&state.store.pool, execution.environment.as_deref());
-        match aq_environments::place(pool, &catalog, binding, pinned, metadata, predecessor).await {
+        let routed = route.and_then(|r| r.e.as_deref());
+        let placed = aq_environments::place(
+            pool,
+            &catalog,
+            binding,
+            pinned,
+            routed,
+            metadata,
+            predecessor,
+        );
+        match placed.await {
             Ok(environment) => (catalog, environment),
             Err(hold) => {
                 let (task, project) = (context.revision.task_id, binding.project_id);

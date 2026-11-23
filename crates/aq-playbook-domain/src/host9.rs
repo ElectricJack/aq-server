@@ -192,6 +192,10 @@ pub fn route_from_input(input: &Value, options: &Options, from: Provenance<'_>) 
         source: Source::Router,
         ended_attempts: from.ended_attempts.into(),
         judgment: Some(input["classification"].clone()).filter(|c| !c.is_null()),
+        // Catalog 2.5.0; the host checks it against the binding.
+        environment: (input["environment"].as_str())
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned),
     })
 }
 

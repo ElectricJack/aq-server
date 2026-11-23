@@ -193,6 +193,63 @@ async fn a_retry_keeps_the_environment_of_the_attempt_it_replaces() {
     assert_eq!(placed(&c, second).await, roles::ENVIRONMENT);
 }
 
+/// A router route of the default level that chose `environment`, on a task
+/// that needs `needs`.
+fn routed(c: &Case, environment: &str, needs: &[&str]) {
+    let route = json!({"c":roles::DEFAULT_LEVEL,"h":[],"p":[],"pf":[],"l":null,"i":"any","d":null,
+        "s":"router","n":1,"e":environment});
+    *c.metadata.lock().unwrap() = json!({"aq:route": route, "aq:needs": needs});
+}
+
+/// Spec 0017 §5.4 step 4: the routing document's environment is used when the
+/// profile pins none (`web`, which no node lists, over the default that
+/// would be offered), and the profile's pin still wins over it.
+#[tokio::test]
+async fn a_routed_environment_is_used_when_the_profile_pins_none() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    routed(&c, "web", &[]);
+    let attempt = offer(&mut c).await;
+    assert_eq!(placed(&c, attempt).await, roles::ENVIRONMENT);
+    drop(c);
+
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    unpin(&c).await;
+    routed(&c, "web", &[]);
+    let reason = refused(&mut c, "no_node_has_environment").await;
+    assert_eq!(reason["environment"], "web", "{reason}");
+}
+
+/// A retry keeps the environment of the attempt it continues, whatever the
+/// route says: routed to `web` (on no node) after the first attempt ran in
+/// `confined-worktree`, the replacement is offered there.
+#[tokio::test]
+async fn a_continuation_keeps_its_environment_over_the_route() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    unpin(&c).await;
+    let first = offer(&mut c).await;
+    fail_and_release(&c, first).await;
+    routed(&c, "web", &[]);
+    let second = offer(&mut c).await;
+    assert_ne!(second, first);
+    assert_eq!(placed(&c, second).await, roles::ENVIRONMENT);
+}
+
+/// A routed environment that lacks a need holds the task naming it; it is
+/// never swapped for the environment that would fit (`full`).
+#[tokio::test]
+async fn a_routed_environment_missing_a_need_holds_the_task() {
+    let mut c = setup().await;
+    environments(&mut c, roles::ENVIRONMENT).await;
+    unpin(&c).await;
+    routed(&c, "web", &["rust"]);
+    let reason = refused(&mut c, "environment_missing_capability").await;
+    assert_eq!(reason["environment"], "web", "{reason}");
+    assert_eq!(reason["missing"], json!(["rust"]), "{reason}");
+}
+
 pub(crate) const TEMPLATE: &str =
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 /// Admit `id` version `version` providing `provides`, as `environment.admit` will.

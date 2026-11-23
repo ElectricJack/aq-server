@@ -184,7 +184,7 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     }
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
-    assert_eq!(CatalogProfile::from_number(12), None);
+    assert_eq!(CatalogProfile::from_number(13), None);
 }
 
 // ------------------------------------------------------------------------
@@ -255,6 +255,8 @@ mod adapters {
         pub attempts: Mutex<(u32, u32)>,
         pub options: Mutex<Options>,
         pub writes: Mutex<Vec<(Uuid, Option<Route>)>>,
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        pub environments: Mutex<aq_server::playbooks::domain::host10::Environments>,
     }
     #[async_trait::async_trait]
     impl RoutingPort for FakeRouting {
@@ -269,6 +271,13 @@ mod adapters {
         }
         async fn options(&self) -> Result<Options> {
             Ok(self.options.lock().unwrap().clone())
+        }
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        async fn environments(
+            &self,
+            _: Uuid,
+        ) -> Result<aq_server::playbooks::domain::host10::Environments> {
+            Ok(self.environments.lock().unwrap().clone())
         }
         async fn write(&self, at: (Uuid, Uuid, u64), route: Option<&Route>) -> Result<Written> {
             let (_, task, version) = at;
@@ -299,6 +308,7 @@ mod adapters {
         pub graph: Arc<FakeGraph>,
         pub routing: Arc<FakeRouting>,
         pub other_project: Uuid,
+        pub profile: CatalogProfile,
     }
     fn offer(provider: &str, harness: &str) -> Offer {
         Offer {
@@ -318,6 +328,23 @@ mod adapters {
         f: common::profiled::Fixture,
         installation_routing: bool,
         judgments: Option<Arc<dyn JudgmentProvider>>,
+    ) -> Host {
+        host_as(
+            f,
+            installation_routing,
+            judgments,
+            CatalogProfile::Host9,
+            |s| s,
+        )
+        .await
+    }
+    /// A host of `profile`; `with` adds the ports that profile needs.
+    pub(super) async fn host_as(
+        f: common::profiled::Fixture,
+        installation_routing: bool,
+        judgments: Option<Arc<dyn JudgmentProvider>>,
+        profile: CatalogProfile,
+        with: impl FnOnce(Service) -> Service,
     ) -> Host {
         let l = f.selection.lineage.clone();
         let directory = tempfile::tempdir().unwrap();
@@ -353,8 +380,10 @@ mod adapters {
                 described: BTreeMap::new(),
             }),
             writes: Mutex::default(),
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            environments: Mutex::default(),
         });
-        let mut service = Service::new_host2(
+        let service = Service::new_host2(
             &f.state,
             Namespace {
                 namespace_id: Uuid::new_v4(),
@@ -365,7 +394,7 @@ mod adapters {
                 owner_user_id: f.actor,
             },
             Arc::new(keys),
-            CatalogProfile::Host9,
+            profile,
             graph.clone(),
             None,
             judgments,
@@ -374,6 +403,7 @@ mod adapters {
         .await
         .unwrap()
         .with_routing(routing.clone());
+        let mut service = with(service);
         service.installation_routing = installation_routing;
         service.initialize(f.actor).await.unwrap();
         let now = (f.state.clock)().timestamp_millis();
@@ -398,6 +428,7 @@ mod adapters {
             graph,
             routing,
             other_project,
+            profile,
         }
     }
     impl Host {
@@ -408,10 +439,10 @@ mod adapters {
                 step: name.replace('.', "-"),
                 invocation: 1,
                 deadline_at_ms: (self.f.state.clock)().timestamp_millis() + 5000,
-                command: CatalogProfile::Host9.registry().commands[name].clone(),
+                command: self.profile.registry().commands[name].clone(),
                 input_digest: digest(&input).unwrap(),
                 input,
-                authority: CatalogProfile::Host9
+                authority: (self.profile)
                     .authority(self.grant, 1, &self.scope)
                     .unwrap(),
                 status: IntentStatus::Dispatched,
@@ -433,12 +464,12 @@ mod adapters {
             (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
             result
         }
-        async fn read(&self, task: Uuid, revision: i64) -> HostResult {
+        pub(super) async fn read(&self, task: Uuid, revision: i64) -> HostResult {
             let input = json!({"subject": {"id": task.to_string(), "revision": revision}});
             self.run(&format!("read-{}", Uuid::new_v4()), "work.read", input)
                 .await
         }
-        async fn route(&self, task: Uuid, revision: i64, change: Value) -> HostResult {
+        pub(super) async fn route(&self, task: Uuid, revision: i64, change: Value) -> HostResult {
             let mut input = json!({"subject": {"id": task.to_string(), "revision": revision},
                 "level": "standard-high", "harnesses": [], "providers": [], "prefer": [],
                 "hold": false, "reasons": [{"code": "level_from_kind", "detail": "Bug fixes are Standard, high."}],
@@ -449,7 +480,10 @@ mod adapters {
             self.run(&format!("route-{}", Uuid::new_v4()), "work.route", input)
                 .await
         }
-        async fn emission(&self, task: Uuid) -> Option<(i64, Option<String>, Option<Value>)> {
+        pub(super) async fn emission(
+            &self,
+            task: Uuid,
+        ) -> Option<(i64, Option<String>, Option<Value>)> {
             sqlx::query_as(
                 "SELECT task_version,outcome,reasons FROM route_needed_emissions WHERE task_id=$1",
             )
@@ -1836,6 +1870,8 @@ mod delivery {
             attempts: Mutex::new((1, 2)),
             options: Mutex::new(Options::default()),
             writes: Mutex::default(),
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            environments: Mutex::default(),
         });
         let port = Arc::new(Port::default());
         let settle = Arc::new(Settle::default());
@@ -2383,7 +2419,7 @@ mod delivery {
                 _: &str,
             ) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push(format!("open {title}"));
-                Ok(pull(self.pr_state.lock().unwrap().clone()))
+                Ok(pull(*self.pr_state.lock().unwrap()))
             }
             async fn pull_request(
                 &self,
@@ -2392,7 +2428,7 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
-                    ..pull(self.pr_state.lock().unwrap().clone())
+                    ..pull(*self.pr_state.lock().unwrap())
                 })
             }
             async fn checks(
@@ -3003,3 +3039,123 @@ mod delivery {
 
 #[cfg(feature = "delivery_playbook")]
 pub(crate) use delivery::commands::GraphMergeHost;
+
+/// Catalog 2.5.0 routing on a Host12 namespace (spec 0017 §5.4): `work.read`
+/// gives the facts a routing document chooses an environment from, and
+/// `work.route` records the environment it chose.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+mod environments {
+    use super::adapters::{Host, host_as};
+    use crate::common;
+    use aq_server::playbooks::{
+        domain::{
+            Result,
+            delivery_store::{DeliveryPort, Latest, Pending},
+            host10::Environments,
+        },
+        review_domain::CatalogProfile,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    /// Every project is bound; no task has a result.
+    struct Bound;
+    #[async_trait::async_trait]
+    impl DeliveryPort for Bound {
+        async fn pending(&self, _: Option<Uuid>, _: u32) -> Result<Vec<Pending>> {
+            Ok(vec![])
+        }
+        async fn latest(&self, _: Uuid) -> Result<Option<Latest>> {
+            Ok(None)
+        }
+        async fn bound(&self, _: Uuid) -> Result<bool> {
+            Ok(true)
+        }
+        async fn has_result(&self, _: Uuid, _: Uuid) -> Result<bool> {
+            Ok(false)
+        }
+    }
+    fn labels(items: &[&str]) -> Vec<String> {
+        items.iter().map(|l| l.to_string()).collect()
+    }
+    /// A Host12 host whose project allows `rust-base` (its default) and `rust-web`.
+    async fn host12() -> Host {
+        let f = common::profiled::fixture().await;
+        common::profiled::insert(&f).await;
+        let with = |s: aq_server::playbooks::service::Service| s.with_delivery(Arc::new(Bound));
+        let h = host_as(f, true, None, CatalogProfile::Host12, with).await;
+        *h.routing.environments.lock().unwrap() = Environments {
+            default: "rust-base".into(),
+            allowed: vec![
+                ("rust-base".into(), labels(&["git", "rust"])),
+                ("rust-web".into(), labels(&["git", "node", "rust"])),
+            ],
+        };
+        h
+    }
+
+    #[tokio::test]
+    async fn work_read_gives_the_needs_and_the_projects_environments() {
+        let h = host12().await;
+        let task = (h.graph).task(
+            "Add a CSV export",
+            json!({"aq:needs": ["rust", "git", "rust"]}),
+        );
+        // `read` checks the answer against the 2.5.0 contract.
+        let read = h.read(task, 3).await;
+        assert_eq!(read.outcome, "observed");
+        let facts = &read.output["facts"];
+        assert_eq!(facts["needs"], json!(["git", "rust"]));
+        assert_eq!(facts["default_environment"], "rust-base");
+        assert_eq!(
+            facts["environments"],
+            json!([{"id": "rust-base", "provides": ["git", "rust"]},
+                {"id": "rust-web", "provides": ["git", "node", "rust"]}])
+        );
+        // The 2.3.0 facts are all there.
+        assert_eq!(facts["title"], "Add a CSV export");
+        assert_eq!(facts["pull_request"], json!(null));
+        // No default environment reads as "".
+        h.routing.environments.lock().unwrap().default = String::new();
+        let read = h.read(task, 3).await;
+        assert_eq!(read.output["facts"]["default_environment"], "");
+        let bare = h.graph.task("Needs nothing", json!({}));
+        assert_eq!(h.read(bare, 3).await.output["facts"]["needs"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_routed_environment_outside_the_binding_is_refused() {
+        let h = host12().await;
+        let task = h.graph.task("Train the ranking model", json!({}));
+        let refused = h.route(task, 3, json!({"environment": "gpu"})).await;
+        assert_eq!(
+            (refused.outcome.as_str(), &refused.output["reason"]),
+            ("refused", &json!("not_offered"))
+        );
+        assert!(h.routing.writes.lock().unwrap().is_empty());
+        // Recorded like any route that names what is not offered.
+        let (_, outcome, _) = h.emission(task).await.unwrap();
+        assert_eq!(outcome.as_deref(), Some("not_offered"));
+        // An allowed one is stored with the route.
+        let routed = h.route(task, 3, json!({"environment": "rust-web"})).await;
+        assert_eq!(routed.outcome, "routed");
+        assert_eq!(h.graph.stored(task).unwrap().e.as_deref(), Some("rust-web"));
+        let (_, route) = h.routing.writes.lock().unwrap()[0].clone();
+        assert_eq!(route.unwrap().environment.as_deref(), Some("rust-web"));
+        // An allowed one that lacks a need is refused too (catalog 2.5.0).
+        let web = h.graph.task("Add the page", json!({"aq:needs": ["node"]}));
+        let lacking = h.route(web, 3, json!({"environment": "rust-base"})).await;
+        assert_eq!(lacking.output["reason"], "not_offered");
+        assert_eq!(
+            h.route(web, 3, json!({"environment": "rust-web"}))
+                .await
+                .outcome,
+            "routed"
+        );
+        // A route that names none (a continuation keeps its own) stores none.
+        let kept = h.graph.task("Tried before", json!({}));
+        assert_eq!(h.route(kept, 3, json!({})).await.outcome, "routed");
+        assert_eq!(h.graph.stored(kept).unwrap().e, None);
+    }
+}
