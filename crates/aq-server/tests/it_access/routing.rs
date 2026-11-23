@@ -547,10 +547,12 @@ async fn options_offer_each_level_every_pair_its_candidates_list() {
     let read = Host::markdown(&e.state, &builtin::routing()).await.unwrap();
     assert_eq!(read, (String::new(), 0));
     let id = Uuid::new_v4();
-    let receipt =
-        aq_role_settings::save_routing_document(&e.pool, actor, "Reviews go to deep.", 0, id, 1)
-            .await
-            .unwrap();
+    let receipt = aq_role_settings::save_routing_document(
+        aq_role_settings::Writer::new(&e.pool, actor, 1).edit(0, id),
+        "Reviews go to deep.",
+    )
+    .await
+    .unwrap();
     let read = Host::markdown(&e.state, &builtin::routing()).await.unwrap();
     assert_eq!(
         read,

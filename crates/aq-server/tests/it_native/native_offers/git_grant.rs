@@ -258,12 +258,9 @@ async fn a_node_clones_and_pushes_only_its_attempts_task_ref_through_v1_git() {
         ..Default::default()
     };
     let saved = aq_role_settings::save_delivery_limits(
-        pool,
-        c.env.actor,
+        aq_role_settings::Writer::new(pool, c.env.actor, Utc::now().timestamp_millis())
+            .edit(0, Uuid::new_v4()),
         &limits,
-        0,
-        Uuid::new_v4(),
-        Utc::now().timestamp_millis(),
     );
     saved.await.unwrap();
     refused(&force(target).await, "413");

@@ -2004,12 +2004,9 @@ mod delivery {
         async fn limits(&self, limits: DeliveryLimits) {
             let now = self.clock();
             let saved = aq_role_settings::save_delivery_limits(
-                &self.pool().await,
-                self.f.actor,
+                aq_role_settings::Writer::new(&self.pool().await, self.f.actor, now)
+                    .edit(0, Uuid::new_v4()),
                 &limits,
-                0,
-                Uuid::new_v4(),
-                now,
             )
             .await;
             saved.unwrap();

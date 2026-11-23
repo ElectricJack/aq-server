@@ -168,6 +168,45 @@ pub enum Change {
     #[cfg(feature = "delivery_playbook")]
     DeliveryLimits(delivery::DeliveryLimits),
 }
+/// Owner and clock for a change in this settings store.
+#[derive(Clone, Copy)]
+pub struct Writer<'a> {
+    pool: &'a sqlx::PgPool,
+    actor: Uuid,
+    now_ms: i64,
+}
+impl<'a> Writer<'a> {
+    pub fn new(pool: &'a sqlx::PgPool, actor: Uuid, now_ms: i64) -> Self {
+        Self {
+            pool,
+            actor,
+            now_ms,
+        }
+    }
+    pub fn edit(self, expected_revision: i64, operation_id: Uuid) -> Edit<'a> {
+        Edit {
+            writer: self,
+            expected_revision,
+            operation_id,
+        }
+    }
+}
+pub struct Edit<'a> {
+    writer: Writer<'a>,
+    expected_revision: i64,
+    operation_id: Uuid,
+}
+impl Edit<'_> {
+    async fn apply(self, change: Change) -> Result<Receipt> {
+        let mutation = Mutation {
+            change,
+            expected_revision: self.expected_revision,
+            operation_id: self.operation_id,
+        };
+        apply_referenced(self.writer, &mutation, None).await
+    }
+}
+
 /// A change with its fence and its retry identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mutation {

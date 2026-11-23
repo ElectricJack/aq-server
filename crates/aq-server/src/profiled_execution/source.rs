@@ -106,8 +106,7 @@ async fn ancestry_wait(
     if crate::role_settings::tables(state) {
         aq_role_settings::refusals::record(
             &state.store.pool,
-            task,
-            project,
+            aq_role_settings::refusals::RefusedTask { task, project },
             &refusal,
             (state.clock)().timestamp_millis(),
         )

@@ -108,14 +108,10 @@ impl Fixture {
     async fn save(&self, kind: Kind, id: &str, markdown: &str) -> Result<Receipt, Error> {
         let expected = self.revision_of(kind, id).await;
         settings::save(
-            &self.pool,
-            self.owner,
+            settings::Writer::new(&self.pool, self.owner, NOW).edit(expected, Uuid::new_v4()),
             kind,
             id,
             markdown,
-            expected,
-            Uuid::new_v4(),
-            NOW,
         )
         .await
     }
@@ -127,12 +123,9 @@ impl Fixture {
             ..current.limits
         };
         settings::save_limits(
-            &self.pool,
-            self.owner,
+            settings::Writer::new(&self.pool, self.owner, NOW)
+                .edit(current.limits_revision, Uuid::new_v4()),
             &limits,
-            current.limits_revision,
-            Uuid::new_v4(),
-            NOW,
         )
         .await
         .unwrap();
@@ -241,13 +234,9 @@ async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
     // A shipped default the owner deletes stays deleted at the next start.
     let revision = f.revision_of(Kind::Role, "reviewer").await;
     settings::delete(
-        &f.pool,
-        f.owner,
+        settings::Writer::new(&f.pool, f.owner, NOW).edit(revision, Uuid::new_v4()),
         Kind::Role,
         "reviewer",
-        revision,
-        Uuid::new_v4(),
-        NOW,
     )
     .await
     .unwrap();
@@ -426,7 +415,11 @@ async fn deleting_a_referenced_execution_profile_is_refused() {
     let before = f.active().await;
     let revision = f.revision_of(Kind::Execution, "sandbox").await;
     let delete = |kind, id: &'static str, revision| {
-        settings::delete(&f.pool, f.owner, kind, id, revision, Uuid::new_v4(), NOW)
+        settings::delete(
+            settings::Writer::new(&f.pool, f.owner, NOW).edit(revision, Uuid::new_v4()),
+            kind,
+            id,
+        )
     };
     let refused = problems(
         delete(Kind::Execution, "sandbox", revision)
@@ -469,14 +462,10 @@ async fn a_stale_revision_conflicts_and_an_operation_id_replays_once() {
         let (pool, owner) = (f.pool.clone(), f.owner);
         async move {
             settings::save(
-                &pool,
-                owner,
+                settings::Writer::new(&pool, owner, NOW).edit(expected, operation),
                 Kind::Role,
                 "developer",
                 &markdown,
-                expected,
-                operation,
-                NOW,
             )
             .await
         }
@@ -498,14 +487,10 @@ async fn a_stale_revision_conflicts_and_an_operation_id_replays_once() {
         .await
         .unwrap();
     let other = settings::save(
-        &f.pool,
-        viewer,
+        settings::Writer::new(&f.pool, viewer, NOW).edit(revision, operation),
         Kind::Role,
         "developer",
         &first,
-        revision,
-        operation,
-        NOW,
     )
     .await;
     assert!(matches!(other, Err(Error::Conflict(_))));
@@ -760,12 +745,8 @@ async fn selection_defaults_and_limits_are_settings_that_recompile_the_set() {
         let (pool, owner) = (f.pool.clone(), f.owner);
         async move {
             settings::save_selection_defaults(
-                &pool,
-                owner,
+                settings::Writer::new(&pool, owner, NOW).edit(expected, Uuid::new_v4()),
                 &defaults,
-                expected,
-                Uuid::new_v4(),
-                NOW,
             )
             .await
         }
@@ -799,7 +780,11 @@ async fn selection_defaults_and_limits_are_settings_that_recompile_the_set() {
     // A limit the stored set does not fit is refused like any invalid change.
     let mut tight = StoreLimits::default();
     tight.documents.max_documents_per_kind = 8;
-    let refused = settings::save_limits(&f.pool, f.owner, &tight, 0, Uuid::new_v4(), NOW).await;
+    let refused = settings::save_limits(
+        settings::Writer::new(&f.pool, f.owner, NOW).edit(0, Uuid::new_v4()),
+        &tight,
+    )
+    .await;
     assert_eq!(
         problems(refused.unwrap_err()),
         ["all documents: hold 9 intelligence profile documents, over the limit of 8"]

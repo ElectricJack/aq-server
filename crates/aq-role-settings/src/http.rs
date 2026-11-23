@@ -214,19 +214,13 @@ struct Write {
     expected_revision: String,
     operation_id: Uuid,
 }
-async fn apply(pool: &PgPool, actor: Uuid, mutation: Mutation, now_ms: i64) -> Result<Value> {
-    let receipt = store::apply(pool, actor, &mutation, now_ms).await?;
+async fn apply(writer: crate::Writer<'_>, mutation: Mutation) -> Result<Value> {
+    let receipt = store::apply_referenced(writer, &mutation, None).await?;
     Ok(json!({"revision": receipt.revision.to_string(), "digest": receipt.digest}))
 }
 /// `PUT`: `{markdown | selection_defaults | limits, expected_revision,
 /// operation_id}`, answered with `{revision, digest}`.
-pub async fn write(
-    pool: &PgPool,
-    actor: Uuid,
-    path: &str,
-    body: Value,
-    now_ms: i64,
-) -> Result<Value> {
+pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result<Value> {
     let bad = || invalid("Invalid settings request");
     let body: Write = serde_json::from_value(body).map_err(|_| bad())?;
     let change = match (
@@ -253,7 +247,7 @@ pub async fn write(
         // A key the request does not state keeps its stored value (a client that does not
         // know a key cannot reset it); the merged whole is validated by the save.
         (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {
-            let stored = store::settings(pool).await?.selection_defaults;
+            let stored = store::settings(writer.pool).await?.selection_defaults;
             let mut merged = serde_json::to_value(stored).map_err(|_| Error::Internal)?;
             let keys = merged.as_object_mut().ok_or(Error::Internal)?;
             keys.extend(stated);
@@ -269,16 +263,14 @@ pub async fn write(
         expected_revision: revision(&body.expected_revision)?,
         operation_id: body.operation_id,
     };
-    apply(pool, actor, mutation, now_ms).await
+    apply(writer, mutation).await
 }
 /// `DELETE …/{id}?expected_revision=<n>&operation_id=<uuid>`. Refused with
 /// the problems while another document or one of `references` names it.
 pub async fn remove(
-    pool: &PgPool,
-    actor: Uuid,
+    writer: crate::Writer<'_>,
     path: &str,
     query: Option<&str>,
-    now_ms: i64,
     references: crate::References,
 ) -> Result<Value> {
     let bad = || invalid("Give expected_revision and operation_id in the query");
@@ -299,7 +291,7 @@ pub async fn remove(
         expected_revision: revision(parameter("expected_revision")?)?,
         operation_id: parameter("operation_id")?.parse().map_err(|_| bad())?,
     };
-    let receipt = store::apply_referenced(pool, actor, &mutation, now_ms, Some(references)).await?;
+    let receipt = store::apply_referenced(writer, &mutation, Some(references)).await?;
     Ok(json!({"revision": receipt.revision.to_string(), "digest": receipt.digest}))
 }
 
