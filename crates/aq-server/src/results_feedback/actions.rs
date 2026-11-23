@@ -102,7 +102,7 @@ pub(super) fn request<P: Payload + serde::Serialize>(id: Uuid, p: P) -> ActionRe
     let cmd = p.clone().command();
     existing::VersionedSubject {
         kind: P::ENTITY,
-        id: id,
+        id,
         revision: cmd.version().into(),
         version_key: P::VERSION_KEY,
     }
