@@ -2699,3 +2699,5 @@ async fn a_repeat_of_a_deleted_operation_is_not_executed_twice() {
 
 #[path = "playbook_plugins.rs"]
 mod plugins;
+
+mod artifact_routes;
