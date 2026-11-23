@@ -158,9 +158,12 @@ async fn snapshot(
     if session_id != row.get::<Uuid, _>("session_id") {
         return Err(invalid());
     }
-    super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
     let hot: HotState = serde_json::from_value(row.get("hot")).map_err(|_| invalid())?;
     hot.validate_against(&binding).map_err(|_| invalid())?;
+    // Exact never-granted closures carry no live authority in any preparation profile.
+    if hot.status != Status::NeverGranted || expected.is_none() {
+        super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
+    }
     if let Some(expected) = expected
         && (expected.binding != binding
             || hot.owner.as_ref().is_some_and(|o| {
