@@ -50,11 +50,7 @@ def history(repo):
     return git(repo, "rev-list", "--first-parent", "refs/remotes/origin/main").splitlines()
 
 
-def build(directory, repo, revision, instance, cleanup):
-    revisions = history(repo)
-    if revision not in revisions:
-        raise ValueError(f"revision {revision} is absent from aq-graph origin/main first-parent history")
-    print(f"Building aq-graph {revision}", flush=True)
+def build_image(directory, repo, revision, instance, cleanup):
     archive = directory / f"{revision}.source.tar"
     iid = directory / f"{revision}.id"
     tag = f"{ENVIRONMENT}-{instance}:{revision}"
@@ -72,14 +68,27 @@ def build(directory, repo, revision, instance, cleanup):
             stdin=stream, timeout=900,
         )
     cleanup.callback(docker, directory, "image", "rm", tag)
-    image_id = iid.read_text().strip()
+    return archive, iid.read_text().strip()
+
+
+def export_image(directory, revision, image_id):
     output = directory / "provenance" / f"{revision}.tar"
     docker(directory, "image", "save", "-o", str(output), image_id, timeout=90)
     with tarfile.open(output) as layout, layout.extractfile("index.json") as stream:
         manifest, = json.load(stream)["manifests"]
+    return output, manifest["digest"]
+
+
+def build(directory, repo, revision, instance, cleanup):
+    revisions = history(repo)
+    if revision not in revisions:
+        raise ValueError(f"revision {revision} is absent from aq-graph origin/main first-parent history")
+    print(f"Building aq-graph {revision}", flush=True)
+    archive, image_id = build_image(directory, repo, revision, instance, cleanup)
+    output, image_digest = export_image(directory, revision, image_id)
     evidence = {
         "source": SOURCE, "revision": revision, "image_id": image_id,
-        "image_digest": manifest["digest"], "source_archive_digest": digest(archive),
+        "image_digest": image_digest, "source_archive_digest": digest(archive),
         "image_archive_digest": digest(output), "source_position": len(revisions) - revisions.index(revision),
     }
     (directory / "provenance" / f"{revision}.json").write_text(json.dumps(evidence))
@@ -108,16 +117,20 @@ def build_next(instance_dir, repo):
         destination.mkdir(mode=0o700, exist_ok=True)
         if (destination / f"{revision}.json").exists():
             return
-        with TemporaryDirectory(dir=instance_dir) as work, ExitStack() as cleanup:
-            build_dir = Path(work)
-            (build_dir / "provenance").mkdir()
-            (build_dir / "docker").mkdir()
-            (build_dir / "docker/config.json").write_text("{}\n")
-            build(build_dir, repo, revision, instance, cleanup)
-            # The controller can read the receipt as soon as the archive is available.
-            for suffix in ("tar", "json"):
-                name = f"{revision}.{suffix}"
-                os.replace(build_dir / "provenance" / name, destination / name)
+        publish_build(instance_dir, repo, revision, instance, destination)
+
+
+def publish_build(instance_dir, repo, revision, instance, destination):
+    with TemporaryDirectory(dir=instance_dir) as work, ExitStack() as cleanup:
+        build_dir = Path(work)
+        (build_dir / "provenance").mkdir()
+        (build_dir / "docker").mkdir()
+        (build_dir / "docker/config.json").write_text("{}\n")
+        build(build_dir, repo, revision, instance, cleanup)
+        # The controller can read the receipt as soon as the archive is available.
+        for suffix in ("tar", "json"):
+            name = f"{revision}.{suffix}"
+            os.replace(build_dir / "provenance" / name, destination / name)
 
 
 if __name__ == "__main__":
