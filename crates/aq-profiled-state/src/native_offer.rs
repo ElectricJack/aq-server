@@ -1,4 +1,5 @@
 //! Central Graph read provenance and the stored original native offer.
+pub mod scheduling;
 use crate::git_author::OfferDelivery;
 use aq_admission::{Digest, Invalid, Result, TaskRevision};
 use serde::{Deserialize, Serialize};
