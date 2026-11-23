@@ -1,6 +1,7 @@
 //! Pure project policy and admission snapshots. These types confer no authority.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub mod decision;
 mod eligibility;
 mod validation;
 pub use eligibility::{EligibilityEvidence, decide, local_reasons};

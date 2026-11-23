@@ -4,6 +4,10 @@
 //! Routes, leases and authority stay in aq-server
 //! (`profiled_execution::login_refresh`, `manual_agents::session_login`).
 pub mod codex;
+pub mod import;
+pub mod operator;
+pub mod refresh;
+pub mod sources;
 pub mod store;
 
 use aq_intelligence_config::{

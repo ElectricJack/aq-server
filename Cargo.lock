@@ -406,6 +406,7 @@ dependencies = [
 name = "aq-login-store"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aq-admission 0.1.13",
  "aq-intelligence-config",
  "aq-selection",
@@ -706,6 +707,7 @@ version = "0.1.0"
 dependencies = [
  "aq-delivery",
  "aq-profiles",
+ "aq-selection",
  "serde",
  "serde_json",
  "uuid",

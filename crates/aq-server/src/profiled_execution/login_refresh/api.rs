@@ -6,16 +6,14 @@
 //! permit, admitted attempt). The body is the octet-stream login file; the
 //! `aq-material-refresh` header carries base64url JSON `MaterialRefresh`.
 //! Other refusals are one uniform Conflict; no response echoes bytes.
-use super::{
-    Origin, append_locked, head_digest, head_version, identity, lineage_locked, renewable,
-};
+use super::{Origin, append_locked};
 use crate::{
     AppState,
     error::AppError,
     execution::authority::{self, Kind, Policy, hot::HotState},
     worker_api::AuthenticatedNode,
 };
-use aq_admission::{Digest, LaunchBinding, MaterialLease, transport::WorkerIdentity};
+use aq_admission::{LaunchBinding, MaterialLease};
 use axum::{
     Json, Router,
     body::Bytes,
@@ -25,36 +23,16 @@ use axum::{
     routing::post,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use uuid::Uuid;
 use zeroize::Zeroizing;
 
 pub const PATH: &str = "/v1/worker/profiled/material/refresh";
 pub const HEADER: &str = "aq-material-refresh";
 pub const MAX_HEADER_BYTES: usize = 8192;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct MaterialRefresh {
-    pub schema_version: u32,
-    pub operation_id: Uuid,
-    pub identity: WorkerIdentity,
-    pub binding: LaunchBinding,
-    pub lease_id: Uuid,
-    /// The version these bytes were refreshed from (N in "N+1 based on N").
-    pub base_version: i64,
-    pub content_digest: Digest,
-}
-/// Write-back outcome. `accepted: false` means a newer version won; `version`
-/// is then the server's current version (fetched by the next attempt).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RefreshOutcome {
-    pub accepted: bool,
-    pub version: i64,
-    pub replayed: bool,
-}
+use aq_login_store::refresh::RefreshDecision;
+pub use aq_login_store::refresh::{MaterialRefresh, RefreshOutcome};
 
 #[track_caller]
 fn refused() -> AppError {
@@ -119,10 +97,7 @@ pub async fn write_back(
     if auth.id() != request.identity.node_id {
         return Err(AppError::Forbidden("material node mismatch".into()));
     }
-    if bytes.is_empty()
-        || bytes.len() > super::store::MAX_BYTES
-        || Digest::of(&bytes) != request.content_digest
-    {
+    if !request.matches_content(&bytes) {
         return Err(refused());
     }
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
@@ -137,108 +112,15 @@ pub async fn write_back(
         .await
         .map_err(db)?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
-    let view = authority::load_locked(
-        state,
-        &mut tx,
-        &request.binding.session,
-        Policy::IdentityOnly,
-    )
-    .await?;
-    if view.kind != Kind::ProfiledV1
-        || !view.holds_task
-        || view.offer_id != request.binding.offer_id
-        || view.launch_manifest_digest.as_ref() != Some(&request.binding.launch_manifest_digest)
-        || view.execution_spec_digest != request.binding.execution_spec_digest.as_str()
-    {
-        return Err(refused());
-    }
-    let hot: Value = sqlx::query_scalar(
-        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(request.binding.attempt_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(|| refused())?;
-    let hot: HotState = serde_json::from_value(hot).map_err(|_| refused())?;
-    hot.validate_against(&request.binding)
-        .map_err(|_| refused())?;
-    // Live, or cancelled after its grant (`Status::login_write_back`); the lease is checked below.
-    let cancelled = hot.cancellation_id.is_some();
-    if !hot.status.login_write_back(hot.revoked, cancelled) {
-        return Err(refused());
-    }
-    crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    // Revocation (attempt closure, preparation revoke) moves the lease out of
-    // `admitted`; lease expiry bounds delivery, not the running login.
-    let lease: Value = sqlx::query_scalar(
-        "SELECT m.lease FROM admission_material_leases m JOIN profiled_launch_materials l ON l.lease_id=m.lease_id AND l.attempt_id=$2 WHERE m.lease_id=$1 AND m.node_id=$3 AND m.boot_id=$4 AND m.admitted_attempt_id=$2 AND m.state='admitted' FOR UPDATE OF m",
-    )
-    .bind(request.lease_id)
-    .bind(request.binding.attempt_id)
-    .bind(auth.id())
-    .bind(request.identity.boot_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(|| refused())?;
-    let lease: MaterialLease = serde_json::from_value(lease).map_err(|_| refused())?;
-    if lease.lease_id != request.lease_id || lease.binding != request.binding {
-        return Err(refused());
-    }
-    let index = super::configured_index(&registry, &lease).ok_or_else(|| refused())?;
-    let (credential, configured) = (
-        &registry.credentials[index],
-        &registry.config.credentials[index],
-    );
-    let base = registry
-        .fingerprints
-        .get(index)
-        .cloned()
-        .flatten()
-        .ok_or_else(|| refused())?;
-    if configured.kind != aq_selection::CredentialKind::SubscriptionLogin
-        || !credential.enabled
-        || !configured.allows(auth.id())
-    {
-        return Err(refused());
-    }
-    let lineage = lineage_locked(
-        &mut tx,
-        &identity(&credential.profile),
-        credential.revision,
-        &base,
-    )
-    .await?;
-    if let Some(prior) = lineage.entries.iter().find(|e| {
-        e.lease_id == Some(lease.lease_id) && e.content_digest == request.content_digest.as_str()
-    }) {
-        return Ok(RefreshOutcome {
-            accepted: true,
-            version: prior.sequence,
-            replayed: true,
-        });
-    }
-    // An operator replace (or revocation, above) ends this lease's login.
-    if !renewable(&lineage, lease.material_digest.as_str()) {
-        return Err(refused());
-    }
-    let current = head_version(&lineage);
-    if request.base_version != current {
-        // Someone newer won: keep the current version.
-        return Ok(RefreshOutcome {
-            accepted: false,
-            version: current,
-            replayed: false,
-        });
-    }
-    if head_digest(&lineage) == request.content_digest.as_str() {
-        // Unchanged bytes: nothing to append.
-        return Ok(RefreshOutcome {
-            accepted: true,
-            version: current,
-            replayed: true,
-        });
+    let lease = admitted_lease(state, &mut tx, request, auth).await?;
+    let (index, lineage) =
+        aq_login_store::refresh::writable_lineage(&mut tx, &registry, &lease, auth.id())
+            .await?
+            .ok_or_else(refused)?;
+    match request.evaluate(&lineage, &lease) {
+        RefreshDecision::Complete(outcome) => return Ok(outcome),
+        RefreshDecision::Refused => return Err(refused()),
+        RefreshDecision::Append => {}
     }
     // A Codex login must be the stored one refreshed: same account, later.
     if !super::refresh_of_head(
@@ -270,4 +152,58 @@ pub async fn write_back(
         version,
         replayed: false,
     })
+}
+fn bound_authority(view: &authority::AuthorityView, binding: &LaunchBinding) -> bool {
+    view.kind == Kind::ProfiledV1
+        && view.holds_task
+        && view.offer_id == binding.offer_id
+        && view.launch_manifest_digest.as_ref() == Some(&binding.launch_manifest_digest)
+        && view.execution_spec_digest == binding.execution_spec_digest.as_str()
+}
+async fn admitted_lease(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request: &MaterialRefresh,
+    auth: &AuthenticatedNode,
+) -> Result<MaterialLease, AppError> {
+    let view =
+        authority::load_locked(state, tx, &request.binding.session, Policy::IdentityOnly).await?;
+    if !bound_authority(&view, &request.binding) {
+        return Err(refused());
+    }
+    let hot: Value = sqlx::query_scalar(
+        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(request.binding.attempt_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| refused())?;
+    let hot: HotState = serde_json::from_value(hot).map_err(|_| refused())?;
+    hot.validate_against(&request.binding)
+        .map_err(|_| refused())?;
+    // Live, or cancelled after its grant (`Status::login_write_back`); the lease is checked below.
+    let cancelled = hot.cancellation_id.is_some();
+    if !hot.status.login_write_back(hot.revoked, cancelled) {
+        return Err(refused());
+    }
+    crate::intelligence::fence_current_registry(state, tx).await?;
+    // Revocation (attempt closure, preparation revoke) moves the lease out of
+    // `admitted`; lease expiry bounds delivery, not the running login.
+    let lease: Value = sqlx::query_scalar(
+        "SELECT m.lease FROM admission_material_leases m JOIN profiled_launch_materials l ON l.lease_id=m.lease_id AND l.attempt_id=$2 WHERE m.lease_id=$1 AND m.node_id=$3 AND m.boot_id=$4 AND m.admitted_attempt_id=$2 AND m.state='admitted' FOR UPDATE OF m",
+    )
+    .bind(request.lease_id)
+    .bind(request.binding.attempt_id)
+    .bind(auth.id())
+    .bind(request.identity.boot_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| refused())?;
+    let lease: MaterialLease = serde_json::from_value(lease).map_err(|_| refused())?;
+    if lease.lease_id != request.lease_id || lease.binding != request.binding {
+        return Err(refused());
+    }
+    Ok(lease)
 }
