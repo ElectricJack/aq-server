@@ -143,12 +143,7 @@ impl Service {
         tx.commit().await?;
         Ok(count)
     }
-    /// Epic 0 (spec 0016 section 6.1): `aq.work.result_ready`, level-triggered
-    /// like `collect_route_needed`. One event for each task whose current
-    /// attempt has stopped and recorded a result that no playbook decision
-    /// settled, while a delivery artifact is active. It is repeated every
-    /// `decision_repeat_ms` (Settings), at once when main or the pull request
-    /// moves, while the previous event or its run is no longer outstanding.
+    /// Announce an unsettled result or a publication whose lease is usable again.
     #[cfg(feature = "delivery_playbook")]
     pub async fn collect_result_ready(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_playbook_domain::delivery_store as store;
@@ -173,7 +168,7 @@ impl Service {
         let due = store::plan(
             &mut tx,
             ns_key,
-            &*self.delivery,
+            (&*self.delivery, host.delivery_ops.as_ref()),
             project,
             limit,
             now,
@@ -190,12 +185,9 @@ impl Service {
             else {
                 continue;
             };
-            let (id, event) = d.event(
-                node["version"].as_i64().ok_or(Error::Unknown)?,
-                ns_key,
-                now,
-                &contract,
-            )?;
+            let Some((id, event)) = d.event(&node, ns_key, now, &contract)? else {
+                continue;
+            };
             self.queue_occurrence(&mut tx, id, &event).await?;
             store::sent(&mut tx, &d, now).await?;
             count += 1;

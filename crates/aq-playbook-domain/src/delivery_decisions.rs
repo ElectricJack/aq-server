@@ -6,10 +6,9 @@
 //! supervisor message are in aq-server. Compiled in only with the cargo
 //! feature `delivery_playbook`.
 //!
-//! Mechanism only: nothing here judges a result. A decision is per result: a
-//! result with one is not announced again. `held` waits for a later decision;
-//! `completed` and `returned` are final. `returns` counts each result sent
-//! back once.
+//! Decisions are per result. `completed` and `returned` are final. A `held`
+//! result can rejoin delivery when the host verifies its publication lease.
+//! `returns` counts each result sent back once.
 use crate::{
     Error, Result,
     delivery_store::{DeliveryPort, locate},

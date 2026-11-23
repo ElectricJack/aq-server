@@ -616,6 +616,7 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
 pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&str>) -> Value {
     let why = match reason {
         "returns_exhausted" => "the delivery playbook reached its repair-return limit",
+        "publish_conflict" => "the forge branch could not be published under the recorded lease",
         _ => "the delivery playbook held the recorded result",
     };
     let mut shown = task_hold(
@@ -630,6 +631,12 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
         shown["wake_condition"] = json!("owner_retry_authorized");
         shown["message"] = json!(format!(
             "Delivery reached its repair-return limit for result {result}. The project owner can authorize a retry."
+        ));
+    } else if reason == "publish_conflict" {
+        shown["blocker_owner"] = json!("repository_maintainer");
+        shown["wake_condition"] = json!("forge_branch_matches_result_or_publish_lease");
+        shown["message"] = json!(format!(
+            "Delivery is holding result {result} after a branch publication conflict. AQ rechecks the forge branch on its delivery interval and resumes when the result is present or the lease is usable."
         ));
     }
     if let Some(evidence) = evidence {

@@ -2368,6 +2368,7 @@ mod delivery {
             mergeability: Mutex<Mergeability>,
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
+            branch_head: Mutex<String>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2485,6 +2486,14 @@ mod delivery {
                 self.log.lock().unwrap().push("close".into());
                 Ok(pull(PullRequestState::Closed))
             }
+            async fn branch_head(
+                &self,
+                _: &GitHubRepository,
+                branch: &str,
+            ) -> GitHubResult<Option<String>> {
+                self.log.lock().unwrap().push(format!("observe {branch}"));
+                Ok(Some(self.branch_head.lock().unwrap().clone()))
+            }
             async fn delete_branch(
                 &self,
                 _: &GitHubRepository,
@@ -2531,12 +2540,93 @@ mod delivery {
                 mergeability: Mutex::new(Mergeability::Clean),
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
+                branch_head: Mutex::new(oid('b')),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
                 .service
                 .with_delivery_ops(Arc::new(Ops(fake.clone(), target)));
             (h, fake)
+        }
+
+        #[tokio::test]
+        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+            let (h, forge) = harness().await;
+            h.activated().await;
+            let pool = h.pool().await;
+            let attempt = h.f.profiled.offer.binding.attempt_id;
+            let task = h.f.selection.lineage.task_id;
+            let result = Uuid::new_v4();
+            h.graph.nodes.lock().unwrap().insert(
+                task,
+                json!({"id": task, "kind": "task", "version": 3, "task_state": "active"}),
+            );
+            let spec = json!({"lifecycle":{"project_id":h.scope.project_id},
+                "source":{"repository_binding_generation":1}, "task":{"workspace_id":h.scope.workspace_id}});
+            let mut tx = pool.begin().await.unwrap();
+            // Only the delivery evidence is needed here. Result submission is tested separately.
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE profiled_launches SET execution_spec=$2 WHERE attempt_id=$1")
+                .bind(attempt)
+                .bind(spec)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{stop}', '{\"kind\":\"stopped\"}') WHERE attempt_id=$1")
+                .bind(attempt).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO profiled_result_heads(attempt_id,report_id) VALUES($1,$2)")
+                .bind(attempt)
+                .bind(result)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let branch = aq_delivery::commands::task_branch(task);
+            sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,$3,$4)")
+                .bind(attempt).bind(Uuid::from_u128(1)).bind(oid('c')).bind(&branch).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
+                .bind(result).bind(attempt).bind(&branch).bind(oid('a')).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','publish_conflict',$3)")
+                .bind(result).bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "a divergent forge branch remains held");
+            *forge.branch_head.lock().unwrap() = oid('a');
+            assert_eq!(
+                h.asked().await,
+                0,
+                "forge probes are spaced by the delivery interval"
+            );
+            h.later(120_000);
+            assert_eq!(h.asked().await, 1);
+            assert_eq!(
+                h.events().await,
+                [json!({"task_id":task,"attempt_id":attempt,
+                "project_id":h.scope.project_id,"result_id":result,"version":3})]
+            );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "the queued event owns the resumed result"
+            );
+            assert_eq!(
+                &*forge.log.lock().unwrap(),
+                &vec![format!("observe {branch}"); 3]
+            );
+            let hold: String =
+                sqlx::query_scalar("SELECT decision FROM delivery_decisions WHERE result_id=$1")
+                    .bind(result)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                hold, "held",
+                "the playbook still owns the delivery decision"
+            );
         }
         /// A disposable Host10 producer with its real operation/evidence store.
         /// Only central Git and the forge response are scripted.

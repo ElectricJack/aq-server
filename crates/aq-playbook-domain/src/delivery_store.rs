@@ -11,6 +11,7 @@
 //! them.
 use crate::{
     Result,
+    delivery_runs::DeliveryOps,
     host9::WorkFacts,
     host10::{
         self, DELIVERY_BINDING, PullRequestFacts, ResultEmission, ResultFacts, ResultReady,
@@ -21,6 +22,7 @@ use crate::{
 use aq_playbook_host::model::{EventContract, EventEnvelope};
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A task whose current attempt has stopped and recorded a result, and whose
@@ -329,12 +331,12 @@ pub async fn observed(
 }
 
 /// The results to announce now: none unless an artifact is active on the
-/// delivery binding of the namespace, else the pending results of `project`
-/// (all projects when `None`) that are due ([`due`]).
+/// delivery binding of the namespace. A held publication can rejoin delivery
+/// once its exact result or usable lease is verified on the forge.
 pub async fn plan(
     db: &mut PgConnection,
     namespace: (Uuid, i64),
-    port: &dyn DeliveryPort,
+    (port, operations): (&dyn DeliveryPort, &dyn DeliveryOps),
     project: Option<Uuid>,
     limit: u32,
     now_ms: i64,
@@ -343,8 +345,99 @@ pub async fn plan(
     if !active(db, namespace).await? {
         return Ok(vec![]);
     }
-    let pending = port.pending(project, limit).await?;
-    due(db, namespace, pending, now_ms, repeat_ms, run_bound_ms).await
+    let resumed = publish_conflict(db, operations, project, now_ms, repeat_ms).await?;
+    let mut ready = due(
+        db,
+        namespace,
+        resumed.into_iter().collect(),
+        now_ms,
+        (repeat_ms, run_bound_ms),
+        true,
+    )
+    .await?;
+    let pending = port
+        .pending(project, limit.saturating_sub(ready.len() as u32))
+        .await?;
+    ready.extend(
+        due(
+            db,
+            namespace,
+            pending,
+            now_ms,
+            (repeat_ms, run_bound_ms),
+            false,
+        )
+        .await?,
+    );
+    Ok(ready)
+}
+
+/// Recheck one held result per pass. Failed probes move behind other holds.
+async fn publish_conflict(
+    db: &mut PgConnection,
+    operations: &dyn DeliveryOps,
+    project: Option<Uuid>,
+    now_ms: i64,
+    repeat_ms: i64,
+) -> Result<Option<Pending>> {
+    let row = sqlx::query(
+        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,
+         (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,
+         (l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,
+         l.execution_spec#>>'{source,repository_binding_generation}' AS repository_generation
+         FROM delivery_decisions d JOIN profiled_result_heads h ON h.report_id=d.result_id
+         JOIN execution_attempts a ON a.attempt_id=h.attempt_id AND a.task_id=d.task_id
+         JOIN profiled_launches l ON l.attempt_id=a.attempt_id
+         JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id
+         JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id
+         JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         LEFT JOIN delivery_tasks t ON t.task_id=a.task_id
+         WHERE d.decision='held' AND d.reason='publish_conflict' AND a.holds_task
+         AND ah.state#>>'{stop,kind}'='stopped' AND p.head IS NOT NULL
+         AND ($1::uuid IS NULL OR l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text)
+         AND GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0))<=$2
+         ORDER BY GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0)),h.report_id
+         LIMIT 1 FOR UPDATE OF a SKIP LOCKED",
+    )
+    .bind(project)
+    .bind(now_ms.saturating_sub(repeat_ms))
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let task = row.get("task_id");
+    let project = row.get("project_id");
+    let repository: Uuid = row.get("repository_id");
+    let generation: Option<&str> = row.get("repository_generation");
+    sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
+        .bind(task).bind(now_ms).execute(&mut *db).await?;
+    let old = aq_delivery::commands::published_head(&mut *db, task).await?;
+    let verified = tokio::time::timeout(Duration::from_secs(2), async {
+        let Some(target) = operations.target(project).await? else {
+            return Ok(false);
+        };
+        if target.git.repository_id != repository
+            || generation != Some(target.git.binding_generation.to_string().as_str())
+        {
+            return Ok(false);
+        }
+        let Some(commands) = operations.commands().await else {
+            return Ok(false);
+        };
+        Ok::<_, crate::Error>(
+            commands
+                .publish_lease_usable(&target, task, row.get("head"), old.as_deref())
+                .await,
+        )
+    })
+    .await
+    .is_ok_and(|result| matches!(result, Ok(true)));
+    Ok(verified.then(|| Pending {
+        task_id: task,
+        workspace_id: row.get("workspace_id"),
+        project_id: project,
+        attempt_id: row.get("attempt_id"),
+        result_id: row.get("report_id"),
+    }))
 }
 
 /// The latest result of `attempt` with no playbook decision on it and no
@@ -636,17 +729,24 @@ impl Due {
             version,
         }
     }
-    /// The `aq.work.result_ready` event for the task at `version`, with its id.
+    /// The `aq.work.result_ready` event for the current Graph task, with its id.
     pub fn event(
         &self,
-        version: i64,
+        node: &Value,
         namespace: (Uuid, i64),
         now_ms: i64,
         contract: &EventContract,
-    ) -> Result<(Uuid, EventEnvelope)> {
+    ) -> Result<Option<(Uuid, EventEnvelope)>> {
+        if node["task_state"]
+            .as_str()
+            .is_some_and(|state| state != "active")
+        {
+            return Ok(None);
+        }
+        let version = node["version"].as_i64().ok_or(crate::Error::Unknown)?;
         let id = result_event_id(namespace, &self.pending, now_ms, &self.facts)?;
         let event = host10::result_ready_event(id, &self.ready(version), now_ms, contract);
-        Ok((id, event.map_err(|_| crate::Error::Invalid)?))
+        Ok(Some((id, event.map_err(|_| crate::Error::Invalid)?)))
     }
 }
 
@@ -696,13 +796,17 @@ async fn due(
     namespace: (Uuid, i64),
     pending: Vec<Pending>,
     now_ms: i64,
-    repeat_ms: i64,
-    run_bound_ms: i64,
+    (repeat_ms, run_bound_ms): (i64, i64),
+    recovering_publish: bool,
 ) -> Result<Vec<Due>> {
+    if pending.is_empty() {
+        return Ok(vec![]);
+    }
     let results: Vec<Uuid> = pending.iter().map(|p| p.result_id).collect();
     let decided: Vec<Uuid> =
-        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1)")
+        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND NOT ($2 AND decision='held' AND reason IS NOT DISTINCT FROM 'publish_conflict')")
             .bind(&results)
+            .bind(recovering_publish)
             .fetch_all(&mut *db)
             .await?;
     let mut out = vec![];
