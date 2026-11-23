@@ -150,6 +150,10 @@ pub async fn claim_due<Request: DeserializeOwned, Receipt: DeserializeOwned>(
     pool: &PgPool,
     now: DateTime<Utc>,
 ) -> Result<Option<Due<Request, Receipt>>, sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    if !available(&mut conn).await? {
+        return Ok(None);
+    }
     let row = sqlx::query(
         "WITH due AS (
            SELECT i.operation_id FROM owner_task_retry_intents i JOIN dashboard_operations d USING(operation_id)
@@ -164,7 +168,7 @@ pub async fn claim_due<Request: DeserializeOwned, Receipt: DeserializeOwned>(
          JOIN users u ON u.id=d.principal_id AND u.role='owner' ",
     )
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     row.map(|row| {
         Ok(Due {

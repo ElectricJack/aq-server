@@ -133,7 +133,9 @@ pub async fn check_graph_completion(
 /// connection is required. Shutdown can cancel an uncertain close; its atomic
 /// owner receipt, not this cursor, remains authoritative on the next startup.
 pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
-    if state.config.profiled_execution.is_none() {
+    let profiled = state.config.profiled_execution.is_some();
+    let retry_checks = state.agent_access.is_some();
+    if !profiled && !retry_checks {
         return;
     }
     let mut sweep = Sweep::default();
@@ -153,15 +155,18 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             _ = ticks.tick() => {}
         }
         tick_count = tick_count.wrapping_add(1);
-        if tick_count.is_multiple_of(3) {
-            let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
-        }
-        if tick_count.is_multiple_of(3) {
+        if retry_checks && tick_count.is_multiple_of(3) {
             let retry =
                 crate::agent_access::human::task_execution::check_retry(&state, &retry_reads);
             if let Ok(Err(error)) = tokio::time::timeout(Duration::from_secs(8), retry).await {
                 tracing::debug!(?error, "owner task retry check deferred");
             }
+        }
+        if !profiled {
+            continue;
+        }
+        if tick_count.is_multiple_of(3) {
+            let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
         }
         if tick_count.is_multiple_of(REWORK_SWEEP_EVERY) {
             tokio::select! {
