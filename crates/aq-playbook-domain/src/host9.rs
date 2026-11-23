@@ -490,30 +490,62 @@ pub fn routing_failure(outcome: &str, version: i64, input: &Value) -> (String, S
         let names = names(&input[name]);
         (!names.is_empty()).then(|| format!(", {name} {}", names.join(", ")))
     };
-    let words = match outcome {
-        "not_offered" => format!(
-            "The routing playbook chose level {}{}{} for this task, but nothing in Settings can \
+    // Catalog 2.5.0: the route named an environment the host refused.
+    let refusal = &input["environment_refusal"];
+    let environment = refusal["environment"].as_str().unwrap_or("unknown");
+    let (cause, words) = match outcome {
+        "not_offered" if refusal["allowed"] == false => (
+            "environment_not_allowed",
+            format!(
+                "The routing playbook chose environment `{environment}` for this task, but the \
+             project does not allow it. Allow it in the project's environments, change the \
+             routing document, or set the task's route yourself. The playbook's reasons: {}",
+                reason_words(&input["reasons"]),
+            ),
+        ),
+        "not_offered" if refusal["allowed"] == true => (
+            "environment_missing_capability",
+            format!(
+                "The routing playbook chose environment `{environment}` for this task, but it does \
+             not provide {}, which the task needs. Change the routing document, choose an \
+             environment that provides it, or set the task's route yourself. The playbook's \
+             reasons: {}",
+                names(&refusal["missing"]).join(", "),
+                reason_words(&input["reasons"]),
+            ),
+        ),
+        "not_offered" => (
+            outcome,
+            format!(
+                "The routing playbook chose level {}{}{} for this task, but nothing in Settings can \
              take it there. Assign a profile to that level in Settings > Intelligence (or add the \
              harness or provider to it), change the routing document, or set the task's route \
              yourself. The playbook's reasons: {}",
-            input["level"].as_str().unwrap_or("unknown"),
-            list("harnesses").unwrap_or_default(),
-            list("providers").unwrap_or_default(),
-            reason_words(&input["reasons"]),
+                input["level"].as_str().unwrap_or("unknown"),
+                list("harnesses").unwrap_or_default(),
+                list("providers").unwrap_or_default(),
+                reason_words(&input["reasons"]),
+            ),
         ),
-        "unroutable" => format!(
-            "The routing document allows no agent to take this task, so it is left unrouted. \
+        "unroutable" => (
+            outcome,
+            format!(
+                "The routing document allows no agent to take this task, so it is left unrouted. \
              Change the task or the routing document, or set the task's route yourself. The \
              playbook's reasons: {}",
-            reason_words(&input["reasons"]),
+                reason_words(&input["reasons"]),
+            ),
         ),
-        _ => "This task has been ready for more than 10 minutes and has no route. The routing \
+        _ => (
+            outcome,
+            "This task has been ready for more than 10 minutes and has no route. The routing \
               playbook has not routed it: its run may have failed or be stuck, or its judgment \
               may have failed. Look at the playbook runs for this task, or set the task's route \
               yourself."
-            .to_string(),
+                .to_string(),
+        ),
     };
-    (format!("{outcome}@{version}"), words)
+    (format!("{cause}@{version}"), words)
 }
 
 #[cfg(test)]

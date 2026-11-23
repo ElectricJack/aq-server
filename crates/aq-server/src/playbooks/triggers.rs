@@ -103,19 +103,18 @@ impl Service {
             limit,
         )
         .await?;
-        let offers = match rows
-            .iter()
-            .any(|row| row.emission.outcome.as_deref() == Some("not_offered"))
-        {
-            true => Some(host9::options_digest(
-                &self
-                    .host
+        let not_offered = |row: &route_store::RouteCandidate| {
+            row.emission.outcome.as_deref() == Some("not_offered")
+        };
+        let options = match rows.iter().any(not_offered) {
+            true => Some(
+                self.host
                     .as_deref()
                     .ok_or(Error::Forbidden)?
                     .routing
                     .options()
                     .await?,
-            )),
+            ),
             false => None,
         };
         let contract = self.registry().events["aq.work.route_needed"].clone();
@@ -131,6 +130,13 @@ impl Service {
                 )
                 .await?;
             }
+            let offers = match options.as_ref().filter(|_| not_offered(&row)) {
+                Some(o) => {
+                    let project = row.project.unwrap_or(self.namespace.project_id);
+                    Some(self.offers_digest(o, project).await?)
+                }
+                None => None,
+            };
             if !host9::route_needed_due(&row.emission, now, &artifact, offers.as_deref()) {
                 row.checked(&mut tx, now).await?;
                 continue;

@@ -339,6 +339,53 @@ mod tests {
         assert!(!notes.contains("environment.build"));
     }
 
+    /// The published routing example of spec 0017 §5.4 (vendored byte for
+    /// byte) seals as a playbook of this record against its catalog, and its
+    /// cases pass.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    #[test]
+    fn the_route_to_environment_example_seals_as_the_routing_record() {
+        let root = format!(
+            "{}/../../vendor/aq-route-to-environment-613db7c",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let read = |name: &str| std::fs::read_to_string(format!("{root}/{name}")).unwrap();
+        let pin: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(format!("{root}-source.json")).unwrap())
+                .unwrap();
+        for file in pin["files"].as_array().unwrap() {
+            let bytes =
+                std::fs::read(format!("{root}/{}", file["path"].as_str().unwrap())).unwrap();
+            assert_eq!(file["bytes"], bytes.len());
+            let sha = <sha2::Sha256 as sha2::Digest>::digest(&bytes);
+            assert_eq!(file["sha256"].as_str().unwrap(), format!("{sha:x}"));
+        }
+        let mut names: Vec<String> = std::fs::read_dir(format!("{root}/cases"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        let cases: Vec<_> = names
+            .iter()
+            .map(|name| serde_json::from_str(&read(&format!("cases/{name}"))).unwrap())
+            .collect();
+        assert_eq!(cases.len(), 8);
+        let record = routing();
+        let inputs = crate::Inputs {
+            grant_capabilities: record.capabilities.clone(),
+            catalog: crate::request::pinned_catalog(&record).unwrap(),
+            record,
+            markdown: read("source.md"),
+            facts: serde_json::from_str(&read("facts.json")).unwrap(),
+            facts_version: "settings-7".into(),
+            previous: None,
+        };
+        let draft = serde_json::from_str(&read("draft.json")).unwrap();
+        let saved = crate::check_saved(&draft, &cases, &inputs, &Default::default())
+            .unwrap_or_else(|refusal| panic!("{refusal:?}"));
+        assert_eq!(saved.artifact.content.playbook.id.as_str(), "aq.routing");
+    }
+
     /// The published 2.5.0 delivery example seals as a playbook of this record.
     #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
     #[test]

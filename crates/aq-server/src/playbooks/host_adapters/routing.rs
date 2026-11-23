@@ -201,31 +201,29 @@ impl Service {
             source_revision,
             ended_attempts: routing.attempts(task).await?.1,
         };
-        let route = host9::route_from_input(input, &options, from);
-        // Spec 0017 §5.4: a routed environment is one the project allows
-        // that provides every need.
-        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
-        let route = match route.as_ref().and_then(|r| r.environment.as_deref()) {
-            Some(e) => {
-                let needs = host10::needs(&node["metadata"]);
-                let refusal = routing.environments(project).await?.refusal(e, &needs);
-                route.filter(|_| refusal.is_none())
-            }
-            None => route,
-        };
-        let Some(route) = route else {
-            let offers = host9::options_digest(&options);
-            self.route_settled(
-                tx,
-                (task, project),
-                version,
-                "not_offered",
-                input,
-                Some(&offers),
-            )
-            .await?;
+        let Some(route) = host9::route_from_input(input, &options, from) else {
+            let offers = self.offers_digest(&options, project).await?;
+            let at = (task, project);
+            self.route_settled(tx, at, version, "not_offered", input, Some(&offers))
+                .await?;
             return refused("not_offered");
         };
+        // Spec 0017 §5.4: a routed environment is one the project allows
+        // that provides every need; a refusal says which and why.
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        if let Some(environment) = route.environment.as_deref() {
+            let environments = routing.environments(project).await?;
+            let needs = host10::needs(&node["metadata"]);
+            if let Some(refusal) = environments.refusal(environment, &needs) {
+                let mut input = input.clone();
+                input["environment_refusal"] = refusal;
+                let offers = environments.offers_digest(&options);
+                let at = (task, project);
+                self.route_settled(tx, at, version, "not_offered", &input, Some(&offers))
+                    .await?;
+                return refused("not_offered");
+            }
+        }
         if routing.write(at, Some(&route)).await? == Written::Stale {
             return stale();
         }
@@ -255,6 +253,13 @@ impl Service {
             .as_i64()
             .ok_or(Error::Invalid)?;
         let refused = |reason| Ok(host_result("refused", host9::refusal(id, asked, reason)));
+        // Catalog 2.5.0 is routing's: only a task on the automatic router.
+        #[cfg(feature = "project_environments")]
+        if _version == "2.5.0"
+            && let Err(reason) = self.routed_task(&input["subject"]).await?
+        {
+            return refused(reason);
+        }
         let Ok(task) = Uuid::parse_str(id) else {
             return refused("unknown_task");
         };
@@ -350,6 +355,18 @@ impl Service {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// What a `not_offered` task is asked about again on: the Settings
+    /// offers and, on catalog 2.5.0, the project's environments.
+    pub(crate) async fn offers_digest(&self, options: &Options, project: Uuid) -> Result<String> {
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        if self.profile.has_environments() {
+            let environments = self.ports()?.routing.environments(project).await?;
+            return Ok(environments.offers_digest(options));
+        }
+        let _ = project;
+        Ok(host9::options_digest(options))
     }
 
     /// Records why the task is not asked about again (`not_offered`,

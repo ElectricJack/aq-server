@@ -204,14 +204,23 @@ pub struct Environments {
 }
 #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
 impl Environments {
-    /// Why a route may not choose `environment` (`not_offered`), if it may
-    /// not: the project does not allow it, or it lacks one of `needs`.
-    pub fn refusal(&self, environment: &str, needs: &[String]) -> Option<&'static str> {
-        let provided = self.allowed.iter().find(|(id, _)| id == environment);
-        match provided {
-            Some((_, provides)) if needs.iter().all(|n| provides.contains(n)) => None,
-            _ => Some("not_offered"),
-        }
+    /// Why a route may not choose `environment` (it is refused
+    /// `not_offered`), if it may not: `{environment, allowed: false}` when the
+    /// project does not allow it, else `{environment, allowed: true, missing}`
+    /// with the needs it lacks. [`host9::routing_failure`] words it.
+    pub fn refusal(&self, environment: &str, needs: &[String]) -> Option<Value> {
+        let Some((_, provides)) = self.allowed.iter().find(|(id, _)| id == environment) else {
+            return Some(json!({"environment": environment, "allowed": false}));
+        };
+        let missing: Vec<&String> = needs.iter().filter(|n| !provides.contains(n)).collect();
+        (!missing.is_empty())
+            .then(|| json!({"environment": environment, "allowed": true, "missing": missing}))
+    }
+    /// What a `not_offered` task is asked about again on: the Settings
+    /// offers and these environments.
+    pub fn offers_digest(&self, options: &aq_routing::classify::Options) -> String {
+        let offers = (host9::options_digest(options), &self.default, &self.allowed);
+        aq_playbook_host::model::digest(&offers).unwrap_or_default()
     }
     /// Catalog 2.5.0 `work.read`: the 2.3.0 `output` with the task's needs
     /// and these environments.
@@ -219,7 +228,9 @@ impl Environments {
         let environments: Vec<Value> = (self.allowed.iter())
             .map(|(id, provides)| json!({"id": id, "provides": provides}))
             .collect();
-        output["facts"]["needs"] = json!(needs(metadata));
+        // The contract's bounds: at most 64 labels of at most 128 bytes.
+        let needs = needs(metadata).into_iter().filter(|n| n.len() <= 128);
+        output["facts"]["needs"] = json!(needs.take(64).collect::<Vec<_>>());
         output["facts"]["default_environment"] = json!(self.default);
         output["facts"]["environments"] = json!(environments);
         output

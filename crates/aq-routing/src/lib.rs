@@ -418,7 +418,11 @@ mod tests {
 
     #[test]
     fn compact_route_fits_2048_bytes_and_refuses_an_oversized_allowlist() {
-        let compact = route().compact(7).unwrap();
+        // The longest environment id catalog 2.5.0's `work.route` takes.
+        let mut routed = route();
+        routed.environment = Some("x".repeat(128));
+        let compact = routed.compact(7).unwrap();
+        assert_eq!(compact.e, routed.environment);
         assert_eq!(compact.d.as_deref(), Some("0123456789abcdef"));
         assert_eq!(compact.n, 7);
         assert!(serde_json::to_vec(&compact).unwrap().len() <= 2048);

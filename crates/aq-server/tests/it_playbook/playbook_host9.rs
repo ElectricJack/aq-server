@@ -184,6 +184,10 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     }
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
+    // The first number after the last profile is none.
+    #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+    assert_eq!(CatalogProfile::from_number(12), None);
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
     assert_eq!(CatalogProfile::from_number(13), None);
 }
 
@@ -1071,7 +1075,7 @@ mod adapters {
 
     impl Host {
         /// A routing artifact is active: what the owner last activated on `aq.routing`.
-        async fn activated(&self, digest: &str) {
+        pub(super) async fn activated(&self, digest: &str) {
             sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,1,'aq.routing',$2,1) ON CONFLICT(namespace_id,generation,binding) DO UPDATE SET artifact=$2")
                 .bind(self.service.namespace.namespace_id)
                 .bind(digest)
@@ -1083,7 +1087,7 @@ mod adapters {
             (self.f.state.clock)().timestamp_millis()
         }
         /// What placement records for a ready task that waits for a route.
-        async fn wanted(&self, task: Uuid, version: i64, project: Uuid) {
+        pub(super) async fn wanted(&self, task: Uuid, version: i64, project: Uuid) {
             sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id,wanted_since_ms) VALUES($1,0,0,$2,$3,$4,$5,$3) ON CONFLICT(task_id) DO UPDATE SET wanted_since_ms=CASE WHEN route_needed_emissions.wanted_version=$2 THEN route_needed_emissions.wanted_since_ms ELSE $3 END,wanted_version=$2,wanted_at_ms=$3")
                 .bind(task)
                 .bind(version)
@@ -1094,11 +1098,11 @@ mod adapters {
                 .await
                 .unwrap();
         }
-        async fn asked(&self) -> usize {
+        pub(super) async fn asked(&self) -> usize {
             (self.service.collect_route_needed(&self.runtime, 8).await).unwrap()
         }
         /// Time passes; placement keeps seeing the task wait.
-        async fn later(&self, ms: i64, task: Uuid, version: i64) {
+        pub(super) async fn later(&self, ms: i64, task: Uuid, version: i64) {
             self.f
                 .time
                 .fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
@@ -1336,7 +1340,10 @@ mod adapters {
 
     impl Host {
         /// What was raised about a task: (reason, cause, escalation, detail, project).
-        async fn raised(&self, task: Uuid) -> Vec<(String, String, String, String, Option<Uuid>)> {
+        pub(super) async fn raised(
+            &self,
+            task: Uuid,
+        ) -> Vec<(String, String, String, String, Option<Uuid>)> {
             sqlx::query_as("SELECT reason,request->>'input',escalation,detail,project_id FROM internal_tasks WHERE purpose='routing_classification' AND affected_kind='task' AND affected_id=$1 AND escalate ORDER BY created_at_ms,request->>'input'")
                 .bind(task.to_string())
                 .fetch_all(&self.f.db.pool().await)
@@ -3055,7 +3062,7 @@ mod environments {
         },
         review_domain::CatalogProfile,
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -3081,10 +3088,13 @@ mod environments {
     }
     /// A Host12 host whose project allows `rust-base` (its default) and `rust-web`.
     async fn host12() -> Host {
+        host12_routing(true).await
+    }
+    async fn host12_routing(installation_routing: bool) -> Host {
         let f = common::profiled::fixture().await;
         common::profiled::insert(&f).await;
         let with = |s: aq_server::playbooks::service::Service| s.with_delivery(Arc::new(Bound));
-        let h = host_as(f, true, None, CatalogProfile::Host12, with).await;
+        let h = host_as(f, installation_routing, None, CatalogProfile::Host12, with).await;
         *h.routing.environments.lock().unwrap() = Environments {
             default: "rust-base".into(),
             allowed: vec![
@@ -3122,6 +3132,162 @@ mod environments {
         assert_eq!(read.output["facts"]["default_environment"], "");
         let bare = h.graph.task("Needs nothing", json!({}));
         assert_eq!(h.read(bare, 3).await.output["facts"]["needs"], json!([]));
+        // Needs past the contract's bounds are cut, not a failed read.
+        let many: Vec<String> = (0..70)
+            .map(|i| format!("need-{i:02}"))
+            .chain(["x".repeat(129)])
+            .collect();
+        let task = h.graph.task("Needs a lot", json!({"aq:needs": many}));
+        let needs = h.read(task, 3).await.output["facts"]["needs"].clone();
+        assert_eq!(needs.as_array().unwrap().len(), 64);
+        assert_eq!(needs[0], "need-00");
+    }
+
+    /// Catalog 2.5.0: the host answers `work.read` only for a task on the
+    /// automatic router, and without installation routing only for one of the
+    /// namespace's project.
+    #[tokio::test]
+    async fn work_read_answers_only_for_a_task_on_the_router() {
+        let h = host12_routing(false).await;
+        let task = h.graph.task("Elsewhere", json!({}));
+        (h.routing.located.lock().unwrap()).insert(task, (Uuid::new_v4(), h.other_project));
+        let refused = h.read(task, 3).await;
+        assert_eq!(
+            (refused.outcome.as_str(), &refused.output["reason"]),
+            ("refused", &json!("not_on_router"))
+        );
+        let mine = h.graph.task("Mine", json!({}));
+        assert_eq!(h.read(mine, 3).await.outcome, "observed");
+        h.routing.on_router.lock().unwrap().clear();
+        assert_eq!(h.read(mine, 3).await.output["reason"], "not_on_router");
+    }
+
+    /// An environment refusal is raised in its own words (the environment and
+    /// what it lacks, not Settings), and the task is asked about again once
+    /// the project's environments change.
+    #[tokio::test]
+    async fn an_environment_refusal_says_why_and_is_asked_again_when_the_binding_changes() {
+        let h = host12().await;
+        h.activated("sha256:routing-1").await;
+        let task = h
+            .graph
+            .task("Train the model", json!({"aq:needs": ["gpu"]}));
+        let project = h.scope.project_id;
+        h.wanted(task, 3, project).await;
+        assert_eq!(h.asked().await, 1);
+        let gpu = json!({"environment": "gpu-box"});
+        assert_eq!(
+            h.route(task, 3, gpu.clone()).await.output["reason"],
+            "not_offered"
+        );
+        let detail = |raised: Vec<(String, String, String, String, Option<Uuid>)>| {
+            raised.last().map(|r| r.3.clone()).unwrap_or_default()
+        };
+        let words = detail(h.raised(task).await);
+        assert!(words.contains("environment `gpu-box`"), "{words}");
+        assert!(words.contains("does not allow it"), "{words}");
+        assert!(!words.contains("Settings"), "{words}");
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+        // The binding allows it now, without `gpu`: asked again, once.
+        (h.routing.environments.lock().unwrap().allowed).push(("gpu-box".into(), labels(&["git"])));
+        h.later(120_000, task, 3).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.route(task, 3, gpu).await.output["reason"], "not_offered");
+        let words = detail(h.raised(task).await);
+        assert!(words.contains("does not provide gpu"), "{words}");
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+    }
+
+    /// The host side of the published `route-to-environment` example: for each
+    /// case, a task and project as its `work.read` answer describes them, and
+    /// the case's calls dispatched through the Host12 adapter get the answers
+    /// the case expects of the host.
+    #[tokio::test]
+    async fn the_route_to_environment_example_cases_hold_against_this_host() {
+        let root = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vendor/aq-route-to-environment-613db7c/cases"
+        );
+        let h = host12().await;
+        let mut paths: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        paths.sort();
+        assert_eq!(paths.len(), 8);
+        let sorted = |v: &Value| {
+            let mut items: Vec<String> = serde_json::from_value(v.clone()).unwrap();
+            items.sort();
+            items
+        };
+        for path in paths {
+            let case: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let name = case["name"].as_str().unwrap().to_owned();
+            let read = &case["returns"]["work.read"][0];
+            let facts = &read["output"]["facts"];
+            let task = match read["outcome"] == "observed" {
+                true => {
+                    *h.routing.environments.lock().unwrap() = Environments {
+                        default: facts["default_environment"].as_str().unwrap().into(),
+                        allowed: (facts["environments"].as_array().unwrap().iter())
+                            .map(|e| (e["id"].as_str().unwrap().into(), sorted(&e["provides"])))
+                            .collect(),
+                    };
+                    *h.routing.attempts.lock().unwrap() = (
+                        facts["charged_failures"].as_u64().unwrap() as u32,
+                        facts["ended_attempts"].as_u64().unwrap() as u32,
+                    );
+                    let mut metadata = json!({"aq:needs": facts["needs"]});
+                    if facts["route"] == "owner" {
+                        metadata["aq:route"] = json!({"c": "complex-high", "l": null, "i": "any",
+                            "d": null, "s": "owner", "n": 1});
+                    }
+                    h.graph.task(facts["title"].as_str().unwrap(), metadata)
+                }
+                false => Uuid::new_v4(),
+            };
+            let mut seen = std::collections::BTreeMap::<String, usize>::new();
+            for call in case["expect"]["calls"].as_array().unwrap() {
+                let command = call["command"].as_str().unwrap();
+                let index = seen.entry(command.into()).or_default();
+                let expected = &case["returns"][command][*index];
+                *index += 1;
+                let mut input = call["input"].clone();
+                input["subject"]["id"] = json!(task.to_string());
+                if command != "work.read" {
+                    // A route the case answers `stale` names the version before.
+                    let stale = expected["outcome"] == "stale";
+                    input["subject"]["revision"] = json!(if stale { 2 } else { 3 });
+                }
+                let id = format!("{name}-{command}-{index}");
+                let answer = h.run(&id, command, input).await;
+                assert_eq!(answer.outcome, expected["outcome"], "{name} {command}");
+                if let Some(reason) = expected["output"]["reason"].as_str() {
+                    assert_eq!(answer.output["reason"], reason, "{name} {command}");
+                }
+                if command == "work.read" && answer.outcome == "observed" {
+                    let got = &answer.output["facts"];
+                    assert_eq!(sorted(&got["needs"]), sorted(&facts["needs"]), "{name}");
+                    for fact in ["default_environment", "route", "ended_attempts"] {
+                        assert_eq!(got[fact], facts[fact], "{name} {fact}");
+                    }
+                    let ids = |v: &Value| -> Vec<Value> {
+                        v.as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|e| e["id"].clone())
+                            .collect()
+                    };
+                    assert_eq!(
+                        ids(&got["environments"]),
+                        ids(&facts["environments"]),
+                        "{name}"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
