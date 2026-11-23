@@ -35,25 +35,33 @@ pub struct ResolveRequest {
 pub(super) fn evidence(v: &Value) -> bool {
     v.as_str().is_some_and(|s| !s.trim().is_empty()) || v.as_object().is_some_and(|o| !o.is_empty())
 }
+struct Target {
+    id: Uuid,
+    generation: u64,
+}
+impl Target {
+    fn valid_for(&self, operation_id: Uuid) -> bool {
+        let distinct = !self.id.is_nil() && self.id != operation_id;
+        distinct && (1..=i64::MAX as u64).contains(&self.generation)
+    }
+}
 impl DeliveryService {
     pub async fn reconcile(&self, r: ReconcileRequest) -> Result<Receipt<ReconcileResult>> {
         let params = json!({"target_operation_id":r.target_operation_id,"expected_generation":r.expected_generation});
         self.settle(
-            &r.context,
-            "operation.reconcile",
-            serde_json::to_value(&r)?,
-            r.target_operation_id,
-            r.expected_generation,
+            IntentRequest::new(&r.context, "operation.reconcile", &r)?,
+            Target {
+                id: r.target_operation_id,
+                generation: r.expected_generation,
+            },
             params,
         )
         .await
     }
     pub async fn resolve(&self, r: ResolveRequest) -> Result<Receipt<ReconcileResult>> {
-        if !r.old_publishers_stopped
-            || r.reason.trim().is_empty()
-            || r.reason.len() > 4096
-            || !evidence(&r.evidence)
-        {
+        let documented =
+            !r.reason.trim().is_empty() && r.reason.len() <= 4096 && evidence(&r.evidence);
+        if !r.old_publishers_stopped || !documented {
             return Err(DeliveryError::InvalidInput(
                 "resolution requires reason, evidence and old_publishers_stopped=true",
             ));
@@ -61,49 +69,42 @@ impl DeliveryService {
         let params = json!({"target_operation_id":r.target_operation_id,"expected_generation":r.expected_generation,
             "disposition":r.disposition,"reason":r.reason,"old_publishers_stopped":true,"evidence":r.evidence});
         self.settle(
-            &r.context,
-            "operation.resolve",
-            serde_json::to_value(&r)?,
-            r.target_operation_id,
-            r.expected_generation,
+            IntentRequest::new(&r.context, "operation.resolve", &r)?,
+            Target {
+                id: r.target_operation_id,
+                generation: r.expected_generation,
+            },
             params,
         )
         .await
     }
     async fn settle(
         &self,
-        c: &OperationContext,
-        operation: &str,
-        inputs: Value,
-        target: Uuid,
-        generation: u64,
+        op: IntentRequest<'_>,
+        target: Target,
         params: Value,
     ) -> Result<Receipt<ReconcileResult>> {
-        if target.is_nil()
-            || target == c.operation_id
-            || generation == 0
-            || generation > i64::MAX as u64
-        {
+        if !target.valid_for(op.context.operation_id) {
             return Err(DeliveryError::InvalidInput(
                 "reconciliation needs its own operation ID and the target generation",
             ));
         }
-        let (mut tx, old) = self.prepare(c, operation, &inputs).await?;
+        let (mut tx, old) = op.prepare(&self.pool).await?;
         let intent = if let Some(old) = old {
             old
         } else {
             let known = sqlx::query_scalar::<_, i32>("SELECT 1 FROM delivery_intents WHERE operation_id=$1 AND operation='publish' AND repository_id=$2 AND binding_generation=$3")
-                .bind(target).bind(c.repository_id).bind(c.binding_generation as i64)
+                .bind(target.id).bind(op.context.repository_id).bind(op.context.binding_generation as i64)
                 .fetch_optional(&mut *tx).await?;
             if known.is_none() {
                 return Err(DeliveryError::InvalidInput(
                     "target is not a publication of this repository binding",
                 ));
             }
-            Self::freeze(&mut tx, c, operation, &inputs, params).await?
+            op.freeze(&mut tx, params).await?
         };
         tx.commit().await?;
-        let receipt: Receipt<ReconcileResult> = self.execute(c, operation, intent).await?;
+        let receipt: Receipt<ReconcileResult> = self.execute(&op, intent).await?;
         // Replays reach here too, so a crash after the receipt still releases.
         // Indeterminate and error replies keep the destination held.
         if receipt
@@ -112,7 +113,7 @@ impl DeliveryService {
             .is_ok_and(ReconcileResult::is_settled)
         {
             sqlx::query("DELETE FROM delivery_destinations WHERE operation_id=$1")
-                .bind(target)
+                .bind(target.id)
                 .execute(&self.pool)
                 .await?;
         }
