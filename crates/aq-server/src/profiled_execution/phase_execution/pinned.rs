@@ -106,32 +106,8 @@ async fn load_for_locked(
     q: &PrepareRequest,
     mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
-    use aq_session_protocol::Validate;
     let issued = mode.issued();
-    q.original.binding.validate().map_err(|_| refused())?;
-    if auth.id() != q.original.identity.node_id
-        || !matches!(q.original.binding.session,aq_admission::SessionIdentity::Remote{node_id,boot_id,..} if node_id==auth.id()&&boot_id==q.original.identity.boot_id)
-    {
-        return Err(refused());
-    }
-    crate::worker_api::lock_current_node(tx, auth).await?;
-    let h = accepted_owner::load_accepted_history_locked(tx, &q.original.binding).await?;
-    q.validate_for(&h.receipt, &h.request, &h.proposal)
-        .map_err(|_| refused())?;
-    if let Some(issued) = issued {
-        if !same(&issued.request, q)?
-            || !same(&issued.accepted.receipt, &h.receipt)?
-            || !same(&issued.accepted.request, &h.request)?
-            || !same(&issued.accepted.proposal, &h.proposal)?
-        {
-            return Err(refused());
-        }
-        // This validates the same actual current material row and policy. No
-        // lease bytes, expiry, operation or installation receipt are rewritten.
-        accepted_owner::require_installed_material_locked(state, auth, tx, &h).await?;
-    } else {
-        accepted_owner::require_live_accepted_locked(state, tx, auth, &h).await?;
-    }
+    let h = load_accepted_locked(state, tx, auth, q, mode).await?;
     let runtime =
         registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
             .await?;
@@ -148,26 +124,7 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let view = authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
-        .await?;
-    super::super::closure::ensure_launch_open_locked(tx, &q.original.binding).await?;
-    if !view.holds_task
-        || if let Some(issued) = issued {
-            view.status != Status::Granted || view.grant_id != Some(issued.receipt.grant.grant_id)
-        } else {
-            view.status != Status::Preparing || view.grant_id.is_some()
-        }
-        || view.cancellation_id.is_some()
-        || view.revoked
-        || view.stopped
-    {
-        return Err(refused());
-    }
-    let (hot, versions) = load_hot_locked(tx, q, &h).await?;
-    require_hot_state(mode, &hot, q, &h)?;
-    if issued.is_some() {
-        view.active_at(now(state)?)?;
-    }
+    let (view, hot, versions) = load_authority_locked(state, tx, q, &h, mode).await?;
     let offer =
         super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
             .await?;
@@ -235,6 +192,78 @@ async fn load_for_locked(
         qualification,
         issuance_ceiling: ceiling,
     })
+}
+
+// Authenticate preparation or retained issuance before consulting current runtime
+// and authority. Keep these reads under the same node lock as the caller.
+async fn load_accepted_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    q: &PrepareRequest,
+    mode: LoadMode<'_>,
+) -> Result<AcceptedHistory, AppError> {
+    use aq_session_protocol::Validate;
+    q.original.binding.validate().map_err(|_| refused())?;
+    let session_matches = matches!(
+        q.original.binding.session,
+        aq_admission::SessionIdentity::Remote { node_id, boot_id, .. }
+            if node_id == auth.id() && boot_id == q.original.identity.boot_id
+    );
+    if auth.id() != q.original.identity.node_id || !session_matches {
+        return Err(refused());
+    }
+    crate::worker_api::lock_current_node(tx, auth).await?;
+    let h = accepted_owner::load_accepted_history_locked(tx, &q.original.binding).await?;
+    q.validate_for(&h.receipt, &h.request, &h.proposal)
+        .map_err(|_| refused())?;
+    if let Some(issued) = mode.issued() {
+        if !same(&issued.request, q)?
+            || !same(&issued.accepted.receipt, &h.receipt)?
+            || !same(&issued.accepted.request, &h.request)?
+            || !same(&issued.accepted.proposal, &h.proposal)?
+        {
+            return Err(refused());
+        }
+        // This validates the same actual current material row and policy. No
+        // lease bytes, expiry, operation or installation receipt are rewritten.
+        accepted_owner::require_installed_material_locked(state, auth, tx, &h).await?;
+    } else {
+        accepted_owner::require_live_accepted_locked(state, tx, auth, &h).await?;
+    }
+    Ok(h)
+}
+
+async fn load_authority_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+    mode: LoadMode<'_>,
+) -> Result<(authority::AuthorityView, HotState, Versions), AppError> {
+    let issued = mode.issued();
+    let view = authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
+        .await?;
+    super::super::closure::ensure_launch_open_locked(tx, &q.original.binding).await?;
+    let (expected_status, expected_grant) = match issued {
+        Some(issued) => (Status::Granted, Some(issued.receipt.grant.grant_id)),
+        None => (Status::Preparing, None),
+    };
+    if !view.holds_task
+        || view.status != expected_status
+        || view.grant_id != expected_grant
+        || view.cancellation_id.is_some()
+        || view.revoked
+        || view.stopped
+    {
+        return Err(refused());
+    }
+    let (hot, versions) = load_hot_locked(tx, q, h).await?;
+    require_hot_state(mode, &hot, q, h)?;
+    if issued.is_some() {
+        view.active_at(now(state)?)?;
+    }
+    Ok((view, hot, versions))
 }
 
 async fn load_hot_locked(
