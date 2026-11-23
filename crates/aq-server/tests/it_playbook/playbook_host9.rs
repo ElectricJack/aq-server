@@ -2575,8 +2575,9 @@ mod delivery {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{stop}', '{\"kind\":\"stopped\"}') WHERE attempt_id=$1")
-                .bind(attempt).execute(&mut *tx).await.unwrap();
+            let hot = json!({"schema_version":1,"status":"finished","stop":{"kind":"stopped"}});
+            sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
+                .bind(attempt).bind(hot).execute(&mut *tx).await.unwrap();
             sqlx::query("INSERT INTO profiled_result_heads(attempt_id,report_id) VALUES($1,$2)")
                 .bind(attempt)
                 .bind(result)
