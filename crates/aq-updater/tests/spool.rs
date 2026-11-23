@@ -302,9 +302,7 @@ mod with_engine {
             }
         }));
         let out = process_requests(&mut e, &h.requests, &rx).await.unwrap();
-        assert_eq!(out.len(), 1, "{out:?}");
-        assert_eq!(out[0].request_id, Some(first.id));
-        assert_eq!(out[0].outcome, Outcome::Succeeded, "{}", out[0].detail);
+        assert_request_results(&out, &[(first.id, Outcome::Succeeded)]);
         assert_eq!(h.fake.count("start_server"), 1);
         assert_eq!(names(&h.requests), vec![format!("{}.json", second.id)]);
         // Already stopped: nothing is taken at all.
@@ -325,9 +323,10 @@ mod with_engine {
         let out = process_requests(&mut e, &h.requests, &no_stop())
             .await
             .unwrap();
-        assert_eq!(out.len(), 2, "{out:?}");
-        assert_eq!(out[0].outcome, Outcome::Refused, "{}", out[0].detail);
-        assert_eq!(out[1].outcome, Outcome::Rejected);
+        assert_request_results(
+            &out,
+            &[(first.id, Outcome::Refused), (second.id, Outcome::Rejected)],
+        );
         assert_eq!(
             out[1].detail,
             format!(
@@ -377,11 +376,13 @@ mod with_engine {
         let out = process_requests(&mut e, &h.requests, &no_stop())
             .await
             .unwrap();
-        assert_eq!(out.len(), 2, "{out:?}");
-        assert_eq!(out[0].request_id, Some(first.id));
-        assert_eq!(out[0].outcome, Outcome::Succeeded, "{}", out[0].detail);
-        assert_eq!(out[1].request_id, Some(second.id));
-        assert_eq!(out[1].outcome, Outcome::Rejected);
+        assert_request_results(
+            &out,
+            &[
+                (first.id, Outcome::Succeeded),
+                (second.id, Outcome::Rejected),
+            ],
+        );
         assert_eq!(out[1].detail, UPDATE_IN_PROGRESS);
         assert_eq!(h.fake.count("start_server"), 1);
         assert_eq!(h.history(), out);
@@ -428,23 +429,18 @@ mod with_engine {
             .await
             .unwrap();
         assert!(*dropped.lock().unwrap());
-        let summary: Vec<_> = out
-            .iter()
-            .map(|e| (e.request_id.unwrap(), e.outcome, e.detail.clone()))
-            .collect();
-        assert_eq!(summary.len(), 4, "{summary:?}");
-        assert_eq!(summary[0].0, first.id);
-        assert_eq!(summary[0].1, Outcome::Succeeded);
-        assert_eq!(
-            summary[1],
-            (dup.id, Outcome::Rejected, UPDATE_IN_PROGRESS.to_string())
+        assert_request_results(
+            &out,
+            &[
+                (first.id, Outcome::Succeeded),
+                (dup.id, Outcome::Rejected),
+                (chan.id, Outcome::Rejected),
+                (other.id, Outcome::Succeeded),
+            ],
         );
-        assert_eq!(
-            summary[2],
-            (chan.id, Outcome::Rejected, UPDATE_IN_PROGRESS.to_string())
-        );
-        assert_eq!(summary[3].0, other.id);
-        assert_eq!(summary[3].1, Outcome::Succeeded, "{}", summary[3].2);
+        for rejected in &out[1..3] {
+            assert_eq!(rejected.detail, UPDATE_IN_PROGRESS, "{rejected:?}");
+        }
         assert_eq!(
             e.journal_state().active.as_ref().unwrap().version,
             b.version
@@ -458,5 +454,16 @@ mod with_engine {
                 ..
             }
         )));
+    }
+
+    fn assert_request_results(history: &[HistoryEntry], expected: &[(Uuid, Outcome)]) {
+        assert_eq!(history.len(), expected.len(), "{history:?}");
+        for (entry, &(request_id, outcome)) in history.iter().zip(expected) {
+            assert_eq!(
+                (entry.request_id, entry.outcome),
+                (Some(request_id), outcome),
+                "{entry:?}"
+            );
+        }
     }
 }
