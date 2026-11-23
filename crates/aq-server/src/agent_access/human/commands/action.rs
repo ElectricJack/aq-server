@@ -20,6 +20,13 @@ pub(super) fn request(project: Uuid, payload: &Create) -> ActionRequest {
     .request("task.create", payload.operation_id, json!(payload))
 }
 impl TaskCreate {
+    fn owner<'a>(&'a self, state: &'a AppState, actor: &'a User) -> Owner<'a> {
+        Owner {
+            state,
+            runtime: &self.runtime,
+            actor,
+        }
+    }
     pub(crate) async fn retained_outcome(
         &self,
         state: &AppState,
@@ -86,7 +93,7 @@ impl TaskCreate {
         journal::status(state, &self.runtime, user, &native)
             .await
             .map_err(ApiError::from)?;
-        let payload = Create::parse(&native.request).map_err(ApiError::from)?;
+        let payload = parse(&native.request).map_err(ApiError::from)?;
         let created = chrono::DateTime::from_timestamp_millis(native.created)
             .ok_or_else(ApiError::unavailable)?;
         Ok(Some((
@@ -97,6 +104,73 @@ impl TaskCreate {
             created,
         )))
     }
+}
+impl Operation {
+    fn matches_payload(&self, project: Uuid, payload: &Create) -> bool {
+        self.project == project
+            && serde_json::from_slice::<Value>(&self.request).ok() == Some(json!(payload))
+    }
+}
+impl Owner<'_> {
+    async fn outcome(&self, native: &Operation) -> Outcome {
+        journal::status(self.state, self.runtime, self.actor, native)
+            .await
+            .map(result)
+            .unwrap_or_else(|_| Outcome::unknown())
+    }
+    async fn creation_failure(&self, id: Uuid, error: AppError) -> Outcome {
+        match journal::load(self.runtime, id).await {
+            Ok(Some(native)) => self.outcome(&native).await,
+            Ok(None) => existing::failure(error),
+            Err(_) => Outcome::unknown(),
+        }
+    }
+    async fn verify_lookup(
+        &self,
+        project: Uuid,
+        op: &actions::Operation,
+    ) -> std::result::Result<(), ApiError> {
+        verify_references(project, op)?;
+        let native = journal::load(self.runtime, op.operation_id)
+            .await
+            .map_err(ApiError::from)?;
+        let confirmed = op.disposition == Disposition::Confirmed;
+        let Some(native) = native else {
+            return if confirmed {
+                Err(ApiError::invalid())
+            } else {
+                Ok(())
+            };
+        };
+        journal::owns(&native, self.actor).map_err(ApiError::from)?;
+        if native.project != project {
+            return Err(ApiError::invalid());
+        }
+        let expected = journal::status(self.state, self.runtime, self.actor, &native)
+            .await
+            .map(result)
+            .map_err(ApiError::from)?;
+        let matches = op.receipt_refs == expected.receipt_refs
+            && op.affected_entities == expected.affected_entities;
+        if confirmed && !matches {
+            return Err(ApiError::invalid());
+        }
+        Ok(())
+    }
+}
+fn verify_references(project: Uuid, op: &actions::Operation) -> std::result::Result<(), ApiError> {
+    let [subject] = op.subject_refs.as_slice() else {
+        return Err(ApiError::invalid());
+    };
+    let project_matches = subject.entity_type == "project" && subject.id == project.to_string();
+    let valid_tasks = op
+        .affected_entities
+        .iter()
+        .all(|task| task.entity_type == "task" && task.id == op.operation_id.to_string());
+    if !project_matches || !valid_tasks {
+        return Err(ApiError::invalid());
+    }
+    Ok(())
 }
 fn result(status: Status) -> Outcome {
     let disposition = match status.state {
@@ -138,7 +212,7 @@ impl ActionKind for TaskCreate {
         request: &ActionRequest,
         payload: &Create,
     ) -> std::result::Result<Scope, ApiError> {
-        Create::parse(&serde_json::to_vec(payload).map_err(|_| ApiError::invalid())?)
+        parse(&serde_json::to_vec(payload).map_err(|_| ApiError::invalid())?)
             .map_err(ApiError::from)?;
         if request.operation_id != payload.operation_id {
             return Err(ApiError::invalid());
@@ -154,7 +228,8 @@ impl ActionKind for TaskCreate {
             .await
             .map_err(ApiError::from)?;
         if let Some(parent) = payload.parent_id {
-            super::authorize_parent(state, &self.runtime, user, project, parent)
+            self.owner(state, user)
+                .authorize_parent(project, parent)
                 .await
                 .map_err(ApiError::from)?;
         }
@@ -166,9 +241,7 @@ impl ActionKind for TaskCreate {
             .map_err(ApiError::from)?
         {
             journal::owns(&old, user).map_err(ApiError::from)?;
-            if old.project != project
-                || serde_json::from_slice::<Value>(&old.request).ok() != Some(json!(payload))
-            {
+            if !old.matches_payload(project, payload) {
                 return Err(ApiError::for_status(StatusCode::CONFLICT));
             }
         }
@@ -194,38 +267,9 @@ impl ActionKind for TaskCreate {
             .await
             .map_err(ApiError::from)?;
         if let Some(op) = operation {
-            if op.subject_refs.len() != 1
-                || op.subject_refs[0].entity_type != "project"
-                || op.subject_refs[0].id != project_id.to_string()
-                || op
-                    .affected_entities
-                    .iter()
-                    .any(|r| r.entity_type != "task" || r.id != op.operation_id.to_string())
-            {
-                return Err(ApiError::invalid());
-            }
-            if let Some(native) = journal::load(&self.runtime, op.operation_id)
-                .await
-                .map_err(ApiError::from)?
-            {
-                journal::owns(&native, user).map_err(ApiError::from)?;
-                if native.project != *project_id {
-                    return Err(ApiError::invalid());
-                }
-                let expected = result(
-                    journal::status(state, &self.runtime, user, &native)
-                        .await
-                        .map_err(ApiError::from)?,
-                );
-                if op.disposition == Disposition::Confirmed
-                    && (op.receipt_refs != expected.receipt_refs
-                        || op.affected_entities != expected.affected_entities)
-                {
-                    return Err(ApiError::invalid());
-                }
-            } else if op.disposition == Disposition::Confirmed {
-                return Err(ApiError::invalid());
-            }
+            self.owner(state, user)
+                .verify_lookup(*project_id, op)
+                .await?;
         }
         Ok(())
     }
@@ -246,16 +290,10 @@ impl ActionKind for TaskCreate {
         };
         match journal::load(&self.runtime, request.operation_id).await {
             Ok(Some(old)) => {
-                if journal::owns(&old, user).is_err()
-                    || old.project != project
-                    || serde_json::from_slice::<Value>(&old.request).ok() != Some(json!(payload))
-                {
+                if journal::owns(&old, user).is_err() || !old.matches_payload(project, &payload) {
                     return existing::disposition(Disposition::Conflict);
                 }
-                return match journal::status(state, &self.runtime, user, &old).await {
-                    Ok(s) => result(s),
-                    Err(_) => Outcome::unknown(),
-                };
+                return self.owner(state, user).outcome(&old).await;
             }
             Err(_) => return Outcome::unknown(),
             _ => {}
@@ -263,18 +301,13 @@ impl ActionKind for TaskCreate {
         let bytes = self.original.clone().unwrap_or_else(|| {
             Bytes::from(serde_json::to_vec(&json!(payload)).expect("typed create"))
         });
-        match create_domain(state, &self.runtime, user, project, bytes).await {
+        match self.owner(state, user).create(project, bytes, None).await {
             Ok(s) => result(s),
-            Err(error) => match journal::load(&self.runtime, request.operation_id).await {
-                Ok(Some(native)) => {
-                    match journal::status(state, &self.runtime, user, &native).await {
-                        Ok(status) => result(status),
-                        Err(_) => Outcome::unknown(),
-                    }
-                }
-                Ok(None) => existing::failure(error),
-                Err(_) => Outcome::unknown(),
-            },
+            Err(error) => {
+                self.owner(state, user)
+                    .creation_failure(request.operation_id, error)
+                    .await
+            }
         }
     }
     async fn reconcile(

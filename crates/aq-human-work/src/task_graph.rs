@@ -1,4 +1,6 @@
 //! Typed atomic task creation and Graph mutation planning.
+pub mod creation_receipt;
+pub mod single;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

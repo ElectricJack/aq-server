@@ -15,97 +15,19 @@ fn hash(bytes: &[u8]) -> String {
 fn db(_: sqlx::Error) -> AppError {
     unavailable()
 }
-#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Create {
-    pub(in crate::agent_access::human) operation_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub(in crate::agent_access::human) expected_project_revision: String,
-    #[schemars(length(min = 1, max = 512))]
-    pub(in crate::agent_access::human) title: String,
-    #[schemars(length(max = 32768))]
-    pub(in crate::agent_access::human) body: String,
-    #[schemars(length(max = 8192))]
-    pub(in crate::agent_access::human) acceptance_criteria: String,
-    #[schemars(length(max = 16))]
-    pub(in crate::agent_access::human) labels: Vec<String>,
-    pub(in crate::agent_access::human) task_state: TaskState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::agent_access::human) parent_id: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 300))]
-    pub(in crate::agent_access::human) priority: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
-    pub(in crate::agent_access::human) story_points: Option<u16>,
-    /// The role the task expects; it must exist. Absent: the project's
-    /// default role.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 128))]
-    pub(in crate::agent_access::human) role: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 128))]
-    pub(in crate::agent_access::human) intelligence_hint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 128))]
-    pub(in crate::agent_access::human) task_type: Option<String>,
-    /// What the task needs from its environment (spec 0017), as `aq:needs`.
-    #[cfg(feature = "project_environments")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in crate::agent_access::human) needs: Option<super::enqueue::Needs>,
-}
-#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::agent_access::human) enum TaskState {
-    Draft,
-    Active,
-}
-impl Create {
-    fn parse(bytes: &[u8]) -> Result<Self> {
-        if bytes.is_empty() || bytes.len() > 65536 {
-            return Err(invalid());
-        }
-        let super::super::contract::StrictValue(raw) =
-            serde_json::from_slice(bytes).map_err(|_| invalid())?;
-        let v: Self = serde_json::from_value(raw).map_err(|_| invalid())?;
-        if v.operation_id.is_nil()
-            || v.parent_id
-                .is_some_and(|p| p.is_nil() || p == v.operation_id)
-            || !super::enqueue::hints_valid(
-                v.priority,
-                [&v.role, &v.intelligence_hint, &v.task_type],
-            )
-            || v.story_points
-                .is_some_and(|n| !(1..=aq_human_work::MAX_STORY_POINTS).contains(&n))
-            || v.revision().is_err()
-            || v.title.trim().is_empty()
-            || v.title.len() > 512
-            || v.title.chars().any(char::is_control)
-            || v.body.contains('\0')
-            || v.acceptance_criteria.contains('\0')
-            || v.body.len() > 32768
-            || v.acceptance_criteria.len() > 8192
-            || v.labels.len() > 16
-            || v.labels
-                .iter()
-                .any(|s| s.trim().is_empty() || s.len() > 128 || s.chars().any(char::is_control))
-            || v.labels
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != v.labels.len()
-        {
-            return Err(invalid());
-        }
-        Ok(v)
+pub(crate) use aq_human_work::task_graph::single::Create;
+use aq_human_work::task_graph::single::TaskState;
+fn parse(bytes: &[u8]) -> Result<Create> {
+    if bytes.is_empty() || bytes.len() > 65536 {
+        return Err(invalid());
     }
-    fn revision(&self) -> Result<i64> {
-        let s = &self.expected_project_revision;
-        if s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(invalid());
-        }
-        s.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(invalid)
+    let super::super::contract::StrictValue(raw) =
+        serde_json::from_slice(bytes).map_err(|_| invalid())?;
+    let v: Create = serde_json::from_value(raw).map_err(|_| invalid())?;
+    if !v.valid() {
+        return Err(invalid());
     }
+    Ok(v)
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,15 +46,7 @@ enum Effect {
     Confirmed,
     NotApplied,
 }
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct Receipt {
-    workspace_id: Uuid,
-    change_set_id: Uuid,
-    task_id: Uuid,
-    version: String,
-    content_revision: String,
-}
+use aq_human_work::task_graph::creation_receipt::{Creation, Receipt};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Recovery {
@@ -155,13 +69,13 @@ pub(super) struct Status {
     created_at_ms: u64,
 }
 impl Status {
-    fn initial(request: &Create, project: Uuid, actor: Uuid, digest: String, now: i64) -> Self {
+    fn initial(admission: &journal::Admission<'_>, actor: Uuid, digest: String, now: i64) -> Self {
         Self {
             contract: CONTRACT.into(),
-            operation_id: request.operation_id,
-            project_id: project,
+            operation_id: admission.request.operation_id,
+            project_id: admission.record.binding.project_id,
             actor_id: actor,
-            task_id: request.operation_id,
+            task_id: admission.request.operation_id,
             request_digest: digest,
             state: OperationState::Pending,
             effect: Effect::NotDispatched,
@@ -226,34 +140,47 @@ impl Operation {
             lease_until: row.get("lease_expires_at_ms"),
             stop: row.get("stop_reason"),
         };
-        let request = Create::parse(&value.request)?;
-        if value.id != request.operation_id
-            || value.id != value.status.task_id
-            || value.id != value.status.operation_id
-            || value.actor != value.status.actor_id
-            || value.project != value.status.project_id
-            || value.revision != request.revision()?
-            || hash(&value.request) != value.request_digest
-            || value.status.request_digest != value.request_digest
-            || hash(&value.payload) != value.payload_digest
-            || value.status.contract != CONTRACT
-            || value.status.created_at_ms != value.created as u64
-        {
+        let request = parse(&value.request)?;
+        if !value.matches_request(&request)? || !value.matches_status() {
             return Err(unavailable());
         }
-        if let Some(raw) = &value.raw_receipt {
-            let r = dispatch::receipt(&value, raw)?;
-            if value.status.state != OperationState::Confirmed
-                || value.status.effect != Effect::Confirmed
-                || value.status.receipt.as_ref() != Some(&r)
-            {
-                return Err(unavailable());
-            }
-        } else if value.status.state == OperationState::Confirmed || value.status.receipt.is_some()
-        {
-            return Err(unavailable());
-        }
+        value.verify_receipt()?;
         Ok(value)
+    }
+    fn matches_intent(&self, project: Uuid, bytes: &[u8]) -> bool {
+        self.project == project && self.request == bytes
+    }
+    fn matches_request(&self, request: &Create) -> Result<bool> {
+        Ok(self.id == request.operation_id
+            && self.revision == request.revision().ok_or_else(invalid)?
+            && hash(&self.request) == self.request_digest
+            && hash(&self.payload) == self.payload_digest)
+    }
+    fn matches_status(&self) -> bool {
+        let status = &self.status;
+        let same_identity = self.id == status.task_id
+            && self.id == status.operation_id
+            && self.actor == status.actor_id
+            && self.project == status.project_id;
+        same_identity
+            && status.request_digest == self.request_digest
+            && status.contract == CONTRACT
+            && status.created_at_ms == self.created as u64
+    }
+    fn verify_receipt(&self) -> Result<()> {
+        let confirmed = self.status.state == OperationState::Confirmed;
+        match &self.raw_receipt {
+            Some(raw) => {
+                let proof = dispatch::receipt(self, raw)?;
+                let confirmed_receipt = confirmed && self.status.effect == Effect::Confirmed;
+                if confirmed_receipt && self.status.receipt.as_ref() == Some(&proof) {
+                    return Ok(());
+                }
+            }
+            None if !confirmed && self.status.receipt.is_none() => return Ok(()),
+            None => {}
+        }
+        Err(unavailable())
     }
 }
 fn outcome(status: Status) -> Result<Response> {
@@ -265,17 +192,16 @@ fn outcome(status: Status) -> Result<Response> {
     };
     Ok((code, Json(status)).into_response())
 }
+type OwnerRoute = (State<AppState>, Extension<Arc<ReadRuntime>>, RequireOwner);
 pub(super) async fn create(
-    State(state): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(actor): RequireOwner,
+    (State(state), Extension(r), RequireOwner(actor)): OwnerRoute,
     Path(project): Path<Uuid>,
     bytes: Bytes,
 ) -> Result<Response> {
-    let request = Create::parse(&bytes)?;
+    let request = parse(&bytes)?;
     if let Some(old) = journal::load(&r, request.operation_id).await? {
         journal::owns(&old, &actor)?;
-        if old.project != project || old.request != bytes.as_ref() {
+        if !old.matches_intent(project, &bytes) {
             return Err(conflict());
         }
     }
@@ -302,103 +228,78 @@ pub(super) async fn create(
         .ok_or_else(unavailable)?;
     outcome(journal::status(&state, &r, &actor, &op).await?)
 }
-/// Parent authority includes project membership, even for a shared workspace.
-async fn authorize_parent(
-    state: &AppState,
-    r: &ReadRuntime,
-    actor: &User,
-    project: Uuid,
-    parent: Uuid,
-) -> Result<()> {
-    let a = access(state, r, actor.clone(), project).await?;
-    let node = super::graph_actions::current(
-        runtime(state)?,
-        a.record.binding.graph_workspace_id,
-        parent,
-        "task",
-    )
-    .await?;
-    if node["metadata"]["aq:project_id"] != json!(project) {
-        return Err(AppError::Forbidden(
-            "parent belongs to another project".into(),
-        ));
-    }
-    Ok(())
+struct Owner<'a> {
+    state: &'a AppState,
+    runtime: &'a ReadRuntime,
+    actor: &'a User,
 }
-async fn create_domain(
-    state: &AppState,
-    r: &ReadRuntime,
-    actor: &User,
-    project: Uuid,
-    bytes: Bytes,
-) -> Result<Status> {
-    create_on_node(state, r, actor, project, bytes, None).await
-}
-async fn create_on_node(
-    state: &AppState,
-    r: &ReadRuntime,
-    actor: &User,
-    project: Uuid,
-    bytes: Bytes,
-    target: Option<Uuid>,
-) -> Result<Status> {
-    let request = Create::parse(&bytes)?;
-    if project.is_nil() {
-        return Err(invalid());
-    }
-    if let Some(old) = journal::load(r, request.operation_id).await? {
-        journal::owns(&old, actor)?;
-        if old.project != project
-            || old.request != bytes.as_ref()
-            || launch::target(&old.payload) != target
-        {
-            return Err(conflict());
+impl Owner<'_> {
+    /// Parent authority includes project membership, even for a shared workspace.
+    async fn authorize_parent(&self, project: Uuid, parent: Uuid) -> Result<()> {
+        let Self {
+            state,
+            runtime: r,
+            actor,
+        } = *self;
+        let a = access(state, r, actor.clone(), project).await?;
+        let node = super::graph_actions::current(
+            runtime(state)?,
+            a.record.binding.graph_workspace_id,
+            parent,
+            "task",
+        )
+        .await?;
+        if node["metadata"]["aq:project_id"] != json!(project) {
+            return Err(AppError::Forbidden(
+                "parent belongs to another project".into(),
+            ));
         }
-        return journal::status(state, r, actor, &old).await;
+        Ok(())
     }
-    let a = access(state, r, actor.clone(), project).await?;
-    let rt = runtime(state)?;
-    let service =
-        super::super::mutations::service_identity(rt, a.record.binding.graph_workspace_id)
-            .map_err(|_| unavailable())?;
-    if let Some(parent) = request.parent_id {
-        authorize_parent(state, r, actor, project, parent).await?;
+    async fn create(&self, project: Uuid, bytes: Bytes, target: Option<Uuid>) -> Result<Status> {
+        let Self {
+            state,
+            runtime: r,
+            actor,
+        } = *self;
+        let request = parse(&bytes)?;
+        if project.is_nil() {
+            return Err(invalid());
+        }
+        if let Some(old) = journal::load(r, request.operation_id).await? {
+            journal::owns(&old, actor)?;
+            if !old.matches_intent(project, &bytes) || launch::target(&old.payload) != target {
+                return Err(conflict());
+            }
+            return journal::status(state, r, actor, &old).await;
+        }
+        let a = access(state, r, actor.clone(), project).await?;
+        let rt = runtime(state)?;
+        let service =
+            super::super::mutations::service_identity(rt, a.record.binding.graph_workspace_id)
+                .map_err(|_| unavailable())?;
+        if let Some(parent) = request.parent_id {
+            self.authorize_parent(project, parent).await?;
+        }
+        let payload = request.mutation(project, actor.id, target);
+        if !contract::upstream_valid("MutationRequest", &payload) {
+            return Err(unavailable());
+        }
+        let payload = super::super::canonical(&payload).map_err(|_| unavailable())?;
+        journal::Admission {
+            record: &a.record,
+            request: &request,
+            bytes: &bytes,
+            payload: &payload,
+            service: &service,
+        }
+        .admit(self)
+        .await?;
+        dispatch::run(state, r, actor, request.operation_id).await
     }
-    let mut payload = json!({"idempotency_key":format!("aq-human-task-create:{}",request.operation_id),"reason":format!("AQ human task create {}",request.operation_id),"operations":[{"op":"create_node","id":request.operation_id,"kind":"task","title":request.title,"body":request.body,"acceptance_criteria":request.acceptance_criteria,"labels":request.labels,"task_state":request.task_state,"metadata":{"aq:human_actor_id":actor.id,"aq:human_operation_id":request.operation_id,"aq:project_id":project}}]});
-    if let Some(node) = target {
-        payload["operations"][0]["metadata"]["aq:requested_node_id"] = json!(node);
-    }
-    super::enqueue::metadata(
-        &mut payload["operations"][0]["metadata"],
-        request.priority,
-        [
-            &request.role,
-            &request.intelligence_hint,
-            &request.task_type,
-        ],
-    );
-    #[cfg(feature = "project_environments")]
-    super::enqueue::needs(&mut payload["operations"][0]["metadata"], &request.needs);
-    if let Some(points) = request.story_points {
-        payload["operations"][0]["metadata"][aq_human_work::STORY_POINTS_KEY] = json!(points);
-    }
-    if let Some(parent) = request.parent_id {
-        payload["operations"].as_array_mut().ok_or_else(unavailable)?.push(json!({"op":"add_edge","id":Uuid::from_bytes(sha2::Sha256::digest([request.operation_id.as_bytes().as_slice(),b"feedback-parent"].concat())[..16].try_into().map_err(|_|unavailable())?),"source":parent,"target":request.operation_id,"edge_type":"parent-child","description":"Feedback draft parent","source_revision":null,"target_revision":null}));
-    }
-    if !contract::upstream_valid("MutationRequest", &payload) {
-        return Err(unavailable());
-    }
-    let payload = super::super::canonical(&payload).map_err(|_| unavailable())?;
-    journal::admit(
-        state, r, actor, &a.record, &request, &bytes, &payload, &service,
-    )
-    .await?;
-    dispatch::run(state, r, actor, request.operation_id).await
 }
 pub(super) async fn lookup(
-    State(state): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(actor): RequireOwner,
+    (State(state), Extension(r), RequireOwner(actor)): OwnerRoute,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Status>> {
     let op = journal::load(&r, id).await?.ok_or_else(|| {
@@ -409,9 +310,7 @@ pub(super) async fn lookup(
     Ok(Json(journal::status(&state, &r, &actor, &op).await?))
 }
 pub(super) async fn recover(
-    State(state): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(actor): RequireOwner,
+    (State(state), Extension(r), RequireOwner(actor)): OwnerRoute,
     Path(id): Path<Uuid>,
     bytes: Bytes,
 ) -> Result<Response> {
