@@ -1251,7 +1251,11 @@ async fn supervisor_token(x: &Fixture) -> String {
         },
     };
     sessions
-        .start(&plan.binding().unwrap(), launch, 60_000, clock)
+        .start(
+            &plan.binding().unwrap(),
+            launch,
+            PermitWindow::new(60_000, clock),
+        )
         .await
         .unwrap();
     aq_server::agent_access::supervisor_conversation::reply::issue_credential(

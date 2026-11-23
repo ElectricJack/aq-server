@@ -362,8 +362,7 @@ impl Fixture {
                     launch_id: observation(p).launch_id,
                     intent: artifact(),
                 },
-                100_000,
-                clock(),
+                PermitWindow::new(100_000, clock()),
             )
             .await
             .unwrap();

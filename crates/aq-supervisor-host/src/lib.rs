@@ -14,7 +14,7 @@ pub mod tool;
 mod verifier;
 use anyhow::{Context, Result, bail, ensure};
 use aq_central_authority::{
-    owner::{Receipt, SessionOwner, Snapshot},
+    owner::{PermitWindow, Receipt, SessionOwner, Snapshot},
     *,
 };
 use aq_session_host::{
@@ -273,8 +273,7 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             Box::pin(owner.start(
                 &central.binding()?,
                 journal::launch_ref(&central, id, &reservation)?,
-                ttl_ms,
-                clock()?,
+                PermitWindow::new(ttl_ms, clock()?),
             ))
             .await?,
         )?;
@@ -458,8 +457,7 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
             Box::pin(self.owner(None).renew(
                 &current.run.plan().binding()?,
                 prior_sequence,
-                ttl_ms,
-                clock()?,
+                PermitWindow::new(ttl_ms, clock()?),
             ))
             .await?,
         )?;
