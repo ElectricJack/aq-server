@@ -64,6 +64,18 @@ impl Harness {
         self.store.execution_offer(task_id, &offer).await.unwrap();
         offer
     }
+    async fn accept(&self, offer: &Offer) {
+        self.store
+            .execution_accept(&acceptance(offer), NOW)
+            .await
+            .unwrap();
+    }
+
+    async fn accepted_offer(&self, task_id: Uuid) -> Offer {
+        let offer = self.offer(task_id).await;
+        self.accept(&offer).await;
+        offer
+    }
 }
 fn register(identity: &NodeIdentity) -> RegisterRequest {
     RegisterRequest {
@@ -188,11 +200,7 @@ async fn concurrent_claims_for_one_task_leave_one_unsettled_attempt() {
 #[tokio::test]
 async fn renewal_replay_preserves_expiry_and_rejects_stale_sequence() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let request = RenewRequest {
         identity: h.identity.clone(),
         operation_id: Uuid::new_v4(),
@@ -229,11 +237,7 @@ async fn renewal_replay_preserves_expiry_and_rejects_stale_sequence() {
 async fn cancellation_wins_before_result_and_retains_late_output() {
     let h = Harness::new().await;
     let task = Uuid::new_v4();
-    let offer = h.offer(task).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(task).await;
     let op = Uuid::new_v4();
     h.store
         .execution_cancel(offer.attempt.attempt_id, op, "changed outcome")
@@ -265,11 +269,7 @@ async fn cancellation_wins_before_result_and_retains_late_output() {
 #[tokio::test]
 async fn accepted_result_cannot_be_retroactively_cancelled() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let result = report(&offer);
     assert_eq!(
         h.store
@@ -295,11 +295,7 @@ async fn accepted_result_cannot_be_retroactively_cancelled() {
 async fn expired_execution_remains_held_until_stopped_and_reported() {
     let h = Harness::new().await;
     let task = Uuid::new_v4();
-    let offer = h.offer(task).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(task).await;
     let next = make_offer(&h.identity);
     is_error(
         h.store.execution_offer(task, &next).await,
@@ -336,11 +332,7 @@ async fn expired_execution_remains_held_until_stopped_and_reported() {
 async fn unresolved_external_operations_prevent_replacement_even_after_stop() {
     let h = Harness::new().await;
     let task = Uuid::new_v4();
-    let offer = h.offer(task).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(task).await;
     let mut result = report(&offer);
     result.pending_operation_ids.push(Uuid::new_v4());
     assert!(
@@ -361,11 +353,7 @@ async fn unresolved_external_operations_prevent_replacement_even_after_stop() {
 #[tokio::test]
 async fn boot_replacement_requires_stop_and_old_results_never_settle_new_authority() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let next = NodeIdentity {
         node_id: h.identity.node_id,
         boot_id: Uuid::new_v4(),
@@ -406,11 +394,7 @@ async fn boot_replacement_requires_stop_and_old_results_never_settle_new_authori
 #[tokio::test]
 async fn reconciliation_does_not_extend_grants_or_take_over_old_incarnations() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let mut request = ReconcileRequest {
         identity: h.identity.clone(),
         operation_id: Uuid::new_v4(),
@@ -490,11 +474,7 @@ async fn expired_unaccepted_offer_and_explicit_decline_release_task_claim() {
 #[tokio::test]
 async fn observation_replay_cannot_regress_or_resurrect_stopped_processes() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let observation = Observation {
         identity: h.identity.clone(),
         operation_id: Uuid::new_v4(),
@@ -688,10 +668,7 @@ async fn recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance() {
         .await
         .unwrap();
     // Old boot gets a grant after reconciliation, before replacement register.
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    h.accept(&offer).await;
     is_error(
         h.store.execution_register(&registration).await,
         ErrorCode::StaleBoot,
@@ -719,11 +696,7 @@ async fn recovery_inventory_cannot_omit_a_writer_or_race_a_new_acceptance() {
 #[tokio::test]
 async fn corrected_reports_preserve_original_immutable_body_and_admission() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let mut original = report(&offer);
     original.stop_certainty = StopCertainty::StopUncertain;
     original.output = "first retained evidence".into();
@@ -769,11 +742,7 @@ async fn corrected_reports_preserve_original_immutable_body_and_admission() {
 #[tokio::test]
 async fn repeated_cancellations_coalesce_one_worker_directive() {
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let first_id = Uuid::new_v4();
     let first = h
         .store
@@ -1062,11 +1031,7 @@ async fn control_auth_and_operations_survive_full_general_pool_and_bulk_saturati
         .await
         .unwrap();
     h.store = Store::from_pool(pool.clone()).await.unwrap();
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let state = recovery_state(&h);
     let admin = aq_server::build_admin_router(state.clone());
     let worker = aq_server::build_worker_router(state);
@@ -1284,18 +1249,10 @@ async fn recovery_clock_controls_do_not_extend_prior_receipts_and_refuse_product
 async fn released_report_correction_cannot_reacquire_a_successors_task_claim() {
     let h = Harness::new().await;
     let task = Uuid::new_v4();
-    let offer = h.offer(task).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(task).await;
     let original = report(&offer);
     h.store.execution_result(&original, NOW).await.unwrap();
-    let next = h.offer(task).await;
-    h.store
-        .execution_accept(&acceptance(&next), NOW)
-        .await
-        .unwrap();
+    let next = h.accepted_offer(task).await;
     let mut correction = report(&offer);
     correction.supersedes_report_id = Some(original.report_id);
     correction.stop_certainty = StopCertainty::StopUncertain;
@@ -1333,11 +1290,7 @@ async fn maintenance_preserves_authorized_cancellation_but_blocks_new_fixture_wo
     use axum::http::StatusCode;
     use serde_json::json;
     let h = Harness::new().await;
-    let offer = h.offer(Uuid::new_v4()).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    let offer = h.accepted_offer(Uuid::new_v4()).await;
     let mut state = recovery_state(&h);
     let spool = tempfile::tempdir().unwrap();
     std::fs::create_dir(spool.path().join("status")).unwrap();
@@ -1480,10 +1433,7 @@ async fn authority_decisions_use_time_after_database_lock_wait() {
         );
         let offer = h.offer(Uuid::new_v4()).await;
         if operation != "accept" {
-            h.store
-                .execution_accept(&acceptance(&offer), NOW)
-                .await
-                .unwrap();
+            h.accept(&offer).await;
         }
         let before = h
             .store
@@ -1588,10 +1538,7 @@ async fn source_offer(h: &Harness, task: Uuid) -> Offer {
     });
     offer.spec = offer.spec.seal();
     h.store.execution_offer(task, &offer).await.unwrap();
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    h.accept(&offer).await;
     offer
 }
 
@@ -1913,10 +1860,7 @@ async fn legacy_cancellation_and_stop_revoke_the_agent_credential() {
     let offer = h.offer(Uuid::new_v4()).await;
     let attempt = offer.attempt.attempt_id;
     bind(attempt).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    h.accept(&offer).await;
     let live = state(attempt).await;
     assert_eq!(
         (live.0, live.1.is_some()),
@@ -1932,10 +1876,7 @@ async fn legacy_cancellation_and_stop_revoke_the_agent_credential() {
     let offer = h.offer(Uuid::new_v4()).await;
     let attempt = offer.attempt.attempt_id;
     bind(attempt).await;
-    h.store
-        .execution_accept(&acceptance(&offer), NOW)
-        .await
-        .unwrap();
+    h.accept(&offer).await;
     h.store
         .execution_cancel(attempt, Uuid::new_v4(), "owner cancelled")
         .await
