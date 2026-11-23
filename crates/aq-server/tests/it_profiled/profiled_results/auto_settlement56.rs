@@ -2477,6 +2477,42 @@ mod playbook {
                 .all(|r| r["code"] != "result_ready_no_delivery_policy"),
             "{reasons:?}"
         );
+        let replacement = reasons
+            .iter()
+            .find(|r| r["code"] == "replacement_facts_pending")
+            .unwrap_or_else(|| panic!("{reasons:?}"));
+        assert_eq!(replacement["result_id"], json!(env.report.report_id));
+        assert_eq!(replacement["blocker_owner"], "aq_settlement");
+        assert_eq!(
+            replacement["wake_condition"],
+            "replacement_evidence_reconciliation"
+        );
+        assert_eq!(
+            replacement["missing_evidence"],
+            json!(["retained_source", "quiescent_effects"])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_return_with_both_replacement_facts_names_the_scheduler_and_its_wake() {
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
+        assert_eq!(send_back(&env, "checks_failed").await, Settled::Returned);
+        let reasons = work_reasons(&env).await;
+        let replacement = reasons
+            .iter()
+            .find(|r| r["code"] == "replacement_facts_ready")
+            .unwrap_or_else(|| panic!("{reasons:?}"));
+        assert_eq!(
+            replacement["attempt_id"],
+            json!(env.report.binding.attempt_id)
+        );
+        assert_eq!(replacement["result_id"], json!(env.report.report_id));
+        assert_eq!(replacement["blocker_owner"], "aq_scheduler");
+        assert_eq!(replacement["wake_condition"], "worker_poll");
+        assert_eq!(replacement["missing_evidence"], json!([]));
     }
 
     /// The conclusion-text heuristics are gone: a failed report whose agent

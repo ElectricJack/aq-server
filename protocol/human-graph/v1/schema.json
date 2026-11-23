@@ -1947,12 +1947,16 @@
       },
       "HumanResultHoldReason": {
         "type": "object",
-        "description": "Why a stopped attempt's recorded result still holds an active task (spec 0016 §7, servers built with delivery by playbook): no playbook has decided the result. `result_ready_no_delivery_policy`: no delivery playbook is active for the project, so the result waits; `result_ready`: one is active and has not decided yet.",
+        "description": "The next action on a stopped attempt's recorded result (spec 0016 §7, servers built with delivery by playbook).",
         "properties": {
           "code": {
             "enum": [
               "result_ready_no_delivery_policy",
-              "result_ready"
+              "result_ready",
+              "delivery_settlement_pending",
+              "delivery_settlement_grant_required",
+              "replacement_facts_pending",
+              "replacement_facts_ready"
             ]
           },
           "attempt_id": {
@@ -1962,6 +1966,22 @@
           "result_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "blocker_owner": {
+            "enum": ["aq_delivery", "delivery_policy_owner", "aq_scheduler", "aq_settlement"]
+          },
+          "wake_condition": {
+            "enum": ["delivery_reconciliation", "scoped_delivery_authorization", "worker_poll", "replacement_evidence_reconciliation"]
+          },
+          "missing_evidence": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": { "enum": ["retained_source", "quiescent_effects"] }
           },
           "message": {
             "type": "string",

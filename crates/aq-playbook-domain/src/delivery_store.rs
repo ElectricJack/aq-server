@@ -400,6 +400,26 @@ pub async fn settlement_wait(
     .await?)
 }
 
+/// Replacement evidence for a settled rework of the holding attempt's current result.
+pub async fn rework_wait(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> Result<Option<(Uuid, bool, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT h.report_id,
+           hot.state#>>'{retention,kind}' IS NOT DISTINCT FROM 'retained',
+           hot.state#>>'{effects,kind}' IS NOT DISTINCT FROM 'quiescent'
+         FROM profiled_result_heads h JOIN execution_attempts a USING(attempt_id)
+         JOIN profiled_authority_hot hot USING(attempt_id)
+         JOIN profiled_auto_settlements s USING(attempt_id,report_id)
+         WHERE h.attempt_id=$1 AND a.holds_task AND s.disposition='rework_required'
+         AND hot.state#>>'{stop,kind}' IN ('stopped','not_started')",
+    )
+    .bind(attempt)
+    .fetch_optional(db)
+    .await?)
+}
+
 /// The latest refused publication for the claimed task, result and retained head.
 /// Older hosts recorded only the catalog reason. A later success supersedes all refusals.
 pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
