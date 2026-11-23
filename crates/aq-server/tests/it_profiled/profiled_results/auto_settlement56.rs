@@ -1189,6 +1189,20 @@ async fn ambiguous_or_foreign_presence_stays_held_without_a_source_head() {
     }
 }
 
+// The synthetic result fixtures do not pass through native offer publication.
+async fn seed_native_offer_clock(pool: &sqlx::PgPool, attempt: Uuid) {
+    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
+        .bind(attempt).bind(NOW as i64).execute(pool).await.unwrap();
+    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 /// MS1 retry (B4): after a final rework, the D3 policy actor records the
 /// replacement facts that only owning domains prove (the central retention
 /// receipt pinned by the report; a settled read-only AQ effect ledger), so the
@@ -1295,16 +1309,7 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
 
     // B4 now admits a replacement of the failed predecessor, which still holds
     // the task until the replacement owner releases it.
-    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
-        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
-    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
+    seed_native_offer_clock(&pool, attempt).await;
     let task = env.f.selection.lineage.task_id;
     match replacement::assess_task(&env.f.state, task, NOW + 1)
         .await
@@ -1352,16 +1357,7 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
     let pool = env.f.db.pool().await;
     let attempt = env.report.binding.attempt_id;
     // B4 needs the original offer instant (as the read-only test sets it).
-    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
-        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
-    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
+    seed_native_offer_clock(&pool, attempt).await;
     let shown = || async {
         let mut conn = pool.acquire().await.unwrap();
         inspect(&mut conn, attempt, NOW + 1).await.unwrap().unwrap()
@@ -2055,6 +2051,7 @@ mod playbook {
         let task = env.f.selection.lineage.task_id;
         let attempt = env.report.binding.attempt_id;
         let pool = env.f.db.pool().await;
+        seed_native_offer_clock(&pool, attempt).await;
         assert_eq!(cancelled_failed_report(&pool, task).await.unwrap(), None);
         let cancelled = cancellation::cancel(
             &env.f.state,
@@ -2074,7 +2071,7 @@ mod playbook {
         );
         assert_eq!(send_back(&env, "policy").await, Settled::Stale);
         assert_eq!(
-            replacement::assess_task(&env.f.state, task, NOW)
+            replacement::assess_task(&env.f.state, task, NOW + 1)
                 .await
                 .unwrap(),
             replacement::Assessment::Blocked("replacement_effects_unreconciled")
@@ -2094,7 +2091,7 @@ mod playbook {
         .unwrap();
         assert_eq!(facts, ("retained".into(), "quiescent".into()));
         assert!(matches!(
-            replacement::assess_task(&env.f.state, task, NOW)
+            replacement::assess_task(&env.f.state, task, NOW + 1)
                 .await
                 .unwrap(),
             replacement::Assessment::Replace(_)
