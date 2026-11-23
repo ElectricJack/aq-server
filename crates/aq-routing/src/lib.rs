@@ -232,6 +232,10 @@ impl Route {
 }
 
 impl CompactRoute {
+    fn predates_attempt(&self, ended_attempts: u64) -> bool {
+        self.s == Source::Router && self.a < ended_attempts
+    }
+
     /// Reads `aq:route` from task metadata. A missing key is `None`.
     pub fn from_metadata(metadata: &serde_json::Value) -> Result<Option<Self>, Error> {
         match metadata.get(ROUTE_KEY) {
@@ -286,9 +290,7 @@ impl Placement {
         }
         match CompactRoute::from_metadata(metadata) {
             Err(_) => Placement::Reroute,
-            Ok(Some(route))
-                if routing_on && route.s == Source::Router && route.a < ended_attempts =>
-            {
+            Ok(Some(route)) if routing_on && route.predates_attempt(ended_attempts) => {
                 Placement::Reroute
             }
             Ok(Some(route)) => Placement::Routed(route),
@@ -380,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn class_round_trips_as_parent_dash_effort_and_orders_by_parent_then_effort() {
+    fn class_round_trips_as_parent_dash_effort() {
         let c = class("standard-high");
         assert_eq!(
             c,
@@ -395,15 +397,19 @@ mod tests {
             serde_json::from_str::<Class>("\"deep-max\"").unwrap(),
             class("deep-max")
         );
+    }
+
+    #[test]
+    fn classes_sort_by_parent_then_effort() {
         assert!(class("standard-high") < class("complex-low"));
         assert!(class("standard-low") < class("standard-max"));
     }
 
     #[test]
     fn unknown_parent_or_effort_is_an_error() {
-        assert!("fast-high".parse::<Class>().is_err());
-        assert!("standard-ultra".parse::<Class>().is_err());
-        assert!("standard".parse::<Class>().is_err());
+        for invalid in ["fast-high", "standard-ultra", "standard"] {
+            assert!(invalid.parse::<Class>().is_err(), "{invalid}");
+        }
         assert!(serde_json::from_str::<Class>("\"fast-high\"").is_err());
     }
 
@@ -426,11 +432,9 @@ mod tests {
         let compact = route().compact(2).unwrap();
         let md = json!({"aq:route": serde_json::to_value(&compact).unwrap(), "other": 1});
         assert_eq!(CompactRoute::from_metadata(&md).unwrap(), Some(compact));
-        assert_eq!(
-            CompactRoute::from_metadata(&json!({"other": 1})).unwrap(),
-            None
-        );
-        assert_eq!(CompactRoute::from_metadata(&json!(null)).unwrap(), None);
+        for missing in [json!({"other":1}), json!(null)] {
+            assert_eq!(CompactRoute::from_metadata(&missing).unwrap(), None);
+        }
         assert!(CompactRoute::from_metadata(&json!({"aq:route": "garbage"})).is_err());
     }
 
@@ -439,11 +443,19 @@ mod tests {
         let router = route().compact(1).unwrap();
         let mut owner = router.clone();
         owner.s = Source::Owner;
-        assert!(may_replace(None, Source::Router));
-        assert!(may_replace(Some(&router), Source::Router));
-        assert!(!may_replace(Some(&owner), Source::Router));
-        assert!(may_replace(Some(&owner), Source::Owner));
-        assert!(may_replace(Some(&router), Source::Owner));
+        for (current, source, permitted) in [
+            (None, Source::Router, true),
+            (Some(&router), Source::Router, true),
+            (Some(&owner), Source::Router, false),
+            (Some(&owner), Source::Owner, true),
+            (Some(&router), Source::Owner, true),
+        ] {
+            assert_eq!(
+                may_replace(current, source),
+                permitted,
+                "{source:?} replacing {current:?}"
+            );
+        }
     }
 
     #[test]
