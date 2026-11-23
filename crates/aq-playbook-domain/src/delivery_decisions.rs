@@ -292,11 +292,7 @@ pub async fn notification(
     let latest = port
         .latest_in(db, origin.task_id)
         .await?
-        .filter(|r| {
-            r.project_id == project
-                && r.attempt_id == origin.attempt_id
-                && r.result_id == origin.result_id
-        })
+        .filter(|r| r.matches_event(&origin))
         .ok_or(Error::Conflict)?;
     let head = if latest.head.is_empty() {
         "none recorded"

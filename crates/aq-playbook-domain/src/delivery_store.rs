@@ -51,6 +51,15 @@ pub struct Latest {
     pub base: String,
 }
 
+impl Latest {
+    /// Compare result identities after the caller has looked up the event's task.
+    pub(crate) fn matches_event(&self, event: &ResultReady) -> bool {
+        self.project_id == event.project_id
+            && self.attempt_id == event.attempt_id
+            && self.result_id == event.result_id
+    }
+}
+
 /// What the host reads of the server's execution records. A port, so that
 /// the emission and `work.read` can be tested without recording a result.
 #[async_trait::async_trait]
@@ -68,11 +77,10 @@ pub trait DeliveryPort: Send + Sync {
     /// Lock the event's attempt and verify its current result before an effect.
     /// Fixture ports use the equivalent identity check against their own store.
     async fn lock_current(&self, _db: &mut PgConnection, event: &ResultReady) -> Result<bool> {
-        Ok(self.latest(event.task_id).await?.is_some_and(|latest| {
-            latest.project_id == event.project_id
-                && latest.attempt_id == event.attempt_id
-                && latest.result_id == event.result_id
-        }))
+        Ok(self
+            .latest(event.task_id)
+            .await?
+            .is_some_and(|latest| latest.matches_event(event)))
     }
 
     /// Whether the server runs tasks of `project` (it has an execution binding).
@@ -631,30 +639,7 @@ async fn due(
         .into_iter()
         .filter(|p| !decided.contains(&p.result_id))
     {
-        let row = sqlx::query("SELECT emitted_result_id,emitted_at_ms,emitted_facts FROM delivery_tasks WHERE task_id=$1 FOR UPDATE")
-            .bind(p.task_id)
-            .fetch_optional(&mut *db)
-            .await?;
-        let mut emission = ResultEmission::default();
-        if let Some(row) = &row {
-            emission.emitted_result = row.get("emitted_result_id");
-            emission.emitted_at_ms = row.get("emitted_at_ms");
-            emission.emitted_facts = row.get("emitted_facts");
-        }
-        if emission.emitted_result == Some(p.result_id) {
-            emission.run_unfinished = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
-                 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
-                 AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
-            )
-            .bind(namespace.0)
-            .bind(namespace.1)
-            .bind(p.task_id.to_string())
-            .bind(emission.emitted_at_ms)
-            .bind(now_ms - run_bound_ms)
-            .fetch_one(&mut *db)
-            .await?;
-        }
+        let emission = emission(db, namespace, &p, (now_ms, run_bound_ms)).await?;
         let moving = result_facts(db, p.task_id, p.project_id, None).await?;
         let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());
         if result_ready_due(&emission, p.result_id, &facts, now_ms, repeat_ms) {
@@ -668,6 +653,41 @@ async fn due(
         }
     }
     Ok(out)
+}
+
+/// Read the task's emission under its row lock, then check whether its run
+/// still suppresses a repeat. Keep both reads on the caller's connection.
+async fn emission(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    pending: &Pending,
+    (now_ms, run_bound_ms): (i64, i64),
+) -> Result<ResultEmission> {
+    let row = sqlx::query("SELECT emitted_result_id,emitted_at_ms,emitted_facts FROM delivery_tasks WHERE task_id=$1 FOR UPDATE")
+        .bind(pending.task_id)
+        .fetch_optional(&mut *db)
+        .await?;
+    let mut emission = ResultEmission::default();
+    if let Some(row) = &row {
+        emission.emitted_result = row.get("emitted_result_id");
+        emission.emitted_at_ms = row.get("emitted_at_ms");
+        emission.emitted_facts = row.get("emitted_facts");
+    }
+    if emission.emitted_result == Some(pending.result_id) {
+        emission.run_unfinished = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
+             AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
+             AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
+        )
+        .bind(namespace.0)
+        .bind(namespace.1)
+        .bind(pending.task_id.to_string())
+        .bind(emission.emitted_at_ms)
+        .bind(now_ms - run_bound_ms)
+        .fetch_one(&mut *db)
+        .await?;
+    }
+    Ok(emission)
 }
 
 /// Records that `aq.work.result_ready` was sent for `due` at `now_ms`.
