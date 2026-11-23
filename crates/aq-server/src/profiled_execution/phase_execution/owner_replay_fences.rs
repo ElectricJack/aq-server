@@ -14,14 +14,19 @@ async fn lock_replay_authority(
         authority::load_locked(state, tx, &q.original.binding.session, Policy::IdentityOnly)
     })
     .await?;
-    if view.identity.node_id != auth.id()
-        || view.identity.boot_id != q.original.identity.boot_id
-        || view.offer_id != q.original.binding.offer_id
-        || view.launch_manifest_digest.as_ref() != Some(&q.original.binding.launch_manifest_digest)
-        || view.execution_spec_digest != q.original.binding.execution_spec_digest.as_str()
-    {
-        return Err(refused());
-    }
+    let live_identity = (view.identity.node_id, view.identity.boot_id, view.offer_id);
+    let replay_identity = (
+        auth.id(),
+        q.original.identity.boot_id,
+        q.original.binding.offer_id,
+    );
+    require_replay(live_identity == replay_identity)?;
+    require_replay(
+        view.launch_manifest_digest.as_ref() == Some(&q.original.binding.launch_manifest_digest),
+    )?;
+    require_replay(
+        view.execution_spec_digest == q.original.binding.execution_spec_digest.as_str(),
+    )?;
     on_heap(|| super::closure::ensure_launch_open_locked(tx, &q.original.binding)).await?;
     Ok(view)
 }
@@ -38,19 +43,16 @@ async fn find_replay_grant(
     let rows=sqlx::query("SELECT attempt_id,operation_id,grant_id FROM profiled_phase_execution_grants WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) ORDER BY attempt_id LIMIT 2 FOR SHARE").bind(q.original.binding.attempt_id).bind(auth.id()).bind(q.original.operation_id).fetch_all(&mut **tx).await.map_err(db)?;
     if rows.is_empty() {
         let collision:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2) OR EXISTS(SELECT 1 FROM profiled_v2_accepts WHERE node_id=$1 AND operation_id=$2)").bind(auth.id()).bind(q.original.operation_id).fetch_one(&mut **tx).await.map_err(db)?;
-        if collision {
-            return Err(refused());
-        }
+        require_replay(!collision)?;
         return Ok(None);
     }
-    if rows.len() != 1
-        || rows[0].get::<Uuid, _>("attempt_id") != q.original.binding.attempt_id
-        || rows[0].get::<Uuid, _>("operation_id") != q.original.operation_id
-    {
+    let [row] = rows.as_slice() else {
         return Err(refused());
-    }
+    };
+    require_replay(row.get::<Uuid, _>("attempt_id") == q.original.binding.attempt_id)?;
+    require_replay(row.get::<Uuid, _>("operation_id") == q.original.operation_id)?;
     let original = on_heap(|| {
-        history::load_optional_locked(tx, auth.id(), &q.original.binding, rows[0].get("grant_id"))
+        history::load_optional_locked(tx, auth.id(), &q.original.binding, row.get("grant_id"))
     })
     .await?
     .ok_or_else(|| refused())?;
@@ -79,9 +81,9 @@ async fn verify_registered_replay(
         )
     })
     .await?;
-    if policy::current(state, &original.accepted, &runtime)? != original.provenance.qualification {
-        return Err(refused());
-    }
+    require_replay(
+        policy::current(state, &original.accepted, &runtime)? == original.provenance.qualification,
+    )?;
     let current_registration = on_heap(|| {
         super::registration::admitted_runtime_locked(tx, auth.id(), q.original.identity.boot_id)
     })
@@ -89,11 +91,8 @@ async fn verify_registered_replay(
     let registered =
         on_heap(|| super::closure::history::load_locked(tx, original.provenance.registration_id))
             .await?;
-    if current_registration.semantic_digest != registered.metadata.semantic_digest
-        || current_registration.request.identity != q.original.identity
-    {
-        return Err(refused());
-    }
+    require_replay(current_registration.semantic_digest == registered.metadata.semantic_digest)?;
+    require_replay(current_registration.request.identity == q.original.identity)?;
     Ok(())
 }
 
@@ -113,17 +112,11 @@ async fn fence_replay_project(
     .map_err(db)?;
     let binding: crate::project_bindings::domain::ProjectBinding =
         serde_json::from_value(project.get("binding")).map_err(|_| refused())?;
-    if project.get::<i64, _>("revision") as u64 != original.accepted.proposal.spec.project_revision
-        || !binding.enabled
-        || !binding.eligible_node(&state.config.projects, auth.id())
-    {
-        return Err(refused());
-    }
+    let current_revision = project.get::<i64, _>("revision") as u64;
+    require_replay(current_revision == original.accepted.proposal.spec.project_revision)?;
+    require_replay(binding.enabled && binding.eligible_node(&state.config.projects, auth.id()))?;
     require_same(&binding, &original.provenance.project.project.binding)?;
-    if !enabled_replay_project(state, binding.project_id) {
-        return Err(refused());
-    }
-    Ok(())
+    require_replay(enabled_replay_project(state, binding.project_id))
 }
 
 fn enabled_replay_project(state: &AppState, project: uuid::Uuid) -> bool {
@@ -157,29 +150,27 @@ async fn fence_replay_hot_state(
     let hot: HotState = serde_json::from_value(raw).map_err(|_| refused())?;
     hot.validate_against(&q.original.binding)
         .map_err(|_| refused())?;
-    if !view.holds_task
-        || view.revoked
-        || view.stopped
-        || view.cancellation_id.is_some()
-        || hot.status != Status::Granted
-    {
-        return Err(refused());
-    }
+    require_replay(replay_attempt_active(view) && hot.status == Status::Granted)?;
     require_same(
         hot.grant.as_ref().ok_or_else(|| refused())?,
         &original.receipt.grant,
     )?;
-    if hot.execution_deadline_ms != Some(original.receipt.execution_deadline_ms) {
-        return Err(refused());
-    }
-    let Some(owner) = hot.owner.as_ref() else {
-        return Err(refused());
-    };
-    if owner.guardian_id != q.original.guardian_id
-        || owner.launch_id != q.original.launch_id
-        || owner.reservation_id != q.original.reservation.reservation_id
-    {
-        return Err(refused());
-    }
-    Ok(())
+    require_replay(hot.execution_deadline_ms == Some(original.receipt.execution_deadline_ms))?;
+    let owner = hot.owner.as_ref().ok_or_else(|| refused())?;
+    let live_owner = (owner.guardian_id, owner.launch_id, owner.reservation_id);
+    let replay_owner = (
+        q.original.guardian_id,
+        q.original.launch_id,
+        q.original.reservation.reservation_id,
+    );
+    require_replay(live_owner == replay_owner)
+}
+
+fn replay_attempt_active(view: &crate::execution::authority::AuthorityView) -> bool {
+    view.holds_task && !view.revoked && !view.stopped && view.cancellation_id.is_none()
+}
+
+#[track_caller]
+fn require_replay(condition: bool) -> Result<(), AppError> {
+    if condition { Ok(()) } else { Err(refused()) }
 }
