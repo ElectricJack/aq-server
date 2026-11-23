@@ -1,111 +1,9 @@
 use crate::candidate_core::*;
 use crate::validate::fresh;
 use crate::*;
-use aq_profiles::{SelectionPolicy, UnknownCostPolicy};
-fn global_budget(input: &SelectionInputs, policy: &SelectionPolicy) -> Option<&'static str> {
-    let budget = &input.budget;
-    if input.now_ms >= input.project.expires_at_ms {
-        return Some("project_admission_snapshot_stale");
-    }
-    if !fresh(budget.observed_at_ms, budget.expires_at_ms, input.now_ms) {
-        return Some("lineage_budget_stale");
-    }
-    if budget
-        .attempts_started
-        .saturating_sub(budget.exempt_attempts)
-        >= policy.max_attempts
-    {
-        return Some("lineage_retry_budget_exhausted");
-    }
-    if budget.attempts_started > 0 && budget.last_attempt_id.is_none() {
-        return Some("lineage_predecessor_unknown");
-    }
-    if budget.attempts_started > 0
-        && input.replacement.as_ref().is_none_or(|e| {
-            !fresh(e.observed_at_ms, e.expires_at_ms, input.now_ms)
-                || Some(e.predecessor_attempt_id) != budget.last_attempt_id
-        })
-    {
-        return Some("replacement_stop_retention_reconciliation_required");
-    }
-    None
-}
-fn cost(
-    input: &SelectionInputs,
-    policy: &SelectionPolicy,
-    harness: &InstalledHarness,
-    estimate: Option<&CandidateEstimate>,
-) -> std::result::Result<(), (CandidateState, &'static str)> {
-    let project = &input.project.ceilings;
-    let p = &policy.budget;
-    let budget = &input.budget;
-    let hard = project.require_hard_cost_enforcement || p.require_hard_cost_enforcement;
-    if hard
-        && (harness.limits.hard_cost_enforcer.is_none()
-            || budget.hard_budget_provider.is_none()
-            || budget.accounting != AccountingCompleteness::Complete)
-    {
-        return Err((
-            CandidateState::Unsupported,
-            "hard_cost_enforcement_unqualified",
-        ));
-    }
-    if p.require_complete_accounting && budget.accounting != AccountingCompleteness::Complete {
-        return Err((CandidateState::PolicyDenied, "complete_accounting_required"));
-    }
-    if project.currency.is_some() && p.currency.is_some() && project.currency != p.currency {
-        return Err((CandidateState::PolicyDenied, "budget_currency_mismatch"));
-    }
-    let limit = match (project.cost_limit_microunits, p.max_cost_microunits) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    let currency = project.currency.as_ref().or(p.currency.as_ref());
-    if let Some(limit) = limit {
-        if budget
-            .currency
-            .as_ref()
-            .is_some_and(|known| Some(known) != currency)
-            || estimate.is_some_and(|e| Some(&e.currency) != currency)
-        {
-            return Err((CandidateState::PolicyDenied, "budget_currency_mismatch"));
-        }
-        if budget.spent_microunits.is_some_and(|spent| spent >= limit) {
-            return Err((
-                CandidateState::PolicyDenied,
-                "lineage_cost_budget_exhausted",
-            ));
-        }
-        if budget.spent_microunits.is_none()
-            || estimate.is_none()
-            || budget.accounting != AccountingCompleteness::Complete
-        {
-            if !hard
-                && !p.require_complete_accounting
-                && p.unknown_cost == UnknownCostPolicy::AllowBounded
-            {
-                return Ok(());
-            }
-            return Err((CandidateState::PolicyDenied, "cost_unknown"));
-        }
-        let estimate = estimate.unwrap();
-        if budget.currency.as_ref() != currency || Some(&estimate.currency) != currency {
-            return Err((CandidateState::PolicyDenied, "budget_currency_mismatch"));
-        }
-        if budget
-            .spent_microunits
-            .unwrap()
-            .checked_add(estimate.microunits)
-            .is_none_or(|sum| sum > limit)
-        {
-            return Err((
-                CandidateState::PolicyDenied,
-                "lineage_cost_budget_exhausted",
-            ));
-        }
-    }
-    Ok(())
-}
+mod budget;
+use aq_profiles::SelectionPolicy;
+use budget::{cost, global_budget};
 /// Upper bound for a live offer decision and its server-owned budget snapshot.
 /// Actual input expirations can shorten this window; admission must recheck them.
 pub const OFFER_SELECTION_TTL_MS: u64 = 30_000;
@@ -138,7 +36,7 @@ pub fn select_for_offer(
     if profile.environments.is_empty() {
         profile.environments = &input.project.allowed_environments;
     }
-    finish(&profile, policy, &prepared, input, OFFER_SELECTION_TTL_MS)
+    finish(&profile, policy, &prepared, input)
 }
 /// The evaluation and the sealed result.
 fn finish(
@@ -146,7 +44,6 @@ fn finish(
     policy: &SelectionPolicy,
     launches: &[CoreLaunch<'_>],
     input: &SelectionInputs,
-    ttl_ms: u64,
 ) -> Result<SelectionOutcome> {
     let delivery = |credential: &AuthorizedCredential| credential_delivery(input, credential);
     let cost_check = |harness: &InstalledHarness, estimate: Option<&CandidateEstimate>| {
@@ -186,27 +83,18 @@ fn finish(
             cost: &cost_check,
         },
     )?;
+    seal_outcome(core, input, policy)
+}
+
+fn seal_outcome(
+    core: CoreOutcome,
+    input: &SelectionInputs,
+    policy: &SelectionPolicy,
+) -> Result<SelectionOutcome> {
     let traces = core.traces;
     let resolved = if let Some((choice, credential_revision, index)) = core.selected {
-        let mut expires = input
-            .node
-            .expires_at_ms
-            .min(input.budget.expires_at_ms)
-            .min(input.project.expires_at_ms)
-            .min(input.now_ms.saturating_add(ttl_ms));
-        for binding in &input.node.credential_bindings {
-            if binding.credential_profile == choice.credential_profile
-                && binding.credential_revision == credential_revision
-            {
-                expires = expires.min(binding.expires_at_ms);
-                if choice.credential_delivery.is_some()
-                    && let Some(preparation) = &binding.preparation
-                {
-                    expires = expires.min(preparation.expires_at_ms);
-                }
-            }
-        }
-        expires = influencing_expiry(
+        let expires = binding_expiry(input, &choice, credential_revision);
+        let expires = influencing_expiry(
             &input.observations,
             input.now_ms,
             policy,
@@ -240,43 +128,82 @@ fn finish(
     })
 }
 
+fn binding_expiry(
+    input: &SelectionInputs,
+    choice: &ConcreteChoice,
+    credential_revision: u64,
+) -> u64 {
+    let mut expires = input
+        .node
+        .expires_at_ms
+        .min(input.budget.expires_at_ms)
+        .min(input.project.expires_at_ms)
+        .min(input.now_ms.saturating_add(OFFER_SELECTION_TTL_MS));
+    for binding in &input.node.credential_bindings {
+        if binding.credential_profile == choice.credential_profile
+            && binding.credential_revision == credential_revision
+        {
+            expires = expires.min(binding.expires_at_ms);
+            if choice.credential_delivery.is_some()
+                && let Some(preparation) = &binding.preparation
+            {
+                expires = expires.min(preparation.expires_at_ms);
+            }
+        }
+    }
+    expires
+}
+
 fn credential_delivery(
     input: &SelectionInputs,
     credential: &AuthorizedCredential,
 ) -> Option<Option<CredentialDelivery>> {
     let mut installed = false;
     for binding in &input.node.credential_bindings {
-        if binding.credential_profile != credential.profile
-            || binding.credential_revision != credential.revision
-            || !fresh(binding.observed_at_ms, binding.expires_at_ms, input.now_ms)
-        {
+        if !binding.matches_current(credential, input.now_ms) {
             continue;
         }
         installed |= binding.available;
-        if let (Some(preparation), Some(owner), Some(supported)) = (
-            &binding.preparation,
-            &credential.material_owner,
-            &input.node.material_delivery,
-        ) && preparation.owner == *owner
-            && preparation.credential_profile == credential.profile
-            && preparation.credential_revision == credential.revision
-            && preparation.target == input.project.target
-            && matches!(preparation.target, ExecutionTarget::Worker { .. })
-            && preparation.delivery.adapter == supported.adapter
-            && preparation.delivery.version == 1
-            && supported.version == 1
-            && fresh(
-                preparation.observed_at_ms,
-                preparation.expires_at_ms,
-                input.now_ms,
-            )
-        {
-            return Some(Some(CredentialDelivery::ServerLease {
-                owner: owner.clone(),
-                adapter: supported.adapter.clone(),
-                version: 1,
-            }));
+        if let Some(delivery) = prepared_delivery(binding, credential, input) {
+            return Some(Some(delivery));
         }
     }
     installed.then_some(None)
+}
+
+fn prepared_delivery(
+    binding: &CredentialBinding,
+    credential: &AuthorizedCredential,
+    input: &SelectionInputs,
+) -> Option<CredentialDelivery> {
+    let preparation = binding.preparation.as_ref()?;
+    let owner = credential.material_owner.as_ref()?;
+    let supported = input.node.material_delivery.as_ref()?;
+    (preparation.owner == *owner
+        && preparation.credential_profile == credential.profile
+        && preparation.credential_revision == credential.revision
+        && preparation.target == input.project.target
+        && matches!(preparation.target, ExecutionTarget::Worker { .. })
+        && preparation.supports_delivery(supported, input.now_ms))
+    .then(|| CredentialDelivery::ServerLease {
+        owner: owner.clone(),
+        adapter: supported.adapter.clone(),
+        version: 1,
+    })
+}
+impl ProvisioningReadiness {
+    fn supports_delivery(&self, supported: &DeliveryCapability, now_ms: u64) -> bool {
+        self.delivery.adapter == supported.adapter
+            && self.delivery.version == 1
+            && supported.version == 1
+            && fresh(self.observed_at_ms, self.expires_at_ms, now_ms)
+    }
+}
+
+impl CredentialBinding {
+    fn matches_current(&self, credential: &AuthorizedCredential, now_ms: u64) -> bool {
+        self.credential_profile == credential.profile
+            && self.credential_revision == credential.revision
+            && fresh(self.observed_at_ms, self.expires_at_ms, now_ms)
+    }
 }
