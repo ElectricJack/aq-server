@@ -10,7 +10,8 @@
 //! describe the request body. The server itself refuses a push that updates
 //! any ref but the grant's task ref, from any old head but the lease, or that
 //! is larger than Settings `delivery-limits.max_push_bytes`. It decides nothing
-//! about the result.
+//! about the result. [`serve_read`] forwards a supervisor's fetch, which
+//! the caller has authorized, under a fixed read grant.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 #[cfg(test)]
@@ -468,6 +469,71 @@ where
         let read = tokio::time::timeout_at(deadline, commands(&mut body, &grant)).await;
         body.prefix = Some(read.map_err(|_| Refusal::Unavailable)??);
     }
+    let grant = (
+        grant.base.as_str(),
+        grant.task_ref.as_str(),
+        limits.max_push_bytes,
+    );
+    forward((socket, repository, path), parts, body, grant, deadline).await
+}
+
+/// The grant a supervisor's fetch is forwarded under: aq-git checks only its
+/// syntax, and it constrains nothing but a push, which is never forwarded.
+pub const READ_BASE: &str = ZERO_OID;
+pub const READ_TASK_REF: &str = "refs/heads/aq/supervisor-read";
+const READ_GRANT: (&str, &str, u64) = (READ_BASE, READ_TASK_REF, 1);
+
+/// One `/v1/supervisor/git/<repository>/<path>` fetch, which the caller has
+/// authorized for `repository`, forwarded to aq-git's git socket under
+/// [`READ_GRANT`] within Settings `git_transfer_timeout_ms`. Anything but the
+/// two fetch routes is refused; the body passes through unread and unlimited.
+pub async fn serve_read<B>(
+    pool: &PgPool,
+    socket: &Path,
+    repository: Uuid,
+    path: &str,
+    request: Request<B>,
+) -> Result<Response<Incoming>, Refusal>
+where
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BoxError>,
+{
+    let fetch = matches!(
+        (request.method().as_str(), path, request.uri().query()),
+        ("GET", "info/refs", Some("service=git-upload-pack")) | ("POST", "git-upload-pack", None)
+    );
+    if !fetch {
+        return Err(Refusal::Forbidden("Supervisors can only fetch"));
+    }
+    let (limits, _) = aq_role_settings::delivery_limits(pool)
+        .await
+        .map_err(|_| Refusal::Unavailable)?;
+    let deadline = Instant::now() + Duration::from_millis(limits.git_transfer_timeout_ms);
+    let (parts, body) = request.into_parts();
+    forward(
+        (socket, repository, path),
+        parts,
+        body,
+        READ_GRANT,
+        deadline,
+    )
+    .await
+}
+
+/// Sends the request to aq-git at `/<repository>/<path>` with only the
+/// [`FORWARDED`] client headers and the grant headers of `(base, task_ref,
+/// max_push_bytes)`, and returns aq-git's response with only [`RETURNED`].
+async fn forward<B>(
+    (socket, repository, path): (&Path, Uuid, &str),
+    parts: http::request::Parts,
+    body: B,
+    (base, task_ref, max_push_bytes): (&str, &str, u64),
+    deadline: Instant,
+) -> Result<Response<Incoming>, Refusal>
+where
+    B: Body<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
+{
     let mut uri = format!("/{repository}/{path}");
     if let Some(query) = parts.uri.query() {
         uri = format!("{uri}?{query}");
@@ -480,9 +546,9 @@ where
     }
     out = (out.header(header::HOST, "aq-git"))
         .header("aq-repository", repository.to_string())
-        .header("aq-base", &grant.base)
-        .header("aq-task-ref", &grant.task_ref)
-        .header("aq-max-push-bytes", limits.max_push_bytes.to_string())
+        .header("aq-base", base)
+        .header("aq-task-ref", task_ref)
+        .header("aq-max-push-bytes", max_push_bytes.to_string())
         .header("aq-operation", Uuid::new_v4().to_string());
     let request = out
         .body(body)
