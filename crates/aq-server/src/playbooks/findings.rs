@@ -95,12 +95,11 @@ impl Service {
     pub(super) async fn findings_reconcile(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let intent = command.intent;
         self.findings_profile()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -156,7 +155,7 @@ impl Service {
                         result("conflict")
                     };
                 return self
-                    .settle_fresh(tx, id, revision, intent, &identity, retained)
+                    .settle_fresh(tx, command.retained(&identity), retained)
                     .await;
             }
             if scan.get::<String, _>("partition") == partition
@@ -225,7 +224,7 @@ impl Service {
                     .bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(observation).bind(hash).bind(json!({"outcome":receipt.outcome,"output":receipt.output})).execute(&mut *tx).await?;
             }
         }
-        self.settle_fresh(tx, id, revision, intent, &identity, result(outcome))
+        self.settle_fresh(tx, command.retained(&identity), result(outcome))
             .await
     }
     #[allow(clippy::too_many_arguments)]

@@ -266,7 +266,11 @@ impl MailHost {
                     .await
             } else {
                 self.service
-                    .plugin_dispatch(&self.runtime, id, revision, intent, false)
+                    .plugin_dispatch(
+                        &self.runtime,
+                        super::host_adapters::HostIntent::new(id, revision, intent),
+                        false,
+                    )
                     .await
             }
         });

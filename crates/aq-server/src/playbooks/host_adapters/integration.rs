@@ -299,15 +299,7 @@ impl Service {
             &intent.id,
         )?;
         let output = &result.output;
-        self.seal_event(
-            tx,
-            "aq.integration.changed",
-            event_id,
-            self.operation(intent)?,
-            &intent.id,
-            &output["subject"],
-            json!({"outcome": result.outcome, "reference": output["reference"], "subject": output["subject"]}),
-        )
+        self.seal_event(tx, HostEvent { contract: "aq.integration.changed", event_id, operation: self.operation(intent)?, causation: &intent.id, subject: &output["subject"], payload: json!({"outcome": result.outcome, "reference": output["reference"], "subject": output["subject"]}) })
         .await
     }
 
@@ -316,27 +308,23 @@ impl Service {
     async fn refuse_fresh(
         &self,
         mut tx: Transaction<'_, Postgres>,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
         identity: &str,
         candidate_operation: Uuid,
         binding: Option<&IntegrationBinding>,
         reason: &str,
         output: &Value,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let result = HostResult {
             outcome: "refused".into(),
             output: output.clone(),
         };
         self.record(
             &mut tx,
-            id,
-            revision,
-            intent,
-            identity,
-            &result.outcome,
-            &result.output,
+            command.retained(identity),
+            EffectReceipt::new(&result.outcome, &result.output),
         )
         .await?;
         self.insert_receipt(
@@ -419,12 +407,12 @@ impl Service {
     pub(super) async fn candidate_prepare(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let operation = self.operation(intent)?;
         let reference = format!("{CANDIDATE_REF}{operation}");
         // A candidate is immutable: revision 1 for its whole life.
@@ -441,9 +429,7 @@ impl Service {
             }
             Stage::Fresh => {
                 let refuse = |tx, binding, reason| {
-                    self.refuse_fresh(
-                        tx, id, revision, intent, &identity, operation, binding, reason, &output,
-                    )
+                    self.refuse_fresh(tx, command, &identity, operation, binding, reason, &output)
                 };
                 let Some(port) = &ports.integration else {
                     return refuse(tx, None, "unavailable").await;
@@ -481,8 +467,12 @@ impl Service {
                     sources,
                 };
                 let plan = serde_json::to_value(&call)?;
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-                    .await?;
+                self.record(
+                    &mut tx,
+                    command.retained(&identity),
+                    EffectReceipt::new(PENDING, &plan),
+                )
+                .await?;
                 self.insert_receipt(
                     &mut tx,
                     intent,
@@ -555,12 +545,12 @@ impl Service {
     pub(super) async fn candidate_publish(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let operation = self.operation(intent)?;
         let reference = format!("{PUBLICATION_REF}{operation}");
         let input = &intent.input;
@@ -597,9 +587,7 @@ impl Service {
         let refuse = |tx, binding, reason| {
             self.refuse_fresh(
                 tx,
-                id,
-                revision,
-                intent,
+                command,
                 &identity,
                 candidate_op.unwrap_or(Uuid::nil()),
                 binding,
@@ -676,8 +664,12 @@ impl Service {
             expected_old,
         };
         let plan = serde_json::to_value(&call)?;
-        self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-            .await?;
+        self.record(
+            &mut tx,
+            command.retained(&identity),
+            EffectReceipt::new(PENDING, &plan),
+        )
+        .await?;
         self.insert_receipt(
             &mut tx,
             intent,

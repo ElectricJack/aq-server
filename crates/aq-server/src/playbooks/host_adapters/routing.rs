@@ -3,6 +3,7 @@
 //! are `aq_playbook_domain::host9`.
 use super::*;
 use aq_playbook_domain::host9::{self, Provenance, WorkFacts};
+use aq_playbook_domain::route_effect::{RouteTarget, RoutingFailure};
 use aq_routing::{Route, Source, Written, classify::Options};
 
 /// What the routing commands need of the server besides the graph.
@@ -77,11 +78,10 @@ impl Service {
     pub(super) async fn work_routing(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let intent = command.intent;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -91,7 +91,7 @@ impl Service {
             Stage::Fresh => {}
         }
         let result = self.route_command(&mut tx, intent).await?;
-        self.settle_fresh(tx, id, revision, intent, &identity, result)
+        self.settle_fresh(tx, command.retained(&identity), result)
             .await
     }
 
@@ -109,9 +109,8 @@ impl Service {
         };
         let own = (self.namespace.workspace_id, self.namespace.project_id);
         let (workspace, project) = ports.routing.located(task).await?.unwrap_or(own);
-        if (project != own.1 && !self.installation_routing)
-            || !ports.routing.on_router(project).await?
-        {
+        let outside = project != own.1 && !self.installation_routing;
+        if outside || !ports.routing.on_router(project).await? {
             return Ok(Err("not_on_router"));
         }
         Ok(match ports.graph.node(workspace, task).await? {
@@ -127,7 +126,9 @@ impl Service {
     ) -> Result<HostResult> {
         let (input, name) = (&intent.input, intent.command.name.as_str());
         #[cfg(feature = "delivery_playbook")]
-        if name == "work.read" && self.profile.is_delivery() && intent.command.version == "2.3.0" {
+        let delivery_read = name == "work.read" && intent.command.version == "2.3.0";
+        #[cfg(feature = "delivery_playbook")]
+        if delivery_read && self.profile.is_delivery() {
             return self.read_delivery(tx, input).await;
         }
         let id = text(&input["subject"], "id")?;
@@ -149,65 +150,83 @@ impl Service {
                 host9::read_output(task, version, &facts),
             ));
         }
-        let reasons = &input["reasons"];
         let stored = host9::route_source(&node["metadata"]);
-        let refused = |reason| Ok(host_result("refused", host9::refusal(id, version, reason)));
-        if name == "work.unroutable" && reasons.as_array().is_none_or(Vec::is_empty) {
-            return refused("no_reasons");
+        let target = RouteTarget {
+            id,
+            task,
+            workspace,
+            project,
+            version,
+            input,
+        };
+        if let Some(refusal) = target.refusal(name, asked, stored) {
+            return Ok(refusal);
         }
-        if stored == Some(Source::Owner) {
-            return refused("owner_route");
-        }
-        let stale = || Ok(host_result("stale", host9::task_output(id, version)));
-        if asked != version {
-            return stale();
-        }
-        let at = (workspace, task, version as u64);
         if name == "work.unroutable" {
-            // The task is left unrouted: a router route it still has goes.
-            let mut left = version;
-            if stored == Some(Source::Router) {
-                if routing.write(at, None).await? == Written::Stale {
-                    return stale();
-                }
-                let node = self.ports()?.graph.node(workspace, task).await?;
-                left = node_version(&node.ok_or(Error::Unknown)?)?;
-            }
-            self.route_settled(tx, (task, project), left, "unroutable", input, None)
-                .await?;
-            return Ok(host_result("recorded", host9::task_output(id, left)));
+            return self.clear_route(tx, target, stored).await;
         }
+        self.write_route(tx, target).await
+    }
+
+    /// Clears the router-owned route and records the graph version it left.
+    async fn clear_route(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        target: RouteTarget<'_>,
+        stored: Option<Source>,
+    ) -> Result<HostResult> {
+        let mut version = target.version;
+        if stored == Some(Source::Router) {
+            let ports = self.ports()?;
+            if ports.routing.write(target.location(), None).await? == Written::Stale {
+                return Ok(target.stale());
+            }
+            let node = ports.graph.node(target.workspace, target.task).await?;
+            version = node_version(&node.ok_or(Error::Unknown)?)?;
+        }
+        self.route_settled(tx, target.failure("unroutable", version), None)
+            .await?;
+        Ok(host_result(
+            "recorded",
+            host9::task_output(target.id, version),
+        ))
+    }
+
+    async fn write_route(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        target: RouteTarget<'_>,
+    ) -> Result<HostResult> {
+        let routing = &self.ports()?.routing;
         let options = routing.options().await?;
-        let (artifact_digest, source_revision) = self.deciding_artifact(tx, task).await?;
+        let (artifact_digest, source_revision) = self.deciding_artifact(tx, target.task).await?;
         let from = Provenance {
             artifact_digest: artifact_digest.as_deref(),
             source_revision,
-            ended_attempts: routing.attempts(task).await?.1,
+            ended_attempts: routing.attempts(target.task).await?.1,
         };
-        let Some(route) = host9::route_from_input(input, &options, from) else {
+        let Some(route) = host9::route_from_input(target.input, &options, from) else {
             let offers = host9::options_digest(&options);
             self.route_settled(
                 tx,
-                (task, project),
-                version,
-                "not_offered",
-                input,
+                target.failure("not_offered", target.version),
                 Some(&offers),
             )
             .await?;
-            return refused("not_offered");
+            return Ok(host_result(
+                "refused",
+                host9::refusal(target.id, target.version, "not_offered"),
+            ));
         };
-        if routing.write(at, Some(&route)).await? == Written::Stale {
-            return stale();
+        if routing.write(target.location(), Some(&route)).await? == Written::Stale {
+            return Ok(target.stale());
         }
         // The task has its route: it no longer waits, and nothing more is asked.
         sqlx::query("UPDATE route_needed_emissions SET wanted_at_ms=NULL,outcome=NULL,reasons=NULL WHERE task_id=$1")
-            .bind(task)
-            .execute(&mut **tx)
-            .await?;
+            .bind(target.task).execute(&mut **tx).await?;
         Ok(host_result(
             "routed",
-            host9::routed_output(id, version, &route),
+            host9::routed_output(target.id, target.version, &route),
         ))
     }
 
@@ -321,15 +340,17 @@ impl Service {
     async fn route_settled(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        (task, project): (Uuid, Uuid),
-        version: i64,
-        outcome: &str,
-        input: &Value,
+        failure: RoutingFailure<'_>,
         offers: Option<&str>,
     ) -> Result<()> {
+        let RoutingFailure {
+            at: (task, _),
+            version,
+            outcome,
+            input,
+        } = failure;
         let reasons = &input["reasons"];
-        self.routing_failure((task, project), outcome, version, input)
-            .await?;
+        self.routing_failure(failure).await?;
         // Settled under the artifact that was asked (the row's), not one
         // activated since: a new artifact is a new cause and asks again.
         let (artifact, _) = self.deciding_artifact(tx, task).await?;
@@ -348,13 +369,13 @@ impl Service {
 
     /// W6: a task routing could not route follows the internal work failure
     /// path (a supervisor first, then the owner's attention), once per cause.
-    pub(crate) async fn routing_failure(
-        &self,
-        (task, project): (Uuid, Uuid),
-        outcome: &str,
-        version: i64,
-        input: &Value,
-    ) -> Result<bool> {
+    pub(crate) async fn routing_failure(&self, failure: RoutingFailure<'_>) -> Result<bool> {
+        let RoutingFailure {
+            at: (task, project),
+            outcome,
+            version,
+            input,
+        } = failure;
         use aq_internal_work::{Affected, Purpose, Reason, store};
         let (cause, words) = host9::routing_failure(outcome, version, input);
         let affected = Affected {
@@ -367,13 +388,13 @@ impl Service {
             _ => Reason::NoCandidate,
         };
         let purpose = Purpose::RoutingClassification;
-        let raised = store::record_failure(
-            &self.pool,
-            purpose,
-            &affected,
-            &cause,
+        let raised = store::Queue::at(&self.pool, self.now()?).record_failure(
+            store::FailureCause {
+                purpose,
+                affected: &affected,
+                cause: &cause,
+            },
             (reason, &words),
-            self.now()?,
         );
         Ok(raised.await.map_err(|_| Error::Unknown)?.is_some())
     }
