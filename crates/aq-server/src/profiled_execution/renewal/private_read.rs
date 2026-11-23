@@ -53,14 +53,7 @@ impl Readers {
             std::thread::Builder::new()
                 .name(format!("{name}-{index}"))
                 .spawn(move || {
-                    loop {
-                        let job = match receive.lock() {
-                            Ok(receive) => match receive.recv() {
-                                Ok(job) => job,
-                                Err(_) => return,
-                            },
-                            Err(_) => return,
-                        };
+                    while let Some(job) = next_job(&receive) {
                         let result = reader(&job.input);
                         let _ = job.reply.send(result);
                         // The ownership permit drops only after read+zeroization, even
@@ -93,6 +86,10 @@ impl Readers {
             .map_err(|_| unavailable())?;
         Ok(receive)
     }
+}
+fn next_job(receive: &Mutex<mpsc::Receiver<Job>>) -> Option<Job> {
+    // Release the receiver lock before reading so both workers can run.
+    receive.lock().ok()?.recv().ok()
 }
 fn read(input: &Input) -> Result<Fingerprint, material::MaterialError> {
     let material = material::read_for_lease_from(

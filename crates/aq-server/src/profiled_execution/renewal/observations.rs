@@ -144,42 +144,48 @@ async fn task(state: &AppState, p: &Pinned) -> Result<Task, AppError> {
         expires_at_ms: current.stamp.expires_at_ms,
     })
 }
+async fn private_material(
+    state: &AppState,
+    p: &Pinned,
+) -> Result<(private_read::Fingerprint, u64, u64), AppError> {
+    let started = now(state)?;
+    let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
+    let node = match p.selection.target {
+        aq_selection::ExecutionTarget::Worker { node_id, .. } => node_id,
+        _ => return Err(changed()),
+    };
+    let source = crate::profiled_execution::login_refresh::lease_source(
+        &state.store.pool,
+        &registry,
+        &p.material,
+    )
+    .await?;
+    let fingerprint = private_read::verify(registry, p.material.clone(), node, source).await?;
+    let received = now(state)?;
+    if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
+        return Err(unavailable());
+    }
+    Ok((fingerprint, started, received))
+}
+async fn retained_source(state: &AppState, p: &Pinned) -> Result<RetentionObservation, AppError> {
+    let identity = source::repository_identity(
+        state,
+        p.spec.source.repository_id,
+        p.spec.source.repository_binding_generation,
+    )
+    .await?;
+    if identity != p.source.token().request().logical_identity {
+        return Err(changed());
+    }
+    profiled_base::inspect_retained_for_execution(state, p.source.token(), p.source.fact()).await
+}
 pub async fn collect(state: &AppState, p: &Pinned) -> Result<Observed, AppError> {
-    let file = async {
-        let started = now(state)?;
-        let registry = state.config.intelligence.clone().ok_or_else(unavailable)?;
-        let node = match p.selection.target {
-            aq_selection::ExecutionTarget::Worker { node_id, .. } => node_id,
-            _ => return Err(changed()),
-        };
-        let source = crate::profiled_execution::login_refresh::lease_source(
-            &state.store.pool,
-            &registry,
-            &p.material,
-        )
-        .await?;
-        let fingerprint = private_read::verify(registry, p.material.clone(), node, source).await?;
-        let received = now(state)?;
-        if received < started || received >= started.checked_add(2000).ok_or_else(unavailable)? {
-            return Err(unavailable());
-        }
-        Ok::<_, AppError>((fingerprint, started, received))
-    };
-    let source = async {
-        let identity = source::repository_identity(
-            state,
-            p.spec.source.repository_id,
-            p.spec.source.repository_binding_generation,
-        )
-        .await?;
-        if identity != p.source.token().request().logical_identity {
-            return Err(changed());
-        }
-        profiled_base::inspect_retained_for_execution(state, p.source.token(), p.source.fact())
-            .await
-    };
-    let (binding, task, source, (file, file_started_at_ms, file_received_at_ms)) =
-        tokio::try_join!(binding(state, p), task(state, p), source, file)?;
+    let (binding, task, source, (file, file_started_at_ms, file_received_at_ms)) = tokio::try_join!(
+        binding(state, p),
+        task(state, p),
+        retained_source(state, p),
+        private_material(state, p)
+    )?;
     Ok(Observed {
         binding,
         task,
