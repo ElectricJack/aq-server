@@ -167,8 +167,7 @@ struct Based {
 async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Query(Based { base_version }): Query<Based>,
+    (Path(id), Query(Based { base_version })): (Path<Uuid>, Query<Based>),
     body: Bytes,
 ) -> Result<Response, AppError> {
     let bytes = Arc::new(Zeroizing::new(body.to_vec()));
