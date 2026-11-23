@@ -227,6 +227,7 @@ dependencies = [
  "anyhow",
  "aq-admission 0.1.13",
  "aq-lifecycle-api",
+ "aq-review-protocol",
  "schemars",
  "semver",
  "serde",

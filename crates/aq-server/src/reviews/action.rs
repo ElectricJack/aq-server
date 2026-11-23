@@ -88,6 +88,29 @@ fn project(view: &serde_json::Value) -> std::result::Result<Uuid, ApiError> {
     serde_json::from_value(view["subject"]["project_id"].clone())
         .map_err(|_| ApiError::unavailable())
 }
+fn verify_recorded_outcome(
+    op: &Operation,
+    view: &serde_json::Value,
+    actor: Uuid,
+) -> std::result::Result<(), ApiError> {
+    if op.disposition != Disposition::Confirmed {
+        return Ok(());
+    }
+    let expected = outcome(
+        receipt(view)?.ok_or_else(ApiError::unavailable)?,
+        actor,
+        op.operation_id,
+    );
+    if expected.disposition != Disposition::Confirmed {
+        return Err(ApiError::invalid());
+    }
+    if op.receipt_refs != expected.receipt_refs
+        || op.affected_entities != expected.affected_entities
+    {
+        return Err(ApiError::invalid());
+    }
+    Ok(())
+}
 #[async_trait]
 impl ActionKind for ResolveDecision {
     type Payload = Resolve;
@@ -120,7 +143,11 @@ impl ActionKind for ResolveDecision {
             .map_err(ApiError::from)?;
         let view = self
             .service()?
-            .inspect_subject(user.id, decision, SubjectProfile::Code, Some(&pin))
+            .inspect_subject(
+                ReviewActor::new(user.id, Some(&pin)),
+                decision,
+                SubjectProfile::Code,
+            )
             .await
             .map_err(ApiError::from)?;
         let expected: ArtifactRef = serde_json::from_value(view["request"]["subject"].clone())
@@ -167,7 +194,11 @@ impl ActionKind for ResolveDecision {
                 .map_err(ApiError::from)?;
             let view = self
                 .service()?
-                .inspect_subject(user.id, decision, SubjectProfile::Code, Some(&pin))
+                .inspect_subject(
+                    ReviewActor::new(user.id, Some(&pin)),
+                    decision,
+                    SubjectProfile::Code,
+                )
                 .await
                 .map_err(ApiError::from)?;
             if *scope
@@ -177,19 +208,7 @@ impl ActionKind for ResolveDecision {
             {
                 return Err(ApiError::invalid());
             }
-            if op.disposition == Disposition::Confirmed {
-                let expected = outcome(
-                    receipt(&view)?.ok_or_else(ApiError::unavailable)?,
-                    user.id,
-                    op.operation_id,
-                );
-                if expected.disposition != Disposition::Confirmed
-                    || op.receipt_refs != expected.receipt_refs
-                    || op.affected_entities != expected.affected_entities
-                {
-                    return Err(ApiError::invalid());
-                }
-            }
+            verify_recorded_outcome(op, &view, user.id)?;
         } else {
             // Tombstones contain only scope; require current project access.
             let Scope::Project { project_id } = scope else {
@@ -217,11 +236,9 @@ impl ActionKind for ResolveDecision {
         };
         match service
             .resolve_subject(
-                user.id,
+                ReviewActor::new(user.id, Some(&pin)),
                 &payload.answer(),
-                SubjectProfile::Code,
-                Some(&payload.expected_subject),
-                Some(&pin),
+                ReviewScope::new(SubjectProfile::Code, Some(&payload.expected_subject)),
             )
             .await
         {
@@ -244,7 +261,11 @@ impl ActionKind for ResolveDecision {
             .map_err(ApiError::from)?;
         let view = self
             .service()?
-            .inspect_subject(user.id, decision, SubjectProfile::Code, Some(&pin))
+            .inspect_subject(
+                ReviewActor::new(user.id, Some(&pin)),
+                decision,
+                SubjectProfile::Code,
+            )
             .await
             .map_err(ApiError::from)?;
         Ok(receipt(&view)?.map(|r| outcome(r, user.id, operation.operation_id)))

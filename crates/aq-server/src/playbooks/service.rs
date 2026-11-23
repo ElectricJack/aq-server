@@ -1416,8 +1416,9 @@ impl Service {
         }
         // SAME transaction: current namespace/grant, human owner question and
         // bridge effect receipt. No grant revocation/expiry admission window.
+        let proposal = prepared.proposal(&request);
         reviews
-            .admit_in_tx(&mut tx, self.namespace.owner_user_id, &prepared, &request)
+            .admit_in_tx(&mut tx, self.namespace.owner_user_id, proposal)
             .await
             .map_err(review_error)?;
         self.check_expiry(&mut tx, id).await?;
@@ -1627,10 +1628,12 @@ impl Service {
                 disposition = "too_late";
                 Self::owner(&mut tx, self.namespace.owner_user_id).await?;
             } else {
+                let cancellation =
+                    crate::reviews::Cancellation::at_first_revision(operation, decision);
                 self.reviews
                     .as_ref()
                     .ok_or(Error::Forbidden)?
-                    .cancel_in_tx(&mut tx, self.namespace.owner_user_id, operation, decision)
+                    .cancel_in_tx(&mut tx, self.namespace.owner_user_id, cancellation)
                     .await
                     .map_err(review_error)?;
             }

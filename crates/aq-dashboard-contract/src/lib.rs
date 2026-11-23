@@ -2,6 +2,7 @@
 pub mod action_contract;
 pub mod feedback_contract;
 pub mod result_metadata;
+pub mod review_view;
 pub mod swarm_contract;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
