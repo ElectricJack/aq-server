@@ -16,15 +16,14 @@ from epic_retirement_records import (
 def evidence_data(value):
     require(isinstance(value, dict), "Expected an evidence object")
     kind = value.get("kind")
-    common = ("kind", "approval_revision", "evidence")
-    if kind == "merge":
-        data = merge_details(value, common)
-    elif kind == "ordinary":
-        data = ordinary_details(value, common)
-    elif kind == "integrated":
-        data = integrated_details(value, common)
-    else:
+    decoders = {
+        "merge": merge_details,
+        "ordinary": ordinary_details,
+        "integrated": integrated_details,
+    }
+    if not isinstance(kind, str) or kind not in decoders:
         raise RetirementError("Expected merge, ordinary or integrated evidence")
+    data = decoders[kind](value, ("kind", "approval_revision", "evidence"))
     if kind != "merge":
         require(type(value["passed"]) is bool, "passed must be boolean")
         data["passed"] = value["passed"]
@@ -75,41 +74,43 @@ def integrated_details(value, common):
     }
 
 
+def record_merge(state, merges, event, anchor):
+    repo = event["repository"]
+    require(
+        state["merges"].get(repo) == event.get("supersedes_merge"),
+        f"Merge for {repo} must supersede its current receipt from status",
+    )
+    require(
+        repo not in merges or merges[repo]["sha"] != event["sha"],
+        f"A repair merge for {repo} must have a different SHA",
+    )
+    return {
+        **state,
+        "merges": {**state["merges"], repo: anchor},
+        "ordinary": {
+            key: value for key, value in state["ordinary"].items() if key != repo
+        },
+        "integrated": None,
+    }
+
+
 def apply_evidence(state, current, event, anchor):
     merges, ordinary = current["merges"], current["ordinary"]
     kind = event["kind"]
-    if kind in ("merge", "ordinary"):
-        repo = event["repository"]
-        require(repo in state["repositories"], f"{repo} is not registered")
+    if kind not in ("merge", "ordinary"):
+        commits = validate_integrated(state, event, merges, ordinary)
+        return {**state, "integrated": anchor}, commits
+    repo = event["repository"]
+    require(repo in state["repositories"], f"{repo} is not registered")
     if kind == "merge":
-        require(
-            state["merges"].get(repo) == event.get("supersedes_merge"),
-            f"Merge for {repo} must supersede its current receipt from status",
-        )
-        require(
-            repo not in merges or merges[repo]["sha"] != event["sha"],
-            f"A repair merge for {repo} must have a different SHA",
-        )
-        state = {
-            **state,
-            "merges": {**state["merges"], repo: anchor},
-            "ordinary": {
-                key: value for key, value in state["ordinary"].items() if key != repo
-            },
-            "integrated": None,
-        }
-        commits = {repo: event["sha"]}
-    elif kind == "ordinary":
+        state = record_merge(state, merges, event, anchor)
+    else:
         require(
             repo in merges and merges[repo]["sha"] == event["sha"],
             f"Ordinary build for {repo} must match its recorded merge SHA",
         )
         state = {**state, "ordinary": {**state["ordinary"], repo: anchor}}
-        commits = {repo: event["sha"]}
-    else:
-        commits = validate_integrated(state, event, merges, ordinary)
-        state = {**state, "integrated": anchor}
-    return state, commits
+    return state, {repo: event["sha"]}
 
 
 def merge_shas(merges):
@@ -139,16 +140,21 @@ def validate_integrated(state, data, merges, ordinary):
 
 
 def missing_builds(state, evidence):
-    merges, ordinary = (evidence[key] for key in ("merges", "ordinary"))
     for repo in sorted(state["repositories"]):
-        if repo not in merges:
-            yield f"{repo}: cleanup merge pending"
-            continue
-        build = ordinary.get(repo)
-        if not build or build["sha"] != merges[repo]["sha"]:
-            yield f"{repo}: ordinary build evidence pending"
-        elif not passing_ordinary_build(build):
-            yield f"{repo}: ordinary build or flag removal check failed"
+        problem = build_problem(repo, evidence["merges"], evidence["ordinary"])
+        if problem:
+            yield f"{repo}: {problem}"
+
+
+def build_problem(repo, merges, ordinary):
+    if repo not in merges:
+        return "cleanup merge pending"
+    build = ordinary.get(repo)
+    if not build or build["sha"] != merges[repo]["sha"]:
+        return "ordinary build evidence pending"
+    if not passing_ordinary_build(build):
+        return "ordinary build or flag removal check failed"
+    return None
 
 
 def missing_acceptance(evidence):
