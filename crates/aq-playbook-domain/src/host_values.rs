@@ -19,7 +19,7 @@ pub fn dispatch_result(result: HostResult, intent: &Intent) -> DispatchResult {
     let expired = aq_playbook_host::DELIVERY_ADMISSION_EXPIRED;
     if result.outcome == "expired"
         && result.output["reason"] == expired
-        && aq_playbook_host::ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+        && aq_playbook_host::DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
     {
         return DispatchResult::Rejected {
             reason: expired.into(),

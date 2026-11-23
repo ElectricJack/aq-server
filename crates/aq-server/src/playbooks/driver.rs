@@ -67,14 +67,16 @@ impl DomainHost for MailHost {
             return Some(self.reconcile(intent));
         }
         let (id, revision) = grant_actor(&intent.authority).ok()?;
-        let answer = self
-            .handle
-            .block_on(
-                self.service
-                    .work_decide(&self.runtime, id, revision, intent, true),
-            )
-            .ok()?;
-        Some(host_result(answer, intent))
+        match self.handle.block_on(self.service.work_decide(
+            &self.runtime,
+            id,
+            revision,
+            intent,
+            true,
+        )) {
+            Ok(answer) => Some(host_result(answer, intent)),
+            Err(_) => Some(self.reconcile(intent)),
+        }
     }
     fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
         self.dispatch_adapter(intent, false)

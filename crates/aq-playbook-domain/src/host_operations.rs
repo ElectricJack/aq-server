@@ -51,7 +51,7 @@ pub async fn close_unadmitted_delivery(
     now: i64,
 ) -> Result<Option<HostResult>> {
     if intent.deadline_at_ms > now
-        || !aq_playbook_host::ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+        || !aq_playbook_host::DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
     {
         return Ok(None);
     }

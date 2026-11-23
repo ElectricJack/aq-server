@@ -1076,15 +1076,14 @@ fn delivery_recovery_page(
     now_ms: i64,
 ) -> runner::Result<(Vec<Intent>, Option<String>)> {
     const SCAN: usize = 32;
-    let mut candidates = admitted_delivery(state, ids)?;
+    let mut candidates = reconcilable_delivery(state, ids)?;
     let keys = state.intents.keys_after(after, SCAN);
     let mut expired = 0;
     for key in &keys {
         if ids.contains(key) {
             continue;
         }
-        if let Some(intent) = admitted_delivery(state, std::slice::from_ref(key))?.pop()
-            && ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+        if let Some(intent) = reconcilable_delivery(state, std::slice::from_ref(key))?.pop()
             && intent.deadline_at_ms <= now_ms
         {
             candidates.push(intent);
@@ -1108,13 +1107,27 @@ pub const ASYNC_DELIVERY_COMMANDS: [&str; 6] = [
     "pull_request.close",
 ];
 
-fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
+/// The async delivery operations and the locally fenced delivery effects.
+/// A receipt or pending record commits before any change outside that transaction.
+pub const DELIVERY_RECOVERY_COMMANDS: [&str; 11] = [
+    ASYNC_DELIVERY_COMMANDS[0],
+    ASYNC_DELIVERY_COMMANDS[1],
+    ASYNC_DELIVERY_COMMANDS[2],
+    ASYNC_DELIVERY_COMMANDS[3],
+    ASYNC_DELIVERY_COMMANDS[4],
+    ASYNC_DELIVERY_COMMANDS[5],
+    "work.read",
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+];
+
+fn reconcilable_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
     let mut found = Vec::new();
     for id in ids {
         let Some(intent) = state.intents.get(id).filter(|intent| {
-            let command = intent.command.name.as_str();
-            (matches!(command, "work.complete" | "work.return")
-                || ASYNC_DELIVERY_COMMANDS.contains(&command))
+            DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
                 && (matches!(
                     intent.status,
                     IntentStatus::Dispatched | IntentStatus::Unknown
@@ -1132,8 +1145,7 @@ fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Ve
         let authority = &intent.authority;
         let scope = model::digest(&(&authority.actor, &authority.scope))?;
         if run.status.terminal()
-            || (ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
-                && !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id))
+            || !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id)
             || state.execution_denied.contains(&run.artifact)
             || state
                 .authority_revocations

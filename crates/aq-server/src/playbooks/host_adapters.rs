@@ -199,7 +199,7 @@ impl Service {
         }
     }
 
-    /// Read a retained reply, or close an expired async intent whose effect never began.
+    /// Read a retained reply, or close an expired delivery intent whose effect never began.
     pub async fn host_retained(
         &self,
         id: Uuid,

@@ -309,15 +309,26 @@ async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() 
 
 #[tokio::test]
 async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("branch.publish", "playbook_host_operations").await;
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_read_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("work.read", "playbook_effects").await;
+}
+
+async fn expired_unadmitted_delivery(command: &str, table: &str) {
     let h = delivery(false).await;
     let driver = publication_driver(&h).await;
     let pool = h.pool().await;
-    sqlx::raw_sql("CREATE FUNCTION interrupt_publish_admission() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.command_name='branch.publish' THEN RAISE EXCEPTION 'interrupted admission'; END IF;
-      RETURN NEW; END $$;
-      CREATE TRIGGER interrupt_publish_admission BEFORE INSERT ON playbook_host_operations
-      FOR EACH ROW EXECUTE FUNCTION interrupt_publish_admission();")
-        .execute(&pool).await.unwrap();
+    let interrupt = format!(
+        "CREATE FUNCTION interrupt_delivery_admission() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.command_name='{command}' THEN RAISE EXCEPTION 'interrupted admission'; END IF;
+         RETURN NEW; END $$;
+         CREATE TRIGGER interrupt_delivery_admission BEFORE INSERT ON {table}
+         FOR EACH ROW EXECUTE FUNCTION interrupt_delivery_admission();"
+    );
+    sqlx::raw_sql(&interrupt).execute(&pool).await.unwrap();
     let mut blocked = None;
     for _ in 0..20 {
         driver.quantum().await.unwrap();
@@ -339,7 +350,7 @@ async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run()
         .effects
         .items
         .into_iter()
-        .find(|e| e.command == "branch.publish")
+        .find(|e| e.command == command)
         .unwrap();
     let deadline = original.deadline_at_ms.unwrap();
     assert_eq!(original.status, "unknown");
@@ -354,10 +365,12 @@ async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run()
         "admission rolled back atomically"
     );
 
-    sqlx::query("DROP TRIGGER interrupt_publish_admission ON playbook_host_operations")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(&format!(
+        "DROP TRIGGER interrupt_delivery_admission ON {table}"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     for _ in 0..4 {
         driver.quantum().await.unwrap();
     }
@@ -385,13 +398,14 @@ async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run()
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM playbook_host_operations WHERE command_name='branch.publish'",
+            "SELECT count(DISTINCT run_id) FROM playbook_effects WHERE command_name=$1 AND status<>'expired'",
         )
+        .bind(command)
         .fetch_one(&pool)
         .await
         .unwrap(),
         1,
-        "only the fresh run admitted publication"
+        "only the fresh run admitted the interrupted command"
     );
     let runs = driver
         .inspect_runs(h.f.actor, Default::default())
