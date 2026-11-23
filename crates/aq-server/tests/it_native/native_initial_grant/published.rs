@@ -89,6 +89,33 @@ async fn ungranted(c: &Prepared) {
         0
     );
 }
+
+#[tokio::test]
+async fn liveness_grants_a_ready_task_beyond_the_first_page() {
+    use aq_admission::control::{ControlReply, decode_reply};
+
+    let case = native_offer::setup().await;
+    case.mode.store(11, Ordering::SeqCst);
+    *case.metadata.lock().unwrap() = json!({"aq:role":"missing-role"});
+    let (status, body) = native_offer::poll_offered(&case).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}");
+    };
+    assert_eq!(page.offers.len(), 1, "{body}");
+    let offer = page.offers.remove(0);
+    assert_eq!(
+        offer.offered.offer.manifest.bindings.task_id,
+        case.second_task
+    );
+    let c = setup_from(case, offer).await;
+    let grant = grant(&c).await.unwrap();
+    grant
+        .validate_for(&c.request, &c.plan, &c.offer, grant.delivery.nonce)
+        .unwrap();
+}
+
 #[tokio::test]
 async fn actual_published_prepare_is_atomic_and_replays_original_versions_after_hot_record_changes()
 {

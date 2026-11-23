@@ -93,11 +93,10 @@ pub(super) async fn observe(
     {
         return Err(refused());
     }
-    // Same bounded profile as publication. A task no longer present in this
-    // finite readiness page refuses; no unbounded scan or stale fallback.
-    // Read stamps and provenance validation share the current owner clock.
+    // Revalidate the task with Graph's readiness predicate independently of its
+    // position in the paginated queue.
     let ready = graph
-        .scheduling_ready_current(input.spec.task.workspace_id, 8, None, state.clock.as_ref())
+        .scheduling_task_ready_current(&input.spec.task, state.clock.as_ref())
         .await
         .map_err(read_error)?;
     // Spec 0014 §5.5: the offer was made for the task's effective role. A

@@ -834,16 +834,9 @@ async fn offers(
         if !aq_machine_control::offer_assembly::deliverable(&snapshot, now(state)?) {
             return Ok(page);
         }
-        let ready = on_heap(|| {
-            graph.scheduling_ready_current(
-                record.binding.graph_workspace_id,
-                8,
-                None,
-                state.clock.as_ref(),
-            )
-        })
-        .await
-        .map_err(|_| refused())?;
+        let ready = on_heap(|| graph.scheduling_task_ready_current(&task, state.clock.as_ref()))
+            .await
+            .map_err(|_| refused())?;
         if canonical(
             &ready
                 .items

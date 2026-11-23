@@ -133,12 +133,14 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 let path = uri.path().strip_prefix(&prefix).unwrap();
                 let value = match path {
                     "ready" | "nodes" => json!({"items":[node],"next_cursor":null}),
+                    path if path.starts_with("ready/") => json!({"items":[node],"next_cursor":null}),
                     path if path.ends_with("/context") => json!({"node":node,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false}),
                     _ => node,
                 };
                 return ([("X-AQ-Graph-API-Version", "1")], axum::Json(value));
             }
-            if (mode == 6 && uri.path().ends_with("/ready"))
+            let exact = uri.path().rsplit_once("/ready/").map(|(_, id)| id);
+            if (mode == 6 && (uri.path().ends_with("/ready") || exact.is_some()))
                 || (mode == 12 && uri.path().ends_with("/context"))
             {
                 // Exact external-observation boundary; normal fixtures never arm
@@ -175,6 +177,17 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 };
                 let next = (mode == 11 && !behind).then_some("page-2");
                 json!({"items":items,"next_cursor":next})
+            } else if let Some(id) = exact {
+                let item = if [3, 8, 10].contains(&mode) {
+                    None
+                } else if id == task.to_string() {
+                    Some(node)
+                } else if id == second_task.to_string() && [7, 11].contains(&mode) {
+                    Some(second)
+                } else {
+                    None
+                };
+                json!({"items":item.into_iter().collect::<Vec<_>>(),"next_cursor":null})
             } else if uri.path().ends_with("/context")
                 && uri.path().contains(&second_task.to_string())
             {
