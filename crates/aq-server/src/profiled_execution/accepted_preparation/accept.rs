@@ -14,13 +14,13 @@ use uuid::Uuid;
 pub async fn accept(
     state: &AppState,
     auth: &AuthenticatedNode,
-    q: &AcceptRequest,
+    request: &AcceptRequest,
     nonce: Uuid,
 ) -> Result<AcceptedDelivery, AppError> {
     if !super::policy::enabled(state) {
         return Err(refused());
     }
-    if nonce.is_nil() || q.original.identity.node_id != auth.id() {
+    if nonce.is_nil() || request.original.identity.node_id != auth.id() {
         return Err(refused());
     }
     let received = now(state)?;
@@ -28,56 +28,34 @@ pub async fn accept(
     let mut tx = begin(state).await?;
     require_schema(&mut tx).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
-    let p = super::authority::proposal_locked(&mut tx, &q.original.acceptance.binding).await?;
-    q.validate_for(&p).map_err(|_| refused())?;
+    let proposal =
+        super::authority::proposal_locked(&mut tx, &request.original.acceptance.binding).await?;
+    request.validate_for(&proposal).map_err(|_| refused())?;
     let runtime = super::super::registration::current_runtime_locked(
         state,
         &mut tx,
         auth.id(),
-        q.original.identity.boot_id,
+        request.original.identity.boot_id,
     )
     .await?;
     let (_, policy) = policy_for(state, &runtime.runtime, &runtime.qualification)?;
-    if q.hold.source_profile != policy.source_profile
-        || q.hold.source_disk_bytes != policy.source_disk_bytes
-        || q.hold.resources.disk_bytes > 68_719_476_736
+    if request.hold.source_profile != policy.source_profile
+        || request.hold.source_disk_bytes != policy.source_disk_bytes
+        || request.hold.resources.disk_bytes > 68_719_476_736
     {
         return Err(refused());
     }
 
-    if let Some(old) = super::authority::accepted_locked(&mut tx, &p, q).await? {
-        super::authority::live_locked(state, &mut tx, auth, &p, q, &old).await?;
-        crate::delegated_permits::handoff::issue_locked(state, &mut tx, auth, q, &old).await?;
-        let reply = delivery(state, q, &p, old, nonce)?;
+    if let Some(reply) = replay_locked(state, &mut tx, auth, &proposal, request, nonce).await? {
         tx.commit().await.map_err(db)?;
         return Ok(reply);
     }
-    let before = super::super::preparation::locked(state, &mut tx, auth, &q.original).await?;
+    let before = super::super::preparation::locked(state, &mut tx, auth, &request.original).await?;
     if before.hot.status != Status::Offered {
         return Err(refused());
     }
-    super::authority::current_policy_locked(state, &mut tx, auth, &p).await?;
-    let timely = before.offer_expiry.min(
-        received
-            .checked_add(q.original.reservation_remaining_ms)
-            .ok_or_else(|| refused())?,
-    );
-    let expiry = received
-        .checked_add(
-            q.hold
-                .maximum_preparation_ms
-                .min(p.policy.maximum_preparation_ms),
-        )
-        .ok_or_else(|| refused())?
-        .min(
-            p.original
-                .offered
-                .artifacts
-                .iter()
-                .map(|a| a.retain_until_ms)
-                .min()
-                .ok_or_else(|| refused())?,
-        );
+    super::authority::current_policy_locked(state, &mut tx, auth, &proposal).await?;
+    let (timely, expiry) = acceptance_window(received, before.offer_expiry, request, &proposal)?;
     if now(state)? >= timely || expiry <= received {
         return Err(refused());
     }
@@ -90,8 +68,11 @@ pub async fn accept(
     .await?;
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
     let selection = before.selection.clone();
-    let binding = q.original.acceptance.binding.clone();
-    let lease_id = Uuid::new_v5(&q.original.operation_id, binding.attempt_id.as_bytes());
+    let binding = request.original.acceptance.binding.clone();
+    let lease_id = Uuid::new_v5(
+        &request.original.operation_id,
+        binding.attempt_id.as_bytes(),
+    );
     let head = super::super::login_refresh::newest_source(
         &state.store.pool,
         &registry,
@@ -123,10 +104,11 @@ pub async fn accept(
     .map_err(|_| refused())?;
     let mut tx = begin(state).await?;
     require_schema(&mut tx).await?;
-    let after = super::super::preparation::locked(state, &mut tx, auth, &q.original).await?;
-    super::authority::current_policy_locked(state, &mut tx, auth, &p).await?;
-    let stored = super::authority::proposal_locked(&mut tx, &q.original.acceptance.binding).await?;
-    if stored.digest().map_err(|_| refused())? != p.digest().map_err(|_| refused())?
+    let after = super::super::preparation::locked(state, &mut tx, auth, &request.original).await?;
+    super::authority::current_policy_locked(state, &mut tx, auth, &proposal).await?;
+    let stored =
+        super::authority::proposal_locked(&mut tx, &request.original.acceptance.binding).await?;
+    if stored.digest().map_err(|_| refused())? != proposal.digest().map_err(|_| refused())?
         || before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()?
     {
         return Err(refused());
@@ -137,18 +119,22 @@ pub async fn accept(
         return Err(refused());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    let registry_at_accept = registry_at_accept(state, &mut tx, &p).await?;
-    if let Some(old) = super::authority::accepted_locked(&mut tx, &p, q).await? {
-        super::authority::live_locked(state, &mut tx, auth, &p, q, &old).await?;
-        crate::delegated_permits::handoff::issue_locked(state, &mut tx, auth, q, &old).await?;
-        let reply = delivery(state, q, &p, old, nonce)?;
+    let registry_at_accept = registry_at_accept(state, &mut tx, &proposal).await?;
+    if let Some(reply) = replay_locked(state, &mut tx, auth, &proposal, request, nonce).await? {
         tx.commit().await.map_err(db)?;
         return Ok(reply);
     }
     if after.hot.status != Status::Offered {
         return Err(refused());
     }
-    let conflict:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2) OR EXISTS(SELECT 1 FROM profiled_v2_accepts WHERE node_id=$1 AND operation_id=$2)").bind(auth.id()).bind(q.original.operation_id).fetch_one(&mut *tx).await.map_err(db)?;
+    let conflict: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_execution_receipts WHERE node_id=$1 AND operation_id=$2) OR EXISTS(SELECT 1 FROM profiled_v2_accepts WHERE node_id=$1 AND operation_id=$2)",
+    )
+        .bind(auth.id())
+        .bind(request.original.operation_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
     if conflict {
         return Err(refused());
     }
@@ -156,63 +142,155 @@ pub async fn accept(
     material.issued_at_ms = time;
     material.validate().map_err(|_| refused())?;
     let mut hot = after.hot;
-    let row=sqlx::query("SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1").bind(q.original.acceptance.binding.attempt_id).fetch_one(&mut *tx).await.map_err(db)?;
+    let row = sqlx::query(
+        "SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1",
+    )
+        .bind(request.original.acceptance.binding.attempt_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
     let receipt = AcceptedReceipt {
         schema_version: 2,
-        negotiation: q.negotiation.clone(),
-        operation_id: q.original.operation_id,
-        request_digest: q.digest().map_err(|_| refused())?,
-        lease: accepted_lease(q, &p, &material, time, expiry, lease_id, registry_at_accept)?,
+        negotiation: request.negotiation.clone(),
+        operation_id: request.original.operation_id,
+        request_digest: request.digest().map_err(|_| refused())?,
+        lease: accepted_lease(
+            request,
+            &proposal,
+            &material,
+            time,
+            expiry,
+            lease_id,
+            registry_at_accept,
+        )?,
         versions: Versions {
             record_revision: row.get::<i64, _>("record_revision") as u64 + 1,
             authority_revision: row.get::<i64, _>("authority_revision") as u64 + 1,
             grant_revision: row.get::<i64, _>("grant_revision") as u64,
         },
     };
-    receipt.validate_for(q, &p).map_err(|_| refused())?;
-    let request_value = value(q)?;
+    receipt
+        .validate_for(request, &proposal)
+        .map_err(|_| refused())?;
+    let request_value = value(request)?;
     let receipt_value = value(&receipt)?;
     let material_value = value(&material)?;
-    let bytes:i32=sqlx::query_scalar("SELECT octet_length($1::jsonb::text)+octet_length($2::jsonb::text)+octet_length($3::jsonb::text)").bind(&request_value).bind(&receipt_value).bind(&material_value).fetch_one(&mut *tx).await.map_err(db)?;
+    let bytes: i32 = sqlx::query_scalar(
+        "SELECT octet_length($1::jsonb::text)+octet_length($2::jsonb::text)+octet_length($3::jsonb::text)",
+    )
+        .bind(&request_value)
+        .bind(&receipt_value)
+        .bind(&material_value)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
     quota(&mut tx, auth.id(), bytes as u64, false).await?;
     if now(state)? >= timely || now(state)? >= expiry {
         return Err(refused());
     }
-    super::super::closure::history::for_attempt_locked(&mut tx, &q.original.acceptance.binding)
-        .await?;
+    super::super::closure::history::for_attempt_locked(
+        &mut tx,
+        &request.original.acceptance.binding,
+    )
+    .await?;
     let owner = LaunchOwner {
-        guardian_id: q.original.guardian_id,
-        launch_id: q.original.launch_id,
-        reservation_id: q.original.reservation.reservation_id,
+        guardian_id: request.original.guardian_id,
+        launch_id: request.original.launch_id,
+        reservation_id: request.original.reservation.reservation_id,
     };
     hot.status = Status::Preparing;
     hot.owner = Some(owner.clone());
-    hot.preparation_operation_id = Some(q.original.operation_id);
-    insert_material(&mut tx, auth, q, &material).await?;
-    sqlx::query("INSERT INTO profiled_v2_accepts(attempt_id,node_id,operation_id,request,request_digest,receipt,receipt_digest,lease_id,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)").bind(q.original.acceptance.binding.attempt_id).bind(auth.id()).bind(q.original.operation_id).bind(request_value).bind(q.digest().map_err(|_|refused())?.as_str()).bind(receipt_value).bind(receipt.digest().map_err(|_|refused())?.as_str()).bind(material.lease_id).bind(time as i64).bind(expiry as i64).execute(&mut *tx).await.map_err(db)?;
+    hot.preparation_operation_id = Some(request.original.operation_id);
+    insert_material(&mut tx, auth, request, &material).await?;
+    sqlx::query(
+        "INSERT INTO profiled_v2_accepts(attempt_id,node_id,operation_id,request,request_digest,receipt,receipt_digest,lease_id,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+    )
+        .bind(request.original.acceptance.binding.attempt_id)
+        .bind(auth.id())
+        .bind(request.original.operation_id)
+        .bind(request_value)
+        .bind(request.digest().map_err(|_| refused())?.as_str())
+        .bind(receipt_value)
+        .bind(receipt.digest().map_err(|_| refused())?.as_str())
+        .bind(material.lease_id)
+        .bind(time as i64)
+        .bind(expiry as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-        .bind(q.original.acceptance.binding.attempt_id)
+        .bind(request.original.acceptance.binding.attempt_id)
         .bind(value(&hot)?)
         .execute(&mut *tx)
         .await
         .map_err(db)?;
     super::super::journal::record_reserved(
         &mut tx,
-        &q.original.acceptance.binding,
+        &request.original.acceptance.binding,
         &owner,
-        q.original.journal_revision,
-        &q.original.journal_digest,
+        request.original.journal_revision,
+        &request.original.journal_digest,
     )
     .await?;
-    crate::delegated_permits::handoff::issue_locked(state, &mut tx, auth, q, &receipt).await?;
-    let reply = delivery(state, q, &p, receipt, nonce)?;
+    crate::delegated_permits::handoff::issue_locked(state, &mut tx, auth, request, &receipt)
+        .await?;
+    let reply = delivery(state, request, &proposal, receipt, nonce)?;
     tx.commit().await.map_err(db)?;
     Ok(reply)
 }
+fn acceptance_window(
+    received: u64,
+    offer_expiry: u64,
+    request: &AcceptRequest,
+    proposal: &super::phase::Proposal,
+) -> Result<(u64, u64), AppError> {
+    let timely = offer_expiry.min(
+        received
+            .checked_add(request.original.reservation_remaining_ms)
+            .ok_or_else(|| refused())?,
+    );
+    let expiry = received
+        .checked_add(
+            request
+                .hold
+                .maximum_preparation_ms
+                .min(proposal.policy.maximum_preparation_ms),
+        )
+        .ok_or_else(|| refused())?
+        .min(
+            proposal
+                .original
+                .offered
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.retain_until_ms)
+                .min()
+                .ok_or_else(|| refused())?,
+        );
+    Ok((timely, expiry))
+}
+
+/// Both replay points recheck live authority and handoff before stamping delivery.
+async fn replay_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    proposal: &super::phase::Proposal,
+    request: &AcceptRequest,
+    nonce: Uuid,
+) -> Result<Option<AcceptedDelivery>, AppError> {
+    let Some(receipt) = super::authority::accepted_locked(tx, proposal, request).await? else {
+        return Ok(None);
+    };
+    super::authority::live_locked(state, tx, auth, proposal, request, &receipt).await?;
+    crate::delegated_permits::handoff::issue_locked(state, tx, auth, request, &receipt).await?;
+    delivery(state, request, proposal, receipt, nonce).map(Some)
+}
+
 fn delivery(
     state: &AppState,
-    q: &AcceptRequest,
-    p: &super::phase::Proposal,
+    request: &AcceptRequest,
+    proposal: &super::phase::Proposal,
     receipt: AcceptedReceipt,
     nonce: Uuid,
 ) -> Result<AcceptedDelivery, AppError> {
@@ -225,22 +303,102 @@ fn delivery(
             clock: DeliveryClock::new(now(state)?, expires).map_err(|_| refused())?,
         },
     };
-    d.validate_for(q, p, nonce).map_err(|_| refused())?;
+    d.validate_for(request, proposal, nonce)
+        .map_err(|_| refused())?;
     Ok(d)
 }
 async fn insert_material(
     tx: &mut Transaction<'_, Postgres>,
     auth: &AuthenticatedNode,
-    q: &AcceptRequest,
-    m: &MaterialLease,
+    request: &AcceptRequest,
+    material: &MaterialLease,
 ) -> Result<(), AppError> {
-    let b = &q.original.acceptance.binding;
-    sqlx::query("INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,'admitted',$13,$14)").bind(m.lease_id).bind(q.original.operation_id).bind(q.digest().map_err(|_|refused())?.as_str()).bind(auth.id()).bind(q.original.identity.boot_id).bind(b.attempt_id).bind(b.offer_id).bind(format!("{}@{}",m.credential_profile.id.as_str(),m.credential_profile.version.as_str())).bind(m.credential_revision as i64).bind(m.purpose.as_str()).bind(value(m)?).bind(Digest::of(Uuid::new_v4().as_bytes()).as_str()).bind(m.issued_at_ms as i64).bind(m.expires_at_ms as i64).execute(&mut **tx).await.map_err(db)?;
+    let binding = &request.original.acceptance.binding;
+    sqlx::query(
+        "INSERT INTO admission_material_leases(lease_id,operation_id,request_digest,node_id,boot_id,prospective_attempt_id,admitted_attempt_id,offer_id,credential_identity,credential_revision,purpose,lease,verifier,state,issued_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,'admitted',$13,$14)",
+    )
+        .bind(material.lease_id)
+        .bind(request.original.operation_id)
+        .bind(request.digest().map_err(|_| refused())?.as_str())
+        .bind(auth.id())
+        .bind(request.original.identity.boot_id)
+        .bind(binding.attempt_id)
+        .bind(binding.offer_id)
+        .bind(format!(
+            "{}@{}",
+            material.credential_profile.id.as_str(),
+            material.credential_profile.version.as_str()
+        ))
+        .bind(material.credential_revision as i64)
+        .bind(material.purpose.as_str())
+        .bind(value(material)?)
+        .bind(Digest::of(Uuid::new_v4().as_bytes()).as_str())
+        .bind(material.issued_at_ms as i64)
+        .bind(material.expires_at_ms as i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
     sqlx::query("INSERT INTO profiled_launch_materials(attempt_id,lease_id) VALUES($1,$2)")
-        .bind(b.attempt_id)
-        .bind(m.lease_id)
+        .bind(binding.attempt_id)
+        .bind(material.lease_id)
         .execute(&mut **tx)
         .await
         .map_err(db)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (AcceptRequest, phase::Proposal) {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../aq-admission/artifacts/preparation-v2.fixture.json"
+        ))
+        .unwrap();
+        (
+            serde_json::from_value(fixture["accept"].clone()).unwrap(),
+            serde_json::from_value(fixture["proposal"].clone()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn acceptance_and_preparation_have_independent_deadlines_with_original_caps() {
+        let (mut request, mut proposal) = fixture();
+        assert_eq!(
+            acceptance_window(1500, 2000, &request, &proposal).unwrap(),
+            (2000, 31500)
+        );
+        request.original.reservation_remaining_ms = 100;
+        assert_eq!(
+            acceptance_window(1500, 2000, &request, &proposal).unwrap(),
+            (1600, 31500)
+        );
+        request.hold.maximum_preparation_ms = 1000;
+        assert_eq!(
+            acceptance_window(1500, 2000, &request, &proposal).unwrap(),
+            (1600, 2500)
+        );
+        proposal.policy.maximum_preparation_ms = 500;
+        assert_eq!(
+            acceptance_window(1500, 2000, &request, &proposal).unwrap(),
+            (1600, 2000)
+        );
+        proposal.original.offered.artifacts[0].retain_until_ms = 1700;
+        assert_eq!(
+            acceptance_window(1500, 2000, &request, &proposal).unwrap(),
+            (1600, 1700)
+        );
+    }
+
+    #[test]
+    fn acceptance_window_refuses_overflow_and_missing_retention() {
+        let (mut request, mut proposal) = fixture();
+        request.original.reservation_remaining_ms = u64::MAX;
+        assert!(acceptance_window(1500, 2000, &request, &proposal).is_err());
+        request.original.reservation_remaining_ms = 0;
+        assert!(acceptance_window(u64::MAX - 1, u64::MAX, &request, &proposal).is_err());
+        proposal.original.offered.artifacts.clear();
+        assert!(acceptance_window(1500, 2000, &request, &proposal).is_err());
+    }
 }
