@@ -111,23 +111,35 @@ pub(super) async fn work(
         true => aq_role_settings::refusals::shown(&r.pool, id).await,
         false => None,
     };
-    let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    #[cfg(feature = "delivery_playbook")]
-    let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => {
-            let namespace = s
-                .config
-                .playbooks
-                .as_deref()
-                .filter(|pb| {
-                    pb.profile.is_delivery()
-                        && (pb.installation_routing || pb.namespace.project_id == p)
-                })
-                .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-            aq_human_work::delivery::waiting(&r.pool, namespace, h, a.requested).await
-        }
+    let graph_wait = match (&hold, open) {
+        (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
         _ => None,
-    });
+    };
+    #[cfg(feature = "delivery_playbook")]
+    let graph_wait = aq_human_work::delivery::completion_wait(
+        graph_wait,
+        match (&hold, open) {
+            (Some(h), true) if h.stopped => {
+                let namespace = s
+                    .config
+                    .playbooks
+                    .as_deref()
+                    .filter(|pb| {
+                        pb.profile.is_delivery()
+                            && (pb.installation_routing || pb.namespace.project_id == p)
+                    })
+                    .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
+                aq_human_work::delivery::waiting(&r.pool, namespace, h, a.requested).await
+            }
+            _ => None,
+        },
+    );
+    let held = held
+        .into_iter()
+        .chain(role_hold)
+        .chain(level_hold)
+        .chain(offer_hold)
+        .chain(graph_wait);
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),

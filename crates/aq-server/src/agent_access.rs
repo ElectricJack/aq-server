@@ -49,7 +49,22 @@ pub(crate) async fn settlement_post(
     workspace: Uuid,
     bytes: Vec<u8>,
 ) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
-    mutations::post_human_creation(rt, workspace, bytes)
+    settlement_transport(rt, workspace, bytes, false).await
+}
+pub(crate) async fn settlement_lookup(
+    rt: &Runtime,
+    workspace: Uuid,
+    bytes: Vec<u8>,
+) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
+    settlement_transport(rt, workspace, bytes, true).await
+}
+async fn settlement_transport(
+    rt: &Runtime,
+    workspace: Uuid,
+    bytes: Vec<u8>,
+    lookup: bool,
+) -> std::result::Result<(StatusCode, Value), crate::error::AppError> {
+    mutations::post_human_creation(rt, workspace, bytes, lookup)
         .await
         .map_err(|_| {
             crate::error::AppError::UpdatesUnavailable(

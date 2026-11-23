@@ -130,6 +130,26 @@ impl ClosureSweep {
 }
 const REWORK_SWEEP_EVERY: u32 = 15;
 
+/// Playbook completions are replayed through their grant and intent owner.
+/// Only default-policy Graph effects belong in this independent sweep.
+pub async fn check_graph_completion(
+    state: &AppState,
+    after: &mut Option<Uuid>,
+) -> Result<(), AppError> {
+    let report = aq_profiled_state::graph_completion::next_due(
+        &state.store.pool,
+        *after,
+        (state.clock)().timestamp_millis(),
+    )
+    .await
+    .map_err(crate::error::db)?;
+    *after = report;
+    if let Some(report) = report {
+        super::settlement::settle_after_record(state, report).await?;
+    }
+    Ok(())
+}
+
 /// Central-only housekeeping. No new scheduler, external service, or worker
 /// connection is required. Shutdown can cancel an uncertain close; its atomic
 /// owner receipt, not this cursor, remains authoritative on the next startup.
@@ -140,6 +160,7 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
     let mut sweep = Sweep::default();
     let mut rework = ReworkSweep::default();
     let mut closures = ClosureSweep::default();
+    let mut graph_completion = None;
     let mut terminations = crate::agent_access::human::task_termination::Sweep::default();
     let mut tick_count: u32 = 0;
     let mut ticks = tokio::time::interval(Duration::from_secs(1));
@@ -156,6 +177,15 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
         }
         if tick_count.is_multiple_of(REWORK_SWEEP_EVERY) {
+            tokio::select! {
+                biased;
+                _ = stop.wait_for(|value| *value) => return,
+                outcome = tokio::time::timeout(Duration::from_secs(8), check_graph_completion(&state, &mut graph_completion)) => {
+                    if let Ok(Err(error)) = outcome {
+                        tracing::debug!(?error, "Graph completion check deferred");
+                    }
+                }
+            }
             tokio::select! {
                 biased;
                 _ = stop.wait_for(|value| *value) => return,

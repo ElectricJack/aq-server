@@ -3,6 +3,17 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+pub fn completion_wait(graph: Option<Value>, delivery: Option<Value>) -> Option<Value> {
+    if delivery
+        .as_ref()
+        .is_some_and(|wait| wait["code"] == "delivery_settlement_grant_required")
+    {
+        delivery
+    } else {
+        graph.or(delivery)
+    }
+}
+
 /// Show the current delivery decision or the policy that can decide an open result.
 pub async fn waiting(
     pool: &PgPool,

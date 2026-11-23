@@ -328,6 +328,56 @@ pub async fn attempt_hold(
     Ok(state.map(|state| Hold::from_authority(attempt, &state)))
 }
 
+/// The original Graph operation stays visible while AQ verifies its receipt.
+pub async fn graph_completion_wait(pool: &PgPool, hold: &Hold) -> Option<Value> {
+    let (result, operation, reason, next): (Uuid, Uuid, Option<String>, Option<i64>) = sqlx::query_as(
+        "SELECT report_id,operation_id,reason,next_graph_check_at_ms FROM profiled_auto_settlements \
+         WHERE attempt_id=$1 AND (disposition IN ('prepared','possible') \
+           OR (disposition='held' AND reason IN ('graph_version_conflict','graph_completion_receipt_conflict'))) \
+         ORDER BY created_at_ms DESC,report_id LIMIT 1",
+    )
+    .bind(hold.attempt_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let (code, owner, wake, message) = match reason.as_deref() {
+        Some("graph_completion_identity_required") => (
+            "graph_completion_identity_required",
+            "aq_operator",
+            "original_graph_service_restored",
+            "Restore the Graph origin and actor pinned to this completion. AQ will recheck the original operation.",
+        ),
+        Some("graph_completion_permission_required") => (
+            "graph_completion_permission_required",
+            "graph_workspace_admin",
+            "graph_mutation_permission_restored",
+            "Restore mutation permission for the configured Graph service actor. AQ will recheck the original completion operation.",
+        ),
+        Some("graph_version_conflict") => (
+            "graph_version_conflict",
+            "project_owner",
+            "current_task_version_reconciled",
+            "Graph refused this completion at the task version AQ originally admitted. Review the current task and result.",
+        ),
+        Some("graph_completion_receipt_conflict") => (
+            "graph_completion_receipt_conflict",
+            "graph_operator",
+            "original_graph_receipt_reconciled",
+            "Graph recorded a different request for this operation key. Reconcile the original Graph receipt.",
+        ),
+        _ => (
+            "graph_completion_receipt_pending",
+            "aq_graph_settlement",
+            "scheduled_graph_receipt_check",
+            "AQ will check Graph for the original completion receipt before resending the same request.",
+        ),
+    };
+    Some(
+        json!({"code":code,"attempt_id":hold.attempt_id,"result_id":result,"operation_id":operation,
+        "message":message,"blocker_owner":owner,"wake_condition":wake,"next_check_at_ms":next}),
+    )
+}
+
 /// Whether the latest confirmed default-policy settlement of `task` found no
 /// file change (owner ruling 4b).
 pub async fn completed_without_changes(pool: &sqlx::PgPool, task: Uuid) -> bool {

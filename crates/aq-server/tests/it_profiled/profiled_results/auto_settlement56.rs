@@ -5,7 +5,10 @@ use super::*;
 use aq_server::profiled_execution::settlement::{self, AutoDisposition, AutoSettlement};
 use axum::{Json, Router, routing::post};
 use serde_json::Value;
-use std::sync::{Mutex, atomic::AtomicUsize};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicUsize},
+};
 
 fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions::Definition {
     let body = format!(
@@ -19,6 +22,13 @@ fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions:
     .unwrap()
 }
 
+struct GraphRecovery {
+    write_status: AtomicU16,
+    lookup_status: AtomicU16,
+    has_receipt: AtomicBool,
+    lookups: Mutex<Vec<Value>>,
+}
+
 pub(crate) struct AutoEnv {
     pub(crate) f: Fixture,
     pub(crate) report: ResultReport,
@@ -29,6 +39,7 @@ pub(crate) struct AutoEnv {
     expected_version: u64,
     pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
+    recovery: Arc<GraphRecovery>,
     _directory: tempfile::TempDir,
     #[cfg(feature = "delivery_playbook")]
     _task_ref: Option<super::pushed_ref::TaskRef>,
@@ -228,35 +239,63 @@ async fn finish_auto_env(
     assert_eq!(graph["node"]["version"], json!(expected_version));
     let writes = Arc::new(AtomicUsize::new(0));
     let bodies = Arc::new(Mutex::new(Vec::new()));
-    let (wc, bc) = (writes.clone(), bodies.clone());
-    // The human work read's Context of the task (spec 0016 section 7's task read).
-    let read = graph.clone();
-    let app = Router::new().route(
-        "/v1/workspaces/{workspace}/nodes/{id}/context",
-        axum::routing::get(move || {
-            std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(read.clone())))
-        }),
+    let recovery = Arc::new(GraphRecovery {
+        write_status: AtomicU16::new(graph_status.as_u16()),
+        lookup_status: AtomicU16::new(200),
+        has_receipt: AtomicBool::new(false),
+        lookups: Mutex::default(),
+    });
+    let mut node = graph["node"].clone();
+    node["task_state"] = json!("completed");
+    node["version"] = json!(node["version"].as_u64().unwrap() + 1);
+    node["content_revision"] = json!(node["content_revision"].as_u64().unwrap() + 1);
+    let receipt = json!({"change_set_id":"00000000-0000-0000-0000-000000000052","results":[node]});
+    let (wc, bc, writer, committed) = (
+        writes.clone(),
+        bodies.clone(),
+        recovery.clone(),
+        receipt.clone(),
     );
-    let app = app.route(
-        "/v1/workspaces/{workspace}/mutations",
-        post(move |Json(body): Json<Value>| {
-            let (g, wc, bc) = (graph.clone(), wc.clone(), bc.clone());
-            async move {
+    let reader = recovery.clone();
+    let app = Router::new()
+        .route(
+            "/v1/workspaces/{workspace}/nodes/{id}/context",
+            axum::routing::get(move || {
+                std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(graph.clone())))
+            }),
+        )
+        .route(
+            "/v1/workspaces/{workspace}/mutations",
+            post(move |Json(body): Json<Value>| {
                 wc.fetch_add(1, Ordering::SeqCst);
                 bc.lock().unwrap().push(body);
-                let mut node = g["node"].clone();
-                node["task_state"] = json!("completed");
-                node["version"] = json!(node["version"].as_u64().unwrap() + 1);
-                node["content_revision"] = json!(node["content_revision"].as_u64().unwrap() + 1);
-                let reply = if graph_status.is_success() {
-                    json!({"change_set_id":"00000000-0000-0000-0000-000000000052","results":[node]})
+                let code =
+                    axum::http::StatusCode::from_u16(writer.write_status.load(Ordering::SeqCst))
+                        .unwrap();
+                let reply = if code.is_success() {
+                    writer.has_receipt.store(true, Ordering::SeqCst);
+                    committed.clone()
                 } else {
-                    json!({"error":"version_conflict"})
+                    json!({"error":"write unavailable"})
                 };
-                (graph_status, [("X-AQ-Graph-API-Version", "1")], Json(reply))
-            }
-        }),
-    );
+                std::future::ready((code, [("X-AQ-Graph-API-Version", "1")], Json(reply)))
+            }),
+        )
+        .route(
+            "/v1/workspaces/{workspace}/mutations/receipt",
+            post(move |Json(body): Json<Value>| {
+                reader.lookups.lock().unwrap().push(body);
+                let code =
+                    axum::http::StatusCode::from_u16(reader.lookup_status.load(Ordering::SeqCst))
+                        .unwrap();
+                let reply = if code.is_success() && reader.has_receipt.load(Ordering::SeqCst) {
+                    receipt.clone()
+                } else {
+                    Value::Null
+                };
+                std::future::ready((code, [("X-AQ-Graph-API-Version", "1")], Json(reply)))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -285,6 +324,7 @@ async fn finish_auto_env(
         expected_version,
         writes,
         bodies,
+        recovery,
         _directory: directory,
         #[cfg(feature = "delivery_playbook")]
         _task_ref: task_ref,
@@ -477,6 +517,117 @@ async fn accepted_result_completes_task_with_expected_version() {
     assert_eq!(
         settlement_row(&env.f, env.report.report_id).await.0,
         "confirmed"
+    );
+}
+
+async fn pending_completion() -> (AutoEnv, Arc<AtomicI64>, AutoSettlement) {
+    let mut env = auto_env("not_required", axum::http::StatusCode::SERVICE_UNAVAILABLE).await;
+    env.check(env.source, &env.checkpoint, &env.validator, "passed")
+        .await;
+    let clock = Arc::new(AtomicI64::new((env.f.state.clock)().timestamp_millis()));
+    let source = clock.clone();
+    env.f.state.clock = Arc::new(move || {
+        chrono::DateTime::from_timestamp_millis(source.load(Ordering::SeqCst)).unwrap()
+    });
+    let initial = env.settle().await;
+    assert_eq!(initial.disposition, AutoDisposition::Possible);
+    assert_eq!(initial.dispatch_count, 1);
+    assert!(env.holds_task().await);
+    (env, clock, initial)
+}
+
+#[tokio::test]
+async fn automatic_sweep_recovers_exact_graph_receipt_after_the_old_send_limit() {
+    let (env, clock, initial) = pending_completion().await;
+    let pool = env.f.db.pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('aq.settlement_owner','aq.settlement-owner.auto.1',true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_auto_settlements SET dispatch_count=8 WHERE report_id=$1")
+        .bind(env.report.report_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    env.recovery.has_receipt.store(true, Ordering::SeqCst);
+    let mut cursor = None;
+    aq_server::profiled_execution::expiry::check_graph_completion(&env.f.state, &mut cursor)
+        .await
+        .unwrap();
+    assert!(cursor.is_none());
+    assert!(env.recovery.lookups.lock().unwrap().is_empty());
+    clock.store(initial.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    aq_server::profiled_execution::expiry::check_graph_completion(&env.f.state, &mut cursor)
+        .await
+        .unwrap();
+    assert_eq!(cursor, Some(env.report.report_id));
+    let confirmed = env.settle().await;
+    assert_eq!(confirmed.disposition, AutoDisposition::Confirmed);
+    assert_eq!(confirmed.operation_id, initial.operation_id);
+    assert_eq!(confirmed.dispatch_count, 8);
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *env.recovery.lookups.lock().unwrap(),
+        *env.bodies.lock().unwrap()
+    );
+    assert!(!env.holds_task().await);
+}
+
+#[tokio::test]
+async fn graph_permission_restoration_replays_only_the_original_completion() {
+    let (env, clock, initial) = pending_completion().await;
+    env.recovery.lookup_status.store(403, Ordering::SeqCst);
+    clock.store(initial.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    let blocked = env.settle().await;
+    assert_eq!(
+        blocked.reason.as_deref(),
+        Some("graph_completion_permission_required")
+    );
+    assert_eq!(blocked.operation_id, initial.operation_id);
+    assert!(env.holds_task().await);
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1);
+    let attempt = env.report.binding.attempt_id;
+    let hold = aq_human_work::attempt_hold(&env.f.db.pool().await, &json!(attempt))
+        .await
+        .unwrap()
+        .unwrap();
+    let wait = aq_human_work::graph_completion_wait(&env.f.db.pool().await, &hold)
+        .await
+        .unwrap();
+    assert_eq!(wait["blocker_owner"], "graph_workspace_admin");
+    assert_eq!(
+        wait["next_check_at_ms"],
+        json!(blocked.next_graph_check_at_ms)
+    );
+
+    env.recovery.lookup_status.store(200, Ordering::SeqCst);
+    env.recovery.write_status.store(200, Ordering::SeqCst);
+    clock.store(blocked.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    let (first, second) = tokio::join!(env.settle(), env.settle());
+    assert!(matches!(
+        first.disposition,
+        AutoDisposition::Confirmed | AutoDisposition::Possible
+    ));
+    assert!(matches!(
+        second.disposition,
+        AutoDisposition::Confirmed | AutoDisposition::Possible
+    ));
+    let confirmed = env.settle().await;
+    assert_eq!(confirmed.disposition, AutoDisposition::Confirmed);
+    assert_eq!(confirmed.operation_id, initial.operation_id);
+    assert_eq!(confirmed.dispatch_count, 2);
+    assert!(!env.holds_task().await);
+    let bodies = env.bodies.lock().unwrap();
+    let lookups = env.recovery.lookups.lock().unwrap();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(lookups.len(), 2);
+    assert!(
+        bodies
+            .iter()
+            .chain(lookups.iter())
+            .all(|body| body == &bodies[0])
     );
 }
 

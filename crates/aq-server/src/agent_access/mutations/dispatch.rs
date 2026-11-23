@@ -177,35 +177,43 @@ async fn post(rt: &Runtime, mapped: &Value) -> Result<(StatusCode, Value)> {
         _ => return Err(Error("internal")),
     };
     let bytes = canonical(&mapped["payload"])?;
-    post_body(rt, workspace, route, bytes).await
+    post_body(rt, workspace, route, bytes, None).await
 }
 pub(super) async fn post_mutation_bytes(
     rt: &Runtime,
     workspace: Uuid,
     bytes: Vec<u8>,
+    lookup: bool,
 ) -> Result<(StatusCode, Value)> {
-    post_body(rt, workspace, "mutations", bytes).await
+    let route = if lookup {
+        "mutations/receipt"
+    } else {
+        "mutations"
+    };
+    post_body(rt, workspace, route, bytes, rt.mutation_actor.as_deref()).await
 }
 async fn post_body(
     rt: &Runtime,
     workspace: Uuid,
     route: &str,
     bytes: Vec<u8>,
+    expected_actor: Option<&str>,
 ) -> Result<(StatusCode, Value)> {
     let url = rt
         .url
         .join(&format!("/v1/workspaces/{workspace}/{route}"))
         .map_err(|_| Error("internal"))?;
-    let mut response = rt
+    let mut request = rt
         .client
         .post(url)
         .bearer_auth(&rt.token)
         .header("X-AQ-Graph-API-Version", "1")
         .header("content-type", "application/json")
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|_| Error("overloaded"))?;
+        .body(bytes);
+    if let Some(actor) = expected_actor {
+        request = request.header("X-AQ-Graph-Expected-Actor", actor);
+    }
+    let mut response = request.send().await.map_err(|_| Error("overloaded"))?;
     if response
         .headers()
         .get("X-AQ-Graph-API-Version")
