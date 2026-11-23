@@ -65,9 +65,7 @@ async fn actual_qualified_private_owner_records_provisionability_and_exact_repla
 async fn compatible_revisions_preserve_epoch_but_new_legacy_and_restore_create_barriers() {
     let c = setup().await;
     record(&c, &c.request).await;
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let mut next = next_inventory(&c.request);
     record(&c, &next).await;
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 2));
     let legacy = json!({"operation_id":Uuid::new_v4(),"boot_id":c.request.identity.boot_id,"sequence":4,"ttl_ms":30_000,"qualifications":c.request.qualifications,"credentials":[]});
@@ -381,9 +379,7 @@ async fn snapshot_row_lock_timeout_is_retryable_not_internal() {
         .execute(&mut *holder)
         .await
         .unwrap();
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let next = next_inventory(&c.request);
     let error = inventory::record(&c.c.env.env.state, &auth(&c).await, &next)
         .await
         .unwrap_err();
@@ -443,21 +439,7 @@ async fn inventory_v2_node_lock_timeout_is_a_retryable_503() {
         .unwrap();
 }
 
-/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
-/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
-/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
-/// kept it while it waited on the attempt row, so inventory-v2's node lock
-/// timed out. Here a worker write holds the attempt row while the read loops.
-/// A locking reader (the old read's loader) still fails the write; the Swarm
-/// read takes no row lock, so every write records and every read answers.
-#[tokio::test]
-async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
-    let mut c = setup().await;
-    let (status, _, body) = post_inventory(&c, &c.request).await;
-    assert_eq!(status, 200, "{body}");
-    c.c.request.inventory_sequence = c.request.sequence;
-    // Poll may return an empty page after 750 ms while its assembly continues
-    // in the background. Wait for the actual offer before testing row locks.
+async fn wait_for_offer(c: &Case) {
     let mut last_body = Value::Null;
     let offered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -481,6 +463,24 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
         offered.is_ok(),
         "initial poll did not publish the fixture attempt: {last_body}"
     );
+}
+
+/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
+/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
+/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
+/// kept it while it waited on the attempt row, so inventory-v2's node lock
+/// timed out. Here a worker write holds the attempt row while the read loops.
+/// A locking reader (the old read's loader) still fails the write; the Swarm
+/// read takes no row lock, so every write records and every read answers.
+#[tokio::test]
+async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
+    let mut c = setup().await;
+    let (status, _, body) = post_inventory(&c, &c.request).await;
+    assert_eq!(status, 200, "{body}");
+    c.c.request.inventory_sequence = c.request.sequence;
+    // Poll may return an empty page after 750 ms while its assembly continues
+    // in the background. Wait for the actual offer before testing row locks.
+    wait_for_offer(&c).await;
     let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
     let node = c.request.identity.node_id;
     let attempt: Uuid = sqlx::query_scalar(

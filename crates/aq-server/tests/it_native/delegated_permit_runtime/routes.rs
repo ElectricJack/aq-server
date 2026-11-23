@@ -2,16 +2,15 @@
 use super::*;
 use serde_json::{Value, json};
 
-pub(super) async fn exercise(
+fn route_bodies(
     f: &phase_refresh_fixture::Prepared,
     upgraded: &PermitUpgradeResponse,
     started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
     revision: u64,
-) {
+) -> Vec<(&'static str, Value)> {
     use aq_accounting::wire::*;
     use aq_admission::transport::*;
     let p = &upgraded.permit;
-    let state = &f.c.env.env.state;
     let identity = WorkerIdentity {
         node_id: p.binding.node.node_id,
         boot_id: p.binding.node.boot_id,
@@ -102,7 +101,7 @@ pub(super) async fn exercise(
     let upload = json!({"version":1,"capability":"aq.terminal-relay","peer":peer,"exchange_id":Uuid::new_v4(),"cursor":0,"receipts":[],"epoch_receipts":[],"resize_receipts":[],"fence_acks":[],"frames":[],"snapshots":[],"gaps":[]});
     let register = json!({"version":1,"capability":"aq.terminal-relay","operation_id":Uuid::new_v4(),"peer":peer,"terminal":terminal,"expected_authority_revision":1,"input_mode":"finite_v1","advertised_capabilities":capabilities});
     let attempt = json!({"attempt_id":binding.attempt_id,"session_id":Uuid::new_v4(),"generation":binding.assignment_generation});
-    let bodies: Vec<(&str, Value)> = vec![
+    vec![
         ("/v1/worker/profiled/material", json!(material)),
         ("/v1/worker/profiled/artifact", json!(artifact)),
         (
@@ -141,7 +140,19 @@ pub(super) async fn exercise(
             "/v2/worker/messages/ack",
             json!({"identity":identity,"attempt":attempt,"operation_id":Uuid::new_v4(),"delivery_id":Uuid::new_v4(),"disposition":"received_by_node"}),
         ),
-    ];
+    ]
+}
+
+pub(super) async fn exercise(
+    f: &phase_refresh_fixture::Prepared,
+    upgraded: &PermitUpgradeResponse,
+    started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
+    revision: u64,
+) {
+    let bodies = route_bodies(f, upgraded, started, revision);
+    let p = &upgraded.permit;
+    let state = &f.c.env.env.state;
+    let binding = &started.original.binding;
     let mut h = headers(p);
     h.insert("aq-phase-terminal-api-version", "1".parse().unwrap());
     h.insert("aq-source-api-version", "1".parse().unwrap());

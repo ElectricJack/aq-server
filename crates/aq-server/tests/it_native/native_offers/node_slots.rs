@@ -34,26 +34,7 @@ pub(super) async fn register(c: &Case, slots: u32, boot: Option<Uuid>) -> Regist
     request
 }
 async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
-    let response = aq_server::build_worker_router(c.env.env.state.clone())
-        .oneshot(
-            axum::http::Request::post("/v1/worker/profiled/poll")
-                .header("authorization", format!("Bearer {}", c.env.env.credential))
-                .header("content-type", "application/json")
-                .header("aq-node-slot", slot.to_string())
-                .body(axum::body::Body::from(
-                    serde_json::to_vec(&c.request).unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
-    let ControlReply::Poll(page) = decode_reply(&bytes).unwrap() else {
-        panic!("poll reply")
-    };
-    page.offers
+    poll_status(c, slot).await.1
 }
 /// Polls until `slot` is offered work, as a worker does. A poll waits only 750 ms
 /// for offer assembly (`producer::workflow::poll`); slower assembly (a loaded CI

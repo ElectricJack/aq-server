@@ -214,39 +214,11 @@ async fn native_cancel_after_start_stops_and_settles_cancelled() {
 
     let hot = native_started::state(&f, &start).await;
     assert_eq!(hot["stop"]["kind"], "running");
-    let renew = aq_admission::transport::Renew {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: aq_admission::transport::WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        binding: start.binding.clone(),
-        grant_id: start.grant_id,
-        reservation_id: start.reservation_id,
-        guardian_id: start.guardian_id,
-        launch_id: start.launch_id,
-        journal_revision: start.journal_revision + 1,
-    };
-    let response = aq_server::build_worker_router(f.state.clone())
-        .oneshot(
-            Request::post("/v1/worker/profiled/renew")
-                .header("authorization", format!("Bearer {}", f.credential))
-                .header("aq-delivery-nonce", Uuid::new_v4().to_string())
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&renew).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 409);
-    let reply: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
-    assert_eq!(reply["body"]["code"], "cancelled");
+    let identity = assert_renewal_cancelled(&f, &start).await;
     let poll = aq_admission::transport::Poll {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
-        identity: renew.identity.clone(),
+        identity,
         inventory_sequence: 1,
         available: aq_admission::Resources {
             slots: 0,
@@ -303,6 +275,42 @@ async fn native_cancel_after_start_stops_and_settles_cancelled() {
         .1,
         receipt
     );
+}
+
+async fn assert_renewal_cancelled(
+    f: &common::profiled::Fixture,
+    start: &aq_admission::started::Request,
+) -> aq_admission::transport::WorkerIdentity {
+    let renew = aq_admission::transport::Renew {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: aq_admission::transport::WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        binding: start.binding.clone(),
+        grant_id: start.grant_id,
+        reservation_id: start.reservation_id,
+        guardian_id: start.guardian_id,
+        launch_id: start.launch_id,
+        journal_revision: start.journal_revision + 1,
+    };
+    let response = aq_server::build_worker_router(f.state.clone())
+        .oneshot(
+            Request::post("/v1/worker/profiled/renew")
+                .header("authorization", format!("Bearer {}", f.credential))
+                .header("aq-delivery-nonce", Uuid::new_v4().to_string())
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&renew).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let reply: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(reply["body"]["code"], "cancelled");
+    renew.identity
 }
 
 #[tokio::test]
