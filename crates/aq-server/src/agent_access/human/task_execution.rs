@@ -1,5 +1,5 @@
 //! Explicit retry over the B4 replacement owner.
-use super::graph_actions::{admit, current, lookup};
+use super::graph_actions::{Claim, OwnerRead, current};
 use super::*;
 use crate::dashboard_api::{
     actions::{self, ActionKind, ActionRequest, Outcome, Registry, existing},
@@ -29,16 +29,20 @@ async fn authorize(
     request: &ActionRequest,
     p: &Retry,
 ) -> std::result::Result<Scope, ApiError> {
-    admit(
+    OwnerRead {
         state,
         runtime,
         user,
+    }
+    .admit(
         request,
-        p.operation_id,
-        p.project_id,
-        "task",
-        &p.expected_version,
-        &[],
+        Claim {
+            operation: p.operation_id,
+            project: p.project_id,
+            entity: "task",
+            expected: &p.expected_version,
+            tasks: &[],
+        },
     )
     .await?;
     // M2 (owner decision 2026-11-13): a new retry of a task AQ holds for what happened to it (a
@@ -173,7 +177,13 @@ impl ActionKind for TaskRetry {
         scope: &Scope,
         operation: Option<&actions::Operation>,
     ) -> std::result::Result<(), ApiError> {
-        lookup(state, &self.0, user, scope, operation, "task").await
+        OwnerRead {
+            state,
+            runtime: &self.0,
+            user,
+        }
+        .lookup(scope, operation, "task")
+        .await
     }
     async fn execute(
         &self,

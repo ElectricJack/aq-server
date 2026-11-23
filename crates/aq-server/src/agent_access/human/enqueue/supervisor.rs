@@ -259,17 +259,9 @@ fn agent_registry(
     workspace: Option<Uuid>,
 ) -> ApiResult<Registry> {
     let mut registry = Registry::default();
-    let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
     macro_rules! adapter {
         ($payload:ty) => {
-            GraphAction::<$payload>::for_agent(
-                state,
-                attempt,
-                task,
-                project,
-                guards.clone(),
-                workspace,
-            )
+            GraphAction::<$payload>::for_agent(state, ids, guards.clone(), workspace)
         };
     }
     registry.register(Single(adapter!(SingleGraph)))?;
