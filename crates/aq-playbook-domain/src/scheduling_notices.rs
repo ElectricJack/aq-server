@@ -98,6 +98,51 @@ impl sqlx::FromRow<'_, PgRow> for Wait {
     }
 }
 
+impl Wait {
+    fn context(&self) -> String {
+        let Self {
+            project,
+            task,
+            attempt,
+            reason,
+            version,
+            report,
+            ..
+        } = self;
+        let mut body = format!(
+            "AQ scheduling needs attention. Project {project}, task {task}, attempt {attempt}. Hold reason: {reason}."
+        );
+        if let Some(v) = version {
+            body.push_str(&format!(" Attempt task revision: {v}."));
+        }
+        if let Some(id) = report {
+            body.push_str(&format!(" Result: {id}."));
+        }
+        if self.delivery {
+            body.push_str(if reason == "returns_exhausted" {
+                " Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt."
+            } else {
+                " The delivery playbook held this result without a recorded supervisor notification. Inspect the latest result and its PR checks."
+            });
+        }
+        body
+    }
+
+    fn append_guidance(&self, body: &mut String, can_retry: bool) {
+        if can_retry && let Some(url) = &self.pr {
+            body.push_str(&format!(" Pull request: {url}."));
+        }
+        body.push_str(" Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.");
+        if can_retry {
+            let request = serde_json::json!({
+                "operation_id":"<fresh UUID>", "reason":"<why another attempt is justified>",
+                "params":{"project_id":self.project,"task_id":self.task,"expected_version":"<current version from task.work>"}
+            });
+            body.push_str(&format!(" If a replacement attempt is justified, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
+        }
+    }
+}
+
 async fn notice_body(db: &mut PgConnection, wait: &Wait) -> Result<String> {
     let Wait {
         project,
@@ -106,27 +151,9 @@ async fn notice_body(db: &mut PgConnection, wait: &Wait) -> Result<String> {
         identity,
         reason,
         report,
-        version,
-        pr,
-        delivery,
         ..
     } = wait;
-    let mut body = format!(
-        "AQ scheduling needs attention. Project {project}, task {task}, attempt {attempt}. Hold reason: {reason}."
-    );
-    if let Some(v) = version {
-        body.push_str(&format!(" Attempt task revision: {v}."));
-    }
-    if let Some(id) = *report {
-        body.push_str(&format!(" Result: {id}."));
-    }
-    if *delivery {
-        body.push_str(if reason == "returns_exhausted" {
-            " Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt."
-        } else {
-            " The delivery playbook held this result without a recorded supervisor notification. Inspect the latest result and its PR checks."
-        });
-    }
+    let mut body = wait.context();
     if reason == "branch_publication_refused" {
         if let Some(detail) = crate::delivery_store::publication_refusal(db, *identity).await? {
             body.push(' ');
@@ -154,17 +181,7 @@ async fn notice_body(db: &mut PgConnection, wait: &Wait) -> Result<String> {
             body.push_str(" Compare this head and outcome with the previous attempt when deciding whether a bounded retry is justified.");
         }
     }
-    if can_retry && let Some(url) = pr {
-        body.push_str(&format!(" Pull request: {url}."));
-    }
-    body.push_str(" Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.");
-    if can_retry {
-        let request = serde_json::json!({
-            "operation_id":"<fresh UUID>", "reason":"<why another attempt is justified>",
-            "params":{"project_id":project,"task_id":task,"expected_version":"<current version from task.work>"}
-        });
-        body.push_str(&format!(" If a replacement attempt is justified, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
-    }
+    wait.append_guidance(&mut body, can_retry);
     // The facts every hold notice carries; the log tail goes last, so
     // that the instructions above are never what is cut.
     crate::hold_notice::complete(db, body, *task, *report).await
@@ -219,4 +236,91 @@ pub async fn notify<E: std::fmt::Debug>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wait() -> Wait {
+        Wait {
+            project: Uuid::from_u128(1),
+            task: Uuid::from_u128(2),
+            attempt: Uuid::from_u128(3),
+            identity: Uuid::from_u128(4),
+            key: String::new(),
+            reason: "returns_exhausted".into(),
+            report: None,
+            version: None,
+            pr: Some("https://example.test/pr/7".into()),
+            delivery: false,
+        }
+    }
+
+    #[test]
+    fn notice_context_preserves_identifiers_and_delivery_explanations() {
+        let mut wait = wait();
+        let context = format!(
+            "AQ scheduling needs attention. Project {}, task {}, attempt {}. Hold reason: returns_exhausted.",
+            wait.project, wait.task, wait.attempt
+        );
+        assert_eq!(wait.context(), context);
+        wait.version = Some("12".into());
+        wait.report = Some(Uuid::from_u128(5));
+        let context = format!(
+            "{context} Attempt task revision: 12. Result: {}.",
+            wait.report.unwrap()
+        );
+        assert_eq!(wait.context(), context);
+        wait.delivery = true;
+        assert_eq!(
+            wait.context(),
+            format!(
+                "{context} Delivery reached its repair-return limit without a recorded supervisor notification. Inspect the latest result and its PR checks before authorizing another attempt."
+            )
+        );
+        wait.reason = "policy_hold".into();
+        assert_eq!(
+            wait.context(),
+            format!(
+                "{} The delivery playbook held this result without a recorded supervisor notification. Inspect the latest result and its PR checks.",
+                context.replace("returns_exhausted", "policy_hold")
+            )
+        );
+    }
+
+    #[test]
+    fn retry_guidance_preserves_evidence_and_the_command_request() {
+        let mut wait = wait();
+        let guidance = " Use task.work and task.history with the project and task IDs above. Check the current claim, readiness and prior attempts. Resolve the reported cause or escalate the decision with these identifiers.";
+        let mut body = "Recorded evidence.".to_owned();
+        wait.append_guidance(&mut body, false);
+        assert_eq!(body, format!("Recorded evidence.{guidance}"));
+        for pr in [Some("https://example.test/pr/7"), None] {
+            wait.pr = pr.map(str::to_owned);
+            let mut body = "Recorded evidence.".to_owned();
+            wait.append_guidance(&mut body, true);
+            let (prefix, request) = body.split_once(" If a replacement attempt is justified, submit task.retry with this command request: ").unwrap();
+            let pr = pr.map_or(String::new(), |url| format!(" Pull request: {url}."));
+            assert_eq!(prefix, format!("Recorded evidence.{pr}{guidance}"));
+            let (request, suffix) = request.split_once(". Replace the placeholders").unwrap();
+            let request: serde_json::Value = serde_json::from_str(request).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({
+                    "operation_id": "<fresh UUID>",
+                    "reason": "<why another attempt is justified>",
+                    "params": {
+                        "project_id": wait.project,
+                        "task_id": wait.task,
+                        "expected_version": "<current version from task.work>"
+                    }
+                })
+            );
+            assert_eq!(
+                suffix,
+                " and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."
+            );
+        }
+    }
 }
