@@ -3,7 +3,6 @@ use super::{
     AuthorityError, AuthorityView,
     cache::{Facts, Key},
 };
-use crate::execution::profiled::Stop;
 pub use aq_profiled_state::hot::*;
 use aq_session_protocol::LaunchBinding;
 use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
@@ -123,22 +122,16 @@ pub(super) async fn load_adopted_locked(
         common.get("holds_task"),
     )?;
     view.require_record(node, attempt_id, &common)?;
-    if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
-        if !common.get::<bool, _>("holds_task") {
-            return Err(AuthorityError::Revoked);
-        }
-        super::require_current_boot(tx, &view.identity).await?;
-        view.active_at(
-            (state.ok_or(AuthorityError::Unsupported)?.clock)()
-                .timestamp_millis()
-                .max(0) as u64,
-        )?;
+    // Preserve the compact path's early task-claim refusal before boot checks.
+    if matches!(policy, Policy::GraphActive | Policy::TerminalActive) && !view.holds_task {
+        return Err(AuthorityError::Revoked);
     }
-    if matches!(policy, Policy::TerminalActive)
-        && (view.execution_deadline_ms.is_none() || !matches!(view.stop, Some(Stop::Running)))
-    {
-        return Err(AuthorityError::Unsupported);
-    }
+    view.require_policy(tx, policy, || {
+        Ok((state.ok_or(AuthorityError::Unsupported)?.clock)()
+            .timestamp_millis()
+            .max(0) as u64)
+    })
+    .await?;
     Ok(Some(view))
 }
 

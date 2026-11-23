@@ -153,6 +153,28 @@ impl AuthorityView {
         }
         Ok(())
     }
+    /// Called after record verification and locks; sample the clock only after
+    /// checking the current boot, including on the compact authority path.
+    async fn require_policy(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        policy: Policy,
+        clock: impl Fn() -> Result<u64>,
+    ) -> Result<()> {
+        if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
+            require_current_boot(tx, &self.identity).await?;
+            self.active_at(clock()?)?;
+        }
+        if matches!(policy, Policy::TerminalActive)
+            && (self.kind != Kind::ProfiledV1
+                || self.execution_deadline_ms.is_none()
+                || !matches!(self.stop, Some(super::profiled::Stop::Running)))
+        {
+            return Err(AuthorityError::Unsupported);
+        }
+        Ok(())
+    }
+
     pub fn require_session(&self, expected: &SessionIdentity) -> Result<()> {
         if &self.session != expected {
             Err(AuthorityError::Identity)
@@ -325,17 +347,7 @@ async fn load_record_locked(
     view.record_revision = row.get::<i64, _>("record_revision") as u64;
     view.authority_revision = row.get::<i64, _>("authority_revision") as u64;
     view.grant_revision = row.get::<i64, _>("grant_revision") as u64;
-    if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
-        require_current_boot(tx, &view.identity).await?;
-        view.active_at(clock())?;
-    }
-    if matches!(policy, Policy::TerminalActive)
-        && (view.kind != Kind::ProfiledV1
-            || view.execution_deadline_ms.is_none()
-            || !matches!(view.stop, Some(super::profiled::Stop::Running)))
-    {
-        return Err(AuthorityError::Unsupported);
-    }
+    view.require_policy(tx, policy, || Ok(clock())).await?;
     Ok(view)
 }
 

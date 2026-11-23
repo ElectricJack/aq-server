@@ -303,7 +303,7 @@ async fn retained_source(
         .bindings
         .as_ref()
         .and_then(|b| b.source.as_ref());
-    if source.is_none() {
+    let Some(source) = source else {
         if !report.artifacts.is_empty() {
             return Err(refuse(
                 ErrorCode::UnsupportedCapability,
@@ -311,7 +311,7 @@ async fn retained_source(
             ));
         }
         return Ok(true);
-    }
+    };
     let mut seen = std::collections::HashSet::new();
     for artifact in &report.artifacts {
         if !seen.insert(artifact.artifact_id) {
@@ -326,33 +326,44 @@ async fn retained_source(
             .ok_or_else(|| refuse(ErrorCode::InvalidRequest, "source retention is not confirmed"))?;
         let manifest: TransferManifest = serde_json::from_str(row.get("manifest"))?;
         let receipt: CentralRetentionReceipt = serde_json::from_str(row.get("receipt"))?;
-        validate(&manifest)?;
-        validate(&receipt)?;
-        if Some(&manifest.source) != source
-            || manifest.role != SourceRole::Checkpoint
-            || manifest.attempt != report.attempt
-            || manifest.resolved_spec_digest != report.resolved_spec_digest
-            || manifest.artifact_id != artifact.artifact_id
-            || artifact.digest != manifest.manifest_digest
-            || Some(artifact.bytes) != manifest.manifest_bytes.checked_add(manifest.bundle_bytes)
-            || artifact.central_receipt.as_deref() != Some(receipt.receipt_id.to_string().as_str())
-            || receipt.transfer_id != manifest.transfer_id
-            || receipt.repository_id != manifest.source.repository_id
-            || receipt.binding_generation != manifest.source.binding_generation
-            || receipt.source != manifest.checkpoint
-            || receipt.retention_handle != manifest.artifact_id
-        {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "source receipt binding mismatch",
-            ));
-        }
+        validate_retained_artifact(source, report, artifact, &manifest, &receipt)?;
     }
     let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM source_transfers WHERE node_id=$1 AND attempt_id=$2 AND state IN ('uploading','import_pending'))")
         .bind(report.identity.node_id).bind(report.attempt.attempt_id).fetch_one(&mut **tx).await?;
     Ok(!pending
         && (report.stop_certainty == StopCertainty::NotStarted || !report.artifacts.is_empty()))
 }
+fn validate_retained_artifact(
+    source: &SourceBinding,
+    report: &ResultReport,
+    artifact: &ArtifactRef,
+    manifest: &TransferManifest,
+    receipt: &CentralRetentionReceipt,
+) -> Result<()> {
+    validate(manifest)?;
+    validate(receipt)?;
+    if &manifest.source != source
+        || manifest.role != SourceRole::Checkpoint
+        || manifest.attempt != report.attempt
+        || manifest.resolved_spec_digest != report.resolved_spec_digest
+        || manifest.artifact_id != artifact.artifact_id
+        || artifact.digest != manifest.manifest_digest
+        || Some(artifact.bytes) != manifest.manifest_bytes.checked_add(manifest.bundle_bytes)
+        || artifact.central_receipt.as_deref() != Some(receipt.receipt_id.to_string().as_str())
+        || receipt.transfer_id != manifest.transfer_id
+        || receipt.repository_id != manifest.source.repository_id
+        || receipt.binding_generation != manifest.source.binding_generation
+        || receipt.source != manifest.checkpoint
+        || receipt.retention_handle != manifest.artifact_id
+    {
+        return Err(refuse(
+            ErrorCode::InvalidRequest,
+            "source receipt binding mismatch",
+        ));
+    }
+    Ok(())
+}
+
 async fn receipt<T: DeserializeOwned>(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,

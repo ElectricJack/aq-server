@@ -169,3 +169,77 @@ fn reconciliation_never_extends_or_transfers_a_grant() {
         ReconcileAction::Unknown
     );
 }
+
+#[test]
+fn source_receipt_cannot_release_another_artifact_or_omit_bundle_bytes() {
+    let offer = granted_attempt().offer;
+    let source = SourceBinding {
+        repository_id: Uuid::new_v4(),
+        binding_generation: 1,
+        logical_identity: "fixture/project".into(),
+        base: ObjectId {
+            algorithm: ObjectAlgorithm::Sha1,
+            hex: "1".repeat(40),
+        },
+    };
+    let manifest = TransferManifest {
+        transfer_id: Uuid::new_v4(),
+        role: SourceRole::Checkpoint,
+        checkpoint: ObjectId {
+            algorithm: ObjectAlgorithm::Sha1,
+            hex: "2".repeat(40),
+        },
+        attempt: offer.attempt.clone(),
+        resolved_spec_digest: offer.spec.resolved_spec_digest.clone(),
+        source: source.clone(),
+        artifact_id: Uuid::new_v4(),
+        manifest_digest: "a".repeat(64),
+        bundle_digest: Some("b".repeat(64)),
+        manifest_bytes: 64,
+        bundle_bytes: 128,
+    };
+    let receipt = CentralRetentionReceipt {
+        receipt_id: Uuid::new_v4(),
+        transfer_id: manifest.transfer_id,
+        repository_id: source.repository_id,
+        binding_generation: source.binding_generation,
+        source: manifest.checkpoint.clone(),
+        retention_handle: manifest.artifact_id,
+        manifest_digest: "c".repeat(64),
+    };
+    let artifact = ArtifactRef {
+        artifact_id: manifest.artifact_id,
+        digest: manifest.manifest_digest.clone(),
+        bytes: manifest.manifest_bytes + manifest.bundle_bytes,
+        central_receipt: Some(receipt.receipt_id.to_string()),
+    };
+    let report = ResultReport {
+        identity: offer.identity,
+        report_id: Uuid::new_v4(),
+        supersedes_report_id: None,
+        attempt: offer.attempt,
+        resolved_spec_digest: offer.spec.resolved_spec_digest,
+        outcome: ProcessOutcome::Success,
+        stop_certainty: StopCertainty::ConfirmedStopped,
+        claimed_success: true,
+        output: "finished".into(),
+        artifacts: vec![artifact.clone()],
+        pending_operation_ids: vec![],
+    };
+    let check = |artifact: &ArtifactRef, receipt: &CentralRetentionReceipt| {
+        validate_retained_artifact(&source, &report, artifact, &manifest, receipt)
+    };
+    check(&artifact, &receipt).unwrap();
+    let mut foreign_receipt = receipt.clone();
+    foreign_receipt.retention_handle = Uuid::new_v4();
+    assert!(matches!(
+        check(&artifact, &foreign_receipt),
+        Err(Error::Refused(ErrorCode::InvalidRequest, _))
+    ));
+    let mut incomplete_artifact = artifact;
+    incomplete_artifact.bytes = manifest.manifest_bytes;
+    assert!(matches!(
+        check(&incomplete_artifact, &receipt),
+        Err(Error::Refused(ErrorCode::InvalidRequest, _))
+    ));
+}
