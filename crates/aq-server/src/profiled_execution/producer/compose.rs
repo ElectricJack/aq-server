@@ -304,7 +304,15 @@ async fn place(
     }
     let provides = |e: &str| env::provided(e, bodies.iter().map(body));
     let (pinned, needs) = (execution.environment.as_deref(), env::needs(metadata));
-    let missing = match env::place(binding, pinned, kept.as_deref(), &needs, provides) {
+    let missing = match env::place(
+        binding,
+        env::FixedEnvironments {
+            pinned,
+            kept: kept.as_deref(),
+        },
+        &needs,
+        provides,
+    ) {
         Ok(environment) => return Ok(environment),
         Err(env::Missing {
             environment,

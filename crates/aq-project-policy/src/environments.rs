@@ -2,7 +2,7 @@
 //! reads the task's metadata, the binding, the profile and the definitions.
 //! This is the default rule of §5.4; the router (step 4) will feed the same
 //! [`place`] with the environment the routing document chose.
-use crate::{ProjectBinding, labels};
+use crate::{ProjectBinding, validation::labels};
 use serde_json::Value;
 
 /// The task metadata key that holds what a task needs from its environment.
@@ -56,6 +56,10 @@ pub struct Missing {
     pub environment: String,
     pub missing: Vec<String>,
 }
+pub struct FixedEnvironments<'a> {
+    pub pinned: Option<&'a str>,
+    pub kept: Option<&'a str>,
+}
 /// The environment of an attempt (spec 0017 §5.4): the profile's `pinned`
 /// one, else the one the attempt it continues ran in (`kept`), else the
 /// binding's `default_environment` if it provides every need, else the
@@ -64,8 +68,7 @@ pub struct Missing {
 /// every need; `Missing` names the labels the first candidate lacks.
 pub fn place(
     binding: &ProjectBinding,
-    pinned: Option<&str>,
-    kept: Option<&str>,
+    fixed: FixedEnvironments,
     needs: &[String],
     provides: impl Fn(&str) -> Vec<String>,
 ) -> Result<String, Missing> {
@@ -76,7 +79,7 @@ pub fn place(
             .cloned()
             .collect()
     };
-    let fixed = pinned.or(kept);
+    let fixed = fixed.pinned.or(fixed.kept);
     let default = binding.default_environment.as_deref();
     let fits = (binding.allowed_environments.iter())
         .filter(|e| lacking(e).is_empty())
@@ -127,7 +130,12 @@ mod tests {
         kept: Option<&str>,
         n: &[&str],
     ) -> Result<String, Missing> {
-        super::place(&binding(default), pinned, kept, &needs(n), provides)
+        super::place(
+            &binding(default),
+            FixedEnvironments { pinned, kept },
+            &needs(n),
+            provides,
+        )
     }
 
     #[test]

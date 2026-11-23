@@ -1,6 +1,9 @@
 //! Pure project policy and admission snapshots. These types confer no authority.
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+mod eligibility;
+mod validation;
+pub use eligibility::{EligibilityEvidence, decide, local_reasons};
 use uuid::Uuid;
 #[cfg(feature = "project_environments")]
 pub mod environments;
@@ -8,17 +11,6 @@ pub mod environments;
 #[serde(deny_unknown_fields, default)]
 pub struct ProjectConfig {
     pub worker_groups: BTreeMap<String, Vec<Uuid>>,
-}
-impl ProjectConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        require(self.worker_groups.len() <= 64, "worker group bound")?;
-        for (id, nodes) in &self.worker_groups {
-            label(id)?;
-            ids(nodes, 256)?;
-            require(!nodes.is_empty(), "empty worker group")?;
-        }
-        Ok(())
-    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,248 +163,6 @@ pub struct Eligibility {
     pub reasons: Vec<String>,
     pub frozen_binding: Option<FrozenProjectBinding>,
 }
-fn require(ok: bool, reason: &str) -> Result<(), String> {
-    if ok { Ok(()) } else { Err(reason.into()) }
-}
-fn label(s: &str) -> Result<(), String> {
-    require(
-        !s.is_empty()
-            && s.len() <= 128
-            && s.bytes().all(|b| {
-                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'@' | b':')
-            }),
-        "bounded logical reference required",
-    )
-}
-fn hex(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-fn ids(values: &[Uuid], max: usize) -> Result<(), String> {
-    let mut seen = BTreeSet::new();
-    require(values.len() <= max, "identity list bound")?;
-    for id in values {
-        require(!id.is_nil() && seen.insert(id), "nil or duplicate identity")?;
-    }
-    Ok(())
-}
-fn labels(values: &[String], max: usize) -> Result<(), String> {
-    require(values.len() <= max, "reference list bound")?;
-    let mut seen = BTreeSet::new();
-    for s in values {
-        label(s)?;
-        require(seen.insert(s), "duplicate reference")?;
-    }
-    Ok(())
-}
-impl ProjectBinding {
-    pub fn validate(&self, config: &ProjectConfig) -> Result<(), String> {
-        config.validate()?;
-        if let Some(p) = &self.publication {
-            p.validate().map_err(|e| e.to_string())?;
-        }
-        require(
-            self.schema_version == 1
-                && !self.project_id.is_nil()
-                && !self.repository_id.is_nil()
-                && !self.graph_workspace_id.is_nil()
-                && self.repository_binding_generation > 0
-                && self.repository_binding_generation <= i64::MAX as u64,
-            "project identity/version",
-        )?;
-        require(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 128
-                && !self.name.chars().any(char::is_control),
-            "project name",
-        )?;
-        require(
-            self.repository_adapter_reference == "aq.git.configured"
-                && self.graph_adapter_reference == "aq.graph.configured",
-            "unknown configured adapter reference",
-        )?;
-        labels(&self.allowed_environments, 32)?;
-        require(
-            !self.allowed_environments.is_empty(),
-            "empty environment allowlist",
-        )?;
-        #[cfg(feature = "project_environments")]
-        require(
-            (self.default_environment.as_ref())
-                .is_none_or(|e| self.allowed_environments.contains(e)),
-            "default environment is not an allowed environment",
-        )?;
-        label(&self.default_role).map_err(|_| "default role")?;
-        label(&self.default_intelligence).map_err(|_| "default intelligence profile")?;
-        for (role, note) in &self.role_notes {
-            label(role).map_err(|_| "role notes role")?;
-            require(!note.contains('\0'), "role notes text")?;
-        }
-        ids(&self.allowed_node_ids, 256)?;
-        labels(&self.allowed_worker_groups, 32)?;
-        require(
-            self.allow_enrolled_nodes
-                || !self.allowed_node_ids.is_empty()
-                || !self.allowed_worker_groups.is_empty(),
-            "no eligible worker identities",
-        )?;
-        for group in &self.allowed_worker_groups {
-            require(
-                config.worker_groups.contains_key(group),
-                "unknown worker group",
-            )?;
-        }
-        require(self.context.len() <= 32, "context reference bound")?;
-        let mut seen = BTreeSet::new();
-        for r in std::iter::once(&self.policy).chain(&self.context) {
-            label(&r.identity)?;
-            label(&r.revision)?;
-            require(
-                hex(&r.digest) && seen.insert((&r.identity, &r.revision)),
-                "invalid or duplicate policy/context reference",
-            )?;
-        }
-        let c = &self.ceilings;
-        require(c.permissions.len() <= 128, "permission bound")?;
-        let mut permissions = BTreeSet::new();
-        for p in &c.permissions {
-            label(&p.operation)?;
-            label(&p.scope_reference)?;
-            require(
-                p.scope_reference.contains(':')
-                    && permissions.insert((&p.operation, &p.scope_reference)),
-                "invalid or duplicate permission",
-            )?;
-        }
-        require(
-            c.context_bytes > 0
-                && c.context_bytes <= 1_048_576
-                && c.wall_time_ms > 0
-                && c.wall_time_ms <= 604_800_000
-                && c.memory_bytes > 0
-                && c.memory_bytes <= i64::MAX as u64
-                && c.cpu_millis > 0
-                && c.cpu_millis <= i64::MAX as u64
-                && c.process_limit > 0
-                && c.process_limit <= 65_536,
-            "resource ceiling bounds",
-        )?;
-        require(
-            c.cost_limit_microunits.is_some() == c.currency.is_some()
-                && (!c.require_hard_cost_enforcement || c.cost_limit_microunits.is_some()),
-            "cost ceiling basis",
-        )?;
-        if let Some(currency) = &c.currency {
-            require(
-                currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
-                "currency code",
-            )?;
-        }
-        Ok(())
-    }
-    pub fn eligible_node(&self, config: &ProjectConfig, node: Uuid) -> bool {
-        self.allow_enrolled_nodes
-            || self.allowed_node_ids.contains(&node)
-            || self.allowed_worker_groups.iter().any(|g| {
-                config
-                    .worker_groups
-                    .get(g)
-                    .is_some_and(|ids| ids.contains(&node))
-            })
-    }
-}
-pub fn local_reasons(
-    record: &ProjectRecord,
-    request: &EligibilityRequest,
-    config: &ProjectConfig,
-    node_live: bool,
-) -> Vec<String> {
-    let b = &record.binding;
-    let mut reasons = Vec::new();
-    if b.validate(config).is_err() {
-        reasons.push("project_policy_invalid".into());
-    }
-    if !b.enabled {
-        reasons.push("project_disabled".into());
-    }
-    if record.revision != request.expected_project_revision {
-        reasons.push("project_revision_changed".into());
-    }
-    if request.node_id.is_nil() || !node_live || !b.eligible_node(config, request.node_id) {
-        reasons.push("node_not_eligible".into());
-    }
-    if !b.allowed_environments.contains(&request.environment) {
-        reasons.push("environment_denied".into());
-    }
-    for value in [
-        &request.role,
-        &request.intelligence_profile,
-        &request.execution_profile,
-    ] {
-        if label(value).is_err() {
-            reasons.push("launch_reference_invalid".into());
-        }
-    }
-    if !hex(&request.snapshot_digest) {
-        reasons.push("snapshot_digest_invalid".into());
-    }
-    reasons
-}
-pub fn decide(
-    record: &ProjectRecord,
-    request: &EligibilityRequest,
-    config: &ProjectConfig,
-    observation: &BindingObservation,
-    node_live: bool,
-    now_ms: u64,
-) -> Eligibility {
-    let b = &record.binding;
-    let mut reasons = local_reasons(record, request, config, node_live);
-    if observation.repository_id != b.repository_id
-        || observation.graph_workspace_id != b.graph_workspace_id
-        || observation.repository_adapter_reference != b.repository_adapter_reference
-        || observation.graph_adapter_reference != b.graph_adapter_reference
-    {
-        reasons.push("binding_observation_identity_mismatch".into());
-    }
-    if observation.observed_at_ms == 0
-        || now_ms < observation.observed_at_ms
-        || now_ms >= observation.expires_at_ms
-        || observation
-            .expires_at_ms
-            .saturating_sub(observation.observed_at_ms)
-            > 30_000
-    {
-        reasons.push("binding_observation_stale".into());
-    }
-    if observation.repository != ExternalStatus::Verified {
-        reasons.push(format!("repository_{:?}", observation.repository).to_lowercase());
-    } else if observation.repository_generation != Some(b.repository_binding_generation) {
-        reasons.push("repository_stale".into());
-    }
-    if observation.graph != ExternalStatus::Verified {
-        reasons.push(format!("graph_{:?}", observation.graph).to_lowercase());
-    }
-    let eligible = reasons.is_empty();
-    Eligibility {
-        eligible,
-        reasons,
-        frozen_binding: eligible.then(|| FrozenProjectBinding {
-            project: record.clone(),
-            snapshot_digest: request.snapshot_digest.clone(),
-            worker_membership_digest: aq_profiles::digest(config)
-                .expect("bounded membership serializes"),
-            binding_observation: observation.clone(),
-            node_id: request.node_id,
-            environment: request.environment.clone(),
-            role: request.role.clone(),
-            intelligence_profile: request.intelligence_profile.clone(),
-            execution_profile: request.execution_profile.clone(),
-        }),
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -497,12 +247,25 @@ pub(crate) mod tests {
         let config = ProjectConfig::default();
         let request = request();
         let observation = observation();
-        let decision = decide(&record, &request, &config, &observation, true, 2000);
+        let decision = decide(
+            &record,
+            &request,
+            &config,
+            EligibilityEvidence::new(&observation, true, 2000),
+        );
         assert!(decision.eligible);
         let frozen = decision.frozen_binding.unwrap();
         record.revision = 2;
         record.binding.ceilings.context_bytes = 4096;
-        assert!(!decide(&record, &request, &config, &observation, true, 2000).eligible);
+        assert!(
+            !decide(
+                &record,
+                &request,
+                &config,
+                EligibilityEvidence::new(&observation, true, 2000)
+            )
+            .eligible
+        );
         assert_eq!(frozen.project.revision, 1);
         assert_eq!(frozen.project.binding.ceilings.context_bytes, 8192);
     }
@@ -522,9 +285,7 @@ pub(crate) mod tests {
                     &record(),
                     &request(),
                     &ProjectConfig::default(),
-                    &observation,
-                    true,
-                    2000
+                    EligibilityEvidence::new(&observation, true, 2000)
                 )
                 .eligible
             );
@@ -535,9 +296,7 @@ pub(crate) mod tests {
                     &record(),
                     &request(),
                     &ProjectConfig::default(),
-                    &observation,
-                    true,
-                    2000
+                    EligibilityEvidence::new(&observation, true, 2000)
                 )
                 .eligible
             );
@@ -549,9 +308,7 @@ pub(crate) mod tests {
                 &record(),
                 &request(),
                 &ProjectConfig::default(),
-                &o,
-                true,
-                2000
+                EligibilityEvidence::new(&o, true, 2000)
             )
             .eligible
         );
@@ -561,9 +318,7 @@ pub(crate) mod tests {
                 &record(),
                 &request(),
                 &ProjectConfig::default(),
-                &o,
-                true,
-                31000
+                EligibilityEvidence::new(&o, true, 31000)
             )
             .eligible
         );
@@ -579,18 +334,50 @@ pub(crate) mod tests {
             .worker_groups
             .insert("engineering".into(), vec![Uuid::from_u128(4)]);
         assert!(record.binding.validate(&config).is_ok());
-        assert!(decide(&record, &request(), &config, &observation(), true, 2000).eligible);
+        assert!(
+            decide(
+                &record,
+                &request(),
+                &config,
+                EligibilityEvidence::new(&observation(), true, 2000)
+            )
+            .eligible
+        );
         let mut r = request();
         r.environment = "host-unconfined".into();
-        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        assert!(
+            !decide(
+                &record,
+                &r,
+                &config,
+                EligibilityEvidence::new(&observation(), true, 2000)
+            )
+            .eligible
+        );
         // A launch names its role, level and execution profile by id; the
         // binding holds no list of them (spec 0014 §5.4).
         let mut r = request();
         r.role = "not a label".into();
-        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        assert!(
+            !decide(
+                &record,
+                &r,
+                &config,
+                EligibilityEvidence::new(&observation(), true, 2000)
+            )
+            .eligible
+        );
         let mut r = request();
         r.snapshot_digest = "short".into();
-        assert!(!decide(&record, &r, &config, &observation(), true, 2000).eligible);
+        assert!(
+            !decide(
+                &record,
+                &r,
+                &config,
+                EligibilityEvidence::new(&observation(), true, 2000)
+            )
+            .eligible
+        );
     }
     #[test]
     fn enrolled_flag_makes_every_node_eligible_and_validates_without_lists() {
