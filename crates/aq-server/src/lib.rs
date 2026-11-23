@@ -153,7 +153,7 @@ impl AppState {
 
 async fn harden(req: Request, next: Next) -> Response {
     let api = req.uri().path() == "/api" || req.uri().path().starts_with("/api/");
-    let mut resp = next.run(req).await;
+    let mut resp = aq_request_site::record(req, next).await; // for the refusal log
     let success = resp.status().is_success();
     let h = resp.headers_mut();
     h.insert(
@@ -314,7 +314,6 @@ pub fn build_admin_router_with_optional_owners(
         .merge(agent_access::human::routes(&state))
         .merge(agent_access::supervisor_conversation::routes(&state))
         .merge(manual_agents::supervisor_controls(&state))
-        .merge(profiled_execution::human_results::routes())
         .merge(profiled_execution::disposition::routes(state.clone()))
         .merge(results_feedback::routes())
         .merge(provider_accounts::routes())

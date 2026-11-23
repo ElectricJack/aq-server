@@ -146,7 +146,7 @@ impl IntoResponse for AppError {
             status: self.status().as_u16(),
             code: body.error.clone(),
         };
-        tracing::warn!(status=context.status, code=%context.code, message=[body.message.as_str(), ""][(context.status != 409) as usize], "API request refused"); // only a conflict's text: others may repeat the caller's input
+        aq_request_site::warn_refused(context.status, &context.code, &body.message);
         let mut response = (self.status(), Json(body)).into_response();
         if matches!(self, AppError::Busy) {
             (response.headers_mut()).insert(header::RETRY_AFTER, HeaderValue::from_static("1"));

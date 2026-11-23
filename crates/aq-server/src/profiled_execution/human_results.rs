@@ -1,6 +1,6 @@
 //! Owner-authorized metadata over exact retained native result claims.
 //! No claim, stop receipt or process outcome establishes acceptance/settlement.
-use crate::{AppState, authz::RequireOwner, error::AppError};
+use crate::{AppState, authz::RequireOwner, error::AppError, results_feedback::detail as v1};
 use crate::{profiled_execution::settlement::actor::ActorPin, store::User};
 use axum::{
     Extension, Json, Router,
@@ -157,6 +157,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/human/results", get(list))
         .route("/api/human/results/{id}/revisions/{revision}", get(detail))
+        .route("/api/v1/results/{id}/revisions/{revision}", get(v1))
         .layer(Extension(Arc::new(Semaphore::new(2))))
 }
 async fn bounded(

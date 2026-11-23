@@ -32,7 +32,23 @@ open. A task comment records context without sending a question.
 
 On a host, use the connection flags in `aq-cli`. The owner can use
 `aq messages inbox` for the supervisor inbox and `aq chat` for a supervisor
-conversation. A project conversation can be found with
-`aq conversation project --project "$project_id"`. To answer a question,
-inspect it and use `aq question answer --help` with the exact decision ID and
-revision. Owner answers and review decisions have different commands.
+conversation. To read what a supervisor conversation holds, take its `id` from
+`aq supervisor list` (one row per supervisor: the global one and each
+project's) and read its messages:
+
+```sh
+aq supervisor list
+aq conversation messages --conversation-id "$conversation_id" --limit 16
+aq conversation messages --conversation-id "$conversation_id" --before "$cursor"
+```
+
+Each message prints its cursor, author kind (`human` or `supervisor`), time and
+body; `--json` prints the whole page. A page holds at most 16 messages; when
+more exist the output ends with the cursor to pass as `--before` (or `--after`
+to read forward). A conversation's `revision` is not a message count: it is the
+version of the conversation record and says nothing about how many messages
+the conversation holds. A conversation with a
+high revision can have no messages. Judge whether one has messages only from
+`aq conversation messages`. To answer a question, inspect it and use
+`aq question answer --help` with the exact decision ID and revision. Owner
+answers and review decisions have different commands.

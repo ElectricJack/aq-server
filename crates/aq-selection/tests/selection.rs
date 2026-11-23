@@ -203,8 +203,11 @@ fn lineage_retry_cost_and_replacement_budgets_cannot_reset_on_fallback() {
         expires_at_ms: 5000,
     });
     assert!(select(&catalog, &input).unwrap().resolved.is_some());
-    input.budget.elapsed_ms = Some(60000);
-    assert!(select(&catalog, &input).unwrap().resolved.is_none());
+    // Time already used limits nothing: each attempt has its own window.
+    input.budget.elapsed_ms = Some(u64::MAX);
+    assert!(select(&catalog, &input).unwrap().resolved.is_some());
+    input.budget.elapsed_ms = None;
+    assert!(select(&catalog, &input).unwrap().resolved.is_some());
 }
 /// Spec 0007 Q1: owner and service handoffs are not charged to the policy's
 /// attempt limit; every other started attempt still is.

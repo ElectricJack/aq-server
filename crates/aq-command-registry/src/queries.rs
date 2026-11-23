@@ -164,9 +164,8 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
                 ]
             }
         }
-        // agent_access/messaging/global/reads.rs::discovery; writes.rs::lookup; marker.rs::read
-        "/api/human/conversations/global"
-        | "/api/human/conversations/{conversation}/operations/{operation}"
+        // agent_access/messaging/global/writes.rs::lookup; marker.rs::read
+        "/api/human/conversations/{conversation}/operations/{operation}"
         | "/api/human/conversations/{conversation}/read-marker" => NONE,
         // agent_access/messaging/global/reads.rs::history (`Page`)
         "/api/human/conversations/{conversation}/messages" => {
@@ -382,8 +381,6 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         "/api/waits/{wait_id}" => NONE,
         // project_bindings.rs::inspect, ::history
         "/api/projects/{id}" | "/api/projects/{id}/revisions/{revision}" => NONE,
-        // agent_access/messaging/global/reads.rs::project_discovery
-        "/api/human/conversations/projects/{project}" => NONE,
         // admin_api.rs::workers, ::status; execution/api.rs::inspect
         "/api/workers" | "/api/status" | "/api/execution/attempts/{id}" => NONE,
         // aq-supervisor-control api.rs::list

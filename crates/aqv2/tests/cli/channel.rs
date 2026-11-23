@@ -451,6 +451,22 @@ fn channel_cases() -> Vec<Vec<String>> {
             "--reason",
             "duplicate",
         ]),
+        c(&[
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+        ]),
+        c(&[
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--limit",
+            "3",
+            "--before",
+            "12.2",
+        ]),
     ]
 }
 fn owner_cases() -> Vec<Vec<String>> {
@@ -546,6 +562,24 @@ fn owner_cases() -> Vec<Vec<String>> {
             "expected_version=4",
             "--reason",
             "duplicate",
+        ]),
+        c(&[
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--limit",
+            "16",
+            "--after",
+            "0",
+        ]),
+        c(&[
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--before",
+            "7",
         ]),
     ]
 }
@@ -706,6 +740,42 @@ async fn typed_subcommands_refuse_mode_mismatches_without_sending() {
         vec!["run", "task.show", "--param", "Bad-Key=1"],
         vec!["run", "task.show", "--param", "a=1", "--param", "a=2"],
         vec!["run", "Task.Show"],
+        vec!["conversation", "messages"],
+        vec!["conversation", "messages", "--conversation-id", "global"],
+        vec![
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--limit",
+            "17",
+        ],
+        vec![
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--before",
+            "0",
+        ],
+        vec![
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--after",
+            "1.0",
+        ],
+        vec![
+            "conversation",
+            "messages",
+            "--conversation-id",
+            CONVERSATION,
+            "--before",
+            "5",
+            "--after",
+            "2",
+        ],
     ] {
         let err = fake.run(&args).await.unwrap_err();
         assert_eq!(err["code"], "invalid_arguments", "{args:?}");
@@ -891,6 +961,41 @@ fn human_renderings_match_golden() {
     text += "\n";
     assert!(!text.contains('\u{1b}'));
     check_golden("render.txt", &text);
+}
+
+/// `conversation messages` prints each message's cursor, author kind, time and
+/// body, never the conversation's revision (it is not a message count), and
+/// tells the reader how to get the next page.
+#[test]
+fn conversation_messages_print_cursor_author_time_and_body() {
+    use aqv2::render::{Render, render};
+    let page = json!({"contract":"human-supervisor-conversation-1",
+        "conversation":{"id":CONVERSATION,"revision":"41","label":"Global supervisor"},
+        "runtime":{"state":"unavailable","binding":null,"reason":"central_runtime_not_connected"},
+        "direction":"backward","through_cursor":"0",
+        "items":[
+            {"cursor":"9","author":{"kind":"human","user_id":OPERATION},"created_at_ms":1_795_368_000_123_i64,
+             "body":"Please start\nthe review\u{1b}[31m"},
+            {"cursor":"8.1","author":{"kind":"supervisor","actor_id":OPERATION,"generation":2,"session_id":SESSION},
+             "created_at_ms":0,"body":"Started"}],
+        "next_cursor":"8.1","has_more":true});
+    let text = render(Render::Messages, &page);
+    assert_eq!(
+        text,
+        format!(
+            "conversation {CONVERSATION} (Global supervisor), 2 messages in this page\n\
+             9  human  2026-11-22 17:20:00 UTC\n  Please start\n  the review\\u{{1b}}[31m\n\
+             8.1  supervisor  1970-01-01 00:00:00 UTC\n  Started\n\
+             more: --before 8.1"
+        )
+    );
+    assert!(!text.contains("41") && !text.to_lowercase().contains("revision"));
+    let empty = json!({"conversation":{"id":CONVERSATION,"revision":"41","label":"Global supervisor"},
+        "direction":"forward","items":[],"next_cursor":null,"has_more":false});
+    assert_eq!(
+        render(Render::Messages, &empty),
+        format!("conversation {CONVERSATION} (Global supervisor), 0 messages in this page")
+    );
 }
 
 // ---- the binary: modes, names, exit codes ----------------------------------

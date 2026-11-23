@@ -13,10 +13,17 @@ pub async fn waiting(
     let mut db = pool.acquire().await.ok()?;
     let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
     if let Some(reason) = hold {
-        let evidence = store::held_pr_evidence(&mut db, result)
+        let mut evidence = store::held_pr_evidence(&mut db, result)
             .await
             .ok()
             .flatten();
+        // The log tail is read for the supervisor; a read that fails shows none.
+        if let (Some(text), Ok(Some(log))) = (
+            evidence.as_mut(),
+            store::held_check_log(&mut db, result).await,
+        ) {
+            text.push_str(&store::log_section(&log));
+        }
         return Some(crate::delivery_hold(
             h,
             result,

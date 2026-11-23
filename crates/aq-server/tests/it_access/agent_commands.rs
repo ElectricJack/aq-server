@@ -338,12 +338,6 @@ async fn owner_commands_reach_the_same_handlers() {
             true,
         ),
         (
-            "conversation.project",
-            format!("/api/human/conversations/projects/{project}"),
-            json!({"project":project}),
-            false,
-        ),
-        (
             "attempt.show",
             format!("/api/execution/attempts/{}", Uuid::nil()),
             json!({"attempt_id":Uuid::nil()}),

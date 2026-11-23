@@ -763,6 +763,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-request-site"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aq-responses-transport"
 version = "0.1.0"
 dependencies = [
@@ -896,6 +907,7 @@ dependencies = [
  "aq-protocol",
  "aq-provider-quota",
  "aq-release",
+ "aq-request-site",
  "aq-result-media",
  "aq-review-protocol",
  "aq-role-settings",

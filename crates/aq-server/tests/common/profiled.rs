@@ -220,7 +220,6 @@ fn fixture_selection(input: &mut aq_selection::SelectionInputs) -> aq_selection:
     };
     let defaults = aq_profiles::roles::SelectionDefaults {
         max_attempts: 3,
-        max_lineage_elapsed_ms: 60_000,
         observation_max_age_ms: 5_000,
         unknown_cost: aq_profiles::UnknownCostPolicy::Deny,
         ..Default::default()

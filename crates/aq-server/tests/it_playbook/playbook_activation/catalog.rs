@@ -1,20 +1,12 @@
 //! Actual protected component owner + bounded human catalog routes. Synthetic
 //! fixture transport and records; no workflow admission or provider execution.
 use super::*;
+use crate::playbook_fixtures::dev_get;
 use axum::{Router, body::Body, http::Request};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 async fn read(app: &Router, email: &str, path: &str) -> (u16, Value) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::get(path)
-                .header("x-aq-dev-email", email)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = dev_get(app, email, path).await;
     assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
     let status = response.status().as_u16();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -24,16 +16,7 @@ async fn read(app: &Router, email: &str, path: &str) -> (u16, Value) {
     )
 }
 async fn supported(app: &Router, email: &str) -> bool {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::get("/api/v1/bootstrap")
-                .header("x-aq-dev-email", email)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = dev_get(app, email, "/api/v1/bootstrap").await;
     let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     body["data"]["capabilities"]

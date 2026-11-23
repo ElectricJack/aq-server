@@ -17,13 +17,6 @@ fn global_budget(input: &SelectionInputs, policy: &SelectionPolicy) -> Option<&'
     {
         return Some("lineage_retry_budget_exhausted");
     }
-    if budget.elapsed_ms.is_none()
-        || budget
-            .elapsed_ms
-            .is_some_and(|ms| ms >= policy.max_lineage_elapsed_ms)
-    {
-        return Some("lineage_time_budget_exhausted_or_unknown");
-    }
     if budget.attempts_started > 0 && budget.last_attempt_id.is_none() {
         return Some("lineage_predecessor_unknown");
     }
