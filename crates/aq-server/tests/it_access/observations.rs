@@ -526,9 +526,14 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
     );
     // An hour without progress: one monitoring incident and no recovery.
     for minute in 0..=60 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
+        engine::tick(
+            &pool,
+            &ports,
+            &target,
+            engine::Tick::new(&policy, NOW + minute * 60_000),
+        )
+        .await
+        .unwrap();
     }
     let actions = |pool: sqlx::PgPool| async move {
         sqlx::query_scalar::<_, String>(
@@ -574,9 +579,14 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
         Some(Explanation::ObservationsUnavailable)
     );
     for minute in 61..=90 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
+        engine::tick(
+            &pool,
+            &ports,
+            &target,
+            engine::Tick::new(&policy, NOW + minute * 60_000),
+        )
+        .await
+        .unwrap();
     }
     assert_eq!(actions(pool).await, ["monitoring_incident"]);
     drop(f);
