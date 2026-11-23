@@ -420,7 +420,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
 
 #[derive(Clone)]
 pub struct Store {
-    pub(crate) inventory_diagnostics: crate::profiled_execution::presence::Diagnostics,
+    pub(crate) inventory_diagnostics: aq_swarm::inventory_diagnostics::Diagnostics,
     pub(crate) manual_runtime: aq_manual_sessions::Runtime,
     // Explicit constructor provenance, never inferred from missing SQL objects.
     #[cfg(feature = "test-support")]

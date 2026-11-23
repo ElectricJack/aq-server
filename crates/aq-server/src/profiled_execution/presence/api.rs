@@ -61,10 +61,14 @@ async fn inventory(
     diagnostic.completed = true;
     let mut response = match result {
         Ok(receipt) => {
+            let accepted = aq_swarm::inventory_diagnostics::Acceptance {
+                recorded_at_ms: receipt.recorded_at_ms,
+                expires_at_ms: receipt.expires_at_ms,
+            };
             state
                 .store
                 .inventory_diagnostics
-                .accept(auth.id(), &receipt);
+                .accept(auth.id(), accepted);
             Json(receipt).into_response()
         }
         Err(error) => {

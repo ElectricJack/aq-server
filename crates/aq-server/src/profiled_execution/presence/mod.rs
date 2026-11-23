@@ -1,8 +1,6 @@
 //! Negotiated global provisionability and independent one-grant presence facts.
 //! No observation here issues execution authority or marks a global key installed.
-mod diagnostics;
 mod qualification;
-pub(crate) use diagnostics::Diagnostics;
 mod storage;
 fn changed() -> crate::error::AppError {
     crate::error::AppError::Conflict(
