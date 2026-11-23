@@ -42,12 +42,7 @@ async fn authorize(
         &[],
     )
     .await?;
-    // M2 (owner decision 2026-11-13): a new retry of a task AQ holds for what happened to it (a
-    // quarantine, a changed project binding, ...) cannot take effect, so it is refused with the
-    // hold and what the owner can do, before anything is admitted. A budget hold is not refused:
-    // the retry is the owner's explicit decision and overrides it (owner decision 2026-11-18).
-    // A fresh retry (2026-11-19) is for a changed project binding alone. A replay of an
-    // admitted operation keeps its outcome.
+    // Admission refuses permanent holds. An admitted retry may wait for evidence.
     if !actions::journal::admitted(&state.store.pool, p.operation_id).await? {
         let task: Uuid = request
             .subject
@@ -262,9 +257,7 @@ async fn execute(
             }
         }
         let owner_operation = anchor.as_ref().map(|_| p.operation_id);
-        // B4 decides admissibility, as the scheduler does: an unsettled predecessor is a
-        // rejection. A limit hold alone (the assessment's, or one selection recorded) is
-        // overridden with the owner's reason; never a confirmation the offer path refuses.
+        // B4 checks stop, source and effects for the same predecessor as the scheduler.
         use aq_machine_control::holds;
         let now = now(state)?;
         let mut assessment =
@@ -303,7 +296,7 @@ async fn execute(
         let recorded = holds::current(&state.store.pool, p.project_id, task).await;
         let recorded = recorded.map_err(|_| AppError::Internal)?;
         let limit = match assessment {
-            replacement::Assessment::Blocked(code) => Some(code),
+            replacement::Assessment::Blocked(code) => holds::budget_code(code),
             _ => recorded.and_then(|h| holds::budget_code(&h.reason)),
         };
         if let Some(code) = limit {
@@ -334,7 +327,18 @@ async fn execute(
         // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
         let r = match &assessment {
             replacement::Assessment::Replace(r) => r,
-            replacement::Assessment::Blocked(code) => return Ok(Outcome::refused(code)),
+            replacement::Assessment::Blocked(code) => {
+                return Ok(
+                    if owner_retry::wait_on(&state.store.pool, owner_operation, code)
+                        .await
+                        .map_err(crate::error::db)?
+                    {
+                        Outcome::pending()
+                    } else {
+                        Outcome::refused(code)
+                    },
+                );
+            }
             replacement::Assessment::Fresh if limit.is_some() || prior_override => {
                 return Ok(override_confirmed(task));
             }

@@ -101,6 +101,40 @@ pub async fn authorized(
     .await
 }
 
+/// Keep an admitted approval pending while the original attempt's proofs settle.
+pub async fn wait_on(
+    pool: &PgPool,
+    operation: Option<Uuid>,
+    code: &str,
+) -> Result<bool, sqlx::Error> {
+    let Some(operation) = operation.filter(|_| {
+        matches!(
+            code,
+            "replacement_prior_execution_uncertain"
+                | "replacement_effects_unreconciled"
+                | "replacement_source_retention_unknown"
+                | "replacement_lineage_history_unknown"
+        )
+    }) else {
+        return Ok(false);
+    };
+    let waiting = sqlx::query_scalar(
+        "WITH marked AS (
+           UPDATE owner_task_retry_intents i SET wait_reason=$2
+           FROM dashboard_operations d WHERE i.operation_id=$1 AND d.operation_id=i.operation_id
+           AND i.predecessor IS NOT NULL AND i.released_at IS NULL
+           AND d.disposition IN ('pending','unknown') RETURNING 1
+         )
+         SELECT EXISTS(SELECT 1 FROM marked) OR EXISTS(
+           SELECT 1 FROM owner_task_retry_intents WHERE operation_id=$1 AND released_at IS NOT NULL)",
+    )
+    .bind(operation)
+    .bind(code)
+    .fetch_one(pool)
+    .await?;
+    Ok(waiting)
+}
+
 pub async fn released(
     conn: &mut PgConnection,
     operation: Uuid,

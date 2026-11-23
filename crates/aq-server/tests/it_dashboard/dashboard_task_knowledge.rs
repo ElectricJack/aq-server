@@ -771,15 +771,21 @@ async fn task_retry_creates_replacement_attempt() {
         )
     };
 
-    // B4 alone decides: an unsettled predecessor is never force-replaced.
-    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
-    assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
-    // Review M-5: the receipt names the reason.
-    assert_eq!(
-        body["data"]["reason"], "replacement_prior_execution_uncertain",
-        "{body}"
-    );
-    assert!(holds().await, "rejected retry leaves the claim untouched");
+    let operation = Uuid::new_v4();
+    let confirmed_retry = retry(operation);
+    let (status, body) = x.act(&confirmed_retry).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["data"]["disposition"], "pending", "{body}");
+    assert!(holds().await, "pending retry preserves the original claim");
+    let wait = aq_human_work::owner_retry_wait(&pool, x.project(), task)
+        .await
+        .unwrap();
+    assert_eq!(wait["operation_id"], json!(operation));
+    assert_eq!(wait["attempt_id"], json!(predecessor));
+    assert_eq!(wait["hold_reason"], "replacement_prior_execution_uncertain");
+    assert_eq!(wait["blocker_owner"], "aq_worker");
+    assert_eq!(wait["wake_condition"], "prior_execution_verified");
+    assert!(wait["next_check_at_ms"].as_i64().is_some());
 
     hot.status = Status::Finished;
     hot.owner = Some(LaunchOwner {
@@ -831,23 +837,6 @@ async fn task_retry_creates_replacement_attempt() {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let operation = Uuid::new_v4();
-    let confirmed_retry = retry(operation);
-    // Interrupt the release transaction, leaving the original approval in the journal.
-    sqlx::raw_sql(
-        "CREATE FUNCTION fail_retry_release() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.released_at IS NOT NULL THEN RAISE EXCEPTION 'interrupted release'; END IF;
-      RETURN NEW; END $$;
-      CREATE TRIGGER fail_retry_release BEFORE UPDATE ON owner_task_retry_intents
-      FOR EACH ROW EXECUTE FUNCTION fail_retry_release();",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let (status, body) = x.act(&confirmed_retry).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(body["data"]["disposition"], "unknown", "{body}");
-    assert!(holds().await, "interrupted release rolled back");
     let schedule = || async {
         sqlx::query("UPDATE owner_task_retry_intents SET next_check_at=to_timestamp(1) WHERE operation_id=$1")
             .bind(operation).execute(&pool).await.unwrap();
@@ -871,8 +860,7 @@ async fn task_retry_creates_replacement_attempt() {
         .await
         .expect("AQ checked the original approval");
     };
-    sqlx::raw_sql("DROP TRIGGER fail_retry_release ON owner_task_retry_intents;
-      CREATE FUNCTION fail_retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+    sqlx::raw_sql("CREATE FUNCTION fail_retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.kind='task.retry' AND NEW.disposition='confirmed' THEN RAISE EXCEPTION 'lost acknowledgement'; END IF;
       RETURN NEW; END $$;
       CREATE TRIGGER fail_retry_receipt BEFORE UPDATE ON dashboard_operations
@@ -912,7 +900,9 @@ async fn task_retry_creates_replacement_attempt() {
         }
     })
     .await
-    .expect("AQ releases the same predecessor when permission returns");
+    .expect(
+        "AQ releases the same predecessor after its evidence and the approver's permission return",
+    );
 
     sqlx::query("DROP TRIGGER fail_retry_receipt ON dashboard_operations")
         .execute(&pool)

@@ -230,6 +230,12 @@ pub struct Outcome {
     pub activation: Option<ActivationCounts>,
 }
 impl Outcome {
+    pub fn pending() -> Self {
+        Self {
+            disposition: Disposition::Pending,
+            ..Self::unknown()
+        }
+    }
     pub fn unknown() -> Self {
         Self {
             disposition: Disposition::Unknown,

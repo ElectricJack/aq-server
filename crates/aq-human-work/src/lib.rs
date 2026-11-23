@@ -437,9 +437,16 @@ pub async fn graph_completion_wait(pool: &PgPool, hold: &Hold) -> Option<Value> 
 
 /// The retry approval has a durable check date even if its request was interrupted.
 pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Option<Value> {
-    let (operation, next, owner_available): (Uuid, i64, bool) = sqlx::query_as(
+    let (operation, next, owner_available, predecessor, reason): (
+        Uuid,
+        i64,
+        bool,
+        Option<Uuid>,
+        Option<String>,
+    ) = sqlx::query_as(
         "SELECT i.operation_id,floor(extract(epoch FROM i.next_check_at)*1000)::bigint,
-          COALESCE(u.role='owner',false)
+          COALESCE(u.role='owner',false),i.predecessor,
+          CASE WHEN i.released_at IS NULL THEN to_jsonb(i)->>'wait_reason' END
          FROM owner_task_retry_intents i JOIN dashboard_operations d USING(operation_id)
          LEFT JOIN users u ON u.id=d.principal_id
          WHERE i.project_id=$1 AND i.task_id=$2 AND d.disposition IN ('pending','unknown')
@@ -450,22 +457,42 @@ pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Optio
     .fetch_optional(pool)
     .await
     .ok()??;
-    let (owner, wake, message) = if owner_available {
-        (
-            "aq_scheduler",
-            "scheduled_owner_retry_check",
-            "AQ will resume the original retry approval at its scheduled check.",
-        )
-    } else {
-        (
+    let (owner, wake, message) = match (owner_available, reason.as_deref()) {
+        (false, _) => (
             "project_owner",
             "original_retry_authority_restored",
             "Restore owner permission for the principal who approved this retry. AQ will recheck the original approval.",
-        )
+        ),
+        (true, Some("replacement_prior_execution_uncertain")) => (
+            "aq_worker",
+            "prior_execution_verified",
+            "AQ will recheck the approved retry once the original attempt's execution and stop evidence is verified.",
+        ),
+        (true, Some("replacement_effects_unreconciled")) => (
+            "aq_effects",
+            "original_effects_reconciled",
+            "AQ will recheck the approved retry once the original attempt's effects have settled.",
+        ),
+        (true, Some("replacement_source_retention_unknown")) => (
+            "aq_worker",
+            "original_source_retained",
+            "AQ will recheck the approved retry once it can verify retention of the original attempt's source.",
+        ),
+        (true, Some("replacement_lineage_history_unknown")) => (
+            "aq_operator",
+            "original_lineage_history_restored",
+            "Restore the original attempt history. AQ will recheck the approved retry.",
+        ),
+        _ => (
+            "aq_scheduler",
+            "scheduled_owner_retry_check",
+            "AQ will resume the original retry approval at its scheduled check.",
+        ),
     };
     Some(
-        json!({"code":"owner_retry_pending","operation_id":operation,"message":message,
-        "blocker_owner":owner,"wake_condition":wake,"next_check_at_ms":next}),
+        json!({"code":"owner_retry_pending","operation_id":operation,"attempt_id":predecessor,
+        "hold_reason":reason,"message":message,"blocker_owner":owner,
+        "wake_condition":wake,"next_check_at_ms":next}),
     )
 }
 
@@ -692,6 +719,13 @@ pub fn readiness_in(
     } else {
         Vec::new()
     };
+    if hold.is_some_and(|h| {
+        held.iter().any(|reason| {
+            reason["code"] == "owner_retry_pending" && reason["attempt_id"] == json!(h.attempt_id)
+        })
+    }) {
+        held.retain(|reason| reason["wake_condition"] != "owner_retry_authorized");
+    }
     if held
         .iter()
         .any(|reason| reason["wake_condition"] == "owner_retry_authorized")
