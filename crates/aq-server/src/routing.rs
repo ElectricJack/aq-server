@@ -106,8 +106,19 @@ async fn store(
     let Ok(Ok((status, raw))) = posted else {
         return Err(unavailable());
     };
-    if status.is_success() && agent_access::settlement_response_valid(&raw) {
-        if route.is_some() {
+    record_route_response(pool, task, sequence, route.is_some(), status, &raw).await
+}
+
+async fn record_route_response(
+    pool: &PgPool,
+    task: Uuid,
+    sequence: u64,
+    has_route: bool,
+    status: reqwest::StatusCode,
+    raw: &serde_json::Value,
+) -> Result<Written, AppError> {
+    if status.is_success() && agent_access::settlement_response_valid(raw) {
+        if has_route {
             routed(pool, task).await;
         }
         return Ok(Written::Routed { sequence });

@@ -347,83 +347,13 @@ async fn readopt(
             return Err(refused());
         }
         let retained: Adoption = parse(value)?;
-        for old in &retained.after {
-            lock_owner(&mut tx, old).await?;
-            let current = load(&mut tx, old.record.permit_id).await?;
-            if json(&current)? != json(old)? {
-                return Err(refused());
-            }
-            let context = context(&mut tx, &current).await?;
-            check_rebound(&mut tx, &current).await?;
-            current
-                .record
-                .authorize(&context, RunnerOperation::ReportResult, now(&state)?)
-                .map_err(|_| refused())?;
-        }
+        validate_readoption_replay(&state, &mut tx, &retained).await?;
         retained
     } else {
         if active != q.previous.boot_id {
             return Err(refused());
         }
-        let mut retained = Adoption {
-            before: vec![],
-            after: vec![],
-            refused: vec![],
-        };
-        for sandbox in &q.sandboxes {
-            let raw: Option<serde_json::Value> = sqlx::query_scalar("SELECT c.state FROM delegated_permit_current c JOIN delegated_permits p USING(permit_id) WHERE c.permit_id=$1 AND p.node_id=$2 AND NOT p.revoked")
-                .bind(sandbox.permit_id).bind(auth.id()).fetch_optional(&mut *tx).await.map_err(db)?;
-            let Some(raw) = raw else {
-                retained.refused.push(ReadoptionResult::Refused {
-                    sandbox_id: sandbox.sandbox_id,
-                    code: ReadoptionRefusal::UnknownSandbox,
-                });
-                continue;
-            };
-            let old: Current = parse(raw)?;
-            lock_owner(&mut tx, &old).await?;
-            let mut current = load(&mut tx, sandbox.permit_id).await?;
-            let matches = current.record.binding.node == q.previous
-                && current.record.binding.attempt_id == sandbox.attempt_id
-                && current.record.binding.sandbox_id == sandbox.sandbox_id
-                && current.record.binding.grant_generation == sandbox.grant_generation
-                && current.record.scope == PermitScope::Execution;
-            if !matches {
-                retained.refused.push(ReadoptionResult::Refused {
-                    sandbox_id: sandbox.sandbox_id,
-                    code: ReadoptionRefusal::UnknownSandbox,
-                });
-                continue;
-            }
-            let valid = async {
-                compatible(
-                    current.registration.as_ref().ok_or_else(refused)?,
-                    &registration,
-                )?;
-                let context = context(&mut tx, &current).await?;
-                current
-                    .record
-                    .authorize(&context, RunnerOperation::ReportResult, now(&state)?)
-                    .map_err(|_| refused())
-            }
-            .await;
-            if valid.is_err() {
-                retained.refused.push(ReadoptionResult::Refused {
-                    sandbox_id: sandbox.sandbox_id,
-                    code: ReadoptionRefusal::NoCurrentGrant,
-                });
-                continue;
-            }
-            retained.before.push(current.clone());
-            current
-                .record
-                .rebind(key(&state)?, q.current.boot_id)
-                .map_err(|_| refused())?;
-            // Revision is retained: the owner readoption response has no revision
-            // field. Rebinding extends neither the lease nor the hard deadline.
-            save(&mut tx, &current).await?;
-            retained.after.push(current);
-        }
+        let retained = adopt_sandboxes(&state, &mut tx, &q, &registration).await?;
         sqlx::query("UPDATE delegated_node_boots SET boot_id=$2 WHERE node_id=$1")
             .bind(auth.id())
             .bind(q.current.boot_id)
@@ -452,6 +382,95 @@ async fn readopt(
     let reply = retained.response(&state, &q, now(&state)?)?;
     commit(tx).await?;
     Ok(response(SandboxDocument::ReadoptionResponse(reply)))
+}
+
+async fn validate_readoption_replay(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    retained: &Adoption,
+) -> Result<(), AppError> {
+    for old in &retained.after {
+        lock_owner(tx, old).await?;
+        let current = load(tx, old.record.permit_id).await?;
+        if json(&current)? != json(old)? {
+            return Err(refused());
+        }
+        let context = context(tx, &current).await?;
+        check_rebound(tx, &current).await?;
+        current
+            .record
+            .authorize(&context, RunnerOperation::ReportResult, now(state)?)
+            .map_err(|_| refused())?;
+    }
+    Ok(())
+}
+
+async fn adopt_sandboxes(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    q: &ReadoptionRequest,
+    registration: &Registration,
+) -> Result<Adoption, AppError> {
+    let mut retained = Adoption {
+        before: vec![],
+        after: vec![],
+        refused: vec![],
+    };
+    for sandbox in &q.sandboxes {
+        let raw: Option<serde_json::Value> = sqlx::query_scalar("SELECT c.state FROM delegated_permit_current c JOIN delegated_permits p USING(permit_id) WHERE c.permit_id=$1 AND p.node_id=$2 AND NOT p.revoked")
+            .bind(sandbox.permit_id).bind(q.current.node_id).fetch_optional(&mut **tx).await.map_err(db)?;
+        let Some(raw) = raw else {
+            retained.refused.push(ReadoptionResult::Refused {
+                sandbox_id: sandbox.sandbox_id,
+                code: ReadoptionRefusal::UnknownSandbox,
+            });
+            continue;
+        };
+        let old: Current = parse(raw)?;
+        lock_owner(tx, &old).await?;
+        let mut current = load(tx, sandbox.permit_id).await?;
+        let matches = current.record.binding.node == q.previous
+            && current.record.binding.attempt_id == sandbox.attempt_id
+            && current.record.binding.sandbox_id == sandbox.sandbox_id
+            && current.record.binding.grant_generation == sandbox.grant_generation
+            && current.record.scope == PermitScope::Execution;
+        if !matches {
+            retained.refused.push(ReadoptionResult::Refused {
+                sandbox_id: sandbox.sandbox_id,
+                code: ReadoptionRefusal::UnknownSandbox,
+            });
+            continue;
+        }
+        let valid = async {
+            compatible(
+                current.registration.as_ref().ok_or_else(refused)?,
+                registration,
+            )?;
+            let context = context(tx, &current).await?;
+            current
+                .record
+                .authorize(&context, RunnerOperation::ReportResult, now(state)?)
+                .map_err(|_| refused())
+        }
+        .await;
+        if valid.is_err() {
+            retained.refused.push(ReadoptionResult::Refused {
+                sandbox_id: sandbox.sandbox_id,
+                code: ReadoptionRefusal::NoCurrentGrant,
+            });
+            continue;
+        }
+        retained.before.push(current.clone());
+        current
+            .record
+            .rebind(key(state)?, q.current.boot_id)
+            .map_err(|_| refused())?;
+        // Revision is retained: the owner readoption response has no revision
+        // field. Rebinding extends neither the lease nor the hard deadline.
+        save(tx, &current).await?;
+        retained.after.push(current);
+    }
+    Ok(retained)
 }
 
 #[derive(Serialize, Deserialize)]

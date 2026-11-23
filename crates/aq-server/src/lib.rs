@@ -261,30 +261,7 @@ pub fn build_admin_router_with_optional_owners(
             .as_ref()
             .map(|keys| Arc::new(reviews::Service::new(state.clone(), keys.clone())))
     });
-    let mounted = dashboard_api::MountedOwners {
-        graph: true,
-        session_usage: true,
-        session_events: true,
-        results: true,
-        media_read: media.as_ref().is_some_and(|r| r.read_enabled()),
-        media_upload: media.as_ref().is_some_and(|r| r.uploads_enabled()),
-        notifications: true,
-        supervisor_conversation: true,
-        reviews: reviews.is_some(),
-        waits: true,
-        session_operations: true,
-        questions: true,
-        playbook_loaded_definitions: playbooks
-            .as_ref()
-            .is_some_and(|driver| driver.loaded_definitions_available()),
-        playbook_catalog: playbooks.as_ref().map(|driver| driver.catalog_support()),
-        playbook_owner: playbooks
-            .as_ref()
-            .map(|d| d.service.namespace.owner_user_id),
-        playbook_decisions: playbooks
-            .as_ref()
-            .is_some_and(|d| d.service.profile.is_host2()),
-    };
+    let mounted = mounted_owners(&playbooks, &reviews, &media);
     let policy_routes = playbooks
         .clone()
         .map(playbooks::api::routes)
@@ -360,6 +337,37 @@ pub fn build_admin_router_with_optional_owners(
         state,
         commands::Listener::Admin,
     )
+}
+
+fn mounted_owners(
+    playbooks: &Option<Arc<playbooks::driver::Driver>>,
+    reviews: &Option<Arc<reviews::Service>>,
+    media: &Option<Arc<result_media::runtime::Runtime>>,
+) -> dashboard_api::MountedOwners {
+    dashboard_api::MountedOwners {
+        graph: true,
+        session_usage: true,
+        session_events: true,
+        results: true,
+        media_read: media.as_ref().is_some_and(|r| r.read_enabled()),
+        media_upload: media.as_ref().is_some_and(|r| r.uploads_enabled()),
+        notifications: true,
+        supervisor_conversation: true,
+        reviews: reviews.is_some(),
+        waits: true,
+        session_operations: true,
+        questions: true,
+        playbook_loaded_definitions: playbooks
+            .as_ref()
+            .is_some_and(|driver| driver.loaded_definitions_available()),
+        playbook_catalog: playbooks.as_ref().map(|driver| driver.catalog_support()),
+        playbook_owner: playbooks
+            .as_ref()
+            .map(|d| d.service.namespace.owner_user_id),
+        playbook_decisions: playbooks
+            .as_ref()
+            .is_some_and(|d| d.service.profile.is_host2()),
+    }
 }
 
 /// Machine routes plus `/healthz`. No human routes are mounted here.

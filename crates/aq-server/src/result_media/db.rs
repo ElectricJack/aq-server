@@ -174,7 +174,7 @@ impl Intent {
         }
         Ok(())
     }
-    pub fn status(&self, at: u64) -> Result<media::UploadStatus> {
+    fn recovery(&self, at: u64) -> media::Recovery {
         let mut recovery = media::Recovery {
             put_allowed: false,
             finalize_allowed: false,
@@ -198,6 +198,9 @@ impl Intent {
             recovery.finalize_allowed = matches!(self.state, S::Received | S::Finalizing);
             None
         };
+        recovery
+    }
+    pub fn status(&self, at: u64) -> Result<media::UploadStatus> {
         let artifact = self
             .receipt
             .as_ref()
@@ -229,7 +232,7 @@ impl Intent {
             created_at_ms: self.created,
             upload_expires_at_ms: self.upload,
             retain_until_ms: self.retain,
-            recovery,
+            recovery: self.recovery(at),
             rejection: self.rejection,
             artifact,
             limits: self.limits.clone(),
@@ -259,31 +262,7 @@ pub(super) async fn load_optional(
     request
         .validate_with_limits(&limits)
         .map_err(|_| Error::Owner)?;
-    let receipt_bytes: Option<Vec<u8>> = r.get("receipt_bytes");
-    let receipt: Option<media::Receipt> = receipt_bytes
-        .as_ref()
-        .map(|bytes| {
-            let receipt: media::Receipt =
-                serde_json::from_slice(bytes).map_err(|_| Error::Owner)?;
-            receipt.validate().map_err(|_| Error::Owner)?;
-            if media::canonical_bytes(&receipt).map_err(|_| Error::Owner)? != *bytes
-                || receipt.binding != binding
-                || receipt.artifact_id.as_uuid() != id
-                || receipt.uploader_id.as_uuid() != r.get::<Uuid, _>("actor_id")
-                || receipt.input.digest != request.input_digest
-                || receipt.input.bytes != request.input_bytes
-                || receipt.input.filename != request.filename
-                || receipt.capture != request.capture
-                || receipt.media() != request.media
-                || receipt.clip.as_ref().map(|c| c.poster_artifact_id) != request.poster_artifact_id
-                || receipt.digest().map_err(|_| Error::Owner)?.as_str()
-                    != r.get::<String, _>("receipt_digest")
-            {
-                return Err(Error::Owner);
-            }
-            Ok(receipt)
-        })
-        .transpose()?;
+    let receipt = retained_receipt(&r, id, &binding, &request)?;
     if media::Digest::of(&raw).as_str() != r.get::<String, _>("request_digest")
         || request.operation_id.as_uuid() != id
     {
@@ -319,6 +298,39 @@ pub(super) async fn load_optional(
         withheld: r.get::<Option<i64>, _>("withheld_at_ms").is_some(),
     }))
 }
+fn retained_receipt(
+    row: &sqlx::postgres::PgRow,
+    id: Uuid,
+    binding: &media::ReportBinding,
+    request: &media::UploadCreate,
+) -> Result<Option<media::Receipt>> {
+    let receipt_bytes: Option<Vec<u8>> = row.get("receipt_bytes");
+    receipt_bytes
+        .as_ref()
+        .map(|bytes| {
+            let receipt: media::Receipt =
+                serde_json::from_slice(bytes).map_err(|_| Error::Owner)?;
+            receipt.validate().map_err(|_| Error::Owner)?;
+            if media::canonical_bytes(&receipt).map_err(|_| Error::Owner)? != *bytes
+                || &receipt.binding != binding
+                || receipt.artifact_id.as_uuid() != id
+                || receipt.uploader_id.as_uuid() != row.get::<Uuid, _>("actor_id")
+                || receipt.input.digest != request.input_digest
+                || receipt.input.bytes != request.input_bytes
+                || receipt.input.filename != request.filename
+                || receipt.capture != request.capture
+                || receipt.media() != request.media
+                || receipt.clip.as_ref().map(|c| c.poster_artifact_id) != request.poster_artifact_id
+                || receipt.digest().map_err(|_| Error::Owner)?.as_str()
+                    != row.get::<String, _>("receipt_digest")
+            {
+                return Err(Error::Owner);
+            }
+            Ok(receipt)
+        })
+        .transpose()
+}
+
 pub(super) async fn load(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<Intent> {
     load_optional(tx, id).await?.ok_or(Error::NotFound)
 }
