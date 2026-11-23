@@ -96,14 +96,21 @@ impl<'a> CheckRequest<'a> {
                 Continue(())
             }
             PullRequestState::Open if initial.state == PullRequestState::Merged => Break(None),
-            PullRequestState::Open => {
-                self.repair(pr.mergeability, seen)?;
-                if pr.base_sha != initial.base_sha {
-                    return Break(None);
-                }
-                Continue(())
-            }
+            PullRequestState::Open => self.checked_open(pr, initial, seen),
             PullRequestState::Closed => Break(Some(Completion::closed())),
+        }
+    }
+    fn checked_open(
+        &self,
+        pr: &PullRequest,
+        initial: &PullRequest,
+        seen: &mut PullRequestObserved,
+    ) -> ControlFlow<Option<Completion>> {
+        self.repair(pr.mergeability, seen)?;
+        if pr.base_sha == initial.base_sha {
+            Continue(())
+        } else {
+            Break(None)
         }
     }
 }

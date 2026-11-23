@@ -184,20 +184,7 @@ pub async fn frozen_request(
         }
         "pull_request.await_checks" => {
             request["pull_request"] = json!(known.as_ref().map(number));
-            request["result_head"] = json!(accepting.head);
-            request["check_target"] = serde_json::to_value(accepting.target)?;
-            let longest = accepting
-                .longest_check_wait_ms
-                .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;
-            let asked = input["deadline_ms"]
-                .as_u64()
-                .ok_or(DeliveryError::InvalidInput("deadline_ms"))?;
-            // Frozen with the request, like the wait, so one operation reads
-            // its logs under the limit it was accepted with.
-            request["check_log_bytes"] = json!(accepting.check_log_bytes.unwrap_or(0));
-            let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
-            request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
-            request["required"] = input["required"].clone();
+            accepting.freeze_wait(&mut request, input, now_ms)?;
         }
         _ => {}
     }
@@ -205,6 +192,28 @@ pub async fn frozen_request(
 }
 
 impl Accepting<'_> {
+    fn freeze_wait(
+        &self,
+        request: &mut Value,
+        input: &Value,
+        now_ms: i64,
+    ) -> Result<(), DeliveryError> {
+        request["result_head"] = json!(self.head);
+        request["check_target"] = serde_json::to_value(&self.target)?;
+        let longest = self
+            .longest_check_wait_ms
+            .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;
+        let asked = input["deadline_ms"]
+            .as_u64()
+            .ok_or(DeliveryError::InvalidInput("deadline_ms"))?;
+        // Frozen with the request, like the wait, so one operation reads
+        // its logs under the limit it was accepted with.
+        request["check_log_bytes"] = json!(self.check_log_bytes.unwrap_or(0));
+        let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
+        request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
+        request["required"] = input["required"].clone();
+        Ok(())
+    }
     fn freeze_merge(
         &self,
         request: &mut Value,
@@ -376,11 +385,7 @@ impl MergeStep<'_> {
         let FrozenCommand {
             operation, request, ..
         } = self.frozen;
-        let DeliveryRuntime {
-            service: delivery,
-            target,
-        } = runtime;
-        const MERGE: &str = "pull_request.merge";
+
         let Some(pr) = request["pull_request"].as_u64() else {
             return Ok(Some(Step::Done(Completion::refused("no_pull_request"))));
         };
@@ -390,27 +395,10 @@ impl MergeStep<'_> {
         .bind(operation)
         .fetch_optional(pool)
         .await?;
-        let current = serde_json::to_value(target)?;
-        if request.get("merge_target") == Some(&Value::Null) {
-            return Ok(Some(without_target(MERGE)));
-        }
-        // Keep cleanup tied to the repository that merged, including old intents.
-        let frozen = retained
-            .as_ref()
-            .map(|(target, _)| target)
-            .or(request.get("merge_target"));
-        if frozen.is_some_and(|target| target != &current) {
-            return Ok(None);
-        }
-        let Some(target) = target else {
-            return Ok(Some(without_target(MERGE)));
-        };
-        let Some(delivery) = delivery else {
-            return Ok(if retained.is_some() {
-                None
-            } else {
-                without_delivery(MERGE)
-            });
+        let current = serde_json::to_value(runtime.target)?;
+        let (delivery, target) = match self.runtime(runtime, retained.as_ref(), &current) {
+            std::ops::ControlFlow::Continue(pair) => pair,
+            std::ops::ControlFlow::Break(step) => return Ok(step),
         };
         if retained.is_none() {
             if let std::ops::ControlFlow::Break(step) = self
@@ -433,6 +421,41 @@ impl MergeStep<'_> {
         ))
     }
 
+    fn runtime<'a>(
+        &self,
+        runtime: DeliveryRuntime<'a>,
+        retained: Option<&(Value, String)>,
+        current: &Value,
+    ) -> std::ops::ControlFlow<Option<Step>, (&'a Delivery, &'a DeliveryTarget)> {
+        use std::ops::ControlFlow::{Break, Continue};
+        const MERGE: &str = "pull_request.merge";
+        let request = self.frozen.request;
+        let DeliveryRuntime {
+            service: delivery,
+            target,
+        } = runtime;
+        if request.get("merge_target") == Some(&Value::Null) {
+            return Break(Some(without_target(MERGE)));
+        }
+        // Keep cleanup tied to the repository that merged, including old intents.
+        let frozen = retained
+            .map(|(target, _)| target)
+            .or(request.get("merge_target"));
+        if frozen.is_some_and(|target| target != current) {
+            return Break(None);
+        }
+        let Some(target) = target else {
+            return Break(Some(without_target(MERGE)));
+        };
+        let Some(delivery) = delivery else {
+            return Break(if retained.is_some() {
+                None
+            } else {
+                without_delivery(MERGE)
+            });
+        };
+        Continue((delivery, target))
+    }
     // A failed confirmation either produces a final/retry step or waits for a concurrent evidence insert.
     async fn confirm(
         &self,
