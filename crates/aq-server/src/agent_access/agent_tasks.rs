@@ -6,7 +6,7 @@
 use super::grant_check::{AgentCaller, DISPATCHED, audit};
 use super::*;
 use crate::commands::refuse;
-use aq_agent_grants::{AuditEntry, Decision, Refusal, RefusalCode, Relation, Target};
+use aq_agent_grants::{AuditEntry, Decision, Refusal, RefusalCode};
 use aq_command_registry::agent_task::AgentTask as Body;
 
 pub(super) fn machine_routes() -> Router<AppState> {
@@ -48,156 +48,204 @@ async fn create(
     if b.api_version != 1 {
         return Error("unsupported_api_version").respond(request_id);
     }
-    match admit(&state, &a, &headers, &b, raw, request_id).await {
+    let submission = Submission {
+        state: &state,
+        caller: &a,
+        headers: &headers,
+        body: &b,
+        request_id,
+    };
+    match submission.admit(raw).await {
         Ok(response) => response,
         Err(r) => refuse(r, request_id),
     }
 }
-async fn admit(
-    state: &AppState,
-    a: &AgentCaller,
-    headers: &HeaderMap,
-    b: &Body,
-    mut params: serde_json::Map<String, Value>,
+struct Submission<'a> {
+    state: &'a AppState,
+    caller: &'a AgentCaller,
+    headers: &'a HeaderMap,
+    body: &'a Body,
     request_id: Uuid,
-) -> std::result::Result<Response, Refusal> {
-    let spec = crate::commands::registry()
-        .get("task.create")
-        .expect("registered");
-    let (decision, target) = a.authorize(state, spec, &mut params).await;
-    let grant = aq_command_registry::required_grant(spec, &target).unwrap_or_default();
-    let checked = aq_agent_grants::GrantRequest::new(spec.name, grant, target);
-    let entry = |d: &Decision| AuditEntry::agent(a.ids, checked, d, request_id);
-    if DISPATCHED.try_with(|_| ()).is_err() {
-        audit(state, &entry(&decision)).await;
-    }
-    let held = match decision {
-        Decision::Allow(held) => held,
-        Decision::Deny(r) => return Err(r),
-    };
-    if b.sets_hint() {
-        let r = Refusal::scope_denied(checked.required, a.grants.related(grant));
-        let r = Refusal {
-            message: "An agent cannot set intelligence_hint on a task it creates.".into(),
-            ..r
+}
+impl Submission<'_> {
+    async fn admit(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+    ) -> std::result::Result<Response, Refusal> {
+        let spec = crate::commands::registry()
+            .get("task.create")
+            .expect("registered");
+        let (decision, target) = self.caller.authorize(self.state, spec, &mut params).await;
+        let grant = aq_command_registry::required_grant(spec, &target).unwrap_or_default();
+        let checked = aq_agent_grants::GrantRequest::new(spec.name, grant, target);
+        if DISPATCHED.try_with(|_| ()).is_err() {
+            self.note(checked, &decision).await;
+        }
+        let held = match decision {
+            Decision::Allow(held) => held,
+            Decision::Deny(r) => return Err(r),
         };
-        audit(state, &entry(&Decision::Deny(r.clone()))).await;
-        return Err(r);
-    }
-    // Before the quota is reserved: a role that does not exist is refused
-    // with the roles that do (spec 0014 §5.5).
-    if let Err(unknown) = crate::role_settings::named(state, b.role.as_slice())
+        self.check_role(checked).await?;
+        let (project, own) = (self.caller.ids.project_id, self.caller.ids.task_id);
+        if held.limits.draft_only {
+            return self.admit_draft(spec).await;
+        }
+        self.reserve(checked, &held).await?;
+        let revision = project_revision(self.state, project, self.body).await?;
+        let request =
+            serde_json::from_value(self.body.action(project, own, &revision)).map_err(|_| {
+                Refusal::error(
+                    RefusalCode::InvalidRequest,
+                    "task.create",
+                    "The task is malformed.",
+                )
+            })?;
+        match super::human::enqueue::supervisor::agent_action(
+            self.state,
+            self.caller.ids,
+            request,
+            Default::default(),
+            None,
+            crate::dashboard_api::actions::AgentAdmission {
+                caller: self.caller,
+                headers: self.headers,
+                reservation: None,
+            },
+        )
         .await
-        .map_err(internal)?
-    {
-        let message = unknown.to_string();
-        return Err(Refusal::error(
-            RefusalCode::InvalidRequest,
-            spec.name,
-            &message,
-        ));
+        {
+            Err(e) if e.status() == axum::http::StatusCode::FORBIDDEN => {
+                let r = Refusal::parent_outside_project(
+                    spec.name,
+                    grant,
+                    self.caller.grants.related(grant),
+                );
+                self.note(checked, &Decision::Deny(r.clone())).await;
+                Err(r)
+            }
+            result => Ok(result.unwrap_or_else(axum::response::IntoResponse::into_response)),
+        }
     }
-    let (project, own) = (a.ids.project_id, a.ids.task_id);
-    // An agent may not hand out more than it holds: the role of the new task
-    // (named, or the project's default) stays within the filer's own role.
-    let filer = a.ids.attempt_id;
-    let named = b.role.as_deref();
-    if let Err(message) = crate::role_settings::within_filer(state, filer, project, named)
-        .await
-        .map_err(internal)?
-    {
-        let r = Refusal::error(RefusalCode::InvalidRequest, spec.name, &message);
-        audit(state, &entry(&Decision::Deny(r.clone()))).await;
-        return Err(r);
-    }
-    if held.limits.draft_only {
-        let mut task = b.action(
+    async fn admit_draft(
+        &self,
+        spec: &aq_command_registry::CommandSpec,
+    ) -> std::result::Result<Response, Refusal> {
+        let (project, own) = (self.caller.ids.project_id, self.caller.ids.task_id);
+        let mut task = self.body.action(
             project,
             own,
-            &match &b.expected_project_revision {
-                Some(r) => r.clone(),
-                None => crate::project_bindings::current(state, project)
-                    .await
-                    .map_err(internal)?
-                    .revision
-                    .to_string(),
-            },
+            &project_revision(self.state, project, self.body).await?,
         );
-        if b.task_state.is_none() {
+        if self.body.task_state.is_none() {
             task["payload"]["task_state"] = json!("draft");
         }
         let request = serde_json::from_value(task).map_err(internal)?;
-        return super::draft_tasks::admit(state, a, headers, spec, request, request_id).await;
+        super::draft_tasks::admit(
+            self.state,
+            self.caller,
+            self.headers,
+            spec,
+            request,
+            self.request_id,
+        )
+        .await
     }
-    let parent = b.parent(own);
-    // Reserve the create against the quota; a replay of the same operation
-    // finds its own row and is not counted again.
-    let depth = match target {
-        Target::Task {
-            relation: Relation::Descendant(d),
-            ..
-        } => Some(d as i32),
-        _ => None,
-    };
-    {
-        let mut tx = state.store.pool.begin().await.map_err(internal)?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-            .bind(a.ids.attempt_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(internal)?;
-        let (count, mine): (i64, bool) = sqlx::query_as("SELECT count(*),COALESCE(bool_or(task_id=$2),FALSE) FROM agent_created_tasks WHERE attempt_id=$1")
-            .bind(a.ids.attempt_id).bind(b.operation_id).fetch_one(&mut *tx).await.map_err(internal)?;
-        let max = held.limits.max_created_tasks.map_or(i64::MAX, i64::from);
-        if !mine && count >= max {
-            let r = Refusal::quota_exceeded(
-                spec.name,
-                grant,
-                a.grants.related(grant),
-                "max_created_tasks",
+    async fn note(&self, checked: aq_agent_grants::GrantRequest<'_>, decision: &Decision) {
+        let entry = AuditEntry::agent(self.caller.ids, checked, decision, self.request_id);
+        audit(self.state, &entry).await;
+    }
+    async fn check_role(
+        &self,
+        checked: aq_agent_grants::GrantRequest<'_>,
+    ) -> std::result::Result<(), Refusal> {
+        if self.body.sets_hint() {
+            let r = Refusal::scope_denied(
+                checked.required,
+                self.caller.grants.related(checked.required.operation),
             );
-            audit(state, &entry(&Decision::Deny(r.clone()))).await;
+            let r = Refusal {
+                message: "An agent cannot set intelligence_hint on a task it creates.".into(),
+                ..r
+            };
+            self.note(checked, &Decision::Deny(r.clone())).await;
             return Err(r);
         }
-        sqlx::query("INSERT INTO agent_created_tasks(task_id,attempt_id,project_id,parent_id,root_task_id,depth,operation_id,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$1,$7) ON CONFLICT DO NOTHING")
-            .bind(b.operation_id).bind(a.ids.attempt_id).bind(project).bind(parent).bind(own).bind(depth).bind(now(state) as i64)
-            .execute(&mut *tx).await.map_err(internal)?;
-        tx.commit().await.map_err(internal)?;
+        // Before the quota is reserved: a role that does not exist is refused
+        // with the roles that do (spec 0014 §5.5).
+        if let Err(unknown) = crate::role_settings::named(self.state, self.body.role.as_slice())
+            .await
+            .map_err(internal)?
+        {
+            let message = unknown.to_string();
+            return Err(Refusal::error(
+                RefusalCode::InvalidRequest,
+                checked.required.command,
+                &message,
+            ));
+        }
+        let project = self.caller.ids.project_id;
+        // An agent may not hand out more than it holds: the role of the new task
+        // (named, or the project's default) stays within the filer's own role.
+        let filer = self.caller.ids.attempt_id;
+        let named = self.body.role.as_deref();
+        if let Err(message) = crate::role_settings::within_filer(self.state, filer, project, named)
+            .await
+            .map_err(internal)?
+        {
+            let r = Refusal::error(
+                RefusalCode::InvalidRequest,
+                checked.required.command,
+                &message,
+            );
+            self.note(checked, &Decision::Deny(r.clone())).await;
+            return Err(r);
+        }
+        Ok(())
     }
-    let revision = match &b.expected_project_revision {
+    async fn reserve(
+        &self,
+        checked: aq_agent_grants::GrantRequest<'_>,
+        held: &aq_agent_grants::Grant,
+    ) -> std::result::Result<(), Refusal> {
+        use aq_agent_grants::store::{SingleReservation, reserve_single};
+        let ids = self.caller.ids;
+        let row = SingleReservation {
+            ids,
+            operation: self.body.operation_id,
+            parent: self.body.parent(ids.task_id),
+            target: checked.target,
+        };
+        let mut tx = self.state.store.pool.begin().await.map_err(internal)?;
+        let reserved = reserve_single(&mut tx, row, held.limits.max_created_tasks, || {
+            now(self.state) as i64
+        })
+        .await
+        .map_err(internal)?;
+        if !reserved {
+            let r = Refusal::quota_exceeded(
+                checked.required.command,
+                checked.required.operation,
+                self.caller.grants.related(checked.required.operation),
+                "max_created_tasks",
+            );
+            self.note(checked, &Decision::Deny(r.clone())).await;
+            return Err(r);
+        }
+        tx.commit().await.map_err(internal)?;
+        Ok(())
+    }
+}
+async fn project_revision(
+    state: &AppState,
+    project: Uuid,
+    b: &Body,
+) -> std::result::Result<String, Refusal> {
+    Ok(match &b.expected_project_revision {
         Some(r) => r.clone(),
         None => crate::project_bindings::current(state, project)
             .await
             .map_err(internal)?
             .revision
             .to_string(),
-    };
-    let request = serde_json::from_value(b.action(project, own, &revision)).map_err(|_| {
-        Refusal::error(
-            RefusalCode::InvalidRequest,
-            "task.create",
-            "The task is malformed.",
-        )
-    })?;
-    match super::human::enqueue::supervisor::agent_action(
-        state,
-        a.ids,
-        request,
-        Default::default(),
-        None,
-        crate::dashboard_api::actions::AgentAdmission {
-            caller: a,
-            headers,
-            reservation: None,
-        },
-    )
-    .await
-    {
-        Err(e) if e.status() == axum::http::StatusCode::FORBIDDEN => {
-            let r = Refusal::parent_outside_project(spec.name, grant, a.grants.related(grant));
-            audit(state, &entry(&Decision::Deny(r.clone()))).await;
-            Err(r)
-        }
-        result => Ok(result.unwrap_or_else(axum::response::IntoResponse::into_response)),
-    }
+    })
 }
