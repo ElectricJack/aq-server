@@ -3,7 +3,11 @@
 pub mod api;
 pub mod draft;
 pub mod epoch;
+mod epoch_ledger;
+mod input_ledger;
 pub mod output;
+mod replay_authority;
+mod validation;
 use aq_session_api as human;
 use aq_session_protocol::*;
 use serde::{Deserialize, Serialize};
@@ -233,10 +237,10 @@ impl Ledger {
         expiry_margin_ms: Option<u64>,
     ) -> Result<Self> {
         valid(&terminal)?;
-        if session_revision == 0
-            || execution_expires_at_ms == 0
-            || expiry_margin_ms.is_some_and(|v| v > 5000)
-        {
+        if session_revision == 0 || execution_expires_at_ms == 0 {
+            return Err(Error::Invalid);
+        }
+        if expiry_margin_ms.is_some_and(|v| v > 5000) {
             return Err(Error::Invalid);
         }
         Ok(Self {
@@ -330,16 +334,16 @@ impl Ledger {
         now: u64,
     ) -> Result<()> {
         valid(t)?;
-        if *t != self.terminal
-            || a.terminal != self.terminal
-            || revision != self.session_revision
-            || a.session_revision != self.session_revision
-        {
+        let expected = (&self.terminal, self.session_revision);
+        if (t, revision) != expected || (&a.terminal, a.session_revision) != expected {
             return Err(Error::Stale);
         }
-        if (control && (!a.control || !self.terminal_policy.input_enabled))
-            || (!control && !a.watch)
-        {
+        let permitted = if control {
+            a.control && self.terminal_policy.input_enabled
+        } else {
+            a.watch
+        };
+        if !permitted {
             return Err(Error::Forbidden);
         }
         if now >= a.valid_until_ms {
@@ -413,6 +417,10 @@ impl Ledger {
             }
         }
     }
+    fn execution_active(&self, a: &Access, now: u64) -> bool {
+        a.execution_active && now < a.execution_expires_at_ms.min(self.execution_expires_at_ms)
+    }
+
     fn active(
         &self,
         a: &Access,
@@ -420,20 +428,16 @@ impl Ledger {
         generation: u64,
         now: u64,
     ) -> Result<&ControllerLease> {
-        if !a.execution_active
-            || now >= a.execution_expires_at_ms
-            || now >= self.execution_expires_at_ms
-        {
+        if !self.execution_active(a, now) {
             return Err(Error::Expired);
         }
         let c = self.controller.as_ref().ok_or(Error::Stale)?;
-        if c.lease.principal_id != a.principal
-            || c.lease.lease_id != lease_id
-            || generation != self.generation
+        if (&c.lease.principal_id, c.lease.lease_id, self.generation)
+            != (&a.principal, lease_id, generation)
         {
             return Err(Error::Stale);
         }
-        if now < c.lease.issued_at_ms || now >= c.lease.expires_at_ms {
+        if !(c.lease.issued_at_ms..c.lease.expires_at_ms).contains(&now) {
             return Err(Error::Expired);
         }
         if !c.acknowledged && c.activate_after_ms.is_none_or(|v| now < v) {
@@ -510,9 +514,8 @@ impl Ledger {
     pub fn acknowledge_fence(&self, p: &draft::Peer, ack: &draft::FenceAck) -> Result<Plan> {
         self.peer(p)?;
         let fence = self.last_fence.as_ref().ok_or(Error::Stale)?;
-        if ack.terminal != self.terminal
-            || ack.fence_id != fence.fence_id
-            || ack.generation != self.generation
+        if (&ack.terminal, ack.fence_id, ack.generation)
+            != (&self.terminal, fence.fence_id, self.generation)
         {
             return Err(Error::Stale);
         }
@@ -565,197 +568,6 @@ impl Ledger {
         };
         n.last_fence = Some(fence.clone());
         self.plan(n, vec![draft::Effect::Fence(fence)])
-    }
-    pub fn input(&self, a: &Access, r: &human::InputRequest, now: u64) -> Result<Plan> {
-        if self.epoch_enabled {
-            return Err(Error::Unsupported);
-        }
-        self.admit_input(a, r, now)
-    }
-    fn admit_input(&self, a: &Access, r: &human::InputRequest, now: u64) -> Result<Plan> {
-        if r.bytes.is_empty() || r.bytes.len() > self.terminal_policy.max_input_bytes as usize {
-            return Err(Error::Invalid);
-        }
-        self.auth(a, &r.terminal, r.expected_session_revision, true, now)?;
-        if self.seen(r.operation_id, a, r)? {
-            return self.plan(self.clone(), vec![]);
-        }
-        let lease = self.active(a, r.lease_id, r.expected_controller_generation, now)?;
-        if self.paused() {
-            return Err(Error::Unknown);
-        }
-        if self.inputs.len() >= MAX_OPERATIONS {
-            return Err(Error::Capacity);
-        }
-        if r.expires_at_ms > a.execution_expires_at_ms || r.expires_at_ms > a.valid_until_ms {
-            return Err(Error::Expired);
-        }
-        if r.expires_at_ms
-            .checked_sub(now)
-            .is_none_or(|ttl| !(1..=2000).contains(&ttl))
-        {
-            return Err(Error::InputDeadline);
-        }
-        let command = InputCommand {
-            operation_id: r.operation_id,
-            lease: lease.clone(),
-            issued_at_ms: now,
-            deadline_ms: r.expires_at_ms,
-            bytes: r.bytes.clone(),
-            escape_key: r.escape_key,
-        };
-        valid(&command)?;
-        let pending: usize = self
-            .inputs
-            .values()
-            .filter(|v| v.command.is_some())
-            .map(|v| v.byte_count)
-            .sum();
-        if pending
-            .checked_add(r.bytes.len())
-            .is_none_or(|v| v > self.terminal_policy.max_pending_input_bytes as usize)
-        {
-            return Err(Error::Capacity);
-        }
-        let mut n = self.clone();
-        n.remember(r.operation_id, a, r)?;
-        n.inputs.insert(
-            r.operation_id,
-            Input {
-                principal: a.principal.clone(),
-                request_digest: digest(r)?,
-                command_digest: digest(&command)?,
-                command: Some(command),
-                disposition: InputDisposition::Queued,
-                dispatched: false,
-                deadline_ms: r.expires_at_ms,
-                byte_count: r.bytes.len(),
-                admission_revision: self.revision.checked_add(1).ok_or(Error::Capacity)?,
-                epoch: None,
-            },
-        );
-        self.plan(n, vec![])
-    }
-    pub fn input_receipt(
-        &self,
-        a: &Access,
-        r: &human::InputRequest,
-        now: u64,
-    ) -> Result<human::InputReceipt> {
-        if r.bytes.is_empty() || r.bytes.len() > self.terminal_policy.max_input_bytes as usize {
-            return Err(Error::Invalid);
-        }
-        self.auth(a, &r.terminal, r.expected_session_revision, true, now)?;
-        let input = self.inputs.get(&r.operation_id).ok_or(Error::Stale)?;
-        if input.principal != a.principal || input.request_digest != digest(r)? {
-            return Err(Error::Conflict);
-        }
-        Ok(human::InputReceipt {
-            operation_id: r.operation_id,
-            terminal: self.terminal.clone(),
-            disposition: input.disposition,
-            input_paused: self.paused(),
-            observed_at_ms: now,
-        })
-    }
-    pub fn dispatch_input(&self, a: &Access, id: Uuid, now: u64) -> Result<Plan> {
-        if self.epoch_enabled {
-            return Err(Error::Unsupported);
-        }
-        self.dispatch_raw(a, id, now)
-    }
-    fn dispatch_raw(&self, a: &Access, id: Uuid, now: u64) -> Result<Plan> {
-        if self.paused() {
-            return Err(Error::Unknown);
-        }
-        if self
-            .inputs
-            .values()
-            .any(|v| v.dispatched && v.command.is_some())
-        {
-            return Err(Error::Capacity);
-        }
-        let input = self.inputs.get(&id).ok_or(Error::Stale)?;
-        let c = input.command.as_ref().ok_or(Error::Transition)?;
-        if !complete_terminal_input(&c.bytes, c.escape_key) {
-            return Err(Error::Transition);
-        }
-        self.auth(a, &c.lease.terminal, self.session_revision, true, now)?;
-        self.active(a, c.lease.lease_id, c.lease.generation, now)?;
-        if now >= input.deadline_ms
-            || input.deadline_ms > a.execution_expires_at_ms
-            || input.deadline_ms > a.valid_until_ms
-        {
-            return Err(Error::Expired);
-        }
-        let first = self
-            .inputs
-            .iter()
-            .filter(|(_, v)| {
-                !v.dispatched
-                    && v.disposition == InputDisposition::Queued
-                    && v.command.as_ref().is_some_and(|old| {
-                        old.lease.lease_id == c.lease.lease_id
-                            && old.lease.generation == c.lease.generation
-                    })
-            })
-            .min_by_key(|(_, v)| v.admission_revision)
-            .map(|(id, _)| *id);
-        if first != Some(id) {
-            return Err(Error::Transition);
-        }
-        if input.disposition != InputDisposition::Queued || input.dispatched {
-            return Err(Error::Transition);
-        }
-        let mut n = self.clone();
-        n.inputs.get_mut(&id).unwrap().dispatched = true;
-        self.plan(n, vec![draft::Effect::Input(c.clone())])
-    }
-    pub fn observe_input(
-        &self,
-        p: &draft::Peer,
-        r: &aq_session_protocol::InputReceipt,
-    ) -> Result<Plan> {
-        self.peer(p)?;
-        valid(r)?;
-        if r.terminal != self.terminal {
-            return Err(Error::Stale);
-        }
-        let old = self.inputs.get(&r.operation_id).ok_or(Error::Stale)?;
-        if old.command_digest != r.command_digest {
-            return Err(Error::Conflict);
-        }
-        if old.disposition == r.disposition {
-            return self.plan(self.clone(), vec![]);
-        }
-        if !old.dispatched || old.command.is_none() || r.disposition == InputDisposition::Queued {
-            return Err(Error::Transition);
-        }
-        let rank = |d| match d {
-            InputDisposition::Queued => 0,
-            InputDisposition::Received => 1,
-            InputDisposition::Injecting => 2,
-            _ => 3,
-        };
-        if rank(r.disposition) < rank(old.disposition) {
-            return Err(Error::Transition);
-        }
-        let mut n = self.clone();
-        let input = n.inputs.get_mut(&r.operation_id).unwrap();
-        input.disposition = r.disposition;
-        if matches!(
-            r.disposition,
-            InputDisposition::Applied
-                | InputDisposition::Expired
-                | InputDisposition::Rejected
-                | InputDisposition::DeliveryUnknown
-        ) {
-            input.command = None;
-        }
-        if r.disposition == InputDisposition::DeliveryUnknown {
-            n.unknown.insert(r.operation_id);
-        }
-        self.plan(n, vec![])
     }
     pub fn expire(&self, now: u64) -> Result<Plan> {
         let mut n = self.clone();
@@ -811,163 +623,6 @@ impl Ledger {
         }
         old.plan(n, vec![])
     }
-    fn check(&self) -> Result<()> {
-        valid_policy(&self.terminal_policy)?;
-        if !self.terminal_policy.input_enabled
-            && (self.controller.is_some() || !self.inputs.is_empty() || self.epoch_enabled)
-        {
-            return Err(Error::Invalid);
-        }
-
-        valid(&self.terminal)?;
-        if self.format != 1
-            || self.session_revision == 0
-            || self.seen.len() > MAX_OPERATIONS
-            || self.inputs.len() > MAX_OPERATIONS
-            || self.captures.len() > MAX_OPERATIONS
-            || self.viewers.len() > MAX_VIEWERS
-            || self.resize_digests.len() > MAX_OPERATIONS
-            || self.unknown.len() > self.inputs.len()
-        {
-            return Err(Error::Invalid);
-        }
-        if self.execution_expires_at_ms == 0
-            || self.expiry_margin_ms.is_some_and(|v| v > 5000)
-            || self.seen.keys().any(Uuid::is_nil)
-            || self.captures.keys().any(Uuid::is_nil)
-        {
-            return Err(Error::Invalid);
-        }
-        if let Some(f) = &self.last_fence
-            && (f.generation != self.generation
-                || f.terminal != self.terminal
-                || f.fence_id.is_nil())
-        {
-            return Err(Error::Invalid);
-        }
-        if let Some(c) = &self.controller {
-            valid(&c.lease)?;
-            if c.lease.terminal != self.terminal
-                || c.lease.generation != self.generation
-                || c.lease.execution_expires_at_ms > self.execution_expires_at_ms
-            {
-                return Err(Error::Invalid);
-            }
-        }
-        if let Some(e) = &self.epoch {
-            e.permit.validate()?;
-            if !self.epoch_enabled
-                || e.permit.terminal != self.terminal
-                || e.permit.controller_generation != self.generation
-                || self.controller.as_ref().is_none_or(|c| {
-                    c.lease.lease_id != e.permit.lease_id
-                        || e.permit.expires_at_ms > c.lease.expires_at_ms
-                })
-                || e.receipts.len() > epoch::RECEIPT_WINDOW
-                || e.highwater < e.retired_through
-                || e.highwater - e.retired_through != e.receipts.len() as u64
-            {
-                return Err(Error::Invalid);
-            }
-            for (sequence, id) in &e.receipts {
-                if *sequence <= e.retired_through
-                    || *sequence > e.highwater
-                    || epoch::operation_id(&e.permit, *sequence)? != *id
-                    || self
-                        .inputs
-                        .get(id)
-                        .is_none_or(|v| v.epoch != Some(e.permit.epoch_id))
-                {
-                    return Err(Error::Invalid);
-                }
-            }
-        }
-        let mut pending = 0usize;
-        for (id, input) in &self.inputs {
-            let seen = self.seen.get(id).ok_or(Error::Invalid)?;
-            if id.is_nil()
-                || seen.principal != input.principal
-                || seen.digest != input.request_digest
-            {
-                return Err(Error::Invalid);
-            };
-            if input.admission_revision == 0 || input.admission_revision > self.revision {
-                return Err(Error::Invalid);
-            }
-            if !(1..=self.terminal_policy.max_input_bytes as usize).contains(&input.byte_count) {
-                return Err(Error::Invalid);
-            }
-            match input.disposition {
-                InputDisposition::Queued => {
-                    if input.command.is_none() {
-                        return Err(Error::Invalid);
-                    }
-                }
-                InputDisposition::Received | InputDisposition::Injecting => {
-                    if !input.dispatched || input.command.is_none() {
-                        return Err(Error::Invalid);
-                    }
-                }
-                InputDisposition::DeliveryUnknown | InputDisposition::Applied => {
-                    if !input.dispatched || input.command.is_some() {
-                        return Err(Error::Invalid);
-                    }
-                }
-                InputDisposition::Rejected => {
-                    if input.command.is_some() {
-                        return Err(Error::Invalid);
-                    }
-                }
-                InputDisposition::Expired => {
-                    if input.command.is_some() {
-                        return Err(Error::Invalid);
-                    }
-                }
-            }
-            if input.epoch.is_some() && !self.epoch_enabled {
-                return Err(Error::Invalid);
-            }
-            if let Some(c) = &input.command {
-                c.validate_envelope().map_err(|_| Error::Invalid)?;
-                if c.operation_id != *id
-                    || c.lease.terminal != self.terminal
-                    || digest(c)? != input.command_digest
-                    || c.bytes.len() != input.byte_count
-                    || c.deadline_ms != input.deadline_ms
-                {
-                    return Err(Error::Invalid);
-                }
-                pending = pending.checked_add(c.bytes.len()).ok_or(Error::Capacity)?;
-            }
-        }
-        for (id, capture) in &self.captures {
-            if *id != capture.request.capture_request_id
-                || capture.request.terminal != self.terminal
-                || capture.request.after_ledger_revision > self.revision
-            {
-                return Err(Error::Invalid);
-            }
-            if let Some(snapshot) = &capture.snapshot {
-                valid(snapshot)?;
-                if snapshot.capture_request_id != *id
-                    || capture.snapshot_id != Some(snapshot.snapshot_id)
-                    || capture.snapshot_digest.as_ref() != Some(&digest(snapshot)?)
-                {
-                    return Err(Error::Invalid);
-                }
-            }
-        }
-        if pending > self.terminal_policy.max_pending_input_bytes as usize
-            || self.unknown.iter().any(|id| {
-                self.inputs
-                    .get(id)
-                    .is_none_or(|v| v.disposition != InputDisposition::DeliveryUnknown)
-            })
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
 }
 impl Ledger {
     /// Renewal is an explicit replacement grant with a higher generation. It
@@ -1004,10 +659,14 @@ impl Ledger {
         if self.seen(r.operation_id, a, r)? {
             return self.plan(self.clone(), vec![]);
         }
-        if r.expires_at_ms <= now
-            || r.expires_at_ms > now.checked_add(30000).ok_or(Error::Invalid)?
-            || r.expires_at_ms > a.valid_until_ms
-        {
+        if r.expires_at_ms <= now {
+            return Err(Error::Expired);
+        }
+        let latest = now
+            .checked_add(30000)
+            .ok_or(Error::Invalid)?
+            .min(a.valid_until_ms);
+        if r.expires_at_ms > latest {
             return Err(Error::Expired);
         }
         let mut n = self.clone();
@@ -1157,14 +816,7 @@ impl Ledger {
             .captures
             .get(&s.capture_request_id)
             .ok_or(Error::Stale)?;
-        if old.invalidated
-            || old.request.controller_generation != self.generation
-            || self
-                .controller
-                .as_ref()
-                .is_none_or(|c| c.lease.lease_id != old.request.lease_id)
-            || !self.unknown.contains(&old.request.uncertain_operation_id)
-        {
+        if !old.awaiting_snapshot(self) {
             return Err(Error::Stale);
         }
         if now >= old.request.expires_at_ms {
@@ -1204,21 +856,7 @@ impl Ledger {
             .captures
             .get(&r.fresh_capture_request_id)
             .ok_or(Error::Stale)?;
-        if now >= capture.request.expires_at_ms {
-            return Err(Error::Expired);
-        }
-        if capture.invalidated {
-            return Err(Error::Stale);
-        }
-        let s = capture.snapshot.as_ref().ok_or(Error::Stale)?;
-        if capture.request.uncertain_operation_id != r.uncertain_operation_id
-            || capture.request.controller_generation != self.generation
-            || capture.request.lease_id != r.lease_id
-            || s.snapshot_id != r.fresh_snapshot_id
-            || s.through_sequence != r.fresh_snapshot_sequence
-        {
-            return Err(Error::Stale);
-        }
+        capture.check_resolution(r, self.generation, now)?;
         if !self.unknown.contains(&r.uncertain_operation_id) {
             return Err(Error::Transition);
         }
@@ -1233,178 +871,43 @@ impl Ledger {
         self.plan(n, vec![])
     }
 }
-impl Ledger {
-    pub fn new_epoch(
-        terminal: TerminalIdentity,
-        session_revision: u64,
-        execution_ceiling_ms: u64,
-        margin: Option<u64>,
-    ) -> Result<Self> {
-        let mut n = Self::new(terminal, session_revision, execution_ceiling_ms, margin)?;
-        n.epoch_enabled = true;
-        Ok(n)
+impl CaptureState {
+    fn awaiting_snapshot(&self, ledger: &Ledger) -> bool {
+        !self.invalidated
+            && self.request.controller_generation == ledger.generation
+            && ledger
+                .controller
+                .as_ref()
+                .is_some_and(|c| c.lease.lease_id == self.request.lease_id)
+            && ledger
+                .unknown
+                .contains(&self.request.uncertain_operation_id)
     }
-    /// Trusted server nonce, not a human-selected epoch. A grant can open exactly
-    /// one epoch. Changing it requires a replacement controller generation.
-    pub fn open_epoch(&self, a: &Access, epoch_id: Uuid, now: u64) -> Result<Plan> {
-        if !self.epoch_enabled {
-            return Err(Error::Unsupported);
+    fn check_resolution(
+        &self,
+        request: &human::ResolveInputRequest,
+        generation: u64,
+        now: u64,
+    ) -> Result<()> {
+        if now >= self.request.expires_at_ms {
+            return Err(Error::Expired);
         }
-        self.auth(a, &self.terminal, self.session_revision, true, now)?;
-        nonnil(epoch_id)?;
-        if self.epoch.is_some() {
-            return Err(Error::Conflict);
-        }
-        let c = self.controller.as_ref().ok_or(Error::Stale)?;
-        self.active(a, c.lease.lease_id, self.generation, now)?;
-        let mut n = self.clone();
-        let remove: Vec<_> = n
-            .inputs
-            .iter()
-            .filter(|(id, v)| v.epoch.is_some() && v.command.is_none() && !n.unknown.contains(id))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in remove {
-            n.inputs.remove(&id);
-            n.seen.remove(&id);
-        }
-        n.epoch = Some(EpochState {
-            permit: epoch::Permit {
-                terminal: self.terminal.clone(),
-                epoch_id,
-                lease_id: c.lease.lease_id,
-                controller_generation: self.generation,
-                expires_at_ms: c
-                    .lease
-                    .expires_at_ms
-                    .min(a.valid_until_ms)
-                    .min(a.execution_expires_at_ms)
-                    .min(self.execution_expires_at_ms),
-                derivation_version: 1,
-            },
-            highwater: 0,
-            retired_through: 0,
-            receipts: BTreeMap::new(),
-        });
-        self.plan(n, vec![])
-    }
-    pub fn epoch_permit(&self) -> Option<epoch::Permit> {
-        self.epoch.as_ref().map(|v| v.permit.clone())
-    }
-    pub fn epoch_input(&self, a: &Access, r: &epoch::Request, now: u64) -> Result<Plan> {
-        r.validate()?;
-        if !self.epoch_enabled {
-            return Err(Error::Unsupported);
-        }
-        self.auth(
-            a,
-            &r.input.terminal,
-            r.input.expected_session_revision,
-            true,
-            now,
-        )?;
-        let e = self.epoch.as_ref().ok_or(Error::Stale)?;
-        self.active(a, e.permit.lease_id, e.permit.controller_generation, now)?;
-        if r.epoch_id != e.permit.epoch_id
-            || r.sequence <= e.retired_through
-            || r.input.lease_id != e.permit.lease_id
-            || r.input.expected_controller_generation != e.permit.controller_generation
+        let snapshot = self.snapshot.as_ref().ok_or(Error::Stale)?;
+        if self.invalidated || self.request.uncertain_operation_id != request.uncertain_operation_id
         {
             return Err(Error::Stale);
         }
-        if r.input.operation_id != epoch::operation_id(&e.permit, r.sequence)? {
-            return Err(Error::Conflict);
-        }
-        if r.sequence > e.highwater.checked_add(1).ok_or(Error::Capacity)? {
-            return Err(Error::Stale);
-        }
-        if r.sequence <= e.highwater {
-            if e.receipts.get(&r.sequence) != Some(&r.input.operation_id) {
-                return Err(Error::Stale);
-            };
-            return self.admit_input(a, &r.input, now);
-        }
-        let mut base = self.clone();
-        if e.receipts.len() >= epoch::RECEIPT_WINDOW {
-            let (&sequence, &id) = e.receipts.first_key_value().ok_or(Error::Invalid)?;
-            let input = self.inputs.get(&id).ok_or(Error::Invalid)?;
-            if input.command.is_some() || self.unknown.contains(&id) {
-                return Err(Error::Capacity);
-            }
-            base.inputs.remove(&id);
-            base.seen.remove(&id);
-            let epoch = base.epoch.as_mut().unwrap();
-            epoch.receipts.remove(&sequence);
-            epoch.retired_through = sequence;
-        }
-        let mut plan = base.admit_input(a, &r.input, now)?;
-        plan.next
-            .inputs
-            .get_mut(&r.input.operation_id)
-            .unwrap()
-            .epoch = Some(e.permit.epoch_id);
-        let epoch = plan.next.epoch.as_mut().unwrap();
-        epoch.highwater = r.sequence;
-        epoch.receipts.insert(r.sequence, r.input.operation_id);
-        plan.next.check()?;
-        plan.next.encode()?;
-        Ok(plan)
-    }
-    pub fn dispatch_epoch_input(&self, a: &Access, id: Uuid, now: u64) -> Result<Plan> {
-        if !self.epoch_enabled {
-            return Err(Error::Unsupported);
-        }
-        let e = self.epoch.as_ref().ok_or(Error::Stale)?;
-        let sequence = *e
-            .receipts
-            .iter()
-            .find(|(_, v)| **v == id)
-            .map(|(k, _)| k)
-            .ok_or(Error::Stale)?;
-        for (_, prior) in e.receipts.range(..sequence) {
-            if self.inputs.get(prior).is_some_and(|v| v.command.is_some()) {
-                return Err(Error::Capacity);
-            }
-        }
-        let mut plan = self.dispatch_raw(a, id, now)?;
-        let draft::Effect::Input(command) = plan.effects.pop().ok_or(Error::Invalid)? else {
-            return Err(Error::Invalid);
-        };
-        plan.effects.push(draft::Effect::EpochInput(epoch::Command {
-            permit: e.permit.clone(),
-            sequence,
-            input: command,
-        }));
-        plan.next.check()?;
-        plan.next.encode()?;
-        Ok(plan)
-    }
-}
-impl Ledger {
-    pub fn epoch_retirement(&self) -> Option<epoch::Retirement> {
-        self.epoch.as_ref().map(|v| epoch::Retirement {
-            permit: v.permit.clone(),
-            retired_through: v.retired_through,
-        })
-    }
-    pub fn observe_epoch_input(&self, p: &draft::Peer, r: &epoch::Receipt) -> Result<Plan> {
-        self.peer(p)?;
-        valid(&r.receipt)?;
-        let e = self.epoch.as_ref().ok_or(Error::Stale)?;
-        if r.epoch_id != e.permit.epoch_id
-            || r.receipt.terminal != self.terminal
-            || r.sequence == 0
-            || r.receipt.operation_id != epoch::operation_id(&e.permit, r.sequence)?
+        if (self.request.controller_generation, self.request.lease_id)
+            != (generation, request.lease_id)
         {
             return Err(Error::Stale);
         }
-        if r.sequence <= e.retired_through {
-            return self.plan(self.clone(), vec![]);
-        }
-        if e.receipts.get(&r.sequence) != Some(&r.receipt.operation_id) {
+        if (snapshot.snapshot_id, snapshot.through_sequence)
+            != (request.fresh_snapshot_id, request.fresh_snapshot_sequence)
+        {
             return Err(Error::Stale);
         }
-        self.observe_input(p, &r.receipt)
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Serialize)]
@@ -1511,30 +1014,6 @@ impl Ledger {
     }
 }
 impl Ledger {
-    pub fn open_epoch_request(
-        &self,
-        a: &Access,
-        r: &epoch::Open,
-        server_nonce: Uuid,
-        now: u64,
-    ) -> Result<Plan> {
-        r.validate()?;
-        self.auth(a, &r.terminal, r.expected_session_revision, true, now)?;
-        if self.seen(r.operation_id, a, r)? {
-            return self.plan(self.clone(), vec![]);
-        }
-        self.active(a, r.lease_id, r.expected_controller_generation, now)?;
-        if now >= r.expires_at_ms
-            || r.expires_at_ms > now.checked_add(2000).ok_or(Error::Invalid)?
-        {
-            return Err(Error::Expired);
-        }
-        let mut plan = self.open_epoch(a, server_nonce, now)?;
-        plan.next.remember(r.operation_id, a, r)?;
-        plan.next.check()?;
-        plan.next.encode()?;
-        Ok(plan)
-    }
     pub fn capture(
         &self,
         a: &Access,
@@ -1634,35 +1113,6 @@ impl Ledger {
 }
 
 impl Ledger {
-    pub fn input_mode(&self) -> draft::InputMode {
-        if self.epoch_enabled {
-            draft::InputMode::EpochV1
-        } else {
-            draft::InputMode::FiniteV1
-        }
-    }
-}
-
-impl Ledger {
-    pub fn queued_inputs(&self) -> Vec<Uuid> {
-        let mut values: Vec<_> = self
-            .inputs
-            .iter()
-            .filter(|(_, v)| {
-                v.disposition == InputDisposition::Queued
-                    && !v.dispatched
-                    && v.command.as_ref().is_some_and(|c| {
-                        self.controller.as_ref().is_some_and(|owner| {
-                            owner.lease.lease_id == c.lease.lease_id
-                                && owner.lease.generation == c.lease.generation
-                        })
-                    })
-            })
-            .map(|(id, v)| (v.admission_revision, *id))
-            .collect();
-        values.sort_unstable();
-        values.into_iter().map(|(_, id)| id).collect()
-    }
     pub fn inspected_receipt(
         &self,
         a: &Access,
@@ -1682,134 +1132,21 @@ impl Ledger {
 }
 
 fn valid_policy(p: &TerminalPolicy) -> Result<()> {
-    if p.max_input_bytes == 0
-        || p.max_input_bytes as usize > MAX_INPUT_BYTES
-        || p.max_pending_input_bytes < p.max_input_bytes
-        || p.max_pending_input_bytes as usize > MAX_PENDING_INPUT_BYTES
-        || p.max_frame_bytes == 0
-        || p.max_frame_bytes as usize > MAX_FRAME_BYTES
-        || p.replay_bytes < p.max_frame_bytes
-        || p.replay_bytes as usize > MAX_REPLAY_BYTES
-    {
-        return Err(Error::Invalid);
+    fn within_limits(unit: u32, total: u32, max_unit: usize, max_total: usize) -> bool {
+        (1..=max_unit).contains(&(unit as usize))
+            && (unit as usize..=max_total).contains(&(total as usize))
     }
-    Ok(())
-}
-
-impl Ledger {
-    /// A replay queue is never an input authority, regardless of plaintext queue
-    /// flags. Fresh input effects come exclusively from a successful one-shot CAS.
-    pub fn authorize_replayable_effect(
-        &self,
-        a: Option<&Access>,
-        effect: &draft::Effect,
-        now: u64,
-    ) -> Result<()> {
-        effect.validate().map_err(|_| Error::Invalid)?;
-        if effect.terminal() != self.terminal() {
-            return Err(Error::Stale);
-        }
-        match effect {
-            draft::Effect::Input(_) | draft::Effect::EpochInput(_) => Err(Error::Transition),
-            draft::Effect::Fence(f) if f.controller.is_none() => {
-                if self.last_fence.as_ref() != Some(f) {
-                    return Err(Error::Stale);
-                }
-                Ok(())
-            }
-            draft::Effect::Fence(f) => {
-                let a = a.ok_or(Error::Forbidden)?;
-                self.auth(a, self.terminal(), self.session_revision, true, now)?;
-                let c = self.controller.as_ref().ok_or(Error::Stale)?;
-                if self.last_fence.as_ref() != Some(f)
-                    || f.controller.as_ref() != Some(&c.lease)
-                    || c.fence_id != f.fence_id
-                    || !a.execution_active
-                    || now >= a.execution_expires_at_ms
-                    || now >= self.execution_expires_at_ms
-                    || now < c.lease.issued_at_ms
-                    || now >= c.lease.expires_at_ms
-                    || c.lease.expires_at_ms > a.valid_until_ms
-                    || c.lease.expires_at_ms > a.execution_expires_at_ms
-                    || c.lease.principal_id != a.principal
-                {
-                    return Err(Error::Stale);
-                }
-                Ok(())
-            }
-            draft::Effect::Watch(w) => {
-                let a = a.ok_or(Error::Forbidden)?;
-                self.authorize_watch(a, w.subscription_id, now)?;
-                if self.viewers.get(&w.subscription_id) != Some(w)
-                    || w.expires_at_ms > a.valid_until_ms
-                {
-                    return Err(Error::Stale);
-                }
-                Ok(())
-            }
-            draft::Effect::Resize(r) => {
-                let a = a.ok_or(Error::Forbidden)?;
-                let lease = self.active(a, r.lease.lease_id, r.lease.generation, now)?;
-                self.auth(a, self.terminal(), self.session_revision, true, now)?;
-                let command_digest = digest(r)?;
-                if lease != &r.lease
-                    || r.sequence != self.resize_sequence
-                    || now >= r.deadline_ms
-                    || r.deadline_ms > a.valid_until_ms
-                    || r.deadline_ms > a.execution_expires_at_ms
-                    || self
-                        .resize_digests
-                        .get(&r.operation_id)
-                        .is_none_or(|(d, s, applied)| {
-                            *d != command_digest || *s != r.sequence || applied.is_some()
-                        })
-                {
-                    return Err(Error::Stale);
-                }
-                Ok(())
-            }
-            draft::Effect::Capture(c) => {
-                let a = a.ok_or(Error::Forbidden)?;
-                self.auth(a, self.terminal(), self.session_revision, true, now)?;
-                if !a.watch {
-                    return Err(Error::Forbidden);
-                }
-                self.active(a, c.lease_id, c.controller_generation, now)?;
-                let state = self
-                    .captures
-                    .get(&c.capture_request_id)
-                    .ok_or(Error::Stale)?;
-                if state.invalidated
-                    || state.snapshot_id.is_some()
-                    || state.request != *c
-                    || !self.unknown.contains(&c.uncertain_operation_id)
-                    || now >= c.expires_at_ms
-                    || c.expires_at_ms > a.valid_until_ms
-                    || c.expires_at_ms > a.execution_expires_at_ms
-                {
-                    return Err(Error::Stale);
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl Ledger {
-    /// Trusted adapter refusal after current authority/scope is proved absent.
-    /// Retains immutable IDs/digests and all dispatched/unknown outcomes; only
-    /// commands that canonical state proves never dispatched become Rejected.
-    pub fn reject_queued_for(&self, principal: &Text) -> Result<Plan> {
-        let mut next = self.clone();
-        for input in next.inputs.values_mut() {
-            if input.principal == *principal
-                && !input.dispatched
-                && input.disposition == InputDisposition::Queued
-                && input.command.take().is_some()
-            {
-                input.disposition = InputDisposition::Rejected;
-            }
-        }
-        self.plan(next, vec![])
-    }
+    let input = within_limits(
+        p.max_input_bytes,
+        p.max_pending_input_bytes,
+        MAX_INPUT_BYTES,
+        MAX_PENDING_INPUT_BYTES,
+    );
+    let output = within_limits(
+        p.max_frame_bytes,
+        p.replay_bytes,
+        MAX_FRAME_BYTES,
+        MAX_REPLAY_BYTES,
+    );
+    (input && output).then_some(()).ok_or(Error::Invalid)
 }
