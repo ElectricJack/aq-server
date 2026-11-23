@@ -94,14 +94,7 @@ fn seal_outcome(
     let traces = core.traces;
     let resolved = if let Some((choice, credential_revision, index)) = core.selected {
         let expires = binding_expiry(input, &choice, credential_revision);
-        let expires = influencing_expiry(
-            &input.observations,
-            input.now_ms,
-            policy,
-            &traces,
-            index,
-            expires,
-        );
+        let expires = influencing_expiry(input, policy, &traces[..=index], expires);
         Some(ResolvedSelection {
             schema_version: 1,
             lineage: input.project.lineage.clone(),
