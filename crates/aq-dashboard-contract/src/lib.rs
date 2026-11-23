@@ -2,6 +2,7 @@
 pub mod action_contract;
 pub mod capabilities;
 pub mod feedback_contract;
+pub mod overview;
 pub mod result_metadata;
 pub mod review_view;
 pub mod swarm_contract;
