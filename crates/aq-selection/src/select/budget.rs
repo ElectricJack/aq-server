@@ -1,6 +1,6 @@
 use crate::validate::fresh;
 use crate::*;
-use aq_profiles::{SelectionPolicy, UnknownCostPolicy};
+use aq_profiles::{IntelligenceBudgetPolicy, SelectionPolicy, UnknownCostPolicy};
 pub(super) fn global_budget(
     input: &SelectionInputs,
     policy: &SelectionPolicy,
@@ -47,26 +47,10 @@ pub(super) fn cost(
     let budget = &input.budget;
     let hard = project.require_hard_cost_enforcement || p.require_hard_cost_enforcement;
     check_accounting(budget, harness, hard, p.require_complete_accounting)?;
-    if project
-        .currency
-        .as_ref()
-        .zip(p.currency.as_ref())
-        .is_some_and(|(project, policy)| project != policy)
-    {
-        return Err((CandidateState::PolicyDenied, "budget_currency_mismatch"));
+    if let Some(limit) = CostLimit::resolve(project, p, hard)? {
+        limit.check(budget, estimate)?;
     }
-    let limits = [project.cost_limit_microunits, p.max_cost_microunits];
-    let Some(limit) = limits.into_iter().flatten().min() else {
-        return Ok(());
-    };
-    CostLimit {
-        limit,
-        currency: project.currency.as_ref().or(p.currency.as_ref()),
-        allow_unknown: !hard
-            && !p.require_complete_accounting
-            && p.unknown_cost == UnknownCostPolicy::AllowBounded,
-    }
-    .check(budget, estimate)
+    Ok(())
 }
 
 fn check_accounting(
@@ -94,12 +78,40 @@ impl BudgetSnapshot {
     }
 }
 
-type CostResult = std::result::Result<(), (CandidateState, &'static str)>;
+type CostResult<T = ()> = std::result::Result<T, (CandidateState, &'static str)>;
 
 struct CostLimit<'a> {
     limit: u64,
     currency: Option<&'a String>,
     allow_unknown: bool,
+}
+
+impl<'a> CostLimit<'a> {
+    fn resolve(
+        project: &'a ResourceCeilings,
+        p: &'a IntelligenceBudgetPolicy,
+        hard: bool,
+    ) -> CostResult<Option<Self>> {
+        if project
+            .currency
+            .as_ref()
+            .zip(p.currency.as_ref())
+            .is_some_and(|(project, policy)| project != policy)
+        {
+            return Err((CandidateState::PolicyDenied, "budget_currency_mismatch"));
+        }
+        let limits = [project.cost_limit_microunits, p.max_cost_microunits];
+        let Some(limit) = limits.into_iter().flatten().min() else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            limit,
+            currency: project.currency.as_ref().or(p.currency.as_ref()),
+            allow_unknown: !hard
+                && !p.require_complete_accounting
+                && p.unknown_cost == UnknownCostPolicy::AllowBounded,
+        }))
+    }
 }
 
 impl CostLimit<'_> {
