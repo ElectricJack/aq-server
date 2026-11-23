@@ -115,6 +115,12 @@ fn synthetic_proof(
         revision: prepared.revision + 2,
         digest: Digest::of(b"synthetic terminal journal, not physical persistence"),
     };
+    bind_synthetic_evidence(r, &prepared);
+    q.validate_for(&context).unwrap();
+    q
+}
+
+fn bind_synthetic_evidence(r: &mut original::Request, prepared: &original::JournalCheckpoint) {
     match &mut r.evidence {
         original::Evidence::Suppressed {
             record,
@@ -151,9 +157,8 @@ fn synthetic_proof(
             *proof_digest = proof.digest().unwrap();
         }
     }
-    q.validate_for(&context).unwrap();
-    q
 }
+
 async fn snapshot(f: &Prepared) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('hot',(SELECT to_jsonb(h) FROM profiled_authority_hot h LIMIT 1),'attempt',(SELECT to_jsonb(a) FROM execution_attempts a LIMIT 1),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j LIMIT 1),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY lease_id) FROM admission_material_leases l),'bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY attempt_id) FROM agent_launch_bindings b),'closures',(SELECT count(*) FROM profiled_launch_closures),'capacity',(SELECT jsonb_agg(to_jsonb(c) ORDER BY attempt_id) FROM profiled_phase_terminal_capacity c))")
         .fetch_one(&f.c.env.env.pool).await.unwrap()
@@ -170,6 +175,14 @@ async fn assert_closed_held(f: &Prepared, q: &wire::ClosureRequest, ack: &wire::
     let counts:(i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM profiled_started_receipts),(SELECT count(*) FROM profiled_stopped_receipts),(SELECT count(*) FROM profiled_result_reports),(SELECT count(*) FROM profiled_verified_releases),(SELECT count(*) FROM profiled_execution_receipts WHERE kind='prepare')")
         .fetch_one(&f.c.env.env.pool).await.unwrap();
     assert_eq!(counts, (0, 0, 0, 0, 0));
+    assert_retained_closure(f, q, ack).await;
+}
+
+async fn assert_retained_closure(
+    f: &Prepared,
+    q: &wire::ClosureRequest,
+    ack: &wire::ClosureReceipt,
+) {
     let row = sqlx::query("SELECT initial_authority_kind,initial_authority_receipt_digest,phase_request_digest,phase_envelope_bytes,phase_ack_bytes,context_bytes,legacy_origin_operation_id,phase_origin_operation_id FROM profiled_launch_closures")
         .fetch_one(&f.c.env.env.pool).await.unwrap();
     assert_eq!(
