@@ -11,15 +11,13 @@ pub(crate) struct TaskCreate {
     pub(crate) original: Option<Bytes>,
 }
 pub(super) fn request(project: Uuid, payload: &Create) -> ActionRequest {
-    existing::request(
-        "task.create",
-        payload.operation_id,
-        "project",
-        project,
-        payload.expected_project_revision.clone(),
-        json!(payload),
-        "project",
-    )
+    existing::VersionedSubject {
+        kind: "project",
+        id: project,
+        revision: payload.expected_project_revision.clone(),
+        version_key: "project",
+    }
+    .request("task.create", payload.operation_id, json!(payload))
 }
 impl TaskCreate {
     pub(crate) async fn retained_outcome(

@@ -45,15 +45,13 @@ impl Resolve {
         }
     }
     pub(super) fn request(&self) -> ActionRequest {
-        existing::request(
-            "decision.resolve",
-            self.operation_id,
-            "decision",
-            self.decision_id,
-            self.expected_decision_revision.to_string(),
-            json!(self),
-            "decision",
-        )
+        existing::VersionedSubject {
+            kind: "decision",
+            id: self.decision_id,
+            revision: self.expected_decision_revision.to_string(),
+            version_key: "decision",
+        }
+        .request("decision.resolve", self.operation_id, json!(self))
     }
 }
 pub(crate) struct ResolveDecision(pub(crate) Option<Arc<Service>>);
