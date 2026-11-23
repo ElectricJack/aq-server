@@ -143,14 +143,30 @@ pub(crate) async fn register_locked(
 ) -> Result<Register, AppError> {
     register_slots_locked(state, tx, auth, request, None).await
 }
-async fn register_slots_locked(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
+fn registration_unchanged(
+    existing: Option<&serde_json::Value>,
+    request: &Register,
+    semantic: &Digest,
+    qualification: &ArtifactRef,
+) -> bool {
+    existing
+        .and_then(|v| v.get("native"))
+        .and_then(|v| serde_json::from_value::<NativeRegistration>(v.clone()).ok())
+        .is_some_and(|v| {
+            v.schema_version == 1
+                && v.configuration_revision > 0
+                && v.registered_at_ms > 0
+                && v.semantic_digest == *semantic
+                && v.qualification == *qualification
+                && existing.and_then(|v| v.get("identity"))
+                    == serde_json::to_value(&request.identity).ok().as_ref()
+        })
+}
+fn validate_registration(
     auth: &crate::worker_api::AuthenticatedNode,
     request: &Register,
     slots: Option<u32>,
-) -> Result<Register, AppError> {
-    use sqlx::Row;
+) -> Result<Digest, AppError> {
     TransportDocument::Register(request.clone())
         .validate()
         .map_err(|_| AppError::BadRequest("invalid native registration".into()))?;
@@ -169,11 +185,21 @@ async fn register_slots_locked(
     if slots.is_some_and(|v| !(1..=1024).contains(&v)) {
         return Err(AppError::BadRequest("invalid node slots".into()));
     }
-    let digest = match slots {
+    match slots {
         Some(n) => aq_selection::digest(&(request, n)),
         None => aq_selection::digest(request),
     }
-    .map_err(|_| AppError::Internal)?;
+    .map_err(|_| AppError::Internal)
+}
+async fn register_slots_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &crate::worker_api::AuthenticatedNode,
+    request: &Register,
+    slots: Option<u32>,
+) -> Result<Register, AppError> {
+    use sqlx::Row;
+    let digest = validate_registration(auth, request, slots)?;
     let semantic = semantic_digest(request)?;
     crate::worker_api::lock_current_node(tx, auth).await?;
     if let Some(row) = sqlx::query("SELECT request_digest,response FROM native_registration_receipts WHERE node_id=$1 AND operation_id=$2")
@@ -200,19 +226,7 @@ async fn register_slots_locked(
             .fetch_optional(&mut **tx)
             .await
             .map_err(|_| AppError::Internal)?;
-    let unchanged = existing
-        .as_ref()
-        .and_then(|v| v.get("native"))
-        .and_then(|v| serde_json::from_value::<NativeRegistration>(v.clone()).ok())
-        .is_some_and(|v| {
-            v.schema_version == 1
-                && v.configuration_revision > 0
-                && v.registered_at_ms > 0
-                && v.semantic_digest == semantic
-                && v.qualification == qualification
-                && existing.as_ref().and_then(|v| v.get("identity"))
-                    == serde_json::to_value(&request.identity).ok().as_ref()
-        });
+    let unchanged = registration_unchanged(existing.as_ref(), request, &semantic, &qualification);
     if existing.is_some() && !unchanged {
         let held = super::compute::busy_locked(tx, auth.id()).await?;
         if held

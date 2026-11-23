@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -69,6 +69,55 @@ fn conflict() -> AppError {
     )
 }
 
+async fn disposition_stop_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    hot: &Value,
+) -> Result<Option<String>, AppError> {
+    // A published delivery no longer blocks: a result delivered while its settlement was
+    // still held is never settled again, and the owner had no way to release its claim.
+    let stop: Option<String> = sqlx::query_scalar("SELECT encode(sha256(receipt_bytes),'hex') FROM profiled_stopped_receipts WHERE attempt_id=$1")
+        .bind(attempt).fetch_optional(&mut **tx).await.map_err(db)?;
+    let stopped = hot["status"] == "finished"
+        && hot["stop"]["kind"] == "stopped"
+        && stop.is_some()
+        && hot["stop"]["receipt"]["digest"].as_str() == stop.as_deref();
+    // A granted launch its worker closed before the agent started: its stop proof is the
+    // launch closure's receipt. The server keeps such an attempt for an operator when the
+    // closure does not prove that nothing ran, and this is that operator's action.
+    let closed =
+        hot["status"] == "cancelling" && hot["revoked"] == true && hot["stop"]["kind"] == "unknown";
+    let stop = if stopped || !closed {
+        stop
+    } else {
+        sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1 AND encode(sha256(receipt_bytes),'hex')=receipt_digest")
+            .bind(attempt).fetch_optional(&mut **tx).await.map_err(db)?
+    };
+    Ok(if stopped || closed { stop } else { None })
+}
+fn replay(
+    old: &[PgRow],
+    attempt: Uuid,
+    request: &Request,
+    actor: Uuid,
+) -> Result<Option<Receipt>, AppError> {
+    if old.is_empty() {
+        return Ok(None);
+    }
+    if old.len() != 1 {
+        return Err(conflict());
+    }
+    let receipt: Receipt =
+        serde_json::from_value(old[0].get("receipt")).map_err(|_| AppError::Internal)?;
+    if receipt.attempt_id != attempt
+        || receipt.operation_id != request.operation_id
+        || receipt.reason != request.reason
+        || receipt.actor_id != actor
+    {
+        return Err(conflict());
+    }
+    Ok(Some(receipt))
+}
 /// Uses the same node -> attempt/hot locks as results, cancellation and
 /// settlement. Historical receipts replay exactly, including after restart.
 pub async fn abandon(
@@ -126,45 +175,15 @@ pub async fn abandon(
     .fetch_all(&mut *tx)
     .await
     .map_err(db)?;
-    if !old.is_empty() {
-        if old.len() != 1 {
-            return Err(conflict());
-        }
-        let receipt: Receipt =
-            serde_json::from_value(old[0].get("receipt")).map_err(|_| AppError::Internal)?;
-        if receipt.attempt_id != attempt
-            || receipt.operation_id != request.operation_id
-            || receipt.reason != request.reason
-            || receipt.actor_id != actor.id()
-        {
-            return Err(conflict());
-        }
+    if let Some(receipt) = replay(&old, attempt, request, actor.id())? {
         tx.commit().await.map_err(db)?;
         return Ok(receipt);
     }
     let hot: Value = row.get("state");
     let unsettled: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition='accepted') AND NOT EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1) AND NOT EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE attempt_id=$1 AND disposition IN ('prepared','possible','confirmed')) AND NOT EXISTS(SELECT 1 FROM profiled_delivery_evidence WHERE attempt_id=$1 AND state='indeterminate')")
         .bind(attempt).fetch_one(&mut *tx).await.map_err(db)?;
-    // A published delivery no longer blocks: a result delivered while its settlement was
-    // still held is never settled again, and the owner had no way to release its claim.
-    let stop: Option<String> = sqlx::query_scalar("SELECT encode(sha256(receipt_bytes),'hex') FROM profiled_stopped_receipts WHERE attempt_id=$1")
-        .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?;
-    let stopped = hot["status"] == "finished"
-        && hot["stop"]["kind"] == "stopped"
-        && stop.is_some()
-        && hot["stop"]["receipt"]["digest"].as_str() == stop.as_deref();
-    // A granted launch its worker closed before the agent started: its stop proof is the
-    // launch closure's receipt. The server keeps such an attempt for an operator when the
-    // closure does not prove that nothing ran, and this is that operator's action.
-    let closed =
-        hot["status"] == "cancelling" && hot["revoked"] == true && hot["stop"]["kind"] == "unknown";
-    let stop = if stopped || !closed {
-        stop
-    } else {
-        sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures WHERE attempt_id=$1 AND encode(sha256(receipt_bytes),'hex')=receipt_digest")
-            .bind(attempt).fetch_optional(&mut *tx).await.map_err(db)?
-    };
-    if !row.get::<bool, _>("holds_task") || !unsettled || !(stopped || closed) || stop.is_none() {
+    let stop = disposition_stop_locked(&mut tx, attempt, &hot).await?;
+    if !row.get::<bool, _>("holds_task") || !unsettled || stop.is_none() {
         // Granted and never started: it may still start until its grant expires, and then the
         // server closes it itself.
         let pending = aq_machine_control::lapse::pending(&mut tx, attempt).await;

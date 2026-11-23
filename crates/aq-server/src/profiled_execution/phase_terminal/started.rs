@@ -156,23 +156,7 @@ async fn record_inner(
     receipt
         .validate_for(request)
         .map_err(|_| AppError::Internal)?;
-    write_started(&mut tx, node, request, &receipt, &loaded).await?;
-    super::super::journal::record_started(&mut tx, q).await?;
-    loaded.hot.stop = Stop::Running;
-    loaded
-        .hot
-        .validate_against(&q.binding)
-        .map_err(|_| AppError::Internal)?;
-    let updated=sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING record_revision,authority_revision,grant_revision").bind(q.binding.attempt_id).bind(serde_json::to_value(&loaded.hot).map_err(|_|AppError::Internal)?).fetch_one(&mut *tx).await.map_err(common::database)?;
-    if u64::try_from(updated.get::<i64, _>("authority_revision")).ok()
-        != Some(receipt.original.authority_revision_at_record)
-        || u64::try_from(updated.get::<i64, _>("record_revision")).ok()
-            != loaded.versions.record_revision.checked_add(1)
-        || u64::try_from(updated.get::<i64, _>("grant_revision")).ok()
-            != Some(loaded.versions.grant_revision)
-    {
-        return Err(AppError::Internal);
-    }
+    record_running_locked(&mut tx, node, request, &receipt, &mut loaded).await?;
     // Every mutable eligibility row remains locked. The final awaited writes
     // may consume the remaining lease; never acknowledge a newly expired start.
     let final_now = common::now(state)?;
@@ -182,6 +166,33 @@ async fn record_inner(
     loaded.view.active_at(final_now)?;
     tx.commit().await.map_err(common::database)?;
     Ok(receipt)
+}
+async fn record_running_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: &AuthenticatedNode,
+    request: &wire::StartedRequest,
+    receipt: &wire::StartedReceipt,
+    loaded: &mut Loaded,
+) -> Result<(), AppError> {
+    let q = &request.original;
+    write_started(tx, node, request, receipt, loaded).await?;
+    super::super::journal::record_started(tx, q).await?;
+    loaded.hot.stop = Stop::Running;
+    loaded
+        .hot
+        .validate_against(&q.binding)
+        .map_err(|_| AppError::Internal)?;
+    let updated=sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING record_revision,authority_revision,grant_revision").bind(q.binding.attempt_id).bind(serde_json::to_value(&loaded.hot).map_err(|_|AppError::Internal)?).fetch_one(&mut **tx).await.map_err(common::database)?;
+    if u64::try_from(updated.get::<i64, _>("authority_revision")).ok()
+        != Some(receipt.original.authority_revision_at_record)
+        || u64::try_from(updated.get::<i64, _>("record_revision")).ok()
+            != loaded.versions.record_revision.checked_add(1)
+        || u64::try_from(updated.get::<i64, _>("grant_revision")).ok()
+            != Some(loaded.versions.grant_revision)
+    {
+        return Err(AppError::Internal);
+    }
+    Ok(())
 }
 async fn write_started(
     tx: &mut Transaction<'_, Postgres>,

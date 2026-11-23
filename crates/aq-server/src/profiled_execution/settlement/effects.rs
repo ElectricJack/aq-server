@@ -120,10 +120,28 @@ pub async fn inspect_aq_effects_locked(
     {
         return Err(refused());
     }
-    let attempt = current.report.binding.attempt_id;
     // B1's owner load has acquired common node/attempt/hot locks and verified
     // actual stopped history. A separate GraphActive check could not succeed
     // for this stopped attempt and would improperly prevent recovery reads.
+    let (binding, profile, node_id) = load_binding_locked(tx, &current).await?;
+    let ledger = inspect_ledger_locked(tx, &current, &binding, &profile, node_id).await?;
+    Ok(AqEffectsSnapshot {
+        report: current.receipt_artifact,
+        stopped: current.receipt.stopped_receipt,
+        profile: current.spec.graph_access_profile.digest,
+        ledger: ledger.digest,
+        count: ledger.count,
+        bytes: ledger.bytes,
+        disposition: ledger.disposition,
+        terminal: ledger.terminal,
+    })
+}
+
+async fn load_binding_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    current: &results::RecordedResult,
+) -> Result<(Value, Value, Uuid), AppError> {
+    let attempt = current.report.binding.attempt_id;
     let launch = sqlx::query(
         "SELECT binding,profile FROM agent_launch_bindings WHERE attempt_id=$1 FOR SHARE",
     )
@@ -160,6 +178,23 @@ pub async fn inspect_aq_effects_locked(
     {
         return Err(refused());
     }
+    Ok((binding, profile, node_id))
+}
+struct InspectedLedger {
+    digest: Digest,
+    count: usize,
+    bytes: u64,
+    disposition: LedgerDisposition,
+    terminal: bool,
+}
+async fn inspect_ledger_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    current: &results::RecordedResult,
+    binding: &Value,
+    profile: &Value,
+    node_id: Uuid,
+) -> Result<InspectedLedger, AppError> {
+    let attempt = current.report.binding.attempt_id;
     // Lock metadata first: JSON/TOAST payloads are not fetched until total bytes
     // have been checked. Existing attempt admission and these row locks keep the
     // subsequent bounded payload read on this exact stable retained set.
@@ -205,14 +240,11 @@ pub async fn inspect_aq_effects_locked(
         hasher.update((encoded.len() as u64).to_be_bytes());
         hasher.update(&encoded);
         terminal &=
-            aq_agent_api::operation_receipt::settled(row, &binding).map_err(|_| refused())?;
+            aq_agent_api::operation_receipt::settled(row, binding).map_err(|_| refused())?;
     }
-    let disposition = verdict(mailed, &profile, terminal);
-    Ok(AqEffectsSnapshot {
-        report: current.receipt_artifact,
-        stopped: current.receipt.stopped_receipt,
-        profile: current.spec.graph_access_profile.digest,
-        ledger: Digest::of(&hasher.finalize()),
+    let disposition = verdict(mailed, profile, terminal);
+    Ok(InspectedLedger {
+        digest: Digest::of(&hasher.finalize()),
         count: metadata.len(),
         bytes,
         disposition,

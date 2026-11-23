@@ -60,8 +60,8 @@ impl Snapshot {
             reason,
         }
     }
-    fn render(self, now: u64, current_boot: bool) -> Result<CurrentAuthority, AppError> {
-        let phase = if self.hot.status == Status::NeverGranted {
+    fn phase(&self, now: u64, current_boot: bool) -> Result<CurrentPhase, AppError> {
+        Ok(if self.hot.status == Status::NeverGranted {
             CurrentPhase::NeverGranted {
                 closure: self.terminal.clone().ok_or_else(invalid)?,
             }
@@ -86,43 +86,49 @@ impl Snapshot {
         {
             self.stop(FailureCode::RecoveryRequired)
         } else {
-            match self.hot.status {
-                Status::Offered if self.offer_expiry > now => CurrentPhase::Offered {
-                    expires_at_ms: self.offer_expiry,
-                },
-                Status::Preparing => {
-                    let (plan, digest) = self.preparation.as_ref().ok_or_else(invalid)?;
-                    if plan.clock.expires_at_ms <= now {
-                        self.stop(FailureCode::Expired)
-                    } else {
-                        CurrentPhase::Preparing {
-                            owner: owner(&self.hot).ok_or_else(invalid)?,
-                            preparation_operation_id: plan.operation_id,
-                            preparation_digest: digest.clone(),
-                            expires_at_ms: plan.clock.expires_at_ms,
-                        }
+            self.live_phase(now)?
+        })
+    }
+    fn live_phase(&self, now: u64) -> Result<CurrentPhase, AppError> {
+        Ok(match self.hot.status {
+            Status::Offered if self.offer_expiry > now => CurrentPhase::Offered {
+                expires_at_ms: self.offer_expiry,
+            },
+            Status::Preparing => {
+                let (plan, digest) = self.preparation.as_ref().ok_or_else(invalid)?;
+                if plan.clock.expires_at_ms <= now {
+                    self.stop(FailureCode::Expired)
+                } else {
+                    CurrentPhase::Preparing {
+                        owner: owner(&self.hot).ok_or_else(invalid)?,
+                        preparation_operation_id: plan.operation_id,
+                        preparation_digest: digest.clone(),
+                        expires_at_ms: plan.clock.expires_at_ms,
                     }
                 }
-                Status::Granted => {
-                    let grant = self.hot.grant.as_ref().ok_or_else(invalid)?;
-                    if grant.expires_at_ms <= now {
-                        self.stop(FailureCode::Expired)
-                    } else {
-                        CurrentPhase::Granted {
-                            owner: owner(&self.hot).ok_or_else(invalid)?,
-                            grant_id: grant.grant_id,
-                            expires_at_ms: grant.expires_at_ms,
-                            execution_deadline_ms: self
-                                .hot
-                                .execution_deadline_ms
-                                .ok_or_else(invalid)?,
-                            started_operation_id: self.started,
-                        }
-                    }
-                }
-                _ => self.stop(FailureCode::Expired),
             }
-        };
+            Status::Granted => {
+                let grant = self.hot.grant.as_ref().ok_or_else(invalid)?;
+                if grant.expires_at_ms <= now {
+                    self.stop(FailureCode::Expired)
+                } else {
+                    CurrentPhase::Granted {
+                        owner: owner(&self.hot).ok_or_else(invalid)?,
+                        grant_id: grant.grant_id,
+                        expires_at_ms: grant.expires_at_ms,
+                        execution_deadline_ms: self
+                            .hot
+                            .execution_deadline_ms
+                            .ok_or_else(invalid)?,
+                        started_operation_id: self.started,
+                    }
+                }
+            }
+            _ => self.stop(FailureCode::Expired),
+        })
+    }
+    fn render(self, now: u64, current_boot: bool) -> Result<CurrentAuthority, AppError> {
+        let phase = self.phase(now, current_boot)?;
         let authority = CurrentAuthority {
             binding: self.binding,
             versions: self.versions,
@@ -274,16 +280,36 @@ async fn read(
         let id = row.get::<Uuid, _>("attempt_id");
         let expected = request.attempts.iter().find(|a| a.binding.attempt_id == id);
         // SQL errors abort the transaction and cannot be concealed as row data.
-        let result = snapshot(&mut tx, row, request, expected).await;
-        if matches!(
-            &result,
-            Err(AppError::UpdatesUnavailable(_) | AppError::Internal)
-        ) {
-            return Err(result.err().unwrap());
-        }
+        let result = match snapshot(&mut tx, row, request, expected).await {
+            Err(error @ (AppError::UpdatesUnavailable(_) | AppError::Internal)) => {
+                return Err(error);
+            }
+            result => result,
+        };
         snapshots.insert(id, result);
     }
     let time = now(state)?;
+    let attempts = render_attempts(snapshots, request, time, current_boot);
+    let page = ReconcilePage {
+        schema_version: 1,
+        operation_id: request.operation_id,
+        identity: request.identity.clone(),
+        delivery_nonce: nonce,
+        server_time_ms: time,
+        attempts,
+        next_after,
+    };
+    page.validate_for(request, nonce).map_err(|_| invalid())?;
+    tx.commit().await.map_err(db)?;
+    Ok(page)
+}
+fn render_attempts(
+    mut snapshots: std::collections::BTreeMap<Uuid, Result<Snapshot, AppError>>,
+    request: &Reconcile,
+    time: u64,
+    current_boot: bool,
+) -> Vec<ReconcileEntry> {
+    let explicit = !request.attempts.is_empty();
     let mut attempts = Vec::new();
     if explicit {
         for wanted in &request.attempts {
@@ -318,18 +344,7 @@ async fn read(
             }
         }
     }
-    let page = ReconcilePage {
-        schema_version: 1,
-        operation_id: request.operation_id,
-        identity: request.identity.clone(),
-        delivery_nonce: nonce,
-        server_time_ms: time,
-        attempts,
-        next_after,
-    };
-    page.validate_for(request, nonce).map_err(|_| invalid())?;
-    tx.commit().await.map_err(db)?;
-    Ok(page)
+    attempts
 }
 pub async fn reconcile(
     state: &AppState,
@@ -362,3 +377,6 @@ pub async fn reconcile(
         )
     })?
 }
+
+#[cfg(test)]
+mod tests;
