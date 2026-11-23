@@ -194,7 +194,7 @@ fn common(input: &SelectionInputs) -> Result<()> {
         )?;
     }
     bounds(&input.project.permission_ceiling, 128)?;
-    bounds(&input.node.harnesses, 16)?;
+    bounds(&input.node.harnesses, crate::MAX_NODE_HARNESSES)?;
     bounds(&input.node.credential_bindings, 32)?;
     bounds(&input.credentials, 32)?;
     bounds(&input.observations, 128)?;

@@ -226,6 +226,8 @@ pub(super) async fn fence_locked(
     let supports = |h: &aq_selection::InstalledHarness| {
         renewal::choice_supported_by_harness(h, c, input.policy)
     };
+    let qualified = &loaded.config.qualified_harnesses;
+    let qualified = super::super::definitions::qualified(state, tx, qualified).await?;
     if row.get::<Uuid, _>("boot_id") != boot
         || inventory.target != target
         || inventory.revision != revision
@@ -234,7 +236,7 @@ pub(super) async fn fence_locked(
         || inventory.harnesses.len() > 16
         || inventory.credential_bindings.len() > 32
         || !inventory.harnesses.iter().any(supports)
-        || !loaded.config.qualified_harnesses.iter().any(supports)
+        || !qualified.iter().any(supports)
     {
         return Err(refused());
     }

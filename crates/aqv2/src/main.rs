@@ -63,6 +63,14 @@ async fn main() -> std::process::ExitCode {
                 if let Some(recovery) = error["recovery"].as_str() {
                     eprintln!("Recover with: {recovery}");
                 }
+                // `environment try`: the job (and its result) is still the output.
+                #[cfg(feature = "project_environments")]
+                if error["job"].is_object() {
+                    println!(
+                        "{}",
+                        aqv2::render::render(aqv2::render::Render::Json, &error["job"])
+                    );
+                }
             }
             std::process::ExitCode::from(code)
         }

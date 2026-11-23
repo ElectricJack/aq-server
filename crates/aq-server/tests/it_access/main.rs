@@ -27,3 +27,5 @@ mod scheduling_reads;
 mod stall_ladder;
 mod worker_api;
 mod worker_auth_context;
+#[cfg(feature = "project_environments")]
+mod worker_environments;

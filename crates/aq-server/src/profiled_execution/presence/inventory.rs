@@ -166,6 +166,8 @@ pub async fn record(
     } else {
         1
     };
+    #[cfg(feature = "project_environments")]
+    let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
     let snapshot = CapabilitySnapshot {
         backend_kind: runtime.backend_kind,
         target: ExecutionTarget::Worker {

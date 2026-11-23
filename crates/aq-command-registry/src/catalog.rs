@@ -1327,6 +1327,8 @@ pub fn catalog() -> Vec<CommandSpec> {
             ..owner
         });
     }
+    #[cfg(feature = "project_environments")]
+    commands.extend(environments());
     // With full access the registry routes these through the owner bridge.
     #[cfg(not(feature = "supervisor_full_access"))]
     for command in &mut commands {
@@ -1358,4 +1360,37 @@ pub fn catalog() -> Vec<CommandSpec> {
         }
     }
     commands
+}
+
+/// Spec 0017 §6.2: an agent tries a recipe of its project. The node's channel
+/// proxy commits and pushes the workspace to the task's branch and adds the
+/// pushed `commit` to the body; a request without one (this surface, or an
+/// older node) is refused with `workspace_not_pushed`. `commit` is not a
+/// param: only the node names it, and `forward` refuses one.
+#[cfg(feature = "project_environments")]
+fn environments() -> [CommandSpec; 2] {
+    let mut queue = mutation(
+        "environment.try",
+        op::ENVIRONMENT_TRY,
+        P,
+        "Build an environment recipe from the task's pushed head on a builder and run one command in the result; answers the job id to poll",
+    );
+    queue.agent = Some(Route::post(
+        "/v1/agent/environments/try",
+        Body::Versioned,
+        Params::Inline(
+            r#"{"type":"object","additionalProperties":false,"required":["name"],"properties":{"project_id":{"type":"string","format":"uuid","description":"Omitted: the attempt's project; another is refused"},"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,63}$","description":"The recipe .aq/environments/<name>.md"},"run":{"type":"string","minLength":1,"description":"One shell command to run in the built image; at most environment_limits.max_arg_bytes"}}}"#,
+        ),
+    ));
+    let show = agent(
+        read(
+            "environment.job.show",
+            op::ENVIRONMENT_TRY,
+            P,
+            "One of the project's try jobs: its state (queued, claimed, completed) and, once completed, the builder's result",
+            None,
+        ),
+        Route::get("/v1/agent/environments/try/{job_id}", &[]),
+    );
+    [queue, show]
 }

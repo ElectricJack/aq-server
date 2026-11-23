@@ -155,6 +155,8 @@ async fn put(
 ) -> Result<Json<Value>> {
     put_request(&state, actor.id, id, request).await.map(Json)
 }
+/// The conflict of a binding that names an absent or revoked worker: it never validates.
+pub(crate) const ABSENT_WORKER: &str = "project refers to absent or revoked worker identity";
 /// Owner project-binding mutation core, shared by the route and D2 onboarding.
 pub(crate) async fn put_binding(
     state: &AppState,
@@ -209,9 +211,7 @@ async fn put_request(
             .await
             .map_err(db)?;
     if count != nodes.len() as i64 {
-        return Err(conflict(
-            "project refers to absent or revoked worker identity",
-        ));
+        return Err(conflict(ABSENT_WORKER));
     }
     let observation = external::observe(&state, &request.binding).await;
     if observation.repository != ExternalStatus::Verified

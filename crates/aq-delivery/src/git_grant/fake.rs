@@ -101,6 +101,19 @@ fn plain(status: StatusCode, text: &'static str) -> Response<Full<Bytes>> {
     response
 }
 
+/// aq-git's `AQ-Try-Ref` rule: absent, or once `refs/heads/aq-try/<uuid>`.
+fn try_ref(headers: &HeaderMap) -> bool {
+    let mut all = headers.get_all("aq-try-ref").iter();
+    match (all.next(), all.next()) {
+        (None, _) => true,
+        (Some(value), None) => (value.to_str().ok())
+            .and_then(|v| v.strip_prefix("refs/heads/aq-try/"))
+            .and_then(|id| Some(Uuid::try_parse(id).ok()?.to_string() == id))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 async fn serve(
     root: PathBuf,
     seen: Arc<Mutex<Vec<HeaderMap>>>,
@@ -121,6 +134,7 @@ async fn serve(
         || !header("aq-task-ref").starts_with("refs/heads/aq/")
         || Uuid::try_parse(&header("aq-operation")).is_err()
         || header("aq-max-push-bytes").parse::<u64>().unwrap_or(0) == 0
+        || !try_ref(&parts.headers)
     {
         return Ok(plain(StatusCode::BAD_REQUEST, "invalid_grant"));
     }

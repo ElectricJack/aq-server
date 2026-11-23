@@ -37,6 +37,8 @@ mod delivery_commands;
 #[cfg(feature = "delivery_playbook")]
 mod delivery_decisions;
 mod delivery_port;
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+mod environment_commands;
 mod integration;
 mod messages;
 mod requests;
@@ -46,6 +48,8 @@ pub use delivery_commands::{DeliveryOps, ServerDelivery};
 #[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub use environment_commands::ServerEnvironments;
 pub use integration::*;
 pub use requests::*;
 pub use routing::{RoutingPort, ServerRouting};
@@ -66,6 +70,9 @@ pub struct HostPorts {
     /// delivered, and the commands over the forge and central aq-git.
     #[cfg(feature = "delivery_playbook")]
     pub delivery_ops: Arc<dyn DeliveryOps>,
+    /// Catalog 2.5.0: the project's recipes on aq-git and its binding.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    pub environment_ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -188,6 +195,12 @@ impl Service {
             "decision.request" => {
                 self.host_decision_request(owner, id, revision, intent)
                     .await
+            }
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            name if self.profile.has_environments()
+                && aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&name) =>
+            {
+                self.environment_command(owner, id, revision, intent).await
             }
             #[cfg(feature = "delivery_playbook")]
             name if self.profile.is_delivery()

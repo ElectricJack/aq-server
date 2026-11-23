@@ -192,15 +192,38 @@ fn route_contracts_publish_the_grant_each_route_checks() {
             );
         }
     }
+    // Spec 0017's routes are published when `project_environments` is removed.
+    #[cfg(feature = "project_environments")]
+    for path in [
+        "/v1/agent/environments/try",
+        "/v1/agent/environments/try/{job_id}",
+    ] {
+        published.insert(path.to_owned(), "environment.try".to_owned());
+    }
     let served: std::collections::BTreeMap<_, _> = aq_agent_grants::AGENT_ROUTE_GRANTS
         .iter()
         .map(|(path, _, grant)| (path.to_string(), grant.to_string()))
         .collect();
     assert_eq!(published, served);
-    assert_eq!(
-        ROUTES.map(|(p, c, g)| (p, c, g)).to_vec(),
-        aq_agent_grants::AGENT_ROUTE_GRANTS.to_vec()
-    );
+    let routes = ROUTES.to_vec();
+    #[cfg(feature = "project_environments")]
+    let routes = [
+        routes,
+        vec![
+            (
+                "/v1/agent/environments/try",
+                "environment.try",
+                "environment.try",
+            ),
+            (
+                "/v1/agent/environments/try/{job_id}",
+                "environment.job.show",
+                "environment.try",
+            ),
+        ],
+    ]
+    .concat();
+    assert_eq!(routes, aq_agent_grants::AGENT_ROUTE_GRANTS.to_vec());
 }
 
 /// `result.read` reaches a project, never a task or the attempt alone, and a

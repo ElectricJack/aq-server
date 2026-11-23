@@ -35,6 +35,10 @@ impl Service {
             name if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) => {
                 (json!("delivery"), "aq.delivery.completed")
             }
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            "environment.build" | "environment.admit" => {
+                (json!("environment"), "aq.environment.completed")
+            }
             _ => return Err(Error::Invalid),
         })
     }
@@ -802,7 +806,7 @@ impl Service {
             return Err(Error::Conflict);
         }
         let mut output = request.output(handle);
-        if self.profile == super::super::review_domain::CatalogProfile::Host11 {
+        if self.profile.has_notes() {
             output["note"] = json!(note.unwrap_or_default());
         }
         let result = self

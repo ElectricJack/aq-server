@@ -16,7 +16,7 @@ mod host;
 
 pub use git::{
     GitFailure, GitPort, RefDeletion, RefPublication, RetainedRef, SocketGit, TASK_BRANCH_PREFIX,
-    object_id,
+    TRY_PREFIX, object_id,
 };
 pub use host::{
     Accepting, due_operations, frozen_request, onboarded_target, published_head, pull_request_text,

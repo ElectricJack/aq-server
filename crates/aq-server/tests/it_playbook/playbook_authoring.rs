@@ -1795,7 +1795,9 @@ async fn registering_an_existing_source_is_refused_and_keeps_its_document_and_bi
 // ---- Fix round 2 (Codex review of the routing switch-on) ----
 
 /// The routing source's id and binding with the worked example's commands,
-/// so the example's draft is its playbook.
+/// so the example's draft is its playbook (a 2.2.0 one: with spec 0017 the
+/// routing source is authored against catalog 2.5.0).
+#[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
 async fn routing_like_source(host: &Host) -> (i64, Uuid) {
     let record = SourceRecord {
         id: "routing".into(),
@@ -1812,6 +1814,7 @@ async fn routing_like_source(host: &Host) -> (i64, Uuid) {
 
 /// Finding 3: routing turns on only once the engine has the routing
 /// playbook, not when it is merely saved.
+#[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
 #[tokio::test]
 async fn the_switch_needs_a_routing_playbook_the_engine_has_acknowledged() {
     let (_db, host) = setup().await;

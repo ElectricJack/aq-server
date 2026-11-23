@@ -14,6 +14,8 @@ pub mod catalog;
 mod chat;
 pub mod cli;
 mod client;
+#[cfg(feature = "project_environments")]
+mod environment;
 pub mod flags;
 mod input;
 mod json;
@@ -195,6 +197,8 @@ async fn dispatch(ctx: &Ctx, command: &cli::Command) -> Result<Value> {
         C::Message(c) => typed::message(ctx, c).await,
         C::Conversation(c) => typed::conversation(ctx, c).await,
         C::Operation(c) => typed::operation(ctx, c).await,
+        #[cfg(feature = "project_environments")]
+        C::Environment(c) => environment::environment(ctx, c).await,
         C::External(tokens) => surface::external(ctx, tokens).await,
         C::Result(cli::ResultCommand::Command(rest)) => {
             let tokens: Vec<String> = std::iter::once("result".into())
@@ -329,6 +333,8 @@ fn external_tokens(command: &cli::Command) -> Option<Vec<String>> {
         C::Conversation(Conversation::Other(rest)) => ("conversation", rest),
         C::Operation(Operation::Other(rest)) => ("operation", rest),
         C::Result(cli::ResultCommand::Command(rest)) => ("result", rest),
+        #[cfg(feature = "project_environments")]
+        C::Environment(environment::Environment::Other(rest)) => ("environment", rest),
         _ => return None,
     };
     Some(

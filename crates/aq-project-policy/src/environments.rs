@@ -1,7 +1,7 @@
 //! Spec 0017 §5: which environment an attempt runs in. Pure: the caller
 //! reads the task's metadata, the binding, the profile and the definitions.
-//! This is the default rule of §5.4; the router (step 4) will feed the same
-//! [`place`] with the environment the routing document chose.
+//! This is the default rule of §5.4; the environment the routing document
+//! chose comes in as `kept` when the attempt continues none.
 use crate::{ProjectBinding, labels};
 use serde_json::Value;
 
