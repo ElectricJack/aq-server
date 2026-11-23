@@ -26,53 +26,67 @@ fn login_harness(candidate: &aq_profiles::roles::Candidate) -> Option<&'static s
     })
 }
 
+/// The availability observations as evaluated at one instant.
+pub struct ObservedAt<'a> {
+    pub observations: &'a [AvailabilityObservation],
+    pub now_ms: u64,
+}
+
 /// Same meaning as `aq_selection`'s observation evaluation: the newest
 /// observation per scope and source decides. A fresh one counts while it is
 /// within `max_age_ms` of being received (the level's
 /// `observation_max_age_ms`) or while its cooldown has not passed.
 /// Observations a worker made on its own node do not describe the server's
 /// use of the credential.
-fn blocked(
-    observations: &[AvailabilityObservation],
+impl ObservedAt<'_> {
+    fn blocked(&self, credential: &AuthorizedCredential, model: &str, max_age_ms: u64) -> bool {
+        let mut newest = BTreeMap::<String, &AvailabilityObservation>::new();
+        for o in self.observations {
+            let Some(key) = matching_scope(o, credential, model) else {
+                continue;
+            };
+            let rank =
+                |o: &AvailabilityObservation| (o.sequence, o.received_at_ms, o.observation_id);
+            if newest.get(&key).is_none_or(|old| rank(o) > rank(old)) {
+                newest.insert(key, o);
+            }
+        }
+        newest
+            .values()
+            .any(|o| blocks_at(o, self.now_ms, max_age_ms))
+    }
+}
+
+fn blocks_at(o: &AvailabilityObservation, now_ms: u64, max_age_ms: u64) -> bool {
+    let fresh = o.received_at_ms > 0 && o.received_at_ms <= now_ms && now_ms < o.expires_at_ms;
+    let observed = now_ms - o.received_at_ms.min(now_ms) <= max_age_ms;
+    fresh
+        && (observed || o.cooldown_until_ms > now_ms)
+        && matches!(
+            o.state,
+            Availability::QuotaUnavailable
+                | Availability::AuthenticationFailed
+                | Availability::TemporaryUnavailable
+        )
+}
+
+fn matching_scope(
+    o: &AvailabilityObservation,
     credential: &AuthorizedCredential,
     model: &str,
-    now_ms: u64,
-    max_age_ms: u64,
-) -> bool {
-    let mut newest = BTreeMap::<String, &AvailabilityObservation>::new();
-    for o in observations {
-        let scope = &o.scope;
-        let matches = matches!(o.source, ObservationSource::Operator { .. })
-            && scope.node_id.is_none()
-            && scope.provider == credential.provider
-            && scope.credential_profile == credential.profile
-            && scope.credential_revision == credential.revision
-            && scope.account_reference == credential.account_reference
-            && scope.endpoint_reference == credential.endpoint_reference
-            && scope.model.as_deref().is_none_or(|m| m == model);
-        if !matches {
-            continue;
-        }
-        let Ok(key) = serde_json::to_string(&(scope, &o.source)) else {
-            continue;
-        };
-        let rank = |o: &AvailabilityObservation| (o.sequence, o.received_at_ms, o.observation_id);
-        if newest.get(&key).is_none_or(|old| rank(o) > rank(old)) {
-            newest.insert(key, o);
-        }
-    }
-    newest.values().any(|o| {
-        let fresh = o.received_at_ms > 0 && o.received_at_ms <= now_ms && now_ms < o.expires_at_ms;
-        let observed = now_ms - o.received_at_ms.min(now_ms) <= max_age_ms;
-        fresh
-            && (observed || o.cooldown_until_ms > now_ms)
-            && matches!(
-                o.state,
-                Availability::QuotaUnavailable
-                    | Availability::AuthenticationFailed
-                    | Availability::TemporaryUnavailable
-            )
-    })
+) -> Option<String> {
+    let scope = &o.scope;
+    let matches = matches!(o.source, ObservationSource::Operator { .. })
+        && scope.node_id.is_none()
+        && scope.provider == credential.provider
+        && scope.credential_profile == credential.profile
+        && scope.credential_revision == credential.revision
+        && scope.account_reference == credential.account_reference
+        && scope.endpoint_reference == credential.endpoint_reference
+        && scope.model.as_deref().is_none_or(|m| m == model);
+    matches
+        .then(|| serde_json::to_string(&(scope, &o.source)).ok())
+        .flatten()
 }
 
 /// The candidates of the level `profile_id` that can be tried now, each with
@@ -82,9 +96,8 @@ fn blocked(
 pub fn resolve(
     snapshot: &Snapshot,
     registry: &LoadedRegistry,
-    observations: &[AvailabilityObservation],
+    observed: ObservedAt<'_>,
     profile_id: &str,
-    now_ms: u64,
 ) -> Result<Resolved, Reason> {
     let profile = snapshot
         .intelligence(profile_id)
@@ -111,7 +124,7 @@ pub fn resolve(
             },
             None => continue,
         };
-        if blocked(observations, credential, &entry.model, now_ms, max_age_ms) {
+        if observed.blocked(credential, &entry.model, max_age_ms) {
             continue;
         }
         candidates.push(Candidate {
