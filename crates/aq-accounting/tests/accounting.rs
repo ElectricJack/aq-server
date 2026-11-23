@@ -14,7 +14,8 @@ fn artifact(s: &str) -> ArtifactRef {
 fn known(n: u64) -> Counter {
     Counter::Known { value: n }
 }
-fn counters(input: u64, output: u64, read: u64, write: u64, reason: u64) -> Counters {
+fn counters(input: u64, output: u64, cache: (u64, u64), reason: u64) -> Counters {
+    let (read, write) = cache;
     Counters {
         input: known(input),
         output: known(output),
@@ -97,7 +98,7 @@ fn record() -> ObservationRecord {
                     native_call_id: text("call-1"),
                 },
                 basis: CounterBasis::PerCall,
-                counters: counters(100, 50, 20, 10, 15),
+                counters: counters(100, 50, (20, 10), 15),
                 category_semantics: CategorySemantics::MayOverlap {
                     policy: artifact("categories"),
                 },
@@ -164,8 +165,10 @@ fn exact_call_replay_and_cross_source_precedence_do_not_add_two_bills() {
         panic!()
     };
     assert_eq!(fact.contribution, a.contribution);
-    assert_eq!(supersedes, Some(a.event.clone()));
-    assert_eq!(previous_contribution, Some(a.contribution));
+    assert_eq!(
+        (supersedes, previous_contribution),
+        (Some(a.event.clone()), Some(a.contribution))
+    );
     assert_eq!(
         decide(&r, context(&r, &p, Some(&fact))).unwrap(),
         Decision::NoCharge {
@@ -282,18 +285,18 @@ fn cumulative_usage_requires_a_verified_baseline_and_preserves_it_on_updates() {
     let baseline = Baseline {
         counter_key: key(&r, &p).unwrap(),
         reference: artifact("retained-history"),
-        counters: counters(80, 30, 15, 5, 10),
+        counters: counters(80, 30, (15, 5), 10),
     };
     let mut c = context(&r, &p, None);
     c.baseline = Some(&baseline);
     let a = appended(decide(&r, c).unwrap());
-    assert_eq!(a.contribution, counters(20, 20, 5, 5, 5));
+    assert_eq!(a.contribution, counters(20, 20, (5, 5), 5));
     let mut next = r;
-    usage(&mut next).counters = counters(110, 60, 25, 10, 20);
+    usage(&mut next).counters = counters(110, 60, (25, 10), 20);
     let next = reseal(next);
     let b = appended(decide(&next, context(&next, &p, Some(&a))).unwrap());
     assert_eq!(b.baseline, Some(baseline));
-    assert_eq!(b.contribution, counters(30, 30, 10, 5, 10));
+    assert_eq!(b.contribution, counters(30, 30, (10, 5), 10));
 }
 #[test]
 fn cumulative_reset_mixed_model_and_unknown_baselines_cannot_manufacture_new_spending() {
@@ -313,7 +316,7 @@ fn cumulative_reset_mixed_model_and_unknown_baselines_cannot_manufacture_new_spe
     c.baseline = Some(&baseline);
     let a = appended(decide(&r, c).unwrap());
     let mut reset = r.clone();
-    usage(&mut reset).counters = counters(90, 45, 20, 10, 10);
+    usage(&mut reset).counters = counters(90, 45, (20, 10), 10);
     let reset = reseal(reset);
     assert_eq!(
         decide(&reset, context(&reset, &p, Some(&a))).unwrap(),
@@ -336,7 +339,7 @@ fn cumulative_reset_mixed_model_and_unknown_baselines_cannot_manufacture_new_spe
     };
     // Unknown baseline propagates rather than being coerced to zero.
     assert!(matches!(
-        subtract(&counters(100, 50, 20, 10, 15), &b.counters)
+        subtract(&counters(100, 50, (20, 10), 15), &b.counters)
             .unwrap()
             .input,
         Counter::Unknown { .. }
@@ -346,7 +349,7 @@ fn cumulative_reset_mixed_model_and_unknown_baselines_cannot_manufacture_new_spe
 fn reported_zero_is_distinct_from_unknown_and_overlap_is_not_double_counted() {
     let l = layout();
     assert_eq!(
-        l.unique_total(&counters(100, 50, 20, 10, 15)).unwrap(),
+        l.unique_total(&counters(100, 50, (20, 10), 15)).unwrap(),
         known(150)
     );
     assert_eq!(l.unique_total(&zeros()).unwrap(), known(0));
@@ -358,7 +361,7 @@ fn reported_zero_is_distinct_from_unknown_and_overlap_is_not_double_counted() {
         l.unique_total(&c).unwrap(),
         Counter::Unknown { .. }
     ));
-    assert!(l.check_counters(&counters(10, 50, 20, 0, 15)).is_err());
+    assert!(l.check_counters(&counters(10, 50, (20, 0), 15)).is_err());
 }
 fn rate() -> RateCard {
     RateCard {
@@ -399,7 +402,7 @@ fn deterministic_pricing_uses_explicit_disjoint_billing_rules_not_all_raw_fields
         .estimate(
             &text("provider"),
             &text("model"),
-            &counters(100, 50, 20, 10, 15),
+            &counters(100, 50, (20, 10), 15),
         )
         .unwrap();
     assert!(matches!(
@@ -424,7 +427,7 @@ fn deterministic_pricing_uses_explicit_disjoint_billing_rules_not_all_raw_fields
 }
 #[test]
 fn partial_pricing_exposes_lower_bound_currency_and_unknown_cost() {
-    let mut c = counters(100, 50, 20, 10, 15);
+    let mut c = counters(100, 50, (20, 10), 15);
     c.input = Counter::Unknown {
         reason: UnknownReason::NotReported,
     };
@@ -439,6 +442,12 @@ fn partial_pricing_exposes_lower_bound_currency_and_unknown_cost() {
         }
     ));
     assert_eq!(p.missing_categories, vec![Category::Input]);
+}
+
+#[test]
+fn rate_card_rejects_another_model_or_invalid_currency() {
+    let r = rate();
+    let c = counters(100, 50, (20, 10), 15);
     assert!(
         r.estimate(&text("provider"), &text("different-model"), &c)
             .is_err()
@@ -454,7 +463,11 @@ fn pricing_rounds_once_per_contribution_and_refuses_overflow() {
         rule.microunits_per_million_tokens = 1;
     }
     let p = r
-        .estimate(&text("provider"), &text("model"), &counters(2, 2, 0, 0, 0))
+        .estimate(
+            &text("provider"),
+            &text("model"),
+            &counters(2, 2, (0, 0), 0),
+        )
         .unwrap();
     assert!(matches!(
         p.cost,
@@ -470,7 +483,7 @@ fn pricing_rounds_once_per_contribution_and_refuses_overflow() {
         r.estimate(
             &text("provider"),
             &text("model"),
-            &counters(u64::MAX, u64::MAX, 0, 0, 0)
+            &counters(u64::MAX, u64::MAX, (0, 0), 0)
         )
         .is_err()
     );
@@ -523,8 +536,8 @@ fn stored_fact_mutation_and_unknown_policy_are_refused() {
 #[test]
 fn projection_corrects_in_place_without_resetting_other_attempts_or_unknown_categories() {
     use aq_accounting::projection::Projection;
-    let first = counters(100, 50, 20, 10, 15);
-    let second = counters(80, 10, 0, 0, 0);
+    let first = counters(100, 50, (20, 10), 15);
+    let second = counters(80, 10, (0, 0), 0);
     let a = Projection::default()
         .replace(None, &first)
         .unwrap()
@@ -539,8 +552,7 @@ fn projection_corrects_in_place_without_resetting_other_attempts_or_unknown_cate
     };
     let b = a.replace(Some(&first), &corrected).unwrap();
     assert_eq!(b.canonical_calls, 2);
-    assert_eq!(b.known_subtotals[0], 170);
-    assert_eq!(b.known_subtotals[1], 10);
+    assert_eq!(&b.known_subtotals[..2], &[170, 10]);
     assert!(matches!(
         b.counters().unwrap().output,
         Counter::Unknown { .. }
@@ -681,10 +693,9 @@ fn partial_source_stays_unknown_until_exact_complete_correction() {
     assert!(!projection.all_categories_represented().unwrap());
     let pricing = card.estimate_fact(&a).unwrap();
     assert!(pricing.source_incomplete);
-    assert!(matches!(pricing.cost, Cost::Unknown { .. }));
     assert!(matches!(
-        pricing.known_lower_bound,
-        Cost::NonInvoiceEstimate { .. }
+        (pricing.cost, pricing.known_lower_bound),
+        (Cost::Unknown { .. }, Cost::NonInvoiceEstimate { .. })
     ));
     let mut corrected = r;
     usage(&mut corrected).completeness = Completeness::ReportedComplete;
@@ -694,8 +705,10 @@ fn partial_source_stays_unknown_until_exact_complete_correction() {
     c.correction_target = Some(&a);
     let b = appended(decide(&corrected, c).unwrap());
     let projection = projection.replace_fact(Some(&a), &b).unwrap();
-    assert_eq!(projection.incomplete_calls, 0);
-    assert_eq!(projection.canonical_calls, 1);
+    assert_eq!(
+        (projection.incomplete_calls, projection.canonical_calls),
+        (0, 1)
+    );
     assert_eq!(projection.known_subtotals[0], 100);
     assert!(projection.all_categories_represented().unwrap());
     assert!(!card.estimate_fact(&b).unwrap().source_incomplete);
