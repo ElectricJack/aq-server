@@ -133,4 +133,4 @@ ALTER TABLE playbook_host_operations DROP CONSTRAINT playbook_host_operations_st
 ALTER TABLE playbook_host_operations ADD CHECK (status IN ('running','assessed','failed','refused','passed','infrastructure_failure','completed','approved','rejected','expired','synced','published','conflict','opened','closed','timeout','merged','not_mergeable','unchanged','built','admitted'));
 SET LOCAL lock_timeout TO DEFAULT;
 
-UPDATE meta SET value='165' WHERE key='state_format_version';
+UPDATE meta SET value='172' WHERE key='state_format_version';

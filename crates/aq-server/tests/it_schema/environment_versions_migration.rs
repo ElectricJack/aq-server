@@ -1,4 +1,4 @@
-//! Migration 0165 (spec 0017 §6.3, §6.7): environment versions and builder
+//! Migration 0172 (spec 0017 §6.3, §6.7): environment versions and builder
 //! jobs move into the database, and `environment_limits` is a Settings value.
 use aq_server::store::Store;
 use aq_server::test_support::TestDb;

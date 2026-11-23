@@ -197,9 +197,9 @@ pub async fn catalog<'e>(
     let bodies = (state.config.profiled_execution.as_deref()).map(|c| &c.definition_bodies[..]);
     let defs = (bodies.unwrap_or_default().iter()).map(|d| (&d.artifact, d.body.as_str()));
     let boot = aq_environments::BootEnvironments::new(defs, state.config.templates.as_deref());
-    // A historical test store, older than migration 0165, has no versions.
+    // A historical test store, older than migration 0172, has no versions.
     #[cfg(feature = "test-support")]
-    if state.store.fixture_profile.is_some_and(|v| v < 165) {
+    if state.store.fixture_profile.is_some_and(|v| v < 172) {
         return Ok(aq_environments::Catalog::boot(&boot));
     }
     (aq_environments::Catalog::load(db, &boot).await).map_err(crate::error::db)
