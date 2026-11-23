@@ -669,9 +669,18 @@ async fn switch(case: &Case, on: bool, expected: u64) {
         .unwrap();
     let mut c = pool.acquire().await.unwrap();
     let now = (case.env.env.state.clock)();
-    aq_machine_control::set_owner_availability(&mut c, on, expected, owner, Uuid::new_v4(), now)
-        .await
-        .unwrap();
+    aq_machine_control::set_owner_availability(
+        &mut c,
+        on,
+        aq_machine_control::OwnerChange {
+            expected_generation: expected,
+            actor: owner,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
+    )
+    .await
+    .unwrap();
 }
 async fn observation_rows(c: &Prepared) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM intelligence_observations")

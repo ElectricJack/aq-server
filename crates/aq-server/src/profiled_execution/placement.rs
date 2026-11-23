@@ -1,6 +1,7 @@
 //! Placement facts and backend preference, fenced against current node occupancy.
 use crate::AppState;
 use crate::error::AppError;
+use crate::observations::vm_time::SpendObservation;
 use aq_admission_sandbox::sandbox::{BackendAdvertisement, BackendCapability, BackendKind, Money};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool};
@@ -66,8 +67,7 @@ async fn spends(
     conn: &mut PgConnection,
     ledger: &Ledger<'_>,
     nodes: &[(Uuid, &BackendAdvertisement)],
-    now_ms: u64,
-    exclude_attempt: Option<Uuid>,
+    observed: SpendObservation,
 ) -> Vec<(Uuid, Option<Money>)> {
     let mut out = Vec::new();
     for (node, adv) in nodes {
@@ -75,7 +75,7 @@ async fn spends(
             continue;
         };
         let spent = if crate::observations::vm_time::is_monthly_backend(adv.kind) {
-            crate::observations::vm_time::node(conn, *node, limit, now_ms, exclude_attempt)
+            crate::observations::vm_time::node(conn, *node, limit, observed)
                 .await
                 .ok()
                 .flatten()
@@ -221,7 +221,16 @@ pub async fn loads(
     let active = active(&mut *conn, nodes, None).await?;
     let advertised: Vec<(Uuid, &BackendAdvertisement)> =
         registered.iter().map(|(n, r)| (*n, &r.backend)).collect();
-    let spends = spends(conn, ledger, &advertised, now_ms, None).await;
+    let spends = spends(
+        conn,
+        ledger,
+        &advertised,
+        SpendObservation {
+            now_ms,
+            exclude_attempt: None,
+        },
+    )
+    .await;
     let pressured = crate::node_storage::pressured(&mut *conn, nodes).await?;
     let mut loads: Vec<Load> = nodes
         .iter()
@@ -433,8 +442,10 @@ pub async fn derive(
         conn,
         ledger,
         &advertised,
-        now_ms,
-        derivation.exclude_attempt,
+        SpendObservation {
+            now_ms,
+            exclude_attempt: derivation.exclude_attempt,
+        },
     )
     .await;
     // SBX25: a node above the disk refusal line is in the ceiling family.
@@ -858,7 +869,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut conn = pool.acquire().await.unwrap();
-                crate::node_storage::record(&mut conn, &id.to_string(), Some(id), &report, 1)
+                crate::node_storage::record(&mut conn, Some(id), &report, 1)
                     .await
                     .unwrap();
             }

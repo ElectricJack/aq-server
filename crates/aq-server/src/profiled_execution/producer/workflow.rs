@@ -2,7 +2,7 @@
 //! ordered projects, failed-attempt replacement within budget, and an exact
 //! commit frozen at offer time. It never calls a model provider.
 use super::{
-    artifacts::{RetainedSet, canonical},
+    artifacts::{ArtifactBody, RetainedSet, canonical},
     build, compose, fairness, now, on_heap, publication, refused,
 };
 use crate::{
@@ -173,14 +173,13 @@ async fn reservation(
             .checked_add(7 * 86_400_000)
             .ok_or_else(|| refused())?,
     );
+    let artifact_body = ArtifactBody::new(
+        ArtifactKind::Context,
+        observed.artifact.clone(),
+        &observed.bytes,
+    );
     proposals
-        .retain(
-            state,
-            OwnerKind::SourceRetention,
-            ArtifactKind::Context,
-            observed.artifact.clone(),
-            &observed.bytes,
-        )
+        .retain(state, OwnerKind::SourceRetention, artifact_body)
         .await?;
     let binding = &compiled.frozen.project.binding;
     let identity = source::repository_identity(
@@ -462,8 +461,7 @@ async fn offers(
         &mut conn,
         auth.id(),
         &config.enabled_projects(),
-        now(state)?,
-        staging,
+        aq_history_caps::Snapshot::new(now(state)?, staging),
     )
     .await
     .map_err(|_| refused())?;
@@ -605,7 +603,17 @@ async fn offers(
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
                         if let Assessment::Blocked(reason) = a {
-                            holds::selection_hold(pool, seen, project, task, reason, at).await;
+                            holds::selection_hold(
+                                pool,
+                                seen,
+                                holds::SelectionRefusal {
+                                    project,
+                                    task,
+                                    reason,
+                                },
+                                at,
+                            )
+                            .await;
                         } else if placement == Some(&Placement::Reroute) {
                             let attempt = a.replacement().map(|r| (r.predecessor, seen));
                             let r = crate::routing::reroute(state, project, items, task, attempt);
@@ -707,8 +715,10 @@ async fn offers(
         }
         super::observation::ReadProvenance::capture(
             &task,
-            &ready,
-            &context,
+            aq_profiled_state::native_offer::GraphReads {
+                ready: &ready,
+                context: &context,
+            },
             compiled.projection.artifact.digest.clone(),
             now(state)?,
         )
@@ -763,13 +773,8 @@ async fn offers(
                     }
                     None => {
                         on_heap(|| {
-                            source::observe_for_offer(
-                                state,
-                                &compiled.frozen,
-                                &policy_record,
-                                &context,
-                                enrolled,
-                            )
+                            source::Observer::new(state, &compiled.frozen, &policy_record)
+                                .for_offer(&context, enrolled)
                         })
                         .await?
                     }
@@ -779,15 +784,17 @@ async fn offers(
                     None => frozen_commit(&policy.source, &observed),
                 };
                 let operation = aq_delivery::offer_source::export_operation(
-                    policy.project_id,
+                    aq_delivery::offer_source::ExportScope {
+                        project: policy.project_id,
+                        revision: record.revision,
+                        generation,
+                        enrolled,
+                    },
                     &task,
-                    record.revision,
-                    generation,
                     config
                         .project_policy_ref(policy.project_id)
                         .map_err(|_| refused())?,
                     frozen,
-                    enrolled,
                 )
                 .map_err(|_| AppError::Internal)?;
                 let reserved =
@@ -898,13 +905,8 @@ async fn offers(
                 .await?
             } else {
                 on_heap(|| {
-                    source::observe_for_offer(
-                        state,
-                        &compiled.frozen,
-                        &policy_record,
-                        &context,
-                        enrolled,
-                    )
+                    source::Observer::new(state, &compiled.frozen, &policy_record)
+                        .for_offer(&context, enrolled)
                 })
                 .await?
             };

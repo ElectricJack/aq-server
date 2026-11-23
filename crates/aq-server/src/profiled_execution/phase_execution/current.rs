@@ -312,7 +312,15 @@ pub(super) async fn fence_locked(
     // The switch's attestation, as in selection; rows and attestation within 1,024.
     let credentials = std::slice::from_ref(credential);
     let mine = crate::intelligence::resolver::relevant(availability.clone(), credentials, node);
-    let owner = aq_machine_control::owner_attested(tx, credentials, &mine, registry_revision, time);
+    let owner = aq_machine_control::owner_attested(
+        tx,
+        credentials,
+        &mine,
+        aq_machine_control::AttestationTime {
+            revision: registry_revision,
+            now_ms: time,
+        },
+    );
     availability.extend(owner.await?);
     if availability.len() > 1024 {
         return Err(refused());

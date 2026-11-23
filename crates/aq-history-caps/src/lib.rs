@@ -4,6 +4,8 @@
 //! database triggers, these Rust mirror checks, the poll gate and the swarm read
 //! all call them. Before 0103 (frozen-format fixtures) every row counts, as it
 //! did before spec 0008.
+pub mod retained_artifacts;
+pub mod source_exports;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
@@ -274,6 +276,18 @@ pub struct Hold {
 /// (max_staging_bytes, max_bundle_bytes) from the source retention config.
 pub type Staging = (u64, u64);
 
+/// Inputs captured when a poll or dashboard read measures live capacity.
+#[derive(Clone, Copy)]
+pub struct Snapshot {
+    pub now_ms: u64,
+    pub staging: Option<Staging>,
+}
+impl Snapshot {
+    pub fn new(now_ms: u64, staging: Option<Staging>) -> Self {
+        Self { now_ms, staging }
+    }
+}
+
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -367,9 +381,9 @@ pub async fn holds(
     conn: &mut PgConnection,
     nodes: &[Uuid],
     projects: &[Uuid],
-    now_ms: u64,
-    staging: Option<Staging>,
+    snapshot: Snapshot,
 ) -> Result<Vec<Hold>, sqlx::Error> {
+    let Snapshot { now_ms, staging } = snapshot;
     if !live_schema(&mut *conn).await? {
         return Ok(Vec::new());
     }
@@ -397,7 +411,7 @@ pub async fn node_holds(
     now_ms: u64,
     staging: Option<Staging>,
 ) -> Result<Vec<Hold>, sqlx::Error> {
-    holds(conn, &[node], &[], now_ms, staging).await
+    holds(conn, &[node], &[], Snapshot::new(now_ms, staging)).await
 }
 
 /// What one poll learns from the holds. A node or server hold stops the poll; a
@@ -418,11 +432,10 @@ pub async fn poll_gate(
     conn: &mut PgConnection,
     node: Uuid,
     projects: &[Uuid],
-    now_ms: u64,
-    staging: Option<Staging>,
+    snapshot: Snapshot,
 ) -> Result<PollGate, sqlx::Error> {
     let mut gate = PollGate::default();
-    for hold in holds(conn, &[node], projects, now_ms, staging).await? {
+    for hold in holds(conn, &[node], projects, snapshot).await? {
         match hold.scope {
             Scope::Project(p) => gate.held.push(p),
             _ => gate.stop = gate.stop.or(Some(hold)),
@@ -437,20 +450,12 @@ pub async fn project_holds(
     project: Uuid,
     now_ms: u64,
 ) -> Result<Vec<Hold>, sqlx::Error> {
-    holds(conn, &[], &[project], now_ms, None).await
+    holds(conn, &[], &[project], Snapshot::new(now_ms, None)).await
 }
 
 /// Every hold the swarm read shows: each listed node's and the server's holds
 /// (once), then each listed project's holds, in one grouped call.
-pub async fn swarm_holds(
-    conn: &mut PgConnection,
-    nodes: &[Uuid],
-    projects: &[Uuid],
-    now_ms: u64,
-    staging: Option<Staging>,
-) -> Result<Vec<Hold>, sqlx::Error> {
-    holds(conn, nodes, projects, now_ms, staging).await
-}
+pub use holds as swarm_holds;
 
 #[cfg(test)]
 mod tests {
@@ -466,7 +471,8 @@ mod tests {
     }
     use super::*;
 
-    fn hold(kind: &str, scope: Scope, bytes: bool, used: i64, limit: i64) -> Hold {
+    fn hold(kind: &str, scope: Scope, bytes: bool, usage: (i64, i64)) -> Hold {
+        let (used, limit) = usage;
         Hold {
             kind: kind.into(),
             scope,
@@ -486,7 +492,7 @@ mod tests {
             "presence_rate",
             "presence_operations",
         ] {
-            let h = hold(kind, Scope::Node(Uuid::nil()), false, 31, 30);
+            let h = hold(kind, Scope::Node(Uuid::nil()), false, (31, 30));
             assert_eq!(h.code_name(), "history_cap_reached");
             assert!(!h.message().contains("rate"), "{}", h.message());
             assert_eq!(h.remedy(), "Wait for running agents to settle");
@@ -496,8 +502,7 @@ mod tests {
                 "presence_operations",
                 Scope::Node(Uuid::nil()),
                 false,
-                4096,
-                4096
+                (4096, 4096)
             )
             .message(),
             "Live inventory reports cap reached: 4096 of 4096"
@@ -510,8 +515,7 @@ mod tests {
             "admission_artifacts",
             Scope::Project(Uuid::from_u128(1)),
             false,
-            449,
-            512,
+            (449, 512),
         );
         assert_eq!(
             h.message(),
@@ -527,8 +531,7 @@ mod tests {
             "native_preparation",
             Scope::Global,
             true,
-            4_194_000,
-            4_194_304,
+            (4_194_000, 4_194_304),
         );
         assert_eq!(
             h.message(),
@@ -538,8 +541,7 @@ mod tests {
             "native_preparation",
             Scope::Node(Uuid::nil()),
             false,
-            256,
-            256,
+            (256, 256),
         );
         assert_eq!(
             leases.message(),

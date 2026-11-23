@@ -55,7 +55,12 @@ async fn write(
     Json(body): Json<Value>,
 ) -> Response {
     let now_ms = (state.clock)().timestamp_millis();
-    let saved = http::write(&state.store.pool, actor.id, uri.path(), body, now_ms).await;
+    let saved = http::write(
+        aq_role_settings::Writer::new(&state.store.pool, actor.id, now_ms),
+        uri.path(),
+        body,
+    )
+    .await;
     if saved.is_ok() {
         // The routing document or what the levels offer may have changed.
         crate::routing::author(&state).await;
@@ -71,7 +76,13 @@ async fn remove(
 ) -> Response {
     let now_ms = (state.clock)().timestamp_millis();
     let (pool, references) = (&state.store.pool, crate::project_bindings::role_references);
-    let removed = http::remove(pool, actor.id, uri.path(), uri.query(), now_ms, references).await;
+    let removed = http::remove(
+        aq_role_settings::Writer::new(pool, actor.id, now_ms),
+        uri.path(),
+        uri.query(),
+        references,
+    )
+    .await;
     if removed.is_ok() {
         crate::routing::author(&state).await;
     }
@@ -234,7 +245,13 @@ pub(crate) async fn offer_refused(
 ) -> AppError {
     if tables(state) {
         let now = (state.clock)().timestamp_millis();
-        refusals::record(&state.store.pool, task, project, refusal, now).await;
+        refusals::record(
+            &state.store.pool,
+            refusals::RefusedTask { task, project },
+            refusal,
+            now,
+        )
+        .await;
     }
     AppError::Conflict(refusal.refusal())
 }

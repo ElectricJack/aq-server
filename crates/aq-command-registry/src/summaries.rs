@@ -54,6 +54,12 @@ pub fn action_summary(kind: &str) -> Option<&'static str> {
         }
         "supervisor.message.send" => "Send a message to the supervisor conversation",
         "swarm.availability.set" => "Turn the owner's availability switch on or off",
+        _ => return task_and_worker_summary(kind),
+    })
+}
+
+fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
+    Some(match kind {
         "task.activate" => "Make a draft task schedulable",
         "task.activate.subtree" => "Make a task’s draft descendants schedulable",
         "task.cancel" => "Cancel a task and stop any attempt holding it",

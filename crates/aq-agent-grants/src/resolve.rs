@@ -142,27 +142,9 @@ fn merge(set: &mut Vec<Grant>, g: Grant) {
 
 impl WorkKindGrants {
     fn apply(self, mut grants: Vec<Grant>, sealing: bool) -> Vec<Grant> {
-        let creation = matches!(self.max_created_tasks, 1..);
-        let editing = |g: &Grant| matches!(g.operation.as_str(), op::TASK_EDIT | op::TASK_CANCEL);
-        grants.retain(|g| match g.operation.as_str() {
-            op::TASK_CREATE_PROJECT => false,
-            op::TASK_CREATE_SUBTASK => creation && (sealing || g.limits.draft_only),
-            _ => !editing(g) || self.edit_drafts,
-        });
+        grants.retain(|g| self.permits(g, sealing));
         for grant in &mut grants {
-            if grant.operation == op::TASK_CREATE_SUBTASK {
-                grant.scope = Scope::TaskSubtree;
-                if sealing {
-                    grant.limits.max_created_tasks = Some(self.max_created_tasks);
-                }
-                grant.limits = grant.limits.meet(Limits {
-                    max_created_tasks: Some(self.max_created_tasks),
-                    max_depth: Some(DEFAULT_MAX_DEPTH),
-                    draft_only: true,
-                });
-            } else if editing(grant) {
-                grant.scope = Scope::TaskSubtree;
-            }
+            self.restrict(grant, sealing);
         }
         if sealing && self.edit_drafts {
             for operation in [op::TASK_EDIT, op::TASK_CANCEL] {
@@ -172,6 +154,34 @@ impl WorkKindGrants {
             }
         }
         grants
+    }
+
+    fn permits(self, grant: &Grant, sealing: bool) -> bool {
+        match grant.operation.as_str() {
+            op::TASK_CREATE_PROJECT => false,
+            op::TASK_CREATE_SUBTASK => {
+                self.max_created_tasks > 0 && (sealing || grant.limits.draft_only)
+            }
+            op::TASK_EDIT | op::TASK_CANCEL => self.edit_drafts,
+            _ => true,
+        }
+    }
+    fn restrict(self, grant: &mut Grant, sealing: bool) {
+        match grant.operation.as_str() {
+            op::TASK_CREATE_SUBTASK => {
+                grant.scope = Scope::TaskSubtree;
+                if sealing {
+                    grant.limits.max_created_tasks = Some(self.max_created_tasks);
+                }
+                grant.limits = grant.limits.meet(Limits {
+                    max_created_tasks: Some(self.max_created_tasks),
+                    max_depth: Some(DEFAULT_MAX_DEPTH),
+                    draft_only: true,
+                });
+            }
+            op::TASK_EDIT | op::TASK_CANCEL => grant.scope = Scope::TaskSubtree,
+            _ => {}
+        }
     }
 
     /// A policy change can reduce a live attempt's task authority.
@@ -195,18 +205,7 @@ pub fn resolve_work(
 ) -> GrantSet {
     let mut requested = default_coding().grants().to_vec();
     for g in profile.iter().chain(&project.add) {
-        match requested.iter_mut().find(|x| x.operation == g.operation) {
-            // An addition with limits keeps them; the default's limits stay
-            // when the profile only restates the operation.
-            Some(x) if x.scope.within(g.scope) && x.scope != g.scope => {
-                x.scope = g.scope;
-                if !g.limits.is_empty() {
-                    x.limits = g.limits;
-                }
-            }
-            Some(_) => {}
-            None => requested.push(g.clone()),
-        }
+        extend_profile(&mut requested, g);
     }
     if let Some(policy) = project.work_kind(kind) {
         requested = policy.apply(requested, true);
@@ -219,4 +218,22 @@ pub fn resolve_work(
         set = set.intersect(creator);
     }
     set
+}
+
+fn extend_profile(requested: &mut Vec<Grant>, grant: &Grant) {
+    let Some(existing) = requested
+        .iter_mut()
+        .find(|g| g.operation == grant.operation)
+    else {
+        requested.push(grant.clone());
+        return;
+    };
+    // Preserve the default limits when the profile only restates the operation.
+    if existing.scope == grant.scope || !existing.scope.within(grant.scope) {
+        return;
+    }
+    existing.scope = grant.scope;
+    if !grant.limits.is_empty() {
+        existing.limits = grant.limits;
+    }
 }

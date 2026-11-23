@@ -129,8 +129,7 @@ impl SocketGit {
 
     async fn call(
         &self,
-        operation: Uuid,
-        name: &str,
+        (operation, name): (Uuid, &str),
         repo: &GitTarget,
         params: Value,
     ) -> Result<Value, GitFailure> {
@@ -184,9 +183,12 @@ impl SocketGit {
         reference: &str,
     ) -> Result<Option<String>, GitFailure> {
         let params = json!({"ref": reference});
-        let result = self.call(Uuid::new_v4(), "ref.show", repo, params).await?;
+        let result = self
+            .call((Uuid::new_v4(), "ref.show"), repo, params)
+            .await?;
         let oid = &result["oid"];
-        if result["ref"] != reference || !(oid.is_null() || oid["algorithm"] == "sha1") {
+        let typed = oid.is_null() || oid["algorithm"] == "sha1";
+        if result["ref"] != reference || !typed {
             return Err(GitFailure::protocol());
         }
         match oid["hex"].as_str() {
@@ -215,6 +217,41 @@ fn task_ref(reference: &str) -> Result<&str, GitFailure> {
     })
 }
 
+impl RefPublication {
+    fn from_reply(
+        result: &Value,
+        reference: &str,
+        old: &Value,
+        expected_source: Option<&str>,
+    ) -> Result<Self, GitFailure> {
+        let head = match result["outcome"].as_str() {
+            Some("applied") if result["target"] == reference && &result["old"] == old => {
+                sha1_hex(&result["new"])?
+            }
+            Some("already_present") => sha1_hex(&result["observed_target"])?,
+            Some("rejected") if result["reason"] == "target_moved" => {
+                return Ok(RefPublication::Moved);
+            }
+            Some("rejected") => {
+                return Err(GitFailure {
+                    code: "rejected".into(),
+                    message: result["reason"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(256)
+                        .collect(),
+                    transient: false,
+                });
+            }
+            _ => return Err(GitFailure::protocol()),
+        };
+        if expected_source.is_some_and(|expected| head != expected) {
+            return Err(GitFailure::protocol());
+        }
+        Ok(RefPublication::Published { head })
+    }
+}
 #[async_trait::async_trait]
 impl GitPort for SocketGit {
     async fn retain_ref(
@@ -232,8 +269,7 @@ impl GitPort for SocketGit {
         }
         let result = self
             .call(
-                operation,
-                "repo.retain_ref",
+                (operation, "repo.retain_ref"),
                 repo,
                 json!({"ref": reference}),
             )
@@ -269,7 +305,7 @@ impl GitPort for SocketGit {
         if let Some(source) = expected_source {
             params["expected_source"] = sha1(source)?;
         }
-        let result = match self.call(operation, "publish", repo, params).await {
+        let result = match self.call((operation, "publish"), repo, params).await {
             Ok(result) => result,
             Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
             Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
@@ -277,32 +313,7 @@ impl GitPort for SocketGit {
             }
             Err(e) => return Err(e),
         };
-        let head = match result["outcome"].as_str() {
-            Some("applied") if result["target"] == reference && result["old"] == old => {
-                sha1_hex(&result["new"])?
-            }
-            Some("already_present") => sha1_hex(&result["observed_target"])?,
-            Some("rejected") if result["reason"] == "target_moved" => {
-                return Ok(RefPublication::Moved);
-            }
-            Some("rejected") => {
-                return Err(GitFailure {
-                    code: "rejected".into(),
-                    message: result["reason"]
-                        .as_str()
-                        .unwrap_or("")
-                        .chars()
-                        .take(256)
-                        .collect(),
-                    transient: false,
-                });
-            }
-            _ => return Err(GitFailure::protocol()),
-        };
-        if expected_source.is_some_and(|expected| head != expected) {
-            return Err(GitFailure::protocol());
-        }
-        Ok(RefPublication::Published { head })
+        RefPublication::from_reply(&result, reference, &old, expected_source)
     }
 
     async fn delete_ref(
@@ -323,8 +334,7 @@ impl GitPort for SocketGit {
             .transpose()?;
         let result = self
             .call(
-                operation,
-                "ref.delete",
+                (operation, "ref.delete"),
                 repo,
                 json!({"ref": reference, "remote": true, "expected_old": lease}),
             )

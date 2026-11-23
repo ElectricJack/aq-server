@@ -3,7 +3,7 @@
 //! supervisor bearer with the `owner` scope reaches the live owner app as the
 //! owner who approved the supervisor, and nothing else does.
 use super::Fixture;
-use crate::dashboard_task_knowledge::{Graph, action, change_set, graph_runtime, node};
+use crate::dashboard_task_knowledge::{Graph, Subject, action, change_set, graph_runtime, node};
 use aq_server::{
     agent_access::supervisor_conversation::reply, config::AuthConfig,
     identity::verifier_from_config, project_bindings::domain,
@@ -206,7 +206,7 @@ impl Owner {
         *self.graph.reply.lock().unwrap() = Some((200, change_set(vec![active])));
         let payload =
             json!({"operation_id":Uuid::new_v4(),"project_id":self.project,"expected_version":"3"});
-        (id, action("task.activate", "task", id, "3", payload))
+        (id, action("task.activate", Subject::Task(id, "3"), payload))
     }
 }
 
@@ -464,7 +464,7 @@ impl Owner {
         *self.graph.reply.lock().unwrap() = Some((200, created));
         let payload = json!({"operation_id":id,"expected_project_revision":"1","title":"Single",
             "body":"","acceptance_criteria":"","labels":[],"task_state":"active"});
-        action("task.create", "project", self.project, "1", payload)
+        action("task.create", Subject::Project(self.project, "1"), payload)
     }
 }
 
@@ -644,7 +644,11 @@ async fn project_supervisor_cannot_replace_its_binding() {
 async fn project_supervisor_cannot_send_playbook_actions() {
     let o = project_owner().await;
     let payload = json!({"operation_id":Uuid::new_v4(),"project_id":o.project});
-    let start = action("playbook.run.start", "project", o.project, "1", payload);
+    let start = action(
+        "playbook.run.start",
+        Subject::Project(o.project, "1"),
+        payload,
+    );
     let (status, out) = o.supervisor("POST", "/api/v1/actions", Some(start)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
     assert_eq!(out["message"], REFUSAL, "{out}");

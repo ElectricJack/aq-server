@@ -108,26 +108,41 @@ async fn serve(
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let (parts, body) = request.into_parts();
     seen.lock().unwrap().push(parts.headers.clone());
-    let header = |name: &str| {
-        (parts.headers.get(name))
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let path = parts.uri.path();
-    let first = path.trim_start_matches('/').split('/').next();
-    if Some(header("aq-repository").as_str()) != first
-        || header("aq-base").len() != 40
-        || !header("aq-task-ref").starts_with("refs/heads/aq/")
-        || Uuid::try_parse(&header("aq-operation")).is_err()
-        || header("aq-max-push-bytes").parse::<u64>().unwrap_or(0) == 0
-    {
+    if !valid_grant(&parts) {
         return Ok(plain(StatusCode::BAD_REQUEST, "invalid_grant"));
     }
     let Ok(body) = body.collect().await else {
         return Ok(plain(StatusCode::BAD_REQUEST, "unreadable body"));
     };
     let body = body.to_bytes();
+    let output = backend(root, &parts, body).await;
+    Ok(cgi_response(&output))
+}
+
+fn header<'a>(parts: &'a http::request::Parts, name: &str) -> &'a str {
+    parts
+        .headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+}
+
+fn valid_grant(parts: &http::request::Parts) -> bool {
+    let first = parts.uri.path().trim_start_matches('/').split('/').next();
+    let repository_matches = Some(header(parts, "aq-repository")) == first;
+    let valid_range = header(parts, "aq-base").len() == 40
+        && header(parts, "aq-task-ref").starts_with("refs/heads/aq/");
+    let operation = Uuid::try_parse(header(parts, "aq-operation")).is_ok();
+    let bounded = header(parts, "aq-max-push-bytes")
+        .parse::<u64>()
+        .unwrap_or(0)
+        > 0;
+    [repository_matches, valid_range, operation, bounded]
+        .into_iter()
+        .all(|valid| valid)
+}
+
+async fn backend(root: PathBuf, parts: &http::request::Parts, body: Bytes) -> Vec<u8> {
     let mut command = tokio::process::Command::new("git");
     command
         .arg("http-backend")
@@ -135,18 +150,18 @@ async fn serve(
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_PROJECT_ROOT", &root)
         .env("GIT_HTTP_EXPORT_ALL", "1")
-        .env("PATH_INFO", path)
+        .env("PATH_INFO", parts.uri.path())
         .env("REQUEST_METHOD", parts.method.as_str())
         .env("QUERY_STRING", parts.uri.query().unwrap_or_default())
-        .env("CONTENT_TYPE", header("content-type"))
+        .env("CONTENT_TYPE", header(parts, "content-type"))
         .env("CONTENT_LENGTH", body.len().to_string())
         .env("REMOTE_USER", "aq")
         .env("REMOTE_ADDR", "127.0.0.1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if !header("content-encoding").is_empty() {
-        command.env("HTTP_CONTENT_ENCODING", header("content-encoding"));
+    if !header(parts, "content-encoding").is_empty() {
+        command.env("HTTP_CONTENT_ENCODING", header(parts, "content-encoding"));
     }
     let mut child = command.spawn().expect("run git http-backend");
     let mut stdin = child.stdin.take().unwrap();
@@ -154,14 +169,17 @@ async fn serve(
         let _ = stdin.write_all(&body).await;
     };
     let (_, output) = tokio::join!(write, child.wait_with_output());
-    let output = output.expect("git http-backend output").stdout;
+    output.expect("git http-backend output").stdout
+}
+
+fn cgi_response(output: &[u8]) -> Response<Full<Bytes>> {
     let split = (output
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map(|i| (i, 4)))
     .or_else(|| output.windows(2).position(|w| w == b"\n\n").map(|i| (i, 2)));
     let Some((end, gap)) = split else {
-        return Ok(plain(StatusCode::BAD_GATEWAY, "no CGI header"));
+        return plain(StatusCode::BAD_GATEWAY, "no CGI header");
     };
     let mut response = Response::new(Full::new(Bytes::copy_from_slice(&output[end + gap..])));
     for line in String::from_utf8_lossy(&output[..end]).lines() {
@@ -181,5 +199,5 @@ async fn serve(
             response.headers_mut().append(name, value);
         }
     }
-    Ok(response)
+    response
 }

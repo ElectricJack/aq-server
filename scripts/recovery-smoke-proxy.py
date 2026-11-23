@@ -9,6 +9,7 @@ import os
 import socket
 import threading
 import time
+from typing import NamedTuple
 import urllib.error
 import urllib.request
 
@@ -28,6 +29,46 @@ def event(value):
             output.write(json.dumps(value, sort_keys=True) + "\n")
             output.flush()
             os.fsync(output.fileno())
+
+
+class Fault(NamedTuple):
+    mode: str
+    token: str
+    barrier_before_drop: bool
+
+
+def valid_token(token):
+    return token.replace("-", "").isalnum() and len(token) <= 100
+
+
+def current_fault(rule, token):
+    with lock:
+        if rule.get("once"):
+            if token in seen:
+                return Fault("pass", token, False)
+            seen.add(token)
+    return Fault(rule.get("mode", "pass"), token, rule.get("barrier_before_drop"))
+
+
+def wait_at_barrier(token, observation, stage):
+    marker = args.control / (token + ".ready")
+    marker.write_text(json.dumps({**observation, "stage": stage}))
+    event({**observation, "event": stage})
+    deadline = time.monotonic() + 90
+    while not (args.control / (token + ".release")).exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("fixture barrier not released")
+        time.sleep(0.01)
+
+
+def grant_observation(path, status, data):
+    if path not in {"/v2/worker/accept", "/v2/worker/renew"} or not 200 <= status < 300:
+        return {}
+    grant = json.loads(data)["grant"]
+    immutable = {key: value for key, value in grant.items() if key != "valid_for_ms"}
+    canonical = json.dumps(immutable, sort_keys=True, separators=(",", ":")).encode()
+    return {"immutable_grant_sha256": hashlib.sha256(canonical).hexdigest(),
+            "grant_remaining_ms": grant["valid_for_ms"]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -56,65 +97,55 @@ class Handler(BaseHTTPRequestHandler):
                        "body_sha256": hashlib.sha256(body).hexdigest()}
         rules = json.loads((args.control / "rules.json").read_text())
         rule = rules.get(self.path, {})
-        mode = rule.get("mode", "pass")
         token = rule.get("token", "")
-        if token and (not token.replace("-", "").isalnum() or len(token) > 100):
+        if token and not valid_token(token):
             return self.reply(500, b'{}')
-        with lock:
-            active = not rule.get("once") or token not in seen
-            if active and rule.get("once"):
-                seen.add(token)
-        if not active:
-            mode = "pass"
-        observation["fault"] = mode
-
-        def barrier(stage):
-            marker = args.control / (token + ".ready")
-            marker.write_text(json.dumps({**observation, "stage": stage}))
-            event({**observation, "event": stage})
-            deadline = time.monotonic() + 90
-            while not (args.control / (token + ".release")).exists():
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("fixture barrier not released")
-                time.sleep(0.01)
-
+        fault = current_fault(rule, token)
+        observation["fault"] = fault.mode
         try:
-            if mode == "partition":
-                event({**observation, "event": "partition_refused_before_forward"})
-                return self.reply(503, b'{"code":"overloaded","message":"fixture partition","retryable":true,"operation_id":null}')
-            if mode == "hold_before_forward":
-                barrier("held_before_forward")
-            request = urllib.request.Request(args.upstream + self.path, body, {
-                "Content-Type": "application/json", "Authorization": self.headers.get("Authorization", "")})
-            started = time.monotonic_ns()
-            try:
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    status, data = response.status, response.read()
-            except urllib.error.HTTPError as response:
-                status, data = response.code, response.read()
-            grant_fields = {}
-            if self.path in {"/v2/worker/accept", "/v2/worker/renew"} and 200 <= status < 300:
-                grant = json.loads(data)["grant"]
-                immutable = {key: value for key, value in grant.items() if key != "valid_for_ms"}
-                grant_fields = {"immutable_grant_sha256": hashlib.sha256(json.dumps(immutable, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
-                                "grant_remaining_ms": grant["valid_for_ms"]}
-            event({**observation, **grant_fields, "event": "upstream_response", "status": status,
-                   "upstream_latency_ms": (time.monotonic_ns() - started) / 1_000_000,
-                   "response_sha256": hashlib.sha256(data).hexdigest()})
-            if mode == "hold_after_commit" and 200 <= status < 300:
-                barrier("held_after_upstream_commit")
-            if mode == "drop_after_commit" and 200 <= status < 300:
-                if rule.get("barrier_before_drop"):
-                    barrier("committed_before_connection_drop")
-                event({**observation, "event": "connection_closed_after_upstream_commit"})
-                self.close_connection = True
-                self.connection.shutdown(socket.SHUT_RDWR)
-                self.connection.close()
-                return
-            self.reply(status, data)
+            self.proxy_request(body, observation, fault)
         except (OSError, TimeoutError) as error:
             event({**observation, "event": "proxy_transport_error", "error_type": type(error).__name__})
             self.close_connection = True
+
+    def proxy_request(self, body, observation, fault):
+        if fault.mode == "partition":
+            event({**observation, "event": "partition_refused_before_forward"})
+            return self.reply(503, b'{"code":"overloaded","message":"fixture partition","retryable":true,"operation_id":null}')
+        if fault.mode == "hold_before_forward":
+            wait_at_barrier(fault.token, observation, "held_before_forward")
+        status, data = self.forward_request(body, observation)
+        if 200 <= status < 300 and self.handle_committed_response(observation, fault):
+            return
+        self.reply(status, data)
+
+    def forward_request(self, body, observation):
+        request = urllib.request.Request(args.upstream + self.path, body, {
+            "Content-Type": "application/json", "Authorization": self.headers.get("Authorization", "")})
+        started = time.monotonic_ns()
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                status, data = response.status, response.read()
+        except urllib.error.HTTPError as response:
+            status, data = response.code, response.read()
+        grant_fields = grant_observation(self.path, status, data)
+        event({**observation, **grant_fields, "event": "upstream_response", "status": status,
+               "upstream_latency_ms": (time.monotonic_ns() - started) / 1_000_000,
+               "response_sha256": hashlib.sha256(data).hexdigest()})
+        return status, data
+
+    def handle_committed_response(self, observation, fault):
+        if fault.mode == "hold_after_commit":
+            wait_at_barrier(fault.token, observation, "held_after_upstream_commit")
+        if fault.mode != "drop_after_commit":
+            return False
+        if fault.barrier_before_drop:
+            wait_at_barrier(fault.token, observation, "committed_before_connection_drop")
+        event({**observation, "event": "connection_closed_after_upstream_commit"})
+        self.close_connection = True
+        self.connection.shutdown(socket.SHUT_RDWR)
+        self.connection.close()
+        return True
 
 
 server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)

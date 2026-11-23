@@ -26,7 +26,7 @@ pub const MAX_CLIP_DURATION_MS: u64 = 60_000;
 pub const MAX_MP4_BOXES: usize = 4096;
 
 pub fn rgba_len(width: u32, height: u32) -> Result<usize> {
-    if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+    if !(1..=MAX_DIMENSION).contains(&width) || !(1..=MAX_DIMENSION).contains(&height) {
         return Err(Invalid::Limit("dimensions"));
     }
     let pixels = u64::from(width)

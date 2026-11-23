@@ -14,54 +14,7 @@ pub(super) struct QueryArgs {
 struct Scope {
     project_id: Option<Uuid>,
 }
-#[derive(Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum Coverage {
-    Complete,
-    Partial,
-    Unavailable,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum SourceStatus {
-    Available,
-    Unavailable,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Accuracy {
-    CompleteObservation,
-    LowerBound,
-    Unknown,
-}
-#[derive(Default, Serialize)]
-struct Counts {
-    draft: Option<u16>,
-    active: Option<u16>,
-    completed: Option<u16>,
-    canceled: Option<u16>,
-}
-#[derive(Serialize)]
-struct Task {
-    id: Uuid,
-    title: String,
-    version: String,
-    content_revision: String,
-    task_state: String,
-    updated_at: String,
-}
-#[derive(Serialize)]
-struct ProjectView {
-    project: Project,
-    observed_at: Option<String>,
-    source_status: SourceStatus,
-    coverage: Coverage,
-    count_accuracy: Accuracy,
-    task_counts: Counts,
-    tasks: Vec<Task>,
-    more_tasks: Option<bool>,
-    reason: Option<&'static str>,
-}
+use aq_human_work::overview::{Coverage, ProjectView};
 #[derive(Serialize)]
 pub(super) struct Reply {
     contract: &'static str,
@@ -79,19 +32,6 @@ fn project(record: &ProjectRecord) -> Project {
         workspace_id: record.binding.graph_workspace_id,
     }
 }
-fn failed(record: &ProjectRecord, reason: &'static str) -> ProjectView {
-    ProjectView {
-        project: project(record),
-        observed_at: None,
-        source_status: SourceStatus::Unavailable,
-        coverage: Coverage::Unavailable,
-        count_accuracy: Accuracy::Unknown,
-        task_counts: Counts::default(),
-        tasks: vec![],
-        more_tasks: None,
-        reason: Some(reason),
-    }
-}
 fn timestamp(state: &AppState) -> Result<String> {
     chrono::DateTime::from_timestamp_millis(stamp(state))
         .map(|d| d.to_rfc3339())
@@ -106,86 +46,80 @@ fn observed(
     if !contract::upstream_valid("NodePage", raw) {
         return Err(());
     }
-    let rows = raw["items"].as_array().ok_or(())?;
-    if rows.len() > usize::from(limit) {
-        return Err(());
+    ProjectView::from_page(project, raw, limit, at).ok_or(())
+}
+impl QueryArgs {
+    fn limits(&self) -> Result<(u16, u16)> {
+        let project = self.project_limit.unwrap_or(4);
+        let tasks = self.task_limit.unwrap_or(16);
+        let bounded = (1..=8).contains(&project) && (1..=32).contains(&tasks);
+        let valid_ids = [self.project_id, self.after]
+            .into_iter()
+            .flatten()
+            .all(|id| !id.is_nil());
+        let valid_scope = valid_ids && (self.project_id.is_none() || self.after.is_none());
+        if !bounded || !valid_scope {
+            return Err(invalid());
+        }
+        Ok((project, tasks))
     }
-    let more = raw["next_cursor"].is_string();
-    if more
-        && raw["next_cursor"]
-            .as_str()
-            .is_none_or(|s| s.is_empty() || s.len() > 256 || s.chars().any(char::is_control))
-    {
-        return Err(());
+    async fn page(
+        &self,
+        runtime: &ReadRuntime,
+        project_limit: u16,
+    ) -> Result<(Vec<ProjectRecord>, bool, Option<Uuid>)> {
+        let rows:Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('revision',revision,'binding',binding,'validated_at_ms',validated_at_ms,'validation',binding_observation) FROM project_execution_bindings WHERE ($1::uuid IS NULL OR project_id=$1) AND ($2::uuid IS NULL OR project_id>$2) ORDER BY project_id LIMIT $3").bind(self.project_id).bind(self.after).bind(i64::from(project_limit)+1).fetch_all(&runtime.pool).await.map_err(|_|unavailable())?;
+        if self.project_id.is_some() && rows.is_empty() {
+            return Err(AppError::NotFound("project not found".into()));
+        }
+        let more_projects = rows.len() > usize::from(project_limit);
+        let records: Vec<ProjectRecord> = rows
+            .into_iter()
+            .take(usize::from(project_limit))
+            .map(|v| serde_json::from_value(v).map_err(|_| unavailable()))
+            .collect::<Result<_>>()?;
+        let next_after = if more_projects {
+            records.last().map(|p| p.binding.project_id)
+        } else {
+            None
+        };
+        Ok((records, more_projects, next_after))
     }
-    let mut counts = Counts {
-        draft: Some(0),
-        active: Some(0),
-        completed: Some(0),
-        canceled: Some(0),
-    };
-    let mut tasks = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for node in rows {
-        if node["workspace_id"] != json!(project.workspace_id)
-            || node["kind"] != "task"
-            || node["deleted"] != false
-            || node["retired"] != false
+}
+struct TaskReader<'a> {
+    state: &'a AppState,
+    graph: &'a Runtime,
+    limit: u16,
+    deadline: tokio::time::Instant,
+}
+impl TaskReader<'_> {
+    async fn observe(&self, record: &ProjectRecord) -> Result<ProjectView> {
+        if record.binding.graph_adapter_reference != "aq.graph.configured"
+            || record.binding.graph_workspace_id.is_nil()
         {
-            return Err(());
+            return Ok(ProjectView::failed(project(record), "unsupported_adapter"));
         }
-        let id = node["id"]
-            .as_str()
-            .and_then(|s| s.parse::<Uuid>().ok())
-            .filter(|id| !id.is_nil())
-            .ok_or(())?;
-        if !seen.insert(id) {
-            return Err(());
+        let remaining = self
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(ProjectView::failed(project(record), "budget_exhausted"));
         }
-        let revision = |key: &str| {
-            node[key]
-                .as_u64()
-                .filter(|n| *n > 0 && *n <= i64::MAX as u64)
-                .map(|n| n.to_string())
-                .ok_or(())
+        let query = vec![
+            ("kind".into(), "task".into()),
+            ("include_retired".into(), "false".into()),
+            ("limit".into(), self.limit.to_string()),
+        ];
+        let path = format!("/v1/workspaces/{}/nodes", record.binding.graph_workspace_id);
+        let read = self.graph.human_get(&path, &query, 1_000_000);
+        let view = match tokio::time::timeout(remaining.min(PROJECT_CALL), read).await {
+            Ok(Ok(raw)) => observed(project(record), &raw, self.limit, timestamp(self.state)?)
+                .unwrap_or_else(|_| ProjectView::failed(project(record), "invalid_graph_response")),
+            Ok(Err(_)) => ProjectView::failed(project(record), "graph_unavailable"),
+            Err(_) => ProjectView::failed(project(record), "read_timeout"),
         };
-        let task_state = node["task_state"].as_str().ok_or(())?;
-        let count = match task_state {
-            "draft" => &mut counts.draft,
-            "active" => &mut counts.active,
-            "completed" => &mut counts.completed,
-            "canceled" => &mut counts.canceled,
-            _ => return Err(()),
-        };
-        *count = Some(count.ok_or(())?.checked_add(1).ok_or(())?);
-        tasks.push(Task {
-            id,
-            title: node["title"].as_str().ok_or(())?.into(),
-            version: revision("version")?,
-            content_revision: revision("content_revision")?,
-            task_state: task_state.into(),
-            updated_at: node["updated_at"].as_str().ok_or(())?.into(),
-        });
+        Ok(view)
     }
-    Ok(ProjectView {
-        project,
-        observed_at: Some(at),
-        source_status: SourceStatus::Available,
-        coverage: if more {
-            Coverage::Partial
-        } else {
-            Coverage::Complete
-        },
-        count_accuracy: if more {
-            Accuracy::LowerBound
-        } else {
-            Accuracy::CompleteObservation
-        },
-        task_counts: counts,
-        tasks,
-        more_tasks: Some(more),
-        reason: None,
-    })
 }
 pub(super) async fn read(
     State(state): State<AppState>,
@@ -194,69 +128,27 @@ pub(super) async fn read(
     args: std::result::Result<Query<QueryArgs>, axum::extract::rejection::QueryRejection>,
 ) -> Result<Json<Reply>> {
     let Query(args) = args.map_err(|_| invalid())?;
-    let project_limit = args.project_limit.unwrap_or(4);
-    let task_limit = args.task_limit.unwrap_or(16);
-    if !(1..=8).contains(&project_limit)
-        || !(1..=32).contains(&task_limit)
-        || args.project_id.is_some_and(|id| id.is_nil())
-        || args.after.is_some_and(|id| id.is_nil())
-        || (args.project_id.is_some() && args.after.is_some())
-    {
-        return Err(invalid());
-    }
+    let (project_limit, task_limit) = args.limits()?;
     let graph = super::runtime(&state)?;
     owner(&runtime, &actor).await?;
     let requested = stamp(&state);
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('revision',revision,'binding',binding,'validated_at_ms',validated_at_ms,'validation',binding_observation) FROM project_execution_bindings WHERE ($1::uuid IS NULL OR project_id=$1) AND ($2::uuid IS NULL OR project_id>$2) ORDER BY project_id LIMIT $3").bind(args.project_id).bind(args.after).bind(i64::from(project_limit)+1).fetch_all(&runtime.pool).await.map_err(|_|unavailable())?;
-    if args.project_id.is_some() && rows.is_empty() {
-        return Err(AppError::NotFound("project not found".into()));
-    }
-    let more_projects = rows.len() > usize::from(project_limit);
-    let records: Vec<ProjectRecord> = rows
-        .into_iter()
-        .take(usize::from(project_limit))
-        .map(|v| serde_json::from_value(v).map_err(|_| unavailable()))
-        .collect::<Result<_>>()?;
-    let next_after = if more_projects {
-        records.last().map(|p| p.binding.project_id)
-    } else {
-        None
+    let (records, more_projects, next_after) = args.page(&runtime, project_limit).await?;
+    let reader = TaskReader {
+        state: &state,
+        graph,
+        limit: task_limit,
+        deadline: tokio::time::Instant::now() + GRAPH_BUDGET,
     };
-    let deadline = tokio::time::Instant::now() + GRAPH_BUDGET;
     let mut projects = Vec::new();
     for record in &records {
-        if record.binding.graph_adapter_reference != "aq.graph.configured"
-            || record.binding.graph_workspace_id.is_nil()
-        {
-            projects.push(failed(record, "unsupported_adapter"));
-            continue;
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            projects.push(failed(record, "budget_exhausted"));
-            continue;
-        }
-        let query = vec![
-            ("kind".into(), "task".into()),
-            ("include_retired".into(), "false".into()),
-            ("limit".into(), task_limit.to_string()),
-        ];
-        let path = format!("/v1/workspaces/{}/nodes", record.binding.graph_workspace_id);
-        let read = graph.human_get(&path, &query, 1_000_000);
-        let view = match tokio::time::timeout(remaining.min(PROJECT_CALL), read).await {
-            Ok(Ok(raw)) => observed(project(record), &raw, task_limit, timestamp(&state)?)
-                .unwrap_or_else(|_| failed(record, "invalid_graph_response")),
-            Ok(Err(_)) => failed(record, "graph_unavailable"),
-            Err(_) => failed(record, "read_timeout"),
-        };
-        projects.push(view);
+        projects.push(reader.observe(record).await?);
     }
     fence_records(&runtime, &actor, &records).await?;
     let at = stamp(&state);
     if at < requested || at - requested >= 5000 {
         return Err(unavailable());
     }
-    let coverage = if more_projects || projects.iter().any(|p| p.coverage != Coverage::Complete) {
+    let coverage = if more_projects || projects.iter().any(|p| !p.complete()) {
         Coverage::Partial
     } else {
         Coverage::Complete

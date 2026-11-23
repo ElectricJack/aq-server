@@ -5,8 +5,9 @@
 //! keeps only its own operation bookkeeping (the effect row, the operation row
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
-    Completion, Delivery, DeliveryTarget, GitTarget, PullRequestObserved, SocketGit, Step,
-    bounded_text, bounded_wait_ms, merge_method, without_delivery, without_target,
+    Completion, Delivery, DeliveryTarget, FrozenCommand, GitTarget, MergeGuard,
+    PullRequestObserved, SocketGit, Step, TaskOperation, bounded_text, bounded_wait_ms,
+    merge_method, without_delivery, without_target,
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};
@@ -173,22 +174,8 @@ pub async fn frozen_request(
             request["pull_request"] = json!(known.as_ref().map(number));
         }
         "pull_request.merge" => {
-            let Some(open) = known
-                .as_ref()
-                .filter(|(_, state)| state == "open" || state == "merged")
-            else {
-                return Ok(Err("no_pull_request"));
-            };
-            request["pull_request"] = json!(number(open));
-            request["method"] = input["method"].clone();
-            request["expected_head_sha"] = input["expected_head_sha"].clone();
-            request["merge_target"] = serde_json::to_value(accepting.target)?;
-            if request["expected_head_sha"].as_str() != Some(accepting.head) {
-                return Ok(Err("head_changed"));
-            }
-            if let Some((attempt, result)) = accepting.result_ids {
-                request["attempt_id"] = json!(attempt);
-                request["result_id"] = json!(result);
+            if let Err(reason) = accepting.freeze_merge(&mut request, input, known.as_ref())? {
+                return Ok(Err(reason));
             }
         }
         "pull_request.close" => {
@@ -197,37 +184,85 @@ pub async fn frozen_request(
         }
         "pull_request.await_checks" => {
             request["pull_request"] = json!(known.as_ref().map(number));
-            request["result_head"] = json!(accepting.head);
-            request["check_target"] = serde_json::to_value(accepting.target)?;
-            let longest = accepting
-                .longest_check_wait_ms
-                .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;
-            let asked = input["deadline_ms"]
-                .as_u64()
-                .ok_or(DeliveryError::InvalidInput("deadline_ms"))?;
-            // Frozen with the request, like the wait, so one operation reads
-            // its logs under the limit it was accepted with.
-            request["check_log_bytes"] = json!(accepting.check_log_bytes.unwrap_or(0));
-            let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
-            request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
-            request["required"] = input["required"].clone();
+            accepting.freeze_wait(&mut request, input, now_ms)?;
         }
         _ => {}
     }
     Ok(Ok(request))
 }
 
+impl Accepting<'_> {
+    fn freeze_wait(
+        &self,
+        request: &mut Value,
+        input: &Value,
+        now_ms: i64,
+    ) -> Result<(), DeliveryError> {
+        request["result_head"] = json!(self.head);
+        request["check_target"] = serde_json::to_value(&self.target)?;
+        let longest = self
+            .longest_check_wait_ms
+            .ok_or(DeliveryError::InvalidInput("longest_check_wait_ms"))?;
+        let asked = input["deadline_ms"]
+            .as_u64()
+            .ok_or(DeliveryError::InvalidInput("deadline_ms"))?;
+        // Frozen with the request, like the wait, so one operation reads
+        // its logs under the limit it was accepted with.
+        request["check_log_bytes"] = json!(self.check_log_bytes.unwrap_or(0));
+        let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
+        request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
+        request["required"] = input["required"].clone();
+        Ok(())
+    }
+    fn freeze_merge(
+        &self,
+        request: &mut Value,
+        input: &Value,
+        known: Option<&(i64, String)>,
+    ) -> Result<Result<(), &'static str>, DeliveryError> {
+        let Some(open) = known.filter(|(_, state)| state == "open" || state == "merged") else {
+            return Ok(Err("no_pull_request"));
+        };
+        request["pull_request"] = json!(u64::try_from(open.0).unwrap_or(0));
+        request["method"] = input["method"].clone();
+        request["expected_head_sha"] = input["expected_head_sha"].clone();
+        request["merge_target"] = serde_json::to_value(&self.target)?;
+        if request["expected_head_sha"].as_str() != Some(self.head) {
+            return Ok(Err("head_changed"));
+        }
+        if let Some((attempt, result)) = self.result_ids {
+            request["attempt_id"] = json!(attempt);
+            request["result_id"] = json!(result);
+        }
+        Ok(Ok(()))
+    }
+}
+pub struct DueOperations<'a> {
+    pub namespace: Uuid,
+    pub generation: i64,
+    pub commands: &'a [&'a str],
+    pub limit: u32,
+    pub now_ms: i64,
+}
+#[derive(Clone, Copy)]
+pub struct DeliveryRuntime<'a> {
+    pub service: Option<&'a Delivery>,
+    pub target: Option<&'a DeliveryTarget>,
+}
 /// Marks at most `limit` running operations of `commands` in one namespace
 /// generation as looked at now, the least recently looked at first, and
 /// returns them: the driver's bounded pass.
 pub async fn due_operations(
     conn: &mut PgConnection,
-    namespace: Uuid,
-    generation: i64,
-    commands: &[&str],
-    limit: u32,
-    now_ms: i64,
+    pass: DueOperations<'_>,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
+    let DueOperations {
+        namespace,
+        generation,
+        commands,
+        limit,
+        now_ms,
+    } = pass;
     let commands: Vec<String> = commands.iter().map(|c| c.to_string()).collect();
     sqlx::query_scalar("UPDATE playbook_host_operations SET observed_at_ms=$4 WHERE operation_id IN (SELECT operation_id FROM playbook_host_operations WHERE namespace_id=$1 AND generation=$2 AND command_name=ANY($5) AND status='running' ORDER BY COALESCE(observed_at_ms,created_at_ms),operation_id LIMIT $3) RETURNING operation_id")
         .bind(namespace)
@@ -246,34 +281,42 @@ pub async fn due_operations(
 /// step sees and the head a sync finds are recorded for `work.read`.
 pub async fn run_step(
     pool: &PgPool,
-    delivery: Option<&Delivery>,
-    target: Option<&DeliveryTarget>,
-    operation: Uuid,
-    command: &str,
-    request: &Value,
+    runtime: DeliveryRuntime<'_>,
+    frozen: FrozenCommand<'_>,
     now_ms: i64,
 ) -> Result<Option<Completion>, DeliveryError> {
+    let FrozenCommand {
+        operation,
+        name: command,
+        request,
+    } = frozen;
+    let DeliveryRuntime {
+        service: delivery,
+        target,
+    } = runtime;
     let project = request_uuid(request, "project").ok_or(DeliveryError::InvalidInput("project"))?;
     let task = request_uuid(request, "task");
     let step = match (command, target, delivery) {
-        ("pull_request.merge", target, delivery) => {
+        ("pull_request.merge", _, _) => {
             let task = task.ok_or(DeliveryError::InvalidInput("task"))?;
-            run_merge_step(
-                pool,
-                delivery,
-                target,
-                operation,
-                (project, task),
-                request,
+            MergeStep {
+                frozen,
+                project,
+                task,
                 now_ms,
-            )
+            }
+            .run(pool, runtime)
             .await?
         }
         (_, None, _) => Some(without_target(command)),
         (_, Some(_), None) => without_delivery(command),
         (_, Some(target), Some(delivery)) => {
             let run = delivery
-                .step(operation, command, request, target, now_ms)
+                .step(
+                    FrozenCommand::new(operation, command, request),
+                    target,
+                    now_ms,
+                )
                 .await
                 .ok_or(DeliveryError::InvalidInput("request"))?;
             if let (Some(task), Some(seen)) = (task, &run.observed) {
@@ -282,13 +325,8 @@ pub async fn run_step(
             run.step
         }
     };
-    // A check wait with no forge keeps waiting until its deadline.
-    let step = match (step, request["deadline_at_ms"].as_i64()) {
-        (Some(step), _) => step,
-        (None, Some(at)) if command == "pull_request.await_checks" && now_ms >= at => {
-            Step::Done(Completion::new("timeout", json!({})))
-        }
-        (None, _) => return Ok(None),
+    let Some(step) = completed_step(step, frozen, now_ms) else {
+        return Ok(None);
     };
     let Step::Done(completion) = step else {
         return Ok(None);
@@ -305,54 +343,126 @@ pub async fn run_step(
     Ok(Some(completion))
 }
 
+fn completed_step(step: Option<Step>, frozen: FrozenCommand<'_>, now_ms: i64) -> Option<Step> {
+    let FrozenCommand {
+        name: command,
+        request,
+        ..
+    } = frozen;
+    // A check wait with no forge keeps waiting until its deadline.
+    match (step, request["deadline_at_ms"].as_i64()) {
+        (Some(step), _) => Some(step),
+        (None, Some(at)) if command == "pull_request.await_checks" && now_ms >= at => {
+            Some(Step::Done(Completion::new("timeout", json!({}))))
+        }
+        (None, _) => None,
+    }
+}
 fn request_uuid(request: &Value, field: &str) -> Option<Uuid> {
     request[field]
         .as_str()
         .and_then(|id| Uuid::parse_str(id).ok())
 }
 
-async fn run_merge_step(
-    pool: &PgPool,
-    delivery: Option<&Delivery>,
-    target: Option<&DeliveryTarget>,
-    operation: Uuid,
-    (project, task): (Uuid, Uuid),
-    request: &Value,
+struct MergeStep<'a> {
+    frozen: FrozenCommand<'a>,
+    project: Uuid,
+    task: Uuid,
     now_ms: i64,
-) -> Result<Option<Step>, DeliveryError> {
-    const MERGE: &str = "pull_request.merge";
-    let Some(pr) = request["pull_request"].as_u64() else {
-        return Ok(Some(Step::Done(Completion::refused("no_pull_request"))));
-    };
-    let retained: Option<(Value, String)> = sqlx::query_as(
-        "SELECT target,merge_sha FROM delivery_merge_evidence WHERE operation_id=$1",
-    )
-    .bind(operation)
-    .fetch_optional(pool)
-    .await?;
-    let current = serde_json::to_value(target)?;
-    if request.get("merge_target") == Some(&Value::Null) {
-        return Ok(Some(without_target(MERGE)));
+}
+struct MergeEvidence<'a> {
+    current: &'a Value,
+    number: i64,
+    head: &'a str,
+    sha: String,
+}
+impl MergeStep<'_> {
+    async fn run(
+        &self,
+        pool: &PgPool,
+        runtime: DeliveryRuntime<'_>,
+    ) -> Result<Option<Step>, DeliveryError> {
+        let FrozenCommand {
+            operation, request, ..
+        } = self.frozen;
+
+        let Some(pr) = request["pull_request"].as_u64() else {
+            return Ok(Some(Step::Done(Completion::refused("no_pull_request"))));
+        };
+        let retained: Option<(Value, String)> = sqlx::query_as(
+            "SELECT target,merge_sha FROM delivery_merge_evidence WHERE operation_id=$1",
+        )
+        .bind(operation)
+        .fetch_optional(pool)
+        .await?;
+        let current = serde_json::to_value(runtime.target)?;
+        let (delivery, target) = match self.runtime(runtime, retained.as_ref(), &current) {
+            std::ops::ControlFlow::Continue(pair) => pair,
+            std::ops::ControlFlow::Break(step) => return Ok(step),
+        };
+        if retained.is_none()
+            && let std::ops::ControlFlow::Break(step) = self
+                .confirm(pool, (delivery, target), (pr, &current))
+                .await?
+        {
+            return Ok(step);
+        }
+        Ok(Some(
+            delivery
+                .finish_merge(
+                    TaskOperation::new(operation, target, self.task),
+                    pr,
+                    request["expected_head_sha"]
+                        .as_str()
+                        .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?,
+                )
+                .await,
+        ))
     }
-    // Keep cleanup tied to the repository that merged, including old intents.
-    let frozen = retained
-        .as_ref()
-        .map(|(target, _)| target)
-        .or(request.get("merge_target"));
-    if frozen.is_some_and(|target| target != &current) {
-        return Ok(None);
+
+    fn runtime<'a>(
+        &self,
+        runtime: DeliveryRuntime<'a>,
+        retained: Option<&(Value, String)>,
+        current: &Value,
+    ) -> std::ops::ControlFlow<Option<Step>, (&'a Delivery, &'a DeliveryTarget)> {
+        use std::ops::ControlFlow::{Break, Continue};
+        const MERGE: &str = "pull_request.merge";
+        let request = self.frozen.request;
+        let DeliveryRuntime {
+            service: delivery,
+            target,
+        } = runtime;
+        if request.get("merge_target") == Some(&Value::Null) {
+            return Break(Some(without_target(MERGE)));
+        }
+        // Keep cleanup tied to the repository that merged, including old intents.
+        let frozen = retained
+            .map(|(target, _)| target)
+            .or(request.get("merge_target"));
+        if frozen.is_some_and(|target| target != current) {
+            return Break(None);
+        }
+        let Some(target) = target else {
+            return Break(Some(without_target(MERGE)));
+        };
+        let Some(delivery) = delivery else {
+            return Break(if retained.is_some() {
+                None
+            } else {
+                without_delivery(MERGE)
+            });
+        };
+        Continue((delivery, target))
     }
-    let Some(target) = target else {
-        return Ok(Some(without_target(MERGE)));
-    };
-    let Some(delivery) = delivery else {
-        return Ok(if retained.is_some() {
-            None
-        } else {
-            without_delivery(MERGE)
-        });
-    };
-    if retained.is_none() {
+    // A failed confirmation either produces a final/retry step or waits for a concurrent evidence insert.
+    async fn confirm(
+        &self,
+        pool: &PgPool,
+        (delivery, target): (&Delivery, &DeliveryTarget),
+        (pr, current): (u64, &Value),
+    ) -> Result<std::ops::ControlFlow<Option<Step>>, DeliveryError> {
+        let request = self.frozen.request;
         let method = request["method"]
             .as_str()
             .ok_or(DeliveryError::InvalidInput("method"))?;
@@ -360,13 +470,50 @@ async fn run_merge_step(
             .as_str()
             .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?;
         let sha = match delivery
-            .merge_on_github(target, pr, merge_method(method), head)
+            .merge_on_github(
+                target,
+                pr,
+                MergeGuard {
+                    method: merge_method(method),
+                    expected_head: head,
+                },
+            )
             .await
         {
             super::MergeAttempt::Confirmed(sha) => sha,
-            super::MergeAttempt::Unconfirmed(step) => return Ok(Some(step)),
+            super::MergeAttempt::Unconfirmed(step) => {
+                return Ok(std::ops::ControlFlow::Break(Some(step)));
+            }
         };
         let number = i64::try_from(pr).map_err(|_| DeliveryError::InvalidInput("number"))?;
+        let evidence = MergeEvidence {
+            number,
+            current,
+            head,
+            sha,
+        };
+        let inserted = self.record(pool, target, evidence).await?;
+        Ok(if inserted {
+            std::ops::ControlFlow::Continue(())
+        } else {
+            std::ops::ControlFlow::Break(None)
+        })
+    }
+    async fn record(
+        &self,
+        pool: &PgPool,
+        target: &DeliveryTarget,
+        evidence: MergeEvidence<'_>,
+    ) -> Result<bool, DeliveryError> {
+        let FrozenCommand {
+            operation, request, ..
+        } = self.frozen;
+        let MergeEvidence {
+            current,
+            number,
+            head,
+            sha,
+        } = evidence;
         // Commit the merge before the separately retryable branch deletion.
         let inserted = sqlx::query(
             "INSERT INTO delivery_merge_evidence(\
@@ -375,37 +522,21 @@ async fn run_merge_step(
              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(operation_id) DO NOTHING",
         )
         .bind(operation)
-        .bind(project)
-        .bind(task)
+        .bind(self.project)
+        .bind(self.task)
         .bind(request_uuid(request, "attempt_id"))
         .bind(request_uuid(request, "result_id"))
         .bind(number)
-        .bind(&current)
+        .bind(current)
         .bind(target.main_ref())
         .bind(head)
         .bind(sha)
-        .bind(now_ms)
+        .bind(self.now_ms)
         .execute(pool)
         .await?;
-        if inserted.rows_affected() == 0 {
-            return Ok(None);
-        }
+        Ok(inserted.rows_affected() != 0)
     }
-    Ok(Some(
-        delivery
-            .finish_merge(
-                operation,
-                target,
-                task,
-                pr,
-                request["expected_head_sha"]
-                    .as_str()
-                    .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?,
-            )
-            .await,
-    ))
 }
-
 /// The pull request as the last command left it (`work.read`
 /// `pull_request`). A command that did not read the url leaves the stored one.
 async fn record_pull_request(

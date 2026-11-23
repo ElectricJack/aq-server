@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::{
     fmt,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 use uuid::Uuid;
 
@@ -23,15 +23,15 @@ impl fmt::Debug for MediaConfig {
             .finish_non_exhaustive()
     }
 }
+fn local_root(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+}
 impl MediaConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.storage_id.is_nil()
-            || !self.root.is_absolute()
-            || self
-                .root
-                .components()
-                .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-        {
+        if self.storage_id.is_nil() || !local_root(&self.root) {
             return Err("media root must be absolute and storage identity nonnil");
         }
         Ok(())

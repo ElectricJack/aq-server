@@ -1,6 +1,9 @@
 use aq_playbook_host::{Error, Limits as HostLimits, Owner, Request};
 use aq_playbooks_model::*;
-use aq_playbooks_runner::{MemoryStorage, State, Storage, StorageError, VersionedState};
+use aq_playbooks_runner::{IndexPage, IndexQuery, MemoryStorage, Storage, StorageError};
+#[path = "common/observed.rs"]
+mod observed;
+use observed::{Observed, Probe};
 
 use std::{
     collections::BTreeSet,
@@ -136,52 +139,23 @@ impl Gate {
         cv.notify_all();
     }
 }
-#[derive(Clone)]
-struct Blocked {
-    store: MemoryStorage,
-    gate: Gate,
-}
-impl Storage for Blocked {
-    fn load(&self, n: &str) -> Result<VersionedState, StorageError> {
-        self.store.load(n)
-    }
-    fn compare_and_swap(&self, n: &str, o: &str, v: u64, s: &State) -> Result<u64, StorageError> {
-        self.store.compare_and_swap(n, o, v, s)
-    }
-    fn acquire(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.store.acquire(n, o)
-    }
-    fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.store.release(n, o)
-    }
-    fn persists_history(&self) -> bool {
-        self.store.persists_history()
-    }
-    fn history_page(
-        &self,
-        n: &str,
-        q: &aq_playbooks_runner::InspectionQuery,
-    ) -> Result<Vec<aq_playbooks_runner::HistoryItem>, StorageError> {
-        self.store.history_page(n, q)
-    }
-    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
-        self.store.delete_history(n, o, before_ms)
-    }
+impl Probe for Gate {
     fn query(
         &self,
-        n: &str,
-        q: &aq_playbooks_runner::IndexQuery,
-    ) -> Result<aq_playbooks_runner::IndexPage, StorageError> {
-        self.gate.block();
-        self.store.query(n, q)
+        store: &MemoryStorage,
+        namespace: &str,
+        query: &IndexQuery,
+    ) -> Result<IndexPage, StorageError> {
+        self.block();
+        store.query(namespace, query)
     }
 }
 #[tokio::test(flavor = "current_thread")]
 async fn blocked_storage_does_not_block_async_control_and_control_queue_is_reserved() {
     let gate = Gate::default();
-    let backend = Blocked {
-        store: MemoryStorage::default(),
-        gate: gate.clone(),
+    let backend = Observed {
+        inner: MemoryStorage::default(),
+        probe: gate.clone(),
     };
     let owner = Owner::start(
         "blocked".into(),
@@ -194,21 +168,7 @@ async fn blocked_storage_does_not_block_async_control_and_control_queue_is_reser
     )
     .await
     .unwrap();
-    let first = owner.clone();
-    let blocked = tokio::spawn(async move {
-        first
-            .call(
-                Request::Runs {
-                    after: None,
-                    limit: 1,
-                },
-                DEADLINE,
-            )
-            .await
-    });
-    while !gate.entered.load(Ordering::Acquire) {
-        tokio::task::yield_now().await;
-    }
+    let blocked = start_blocked_query(&owner, &gate).await;
     // Current-thread executor remains responsive despite synchronous storage hold.
     tokio::time::timeout(Duration::from_millis(100), async {
         tokio::task::yield_now().await;
@@ -250,36 +210,15 @@ async fn blocked_storage_does_not_block_async_control_and_control_queue_is_reser
     ));
     gate.release();
     blocked.await.unwrap().unwrap();
-    // The owner thread retires asynchronously; bound the wait by time, not by
-    // a count of yields, so a loaded machine (nextest runs tests in parallel
-    // processes) cannot exhaust it first.
-    let retire_by = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < retire_by {
-        if matches!(
-            owner
-                .call(
-                    Request::Runs {
-                        after: None,
-                        limit: 1
-                    },
-                    DEADLINE
-                )
-                .await,
-            Err(Error::Stopped)
-        ) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    panic!("queued stop did not retire owner");
+    wait_until_retired(&owner).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn dropping_last_handle_never_joins_stalled_owner_on_async_thread() {
     let gate = Gate::default();
-    let backend = Blocked {
-        store: MemoryStorage::default(),
-        gate: gate.clone(),
+    let backend = Observed {
+        inner: MemoryStorage::default(),
+        probe: gate.clone(),
     };
     let owner = Owner::start("drop".into(), HostLimits::default(), move || Ok(backend))
         .await
@@ -496,4 +435,51 @@ fn admit_once(key: &str, requested_at_ms: Option<i64>, now_ms: i64) -> Request {
         requested_at_ms,
         now_ms,
     }
+}
+
+async fn start_blocked_query(
+    owner: &Owner,
+    gate: &Gate,
+) -> tokio::task::JoinHandle<Result<serde_json::Value, Error>> {
+    let first = owner.clone();
+    let blocked = tokio::spawn(async move {
+        first
+            .call(
+                Request::Runs {
+                    after: None,
+                    limit: 1,
+                },
+                DEADLINE,
+            )
+            .await
+    });
+    while !gate.entered.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    blocked
+}
+
+async fn wait_until_retired(owner: &Owner) {
+    // The owner thread retires asynchronously; bound the wait by time, not by
+    // a count of yields, so a loaded machine (nextest runs tests in parallel
+    // processes) cannot exhaust it first.
+    let retire_by = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < retire_by {
+        if matches!(
+            owner
+                .call(
+                    Request::Runs {
+                        after: None,
+                        limit: 1
+                    },
+                    DEADLINE
+                )
+                .await,
+            Err(Error::Stopped)
+        ) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    panic!("queued stop did not retire owner");
 }

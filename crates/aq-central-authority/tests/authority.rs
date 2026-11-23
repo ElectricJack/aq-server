@@ -233,75 +233,41 @@ fn start_is_bound_to_exact_plan_permit_batch_and_launch() {
     let p = plan();
     let state = Run::new(p.clone(), clock(1000)).unwrap();
     let expected = p.dispatch(permit(&p, 1, 1000, 101000)).unwrap();
-    let mut wrong = expected.clone();
-    wrong.batch_digest = Digest::of(b"wrong-batch");
-    let t = state
-        .transition(
-            &Event::CommitStart {
-                launch: launch(&p),
-                dispatch: wrong,
-            },
-            clock(1000),
-        )
-        .unwrap();
-    assert_eq!(refuse(t, Refusal::Binding), state);
-    let mut wrong = expected.clone();
-    wrong.host_operation_id = uuid(77);
-    assert_eq!(
-        refuse(
+    let commit = |state: &Run, launch, dispatch, at| {
+        state
+            .transition(&Event::CommitStart { launch, dispatch }, clock(at))
+            .unwrap()
+    };
+    let mut batch = expected.clone();
+    batch.batch_digest = Digest::of(b"wrong-batch");
+    let mut operation = expected.clone();
+    operation.host_operation_id = uuid(77);
+    for dispatch in [batch, operation] {
+        assert_eq!(
+            refuse(commit(&state, launch(&p), dispatch, 1000), Refusal::Binding),
             state
-                .transition(
-                    &Event::CommitStart {
-                        launch: launch(&p),
-                        dispatch: wrong
-                    },
-                    clock(1000)
-                )
-                .unwrap(),
-            Refusal::Binding
-        ),
-        state
-    );
-    let mut wrong = launch(&p);
-    wrong.binding.plan_digest = Digest::of(b"different-plan");
+        );
+    }
+    let mut other_plan = launch(&p);
+    other_plan.binding.plan_digest = Digest::of(b"different-plan");
     refuse(
-        state
-            .transition(
-                &Event::CommitStart {
-                    launch: wrong,
-                    dispatch: expected.clone(),
-                },
-                clock(1000),
-            )
-            .unwrap(),
+        commit(&state, other_plan, expected.clone(), 1000),
         Refusal::Binding,
     );
     let running = started();
     assert_eq!(
-        running
-            .transition(
-                &Event::CommitStart {
-                    launch: launch(&p),
-                    dispatch: expected
-                },
-                clock(1100)
-            )
-            .unwrap()
-            .decision,
+        commit(&running, launch(&p), expected, 1100).decision,
         Decision::Replayed
     );
     let mut altered = launch(&p);
     altered.launch_id = uuid(200);
     refuse(
-        running
-            .transition(
-                &Event::CommitStart {
-                    launch: altered,
-                    dispatch: running.association().unwrap().clone(),
-                },
-                clock(1100),
-            )
-            .unwrap(),
+        commit(
+            &running,
+            altered,
+            running.association().unwrap().clone(),
+            1100,
+        ),
         Refusal::Phase,
     );
 }
@@ -513,37 +479,7 @@ fn uncertain_input_needs_exact_explicit_reconciliation_and_never_changes_known_o
         1102,
     );
     let stopped = stop(&known, 1200);
-    assert_eq!(
-        stopped.dispatch(),
-        &DispatchState::Resolved {
-            evidence: Box::new(receipt.clone())
-        }
-    );
-    assert_eq!(
-        stopped
-            .transition(
-                &Event::Handoff {
-                    evidence: receipt.clone()
-                },
-                clock(1201)
-            )
-            .unwrap()
-            .decision,
-        Decision::Replayed
-    );
-    let mut contradictory = receipt.clone();
-    contradictory.disposition = HandoffDisposition::HandedOff;
-    refuse(
-        stopped
-            .transition(
-                &Event::ReconcileHandoff {
-                    evidence: contradictory,
-                },
-                clock(1201),
-            )
-            .unwrap(),
-        Refusal::Conflict,
-    );
+    assert_known_receipt(&stopped, &receipt);
     let mut np = next_plan(stopped.plan(), 5, 1);
     np.batch.messages = vec![plan().batch.messages[0].clone()];
     let mut h = history(&np);
@@ -553,6 +489,31 @@ fn uncertain_input_needs_exact_explicit_reconciliation_and_never_changes_known_o
     assert_eq!(
         stopped.successor(np, clock(1300), &h),
         Err(Error::Refused(Refusal::Conflict))
+    );
+}
+
+fn assert_known_receipt(stopped: &Run, receipt: &HandoffEvidence) {
+    assert_eq!(
+        stopped.dispatch(),
+        &DispatchState::Resolved {
+            evidence: Box::new(receipt.clone())
+        }
+    );
+    let recorded = Event::Handoff {
+        evidence: receipt.clone(),
+    };
+    assert_eq!(
+        stopped.transition(&recorded, clock(1201)).unwrap().decision,
+        Decision::Replayed
+    );
+    let mut contradictory = receipt.clone();
+    contradictory.disposition = HandoffDisposition::HandedOff;
+    let reconcile = Event::ReconcileHandoff {
+        evidence: contradictory,
+    };
+    refuse(
+        stopped.transition(&reconcile, clock(1201)).unwrap(),
+        Refusal::Conflict,
     );
 }
 

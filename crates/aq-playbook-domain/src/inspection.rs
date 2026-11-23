@@ -26,12 +26,11 @@ impl PageQuery {
 
     pub fn validate(&self, namespace: &Namespace) -> Result<usize> {
         let limit = self.limit.unwrap_or(25);
-        if limit == 0
-            || limit > 25
+        if !(1..=25).contains(&limit)
             || self
                 .after
-                .as_ref()
-                .is_some_and(|v| v.is_empty() || v.len() > 256 || v.chars().any(char::is_control))
+                .as_deref()
+                .is_some_and(|cursor| !nonempty_text(cursor, 256))
         {
             return Err(Error::Invalid);
         }
@@ -57,13 +56,8 @@ pub struct RunsQuery {
 }
 impl RunsQuery {
     pub fn validate(&self) -> Result<()> {
-        if self.since_ms.is_some_and(|v| v < 0)
-            || self.until_ms.is_some_and(|v| v <= 0)
-            || self
-                .since_ms
-                .zip(self.until_ms)
-                .is_some_and(|(since, until)| until <= since)
-        {
+        let since = self.since_ms.unwrap_or(0);
+        if since < 0 || self.until_ms.is_some_and(|until| until <= since) {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -182,10 +176,16 @@ pub struct AdmissionView {
     /// Why a held (`unknown`) admission is held; `None` otherwise.
     pub held_reason: Option<String>,
 }
+fn bounded_text(value: &str, max_bytes: usize) -> bool {
+    value.len() <= max_bytes && !value.chars().any(char::is_control)
+}
+fn nonempty_text(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty() && bounded_text(value, max_bytes)
+}
 fn text(v: &Value, key: &str) -> Result<String> {
     v.get(key)
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control))
+        .filter(|s| nonempty_text(s, 512))
         .map(str::to_owned)
         .ok_or(Error::Unknown)
 }
@@ -200,13 +200,12 @@ pub fn run(v: Value) -> Result<RunView> {
         serde_json::from_value(v["children"].clone()).map_err(|_| Error::Unknown)?;
     let dependencies: BTreeMap<String, String> =
         serde_json::from_value(v["dependencies"].clone()).map_err(|_| Error::Unknown)?;
-    if children.len() > 128
-        || dependencies.len() > 128
+    if children.len().max(dependencies.len()) > 128
         || children
             .iter()
             .chain(dependencies.keys())
             .chain(dependencies.values())
-            .any(|s| s.len() > 512 || s.chars().any(char::is_control))
+            .any(|s| !bounded_text(s, 512))
     {
         return Err(Error::Overloaded);
     }
@@ -240,11 +239,7 @@ fn pending_intents(pending: &Value) -> Result<Vec<String>> {
         }
         _ => Vec::new(),
     };
-    if intents.len() > 128
-        || intents
-            .iter()
-            .any(|s| s.is_empty() || s.len() > 512 || s.chars().any(char::is_control))
-    {
+    if intents.len() > 128 || intents.iter().any(|s| !nonempty_text(s, 512)) {
         return Err(Error::Overloaded);
     }
     Ok(intents)

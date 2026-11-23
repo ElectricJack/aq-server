@@ -86,8 +86,14 @@ async fn proxy(
 ) -> Result<Response, AppError> {
     let node = crate::worker_api::authenticate_context(&state, request.headers()).await?;
     let socket = socket(&state).ok_or_else(|| AppError::NotFound("no git endpoint".into()))?;
-    let (pool, route) = (&state.store.pool, (repository, path.as_str()));
-    match aq_delivery::git_grant::serve(pool, socket, node.id(), route, request).await {
+    let server = aq_delivery::git_grant::SmartHttp {
+        pool: &state.store.pool,
+        socket,
+    };
+    match server
+        .serve(node.id(), (repository, path.as_str()), request)
+        .await
+    {
         Ok(response) => Ok(response.map(axum::body::Body::new).into_response()),
         Err(Refusal::NotFound) => Err(AppError::NotFound("not a git route".into())),
         Err(Refusal::Forbidden(why)) => Err(AppError::Forbidden(why.into())),

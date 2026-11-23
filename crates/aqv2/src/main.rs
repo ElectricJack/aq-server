@@ -12,25 +12,7 @@ async fn main() -> std::process::ExitCode {
             .and_then(|m| aqv2::cli::Cli::from_arg_matches(&m));
     let cli = match parsed {
         Ok(cli) => cli,
-        Err(error)
-            if matches!(
-                error.kind(),
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
-            ) =>
-        {
-            let _ = error.print();
-            return std::process::ExitCode::SUCCESS;
-        }
-        Err(error) => {
-            if json_output {
-                print_json(
-                    json!({"schema_version":1,"error":aqv2::error("invalid_arguments",&format!("Invalid command arguments; use {program} --help"))}),
-                );
-            } else {
-                let _ = error.print();
-            }
-            return std::process::ExitCode::from(2);
-        }
+        Err(error) => return parse_error(error, json_output, program),
     };
     let json_output = json_output || cli.json;
     if let aqv2::cli::Command::Result(command) = &cli.commands.command
@@ -50,21 +32,41 @@ async fn main() -> std::process::ExitCode {
         }
         Err(error) => {
             let code = aqv2::exit_code(&error);
-            if json_output {
-                print_json(json!({"schema_version":1,"error":error}));
-            } else if error["effect"] == "not_applied" && error["command"].is_string() {
-                eprintln!("{program}: {}", aqv2::render::refusal(&error));
-            } else {
-                // JSON quoting keeps server/input control characters out of the terminal.
-                eprintln!("{}: {}", error["code"], error["message"]);
-                if let Some(id) = error["operation_id"].as_str() {
-                    eprintln!("operation_id: {id}");
-                }
-                if let Some(recovery) = error["recovery"].as_str() {
-                    eprintln!("Recover with: {recovery}");
-                }
-            }
+            report_error(&error, json_output, program);
             std::process::ExitCode::from(code)
+        }
+    }
+}
+fn parse_error(error: clap::Error, json_output: bool, program: &str) -> std::process::ExitCode {
+    if matches!(
+        error.kind(),
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+    ) {
+        let _ = error.print();
+        return std::process::ExitCode::SUCCESS;
+    }
+    if json_output {
+        print_json(
+            json!({"schema_version":1,"error":aqv2::error("invalid_arguments",&format!("Invalid command arguments; use {program} --help"))}),
+        );
+    } else {
+        let _ = error.print();
+    }
+    std::process::ExitCode::from(2)
+}
+fn report_error(error: &Value, json_output: bool, program: &str) {
+    if json_output {
+        print_json(json!({"schema_version":1,"error":error}));
+    } else if error["effect"] == "not_applied" && error["command"].is_string() {
+        eprintln!("{program}: {}", aqv2::render::refusal(error));
+    } else {
+        // JSON quoting keeps server/input control characters out of the terminal.
+        eprintln!("{}: {}", error["code"], error["message"]);
+        if let Some(id) = error["operation_id"].as_str() {
+            eprintln!("operation_id: {id}");
+        }
+        if let Some(recovery) = error["recovery"].as_str() {
+            eprintln!("Recover with: {recovery}");
         }
     }
 }

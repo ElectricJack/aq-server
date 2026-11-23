@@ -207,25 +207,7 @@ fn route_contracts_publish_the_grant_each_route_checks() {
 /// project grant for another project is not this project's.
 #[tokio::test]
 async fn result_review_routes_need_project_scope_and_stay_in_the_attempts_project() {
-    for scope in ["attempt:self", "task:self", "task:subtree"] {
-        let e = setup_with(Some(json!([{"operation":"result.read","scope":scope}]))).await;
-        for path in [
-            "/v1/agent/results/list",
-            "/v1/agent/results/show",
-            "/v1/agent/results/patch",
-        ] {
-            let (status, body) = structured(&e, path).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{scope} {path} {body}");
-            assert_eq!(body["code"], "scope_denied", "{scope} {path} {body}");
-            assert_eq!(body["grant"], "result.read");
-        }
-    }
-    let other = format!("project:{}", Uuid::new_v4());
-    let e = setup_with(Some(json!([{"operation":"result.read","scope":other}]))).await;
-    let (status, body) = structured(&e, "/v1/agent/results/list").await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["code"], "scope_denied", "{body}");
-
+    reject_narrow_result_scopes().await;
     let e = setup_with(Some(
         json!([{"operation":"result.read","scope":"project:self"}]),
     ))
@@ -292,4 +274,24 @@ async fn result_review_routes_need_project_scope_and_stay_in_the_attempts_projec
     assert_eq!(patch(future).await.0, StatusCode::UPGRADE_REQUIRED);
     let (status, _) = send(&e.app, "/v1/agent/results/patch", None, Some(query)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+async fn reject_narrow_result_scopes() {
+    for scope in ["attempt:self", "task:self", "task:subtree"] {
+        let e = setup_with(Some(json!([{"operation":"result.read","scope":scope}]))).await;
+        for path in [
+            "/v1/agent/results/list",
+            "/v1/agent/results/show",
+            "/v1/agent/results/patch",
+        ] {
+            let (status, body) = structured(&e, path).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{scope} {path} {body}");
+            assert_eq!(body["code"], "scope_denied", "{scope} {path} {body}");
+            assert_eq!(body["grant"], "result.read");
+        }
+    }
+    let other = format!("project:{}", Uuid::new_v4());
+    let e = setup_with(Some(json!([{"operation":"result.read","scope":other}]))).await;
+    let (status, body) = structured(&e, "/v1/agent/results/list").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "scope_denied", "{body}");
 }

@@ -63,23 +63,27 @@ fn scope_check_pins_project_and_subtree() {
         project: own,
         relation,
     };
-    assert!(allows(Scope::AttemptSelf, h, Target::OwnAttempt));
-    assert!(!allows(Scope::AttemptSelf, h, task(Relation::Own)));
-    assert!(allows(Scope::TaskSelf, h, task(Relation::Own)));
-    assert!(!allows(Scope::TaskSelf, h, task(Relation::Descendant(1))));
-    assert!(allows(Scope::TaskSubtree, h, task(Relation::Descendant(2))));
-    assert!(!allows(Scope::TaskSubtree, h, task(Relation::Other)));
-    assert!(!allows(Scope::TaskSubtree, h, Target::Project(own)));
-    assert!(allows(Scope::ProjectSelf, h, task(Relation::Other)));
-    assert!(allows(Scope::ProjectSelf, h, Target::Project(own)));
-    assert!(!allows(Scope::ProjectSelf, h, Target::Project(other)));
     let foreign = Target::Task {
         project: other,
         relation: Relation::Other,
     };
-    assert!(!allows(Scope::ProjectSelf, h, foreign));
-    assert!(allows(Scope::Project(other), h, foreign));
-    assert!(!allows(Scope::Project(other), h, task(Relation::Own)));
+    for (scope, target, permitted) in [
+        (Scope::AttemptSelf, Target::OwnAttempt, true),
+        (Scope::AttemptSelf, task(Relation::Own), false),
+        (Scope::TaskSelf, task(Relation::Own), true),
+        (Scope::TaskSelf, task(Relation::Descendant(1)), false),
+        (Scope::TaskSubtree, task(Relation::Descendant(2)), true),
+        (Scope::TaskSubtree, task(Relation::Other), false),
+        (Scope::TaskSubtree, Target::Project(own), false),
+        (Scope::ProjectSelf, task(Relation::Other), true),
+        (Scope::ProjectSelf, Target::Project(own), true),
+        (Scope::ProjectSelf, Target::Project(other), false),
+        (Scope::ProjectSelf, foreign, false),
+        (Scope::Project(other), foreign, true),
+        (Scope::Project(other), task(Relation::Own), false),
+    ] {
+        assert_eq!(allows(scope, h, target), permitted, "{scope:?}: {target:?}");
+    }
 }
 
 #[test]
@@ -95,27 +99,39 @@ fn check_names_the_missing_grant_and_held_family() {
     let Decision::Deny(r) = check(
         &grants,
         h,
-        "task.create",
-        op::TASK_CREATE_PROJECT,
-        Target::Project(project),
+        GrantRequest::new(
+            "task.create",
+            op::TASK_CREATE_PROJECT,
+            Target::Project(project),
+        ),
     ) else {
         panic!()
     };
-    assert_eq!(r.code, RefusalCode::GrantMissing);
-    assert_eq!(r.grant.as_deref(), Some("task.create.project"));
+    assert_eq!(
+        (r.code, r.grant.as_deref()),
+        (RefusalCode::GrantMissing, Some("task.create.project"))
+    );
     assert_eq!(r.held.len(), 2, "only the task.* family is shown");
     assert!(r.message.contains("task.create.project"));
-    assert_eq!(r.body()["code"], "grant_missing");
-    assert_eq!(r.body()["held"][0]["scope"], "task:subtree");
+    let body = r.body();
+    assert_eq!(
+        (&body["code"], &body["held"][0]["scope"]),
+        (
+            &serde_json::json!("grant_missing"),
+            &serde_json::json!("task:subtree")
+        )
+    );
     let Decision::Deny(r) = check(
         &grants,
         h,
-        "task.create",
-        op::TASK_CREATE_SUBTASK,
-        Target::Task {
-            project,
-            relation: Relation::Other,
-        },
+        GrantRequest::new(
+            "task.create",
+            op::TASK_CREATE_SUBTASK,
+            Target::Task {
+                project,
+                relation: Relation::Other,
+            },
+        ),
     ) else {
         panic!()
     };
@@ -123,9 +139,7 @@ fn check_names_the_missing_grant_and_held_family() {
     let Decision::Deny(r) = check(
         &grants,
         h,
-        "question.answer",
-        "question.answer",
-        Target::OwnAttempt,
+        GrantRequest::new("question.answer", "question.answer", Target::OwnAttempt),
     ) else {
         panic!()
     };
@@ -137,9 +151,7 @@ fn check_names_the_missing_grant_and_held_family() {
         check(
             &grants,
             h,
-            "task.show",
-            op::TASK_READ,
-            Target::Project(project)
+            GrantRequest::new("task.show", op::TASK_READ, Target::Project(project))
         ),
         Decision::Allow(_)
     ));
@@ -169,9 +181,14 @@ fn intersection_never_widens() {
     let got = child.intersect(&creator);
     assert!(got.get(op::TASK_CREATE_PROJECT).is_none());
     let sub = got.get(op::TASK_CREATE_SUBTASK).unwrap();
-    assert_eq!(sub.scope, Scope::TaskSubtree);
-    assert_eq!(sub.limits.max_created_tasks, Some(5));
-    assert_eq!(sub.limits.max_depth, Some(2));
+    assert_eq!(
+        sub,
+        &Grant::new(op::TASK_CREATE_SUBTASK, Scope::TaskSubtree).limited(Limits {
+            max_created_tasks: Some(5),
+            max_depth: Some(2),
+            draft_only: false,
+        })
+    );
     assert_eq!(got.get(op::COMMENT_WRITE).unwrap().scope, Scope::TaskSelf);
     let other = GrantSet::new(vec![Grant::new(op::TASK_READ, Scope::Project(id(9)))]).unwrap();
     let mine = GrantSet::new(vec![Grant::new(op::TASK_READ, Scope::ProjectSelf)]).unwrap();
@@ -183,12 +200,18 @@ fn every_route_grant_is_grantable() {
     let h = Holder { project: id(1) };
     for (path, command, grant) in AGENT_ROUTE_GRANTS {
         assert!(path.starts_with("/v1/agent/") && grantable(grant), "{path}");
-        assert_eq!(route_grant(path, h, Relation::Own).unwrap().0, command);
+        assert_eq!(
+            route_grant(path, h, Relation::Own)
+                .unwrap()
+                .required
+                .command,
+            command
+        );
     }
     assert!(matches!(
         route_grant("/v1/agent/comments", h, Relation::Own)
             .unwrap()
-            .2,
+            .target,
         Target::Task {
             relation: Relation::Own,
             ..
@@ -198,7 +221,7 @@ fn every_route_grant_is_grantable() {
     assert!(matches!(
         route_grant("/v1/agent/comments/list", h, Relation::Other)
             .unwrap()
-            .2,
+            .target,
         Target::Task {
             relation: Relation::Other,
             ..
@@ -206,7 +229,7 @@ fn every_route_grant_is_grantable() {
     ));
     for path in ["/v1/agent/waits/ack", "/v1/agent/waits/list"] {
         assert_eq!(
-            route_grant(path, h, Relation::Other).unwrap().2,
+            route_grant(path, h, Relation::Other).unwrap().target,
             Target::OwnAttempt
         );
     }
@@ -216,7 +239,7 @@ fn every_route_grant_is_grantable() {
         "/v1/agent/results/show",
         "/v1/agent/results/patch",
     ] {
-        let target = route_grant(path, h, Relation::Own).unwrap().2;
+        let target = route_grant(path, h, Relation::Own).unwrap().target;
         assert_eq!(target, Target::Project(id(1)));
         for (scope, allowed) in [
             (Scope::ProjectSelf, true),
@@ -261,15 +284,21 @@ fn published_fixtures_are_what_the_crate_produces() {
     ))
     .unwrap();
     let held = fixture.held.clone();
-    let made = Refusal::grant_missing("task.create", op::TASK_CREATE_PROJECT, held)
-        .with_request(fixture.request_id.unwrap());
+    let made = Refusal::grant_missing(
+        RequiredGrant::new("task.create", op::TASK_CREATE_PROJECT),
+        held,
+    )
+    .with_request(fixture.request_id.unwrap());
     assert_eq!(made, fixture);
     let fixture: Refusal = serde_json::from_str(include_str!(
         "../../../protocol/commands/v1/fixtures/refusal-scope-denied.json"
     ))
     .unwrap();
-    let made = Refusal::scope_denied("comment.list", op::COMMENT_READ, fixture.held.clone())
-        .with_request(fixture.request_id.unwrap());
+    let made = Refusal::scope_denied(
+        RequiredGrant::new("comment.list", op::COMMENT_READ),
+        fixture.held.clone(),
+    )
+    .with_request(fixture.request_id.unwrap());
     assert_eq!(made, fixture);
 }
 
@@ -282,11 +311,15 @@ fn default_coding_grants_follow_the_owner_decisions() {
         (sub.limits.max_created_tasks, sub.limits.max_depth),
         (Some(5), Some(2))
     );
-    assert_eq!(d.get(op::KNOWLEDGE_READ).unwrap().scope, Scope::ProjectSelf);
-    assert!(d.get(op::TASK_CREATE_PROJECT).is_none());
-    assert!(d.get(op::TASK_EDIT).is_none());
-    assert_eq!(d.get(op::MESSAGE_SEND).unwrap().scope, Scope::TaskSubtree);
-    assert_eq!(d.get(op::QUESTION_ASK).unwrap().scope, Scope::AttemptSelf);
+    for (operation, scope) in [
+        (op::KNOWLEDGE_READ, Some(Scope::ProjectSelf)),
+        (op::TASK_CREATE_PROJECT, None),
+        (op::TASK_EDIT, None),
+        (op::MESSAGE_SEND, Some(Scope::TaskSubtree)),
+        (op::QUESTION_ASK, Some(Scope::AttemptSelf)),
+    ] {
+        assert_eq!(d.get(operation).map(|g| g.scope), scope, "{operation}");
+    }
 }
 
 #[test]
@@ -445,15 +478,22 @@ fn work_kind_policies_set_draft_grants_without_changing_coding_defaults() {
     for (kind, max) in [("spec_ingestion", 30), ("fidelity_review", 10)] {
         let set = grants(kind);
         let creation = set.get(op::TASK_CREATE_SUBTASK).unwrap();
-        assert!(creation.limits.draft_only);
-        assert_eq!(creation.limits.max_created_tasks, Some(max));
-        assert_eq!(creation.scope, Scope::TaskSubtree);
-        assert!(set.get(op::TASK_CREATE_PROJECT).is_none());
-        assert_eq!(set.get(op::TASK_EDIT).is_some(), kind == "fidelity_review");
         assert_eq!(
-            set.get(op::TASK_CANCEL).is_some(),
-            kind == "fidelity_review"
+            (
+                creation.limits.draft_only,
+                creation.limits.max_created_tasks,
+                creation.scope
+            ),
+            (true, Some(max), Scope::TaskSubtree)
         );
+        assert!(set.get(op::TASK_CREATE_PROJECT).is_none());
+        for operation in [op::TASK_EDIT, op::TASK_CANCEL] {
+            assert_eq!(
+                set.get(operation).is_some(),
+                kind == "fidelity_review",
+                "{operation}"
+            );
+        }
     }
     let child = resolve_work(
         &[],

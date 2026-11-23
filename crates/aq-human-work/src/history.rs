@@ -5,19 +5,23 @@ use uuid::Uuid;
 
 const ATTEMPT_LIMIT: i64 = 16;
 
+pub struct TaskHistory<'a> {
+    pub task: Uuid,
+    pub rows: &'a [Value],
+    pub prior: Option<&'a Value>,
+}
+
 pub async fn items(
     pool: &PgPool,
     service: Option<&str>,
     scope: (Uuid, Uuid),
-    task: Uuid,
-    rows: &[Value],
-    prior: Option<&Value>,
+    page: TaskHistory<'_>,
 ) -> Option<Vec<Value>> {
-    let changes = crate::changes(rows, task, prior);
-    let actors = crate::attribution::history(pool, service, scope, rows)
+    let changes = crate::changes(page.rows, page.task, page.prior);
+    let actors = crate::attribution::history(pool, service, scope, page.rows)
         .await
         .ok()?;
-    rows
+    page.rows
         .iter()
         .zip(changes.into_iter().zip(actors))
         .map(|(h, (change, actor))| {

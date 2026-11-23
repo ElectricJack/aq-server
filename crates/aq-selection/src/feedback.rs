@@ -54,38 +54,8 @@ pub fn derive_worker_observation(
         ttl_ms,
         cooldown_ms,
     } = *context;
-    ensure(
-        !observation_id.is_nil()
-            && report.schema_version == 1
-            && !report.operation_id.is_nil()
-            && !sealed_attempt.is_nil()
-            && report.sequence > 0
-            && revision > 0
-            && now_ms > 0
-            && (1000..=3_600_000).contains(&ttl_ms)
-            && cooldown_ms <= ttl_ms,
-        "failure identity/timing",
-    )?;
-    ensure(
-        report.lifecycle_event_id.is_none_or(|id| !id.is_nil()),
-        "lifecycle provenance identity",
-    )?;
-    ensure(
-        report.node_id == authenticated_node
-            && report.boot_id == current_boot
-            && report.attempt_id == sealed_attempt
-            && sealed.target
-                == ExecutionTarget::Worker {
-                    node_id: authenticated_node,
-                    boot_id: current_boot,
-                },
-        "failure current sealed attempt/boot",
-    )?;
-    ensure(
-        report.selection_digest == digest(sealed)?
-            && sealed.choice.failure_classifier.as_ref() == Some(&report.classifier),
-        "failure classifier/selection qualification",
-    )?;
+    context.validate_timing(report)?;
+    context.validate_binding(report)?;
     let state = match report.failure {
         ProviderFailure::Quota => Availability::QuotaUnavailable,
         ProviderFailure::RateLimited | ProviderFailure::Temporary => {
@@ -124,4 +94,48 @@ pub fn derive_worker_observation(
     };
     result.validate()?;
     Ok(result)
+}
+
+impl FailureContext<'_> {
+    fn validate_timing(&self, report: &StructuredFailure) -> Result<()> {
+        ensure(
+            !self.observation_id.is_nil()
+                && report.schema_version == 1
+                && !report.operation_id.is_nil()
+                && !self.sealed_attempt.is_nil()
+                && report.sequence > 0
+                && self.valid_observation_window(),
+            "failure identity/timing",
+        )?;
+        ensure(
+            report.lifecycle_event_id.is_none_or(|id| !id.is_nil()),
+            "lifecycle provenance identity",
+        )?;
+        Ok(())
+    }
+    fn valid_observation_window(&self) -> bool {
+        self.revision > 0
+            && self.now_ms > 0
+            && (1000..=3_600_000).contains(&self.ttl_ms)
+            && self.cooldown_ms <= self.ttl_ms
+    }
+    fn validate_binding(&self, report: &StructuredFailure) -> Result<()> {
+        ensure(
+            report.node_id == self.authenticated_node
+                && report.boot_id == self.current_boot
+                && report.attempt_id == self.sealed_attempt
+                && self.sealed.target
+                    == ExecutionTarget::Worker {
+                        node_id: self.authenticated_node,
+                        boot_id: self.current_boot,
+                    },
+            "failure current sealed attempt/boot",
+        )?;
+        ensure(
+            report.selection_digest == digest(self.sealed)?
+                && self.sealed.choice.failure_classifier.as_ref() == Some(&report.classifier),
+            "failure classifier/selection qualification",
+        )?;
+        Ok(())
+    }
 }

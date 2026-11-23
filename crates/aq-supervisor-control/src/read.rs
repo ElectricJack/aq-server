@@ -113,12 +113,10 @@ fn narrowed(query: Option<&str>, project: Uuid) -> Option<String> {
         if key.contains(['%', '+']) {
             return None;
         }
-        if key == "project_id" {
-            if value.parse::<Uuid>().ok() != Some(project) {
-                return None;
-            }
-            named = true;
+        if key == "project_id" && value.parse::<Uuid>().ok() != Some(project) {
+            return None;
         }
+        named |= key == "project_id";
         pairs.push(pair.to_string());
     }
     if !named {
@@ -139,6 +137,34 @@ async fn in_project(
 pub async fn unserved() -> Refused {
     Refused(StatusCode::NOT_FOUND, "No such supervisor route")
 }
+fn narrow_uri(uri: &axum::http::Uri, project: Uuid) -> Option<axum::http::Uri> {
+    let query = narrowed(uri.query(), project)?;
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = format!("{}?{query}", uri.path()).parse().ok();
+    axum::http::Uri::from_parts(parts).ok()
+}
+
+async fn scoped_read(
+    request: &mut Request,
+    tx: &mut Transaction<'static, Postgres>,
+    project: Uuid,
+) -> Result<(), Refused> {
+    match reads(request.uri().path()) {
+        Reads::Project(Some(id)) if id == project => Ok(()),
+        Reads::Project(_) => Err(OTHER_PROJECT),
+        Reads::Unserved => Err(unserved().await),
+        Reads::Result(id) => match in_project(tx, id, project).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(OTHER_PROJECT),
+            Err(e) => Err(Refused::from(Error::from(e))),
+        },
+        Reads::Results => {
+            *request.uri_mut() = narrow_uri(request.uri(), project).ok_or(OTHER_PROJECT)?;
+            Ok(())
+        }
+    }
+}
+
 pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) -> Response {
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return Refused(
@@ -151,29 +177,10 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
         Ok(p) => p,
         Err(e) => return Refused::from(e).into_response(),
     };
-    if let Some(project) = permit.project {
-        match reads(request.uri().path()) {
-            Reads::Project(id) if id == Some(project) => {}
-            Reads::Project(_) => return OTHER_PROJECT.into_response(),
-            Reads::Unserved => return unserved().await.into_response(),
-            Reads::Result(id) => match in_project(&mut permit.guard, id, project).await {
-                Ok(true) => {}
-                Ok(false) => return OTHER_PROJECT.into_response(),
-                Err(e) => return Refused::from(Error::from(e)).into_response(),
-            },
-            Reads::Results => {
-                let uri = request.uri().clone();
-                let Some(query) = narrowed(uri.query(), project) else {
-                    return OTHER_PROJECT.into_response();
-                };
-                let mut parts = uri.into_parts();
-                parts.path_and_query = format!("{}?{query}", request.uri().path()).parse().ok();
-                match axum::http::Uri::from_parts(parts) {
-                    Ok(uri) => *request.uri_mut() = uri,
-                    Err(_) => return OTHER_PROJECT.into_response(),
-                }
-            }
-        }
+    if let Some(project) = permit.project
+        && let Err(refusal) = scoped_read(&mut request, &mut permit.guard, project).await
+    {
+        return refusal.into_response();
     }
     request.extensions_mut().insert(permit.owner);
     let response = next.run(request).await;

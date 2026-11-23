@@ -216,33 +216,23 @@ pub(super) async fn publish(
         .iter()
         .map(|(id, _)| *id)
         .collect::<Vec<_>>();
-    let linked = artifacts::link_locked(
-        &mut tx,
+    let scope = artifacts::LinkScope::new(
         binding.attempt_id,
         built.source.admission.project_id,
-        &ids,
-        time,
-        built.retained.until,
-    )
-    .await?;
-    let mut linked_bytes = linked
-        .iter()
-        .map(super::artifacts::canonical)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut offered_bytes = delivery
-        .native
-        .offered
-        .artifacts
-        .iter()
-        .map(super::artifacts::canonical)
-        .collect::<Result<Vec<_>, _>>()?;
-    linked_bytes.sort();
-    offered_bytes.sort();
-    if linked_bytes != offered_bytes {
+        time..built.retained.until,
+    );
+    let linked = artifacts::link_locked(&mut tx, scope, &ids).await?;
+    if canonical_descriptors(&linked)? != canonical_descriptors(&delivery.native.offered.artifacts)?
+    {
         return Err(refused());
     }
     on_heap(|| {
-        source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection)
+        source_exports::link_locked(
+            state,
+            &mut tx,
+            &binding.session,
+            source_exports::LinkEvidence::new(export, fact, inspection),
+        )
     })
     .await?;
     let effective: Vec<_> = m
@@ -286,4 +276,15 @@ pub(super) async fn publish(
             .map(|_| Outcome::Published(Box::new(delivery)))
             .map_err(db),
     }
+}
+
+fn canonical_descriptors(
+    descriptors: &[aq_admission::RetainedArtifact],
+) -> Result<Vec<Vec<u8>>, AppError> {
+    let mut bytes = descriptors
+        .iter()
+        .map(super::artifacts::canonical)
+        .collect::<Result<Vec<_>, _>>()?;
+    bytes.sort();
+    Ok(bytes)
 }

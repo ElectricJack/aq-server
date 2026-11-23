@@ -138,8 +138,10 @@ pub(super) async fn observe(
     }
     let provenance = ReadProvenance::capture(
         &input.spec.task,
-        &ready,
-        &context,
+        aq_profiled_state::native_offer::GraphReads {
+            ready: &ready,
+            context: &context,
+        },
         projection.artifact.digest,
         time,
     )

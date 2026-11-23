@@ -93,11 +93,13 @@ pub async fn release(
     let now = (state.clock)();
     lost::record(
         &mut tx,
-        node.id(),
         request,
         &found,
-        stop.digest.as_str(),
-        now,
+        lost::ReleaseReceipt {
+            node: node.id(),
+            digest: stop.digest.as_str(),
+            recorded_at: now,
+        },
     )
     .await
     .map_err(mc)?;

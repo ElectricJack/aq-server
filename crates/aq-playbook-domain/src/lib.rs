@@ -1,8 +1,13 @@
 //! Fixed host contracts and typed grant scope. No generic SQL/endpoint/command proxy.
 pub mod artifacts;
 pub mod catalog_view;
+pub mod check_admission;
+pub mod check_cancellations;
 pub mod coding;
+pub mod config_policy;
+pub mod context_reads;
 pub mod daily_schedules;
+pub mod decision_effects;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_decisions;
 #[cfg(feature = "delivery_playbook")]
@@ -11,6 +16,10 @@ mod delivery_review;
 pub mod delivery_runs;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
+pub mod driver_outcomes;
+pub mod effect_store;
+pub mod finding_episodes;
+pub mod health_scans;
 #[cfg(feature = "delivery_playbook")]
 pub mod hold_notice;
 #[cfg(feature = "delivery_playbook")]
@@ -20,10 +29,17 @@ pub mod host_operations;
 pub mod host_requests;
 pub mod host_values;
 pub mod inspection;
+pub mod integration_receipts;
+pub mod intent_store;
+pub mod judgment_admission;
 pub mod loaded_definitions;
+pub mod manual_admission;
+pub mod namespace_store;
 pub mod playbook_view;
 pub mod plugin_effects;
+pub mod publication_evidence;
 pub mod review_domain;
+pub mod route_effect;
 pub mod route_store;
 #[cfg(feature = "delivery_playbook")]
 pub mod scheduling_notices;
@@ -57,19 +73,17 @@ pub struct Namespace {
 }
 impl Namespace {
     pub fn validate(&self) -> Result<()> {
-        if [
+        let ids = [
             self.namespace_id,
             self.workspace_id,
             self.project_id,
             self.owner_user_id,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-            || self.generation <= 0
-            || self.name.is_empty()
-            || self.name.len() > 128
-            || self.name.contains('\0')
-        {
+        ];
+        let valid_name = (1..=128).contains(&self.name.len()) && !self.name.contains('\0');
+        if ids.iter().any(Uuid::is_nil) || self.generation <= 0 {
+            return Err(Error::Invalid);
+        }
+        if !valid_name {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -168,27 +182,32 @@ pub struct GrantScope {
 }
 impl GrantScope {
     pub fn validate(&self) -> Result<()> {
-        if self.workspace_id.is_nil()
-            || self.project_id.is_nil()
-            || self.recipients.is_empty()
-            || self.recipients.len() > 128
-            || self.capabilities != BTreeSet::from(["message.send".into()])
-        {
+        if self.workspace_id.is_nil() || self.project_id.is_nil() {
+            return Err(Error::Invalid);
+        }
+        if self.capabilities != BTreeSet::from(["message.send".into()]) {
+            return Err(Error::Invalid);
+        }
+        self.validate_recipients()?;
+        if canonical_bytes(self).map_err(|_| Error::Invalid)?.len() > 32768 {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+    fn validate_recipients(&self) -> Result<()> {
+        if !(1..=128).contains(&self.recipients.len()) {
             return Err(Error::Invalid);
         }
         let mut seen = BTreeSet::new();
-        for r in &self.recipients {
-            r.validate()?;
-            let (w, p, _) = r.scope();
-            if w != self.workspace_id
-                || p != self.project_id
-                || !seen.insert(serde_json::to_string(r)?)
-            {
+        for recipient in &self.recipients {
+            recipient.validate()?;
+            let (workspace, project, _) = recipient.scope();
+            if (workspace, project) != (self.workspace_id, self.project_id) {
                 return Err(Error::Invalid);
             }
-        }
-        if canonical_bytes(self).map_err(|_| Error::Invalid)?.len() > 32768 {
-            return Err(Error::Invalid);
+            if !seen.insert(serde_json::to_string(recipient)?) {
+                return Err(Error::Invalid);
+            }
         }
         Ok(())
     }
@@ -206,7 +225,7 @@ pub struct MessageInput {
 impl MessageInput {
     pub fn validate(&self) -> Result<()> {
         self.recipient.validate()?;
-        if self.thread_id.is_nil() || self.body.is_empty() || self.body.len() > 16384 {
+        if self.thread_id.is_nil() || !(1..=16384).contains(&self.body.len()) {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -336,18 +355,21 @@ pub fn message_input(intent: &Intent) -> Result<MessageInput> {
     if intent.command != message_contract() {
         return Err(Error::Forbidden);
     }
-    if intent.input_digest != digest(&intent.input)?
-        || intent.id.is_empty()
-        || intent.id.len() > 512
-        || intent.run.is_empty()
-        || intent.run.len() > 512
-        || intent.deadline_at_ms <= 0
-    {
-        return Err(Error::Invalid);
-    }
+    validate_intent_identity(intent)?;
     let input: MessageInput = serde_json::from_value(intent.input.clone())?;
     input.validate()?;
     Ok(input)
+}
+pub fn validate_intent_identity(intent: &Intent) -> Result<()> {
+    if intent.input_digest != digest(&intent.input)? {
+        return Err(Error::Invalid);
+    }
+    let valid_id = |id: &str| (1..=512).contains(&id.len());
+    let names_valid = valid_id(&intent.id) && valid_id(&intent.run);
+    if !names_valid || intent.deadline_at_ms <= 0 {
+        return Err(Error::Invalid);
+    }
+    Ok(())
 }
 pub fn digest(value: &impl Serialize) -> Result<String> {
     aq_playbook_host::model::digest(value).map_err(|_| Error::Invalid)
@@ -381,11 +403,10 @@ pub fn grant_actor(value: &Authority) -> Result<(Uuid, i64)> {
     let (id, revision) = suffix.split_once('/').ok_or(Error::Forbidden)?;
     let id: Uuid = id.parse().map_err(|_| Error::Forbidden)?;
     let revision: i64 = revision.parse().map_err(|_| Error::Forbidden)?;
-    if id.is_nil()
-        || revision <= 0
-        || value.actor != authority(id, revision).actor
-        || value.scope != "project"
-    {
+    if id.is_nil() || revision <= 0 {
+        return Err(Error::Forbidden);
+    }
+    if value.actor != authority(id, revision).actor || value.scope != "project" {
         return Err(Error::Forbidden);
     }
     Ok((id, revision))
