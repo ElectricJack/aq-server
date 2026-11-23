@@ -126,8 +126,7 @@ pub(super) async fn build_locked(
         1,
         aq_selection::digest(&principal).map_err(|_| AppError::Internal)?,
     )?;
-    let policy_budget =
-        super::super::continuation_policy::load_locked(tx, &request.binding).await?;
+    super::super::continuation_policy::load_locked(tx, &request.binding).await?;
     let proposal = Proposal {
         schema_version: 2,
         negotiation: request.negotiation.clone(),
@@ -146,7 +145,8 @@ pub(super) async fn build_locked(
                 .map_err(|_| refused())?,
             model: original.offered.offer.manifest.model.clone(),
             harness: original.offered.offer.manifest.harness.clone(),
-            maximum_lineage_elapsed_ms: policy_budget.0.max_lineage_elapsed_ms,
+            // The attempt's own time window: its execution profile's wall time.
+            maximum_lineage_elapsed_ms: original.offered.offer.manifest.resources.wall_time_ms,
         },
         original,
         spec,

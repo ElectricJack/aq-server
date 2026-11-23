@@ -800,6 +800,76 @@ pub async fn message(ctx: &Ctx, c: &Message) -> Result<Value> {
     invoke(ctx, &inv).await
 }
 
+// ---- conversation ----------------------------------------------------------
+
+/// A message position as `before` accepts it: `N` or `N.M`, from 1.
+fn before_cursor(value: &str) -> std::result::Result<String, String> {
+    position(value, false)
+}
+/// A message position as `after` accepts it: `0`, `N` or `N.M`.
+fn after_cursor(value: &str) -> std::result::Result<String, String> {
+    position(value, true)
+}
+fn position(value: &str, zero: bool) -> std::result::Result<String, String> {
+    let number = |part: &str| {
+        !part.is_empty()
+            && part.len() <= 19
+            && !part.starts_with('0')
+            && part.bytes().all(|b| b.is_ascii_digit())
+    };
+    let ok = match value.split_once('.') {
+        Some((a, b)) => number(a) && number(b),
+        None => number(value) || (zero && value == "0"),
+    };
+    ok.then(|| value.to_string())
+        .ok_or_else(|| "a message cursor, as a message prints it".into())
+}
+
+#[derive(Subcommand)]
+pub enum Conversation {
+    /// Read a supervisor conversation's messages (its id is the `id` of a row of
+    /// `aq supervisor list`). A conversation's `revision` is not a message count.
+    Messages(ConversationMessages),
+    #[command(external_subcommand)]
+    Other(Vec<String>),
+}
+#[derive(Args)]
+pub struct ConversationMessages {
+    /// The conversation: the `id` of a supervisor in `aq supervisor list`.
+    #[arg(long)]
+    pub conversation_id: Uuid,
+    /// How many messages (at most 16, the server's page).
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=16))]
+    pub limit: Option<u8>,
+    /// The page of messages before this cursor (a message's cursor).
+    #[arg(long, value_parser = before_cursor, conflicts_with = "after")]
+    pub before: Option<String>,
+    /// The page of messages after this cursor (`0` is the start).
+    #[arg(long, value_parser = after_cursor, conflicts_with = "before")]
+    pub after: Option<String>,
+}
+pub fn conversation_invocation(c: &Conversation) -> Result<Option<Invocation>> {
+    Ok(Some(match c {
+        Conversation::Messages(a) => {
+            let mut p = obj(json!({"conversation_id":a.conversation_id}));
+            put(&mut p, "limit", a.limit);
+            put(&mut p, "before", a.before.as_ref());
+            put(&mut p, "after", a.after.as_ref());
+            Invocation::read("conversation.messages", p)
+        }
+        Conversation::Other(_) => return Ok(None),
+    }))
+}
+pub async fn conversation(ctx: &Ctx, c: &Conversation) -> Result<Value> {
+    match conversation_invocation(c)? {
+        Some(inv) => invoke(ctx, &inv).await,
+        None => match c {
+            Conversation::Other(rest) => other(ctx, "conversation", rest).await,
+            _ => unreachable!(),
+        },
+    }
+}
+
 // ---- operation -------------------------------------------------------------
 
 #[derive(Subcommand)]

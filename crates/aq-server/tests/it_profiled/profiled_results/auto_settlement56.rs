@@ -1640,7 +1640,7 @@ mod playbook {
         let attempt = env.report.binding.attempt_id;
         sqlx::query("UPDATE supervisor_controls c SET enabled=true, profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
             .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_time_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_retry_budget_exhausted',$4,'budget exhausted',to_timestamp($5))")
             .bind(Uuid::new_v4()).bind(task).bind(project).bind(attempt).bind(NOW as f64/1000.0).execute(&pool).await.unwrap();
         assert_eq!(
             aq_machine_control::holds::unclaimed_count(&pool, &[task, Uuid::new_v4()])
@@ -1657,7 +1657,7 @@ mod playbook {
             for id in [task, attempt, env.report.report_id] {
                 assert!(body.contains(&id.to_string()));
             }
-            assert!(body.contains("lineage_time_budget_exhausted"));
+            assert!(body.contains("lineage_retry_budget_exhausted"));
             count.fetch_add(1, Ordering::SeqCst);
             Ok::<_, ()>(Uuid::new_v4())
         };
@@ -1845,6 +1845,152 @@ mod playbook {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(
             delivery_decisions::told(&mut pool.acquire().await.unwrap(), project, &key)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Spec 0021 section 5.2: whatever its source, a hold tells the project's
+    /// supervisor once, with the facts and commands it needs.
+    fn assert_hold_facts(body: &str, ids: &[Uuid], reason: &str, outcome: &str, attempt: Uuid) {
+        for id in ids {
+            assert!(body.contains(&id.to_string()), "{id} in {body}");
+        }
+        assert!(body.contains(reason), "{reason} in {body}");
+        assert!(
+            body.contains(&format!("attempt {attempt}: outcome {outcome}")),
+            "the attempt and its outcome in {body}"
+        );
+        for command in [
+            "task.work",
+            "task.history",
+            "task.retry",
+            "attempt.abandon",
+            "task.edit",
+            "task.cancel",
+        ] {
+            assert!(body.contains(command), "{command} in {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_kind_of_task_hold_notifies_its_project_once_and_a_new_hold_notifies_again() {
+        use aq_playbook_domain::scheduling_notices::notify;
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        let outcome: String = sqlx::query_scalar("SELECT convert_from(report_bytes,'UTF8')::jsonb->>'outcome' FROM profiled_result_reports WHERE report_id=$1")
+            .bind(env.report.report_id).fetch_one(&pool).await.unwrap();
+        let bodies = std::sync::Mutex::new(Vec::<String>::new());
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            bodies.lock().unwrap().push(body.to_owned());
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        let due = NOW as i64 + 600_001;
+        // A budget hold, a never-granted hold, a policy hold, and the first
+        // reason held again after its release.
+        let reasons = [
+            "lineage_retry_budget_exhausted",
+            "never_granted_retry_bound_exhausted",
+            "replacement_project_revision_changed",
+            "lineage_retry_budget_exhausted",
+        ];
+        for (n, reason) in reasons.into_iter().enumerate() {
+            sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,$4,$5,'held',to_timestamp($6))")
+                .bind(Uuid::new_v4()).bind(task).bind(project).bind(reason).bind(attempt).bind(NOW as f64 / 1000.0)
+                .execute(&pool).await.unwrap();
+            // Reading the task, and every later sweep, tells nobody again.
+            work_reasons(&env).await;
+            for _ in 0..3 {
+                notify(&pool, due, &send).await.unwrap();
+            }
+            let sent = bodies.lock().unwrap().clone();
+            assert_eq!(sent.len(), n + 1, "one notice per hold: {reason}");
+            assert_hold_facts(
+                &sent[n],
+                &[project, task, attempt],
+                reason,
+                &outcome,
+                attempt,
+            );
+            sqlx::query("UPDATE task_holds SET cleared_at=now(),cleared_by='claim_released' WHERE task_id=$1 AND cleared_at IS NULL")
+                .bind(task).execute(&pool).await.unwrap();
+            notify(&pool, due, &send).await.unwrap();
+            assert_eq!(
+                bodies.lock().unwrap().len(),
+                n + 1,
+                "a released hold is quiet"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delivery_hold_of_any_reason_notifies_once_and_never_after_the_playbook_did() {
+        use aq_playbook_domain::{delivery_decisions, scheduling_notices::notify};
+        let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+        let pool = env.f.db.pool().await;
+        let task = env.f.selection.lineage.task_id;
+        let project = env.f.selection.lineage.project_id;
+        let attempt = env.report.binding.attempt_id;
+        let result = env.report.report_id;
+        sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+            .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+        let outcome: String = sqlx::query_scalar("SELECT convert_from(report_bytes,'UTF8')::jsonb->>'outcome' FROM profiled_result_reports WHERE report_id=$1")
+            .bind(result).fetch_one(&pool).await.unwrap();
+        let reason = "policy_hold";
+        sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held',$3,$4)")
+            .bind(result).bind(task).bind(reason).bind(NOW as i64).execute(&pool).await.unwrap();
+        let key = delivery_decisions::notify_key(&format!("{result}:{reason}")).unwrap();
+        let bodies = std::sync::Mutex::new(Vec::<String>::new());
+        let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                          scope: Option<Uuid>,
+                          body: &str,
+                          _: u64| {
+            assert_eq!(scope, Some(project));
+            bodies.lock().unwrap().push(body.to_owned());
+            Ok::<_, ()>(Uuid::new_v4())
+        };
+        let due = NOW as i64 + 600_001;
+        // The playbook's own notice for this hold is the one notice.
+        delivery_decisions::record_told(
+            &mut *pool.acquire().await.unwrap(),
+            project,
+            &key,
+            Uuid::new_v4(),
+            NOW as i64,
+        )
+        .await
+        .unwrap();
+        notify(&pool, due, &send).await.unwrap();
+        assert!(bodies.lock().unwrap().is_empty(), "no duplicate notice");
+        // Without it, the hold still reaches the supervisor, once.
+        sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+            .bind(project)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            notify(&pool, due, &send).await.unwrap();
+        }
+        let sent = bodies.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_hold_facts(
+            &sent[0],
+            &[project, task, attempt, result],
+            reason,
+            &outcome,
+            attempt,
+        );
+        assert!(
+            delivery_decisions::told(&mut *pool.acquire().await.unwrap(), project, &key)
                 .await
                 .unwrap()
         );
@@ -2346,6 +2492,74 @@ mod playbook {
             .is_err()
         );
         tx.rollback().await.unwrap();
+
+        // A failed required check also carries the redacted tail of its job
+        // log, for the exact head it was read at (spec 0021 section 5.3).
+        let failed = record("pull_request.await_checks", "failed", result).await;
+        sqlx::query("UPDATE playbook_host_operations SET completed_at_ms=$2 WHERE operation_id=$1")
+            .bind(failed)
+            .bind(NOW as i64 + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let log: String = (0..2000)
+            .map(|i| format!("== unit ==\nline {i:04} of the failed job\n"))
+            .chain(["FAILED test_flaky\n".to_owned()])
+            .collect();
+        let pull_request = |head: String, log: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,checks_log_head,checks_log_tail,updated_at_ms) VALUES($1,228,'https://example.test/pr/228','open','mergeable','failed','[\"unit\"]',$2,$3,$4) ON CONFLICT(task_id) DO UPDATE SET checks_log_head=$2,checks_log_tail=$3")
+                    .bind(task).bind(head).bind(log).bind(NOW as i64)
+                    .execute(&pool).await.unwrap();
+            }
+        };
+        pull_request("4".repeat(40), log.clone()).await;
+        let shown = |reasons: &[Value]| {
+            reasons.iter().any(|r| {
+                r["message"].as_str().is_some_and(|m| {
+                    m.contains("recorded failed from pull_request.await_checks")
+                        && m.contains("untrusted")
+                        && m.contains("FAILED test_flaky")
+                })
+            })
+        };
+        assert!(shown(&work_reasons(&env).await), "task.work shows the tail");
+        let mut tx = pool.begin().await.unwrap();
+        let (_, body) = aq_playbook_domain::delivery_decisions::notification(
+            &mut tx,
+            &port,
+            Some(origin),
+            lineage.project_id,
+            &notice,
+        )
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+        assert!(
+            body.contains("FAILED test_flaky"),
+            "the notice shows the tail"
+        );
+        assert!(
+            body.len() <= aq_playbook_domain::delivery_store::SUPERVISOR_MESSAGE_BYTES,
+            "a long tail is cut to fit the notice, not the notice dropped: {}",
+            body.len()
+        );
+        assert!(body.contains("Use task.retry"), "the instructions stay");
+        // A tail read for another head is not this result's.
+        pull_request("5".repeat(40), log).await;
+        assert!(!shown(&work_reasons(&env).await));
+        sqlx::query("DELETE FROM delivery_pull_requests WHERE task_id=$1")
+            .bind(task)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
+            .bind(failed)
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let merge = record("pull_request.merge", "running", result).await;
         assert_eq!(held_report(&pool, task).await.unwrap(), None);
         assert!(!work_reasons(&env).await.iter().any(|r| {
@@ -2371,7 +2585,7 @@ mod playbook {
             .bind(result).execute(&pool).await.unwrap();
         sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
             .bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'task_sandbox_minutes_budget_exhausted',$4,'returned',to_timestamp($5))")
+        sqlx::query("INSERT INTO task_holds(comment_id,task_id,attempts,project_id,reason,attempt_id,comment_body,held_at) VALUES($1,$2,1,$3,'lineage_cost_budget_exhausted',$4,'returned',to_timestamp($5))")
             .bind(Uuid::new_v4()).bind(task).bind(lineage.project_id).bind(attempt).bind(NOW as f64 / 1000.0).execute(&pool).await.unwrap();
         let reasons = work_reasons(&env).await;
         let evidence = format!("returned result {result}. Worker outcome: success.");
@@ -2407,7 +2621,7 @@ mod playbook {
             async |_, scope, body: &str, _| {
                 assert_eq!(scope, Some(lineage.project_id));
                 assert!(
-                    body.contains("task_sandbox_minutes_budget_exhausted")
+                    body.contains("lineage_cost_budget_exhausted")
                         && body.contains(&"4".repeat(40))
                         && body.contains("conflict")
                         && body.contains(&evidence)

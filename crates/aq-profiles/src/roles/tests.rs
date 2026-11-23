@@ -35,7 +35,6 @@ name: Standard, high
 ## Selection
 - max_attempts: 2
 - fallback_on: [unavailable, unsupported]
-- max_lineage_elapsed_ms: 3600000
 - observation_max_age_ms: 30000
 - allow_unknown_availability: false
 - unknown_cost: deny
@@ -43,7 +42,6 @@ name: Standard, high
 - require_hard_cost_enforcement: true
 - max_cost_microunits: 5000000
 - currency: USD
-- max_lineage_sandbox_ms: 7200000
 - max_uncharged_continuations: 1
 ";
 const EXECUTION: &str = "---
@@ -268,7 +266,6 @@ fn intelligence_document_parses() {
                 FallbackReason::Unavailable,
                 FallbackReason::Unsupported
             ]),
-            max_lineage_elapsed_ms: Some(3_600_000),
             observation_max_age_ms: Some(30_000),
             allow_unknown_availability: Some(false),
             unknown_cost: Some(UnknownCostPolicy::Deny),
@@ -276,7 +273,6 @@ fn intelligence_document_parses() {
             require_hard_cost_enforcement: Some(true),
             max_cost_microunits: Some(Some(5_000_000)),
             currency: Some(Some("USD".into())),
-            max_lineage_sandbox_ms: Some(7_200_000),
             max_uncharged_continuations: Some(1),
         }
     );
@@ -284,16 +280,9 @@ fn intelligence_document_parses() {
     // The policy a launch pins carries the retry budget, and Settings stored
     // before the budget keys existed read as the initial values.
     let policy = defaults().with(&profile.selection).policy(1, Vec::new());
-    assert_eq!(
-        (
-            policy.max_lineage_sandbox_ms,
-            policy.max_uncharged_continuations
-        ),
-        (Some(7_200_000), Some(1))
-    );
+    assert_eq!(policy.max_uncharged_continuations, Some(1));
     let mut stored = serde_json::to_value(defaults()).unwrap();
     for key in [
-        "max_lineage_sandbox_ms",
         "max_uncharged_continuations",
         "max_wake_attempts",
         "max_wake_lineage_elapsed_ms",
@@ -303,6 +292,53 @@ fn intelligence_document_parses() {
     }
     let read: SelectionDefaults = serde_json::from_value(stored).unwrap();
     assert_eq!(read, defaults());
+}
+const REMOVED: [&str; 2] = ["max_lineage_elapsed_ms", "max_lineage_sandbox_ms"];
+#[test]
+fn the_lineage_time_budgets_are_gone_from_defaults_documents_and_policies() {
+    let json = serde_json::to_string(&defaults()).unwrap();
+    let policy = serde_json::to_string(&defaults().policy(1, Vec::new())).unwrap();
+    for key in REMOVED {
+        assert!(!json.contains(key) && !policy.contains(key), "{key}");
+        // A save that states one is refused as unknown, as is a profile document.
+        let mut stated = serde_json::to_value(defaults()).unwrap();
+        stated[key] = 1.into();
+        assert!(serde_json::from_value::<SelectionDefaults>(stated).is_err());
+        let source = format!("{INTELLIGENCE}- {key}: 3600000\n");
+        assert!(parse_intelligence(&source).is_err(), "{key}");
+    }
+}
+#[test]
+fn stored_settings_snapshots_and_policies_with_the_removed_keys_still_read() {
+    // Defaults and a profile's overrides as an earlier release stored them.
+    let mut stored = serde_json::to_value(defaults()).unwrap();
+    stored["max_lineage_elapsed_ms"] = 3_600_000.into();
+    stored["max_lineage_sandbox_ms"] = 14_400_000.into();
+    super::drop_removed_keys(&mut stored);
+    assert_eq!(
+        serde_json::from_value::<SelectionDefaults>(stored).unwrap(),
+        defaults()
+    );
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
+    let mut content: serde_json::Value =
+        serde_json::from_slice(snapshot.canonical_bytes()).unwrap();
+    content["selection_defaults"]["max_lineage_elapsed_ms"] = 3_600_000.into();
+    content["selection_defaults"]["max_lineage_sandbox_ms"] = 14_400_000.into();
+    for profile in content["intelligence"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        profile["selection"] = serde_json::json!({"max_attempts": 3, "max_lineage_elapsed_ms": 7});
+    }
+    let bytes = serde_json::to_vec(&content).unwrap();
+    let read = Snapshot::from_stored_bytes(&bytes).unwrap();
+    assert_eq!(read.selection_defaults(), &defaults());
+    // The digest is that of the bytes as stored.
+    assert_eq!(read.canonical_bytes(), bytes.as_slice());
+    for profile in read.intelligence_profiles() {
+        assert_eq!(profile.selection.max_attempts, Some(3));
+    }
 }
 #[test]
 fn a_profile_is_its_candidates_and_selection_is_optional() {
@@ -383,7 +419,7 @@ fn intelligence_document_refusals_name_the_fault() {
     );
     assert_eq!(
         edit("- unknown_cost: deny", "unknown_cost: deny"),
-        "line 18: `## Selection` expects `- key: value` items, found `unknown_cost: deny`"
+        "line 17: `## Selection` expects `- key: value` items, found `unknown_cost: deny`"
     );
     assert_eq!(
         edit("## Selection", "## Policy").split(';').next().unwrap(),
@@ -1327,10 +1363,7 @@ fn a_launch_resolves_defaults_overrides_and_the_execution_profile() {
     // What the nine level documents each said before they became candidates-only.
     assert_eq!((p.schema_version, p.max_attempts), (1, 2));
     assert_eq!(p.fallback_on.len(), 5);
-    assert_eq!(
-        (p.max_lineage_elapsed_ms, p.observation_max_age_ms),
-        (3_600_000, 30_000)
-    );
+    assert_eq!(p.observation_max_age_ms, 30_000);
     assert!(!p.allow_unknown_availability);
     assert_eq!(p.budget.unknown_cost, UnknownCostPolicy::AllowBounded);
     assert!(!p.budget.require_complete_accounting && !p.budget.require_hard_cost_enforcement);
@@ -1413,7 +1446,6 @@ fn a_profile_overrides_single_keys_and_the_serializer_writes_only_those() {
     let p = &launch.selection_policy;
     assert_eq!((p.max_attempts, p.observation_max_age_ms), (5, 30_000));
     assert_eq!(p.fallback_on, [FallbackReason::Unavailable]);
-    assert_eq!(p.max_lineage_elapsed_ms, 3_600_000);
     // The native profile: its own output limit and no container capability.
     assert_eq!(p.max_output_tokens, 9000);
     let ids: Vec<_> = p

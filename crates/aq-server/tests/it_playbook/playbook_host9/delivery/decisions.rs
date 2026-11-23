@@ -4,6 +4,7 @@
 //! Graph are tested with a recorded result in
 //! `it_profiled::profiled_results::auto_settlement56::playbook`.
 use super::{D, delivery};
+use aq_playbook_host::runner::Intent;
 use aq_server::playbooks::{
     domain::{Error, delivery_decisions::Settled},
     host_adapters::HostResult,
@@ -16,16 +17,30 @@ type Decision = (String, Option<String>, Option<String>, Option<bool>);
 fn decide(task: Uuid, result: Uuid) -> Value {
     json!({"task": task.to_string(), "result_id": result.to_string()})
 }
-fn back(task: Uuid, result: Uuid, reason: &str, detail: Option<&str>, update: bool) -> Value {
-    let mut input = json!({"task": task.to_string(), "result_id": result.to_string(),
-        "reason": reason, "update_from_main": update});
-    if let Some(detail) = detail {
-        input["detail"] = json!(detail);
-    }
-    input
+/// A `work.return` input without a detail that does not update from main.
+fn back(task: Uuid, result: Uuid, reason: &str) -> Value {
+    json!({"task": task.to_string(), "result_id": result.to_string(),
+        "reason": reason, "update_from_main": false})
 }
 fn hold(task: Uuid, result: Uuid, reason: &str) -> Value {
     json!({"task": task.to_string(), "result_id": result.to_string(), "reason": reason})
+}
+fn notice(project: Uuid, identity: &str, text: &str) -> Value {
+    json!({"project": project.to_string(), "identity": identity, "text": text})
+}
+/// `intent` dispatched by the event run `run` instead of a synthetic one.
+fn in_run(mut intent: Intent, run: &str) -> Intent {
+    intent.run = run.into();
+    intent
+}
+/// The recorded decision of a returned result.
+fn returned_for(reason: &str, detail: Option<&str>, update: bool) -> Decision {
+    let detail = detail.map(Into::into);
+    ("returned".into(), Some(reason.into()), detail, Some(update))
+}
+/// The recorded decision of a held result.
+fn held_for(reason: &str) -> Decision {
+    ("held".into(), Some(reason.into()), None, None)
 }
 fn refused(reason: &str) -> HostResult {
     HostResult {
@@ -423,7 +438,8 @@ async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     h.answers(Settled::Returned);
     let (task, first) = h.stopped(h.scope.project_id, "success");
     assert_eq!(h.returns(task).await, 0);
-    let input = back(task, first.result_id, "checks_failed", Some("unit"), false);
+    let mut input = back(task, first.result_id, "checks_failed");
+    input["detail"] = json!("unit");
     let sent = h.run("return-1", "work.return", input.clone()).await;
     assert_eq!(sent, empty("returned"));
     assert_eq!(
@@ -433,16 +449,7 @@ async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     assert_eq!(h.returns(task).await, 1);
     // What the next attempt is told: the reason, the detail and whether to update from main.
     let decided = h.decision(first.result_id).await.unwrap();
-    let want = ("returned", Some("checks_failed"), Some("unit"), Some(false));
-    assert_eq!(
-        (
-            decided.0.as_str(),
-            decided.1.as_deref(),
-            decided.2.as_deref(),
-            decided.3
-        ),
-        want
-    );
+    assert_eq!(decided, returned_for("checks_failed", Some("unit"), false));
     // A replay, and another run's return of the same result, count nothing more.
     assert_eq!(h.run("return-1", "work.return", input.clone()).await, sent);
     assert_eq!(h.run("return-2", "work.return", input).await, sent);
@@ -453,30 +460,19 @@ async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     assert_eq!(late.await, refused("stale_result"));
     // The next attempt's result goes back on a conflict, updated from main.
     let next = h.next_result(task);
-    let conflict = back(task, next, "merge_conflict", None, true);
+    let mut conflict = back(task, next, "merge_conflict");
+    conflict["update_from_main"] = json!(true);
     let sent = h.run("return-3", "work.return", conflict).await;
     assert_eq!(sent, empty("returned"));
     assert_eq!(h.returns(task).await, 2);
     let decided = h.decision(next).await.unwrap();
-    assert_eq!(
-        decided,
-        (
-            "returned".into(),
-            Some("merge_conflict".into()),
-            None,
-            Some(true)
-        )
-    );
+    assert_eq!(decided, returned_for("merge_conflict", None, true));
     // A fenced or stale return changes nothing and counts nothing.
     let third = h.next_result(task);
     h.answers(Settled::Stale);
-    let fenced = h.run(
-        "return-4",
-        "work.return",
-        back(task, third, "policy", None, false),
-    );
+    let fenced = h.run("return-4", "work.return", back(task, third, "policy"));
     assert_eq!(fenced.await, refused("stale_result"));
-    let stale = back(task, next, "policy", None, false);
+    let stale = back(task, next, "policy");
     assert_eq!(
         h.run("return-5", "work.return", stale).await,
         refused("stale_result")
@@ -500,10 +496,7 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
     // Holding settles nothing and tells nobody; the result is not announced again.
     assert!(h.settled().is_empty());
     let decided = h.decision(p.result_id).await.unwrap();
-    assert_eq!(
-        decided,
-        ("held".into(), Some("returns_exhausted".into()), None, None)
-    );
+    assert_eq!(decided, held_for("returns_exhausted"));
     h.later(10_000_000);
     assert_eq!(h.asked().await, 0);
     // A second hold keeps the first.
@@ -512,7 +505,7 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
     assert_eq!(h.decision(p.result_id).await, Some(decided));
     // A later decision ends the hold.
     h.answers(Settled::Returned);
-    let input = back(task, p.result_id, "policy", None, false);
+    let input = back(task, p.result_id, "policy");
     assert_eq!(
         h.run("return", "work.return", input).await,
         empty("returned")
@@ -548,20 +541,11 @@ async fn a_stale_hold_and_its_notification_cannot_act_on_a_same_head_replacement
     let h = delivery(false).await;
     let (task, original) = h.stopped(h.scope.project_id, "success");
     let run = h.event_run(task).await;
-    let mut hold_intent = h.intent(
-        "event-hold",
-        "work.hold",
-        hold(task, original.result_id, "policy"),
-    );
-    hold_intent.run.clone_from(&run);
-    let mut notice = h.intent(
-        "event-notice",
-        "supervisor.notify",
-        json!({
-            "project": original.project_id, "identity": original.result_id, "text": "stale hold",
-        }),
-    );
-    notice.run = run;
+    let identity = original.result_id.to_string();
+    let input = hold(task, original.result_id, "policy");
+    let hold_intent = in_run(h.intent("event-hold", "work.hold", input), &run);
+    let input = notice(original.project_id, &identity, "stale hold");
+    let notice = in_run(h.intent("event-notice", "supervisor.notify", input), &run);
     assert!(matches!(h.try_run(&notice).await, Err(Error::Conflict)));
     assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
 
@@ -576,16 +560,16 @@ async fn held_result_notice_identifies_the_work_that_needs_attention() {
     let h = delivery(false).await;
     let (task, original) = h.stopped(h.scope.project_id, "failed");
     let run = h.event_run(task).await;
-    let mut hold_intent = h.intent(
-        "hold",
-        "work.hold",
-        hold(task, original.result_id, "policy"),
-    );
-    hold_intent.run.clone_from(&run);
+    let input = hold(task, original.result_id, "policy");
+    let hold_intent = in_run(h.intent("hold", "work.hold", input), &run);
     assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
-    let mut notice = h.intent("notify", "supervisor.notify",
-        json!({"project":original.project_id, "identity":original.result_id, "text":"Delivery requires attention."}));
-    notice.run = run;
+    let identity = original.result_id.to_string();
+    let input = notice(
+        original.project_id,
+        &identity,
+        "Delivery requires attention.",
+    );
+    let notice = in_run(h.intent("notify", "supervisor.notify", input), &run);
     assert_eq!(h.try_run(&notice).await.unwrap(), empty("sent"));
     let body: String = sqlx::query_scalar("SELECT m.body FROM mailbox_messages m JOIN delivery_notifications n USING(message_id) WHERE n.project_id=$1")
         .bind(original.project_id).fetch_one(&h.pool().await).await.unwrap();
@@ -608,13 +592,12 @@ async fn held_result_notice_identifies_the_work_that_needs_attention() {
 #[tokio::test]
 async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let h = delivery(false).await;
-    let notify = |project: Uuid, identity: &str, text: &str| json!({"project": project.to_string(), "identity": identity, "text": text});
     let own = h.scope.project_id;
     let text = format!("Held after three returns ({})", Uuid::new_v4());
     let sent = h.run(
         "notify-1",
         "supervisor.notify",
-        notify(own, "result-1", &text),
+        notice(own, "result-1", &text),
     );
     assert_eq!(sent.await, empty("sent"));
     assert_eq!(h.messages(&text).await, 1);
@@ -622,7 +605,7 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let replay = h.run(
         "notify-1",
         "supervisor.notify",
-        notify(own, "result-1", &text),
+        notice(own, "result-1", &text),
     );
     assert_eq!(replay.await, empty("sent"));
     // Another call with the same identity, whatever its text, sends nothing.
@@ -630,7 +613,7 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let duplicate = h.run(
         "notify-2",
         "supervisor.notify",
-        notify(own, "result-1", &other),
+        notice(own, "result-1", &other),
     );
     assert_eq!(duplicate.await, empty("duplicate"));
     assert_eq!((h.messages(&text).await, h.messages(&other).await), (1, 0));
@@ -638,12 +621,12 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let next = h.run(
         "notify-3",
         "supervisor.notify",
-        notify(own, "result-2", &text),
+        notice(own, "result-2", &text),
     );
     assert_eq!(next.await, empty("sent"));
     assert_eq!(h.messages(&text).await, 2);
     // Another project is not this namespace's to address.
-    let foreign = notify(h.other_project, "result-1", &text);
+    let foreign = notice(h.other_project, "result-1", &text);
     let intent = h.intent("notify-4", "supervisor.notify", foreign);
     assert!(matches!(h.try_run(&intent).await, Err(Error::Forbidden)));
     assert_eq!(h.messages(&text).await, 2);
@@ -654,13 +637,13 @@ async fn supervisor_notify_is_once_per_identity_in_each_project() {
     let h = delivery(true).await;
     let text = format!("Held ({})", Uuid::new_v4());
     for (id, project) in [("own", h.scope.project_id), ("other", h.other_project)] {
-        let input = json!({"project": project.to_string(), "identity": "result-1", "text": text});
+        let input = notice(project, "result-1", &text);
         let sent = h.run(id, "supervisor.notify", input).await;
         assert_eq!(sent, empty("sent"));
     }
     assert_eq!(h.messages(&text).await, 2);
     // A project the server does not run is refused even with installation routing.
-    let input = json!({"project": Uuid::new_v4().to_string(), "identity": "x", "text": text});
+    let input = notice(Uuid::new_v4(), "x", &text);
     let intent = h.intent("unbound", "supervisor.notify", input);
     assert!(matches!(h.try_run(&intent).await, Err(Error::Forbidden)));
 }

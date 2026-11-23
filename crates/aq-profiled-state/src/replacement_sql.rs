@@ -60,7 +60,6 @@ fn decode(
         holds_task: row.get("holds_task"),
         released: row.get("released"),
         status: hot.status,
-        granted: hot.grant.is_some() || hot.execution_deadline_ms.is_some(),
         execution_deadline_ms: hot.execution_deadline_ms,
         stop: hot.stop,
         retention: hot.retention,

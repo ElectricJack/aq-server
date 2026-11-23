@@ -160,7 +160,7 @@ async fn a_task_past_its_policy_max_attempts_is_held_visibly_once_and_other_work
     let again = decision(&c, "lineage_retry_budget_exhausted", 1);
     holds::hold(&pool, again, at).await;
     let mut conn = pool.acquire().await.unwrap();
-    let other = decision(&c, "lineage_time_budget_exhausted", 1).unwrap();
+    let other = decision(&c, "lineage_cost_budget_exhausted", 1).unwrap();
     let noted = holds::note(&mut conn, &other, None, at).await.unwrap();
     assert_eq!(noted, None, "one hold per attempt history");
     drop(conn);
@@ -383,12 +383,7 @@ async fn owner_actions(c: &mut Case) {
 /// Settings value the attempt's launch pinned.
 async fn budget_held(code: &str) -> (Case, Uuid) {
     let mut c = setup().await;
-    pin_policy(&mut c, |p| match code {
-        "lineage_retry_budget_exhausted" => p.max_attempts = 1,
-        "lineage_time_budget_exhausted" => p.max_lineage_elapsed_ms = 2_500,
-        _ => p.max_lineage_sandbox_ms = 1_000,
-    })
-    .await;
+    pin_policy(&mut c, |p| p.max_attempts = 1).await;
     let (status, body) = poll_offered(&c).await;
     assert_eq!(status, 200, "{body}");
     let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
@@ -396,26 +391,6 @@ async fn budget_held(code: &str) -> (Case, Uuid) {
         panic!("{body}")
     };
     let predecessor = page.offers.remove(0).offered.offer.binding.attempt_id;
-    if code == "task_sandbox_minutes_budget_exhausted" {
-        // The attempt was granted a window (synthetic; the hot guard is bypassed).
-        let mut tx = c.env.env.pool.begin().await.unwrap();
-        sqlx::query("SET LOCAL session_replication_role=replica")
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let deadline = (c.env.env.state.clock)().timestamp_millis() + 5_000;
-        sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{execution_deadline_ms}',to_jsonb($2::BIGINT)) WHERE attempt_id=$1")
-            .bind(predecessor)
-            .bind(deadline)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-    }
-    if code == "lineage_time_budget_exhausted" {
-        // Three seconds, so the node's observations stay fresh for the poll after the override.
-        c.env.env.time.fetch_add(3_000, Ordering::SeqCst);
-    }
     // The failed attempt keeps its claim: B4 releases nothing while a budget holds the task.
     // The hold is recorded as the poll's decision records it (the fixture's synthetic stop
     // frees no compute, so its node cannot poll while the attempt holds the task).
@@ -440,11 +415,7 @@ async fn budget_held(code: &str) -> (Case, Uuid) {
 #[tokio::test]
 async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
     use aq_server::profiled_execution::replacement::{self, Assessment};
-    for code in [
-        "lineage_retry_budget_exhausted",
-        "lineage_time_budget_exhausted",
-        "task_sandbox_minutes_budget_exhausted",
-    ] {
+    for code in ["lineage_retry_budget_exhausted"] {
         let (mut c, predecessor) = budget_held(code).await;
         let task = c.env.lineage.task_id;
         let pool = c.env.env.pool.clone();
@@ -504,7 +475,7 @@ async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
             panic!("{code}: the next offer assessment is not blocked");
         };
         assert_eq!((r.attempts_started, r.exempt_attempts), (1, 1), "{code}");
-        assert_eq!((r.elapsed_ms, r.sandbox_ms, r.needs_release), (0, 0, false));
+        assert_eq!((r.elapsed_ms, r.needs_release), (0, false));
         let rows = hold_rows(&c, task).await;
         assert_eq!(rows.len(), 1, "{code}: {rows:?}");
         assert!(rows[0].3.is_some(), "{code}: the hold is cleared: {rows:?}");
@@ -625,7 +596,7 @@ async fn hold_records_race_free_and_post_their_stored_comment_once() {
     // posts the stored comment (a replay of the same id) and marks it, with no second comment.
     let unmark = "UPDATE task_holds SET commented=FALSE WHERE task_id=$1";
     sqlx::query(unmark).bind(task).execute(&pool).await.unwrap();
-    holds::hold(&pool, decision(&c, "lineage_time_budget_exhausted", 1), at).await;
+    holds::hold(&pool, decision(&c, "lineage_cost_budget_exhausted", 1), at).await;
     assert!(hold_rows(&c, task).await[0].2, "marked again");
     let comments = system_comments(&c, task).await;
     assert_eq!(comments.len(), 1, "{comments:?}");
@@ -814,7 +785,7 @@ async fn a_confirmed_budget_retry_fences_the_previous_selection_decision() {
     let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
     let project = c.env.lineage.project_id;
     let at = (c.env.env.state.clock)();
-    let code = "task_sandbox_minutes_budget_exhausted";
+    let code = "lineage_retry_budget_exhausted";
     let before = holds::history(&pool, task).await.unwrap();
     holds::selection_hold(&pool, Some(before), project, task, code, at).await;
     owner_actions(&mut c).await;
@@ -1111,12 +1082,12 @@ async fn a_fresh_owner_retry_is_refused_for_any_other_hold() {
 }
 
 #[tokio::test]
-async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_expires() {
-    let (mut c, predecessor) = budget_held("lineage_time_budget_exhausted").await;
+async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_up() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
     owner_actions(&mut c).await;
     let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
     assert_eq!(status, 422, "{same}");
-    assert_eq!(same["code"], "lineage_time_budget_exhausted");
+    assert_eq!(same["code"], "lineage_retry_budget_exhausted");
     sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
         .bind(c.env.lineage.project_id)
         .execute(&c.env.env.pool)

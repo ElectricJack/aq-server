@@ -9,6 +9,8 @@ const DAY_MS: u64 = 24 * 60 * 60 * SECOND_MS;
 const WEEK_MS: u64 = 7 * DAY_MS;
 /// The largest `max_push_bytes` Settings accepts: 64 GiB.
 const MAX_PUSH_BYTES_CEILING: u64 = 64 * 1024 * 1024 * 1024;
+/// The largest `check_log_bytes` Settings accepts: 1 MiB.
+const CHECK_LOG_BYTES_CEILING: u64 = 1024 * 1024;
 
 /// What the delivery path waits for, repeats and carries. Fields are in
 /// milliseconds unless the name says bytes.
@@ -33,9 +35,17 @@ pub struct DeliveryLimits {
     /// field existed read as `true`.
     #[serde(default = "require_landed_results")]
     pub require_landed_results: bool,
+    /// The most bytes of failed-job log the host keeps for a failed required
+    /// check, read through the GitHub App and redacted.
+    /// Settings stored before this field existed read as the default.
+    #[serde(default = "check_log_bytes")]
+    pub check_log_bytes: u64,
 }
 fn require_landed_results() -> bool {
     true
+}
+fn check_log_bytes() -> u64 {
+    16_384
 }
 impl Default for DeliveryLimits {
     fn default() -> Self {
@@ -47,13 +57,14 @@ impl Default for DeliveryLimits {
             git_transfer_timeout_ms: 600_000,
             max_push_bytes: 268_435_456,
             require_landed_results: true,
+            check_log_bytes: check_log_bytes(),
         }
     }
 }
 impl DeliveryLimits {
     /// Every value in its range; the message names the first that is not.
     pub fn validate(&self) -> Result<(), String> {
-        let fields: [(&str, u64, u64, u64); 6] = [
+        let fields: [(&str, u64, u64, u64); 7] = [
             (
                 "main_sync_interval_ms",
                 self.main_sync_interval_ms,
@@ -90,6 +101,12 @@ impl DeliveryLimits {
                 1,
                 MAX_PUSH_BYTES_CEILING,
             ),
+            (
+                "check_log_bytes",
+                self.check_log_bytes,
+                1,
+                CHECK_LOG_BYTES_CEILING,
+            ),
         ];
         for (name, value, least, most) in fields {
             if !(least..=most).contains(&value) {
@@ -121,12 +138,13 @@ mod tests {
             (60_000, 30_000, 120_000, 3_600_000, 600_000, 268_435_456)
         );
         assert!(d.require_landed_results);
+        assert_eq!(d.check_log_bytes, 16_384);
         assert_eq!(d.validate(), Ok(()));
     }
     #[test]
     fn each_field_is_refused_at_zero_and_over_its_maximum() {
         type Set = fn(&mut DeliveryLimits, u64);
-        let setters: [(&str, Set, u64); 6] = [
+        let setters: [(&str, Set, u64); 7] = [
             (
                 "main_sync_interval_ms",
                 |l, v| l.main_sync_interval_ms = v,
@@ -153,6 +171,11 @@ mod tests {
                 |l, v| l.max_push_bytes = v,
                 MAX_PUSH_BYTES_CEILING,
             ),
+            (
+                "check_log_bytes",
+                |l, v| l.check_log_bytes = v,
+                CHECK_LOG_BYTES_CEILING,
+            ),
         ];
         for (name, set, most) in setters {
             for bad in [0, most + 1, u64::MAX] {
@@ -175,6 +198,27 @@ mod tests {
             .remove("require_landed_results");
         let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
         assert!(read.require_landed_results);
+    }
+    #[test]
+    fn check_log_bytes_is_bounded_and_defaults_when_not_stored() {
+        let mut limits = DeliveryLimits::default();
+        for ok in [1, CHECK_LOG_BYTES_CEILING] {
+            limits.check_log_bytes = ok;
+            assert_eq!(limits.validate(), Ok(()), "{ok}");
+        }
+        for bad in [0, CHECK_LOG_BYTES_CEILING + 1, u64::MAX] {
+            limits.check_log_bytes = bad;
+            assert!(
+                limits
+                    .validate()
+                    .unwrap_err()
+                    .starts_with("check_log_bytes")
+            );
+        }
+        let mut stored = serde_json::to_value(DeliveryLimits::default()).unwrap();
+        stored.as_object_mut().unwrap().remove("check_log_bytes");
+        let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.check_log_bytes, 16_384);
     }
     #[test]
     fn unknown_and_missing_fields_are_refused() {

@@ -89,7 +89,12 @@ async fn handle(State(mock): State<Mock>, request: Request) -> Response {
     let Some((status, headers, body)) = reply else {
         return (AxStatus::INTERNAL_SERVER_ERROR, "no scripted reply").into_response();
     };
-    let mut response = (AxStatus::from_u16(status).unwrap(), body.to_string()).into_response();
+    // A string is a raw text body (a job log); anything else is JSON.
+    let text = match &body {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let mut response = (AxStatus::from_u16(status).unwrap(), text).into_response();
     for (name, value) in headers {
         response.headers_mut().insert(name, value.parse().unwrap());
     }

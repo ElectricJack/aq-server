@@ -115,8 +115,17 @@ pub(super) fn confirmation(
             u64::MAX,
             FactValue::Budget {
                 lineage_id: p.input.spec.lifecycle.lineage_id,
-                elapsed_ms: Some(lineage_elapsed(p)?),
-                maximum_lineage_elapsed_ms: p.policy.max_lineage_elapsed_ms,
+                // Each attempt has its own window, the execution profile's
+                // wall time, and has used none of it when it is granted.
+                elapsed_ms: Some(0),
+                maximum_lineage_elapsed_ms: p
+                    .input
+                    .offer
+                    .offered
+                    .offer
+                    .manifest
+                    .resources
+                    .wall_time_ms,
                 remaining_cost_microunits: None,
             },
         ),
@@ -210,16 +219,4 @@ pub(super) fn confirmation(
         .validate_for(q, a, &p.history.request, proposal)
         .map_err(|_| refused())?;
     Ok(result)
-}
-
-/// Lineage time already used, as pinned by the selection decision: zero for a
-/// first attempt, the predecessors' elapsed time for a B4 replacement.
-pub(super) fn lineage_elapsed(p: &super::pinned::Pinned) -> Result<u64, AppError> {
-    p.input
-        .decision
-        .inputs
-        .budget
-        .elapsed_ms
-        .filter(|elapsed| *elapsed < p.policy.max_lineage_elapsed_ms)
-        .ok_or_else(|| refused())
 }

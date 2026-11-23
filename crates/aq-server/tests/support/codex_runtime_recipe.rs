@@ -124,7 +124,7 @@ pub fn documents() -> Vec<(Kind, String, String)> {
          ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n\
          | openai | {MODEL} | {REASONING} | codex |\n\n\
          ## Selection\n- max_attempts: 1\n- fallback_on: []\n\
-         - max_lineage_elapsed_ms: 60000\n- observation_max_age_ms: 5000\n"
+         - observation_max_age_ms: 5000\n"
     );
     let execution = format!(
         "---\nid: {EXECUTION}\nname: Codex worker, twenty seconds\n\

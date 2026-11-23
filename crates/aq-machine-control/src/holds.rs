@@ -38,12 +38,7 @@ pub fn valid_code(code: &str) -> bool {
 pub fn phrase(code: &str) -> String {
     let fixed = match code {
         "lineage_retry_budget_exhausted" => "its retry budget is exhausted",
-        "lineage_time_budget_exhausted" => "its lineage time budget is exhausted",
-        "lineage_time_budget_exhausted_or_unknown" => {
-            "its lineage time budget is exhausted or unknown"
-        }
         "lineage_cost_budget_exhausted" => "its cost budget is exhausted",
-        "task_sandbox_minutes_budget_exhausted" => "its sandbox minutes budget is exhausted",
         "replacement_policy_retry_budget_exhausted" => {
             "the catalog retry policy's maximum attempts are used up"
         }
@@ -96,9 +91,8 @@ pub fn retry_refusal(code: &str) -> String {
     )
 }
 
-/// A hold that is only a limit: attempts, lineage time, sandbox time, cost or never-granted
-/// offers used up (the `replacement_policy_*` codes are holds recorded before the budgets
-/// became one; `..._or_unknown` is selection's own time check). An owner retry overrides it and
+/// A hold that is only a limit: attempts, cost or never-granted offers used up (the
+/// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner retry overrides it and
 /// every budget starts again (owner decision 2026-11-18). Every other hold is about what
 /// happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
@@ -106,12 +100,9 @@ pub fn is_budget_hold(code: &str) -> bool {
 }
 /// `code` as the fixed code of a limit hold, if it is one.
 pub fn budget_code(code: &str) -> Option<&'static str> {
-    const CODES: [&str; 8] = [
+    const CODES: [&str; 5] = [
         "lineage_retry_budget_exhausted",
-        "lineage_time_budget_exhausted",
-        "lineage_time_budget_exhausted_or_unknown",
         "lineage_cost_budget_exhausted",
-        "task_sandbox_minutes_budget_exhausted",
         "never_granted_retry_bound_exhausted",
         "replacement_policy_retry_budget_exhausted",
         "replacement_policy_time_budget_exhausted",
@@ -278,8 +269,7 @@ pub fn is_hold(code: &str) -> bool {
     code.ends_with("_budget_exhausted")
         || matches!(
             code,
-            "lineage_time_budget_exhausted_or_unknown"
-                | "never_granted_retry_bound_exhausted"
+            "never_granted_retry_bound_exhausted"
                 | "replacement_project_revision_changed"
                 | "replacement_after_unpublished_delivery_needs_new_source"
                 | "stall_quarantined"
@@ -838,10 +828,7 @@ mod tests {
     fn every_known_code_has_its_own_phrase_and_an_unknown_one_the_fallback() {
         let known = [
             "lineage_retry_budget_exhausted",
-            "lineage_time_budget_exhausted",
-            "lineage_time_budget_exhausted_or_unknown",
             "lineage_cost_budget_exhausted",
-            "task_sandbox_minutes_budget_exhausted",
             "replacement_policy_retry_budget_exhausted",
             "replacement_policy_time_budget_exhausted",
             "never_granted_retry_bound_exhausted",
@@ -898,10 +885,7 @@ mod tests {
     fn only_limits_are_budget_holds_an_owner_retry_overrides() {
         for code in [
             "lineage_retry_budget_exhausted",
-            "lineage_time_budget_exhausted",
-            "lineage_time_budget_exhausted_or_unknown",
             "lineage_cost_budget_exhausted",
-            "task_sandbox_minutes_budget_exhausted",
             "never_granted_retry_bound_exhausted",
             "replacement_policy_retry_budget_exhausted",
             "replacement_policy_time_budget_exhausted",

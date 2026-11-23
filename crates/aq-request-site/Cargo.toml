@@ -1,0 +1,15 @@
+[package]
+name = "aq-request-site"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "The method and matched route template of a request, for the API refusal log"
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+tracing-subscriber.workspace = true

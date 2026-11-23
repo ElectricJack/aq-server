@@ -144,6 +144,19 @@ pub trait GitHubAdapter: Send + Sync {
         pr: u64,
         required: Option<&[String]>,
     ) -> GitHubResult<Checks>;
+    /// The redacted tail of the logs of the failed check runs named `failed`
+    /// on `head_sha`: at most `bytes` bytes in all. `None` when the forge has
+    /// no log to give. A caller treats an error the same way: the check
+    /// stays recorded as failed, without a tail.
+    async fn failed_check_log(
+        &self,
+        _repo: &GitHubRepository,
+        _head_sha: &str,
+        _failed: &[String],
+        _bytes: u64,
+    ) -> GitHubResult<Option<String>> {
+        Ok(None)
+    }
     /// Check the base branch and submit the merge with the expected head SHA.
     async fn merge(
         &self,

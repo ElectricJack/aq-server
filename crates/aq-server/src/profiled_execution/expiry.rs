@@ -20,31 +20,10 @@ impl Sweep {
     /// Output and work count are bounded, not the PostgreSQL scan cost. Every
     /// candidate advances the disposable cursor even when its owner refuses.
     pub async fn tick(&mut self, state: &AppState) -> Result<Progress, AppError> {
-        let mut tx = state
-            .store
-            .pool
-            .begin()
-            .await
-            .map_err(|_| AppError::Internal)?;
-        sqlx::query("SET LOCAL statement_timeout='2s'")
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| AppError::Internal)?;
-        let candidates: Vec<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT a.attempt_id,a.node_id FROM execution_attempts a \
-             JOIN profiled_authority_hot h USING(attempt_id) \
-             WHERE a.kind='profiled_v1' AND a.holds_task \
-             AND h.state->>'status' IN ('offered','preparing') \
-             AND (h.state->'grant' IS NULL OR h.state->'grant'='null'::jsonb) \
-             AND ($1::UUID IS NULL OR a.attempt_id>$1) \
-             ORDER BY a.attempt_id LIMIT $2",
-        )
-        .bind(self.after)
-        .bind(PAGE)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|_| AppError::Internal)?;
-        tx.commit().await.map_err(|_| AppError::Internal)?;
+        let candidates =
+            aq_machine_control::attempts::ungranted_candidates(&state.store.pool, self.after, PAGE)
+                .await
+                .map_err(crate::error::db)?;
         if candidates.is_empty() {
             self.after = None;
             return Ok(Progress::default());

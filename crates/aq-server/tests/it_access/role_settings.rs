@@ -273,6 +273,37 @@ async fn defaults_are_installed_once_and_an_edit_is_not_overwritten() {
     assert!(again.installed.is_empty());
 }
 
+/// Spec 0021 §5.1: Settings stored before the lineage time budgets were removed still load; the
+/// keys are left out, and the next save writes the document without them.
+#[tokio::test]
+async fn stored_selection_defaults_with_the_removed_time_budgets_still_load() {
+    let f = started().await;
+    let mut stored = serde_json::to_value(SelectionDefaults::default()).unwrap();
+    stored["max_attempts"] = json!(4);
+    stored["max_lineage_elapsed_ms"] = json!(64_800_000);
+    stored["max_lineage_sandbox_ms"] = json!(64_800_000);
+    sqlx::query("UPDATE role_settings SET selection_defaults=$1 WHERE singleton")
+        .bind(&stored)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let read = settings::settings(&f.pool).await.unwrap();
+    assert_eq!(read.selection_defaults.max_attempts, 4);
+    let mut conn = f.pool.acquire().await.unwrap();
+    let again = settings::selection_defaults(&mut conn).await.unwrap();
+    assert_eq!(again, read.selection_defaults);
+    drop(conn);
+    let (status, body) = f
+        .call("GET", "/api/settings/selection-defaults", None, true, false)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let keys = body["selection_defaults"].as_object().unwrap();
+    assert!(
+        !keys.contains_key("max_lineage_elapsed_ms")
+            && !keys.contains_key("max_lineage_sandbox_ms")
+    );
+}
+
 #[tokio::test]
 async fn a_stored_snapshot_is_read_as_stored_even_if_validation_would_refuse_it_today() {
     let f = started().await;
@@ -969,7 +1000,7 @@ async fn an_owner_reads_saves_and_deletes_documents_over_http() {
         let path = "/api/settings/selection-defaults";
         f.call("PUT", path, Some(body), true, true)
     };
-    let stated = json!({"max_lineage_sandbox_ms": 7_200_000, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD"});
+    let stated = json!({"max_uncharged_continuations": 7, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD"});
     let (status, body) = put(stated, revision().await).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let partial = json!({"max_attempts": 4, "max_cost_microunits": null, "currency": null});
@@ -980,12 +1011,17 @@ async fn an_owner_reads_saves_and_deletes_documents_over_http() {
         .await;
     let now = &read["selection_defaults"];
     assert_eq!(now["max_attempts"], 4);
-    assert_eq!(now["max_lineage_sandbox_ms"], 7_200_000, "kept: {now}");
+    assert_eq!(now["max_uncharged_continuations"], 7, "kept: {now}");
     assert_eq!(now["max_never_granted_offers"], 3, "kept: {now}");
-    assert_eq!(now["max_uncharged_continuations"], 5, "never stated: {now}");
+    assert_eq!(now["max_wake_attempts"], 3, "never stated: {now}");
     assert_eq!(now["max_cost_microunits"], Value::Null, "cleared: {now}");
     let (status, _) = put(json!({"no_such_key": 1}), revision().await).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The lineage time budgets are gone: a save that states one is refused as unknown.
+    for key in ["max_lineage_elapsed_ms", "max_lineage_sandbox_ms"] {
+        let (status, _) = put(json!({ key: 3_600_000 }), revision().await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{key}");
+    }
     let (status, _) = put(json!({"max_never_granted_offers": 0}), revision().await).await;
     assert_eq!(
         status,
@@ -1192,7 +1228,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         "main_sync_interval_ms": 60000, "main_freshness_ms": 30000,
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
         "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
-        "require_landed_results": true});
+        "require_landed_results": true, "check_log_bytes": 16384});
     let (status, body) = f.call("GET", PATH, None, true, false).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
@@ -1248,9 +1284,12 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         let mut negative = defaults.clone();
         negative[field] = json!(-1);
         cases.push(negative);
-        let mut missing = defaults.clone();
-        missing.as_object_mut().unwrap().remove(field);
-        cases.push(missing);
+        // A field Settings stored before it existed reads as its default.
+        if !["require_landed_results", "check_log_bytes"].contains(&field.as_str()) {
+            let mut missing = defaults.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            cases.push(missing);
+        }
     }
     let mut unknown = defaults.clone();
     unknown["surprise"] = json!(1);

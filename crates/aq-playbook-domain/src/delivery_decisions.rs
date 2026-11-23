@@ -393,18 +393,18 @@ pub async fn notification(
         "Recorded outcome: {}. Changes from the lineage base: {}. Retained head: {head}.",
         latest.outcome, latest.changed
     );
-    if reason == "returns_exhausted"
-        && let Some(pr) = crate::delivery_store::held_pr_evidence(db, origin.result_id).await?
-    {
+    if let Some(pr) = crate::delivery_store::held_pr_evidence(db, origin.result_id).await? {
         evidence.push(' ');
         evidence.push_str(&pr);
     }
-    Ok((
-        key,
-        format!(
-            "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
-        ),
-    ))
+    let notice = format!(
+        "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
+    );
+    // The facts every hold notice carries (spec 0021 section 5.2); the log
+    // tail goes last and is cut to what the supervisor's mailbox accepts.
+    let notice =
+        crate::hold_notice::complete(db, notice, origin.task_id, Some(origin.result_id)).await?;
+    Ok((key, notice))
 }
 
 /// The once-only key of `supervisor.notify` in a project.

@@ -23,6 +23,8 @@ pub mod delivery_runs;
 pub mod delivery_store;
 pub mod grants;
 #[cfg(feature = "delivery_playbook")]
+pub mod hold_notice;
+#[cfg(feature = "delivery_playbook")]
 pub mod host10;
 pub mod host9;
 pub mod host_operations;

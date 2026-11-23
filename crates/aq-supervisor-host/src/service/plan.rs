@@ -43,11 +43,19 @@ fn instructions(config: &ServiceConfig, control: &Control) -> String {
         config.conversation_id
     )
 }
+/// What the global supervisor files for a new project (spec 0017 section 6.8).
+#[cfg(all(feature = "supervisor_full_access", feature = "project_environments"))]
+const TOOLCHAIN_SETUP: &str = "New projects: after you create a project and its binding, file a first active task, \"Set up the sandbox toolchain\". Its body names the owner's request and the repository's own signals: package.json engines and packageManager, lockfiles, rust-toolchain.toml and the CI workflow's setup steps. The agent writes the project's recipe as .aq/environments/<name>.md with `default: true` in its front matter (at most one recipe per repository), proves it with `aq environment try <name> --run \"<the project's own test command>\"`, and delivers it as a pull request. Until that recipe merges, the project's tasks run in the AQ base environment, so keep the base environment in the binding's allowed_environments before the recipe merges; add the project's own environment once it exists.\n";
+#[cfg(all(
+    feature = "supervisor_full_access",
+    not(feature = "project_environments")
+))]
+const TOOLCHAIN_SETUP: &str = "";
 #[cfg(feature = "supervisor_full_access")]
 fn instructions(config: &ServiceConfig, control: &Control) -> String {
     let scope = if let Some(project) = control.project {
         format!(
-            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
+            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID, and read the project's results with result.list and result.show. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
             control.label
         )
     } else {
@@ -59,7 +67,7 @@ Use authenticated AQ tools within the scope above.
 Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or tool commands NAME for one command's schema. To invoke one, run /usr/local/bin/aq-supervisor-host tool NAME with one JSON CommandRequest on stdin, e.g. {{"params":{{"project_id":"UUID"}}}} for task.list. Use task.list and task.show with the project ID for current task versions. Mutations also need a fresh operation_id, a subject and the current expected versions; inspect the command schema and current project/task before writing. Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
 {ATTACHMENTS}
 Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify the task's current execution and history before reporting that a worker started.
-This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
+{setup}This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
 {code}Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
 Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
 Respect human review gates unless the owner has delegated that review to you.
@@ -67,6 +75,11 @@ Your final answer is published automatically to this conversation with any confi
 "#,
         conversation = config.conversation_id,
         code = CODE_ACCESS,
+        setup = if control.project.is_none() {
+            TOOLCHAIN_SETUP
+        } else {
+            ""
+        },
     )
 }
 /// Code access needs the supervisor git route, which also needs delivery_playbook.
@@ -309,6 +322,60 @@ pub(super) fn install(config: &ServiceConfig, turn: &Config) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "supervisor_full_access")]
+    #[test]
+    fn full_access_instructions_describe_the_toolchain_setup_task() {
+        let root = PathBuf::from("/tmp/aq-plan-test");
+        let config = ServiceConfig {
+            database_url: "postgres://localhost/test".into(),
+            conversation_id: Uuid::new_v4(),
+            authority_id: Uuid::new_v4(),
+            root: root.clone(),
+            workspace: root.join("workspace"),
+            homes: root.join("homes"),
+            helper: PathBuf::from("/usr/local/bin/aq-session-host"),
+            tmux: PathBuf::from("/usr/bin/tmux"),
+            tmux_version: "tmux 3.3a".into(),
+            native: PathBuf::from("/opt/aq/bin/codex"),
+            native_digest: Digest::of(b"native"),
+            image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
+            secret_file: root.join("subscription.json"),
+            server_origin: "http://server:8081".into(),
+        };
+        let control = Control {
+            actor: Uuid::new_v4(),
+            enabled: true,
+            revision: 1,
+            profile: json!({}),
+            owner: Some(Uuid::new_v4()),
+            project: None,
+            label: "Global supervisor".into(),
+        };
+        let text = instructions(&config, &control);
+        #[cfg(feature = "project_environments")]
+        for want in [
+            "Set up the sandbox toolchain",
+            ".aq/environments/<name>.md",
+            "default: true",
+            "aq environment try",
+            "base environment",
+            "allowed_environments before the recipe merges",
+        ] {
+            assert!(text.contains(want), "{want}");
+        }
+        #[cfg(not(feature = "project_environments"))]
+        for gone in [".aq/environments", "aq environment try", "toolchain"] {
+            assert!(!text.contains(gone), "{gone}");
+        }
+        #[cfg(feature = "project_environments")]
+        {
+            let scoped = Control {
+                project: Some(Uuid::new_v4()),
+                ..control
+            };
+            assert!(!instructions(&config, &scoped).contains(".aq/environments"));
+        }
+    }
     #[test]
     fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
         let directory = tempfile::tempdir().unwrap();

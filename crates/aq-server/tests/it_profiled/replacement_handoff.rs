@@ -74,7 +74,6 @@ fn replacement_of(predecessor: Uuid) -> Replacement {
         attempts_started: 1,
         exempt_attempts: 0,
         elapsed_ms: 1,
-        sandbox_ms: 0,
         stop_receipt: artifact("stop"),
         retained_source_receipt: artifact("retained"),
         effect_reconciliation_receipt: artifact("effects"),

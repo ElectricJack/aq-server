@@ -656,6 +656,13 @@ async fn offers(
             None => None,
         };
         if let Some(replacement) = &replacement {
+            tracing::info!(
+                task_id = %task.task_id,
+                predecessor = %replacement.predecessor,
+                attempts_started = replacement.attempts_started,
+                lineage_elapsed_ms = replacement.elapsed_ms,
+                "replacement attempt admitted within the retry budget"
+            );
             // The failed predecessor's claim is released under its locks before
             // the successor's generation; a later refusal retries idempotently.
             on_heap(|| replacement::release(state, task.task_id, replacement)).await?;
