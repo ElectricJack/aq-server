@@ -247,14 +247,13 @@ async fn execute(
         if raw["task_state"] != "active" {
             return Ok(rejected());
         }
-        if let Some(anchor) = &anchor {
-            if !anchor
+        if let Some(anchor) = &anchor
+            && !anchor
                 .matches(&state.store.pool, task, revision)
                 .await
                 .map_err(|_| AppError::Internal)?
-            {
-                return Ok(stale_or_overridden(task, prior_override));
-            }
+        {
+            return Ok(stale_or_overridden(task, prior_override));
         }
         let owner_operation = anchor.as_ref().map(|_| p.operation_id);
         // B4 checks stop, source and effects for the same predecessor as the scheduler.

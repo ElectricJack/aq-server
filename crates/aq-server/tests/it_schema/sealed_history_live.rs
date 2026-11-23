@@ -84,7 +84,7 @@ async fn offer_stage_pins_charge_once_and_release_independently() {
             .unwrap();
         assert!(
             offer_stage::pin(
-                &mut *pool.acquire().await.unwrap(),
+                &mut pool.acquire().await.unwrap(),
                 stage,
                 artifact,
                 NOW as u64
@@ -100,7 +100,7 @@ async fn offer_stage_pins_charge_once_and_release_independently() {
     assert_eq!(use_at(NOW + 1).await, (1, 1, 1, 1));
     assert!(
         !offer_stage::pin(
-            &mut *pool.acquire().await.unwrap(),
+            &mut pool.acquire().await.unwrap(),
             first,
             artifact,
             NOW as u64 + 1

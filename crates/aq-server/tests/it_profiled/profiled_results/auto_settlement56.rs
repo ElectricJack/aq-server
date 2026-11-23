@@ -1766,7 +1766,7 @@ mod playbook {
         sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb,completed_at_ms=completed_at_ms+1 WHERE operation_id=$1")
             .bind(known_refusal).execute(&pool).await.unwrap();
         let detail = aq_playbook_domain::delivery_store::publication_refusal(
-            &mut *pool.acquire().await.unwrap(),
+            &mut pool.acquire().await.unwrap(),
             result,
         )
         .await
@@ -1789,7 +1789,7 @@ mod playbook {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(
             aq_playbook_domain::delivery_store::publication_refusal(
-                &mut *pool.acquire().await.unwrap(),
+                &mut pool.acquire().await.unwrap(),
                 result
             )
             .await
@@ -1961,7 +1961,7 @@ mod playbook {
         let due = NOW as i64 + 600_001;
         // The playbook's own notice for this hold is the one notice.
         delivery_decisions::record_told(
-            &mut *pool.acquire().await.unwrap(),
+            &mut pool.acquire().await.unwrap(),
             project,
             &key,
             Uuid::new_v4(),
@@ -1990,7 +1990,7 @@ mod playbook {
             attempt,
         );
         assert!(
-            delivery_decisions::told(&mut *pool.acquire().await.unwrap(), project, &key)
+            delivery_decisions::told(&mut pool.acquire().await.unwrap(), project, &key)
                 .await
                 .unwrap()
         );
@@ -2144,7 +2144,7 @@ mod playbook {
         );
         assert!(
             delivery_store::undecided(
-                &mut *pool.acquire().await.unwrap(),
+                &mut pool.acquire().await.unwrap(),
                 legacy.report.binding.attempt_id
             )
             .await

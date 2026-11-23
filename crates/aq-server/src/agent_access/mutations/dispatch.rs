@@ -457,7 +457,7 @@ mod tests {
                 token: "fixture-token".into(),
                 ttl: 1000,
             };
-            let result = post_mutation_bytes(&rt, Uuid::new_v4(), b"{}".to_vec()).await;
+            let result = post_mutation_bytes(&rt, Uuid::new_v4(), b"{}".to_vec(), false).await;
             assert_eq!(result.is_ok(), valid, "{body}");
             if valid {
                 assert_eq!(result.unwrap().1["results"][0]["metadata"]["weight"], 0.25);

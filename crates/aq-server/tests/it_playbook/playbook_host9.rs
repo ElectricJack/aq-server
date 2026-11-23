@@ -2440,7 +2440,7 @@ mod delivery {
                 _: &str,
             ) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push(format!("open {title}"));
-                Ok(pull(self.pr_state.lock().unwrap().clone()))
+                Ok(pull(*self.pr_state.lock().unwrap()))
             }
             async fn pull_request(
                 &self,
@@ -2449,7 +2449,7 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
-                    ..pull(self.pr_state.lock().unwrap().clone())
+                    ..pull(*self.pr_state.lock().unwrap())
                 })
             }
             async fn checks(

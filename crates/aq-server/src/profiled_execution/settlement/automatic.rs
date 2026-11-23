@@ -183,6 +183,7 @@ pub async fn record_replacement_facts(
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
     recover_held_for_retry_exact(state, task, None).await
 }
+#[cfg(feature = "delivery_playbook")]
 pub(crate) async fn recover_held_for_retry_exact(
     state: &AppState,
     task: Uuid,
