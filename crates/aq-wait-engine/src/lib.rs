@@ -8,6 +8,7 @@ mod cycle;
 mod model;
 mod progress;
 mod proof;
+pub mod question;
 mod reduce;
 mod snapshot;
 mod source;
