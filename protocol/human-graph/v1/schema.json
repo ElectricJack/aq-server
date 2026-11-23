@@ -1204,7 +1204,7 @@
               },
               "reasons": {
                 "type": "array",
-                "maxItems": 4,
+                "maxItems": 8,
                 "items": {
                   "anyOf": [
                     {
@@ -1227,6 +1227,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanOwnerRetryWait"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanAttemptRecoveryWait"
                     }
                   ]
                 }
@@ -1964,12 +1967,28 @@
         "properties": {
           "code": { "const": "owner_retry_pending" },
           "operation_id": { "type": "string", "format": "uuid" },
-          "blocker_owner": { "enum": ["aq_scheduler", "project_owner"] },
-          "wake_condition": { "enum": ["scheduled_owner_retry_check", "original_retry_authority_restored"] },
+          "attempt_id": { "type": ["string", "null"], "format": "uuid" },
+          "hold_reason": { "type": ["string", "null"], "minLength": 1, "maxLength": 96 },
+          "blocker_owner": { "enum": ["aq_scheduler", "project_owner", "aq_worker", "aq_effects", "aq_operator"] },
+          "wake_condition": { "enum": ["scheduled_owner_retry_check", "original_retry_authority_restored", "prior_execution_verified", "original_effects_reconciled", "original_source_retained", "original_lineage_history_restored"] },
           "next_check_at_ms": { "type": "integer", "minimum": 1 },
           "message": { "type": "string", "maxLength": 512 }
         },
         "required": ["code", "operation_id", "blocker_owner", "wake_condition", "next_check_at_ms", "message"],
+        "additionalProperties": false
+      },
+      "HumanAttemptRecoveryWait": {
+        "type": "object",
+        "description": "The recovery a stopped or closed holding attempt waits for, or the backoff before AQ reoffers a task after repeated verified launch failures.",
+        "properties": {
+          "code": { "enum": ["closure_does_not_prove_nonstart", "closed_launch_settlement_pending", "stopped_result_recovery_pending", "launch_retry_backoff"] },
+          "attempt_id": { "type": "string", "format": "uuid" },
+          "blocker_owner": { "enum": ["aq_operator", "aq_scheduler", "aq_worker"] },
+          "wake_condition": { "enum": ["original_launch_evidence_reconciled", "closed_launch_settlement", "stopped_result_reconciled", "launch_retry_backoff_elapsed"] },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "attempt_id", "blocker_owner", "wake_condition", "message"],
         "additionalProperties": false
       },
       "HumanResultHoldReason": {

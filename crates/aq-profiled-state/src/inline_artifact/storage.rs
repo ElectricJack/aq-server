@@ -21,7 +21,8 @@ pub async fn lock_retention(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<bool>, s
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-inline-artifact-quota-v1',0))")
         .execute(&mut **tx)
         .await?;
-    sqlx::query_scalar("SELECT offer_staged FROM admission_artifacts WHERE artifact_id=$1")
+    // to_jsonb: stores before migration 0167 have no offer_staged column.
+    sqlx::query_scalar("SELECT COALESCE((to_jsonb(a)->>'offer_staged')::boolean,false) FROM admission_artifacts a WHERE artifact_id=$1")
         .bind(id)
         .fetch_optional(&mut **tx)
         .await
@@ -117,7 +118,13 @@ impl Record {
         request: &Retain<'_>,
         offer_staged: bool,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms,offer_staged) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        // Unstaged rows omit the column, which stores before migration 0167 lack.
+        let sql = if offer_staged {
+            "INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms,offer_staged) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true)"
+        } else {
+            "INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+        };
+        sqlx::query(sql)
             .bind(request.artifact_id)
             .bind(&self.value)
             .bind(self.descriptor.artifact.digest.as_str())
@@ -127,8 +134,8 @@ impl Record {
             .bind(request.bytes)
             .bind(self.descriptor.retained_at_ms as i64)
             .bind(request.retain_until_ms as i64)
-            .bind(offer_staged)
-            .execute(&mut **tx).await?;
+            .execute(&mut **tx)
+            .await?;
         Ok(())
     }
     pub async fn insert_receipt(

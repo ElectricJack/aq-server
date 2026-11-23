@@ -334,7 +334,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let definitions = (unique.iter())
         .map(|r| body(r).map(|b| (r, b)).ok_or_else(|| refused()))
         .collect::<Result<Vec<_>, _>>()?;
-    aq_history_caps::offer_stage::open(
+    let staged = aq_history_caps::offer_stage::open(
         &state.store.pool,
         stage,
         attempt_id,
@@ -343,7 +343,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     )
     .await
     .map_err(crate::error::db)?;
-    set.stage = Some(stage);
+    set.stage = staged.then_some(stage);
     for (artifact, body) in definitions {
         on_heap(|| {
             let artifact_body =
@@ -452,7 +452,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
             source_retention_id,
             &source,
             until,
-            Some(stage),
+            set.stage,
         )
     })
     .await?;
