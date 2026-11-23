@@ -510,9 +510,9 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
     if reason == "returns_exhausted" {
         shown["blocker_owner"] = json!("project_owner");
         shown["wake_condition"] = json!("owner_retry_authorized");
-        if let Some(Value::String(message)) = shown.get_mut("message") {
-            message.push_str(" The project owner can use task.retry to authorize another attempt when its evidence and routing are ready.");
-        }
+        shown["message"] = json!(format!(
+            "Delivery reached its repair-return limit for result {result}. The project owner can authorize a retry."
+        ));
     }
     if let Some(evidence) = evidence {
         shown["message"] = json!(format!(
