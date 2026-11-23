@@ -109,6 +109,64 @@ struct Case {
     loss: Arc<AtomicBool>,
     gate: Arc<ResponseGate>,
 }
+fn graph_router(
+    graph: Value,
+    writes: Arc<AtomicUsize>,
+    loss: Arc<AtomicBool>,
+    gate: Arc<ResponseGate>,
+) -> Router {
+    let write_graph = graph.clone();
+    let expected_key = Arc::new(std::sync::Mutex::new(None::<String>));
+    Router::new()
+        .route(
+            "/v1/workspaces/{workspace}/nodes/{task}/context",
+            get(move || {
+                let graph = graph.clone();
+                async move { ([("X-AQ-Graph-API-Version", "1")], Json(graph)) }
+            }),
+        )
+        .route(
+            "/v1/workspaces/{workspace}/mutations",
+            post(move |Json(body): Json<Value>| {
+                let graph = write_graph.clone();
+                let writes = writes.clone();
+                let loss = loss.clone();
+                let key = expected_key.clone();
+                let gate = gate.clone();
+                async move {
+                    assert_eq!(body["operations"][0]["op"], "update_node");
+                    assert_eq!(body["operations"][0]["id"], graph["node"]["id"]);
+                    assert_eq!(body["operations"][0]["expected_version"], graph["node"]["version"]);
+                    {
+                        let id = body["idempotency_key"].as_str().unwrap().to_owned();
+                        let mut guard = key.lock().unwrap();
+                        if let Some(old) = guard.as_ref() {
+                            assert_eq!(old, &id);
+                        } else {
+                            *guard = Some(id);
+                            writes.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    if gate.enabled.swap(false, Ordering::SeqCst) {
+                        gate.entered.notify_one();
+                        gate.release.notified().await;
+                    }
+                    let mut node = graph["node"].clone();
+                    node["task_state"] = json!("completed");
+                    node["version"] = json!(node["version"].as_u64().unwrap() + 1);
+                    node["content_revision"] = json!(node["content_revision"].as_u64().unwrap() + 1);
+                    let reply = json!({"change_set_id":"00000000-0000-0000-0000-000000000039","results":[node]});
+                    let status = if loss.swap(false, Ordering::SeqCst) {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::OK
+                    };
+                    (status, [("X-AQ-Graph-API-Version", "1")], Json(reply))
+                }
+            }),
+        )
+}
+
 async fn setup() -> Case {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
@@ -146,26 +204,15 @@ async fn setup() -> Case {
         actual,
         aq_agent_api::digest(&json!({"kind":"session","binding":binding})).unwrap()
     );
-    let graph = graph_context(&env.f);
-    let write_graph = graph.clone();
     let writes = Arc::new(AtomicUsize::new(0));
     let loss = Arc::new(AtomicBool::new(false));
-    let wc = writes.clone();
-    let lc = loss.clone();
-    let expected_key = Arc::new(std::sync::Mutex::new(None::<String>));
-    let key = expected_key.clone();
     let gate = Arc::new(ResponseGate::default());
-    let response_gate = gate.clone();
-    let app=Router::new().route("/v1/workspaces/{workspace}/nodes/{task}/context",get(move||{let g=graph.clone();async move{([("X-AQ-Graph-API-Version","1")],Json(g))}})).route("/v1/workspaces/{workspace}/mutations",post(move|Json(body):Json<Value>|{
-        let g=write_graph.clone();let wc=wc.clone();let lc=lc.clone();let key=key.clone();let gate=response_gate.clone();
-        async move{
-            assert_eq!(body["operations"][0]["op"],"update_node");assert_eq!(body["operations"][0]["id"],g["node"]["id"]);assert_eq!(body["operations"][0]["expected_version"],g["node"]["version"]);
-            {let id=body["idempotency_key"].as_str().unwrap().to_owned();let mut guard=key.lock().unwrap();if let Some(old)=guard.as_ref(){assert_eq!(old,&id)}else{*guard=Some(id);wc.fetch_add(1,Ordering::SeqCst);}}
-            if gate.enabled.swap(false,Ordering::SeqCst){gate.entered.notify_one();gate.release.notified().await;}
-            let mut node=g["node"].clone();node["task_state"]=json!("completed");node["version"]=json!(node["version"].as_u64().unwrap()+1);node["content_revision"]=json!(node["content_revision"].as_u64().unwrap()+1);
-            let reply=json!({"change_set_id":"00000000-0000-0000-0000-000000000039","results":[node]});let status=if lc.swap(false,Ordering::SeqCst){axum::http::StatusCode::SERVICE_UNAVAILABLE}else{axum::http::StatusCode::OK};(status,[("X-AQ-Graph-API-Version","1")],Json(reply))
-        }
-    }));
+    let app = graph_router(
+        graph_context(&env.f),
+        writes.clone(),
+        loss.clone(),
+        gate.clone(),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

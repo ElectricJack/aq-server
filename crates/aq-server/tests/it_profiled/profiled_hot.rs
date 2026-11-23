@@ -1,9 +1,34 @@
 //! Registered hot-migration qualification; no production grant producer.
 use crate::common;
-use aq_server::execution::authority::hot::HotState;
-use common::profiled::{fixture, insert};
+use aq_server::execution::authority::{
+    cache::{Facts, Key, VerifiedCache},
+    hot::HotState,
+};
+use common::profiled::{Fixture, fixture, insert};
 use serde_json::json;
 use sqlx::Row;
+use uuid::Uuid;
+
+fn cache_entry(f: &Fixture) -> (Key, Facts) {
+    let binding = &f.profiled.offer.binding;
+    let facts = Facts {
+        binding: binding.clone(),
+        project_id: f.profiled.offer.manifest.bindings.project_id,
+        task_id: f.profiled.offer.manifest.bindings.task_id,
+        graph: f.profiled.graph.clone(),
+        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
+        source: f.profiled.source.clone(),
+    };
+    let key = Key {
+        attempt_id: binding.attempt_id,
+        decision_id: f.decision,
+        source_observation_id: Uuid::new_v4(),
+        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
+        launch_manifest_digest: binding.launch_manifest_digest.clone(),
+        selection_digest: aq_selection::digest(&f.selection).unwrap(),
+    };
+    (key, facts)
+}
 
 #[tokio::test]
 async fn adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_seals() {
@@ -112,26 +137,8 @@ async fn adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_s
 
 #[tokio::test]
 async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
-    use aq_server::execution::authority::cache::{Facts, Key, VerifiedCache};
-    use uuid::Uuid;
     let f = fixture().await;
-    let binding = &f.profiled.offer.binding;
-    let mut facts = Facts {
-        binding: binding.clone(),
-        project_id: f.profiled.offer.manifest.bindings.project_id,
-        task_id: f.profiled.offer.manifest.bindings.task_id,
-        graph: f.profiled.graph.clone(),
-        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
-        source: f.profiled.source.clone(),
-    };
-    let mut key = Key {
-        attempt_id: binding.attempt_id,
-        decision_id: f.decision,
-        source_observation_id: Uuid::new_v4(),
-        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
-        launch_manifest_digest: binding.launch_manifest_digest.clone(),
-        selection_digest: aq_selection::digest(&f.selection).unwrap(),
-    };
+    let (mut key, mut facts) = cache_entry(&f);
     let first_key = key.clone();
     let mut cache = VerifiedCache::default();
     assert!(cache.get(&key).is_none());
@@ -182,33 +189,14 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
 #[tokio::test]
 async fn immutable_cache_hit_never_caches_renewal_revocation_or_expiry() {
     use aq_server::execution::{
-        authority::{
-            cache::{Facts, Key, VerifiedCache},
-            hot::{self, LaunchOwner},
-        },
+        authority::hot::{self, LaunchOwner},
         profiled::{Status, Stop},
     };
     use aq_session_protocol::ProfiledGrant;
     use common::profiled::NOW;
-    use uuid::Uuid;
     let f = fixture().await;
     let binding = f.profiled.offer.binding.clone();
-    let key = Key {
-        attempt_id: binding.attempt_id,
-        decision_id: f.decision,
-        source_observation_id: Uuid::new_v4(),
-        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
-        launch_manifest_digest: binding.launch_manifest_digest.clone(),
-        selection_digest: aq_selection::digest(&f.selection).unwrap(),
-    };
-    let facts = Facts {
-        binding: binding.clone(),
-        project_id: f.profiled.offer.manifest.bindings.project_id,
-        task_id: f.profiled.offer.manifest.bindings.task_id,
-        graph: f.profiled.graph.clone(),
-        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
-        source: f.profiled.source.clone(),
-    };
+    let (key, facts) = cache_entry(&f);
     let mut cache = VerifiedCache::default();
     assert!(cache.insert_verified(key.clone(), facts));
     let mut state = HotState::from_compat(&f.profiled).unwrap();
@@ -261,7 +249,6 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
     };
     use aq_session_protocol::ProfiledGrant;
     use common::profiled::{NOW, artifact};
-    use uuid::Uuid;
     // Qualify the original hot/compatibility storage contract with its actual
     // pre-settlement schema. Synthetic release records cannot satisfy owner39.
     let mut f = aq_server::test_support::with_store_profile(27, fixture()).await;

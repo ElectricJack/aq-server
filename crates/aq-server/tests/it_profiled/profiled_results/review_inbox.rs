@@ -11,25 +11,31 @@ fn query() -> InboxQuery {
         cursor: None,
     }
 }
+async fn admit_decision(env: &ReviewEnv) -> aq_review_protocol::DecisionRequest {
+    let f = &env.f;
+    let request = aq_review_protocol::DecisionRequest {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        decision_id: Uuid::new_v4(),
+        subject: env.prepared.subject().artifact().unwrap(),
+        eligible_owners: vec![f.actor],
+        eligibility_project_revision: 1,
+        review_policy: env.prepared.subject().validation_policy.clone(),
+        expires_at_ms: NOW + 30000,
+    };
+    env.service
+        .admit(f.actor, &env.prepared, &request)
+        .await
+        .unwrap();
+    request
+}
+
 #[tokio::test]
 async fn authorized_review_inbox_pages_actual_owner_records_and_binds_cursors() {
     let env = review_env(1).await;
     let f = &env.f;
     for _ in 0..3 {
-        let request = aq_review_protocol::DecisionRequest {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            decision_id: Uuid::new_v4(),
-            subject: env.prepared.subject().artifact().unwrap(),
-            eligible_owners: vec![f.actor],
-            eligibility_project_revision: 1,
-            review_policy: env.prepared.subject().validation_policy.clone(),
-            expires_at_ms: NOW + 30000,
-        };
-        env.service
-            .admit(f.actor, &env.prepared, &request)
-            .await
-            .unwrap();
+        admit_decision(&env).await;
     }
     let first = env.service.inbox(f.actor, &query()).await.unwrap();
     assert_eq!(first.items.len(), 1);
@@ -209,20 +215,7 @@ async fn dashboard_decision_resolve_binds_subject_and_shares_native_finality() {
         Some(Arc::new(env.service.clone())),
     );
     for legacy_first in [false, true] {
-        let request = aq_review_protocol::DecisionRequest {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            decision_id: Uuid::new_v4(),
-            subject: env.prepared.subject().artifact().unwrap(),
-            eligible_owners: vec![f.actor],
-            eligibility_project_revision: 1,
-            review_policy: env.prepared.subject().validation_policy.clone(),
-            expires_at_ms: NOW + 30000,
-        };
-        env.service
-            .admit(f.actor, &env.prepared, &request)
-            .await
-            .unwrap();
+        let request = admit_decision(&env).await;
         let op = Uuid::new_v4();
         let answer = json!({"schema_version":1,"operation_id":op,"decision_id":request.decision_id,"expected_decision_revision":1,"choice":"approve","comment":"Reviewed exact source"});
         let mut payload = answer.clone();
@@ -303,20 +296,7 @@ async fn dashboard_decision_resolve_binds_subject_and_shares_native_finality() {
 #[tokio::test]
 async fn overview_attention_lists_waiting_decision_and_failed_task() {
     let env = Box::pin(review_env_for_outcome(1, None, false, true)).await;
-    let request = aq_review_protocol::DecisionRequest {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        decision_id: Uuid::new_v4(),
-        subject: env.prepared.subject().artifact().unwrap(),
-        eligible_owners: vec![env.f.actor],
-        eligibility_project_revision: 1,
-        review_policy: env.prepared.subject().validation_policy.clone(),
-        expires_at_ms: NOW + 30000,
-    };
-    env.service
-        .admit(env.f.actor, &env.prepared, &request)
-        .await
-        .unwrap();
+    let request = admit_decision(&env).await;
     let app = aq_server::build_admin_router_with_policy_owners(
         env.f.state.clone(),
         None,
@@ -430,20 +410,29 @@ async fn overview_attention_lists_waiting_decision_and_failed_task() {
     assert!(sources.iter().any(|v| v["source"] == "results"
         && v["observation"]["observed_at"] == "1970-01-01T00:16:40.000Z"
         && v["total"]["value"] == 1));
+    assert_overview_authorization_and_partial_sources(&env, &app, request.decision_id).await;
+    env.peer.abort();
+}
+
+async fn assert_overview_authorization_and_partial_sources(
+    env: &ReviewEnv,
+    app: &axum::Router,
+    decision: Uuid,
+) {
     let pool = env.f.db.pool().await;
     for (email, role) in [
         ("other-owner@localhost", "owner"),
         ("excluded-viewer@localhost", "viewer"),
     ] {
         sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,$2,$3,'dev',$2,now())").bind(Uuid::new_v4()).bind(email).bind(role).execute(&pool).await.unwrap();
-        let other = overview_as(&app, "/api/v1/overview", email).await;
-        assert!(!other.to_string().contains(&request.decision_id.to_string()));
+        let other = overview_as(app, "/api/v1/overview", email).await;
+        assert!(!other.to_string().contains(&decision.to_string()));
         if role == "viewer" {
             assert!(other["data"]["attention"].as_array().unwrap().is_empty());
         }
     }
     let excluded = overview_as(
-        &app,
+        app,
         &format!("/api/v1/overview?scope=project:{}", Uuid::new_v4()),
         "owner@localhost",
     )
@@ -490,7 +479,6 @@ async fn overview_attention_lists_waiting_decision_and_failed_task() {
             .unwrap()
             .is_empty()
     );
-    env.peer.abort();
 }
 
 #[tokio::test]
@@ -591,24 +579,7 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
         None,
         Some(Arc::new(env.service.clone())),
     );
-    let admit = || async {
-        let request = aq_review_protocol::DecisionRequest {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            decision_id: Uuid::new_v4(),
-            subject: env.prepared.subject().artifact().unwrap(),
-            eligible_owners: vec![f.actor],
-            eligibility_project_revision: 1,
-            review_policy: env.prepared.subject().validation_policy.clone(),
-            expires_at_ms: NOW + 30000,
-        };
-        env.service
-            .admit(f.actor, &env.prepared, &request)
-            .await
-            .unwrap();
-        request.decision_id
-    };
-    let first = admit().await;
+    let first = admit_decision(&env).await.decision_id;
     let answer = json!({"schema_version":1,"operation_id":Uuid::new_v4(),"decision_id":first,"expected_decision_revision":1,"choice":"reject","comment":"Needs a test"});
     let (code, body) = dashboard_call(
         &app,
@@ -617,8 +588,8 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
     )
     .await;
     assert_eq!(code, 200, "{body}");
-    let second = admit().await;
-    let third = admit().await;
+    let second = admit_decision(&env).await.decision_id;
+    let third = admit_decision(&env).await.decision_id;
 
     // X14/X15/X16 on the inbox item and page.
     let page = env
@@ -713,9 +684,21 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
             .is_err()
     );
 
+    assert_decision_history_and_evidence(&env, &app, first, second).await;
+    env.peer.abort();
+}
+
+async fn assert_decision_history_and_evidence(
+    env: &ReviewEnv,
+    app: &axum::Router,
+    first: Uuid,
+    second: Uuid,
+) {
+    let f = &env.f;
+    let defer = format!("/api/reviews/decisions/{second}/defer");
     // X17/X18/X19 on the decision read.
     let path = format!("/api/reviews/decisions/{second}");
-    let (code, view) = dashboard_call(&app, &path, None).await;
+    let (code, view) = dashboard_call(app, &path, None).await;
     assert_eq!(code, 200, "{view}");
     assert_eq!(view["kind"], "review");
     assert_eq!(view["requested_by"]["user_id"], json!(f.actor));
@@ -774,22 +757,22 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
     );
     let viewed = format!("/api/reviews/decisions/{second}/evidence/result_record/viewed");
     let stale = json!({"ref_digest":"0".repeat(64)});
-    assert_eq!(dashboard_call(&app, &viewed, Some(stale)).await.0, 409);
+    assert_eq!(dashboard_call(app, &viewed, Some(stale)).await.0, 409);
     let missing = format!("/api/reviews/decisions/{second}/evidence/nope/viewed");
     let digest = json!({"ref_digest":result["ref"]["digest"]});
     assert_eq!(
-        dashboard_call(&app, &missing, Some(digest.clone())).await.0,
+        dashboard_call(app, &missing, Some(digest.clone())).await.0,
         404
     );
-    let (code, seen) = dashboard_call(&app, &viewed, Some(digest.clone())).await;
+    let (code, seen) = dashboard_call(app, &viewed, Some(digest.clone())).await;
     assert_eq!(code, 200, "{seen}");
     assert_eq!(seen["viewed_at_ms"], NOW);
     f.time.store((NOW + 5) as i64, Ordering::SeqCst);
     assert_eq!(
-        dashboard_call(&app, &viewed, Some(digest)).await.1["viewed_at_ms"],
+        dashboard_call(app, &viewed, Some(digest)).await.1["viewed_at_ms"],
         NOW
     );
-    let (_, view) = dashboard_call(&app, &path, None).await;
+    let (_, view) = dashboard_call(app, &path, None).await;
     let result = view["evidence"]
         .as_array()
         .unwrap()
@@ -801,7 +784,6 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
     // Clearing a deferral restores the plain pending view.
     let clear =
         json!({"operation_id":Uuid::new_v4(),"expected_decision_revision":1,"until_ms":null});
-    assert_eq!(dashboard_call(&app, &defer, Some(clear)).await.0, 200);
-    assert!(dashboard_call(&app, &path, None).await.1["deferred_until_ms"].is_null());
-    env.peer.abort();
+    assert_eq!(dashboard_call(app, &defer, Some(clear)).await.0, 200);
+    assert!(dashboard_call(app, &path, None).await.1["deferred_until_ms"].is_null());
 }

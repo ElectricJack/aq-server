@@ -11,6 +11,22 @@ pub(super) struct WaitEnv {
     pub(super) binding: wire::Binding,
 }
 impl WaitEnv {
+    async fn approve_decision(&self) {
+        let f = &self.env.f;
+        Box::pin(self.env.service.resolve(
+            f.actor,
+            &aq_review_protocol::ResolveRequest {
+                schema_version: 1,
+                operation_id: Uuid::new_v4(),
+                decision_id: self.decision_id,
+                expected_decision_revision: 1,
+                choice: aq_review_protocol::Choice::Approve,
+                comment: Some("Synthetic".into()),
+            },
+        ))
+        .await
+        .unwrap();
+    }
     pub(super) fn node(&self) -> Uuid {
         self.env.f.node.node_id
     }
@@ -173,19 +189,7 @@ async fn wait_on_decision_wakes_once_after_resolution() {
         .unwrap();
     assert_eq!(phase, "pending");
 
-    Box::pin(w.env.service.resolve(
-        f.actor,
-        &aq_review_protocol::ResolveRequest {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            decision_id: w.decision_id,
-            expected_decision_revision: 1,
-            choice: aq_review_protocol::Choice::Approve,
-            comment: Some("Synthetic".into()),
-        },
-    ))
-    .await
-    .unwrap();
+    w.approve_decision().await;
     f.time.store((NOW + 61_000) as i64, Ordering::SeqCst);
     // Duplicate reconciliation records exactly one outcome and one intent.
     waits::reconcile_due(&f.state, 64).await.unwrap();
@@ -514,19 +518,7 @@ mod hibernation {
 
         // Resolve the wait so its resume intent is ready.
         let f = &w.env.f;
-        Box::pin(w.env.service.resolve(
-            f.actor,
-            &aq_review_protocol::ResolveRequest {
-                schema_version: 1,
-                operation_id: Uuid::new_v4(),
-                decision_id: w.decision_id,
-                expected_decision_revision: 1,
-                choice: aq_review_protocol::Choice::Approve,
-                comment: Some("Synthetic".into()),
-            },
-        ))
-        .await
-        .unwrap();
+        w.approve_decision().await;
         f.time.store((NOW + 61_000) as i64, Ordering::SeqCst);
         waits::reconcile_due(&f.state, 64).await.unwrap();
 

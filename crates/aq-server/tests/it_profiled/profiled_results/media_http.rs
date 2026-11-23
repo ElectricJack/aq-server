@@ -85,25 +85,35 @@ async fn value(response: Response) -> serde_json::Value {
     )
     .unwrap()
 }
-fn large_png() -> Vec<u8> {
-    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let start = out.len();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(data);
-        let mut crc = !0u32;
-        for n in &out[start..] {
-            crc ^= u32::from(*n);
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 {
-                    0xedb88320 ^ (crc >> 1)
-                } else {
-                    crc >> 1
-                };
-            }
+fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let mut crc = !0u32;
+    for n in &out[start..] {
+        crc ^= u32::from(*n);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                0xedb88320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
         }
-        out.extend_from_slice(&(!crc).to_be_bytes());
     }
+    out.extend_from_slice(&(!crc).to_be_bytes());
+}
+
+fn adler32(raw: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for n in raw {
+        a = (a + u32::from(*n)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn large_png() -> Vec<u8> {
     let (width, height) = (1024u32, 8u32);
     let mut raw = Vec::new();
     let mut seed = 91u32;
@@ -121,12 +131,7 @@ fn large_png() -> Vec<u8> {
     deflate.extend_from_slice(&len.to_le_bytes());
     deflate.extend_from_slice(&(!len).to_le_bytes());
     deflate.extend_from_slice(&raw);
-    let (mut a, mut b) = (1u32, 0u32);
-    for n in &raw {
-        a = (a + u32::from(*n)) % 65521;
-        b = (b + a) % 65521;
-    }
-    deflate.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    deflate.extend_from_slice(&adler32(&raw).to_be_bytes());
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut header = width.to_be_bytes().to_vec();
     header.extend_from_slice(&height.to_be_bytes());

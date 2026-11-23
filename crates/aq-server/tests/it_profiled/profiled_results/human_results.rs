@@ -200,6 +200,27 @@ async fn dashboard_search_uses_retained_result_metadata_and_digest() {
         assert!(!body.to_string().contains(excluded));
     }
 }
+async fn corrupt_report_encoding(pool: &sqlx::PgPool, report_id: Uuid) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE profiled_result_reports SET report_bytes=report_bytes||'\\x0a'::bytea, \
+         report_digest=encode(sha256(report_bytes||'\\x0a'::bytea),'hex') WHERE report_id=$1",
+    )
+    .bind(report_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("ALTER TABLE profiled_result_reports ENABLE TRIGGER profiled_result_immutable")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
 #[tokio::test]
 async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart() {
     let (f, _, report) = prepare(true, true).await;
@@ -238,24 +259,7 @@ async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart(
     // `profiled_result_reports_check`): its validation refuses. The correction
     // still lists, the page says it is incomplete.
     let pool = f.db.pool().await;
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("ALTER TABLE profiled_result_reports DISABLE TRIGGER profiled_result_immutable")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query(
-        "UPDATE profiled_result_reports SET report_bytes=report_bytes||'\\x0a'::bytea, \
-         report_digest=encode(sha256(report_bytes||'\\x0a'::bytea),'hex') WHERE report_id=$1",
-    )
-    .bind(report.report_id)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    sqlx::query("ALTER TABLE profiled_result_reports ENABLE TRIGGER profiled_result_immutable")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    corrupt_report_encoding(&pool, report.report_id).await;
     let page = human_results::read_project(&f.state, project, None, None, None)
         .await
         .unwrap();
