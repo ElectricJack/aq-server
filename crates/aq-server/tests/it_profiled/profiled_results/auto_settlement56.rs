@@ -2044,6 +2044,66 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn liveness_owner_retry_reconciles_a_stopped_cancellation_with_a_pushed_failure() {
+        use aq_delivery::git_grant::cancelled_failed_report;
+        use aq_server::profiled_execution::{cancellation, replacement};
+
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
+        let task = env.f.selection.lineage.task_id;
+        let attempt = env.report.binding.attempt_id;
+        let pool = env.f.db.pool().await;
+        assert_eq!(cancelled_failed_report(&pool, task).await.unwrap(), None);
+        let cancelled = cancellation::cancel(
+            &env.f.state,
+            attempt,
+            Uuid::new_v4(),
+            "Stop after the stored credential expired",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            cancelled.disposition,
+            cancellation::Disposition::Requested
+        ));
+        assert_eq!(
+            cancelled_failed_report(&pool, task).await.unwrap(),
+            Some(env.report.report_id)
+        );
+        assert_eq!(send_back(&env, "policy").await, Settled::Stale);
+        assert_eq!(
+            replacement::assess_task(&env.f.state, task, NOW)
+                .await
+                .unwrap(),
+            replacement::Assessment::Blocked("replacement_effects_unreconciled")
+        );
+        for _ in 0..2 {
+            settlement::recover_held_for_retry(&env.f.state, task)
+                .await
+                .unwrap();
+        }
+        let facts: (String, String) = sqlx::query_as(
+            "SELECT state#>>'{retention,kind}',state#>>'{effects,kind}'
+             FROM profiled_authority_hot WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(facts, ("retained".into(), "quiescent".into()));
+        assert!(matches!(
+            replacement::assess_task(&env.f.state, task, NOW)
+                .await
+                .unwrap(),
+            replacement::Assessment::Replace(_)
+        ));
+        assert!(env.holds_task().await);
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn exhausted_success_retry_requires_a_final_pr_failure_for_this_exact_result() {
         use aq_delivery::git_grant::held_report;
         let env = Box::pin(held_retry_env(

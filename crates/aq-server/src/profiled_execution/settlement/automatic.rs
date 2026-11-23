@@ -237,6 +237,12 @@ pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> 
     let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
         .await
         .map_err(db)?;
+    let report = match report {
+        Some(_) => report,
+        None => aq_delivery::git_grant::cancelled_failed_report(&state.store.pool, task)
+            .await
+            .map_err(db)?,
+    };
     if let Some(report) = report {
         Box::pin(replacement_facts(state, report, true)).await?;
     }
@@ -259,17 +265,6 @@ async fn replacement_facts(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    let reworked = match lock_row(&mut tx, report_id).await? {
-        Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
-        #[cfg(feature = "delivery_playbook")]
-        None if owner_retry => {
-            aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
-                .await
-                .map_err(db)?
-                == Some(report_id)
-        }
-        None => false,
-    };
     let view = authority::load_locked(
         state,
         &mut tx,
@@ -277,6 +272,29 @@ async fn replacement_facts(
         authority::Policy::IdentityOnly,
     )
     .await?;
+    // An owner can request a replacement of a proven stopped cancellation with
+    // a pinned failed result. Recheck the exact eligible report under the attempt locks.
+    #[cfg(feature = "delivery_playbook")]
+    let cancelled_retry = owner_retry
+        && view.cancellation_id.is_some()
+        && aq_delivery::git_grant::cancelled_failed_report(&mut *tx, r.spec.task.task_id)
+            .await
+            .map_err(db)?
+            == Some(report_id);
+    #[cfg(not(feature = "delivery_playbook"))]
+    let cancelled_retry = false;
+    let reworked = match lock_row(&mut tx, report_id).await? {
+        Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
+        #[cfg(feature = "delivery_playbook")]
+        None if owner_retry => {
+            cancelled_retry
+                || aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
+                    .await
+                    .map_err(db)?
+                    == Some(report_id)
+        }
+        None => false,
+    };
     let attempt = r.report.binding.attempt_id;
     let owner_settled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition IN ('accepted','needs_reconciliation','stale')) OR EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1)")
         .bind(attempt)
@@ -302,7 +320,7 @@ async fn replacement_facts(
         || !r.is_current_report_head
         || !view.holds_task
         || !view.stopped
-        || (owner_retry && (view.revoked || view.cancellation_id.is_some()))
+        || (owner_retry && (view.revoked || view.cancellation_id.is_some()) && !cancelled_retry)
         || !hot.stop.known_stopped()
         || owner_settled
     {
