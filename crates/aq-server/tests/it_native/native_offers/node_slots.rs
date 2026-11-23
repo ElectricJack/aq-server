@@ -150,6 +150,19 @@ async fn a_refused_publication_releases_staging_and_retains_the_artifacts() {
     .unwrap();
     assert_eq!((stages, closed, pins, attempts), (1, 1, 0, 0));
     assert!(objects > 0, "finished assemblies retain their exact bytes");
+    let (charged, legacy): (i64, i64) = sqlx::query_as(
+        "SELECT usage.scope_rows,
+            (SELECT count(*) FROM admission_artifacts a WHERE a.owner_key=s.project_id::text
+             AND NOT a.offer_staged AND a.created_at_ms>=$1-600000
+             AND NOT EXISTS(SELECT 1 FROM profiled_launch_artifacts l WHERE l.artifact_id=a.artifact_id))
+         FROM admission_offer_stages s CROSS JOIN LATERAL sealed_history_usage('admission_artifacts',s.project_id,$1) usage",
+    )
+    .bind((c.env.env.state.clock)().timestamp_millis())
+    .fetch_one(pool).await.unwrap();
+    assert_eq!(
+        charged, legacy,
+        "the charged rows no longer include the refused assembly"
+    );
     lock.commit().await.unwrap();
     let next = offered(&c, 1).await;
     let claim: bool =
