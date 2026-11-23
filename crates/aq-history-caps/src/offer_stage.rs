@@ -1,17 +1,28 @@
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+/// Stores before migration 0167 have no offer stages; their assemblies stay unstaged.
+async fn available(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT to_regclass('admission_offer_stages') IS NOT NULL")
+        .fetch_one(pool)
+        .await
+}
+
+/// Opens the stage; `false` when the store predates offer stages.
 pub async fn open(
     pool: &PgPool,
     stage: Uuid,
     attempt: Uuid,
     project: Uuid,
     now: u64,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
+    if !available(pool).await? {
+        return Ok(false);
+    }
     sqlx::query("INSERT INTO admission_offer_stages(stage_id,attempt_id,project_id,expires_at_ms) VALUES ($1,$2,$3,$4)")
         .bind(stage).bind(attempt).bind(project).bind(super::ms(now.saturating_add(600_000)))
         .execute(pool).await?;
-    Ok(())
+    Ok(true)
 }
 
 pub async fn pin(
@@ -31,6 +42,9 @@ pub async fn pin(
 /// Release capacity after all publication retries finish. Existing links and
 /// any other assembly's pins retain their own charges.
 pub async fn close(pool: &PgPool, stage: Uuid, at: u64) -> Result<(), sqlx::Error> {
+    if !available(pool).await? {
+        return Ok(());
+    }
     let mut tx = pool.begin().await?;
     sqlx::query(
         "SELECT set_config('lock_timeout','500ms',true),set_config('statement_timeout','2s',true)",

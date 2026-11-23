@@ -173,7 +173,7 @@ async fn conclusion_text_never_reworks_a_result() {
             f,
             report,
             axum::http::StatusCode::OK,
-            ReportSource::Pushed { changed: changed },
+            ReportSource::Pushed { changed },
         )
         .await;
         let auth = context(&env.f).await;
