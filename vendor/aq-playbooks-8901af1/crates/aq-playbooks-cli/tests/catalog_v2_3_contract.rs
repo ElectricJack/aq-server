@@ -1,8 +1,7 @@
 //! Host catalog 2.3.0 conformance (Epic 0, delivery by playbook): 2.2.0 plus
 //! the delivery event `aq.work.result_ready`, the delivery commands, their
 //! completion event `aq.delivery.completed`, and `work.read` extended with
-//! the facts of a task's result. Compiled only with `delivery_playbook`.
-#![cfg(feature = "delivery_playbook")]
+//! the facts of a task's result.
 #[allow(dead_code)]
 #[path = "support/schemas.rs"]
 mod schemas;

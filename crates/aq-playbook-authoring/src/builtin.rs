@@ -199,7 +199,7 @@ mod tests {
     /// abilities (`project` is the one scope the contracts allow).
     #[test]
     fn the_delivery_example_seals_as_the_delivery_record() {
-        const DIR: &str = "../../vendor/aq-playbooks-c744301/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
+        const DIR: &str = "../../vendor/aq-playbooks-8901af1/contracts/aq-host-2.3.0/examples/deliver-by-playbook";
         let read = |name: &str| {
             std::fs::read_to_string(format!("{}/{DIR}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
         };

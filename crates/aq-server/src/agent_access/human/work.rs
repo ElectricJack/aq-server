@@ -23,35 +23,6 @@ fn error_class(error: &AppError) -> &'static str {
     }
 }
 
-<<<<<<< HEAD
-/// Epic 0 (spec 0016 section 7): why a stopped attempt's undecided result
-/// holds the task, and whether a delivery playbook is active for `project`
-/// to decide it. A read failure omits it; the attempt's own hold is shown.
-async fn result_waiting(
-    s: &AppState,
-    pool: &PgPool,
-    project: Uuid,
-    attempt: Uuid,
-) -> Option<Value> {
-    use aq_playbook_domain::delivery_store as store;
-    let mut db = pool.acquire().await.ok()?;
-    let result = store::undecided(&mut db, attempt).await.ok()??;
-    // The namespace's delivery artifact, for its project or (installation routing) all.
-    let active = match s.config.playbooks.as_deref() {
-        Some(pb)
-            if pb.profile.is_delivery()
-                && (pb.installation_routing || pb.namespace.project_id == project) =>
-        {
-            let namespace = (pb.namespace.namespace_id, pb.namespace.generation);
-            store::active(&mut db, namespace).await.ok()?
-        }
-        _ => false,
-    };
-    Some(aq_human_work::result_waiting(attempt, result, active))
-}
-
-=======
->>>>>>> refs/remotes/central/main
 /// The hierarchy relationships that keep the active task `id` out of the
 /// runnable queue (Graph's ready query leaves out a task under a draft or
 /// retired ancestor and a container with live children), and whether the read
@@ -141,12 +112,8 @@ pub(super) async fn work(
         false => None,
     };
     let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-<<<<<<< HEAD
     // Epic 0 (spec 0016 section 7): a stopped attempt's undecided result waits
     // for a playbook, and the read says whether one is active to decide it.
-=======
-    #[cfg(feature = "delivery_playbook")]
->>>>>>> refs/remotes/central/main
     let held = held.chain(match (&hold, open) {
         (Some(h), true) if h.stopped => {
             let namespace = s

@@ -1282,14 +1282,8 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         let mut negative = defaults.clone();
         negative[field] = json!(-1);
         cases.push(negative);
-<<<<<<< HEAD
-        // `require_landed_results` defaults to true when absent (rows stored
-        // before it existed), so only the numbers are required.
-        if field != "require_landed_results" {
-=======
         // A field Settings stored before it existed reads as its default.
         if !["require_landed_results", "check_log_bytes"].contains(&field.as_str()) {
->>>>>>> refs/remotes/central/main
             let mut missing = defaults.clone();
             missing.as_object_mut().unwrap().remove(field);
             cases.push(missing);

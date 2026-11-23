@@ -6,12 +6,9 @@ publish.workspace = true
 
 [dependencies]
 aq-internal-work = { path = "../aq-internal-work" }
-# Catalog 2.3.0 (Epic 0) is permanent here. The vendored aq-playbooks c744301
-# still gates it behind its own feature; drop this once a re-vendored
-# aq-playbooks has retired that flag.
-aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-compiler", version = "=0.2.0", features = ["delivery_playbook"] }
-aq-playbooks-model = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-model", version = "=0.2.0" }
-aq-playbooks-simulation = { path = "../../vendor/aq-playbooks-c744301/crates/aq-playbooks-simulation", version = "=0.2.0" }
+aq-playbooks-compiler = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-compiler", version = "=0.2.0" }
+aq-playbooks-model = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-model", version = "=0.2.0" }
+aq-playbooks-simulation = { path = "../../vendor/aq-playbooks-8901af1/crates/aq-playbooks-simulation", version = "=0.2.0" }
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -189,7 +189,6 @@ impl ActionKind for TaskRetry {
             let now = now(state)?;
             let mut assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
-            #[cfg(feature = "delivery_playbook")]
             if !p.fresh
                 && matches!(
                     assessment,

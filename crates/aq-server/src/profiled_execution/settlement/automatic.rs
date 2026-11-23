@@ -231,7 +231,6 @@ pub async fn record_replacement_facts(
 
 /// Reconcile the current delivery hold supported by its recorded worker and PR outcomes.
 /// Resolve the current report from the task so an earlier result cannot authorize a retry.
-#[cfg(feature = "delivery_playbook")]
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
     let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
         .await
@@ -260,7 +259,6 @@ async fn replacement_facts(
         .map_err(db)?;
     let reworked = match lock_row(&mut tx, report_id).await? {
         Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
-        #[cfg(feature = "delivery_playbook")]
         None if owner_retry => {
             aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
                 .await
