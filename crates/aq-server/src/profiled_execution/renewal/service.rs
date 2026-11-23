@@ -9,7 +9,7 @@ use aq_admission::{
     control::{RenewedAuthority, Versions},
     transport::{Renew, TransportDocument},
 };
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 #[track_caller]
 fn refused() -> AppError {
@@ -69,34 +69,16 @@ pub async fn renew(
         .min(observed.ceiling()?)
         .min(facts.inventory_expires_at_ms);
     let stored = if let Some(stored) = history::lookup(&mut tx, auth.id(), request).await? {
-        if stored.body.expires_at_ms != previous_expiry
-            || stored.body.versions.grant_revision != after.versions.grant_revision
-            || stored.body.versions.record_revision > after.versions.record_revision
-            || stored.body.versions.authority_revision > after.versions.authority_revision
-            || stored.body.execution_deadline_ms != hard
-        {
-            return Err(refused());
-        }
-        if stored.body.expires_at_ms > ceiling {
-            return Err(refused());
-        }
+        validate_replay(
+            &stored.body,
+            &after.versions,
+            previous_expiry,
+            hard,
+            ceiling,
+        )?;
         stored
     } else {
-        let row=sqlx::query("SELECT revision,binding,grant_id FROM profiled_owner_journals WHERE attempt_id=$1 FOR SHARE").bind(request.binding.attempt_id).fetch_optional(&mut *tx).await.map_err(|_|AppError::Internal)?.ok_or_else(|| refused())?;
-        if row.get::<serde_json::Value, _>("binding")
-            != serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?
-            || row.get::<Option<Uuid>, _>("grant_id") != Some(request.grant_id)
-        {
-            return Err(refused());
-        }
-        let physical = u64::try_from(row.get::<i64, _>("revision")).map_err(|_| refused())?;
-        let latest = super::latest_renewal_revision_locked(&mut tx, auth.id(), &request.binding)
-            .await?
-            .unwrap_or(0)
-            .max(physical);
-        if request.journal_revision <= latest {
-            return Err(refused());
-        }
+        ensure_journal_advanced_locked(&mut tx, auth.id(), request).await?;
         let issued = now(state)?;
         observed.fresh_at(issued)?;
         let expiry = issued
@@ -106,25 +88,7 @@ pub async fn renew(
         if issued >= previous_expiry || expiry <= previous_expiry {
             return Err(refused());
         }
-        after
-            .hot
-            .grant
-            .as_mut()
-            .ok_or_else(|| refused())?
-            .expires_at_ms = expiry;
-        after
-            .hot
-            .validate_against(&request.binding)
-            .map_err(|_| refused())?;
-        let row=sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING record_revision,authority_revision,grant_revision").bind(request.binding.attempt_id).bind(serde_json::to_value(&after.hot).map_err(|_|AppError::Internal)?).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
-        let versions = Versions {
-            record_revision: row.get::<i64, _>("record_revision") as u64,
-            authority_revision: row.get::<i64, _>("authority_revision") as u64,
-            grant_revision: row.get::<i64, _>("grant_revision") as u64,
-        };
-        if versions.grant_revision <= after.versions.grant_revision {
-            return Err(refused());
-        }
+        let versions = extend_grant_locked(&mut tx, request, &mut after, expiry).await?;
         let stored = Stored::new(Body {
             operation_id: request.operation_id,
             binding: request.binding.clone(),
@@ -169,4 +133,84 @@ pub async fn renew(
     let reply = stored.deliver(nonce, time)?;
     tx.commit().await.map_err(|_| unavailable())?;
     Ok(reply)
+}
+
+fn validate_replay(
+    body: &Body,
+    current_versions: &Versions,
+    previous_expiry: u64,
+    hard_deadline: u64,
+    ceiling: u64,
+) -> Result<(), AppError> {
+    if body.expires_at_ms != previous_expiry
+        || body.versions.grant_revision != current_versions.grant_revision
+        || body.versions.record_revision > current_versions.record_revision
+        || body.versions.authority_revision > current_versions.authority_revision
+        || body.execution_deadline_ms != hard_deadline
+        || body.expires_at_ms > ceiling
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+async fn ensure_journal_advanced_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    request: &Renew,
+) -> Result<(), AppError> {
+    let row = sqlx::query("SELECT revision,binding,grant_id FROM profiled_owner_journals WHERE attempt_id=$1 FOR SHARE")
+        .bind(request.binding.attempt_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|_| AppError::Internal)?
+        .ok_or_else(|| refused())?;
+    if row.get::<serde_json::Value, _>("binding")
+        != serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?
+        || row.get::<Option<Uuid>, _>("grant_id") != Some(request.grant_id)
+    {
+        return Err(refused());
+    }
+    let physical = u64::try_from(row.get::<i64, _>("revision")).map_err(|_| refused())?;
+    let latest = super::latest_renewal_revision_locked(tx, node, &request.binding)
+        .await?
+        .unwrap_or(0)
+        .max(physical);
+    if request.journal_revision <= latest {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+async fn extend_grant_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &Renew,
+    pinned: &mut pinned::Pinned,
+    expiry: u64,
+) -> Result<Versions, AppError> {
+    pinned
+        .hot
+        .grant
+        .as_mut()
+        .ok_or_else(|| refused())?
+        .expires_at_ms = expiry;
+    pinned
+        .hot
+        .validate_against(&request.binding)
+        .map_err(|_| refused())?;
+    let row = sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING record_revision,authority_revision,grant_revision")
+        .bind(request.binding.attempt_id)
+        .bind(serde_json::to_value(&pinned.hot).map_err(|_| AppError::Internal)?)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let versions = Versions {
+        record_revision: row.get::<i64, _>("record_revision") as u64,
+        authority_revision: row.get::<i64, _>("authority_revision") as u64,
+        grant_revision: row.get::<i64, _>("grant_revision") as u64,
+    };
+    if versions.grant_revision <= pinned.versions.grant_revision {
+        return Err(refused());
+    }
+    Ok(versions)
 }
