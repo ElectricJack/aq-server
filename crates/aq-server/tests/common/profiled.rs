@@ -99,33 +99,7 @@ pub async fn fixture_on(
         })
         .await
         .unwrap();
-    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
-    let mut input: aq_selection::SelectionInputs =
-        serde_json::from_value(raw["inputs"].clone()).unwrap();
-    if let Some((_, lineage)) = additional {
-        input.project.lineage = lineage.clone();
-        input.budget.lineage = lineage;
-    }
-    input.project.target = aq_selection::ExecutionTarget::Worker {
-        node_id: node.id,
-        boot_id: identity.boot_id,
-    };
-    input.node.target = input.project.target.clone();
-    input.project.expires_at_ms = NOW + 30_000;
-    input.node.observed_at_ms = NOW - 10;
-    input.node.expires_at_ms = NOW + 30_000;
-    input.budget.observed_at_ms = NOW - 10;
-    input.budget.expires_at_ms = NOW + 30_000;
-    input.now_ms = NOW;
-    for c in &mut input.node.credential_bindings {
-        c.observed_at_ms = NOW - 10;
-        c.expires_at_ms = NOW + 30_000;
-    }
-    for o in &mut input.observations {
-        o.received_at_ms = NOW - 10;
-        o.expires_at_ms = NOW + 30_000;
-        o.cooldown_until_ms = NOW - 10;
-    }
+    let mut input = fixture_inputs(&identity, additional.map(|(_, lineage)| lineage));
     let selected = fixture_selection(&mut input);
     let state_projection = state_from_selection(&selected, &identity);
     let cfg: Config = toml::from_str(
@@ -170,6 +144,40 @@ enabled=true
         time,
     }
 }
+fn fixture_inputs(
+    identity: &NodeIdentity,
+    lineage: Option<aq_selection::TaskLineage>,
+) -> aq_selection::SelectionInputs {
+    let raw: Value = serde_json::from_str(include_str!("../fixtures/selection-v2.json")).unwrap();
+    let mut input: aq_selection::SelectionInputs =
+        serde_json::from_value(raw["inputs"].clone()).unwrap();
+    if let Some(lineage) = lineage {
+        input.project.lineage = lineage.clone();
+        input.budget.lineage = lineage;
+    }
+    input.project.target = aq_selection::ExecutionTarget::Worker {
+        node_id: identity.node_id,
+        boot_id: identity.boot_id,
+    };
+    input.node.target = input.project.target.clone();
+    input.project.expires_at_ms = NOW + 30_000;
+    input.node.observed_at_ms = NOW - 10;
+    input.node.expires_at_ms = NOW + 30_000;
+    input.budget.observed_at_ms = NOW - 10;
+    input.budget.expires_at_ms = NOW + 30_000;
+    input.now_ms = NOW;
+    for c in &mut input.node.credential_bindings {
+        c.observed_at_ms = NOW - 10;
+        c.expires_at_ms = NOW + 30_000;
+    }
+    for o in &mut input.observations {
+        o.received_at_ms = NOW - 10;
+        o.expires_at_ms = NOW + 30_000;
+        o.cooldown_until_ms = NOW - 10;
+    }
+    input
+}
+
 /// The fixture's selection: a launch of one role on one level whose first
 /// candidate is the fixture's `model-a` on the fixture node's `codex`
 /// harness. The documents are built in place, not compiled: the fixture's
@@ -311,7 +319,7 @@ pub fn state_from_selection(
     let graph_artifact = artifact("graph-profile", b"synthetic-frozen-graph-profile");
     offer.manifest.bindings.graph_access_profile = graph_artifact.clone();
     offer.binding.graph_access_profile_digest = graph_artifact.digest.clone();
-    let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":selected.lineage.task_id});
+    let spec = synthetic_spec(selected.lineage.task_id);
     offer.binding.execution_spec_digest = aq_selection::digest(&spec).unwrap();
     offer.binding.launch_manifest_digest = canonical_digest(&offer.manifest).unwrap();
     let source = SourceBinding {
@@ -347,14 +355,18 @@ pub fn state_from_selection(
     state_projection.validate().unwrap();
     state_projection
 }
+fn synthetic_spec(task_id: Uuid) -> Value {
+    json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":task_id})
+}
+
 pub async fn insert(f: &Fixture) -> Uuid {
-    let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
+    let spec = synthetic_spec(f.selection.lineage.task_id);
     insert_spec(f, spec, false, false, None).await
 }
 /// Like `insert`, with the native offer clock recorded on the launch so the
 /// lineage history used by failed-attempt replacement is known.
 pub async fn insert_offered(f: &Fixture, offered_at_ms: u64) -> Uuid {
-    let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
+    let spec = synthetic_spec(f.selection.lineage.task_id);
     insert_spec(f, spec, false, false, Some(offered_at_ms)).await
 }
 pub async fn insert_typed(
@@ -365,7 +377,7 @@ pub async fn insert_typed(
     insert_spec(f, json!(spec), false, false, None).await
 }
 pub async fn insert_sibling(f: &Fixture) -> Uuid {
-    let spec = json!({"schema_version":1,"kind":"synthetic_profiled_authority_fixture","task_id":f.selection.lineage.task_id});
+    let spec = synthetic_spec(f.selection.lineage.task_id);
     insert_spec(f, spec, true, false, None).await
 }
 pub async fn insert_with_retained_decision(

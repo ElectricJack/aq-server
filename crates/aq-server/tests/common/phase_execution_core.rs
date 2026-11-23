@@ -158,48 +158,10 @@ async fn setup_from_presence_observed(
         receipt.validate_for(&ready.request).unwrap();
         c.request.inventory_sequence = ready.request.sequence;
     }
-    let revision: i64 =
-        sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
-    let mut observation = c.env.manual.clone();
-    observation["operation_id"] = serde_json::json!(Uuid::new_v4());
-    observation["expected_revision"] = serde_json::json!(revision);
-    observation["sequence"] = serde_json::json!(2);
     let admin = aq_server::build_admin_router(c.env.env.state.clone());
-    let (status, body) = on_heap(|| {
-        common::selection::call(
-            &admin,
-            "/api/intelligence/observations",
-            Some(observation),
-            "owner@localhost",
-        )
-    })
-    .await;
-    assert_eq!(status, 200, "{body}");
+    on_heap(|| refresh_observation(&c, &admin, 2, None)).await;
     if let Some(ttl_ms) = short_observation_ttl_ms {
-        let revision: i64 =
-            sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
-                .fetch_one(&c.env.env.pool)
-                .await
-                .unwrap();
-        let mut observation = c.env.manual.clone();
-        observation["operation_id"] = serde_json::json!(Uuid::new_v4());
-        observation["expected_revision"] = serde_json::json!(revision);
-        observation["sequence"] = serde_json::json!(3);
-        observation["scope"]["node_id"] = serde_json::json!(c.env.env.node);
-        observation["ttl_ms"] = serde_json::json!(ttl_ms);
-        let (status, body) = on_heap(|| {
-            common::selection::call(
-                &admin,
-                "/api/intelligence/observations",
-                Some(observation),
-                "owner@localhost",
-            )
-        })
-        .await;
-        assert_eq!(status, 200, "{body}");
+        on_heap(|| refresh_observation(&c, &admin, 3, Some(ttl_ms))).await;
     }
     let (status, body) = on_heap(|| native_offer::poll_offered(&c)).await;
     assert_eq!(status, 200, "{body}");
@@ -267,6 +229,38 @@ async fn setup_from_presence_observed(
     };
     (c, p, request)
 }
+/// Refresh the operator observation, optionally adding the short node scope.
+async fn refresh_observation(
+    c: &Case,
+    admin: &axum::Router,
+    sequence: u64,
+    node_ttl_ms: Option<u64>,
+) {
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    let mut observation = c.env.manual.clone();
+    observation["operation_id"] = serde_json::json!(Uuid::new_v4());
+    observation["expected_revision"] = serde_json::json!(revision);
+    observation["sequence"] = serde_json::json!(sequence);
+    if let Some(ttl_ms) = node_ttl_ms {
+        observation["scope"]["node_id"] = serde_json::json!(c.env.env.node);
+        observation["ttl_ms"] = serde_json::json!(ttl_ms);
+    }
+    let (status, body) = on_heap(|| {
+        common::selection::call(
+            admin,
+            "/api/intelligence/observations",
+            Some(observation),
+            "owner@localhost",
+        )
+    })
+    .await;
+    assert_eq!(status, 200, "{body}");
+}
+
 pub struct Prepared {
     pub c: Case,
     pub p: phase::Proposal,

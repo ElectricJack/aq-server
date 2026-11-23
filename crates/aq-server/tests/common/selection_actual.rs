@@ -77,6 +77,11 @@ impl ActualSetup {
                 && self.project.graph_adapter_reference == "aq.graph.configured",
             "fixed actual owner adapters required"
         );
+        self.validate_graph()?;
+        self.validate_documents()
+    }
+
+    fn validate_graph(&self) -> Result<()> {
         let origin = reqwest::Url::parse(&self.graph.graph_url)?;
         ensure!(
             origin.scheme() == "http"
@@ -96,6 +101,10 @@ impl ActualSetup {
                 .is_some_and(|s| !s.is_empty()),
             "actual Graph writer actor required"
         );
+        Ok(())
+    }
+
+    fn validate_documents(&self) -> Result<()> {
         // The recipe's documents with the shipped ones must be a valid set
         // before any store exists.
         let mut sources = aq_profiles::roles::default_documents();
@@ -265,43 +274,7 @@ enabled=true
                 == Some(input.project.repository_binding_generation),
         "actual project owner observations mismatch"
     );
-    let graph = state.agent_access.as_ref().unwrap();
-    let ready = graph
-        .scheduling_ready(input.task.workspace_id, 8, None)
-        .await?;
-    ensure!(
-        ready.items.len() == 1
-            && ready.next_cursor.is_none()
-            && ready.items[0].revision == input.task,
-        "actual readiness must contain exactly the original task pin"
-    );
-    let context = graph.scheduling_context(&input.task, 1, 64, 65_536).await?;
-    ensure!(
-        !context.truncated && context.context["node"] == ready.items[0].node,
-        "actual context/root mismatch"
-    );
-    for key in ["nodes", "edges", "pinned_revisions"] {
-        ensure!(
-            context.context[key]
-                .as_array()
-                .is_some_and(|a| a.is_empty()),
-            "actual pilot refuses required neighbor context, never trims it"
-        );
-    }
-    let last_seen: Option<chrono::DateTime<Utc>> =
-        sqlx::query_scalar("SELECT last_seen_at FROM nodes WHERE id=$1")
-            .bind(node.id)
-            .fetch_one(&pool)
-            .await?;
-    ensure!(
-        last_seen.is_none(),
-        "actual constructor must not stamp worker liveness"
-    );
-    let empty:(i64,i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM intelligence_node_snapshots),(SELECT count(*) FROM intelligence_observations),(SELECT count(*) FROM execution_nodes),(SELECT count(*) FROM profiled_launch_registrations),(SELECT count(*) FROM intelligence_credential_definitions),(SELECT count(*) FROM intelligence_decisions),(SELECT count(*) FROM profiled_launches)").fetch_one(&pool).await?;
-    ensure!(
-        empty == (0, 0, 0, 0, 0, 0, 0),
-        "actual constructor cannot install synthetic selection/registration facts"
-    );
+    let (ready, context) = observe_initial_task(&state, &pool, node.id, &input.task).await?;
     // The actual base uses the shipped documents the store installed.
     let snapshot = super::super::roles::active(&pool).await;
     let env = Env {
@@ -334,4 +307,47 @@ enabled=true
         ready,
         context,
     })
+}
+
+/// Read the original task pin and prove that construction seeded no worker facts.
+async fn observe_initial_task(
+    state: &AppState,
+    pool: &sqlx::PgPool,
+    node: Uuid,
+    task: &TaskRevision,
+) -> Result<(ReadyPage, TaskContext)> {
+    let graph = state.agent_access.as_ref().unwrap();
+    let ready = graph.scheduling_ready(task.workspace_id, 8, None).await?;
+    ensure!(
+        ready.items.len() == 1 && ready.next_cursor.is_none() && ready.items[0].revision == *task,
+        "actual readiness must contain exactly the original task pin"
+    );
+    let context = graph.scheduling_context(task, 1, 64, 65_536).await?;
+    ensure!(
+        !context.truncated && context.context["node"] == ready.items[0].node,
+        "actual context/root mismatch"
+    );
+    for key in ["nodes", "edges", "pinned_revisions"] {
+        ensure!(
+            context.context[key]
+                .as_array()
+                .is_some_and(|a| a.is_empty()),
+            "actual pilot refuses required neighbor context, never trims it"
+        );
+    }
+    let last_seen: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT last_seen_at FROM nodes WHERE id=$1")
+            .bind(node)
+            .fetch_one(pool)
+            .await?;
+    ensure!(
+        last_seen.is_none(),
+        "actual constructor must not stamp worker liveness"
+    );
+    let empty:(i64,i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM intelligence_node_snapshots),(SELECT count(*) FROM intelligence_observations),(SELECT count(*) FROM execution_nodes),(SELECT count(*) FROM profiled_launch_registrations),(SELECT count(*) FROM intelligence_credential_definitions),(SELECT count(*) FROM intelligence_decisions),(SELECT count(*) FROM profiled_launches)").fetch_one(pool).await?;
+    ensure!(
+        empty == (0, 0, 0, 0, 0, 0, 0),
+        "actual constructor cannot install synthetic selection/registration facts"
+    );
+    Ok((ready, context))
 }
