@@ -3,7 +3,7 @@
 //! module creates no client, credential, local channel or execution authority.
 use super::refused;
 use crate::{AppState, error::AppError, profiled_execution::definitions::Definition};
-use aq_admission::{ArtifactRef, DOCKER_LOCAL_PROFILES, Digest, Text};
+use aq_admission::{ArtifactRef, DOCKER_LOCAL_PROFILES, Digest, DockerLocalProfile, Text};
 use serde::Deserialize;
 
 pub(super) const STARTUP_ID: &str = "aq.agent-result-startup";
@@ -61,10 +61,7 @@ pub(super) fn from_definitions(
     if sandbox.is_some_and(|p| p.profile != opt.profile) {
         return Err(refused());
     }
-    if opt.schema_version != 1
-        || !recipe_matches(&opt, adapter)?
-        || opt.contract != public_reference("aq.agent-result-local", CONTRACT_DIGEST)?
-    {
+    if !supported_opt_in(&opt, adapter)? {
         return Err(refused());
     }
     let (artifact, text) = startup_instruction(definitions)?;
@@ -89,6 +86,12 @@ fn selected_opt_in(adapter: &ArtifactRef, definitions: &[Definition]) -> Result<
     }
     serde_json::from_str(selected.body()).map_err(|_| refused())
 }
+/// Schema one, the recipe pinned for the profile and the public contract.
+fn supported_opt_in(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> {
+    Ok(opt.schema_version == 1
+        && recipe_matches(opt, adapter)?
+        && opt.contract == public_reference("aq.agent-result-local", CONTRACT_DIGEST)?)
+}
 /// The opt-in names the recipe its profile pins for `adapter`.
 fn recipe_matches(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> {
     let recipe = &opt.recipe;
@@ -102,14 +105,21 @@ fn recipe_matches(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> 
                     INTERACTIVE_RECIPE_DIGEST,
                 )?
         }
-        profile => DOCKER_LOCAL_PROFILES.iter().any(|p| {
-            p.profile == profile
-                && p.adapter == adapter.id.as_str()
-                && p.recipe_id == recipe.id.as_str()
-                && version_one
-                && p.recipe_digest.is_none_or(|d| d == recipe.digest.as_str())
-        }),
+        profile => {
+            version_one
+                && DOCKER_LOCAL_PROFILES
+                    .iter()
+                    .filter(|p| p.profile == profile && p.adapter == adapter.id.as_str())
+                    .any(|p| pins_recipe(p, recipe))
+        }
     })
+}
+/// The docker-local profile pins `recipe`'s id and, where it has one, digest.
+fn pins_recipe(sandbox: &DockerLocalProfile, recipe: &ArtifactRef) -> bool {
+    sandbox.recipe_id == recipe.id.as_str()
+        && sandbox
+            .recipe_digest
+            .is_none_or(|d| d == recipe.digest.as_str())
 }
 /// The exact public startup instruction, by pinned reference and length.
 fn startup_instruction(definitions: &[Definition]) -> Result<(ArtifactRef, String), AppError> {
@@ -166,17 +176,18 @@ pub(super) fn for_adapter(
 }
 impl ReportingInstruction {
     pub fn validate_rendered(&self, count: usize, bytes: &[u8]) -> Result<(), AppError> {
-        if count != 1
-            || bytes
-                .windows(self.text.len())
-                .filter(|part| *part == self.text.as_bytes())
-                .count()
-                != 1
-        {
+        if count != 1 || occurrences(bytes, self.text.as_bytes()) != 1 {
             return Err(refused());
         }
         Ok(())
     }
+}
+/// Possibly overlapping occurrences of a non-empty `needle` in `bytes`.
+fn occurrences(bytes: &[u8], needle: &[u8]) -> usize {
+    bytes
+        .windows(needle.len())
+        .filter(|part| *part == needle)
+        .count()
 }
 
 #[cfg(test)]
