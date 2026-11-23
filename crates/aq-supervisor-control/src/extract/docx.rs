@@ -1,6 +1,7 @@
 //! DOCX: a ZIP package whose `word/document.xml` holds the body text.
 //! Headers, footers, footnotes and text inside embedded objects are not read.
 use super::{Budget, Res, Stop};
+use crate::zip::{end_record, u16_at, u32_at};
 use flate2::Crc;
 
 const MAX_ENTRIES: usize = 4096;
@@ -40,14 +41,6 @@ fn damaged(why: &str) -> Stop {
     ))
 }
 
-fn u16_at(bytes: &[u8], i: usize) -> Option<usize> {
-    Some(u16::from_le_bytes(bytes.get(i..i + 2)?.try_into().ok()?) as usize)
-}
-
-fn u32_at(bytes: &[u8], i: usize) -> Option<usize> {
-    Some(u32::from_le_bytes(bytes.get(i..i + 4)?.try_into().ok()?) as usize)
-}
-
 struct Directory {
     start: usize,
     end: usize,
@@ -58,11 +51,7 @@ fn directory_bounds(bytes: &[u8]) -> Res<Directory> {
     if !bytes.starts_with(b"PK\x03\x04") || bytes.len() < 22 {
         return Err(damaged("it is not a ZIP package"));
     }
-    let floor = bytes.len().saturating_sub(22 + 0xffff);
-    let end = (floor..=bytes.len() - 22)
-        .rev()
-        .find(|&i| bytes[i..].starts_with(b"PK\x05\x06"))
-        .ok_or_else(|| damaged("the ZIP end record is missing"))?;
+    let end = end_record(bytes).ok_or_else(|| damaged("the ZIP end record is missing"))?;
     let (Some(count), Some(size), Some(start)) = (
         u16_at(bytes, end + 10),
         u32_at(bytes, end + 12),

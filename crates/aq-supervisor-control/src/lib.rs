@@ -9,6 +9,7 @@ pub mod extract;
 pub mod owner;
 pub mod read;
 pub mod wire;
+mod zip;
 pub use api::{Auth, Service};
 pub use aq_manual_sessions::intelligence::resolve_stored;
 use sqlx::{Postgres, Row, Transaction};
