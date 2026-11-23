@@ -30,45 +30,64 @@ enum Mode {
     Terminal,
     Output,
 }
-async fn run_worker(mode: Mode) {
-    let use_phase = !matches!(mode, Mode::Legacy);
-    let prepare_phase_inputs = matches!(
-        mode,
-        Mode::Inputs
-            | Mode::Execution
-            | Mode::Host
-            | Mode::LostExecutionReply
-            | Mode::Terminal
-            | Mode::Output
-    );
-    let execute_phase = matches!(
-        mode,
-        Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal | Mode::Output
-    );
-    let host = matches!(mode, Mode::Host | Mode::Terminal | Mode::Output);
-    let terminal = matches!(mode, Mode::Terminal | Mode::Output);
-    let relay_output = matches!(mode, Mode::Output);
-    let history_loss = matches!(mode, Mode::LostExecutionReply);
-    let mut a = setup_actual_unpublished().await;
-    let case = &mut a.case;
-    if REFRESH_PROFILE {
-        refresh_identity::configure(case).await;
+impl Mode {
+    fn uses_phase(self) -> bool {
+        !matches!(self, Mode::Legacy)
     }
-    let (phase_config, inventory_qualification) = if use_phase {
-        let (mut config, inventory_qualification) = phase::configure(case, execute_phase).await;
-        config["prepare_inputs"] = json!(prepare_phase_inputs);
-        if execute_phase {
+
+    fn prepares_inputs(self) -> bool {
+        matches!(
+            self,
+            Mode::Inputs
+                | Mode::Execution
+                | Mode::Host
+                | Mode::LostExecutionReply
+                | Mode::Terminal
+                | Mode::Output
+        )
+    }
+
+    fn executes_phase(self) -> bool {
+        matches!(
+            self,
+            Mode::Execution | Mode::Host | Mode::LostExecutionReply | Mode::Terminal | Mode::Output
+        )
+    }
+
+    fn starts_host(self) -> bool {
+        matches!(self, Mode::Host | Mode::Terminal | Mode::Output)
+    }
+
+    fn reports_terminal(self) -> bool {
+        matches!(self, Mode::Terminal | Mode::Output)
+    }
+
+    fn relays_output(self) -> bool {
+        matches!(self, Mode::Output)
+    }
+
+    fn loses_execution_reply(self) -> bool {
+        matches!(self, Mode::LostExecutionReply)
+    }
+}
+
+async fn configure_phase(case: &mut Case, mode: Mode) -> (Option<Value>, Option<ArtifactRef>) {
+    if mode.uses_phase() {
+        let (mut config, inventory_qualification) =
+            phase::configure(case, mode.executes_phase()).await;
+        config["prepare_inputs"] = json!(mode.prepares_inputs());
+        if mode.executes_phase() {
             config["prepare_execution"] = json!(true);
-            if history_loss {
+            if mode.loses_execution_reply() {
                 config["history_after_lost_execution"] = json!(true);
             }
-            if host {
+            if mode.starts_host() {
                 config["synthetic_host"] = phase_host::configuration();
             }
-            if terminal {
+            if mode.reports_terminal() {
                 phase_terminal::configure(case).await;
                 config["report_terminal"] = json!(true);
-                if relay_output {
+                if mode.relays_output() {
                     phase_output::configure(case).await;
                     config["relay_output"] = json!(true);
                     config["await_synthetic_assessment"] = json!(true);
@@ -78,7 +97,115 @@ async fn run_worker(mode: Mode) {
         (Some(config), inventory_qualification)
     } else {
         (None, None)
-    };
+    }
+}
+
+async fn verify_legacy_grant(
+    case: &Case,
+    result: &Value,
+    identity: &aq_admission::transport::WorkerIdentity,
+    worker_root: &std::path::Path,
+    worker_git_root: &std::path::Path,
+) {
+    let prepare: Prepare = serde_json::from_value(result["request"].clone()).unwrap();
+    let grant: InitialGrantDelivery = serde_json::from_value(result["grant"].clone()).unwrap();
+    assert_eq!(&prepare.identity, identity);
+    assert_eq!(grant.original.grant.binding, prepare.binding);
+    assert!(grant.original.grant.expires_at_ms <= grant.execution_deadline_ms);
+    // Inspect actual disk history only after the independent worker's live
+    // owner reports success. Reading this record never grants execution rights.
+    let snapshot: Value =
+        serde_json::from_slice(&std::fs::read(worker_root.join("journal/journal.json")).unwrap())
+            .unwrap();
+    assert_eq!(snapshot["state"]["format"], JOURNAL_FORMAT);
+    let attempt = &snapshot["state"]["attempts"][prepare.binding.attempt_id.to_string()];
+    let record = &attempt["initial_grant"];
+    assert_eq!(record["delivery"], result["grant"]);
+    assert_eq!(attempt["prepared"]["request"], result["request"]);
+    assert_eq!(
+        record["prepare_digest"],
+        attempt["prepared"]["request_digest"]
+    );
+    let mut canonical = record.clone();
+    canonical.sort_all_objects();
+    assert_eq!(
+        result["durable_grant"]["record_digest"],
+        json!(Digest::of(&serde_json::to_vec(&canonical).unwrap()))
+    );
+    assert_eq!(
+        result["durable_grant"]["attempt_id"],
+        json!(prepare.binding.attempt_id)
+    );
+    assert_eq!(record["record_revision"], snapshot["state"]["revision"]);
+    assert!(record["record_revision"].as_u64().unwrap() >= prepare.journal_revision + 2);
+    assert!(
+        result["durable_grant"]["observed_after_sync_ns"]
+            .as_u64()
+            .unwrap()
+            >= record["observed_before_write_ns"].as_u64().unwrap()
+    );
+    for cap in ["deadline_ns", "hard_deadline_ns"] {
+        assert!(result["durable_grant"][cap].as_u64().unwrap() <= record[cap].as_u64().unwrap());
+        assert!(
+            result["durable_grant"]["observed_after_sync_ns"]
+                .as_u64()
+                .unwrap()
+                < result["durable_grant"][cap].as_u64().unwrap()
+        );
+    }
+    let row: Value =
+        sqlx::query_scalar("SELECT receipt FROM admission_material_receipts WHERE lease_id=$1")
+            .bind(prepare.materials[0].lease_id)
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(row, serde_json::to_value(&prepare.materials[0]).unwrap());
+    let path = std::path::PathBuf::from(result["workspace_path"].as_str().unwrap());
+    assert!(path.starts_with(worker_git_root.join("workspaces")));
+    assert_eq!(
+        std::fs::read(path.join("source")).unwrap(),
+        b"actual source bytes\n"
+    );
+    let hot: Value =
+        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(prepare.binding.attempt_id)
+            .fetch_one(&case.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(hot["status"], "granted");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM profiled_execution_receipts WHERE kind='started'"
+        )
+        .fetch_one(&case.env.env.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1"
+        )
+        .bind(prepare.binding.attempt_id)
+        .fetch_one(&case.env.env.pool)
+        .await
+        .unwrap()
+    );
+}
+
+async fn run_worker(mode: Mode) {
+    let use_phase = mode.uses_phase();
+    let execute_phase = mode.executes_phase();
+    let host = mode.starts_host();
+    let terminal = mode.reports_terminal();
+    let relay_output = mode.relays_output();
+    let history_loss = mode.loses_execution_reply();
+    let mut a = setup_actual_unpublished().await;
+    let case = &mut a.case;
+    if REFRESH_PROFILE {
+        refresh_identity::configure(case).await;
+    }
+    let (phase_config, inventory_qualification) = configure_phase(case, mode).await;
     let dir = case.env.env._dir.path();
     let worker_root = dir.join("assembly-worker");
     std::fs::create_dir(&worker_root).unwrap();
@@ -277,7 +404,7 @@ async fn run_worker(mode: Mode) {
         "phase_history_only"
     } else if execute_phase {
         "granted_phase_execution"
-    } else if prepare_phase_inputs {
+    } else if mode.prepares_inputs() {
         "prepared_phase_inputs"
     } else if use_phase {
         "accepted_preparation"
@@ -348,93 +475,7 @@ async fn run_worker(mode: Mode) {
             assert!(result.get("host_started").is_none());
         }
     } else {
-        let prepare: Prepare = serde_json::from_value(result["request"].clone()).unwrap();
-        let grant: InitialGrantDelivery = serde_json::from_value(result["grant"].clone()).unwrap();
-        assert_eq!(prepare.identity, identity);
-        assert_eq!(grant.original.grant.binding, prepare.binding);
-        assert!(grant.original.grant.expires_at_ms <= grant.execution_deadline_ms);
-        // Inspect actual disk history only after the independent worker's live
-        // owner reports success. Reading this record never grants execution rights.
-        let snapshot: Value = serde_json::from_slice(
-            &std::fs::read(worker_root.join("journal/journal.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(snapshot["state"]["format"], JOURNAL_FORMAT);
-        let attempt = &snapshot["state"]["attempts"][prepare.binding.attempt_id.to_string()];
-        let record = &attempt["initial_grant"];
-        assert_eq!(record["delivery"], result["grant"]);
-        assert_eq!(attempt["prepared"]["request"], result["request"]);
-        assert_eq!(
-            record["prepare_digest"],
-            attempt["prepared"]["request_digest"]
-        );
-        let mut canonical = record.clone();
-        canonical.sort_all_objects();
-        assert_eq!(
-            result["durable_grant"]["record_digest"],
-            json!(Digest::of(&serde_json::to_vec(&canonical).unwrap()))
-        );
-        assert_eq!(
-            result["durable_grant"]["attempt_id"],
-            json!(prepare.binding.attempt_id)
-        );
-        assert_eq!(record["record_revision"], snapshot["state"]["revision"]);
-        assert!(record["record_revision"].as_u64().unwrap() >= prepare.journal_revision + 2);
-        assert!(
-            result["durable_grant"]["observed_after_sync_ns"]
-                .as_u64()
-                .unwrap()
-                >= record["observed_before_write_ns"].as_u64().unwrap()
-        );
-        for cap in ["deadline_ns", "hard_deadline_ns"] {
-            assert!(
-                result["durable_grant"][cap].as_u64().unwrap() <= record[cap].as_u64().unwrap()
-            );
-            assert!(
-                result["durable_grant"]["observed_after_sync_ns"]
-                    .as_u64()
-                    .unwrap()
-                    < result["durable_grant"][cap].as_u64().unwrap()
-            );
-        }
-        let row: Value =
-            sqlx::query_scalar("SELECT receipt FROM admission_material_receipts WHERE lease_id=$1")
-                .bind(prepare.materials[0].lease_id)
-                .fetch_one(&case.env.env.pool)
-                .await
-                .unwrap();
-        assert_eq!(row, serde_json::to_value(&prepare.materials[0]).unwrap());
-        let path = std::path::PathBuf::from(result["workspace_path"].as_str().unwrap());
-        assert!(path.starts_with(worker_git_root.join("workspaces")));
-        assert_eq!(
-            std::fs::read(path.join("source")).unwrap(),
-            b"actual source bytes\n"
-        );
-        let hot: Value =
-            sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-                .bind(prepare.binding.attempt_id)
-                .fetch_one(&case.env.env.pool)
-                .await
-                .unwrap();
-        assert_eq!(hot["status"], "granted");
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM profiled_execution_receipts WHERE kind='started'"
-            )
-            .fetch_one(&case.env.env.pool)
-            .await
-            .unwrap(),
-            0
-        );
-        assert!(
-            sqlx::query_scalar::<_, bool>(
-                "SELECT holds_task FROM execution_attempts WHERE attempt_id=$1"
-            )
-            .bind(prepare.binding.attempt_id)
-            .fetch_one(&case.env.env.pool)
-            .await
-            .unwrap()
-        );
+        verify_legacy_grant(case, &result, &identity, &worker_root, &worker_git_root).await;
     }
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(5), worker.wait())

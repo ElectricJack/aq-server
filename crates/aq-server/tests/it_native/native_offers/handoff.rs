@@ -209,6 +209,20 @@ async fn export_of(c: &Case, attempt: Uuid) -> (Uuid, Value) {
         .bind(attempt).fetch_one(&c.env.env.pool).await.unwrap()
 }
 
+async fn refused_poll(c: &Case) {
+    let (status, body) = native_offer::poll(c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert!(page.offers.is_empty(), "{body}");
+    // A refused successor is counted when the poll's assembly ends, which on a
+    // loaded runner is after the poll has answered the empty page; until then
+    // a further poll counts nothing.
+    native_offer::assembled(c).await;
+}
+
 async fn handed_off() -> (Case, Uuid) {
     let (mut c, first) = native_offer::published().await;
     let grant = granted(&mut c, &first).await;
@@ -287,17 +301,7 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
     };
     let exports = count("SELECT count(*) FROM profiled_source_exports").await;
     for _ in 0..2 {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(
-            status, 200,
-            "a refused handoff never fails the poll: {body}"
-        );
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        native_offer::assembled(&c).await;
+        refused_poll(&c).await;
     }
     assert_eq!(
         count("SELECT count(*) FROM profiled_source_exports").await,
@@ -340,22 +344,9 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
             .await
             .unwrap()
     };
-    let refused_poll = || async {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(status, 200, "{body}");
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        // A refused successor is counted when the poll's assembly ends, which on a
-        // loaded runner is after the poll has answered the empty page; until then
-        // a further poll counts nothing.
-        native_offer::assembled(&c).await;
-    };
     // The case clock stands still: 20 skips within a moment are not stuck.
     for n in 1..=holds::STUCK_SKIPS {
-        refused_poll().await;
+        refused_poll(&c).await;
         assert_eq!(skips().await, Some(n));
         assert!(
             super::holds::hold_rows(&c, task).await.is_empty(),
@@ -371,7 +362,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     .execute(pool)
     .await
     .unwrap();
-    refused_poll().await;
+    refused_poll(&c).await;
     let readiness = super::holds::work(&c, task).await;
     assert_eq!(readiness["state"], "held", "{readiness}");
     assert_eq!(
@@ -388,7 +379,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
         )]
     );
     // AQ keeps trying it; the hold and its one comment stay as they are.
-    refused_poll().await;
+    refused_poll(&c).await;
     assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 2));
     assert_eq!(posted().await, 1);
     let comments = super::holds::system_comments(&c, task).await;

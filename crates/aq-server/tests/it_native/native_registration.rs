@@ -9,6 +9,30 @@ use common::profiled::{NOW, artifact, fixture};
 use std::sync::Arc;
 use uuid::Uuid;
 
+async fn install_allowlist(
+    state: &mut aq_server::AppState,
+    request: &Register,
+    qualification: aq_admission::ArtifactRef,
+) {
+    let mut config = (*state.config).clone();
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            runtime: request.runtime.clone(),
+            qualification,
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: None,
+        }],
+        projects: vec![],
+    }));
+    state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(state)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn startup_installs_policy_anchor_and_refuses_stale_configuration() {
     let mut f = fixture().await;
@@ -80,23 +104,7 @@ async fn configured_allowlist_does_not_synthesize_registration_and_admitted_iden
         "synthetic-runtime-qualification",
         b"synthetic-qualification",
     );
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: qualification.clone(),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
+    install_allowlist(&mut f.state, &request, qualification.clone()).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
@@ -280,23 +288,12 @@ async fn native_writer_replays_without_reinstall_and_fences_held_claims_and_cred
         capabilities: vec![],
         features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
     };
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: artifact("synthetic-qualification", b"qualification"),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
+    install_allowlist(
+        &mut f.state,
+        &request,
+        artifact("synthetic-qualification", b"qualification"),
+    )
+    .await;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::AUTHORIZATION,
@@ -459,23 +456,12 @@ async fn registration_receipt_cap_is_per_boot() {
         capabilities: vec![],
         features: vec![Feature::ArtifactTransferV1, Feature::DurableHostJournalV1],
     };
-    let mut config = (*f.state.config).clone();
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            runtime: request.runtime.clone(),
-            qualification: artifact("synthetic-qualification", b"qualification"),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: None,
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
+    install_allowlist(
+        &mut f.state,
+        &request,
+        artifact("synthetic-qualification", b"qualification"),
+    )
+    .await;
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::AUTHORIZATION,

@@ -607,6 +607,31 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
     );
 }
 
+async fn disposition(
+    state: &aq_server::AppState,
+    attempt: Uuid,
+    email: &str,
+    body: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let response = aq_server::build_admin_router(state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                .header("content-type", "application/json")
+                .header("x-aq-dev-email", email)
+                .header("X-AQ-Request", "1")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+    )
+}
+
 /// The owner's abandon covers a granted launch closed before the agent started. Such an
 /// attempt has no stopped receipt; its stop proof is the launch closure's receipt.
 #[tokio::test]
@@ -629,27 +654,8 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
     };
     assert!(held().await, "a closed launch keeps its claim");
     let state = &c.case.env.env.state;
-    let abandon = |email: &'static str, body: serde_json::Value| async move {
-        let response = aq_server::build_admin_router(state.clone())
-            .oneshot(
-                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
-                    .header("content-type", "application/json")
-                    .header("x-aq-dev-email", email)
-                    .header("X-AQ-Request", "1")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-        )
-    };
     let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "launch failed before the agent started"});
-    let (status, receipt) = abandon("owner@localhost", body.clone()).await;
+    let (status, receipt) = disposition(state, attempt, "owner@localhost", body.clone()).await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["disposition"], "abandoned");
     let closure: String = sqlx::query_scalar(
@@ -664,7 +670,7 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         "the stop proof is the closure receipt"
     );
     assert!(!held().await, "the claim is released");
-    let (status, replay) = abandon("owner@localhost", body).await;
+    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
 
