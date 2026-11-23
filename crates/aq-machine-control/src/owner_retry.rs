@@ -150,7 +150,7 @@ pub async fn claim_due<Request: DeserializeOwned, Receipt: DeserializeOwned>(
     pool: &PgPool,
     now: DateTime<Utc>,
 ) -> Result<Option<Due<Request, Receipt>>, sqlx::Error> {
-    sqlx::query(
+    let row = sqlx::query(
         "WITH due AS (
            SELECT i.operation_id FROM owner_task_retry_intents i JOIN dashboard_operations d USING(operation_id)
            WHERE i.next_check_at <= $1 AND d.disposition IN ('pending','unknown')
@@ -164,15 +164,16 @@ pub async fn claim_due<Request: DeserializeOwned, Receipt: DeserializeOwned>(
          JOIN users u ON u.id=d.principal_id AND u.role='owner' ",
     )
     .bind(now)
-    .try_map(|row| {
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
         Ok(Due {
             principal_id: row.try_get("principal_id")?,
             request: row.try_get::<sqlx::types::Json<_>, _>("request")?.0,
             response: row.try_get::<sqlx::types::Json<_>, _>("response")?.0,
         })
     })
-    .fetch_optional(pool)
-    .await
+    .transpose()
 }
 
 pub async fn due_terminations(
