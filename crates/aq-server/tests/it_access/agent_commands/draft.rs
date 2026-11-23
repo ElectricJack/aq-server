@@ -38,8 +38,10 @@ impl Case {
         let attempt = Uuid::new_v4();
         let e = setup_graph_with_attempt(
             Some(grants(&policy, "spec_ingestion")),
-            &url,
-            Some("dev-service"),
+            crate::messaging::GraphEndpoint {
+                url: &url,
+                mutation_actor_id: Some("dev-service"),
+            },
             Some(attempt),
             |_, _| {},
         )
