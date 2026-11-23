@@ -76,7 +76,7 @@ impl Token<'_> {
     /// two or more characters, or (d) a slash path with a segment containing `-`, `_`
     /// or a digit, or a segment that is a file or dot name. Letter-only slash words
     /// (`none/nil`, `and/or`, `CI/CD`, `I/O`) are not paths, and nothing with `://` is.
-    fn is_path(self) -> bool {
+    fn is_path(&self) -> bool {
         let token = self.0;
         let allowed = |c| name_char(c) || c == '/';
         if token.contains("://") || !token.chars().all(allowed) {
