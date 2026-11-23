@@ -179,6 +179,37 @@ async fn same_named37_checks_keys_indexes_fks_and_nullability_cannot_bypass_star
     }
 }
 
+#[tokio::test]
+async fn schema_shapes_follow_frozen_migration_boundaries() {
+    let (_db, pool) = database(37).await;
+    for version in [48, 49, 108, 109, crate::STATE_FORMAT_VERSION] {
+        migrate_known(&pool, &MIGRATIONS[..version as usize], version)
+            .await
+            .unwrap();
+        for name in [
+            "central_supervisor_reservations_state_check",
+            "central_supervisor_reservations_check2",
+        ] {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::raw_sql(&format!(
+                "ALTER TABLE central_supervisor_reservations DROP CONSTRAINT {name}; \
+                 ALTER TABLE central_supervisor_reservations ADD CONSTRAINT {name} CHECK(TRUE)"
+            ))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            assert!(
+                matches!(
+                    super::central37::central37_storage_guard(&mut tx, version).await,
+                    Err(StoreError::Corrupt(_))
+                ),
+                "{name} at {version}"
+            );
+            tx.rollback().await.unwrap();
+        }
+    }
+}
+
 async fn seed_cancelled_reservation(db: &TestDb, pool: &PgPool) -> crate::AppState {
     use crate::agent_access::supervisor_conversation::reservations::{
         PreviewRequest, ReservationOwner,
