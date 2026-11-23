@@ -7,6 +7,7 @@ use wire::{Validate, canonical_digest};
 mod cycle;
 mod model;
 mod progress;
+pub mod receipts;
 mod proof;
 pub mod question;
 mod reduce;

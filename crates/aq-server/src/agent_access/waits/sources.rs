@@ -3,7 +3,7 @@
 //! row is a retryable unavailability (freshness stays visible), never a result.
 use super::{Result, artifact, text};
 use crate::{AppState, agent_access::messaging::Recipient};
-use aq_wait_engine::{CommittedObservation, SourceProtocol, SourceReply, SourceRequest, wire};
+use aq_wait_engine::{SourceReply, SourceRequest, receipts::Observed, wire};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -11,12 +11,6 @@ use uuid::Uuid;
 mod decision;
 mod message;
 
-struct Observed {
-    state: wire::MemberState,
-    result: Option<wire::ArtifactRef>,
-    revision: String,
-    snapshot: wire::ArtifactRef,
-}
 fn unavailable(request: &SourceRequest, reason: &str) -> SourceReply {
     SourceReply::RetryableUnavailable {
         member_id: request.member.member_id,
@@ -75,52 +69,9 @@ pub(super) async fn observe(
     let Some(observed) = observed else {
         return Ok(unavailable(request, "source owner row unavailable"));
     };
-    committed(request, observed)
+    Ok(observed.committed(request)?)
 }
 
-fn committed(request: &SourceRequest, observed: Observed) -> Result<SourceReply> {
-    let owner = request.member.condition.owner();
-    let condition_digest = wire::canonical_digest(&request.member.condition)?;
-    let observation = wire::MemberOutcome {
-        member_id: request.member.member_id,
-        state: observed.state,
-        evidence: observed.result.map(|result| wire::SourceEvidence {
-            owner: owner.clone(),
-            condition_digest: condition_digest.clone(),
-            revision: text(observed.revision.clone()),
-            result,
-        }),
-    };
-    let subscription = request
-        .subscription
-        .digest()
-        .map_err(|_| super::WaitError("internal"))?;
-    Ok(SourceReply::Committed(Box::new(CommittedObservation {
-        protocol: SourceProtocol::CommittedReplay,
-        subscription: request.subscription.clone(),
-        scope: request.scope.clone(),
-        binding: request.binding.clone(),
-        principal: request.principal.clone(),
-        source_access: request.source_access.clone(),
-        incarnation: text("1"),
-        boundary: wire::SourceBoundary {
-            member_id: request.member.member_id,
-            owner,
-            condition_digest,
-            committed_revision: text(observed.revision.clone()),
-            committed_replay_cursor: text(observed.revision),
-            subscription_receipt: artifact("wait-subscription", subscription),
-            snapshot_digest: observed.snapshot.digest.clone(),
-        },
-        owner_snapshot: observed.snapshot,
-        projection_digest: wire::canonical_digest(&observation)?,
-        replay_from: request
-            .previous
-            .as_ref()
-            .map(|b| b.committed_replay_cursor.clone()),
-        observation,
-    })))
-}
 fn snapshot(id: String, value: &Value) -> Result<wire::ArtifactRef> {
     Ok(artifact(id, value_digest(value)?))
 }
