@@ -12,6 +12,22 @@ format_checker = jsonschema.FormatChecker()
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 
+def validate_anchor(anchor):
+    if anchor['kind'] == 'image_region':
+        assert anchor['width'] > 0 and anchor['height'] > 0
+        assert anchor['x'] + anchor['width'] <= 1 and anchor['y'] + anchor['height'] <= 1
+    if anchor['kind'] == 'video_range':
+        assert 0 <= anchor['start_ms'] < anchor['end_ms'] <= 60000
+
+
+def validate_draft(value):
+    assert value['title'].strip() and 1 <= len(value['title']) <= 200
+    assert not any(ord(c) < 32 for c in value['title'])
+    assert 1 <= len(value['description'].encode()) <= 32768
+    assert 1 <= len(value['acceptance_criteria'].encode()) <= 8192
+    assert int(value['expected_project_revision']) > 0
+
+
 def validate(kind, value):
     document = dict(schema, **{'$ref': '#/$defs/' + kind})
     document.pop('anyOf', None)
@@ -22,18 +38,9 @@ def validate(kind, value):
     if kind in ('Comment', 'Correction'):
         assert value['body'].strip() and 1 <= len(value['body'].encode()) <= 16384
     if kind == 'Comment':
-        a = value['anchor']
-        if a['kind'] == 'image_region':
-            assert a['width'] > 0 and a['height'] > 0
-            assert a['x'] + a['width'] <= 1 and a['y'] + a['height'] <= 1
-        if a['kind'] == 'video_range':
-            assert 0 <= a['start_ms'] < a['end_ms'] <= 60000
+        validate_anchor(value['anchor'])
     if kind == 'FeedbackDraft':
-        assert value['title'].strip() and 1 <= len(value['title']) <= 200
-        assert not any(ord(c) < 32 for c in value['title'])
-        assert 1 <= len(value['description'].encode()) <= 32768
-        assert 1 <= len(value['acceptance_criteria'].encode()) <= 8192
-        assert int(value['expected_project_revision']) > 0
+        validate_draft(value)
     assert len(canonical(value)) <= 65536
 
 for fixture in json.loads((ROOT / 'fixtures/valid.json').read_text()):
@@ -76,14 +83,8 @@ def validate_legacy(kind, value):
     document.pop('anyOf', None)
     jsonschema.Draft202012Validator(document, format_checker=format_checker).validate(value)
 
-for kind, old_key, new_key in (
-    ('Detail', 'legacy_detail', 'detail_1_1'),
-    ('CommentsPage', 'legacy_comments', 'comments_1_1'),
-):
-    validate(kind, additions[old_key])  # additive decoder accepts old wire data
-    validate_legacy(kind, additions[old_key])
-    validate(kind, additions[new_key])
-    projected = json.loads(json.dumps(additions[new_key]))
+def legacy_projection(kind, value):
+    projected = json.loads(json.dumps(value))
     projected.pop('feedback_read_version')
     assert projected.pop('follow_up_submission') == {'state': 'unsupported'}
     if kind == 'Detail':
@@ -95,6 +96,16 @@ for kind, old_key, new_key in (
         for comment in projected['items']:
             assert comment.pop('feedback_links')[0]['origin']['comment_revision'] == '1'
             assert comment.pop('resolution')['follow_up']['revision'] == 'a' * 64
+    return projected
+
+for kind, old_key, new_key in (
+    ('Detail', 'legacy_detail', 'detail_1_1'),
+    ('CommentsPage', 'legacy_comments', 'comments_1_1'),
+):
+    validate(kind, additions[old_key])  # additive decoder accepts old wire data
+    validate_legacy(kind, additions[old_key])
+    validate(kind, additions[new_key])
+    projected = legacy_projection(kind, additions[new_key])
     assert projected == additions[old_key]
     validate_legacy(kind, projected)
 
