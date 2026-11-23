@@ -262,17 +262,15 @@ async fn list(
         Some(last) if more => Some(
             runtime
                 .codec
-                .encode(
-                    &bind,
+                .encode(bind.position(
                     "keyset",
                     &format!(
                         "{}:{}",
                         last.get::<i64, _>(key),
                         last.get::<Uuid, _>("decision_id")
                     ),
-                    at,
-                    expires,
-                )
+                    at..expires,
+                ))
                 .map_err(cursor_error)?,
         ),
         _ => None,

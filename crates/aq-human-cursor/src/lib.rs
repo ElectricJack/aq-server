@@ -50,31 +50,36 @@ impl Default for CursorCodec {
         }
     }
 }
-impl CursorCodec {
-    pub fn encode(
+impl Binding {
+    pub fn position(
         &self,
-        binding: &Binding,
         snapshot: &str,
         position: &str,
-        issued: u64,
-        expires: u64,
-    ) -> Result<String, CursorError> {
-        if issued >= expires
-            || snapshot.is_empty()
-            || snapshot.len() > 512
-            || position.len() > 512
-            || binding.page_size == 0
-            || binding.page_size > 100
-        {
-            return Err(CursorError::Unavailable);
-        }
-        let value = Position {
-            binding: binding.clone(),
+        validity: std::ops::Range<u64>,
+    ) -> Position {
+        Position {
+            binding: self.clone(),
             snapshot: snapshot.into(),
             position: position.into(),
-            issued,
-            expires,
-        };
+            issued: validity.start,
+            expires: validity.end,
+        }
+    }
+}
+
+impl Position {
+    fn valid(&self) -> bool {
+        let valid_snapshot = (1..=512).contains(&self.snapshot.len());
+        let valid_page = (1..=100).contains(&self.binding.page_size) && self.position.len() <= 512;
+        self.issued < self.expires && valid_snapshot && valid_page
+    }
+}
+
+impl CursorCodec {
+    pub fn encode(&self, value: Position) -> Result<String, CursorError> {
+        if !value.valid() {
+            return Err(CursorError::Unavailable);
+        }
         let bytes = serde_json::to_vec(&value).map_err(|_| CursorError::Unavailable)?;
         if bytes.len() > 2048 {
             return Err(CursorError::Unavailable);
@@ -127,7 +132,7 @@ impl CursorCodec {
         {
             return Err(CursorError::AuthorizationChanged);
         }
-        if &value.binding != binding || now < value.issued || now >= value.expires {
+        if &value.binding != binding || !(value.issued..value.expires).contains(&now) {
             return Err(CursorError::RestartRequired);
         }
         Ok(value)
@@ -153,7 +158,7 @@ mod tests {
         let codec = CursorCodec::default();
         let b = binding();
         let token = codec
-            .encode(&b, "snapshot-1", "offset-2", 100, 200)
+            .encode(b.position("snapshot-1", "offset-2", 100..200))
             .unwrap();
         let decoded = codec.decode(&token, &b, 150).unwrap();
         assert_eq!(decoded.snapshot, "snapshot-1");

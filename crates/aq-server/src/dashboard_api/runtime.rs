@@ -113,18 +113,19 @@ impl Runtime {
         }
         self.codec
             .encode(
-                &Self::binding(
+                Self::binding(
                     s.actor,
                     &s.partition,
                     &s.scope,
                     s.resource,
                     limit,
                     &s.filters,
+                )
+                .position(
+                    &s.id.to_string(),
+                    &offset.to_string(),
+                    s.created..s.expires,
                 ),
-                &s.id.to_string(),
-                &offset.to_string(),
-                s.created,
-                s.expires,
             )
             .map_err(|_| Error::Unavailable)
     }

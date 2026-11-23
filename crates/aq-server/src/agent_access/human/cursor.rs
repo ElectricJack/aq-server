@@ -40,13 +40,11 @@ impl Codec {
         }
         let now = u64::try_from(now).map_err(|_| unavailable())?;
         self.shared
-            .encode(
-                &Self::binding(b),
+            .encode(Self::binding(b).position(
                 "graph_owner_snapshot",
                 upstream,
-                now,
-                now.checked_add(ttl).ok_or_else(unavailable)?,
-            )
+                now..now.checked_add(ttl).ok_or_else(unavailable)?,
+            ))
             .map_err(|_| unavailable())
     }
     pub fn decode(&self, token: &str, b: &Binding, now: i64) -> Result<String> {

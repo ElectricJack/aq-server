@@ -192,7 +192,7 @@ pub async fn read(
             serde_json::to_string(&(last.updated_at, last.id)).map_err(|_| Error::Unavailable)?;
         Some(
             cursors
-                .encode(&binding, &graph_scope, &key, now, now + CURSOR_TTL_MS)
+                .encode(binding.position(&graph_scope, &key, now..now + CURSOR_TTL_MS))
                 .map_err(|_| Error::Unavailable)?,
         )
     } else {
