@@ -153,49 +153,20 @@ impl DeliveryPort for PgDelivery {
         };
         let (attempt, report): (Uuid, serde_json::Value) =
             (row.get("attempt_id"), row.get("report"));
-        // Spec 0016 §5.1: the pushed task ref, confirmed at its head when the
-        // report was recorded, from the commit the attempt was offered.
-        let start: Option<String> = sqlx::query_scalar(
-            "SELECT execution_spec#>>'{source,resolved_object,hex}' FROM profiled_launches WHERE attempt_id=$1",
-        )
-        .bind(attempt)
-        .fetch_optional(&mut *conn)
-        .await?
-        .flatten();
-        // A push whose lease no longer held names no head: its outcome is
-        // `push_conflict`, so the policy can send the task back.
-        let pushed: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT head FROM delivery_pushed_results WHERE report_id=$1")
-                .bind(row.get::<Uuid, _>("report_id"))
-                .fetch_optional(&mut *conn)
-                .await?;
-        let conflict = matches!(pushed, Some((None,)));
-        let head = pushed.and_then(|(head,)| head).unwrap_or_default();
-        let start = if head.is_empty() {
-            String::new()
-        } else {
-            start.unwrap_or_default()
-        };
-        // The lineage's original base; past the handoff bound it is unknown,
-        // and a result with a source then counts as changed.
-        let base = match start.is_empty() {
-            true => None,
-            false => aq_machine_control::lineage_base(conn, task, &start)
-                .await
-                .map_err(|_| crate::Error::Unknown)?,
-        };
+        let result = row.get("report_id");
+        let source = retained_source(conn, task, attempt, result).await?;
         Ok(Some(Latest {
             workspace_id: row.get("workspace_id"),
             project_id: row.get("project_id"),
             attempt_id: attempt,
-            result_id: row.get("report_id"),
-            outcome: match conflict {
+            result_id: result,
+            outcome: match source.push_conflict {
                 true => "push_conflict".to_owned(),
                 false => report["outcome"].as_str().unwrap_or("").to_owned(),
             },
-            changed: !head.is_empty() && base.as_deref() != Some(head.as_str()),
-            head,
-            base: base.unwrap_or_default(),
+            changed: source.changed(),
+            head: source.head,
+            base: source.base.unwrap_or_default(),
         }))
     }
 
@@ -243,6 +214,63 @@ impl DeliveryPort for PgDelivery {
         .fetch_one(&self.0)
         .await?)
     }
+}
+
+struct RetainedSource {
+    head: String,
+    base: Option<String>,
+    push_conflict: bool,
+}
+
+impl RetainedSource {
+    fn changed(&self) -> bool {
+        !self.head.is_empty() && self.base.as_deref() != Some(self.head.as_str())
+    }
+}
+
+/// Spec 0016 §5.1: the pushed task ref and the lineage's original base.
+/// Keep source reads on the caller's connection, in their original order.
+async fn retained_source(
+    db: &mut PgConnection,
+    task: Uuid,
+    attempt: Uuid,
+    result: Uuid,
+) -> Result<RetainedSource> {
+    let start: Option<String> = sqlx::query_scalar(
+        "SELECT execution_spec#>>'{source,resolved_object,hex}' FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(&mut *db)
+    .await?
+    .flatten();
+    // A push whose lease no longer held names no head: its outcome is
+    // `push_conflict`, so the policy can send the task back.
+    let pushed: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT head FROM delivery_pushed_results WHERE report_id=$1")
+            .bind(result)
+            .fetch_optional(&mut *db)
+            .await?;
+    let push_conflict = matches!(pushed, Some((None,)));
+    let head = pushed.and_then(|(head,)| head).unwrap_or_default();
+    let start = if head.is_empty() {
+        String::new()
+    } else {
+        start.unwrap_or_default()
+    };
+    // Past the handoff bound the base is unknown, and a result with a
+    // source then counts as changed.
+    let base = if start.is_empty() {
+        None
+    } else {
+        aq_machine_control::lineage_base(db, task, &start)
+            .await
+            .map_err(|_| crate::Error::Unknown)?
+    };
+    Ok(RetainedSource {
+        head,
+        base,
+        push_conflict,
+    })
 }
 
 /// The facts of a task's latest result for `work.read`. `latest` is `None`

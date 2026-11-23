@@ -12,7 +12,7 @@
 //! back once.
 use crate::{
     Error, Result,
-    delivery_store::{DeliveryPort, locate},
+    delivery_store::{DeliveryPort, Latest, locate},
     digest,
     host_values::{HostResult, text},
     host10::ResultReady,
@@ -285,15 +285,31 @@ pub async fn notification(
     .flatten();
     let reason = reason.ok_or(Error::Conflict)?;
     let key = notify_key(&format!("{}:{reason}", origin.result_id))?;
-    let context = format!(
-        "Delivery hold {reason} for project {}, task {} (revision {}), attempt {}, result {}.",
-        origin.project_id, origin.task_id, origin.version, origin.attempt_id, origin.result_id
-    );
     let latest = port
         .latest_in(db, origin.task_id)
         .await?
         .filter(|r| r.matches_event(&origin))
         .ok_or(Error::Conflict)?;
+    let pr = crate::delivery_store::held_pr_evidence(db, origin.result_id).await?;
+    let notice = delivery_notice(&origin, &latest, &reason, pr.as_deref(), body);
+    // The facts every hold notice carries (spec 0021 section 5.2); the log
+    // tail goes last and is cut to what the supervisor's mailbox accepts.
+    let notice =
+        crate::hold_notice::complete(db, notice, origin.task_id, Some(origin.result_id)).await?;
+    Ok((key, notice))
+}
+
+fn delivery_notice(
+    origin: &ResultReady,
+    latest: &Latest,
+    reason: &str,
+    pr: Option<&str>,
+    body: &str,
+) -> String {
+    let context = format!(
+        "Delivery hold {reason} for project {}, task {} (revision {}), attempt {}, result {}.",
+        origin.project_id, origin.task_id, origin.version, origin.attempt_id, origin.result_id
+    );
     let head = if latest.head.is_empty() {
         "none recorded"
     } else {
@@ -303,18 +319,13 @@ pub async fn notification(
         "Recorded outcome: {}. Changes from the lineage base: {}. Retained head: {head}.",
         latest.outcome, latest.changed
     );
-    if let Some(pr) = crate::delivery_store::held_pr_evidence(db, origin.result_id).await? {
+    if let Some(pr) = pr {
         evidence.push(' ');
-        evidence.push_str(&pr);
+        evidence.push_str(pr);
     }
-    let notice = format!(
+    format!(
         "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
-    );
-    // The facts every hold notice carries (spec 0021 section 5.2); the log
-    // tail goes last and is cut to what the supervisor's mailbox accepts.
-    let notice =
-        crate::hold_notice::complete(db, notice, origin.task_id, Some(origin.result_id)).await?;
-    Ok((key, notice))
+    )
 }
 
 /// The once-only key of `supervisor.notify` in a project.
@@ -355,6 +366,56 @@ pub async fn record_told(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_notice_preserves_context_evidence_and_retry_guidance() {
+        let origin = ResultReady {
+            task_id: Uuid::from_u128(1),
+            project_id: Uuid::from_u128(2),
+            attempt_id: Uuid::from_u128(3),
+            result_id: Uuid::from_u128(4),
+            version: 5,
+        };
+        for (head, changed, pr, expected_evidence) in [
+            (
+                "",
+                false,
+                None,
+                "Recorded outcome: success. Changes from the lineage base: false. Retained head: none recorded.",
+            ),
+            (
+                "retained-head",
+                true,
+                Some("PR evidence."),
+                "Recorded outcome: success. Changes from the lineage base: true. Retained head: retained-head. PR evidence.",
+            ),
+        ] {
+            let latest = Latest {
+                workspace_id: Uuid::from_u128(6),
+                project_id: origin.project_id,
+                attempt_id: origin.attempt_id,
+                result_id: origin.result_id,
+                outcome: "success".into(),
+                changed,
+                head: head.into(),
+                base: String::new(),
+            };
+            let expected = format!(
+                "Delivery hold checks_failed for project {}, task {} (revision 5), attempt {}, result {}.\n{expected_evidence}\n\nInspect the failed check.\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry.",
+                origin.project_id, origin.task_id, origin.attempt_id, origin.result_id
+            );
+            assert_eq!(
+                delivery_notice(
+                    &origin,
+                    &latest,
+                    "checks_failed",
+                    pr,
+                    "Inspect the failed check."
+                ),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn a_decided_result_answers_its_own_outcome_again_and_refuses_the_other() {
