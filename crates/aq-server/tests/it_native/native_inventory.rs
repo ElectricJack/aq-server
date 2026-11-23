@@ -106,6 +106,7 @@ async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: request.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],

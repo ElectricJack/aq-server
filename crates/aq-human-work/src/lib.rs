@@ -130,7 +130,8 @@ pub use hierarchy::{
 };
 mod holds;
 pub use holds::{
-    Hold, attempt_hold, completed_without_changes, holding_executions, recorded_hold,
+    Hold, attempt_hold, attempt_recovery_wait, completed_without_changes, graph_completion_wait,
+    holding_executions, launch_retry_wait, owner_retry_wait, recorded_hold,
     show_no_change_settlement, task_hold,
 };
 #[cfg(feature = "delivery_playbook")]

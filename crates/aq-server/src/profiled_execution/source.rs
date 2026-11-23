@@ -320,4 +320,5 @@ fn resolve_ref(
 mod selection;
 use selection::Selected;
 mod ownership;
+pub(super) use ownership::retain_for;
 pub use ownership::{retain_admission, validate_body, validate_stored_body};

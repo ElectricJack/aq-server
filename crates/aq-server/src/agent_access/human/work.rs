@@ -122,7 +122,12 @@ impl TaskWork<'_> {
         crate::role_settings::level_hold(self.state, self.pool, &self.record.binding, node).await
     }
     #[cfg(feature = "delivery_playbook")]
-    async fn delivery_hold(&self, hold: Option<&aq_human_work::Hold>, open: bool) -> Option<Value> {
+    async fn delivery_hold(
+        &self,
+        hold: Option<&aq_human_work::Hold>,
+        open: bool,
+        at_ms: i64,
+    ) -> Option<Value> {
         match (hold, open) {
             (Some(h), true) if h.stopped => {
                 let namespace = self
@@ -135,7 +140,7 @@ impl TaskWork<'_> {
                             && (pb.installation_routing || pb.namespace.project_id == self.project)
                     })
                     .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-                aq_human_work::delivery::waiting(self.pool, namespace, h).await
+                aq_human_work::delivery::waiting(self.pool, namespace, h, at_ms).await
             }
             _ => None,
         }
@@ -175,9 +180,27 @@ pub(super) async fn work(
     let role_hold = task.role_hold(&raw["node"]).await?;
     // Spec 0014 §6.1: and one whose last offer was refused before any attempt.
     let offer_hold = task.offer_hold(open, &execution).await;
-    let held = held.into_iter().chain(role_hold).chain(offer_hold);
+    let graph_wait = match (&hold, open) {
+        (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
+        _ => None,
+    };
     #[cfg(feature = "delivery_playbook")]
-    let held = held.chain(task.delivery_hold(hold.as_ref(), open).await);
+    let graph_wait = aq_human_work::delivery::completion_wait(
+        graph_wait,
+        task.delivery_hold(hold.as_ref(), open, a.requested).await,
+    );
+    let recovery = match (&hold, open) {
+        (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
+        _ => None,
+    };
+    let held = held
+        .into_iter()
+        .chain(recovery)
+        .chain(role_hold)
+        .chain(offer_hold)
+        .chain(graph_wait)
+        .chain(aq_human_work::launch_retry_wait(&r.pool, id, (s.clock)().timestamp_millis()).await)
+        .chain(aq_human_work::owner_retry_wait(&r.pool, p, id).await);
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),

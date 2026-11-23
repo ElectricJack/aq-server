@@ -102,6 +102,11 @@ impl<'a> Report<'a> {
             &mut credential_bindings,
             std::mem::take(&mut material.preparations),
         );
+        #[cfg(feature = "project_environments")]
+        let harnesses = crate::profiled_execution::definitions::listed(
+            self.state, &mut *tx, node_id, harnesses,
+        )
+        .await?;
         let snapshot = CapabilitySnapshot {
             backend_kind: None,
             material_delivery: material.delivery.clone(),

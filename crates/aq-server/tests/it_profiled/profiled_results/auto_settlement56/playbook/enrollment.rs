@@ -87,7 +87,7 @@ async fn two_projects_keep_distinct_result_paths_after_enrollment_changes() {
     );
     assert!(
         delivery_store::undecided(
-            &mut *pool.acquire().await.unwrap(),
+            &mut pool.acquire().await.unwrap(),
             legacy.report.binding.attempt_id
         )
         .await

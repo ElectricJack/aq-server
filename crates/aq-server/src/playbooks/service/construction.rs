@@ -141,6 +141,17 @@ impl Service {
         }
         self
     }
+    /// Replaces the environment port of a freshly built host service (tests).
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    pub fn with_environment_ops(
+        mut self,
+        ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
+    ) -> Self {
+        if let Some(ports) = self.host.as_mut().and_then(Arc::get_mut) {
+            ports.environment_ops = ops;
+        }
+        self
+    }
     /// D8 host services with the existing D4 contracts and confirmed domain events.
     pub async fn new_monitoring6(
         state: &crate::AppState,
@@ -243,5 +254,7 @@ fn default_host_ports(state: &crate::AppState, graph: Arc<dyn host::WorkGraph>) 
         routing: Arc::new(host::ServerRouting(state.clone())),
         #[cfg(feature = "delivery_playbook")]
         delivery_ops: Arc::new(host::ServerDelivery::new(state.clone())),
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        environment_ops: Arc::new(host::ServerEnvironments(state.clone())),
     }
 }

@@ -230,6 +230,7 @@ impl GraphPayload for TaskRouteSet {
             source: aq_routing::Source::Owner,
             ended_attempts: 0,
             judgment: None,
+            environment: None,
         })))
     }
 }

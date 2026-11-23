@@ -110,7 +110,7 @@ impl Harness {
         bytes: Vec<u8>,
     ) -> (StatusCode, Value) {
         self.request(
-            Request::put(&format!(
+            Request::put(format!(
                 "/v1/execution/sources/{}/manifest?operation_id={op}&offset={offset}&digest={}",
                 self.manifest.transfer_id,
                 hash(&bytes)

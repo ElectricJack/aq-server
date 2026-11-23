@@ -169,6 +169,7 @@ async fn snapshot_definitions(
     })
 }
 pub struct Assembly<'a> {
+    pub stage: Uuid,
     pub state: &'a AppState,
     pub runtime: &'a RegisteredRuntime,
     pub compiled: Compiled,
@@ -200,6 +201,7 @@ fn confinement_mode(
 }
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
+        stage,
         state,
         runtime,
         mut compiled,
@@ -245,6 +247,7 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
         .ok_or_else(|| refused())?;
     let prepared = compiled.prepared.swap_remove(index);
     let policy = prepared.policy.clone();
+    #[cfg_attr(feature = "project_environments", allow(unused_variables))]
     let configuration = state
         .config
         .profiled_execution
@@ -312,34 +315,39 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     } else {
         None
     };
+    #[cfg(feature = "project_environments")]
+    let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
+    #[cfg(feature = "project_environments")]
+    let body = |r: &ArtifactRef| catalog.definition(r);
+    #[cfg(not(feature = "project_environments"))]
+    let body = |r: &ArtifactRef| {
+        let mut bodies = configuration.definition_bodies.iter();
+        bodies.find(|d| d.artifact() == r).map(|d| d.body())
+    };
     let review = if enrolled {
         aq_admission::outcome::ReviewRequirement::PolicyActor
     } else {
-        configuration
-            .definition_bodies
-            .iter()
-            .find(|d| d.artifact() == &validation)
-            .map(|d| super::super::settlement::review_requirement(d.body()))
-            .ok_or_else(|| refused())?
+        let review = body(&validation).map(super::super::settlement::review_requirement);
+        review.ok_or_else(|| refused())?
     };
     // Check every required actual body before writing any retained artifact.
-    let definitions = unique
-        .iter()
-        .map(|r| {
-            configuration
-                .definition_bodies
-                .iter()
-                .find(|d| d.artifact() == r)
-                .ok_or_else(|| refused())
-        })
+    let definitions = (unique.iter())
+        .map(|r| body(r).map(|b| (r, b)).ok_or_else(|| refused()))
         .collect::<Result<Vec<_>, _>>()?;
-    for definition in definitions {
+    aq_history_caps::offer_stage::open(
+        &state.store.pool,
+        stage,
+        attempt_id,
+        set.project,
+        now(state)?,
+    )
+    .await
+    .map_err(crate::error::db)?;
+    set.stage = Some(stage);
+    for (artifact, body) in definitions {
         on_heap(|| {
-            let artifact_body = ArtifactBody::new(
-                ArtifactKind::Definition,
-                definition.artifact().clone(),
-                definition.body().as_bytes(),
-            );
+            let artifact_body =
+                ArtifactBody::new(ArtifactKind::Definition, artifact.clone(), body.as_bytes());
             set.retain(state, OwnerKind::Composition, artifact_body)
         })
         .await?;
@@ -439,11 +447,12 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let source_retention_id =
         Uuid::new_v5(&source_operation, &canonical(&(&source.artifact, until))?);
     let source_retained = on_heap(|| {
-        crate::profiled_execution::source::retain_admission(
+        crate::profiled_execution::source::retain_for(
             state,
             source_retention_id,
             &source,
             until,
+            Some(stage),
         )
     })
     .await?;

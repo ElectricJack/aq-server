@@ -624,3 +624,73 @@ fn counts_and_edges_use_decimal_wire_forms() {
     );
     assert!(edge(&json!({"version":0})).is_none());
 }
+
+#[test]
+fn an_owner_retry_hold_takes_precedence_over_ready_replacement_evidence() {
+    let proof = json!({"code":"replacement_facts_ready","wake_condition":"worker_poll"});
+    let budget = json!({"code":"task_held","wake_condition":"owner_retry_authorized"});
+    let blocked = readiness(
+        Some("active"),
+        None,
+        vec![budget.clone(), proof.clone()],
+        TaskDependencies::new(vec![], true),
+    );
+    assert_eq!(blocked["state"], "held");
+    assert_eq!(blocked["reasons"], json!([budget]));
+    let waiting = readiness(
+        Some("active"),
+        None,
+        vec![proof.clone()],
+        TaskDependencies::new(vec![], true),
+    );
+    assert_eq!(waiting["reasons"], json!([proof]));
+}
+
+#[test]
+fn closed_launch_shows_the_owner_and_the_event_that_can_release_it() {
+    let attempt = Uuid::new_v4();
+    let hold = Hold::from_authority(attempt, &authority("cancelling", "unknown", Value::Null));
+    let absent = crate::holds::recovery_reason(attempt, Some("unknown"), None, false);
+    assert_eq!(
+        readiness(
+            Some("active"),
+            Some(&hold),
+            absent,
+            TaskDependencies::new(vec![], true)
+        )["state"],
+        "running"
+    );
+
+    let reason =
+        crate::holds::recovery_reason(attempt, Some("unknown"), Some(false), false).unwrap();
+    let result = readiness(
+        Some("active"),
+        Some(&hold),
+        Some(reason),
+        TaskDependencies::new(vec![], true),
+    );
+    assert_eq!(result["state"], "held");
+    assert_eq!(result["reasons"][0]["attempt_id"], json!(attempt));
+    assert_eq!(result["reasons"][0]["blocker_owner"], "aq_operator");
+    assert_eq!(
+        result["reasons"][0]["wake_condition"],
+        "original_launch_evidence_reconciled"
+    );
+
+    let stopped = crate::holds::recovery_reason(attempt, Some("stopped"), None, false).unwrap();
+    assert_eq!(stopped["blocker_owner"], "aq_worker");
+    assert!(crate::holds::recovery_reason(attempt, Some("stopped"), None, true).is_none());
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[test]
+fn exhausted_delivery_names_the_retry_owner_and_original_result() {
+    let attempt = Uuid::new_v4();
+    let result = Uuid::new_v4();
+    let stopped = Hold::from_authority(attempt, &authority("finished", "stopped", Value::Null));
+    let reason = delivery_hold(&stopped, result, "returns_exhausted", None);
+    assert_eq!(reason["attempt_id"], json!(attempt));
+    assert_eq!(reason["result_id"], json!(result));
+    assert_eq!(reason["blocker_owner"], "project_owner");
+    assert_eq!(reason["wake_condition"], "owner_retry_authorized");
+}

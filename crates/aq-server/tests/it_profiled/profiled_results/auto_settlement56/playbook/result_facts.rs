@@ -44,7 +44,7 @@ async fn a_recorded_result_waits_with_its_facts_and_no_verdict() {
 
 /// The reasons of the task's work read (`GET .../tasks/{task}/work`),
 /// checked against the human-graph-1 schema.
-pub(super) async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
+pub(crate) async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     let lineage = &env.f.selection.lineage;
@@ -89,6 +89,8 @@ async fn the_task_read_says_a_result_waits_without_a_delivery_policy() {
         .unwrap_or_else(|| panic!("{reasons:?}"));
     assert_eq!(waiting["result_id"], json!(env.report.report_id));
     assert_eq!(waiting["attempt_id"], json!(env.report.binding.attempt_id));
+    assert_eq!(waiting["blocker_owner"], "delivery_policy_owner");
+    assert_eq!(waiting["wake_condition"], "delivery_policy_activated");
     let message = waiting["message"].as_str().unwrap();
     assert!(message.starts_with("Result ready, no delivery policy"));
     // A playbook's decision ends the wait (here it sends the result back).
@@ -100,6 +102,42 @@ async fn the_task_read_says_a_result_waits_without_a_delivery_policy() {
             .all(|r| r["code"] != "result_ready_no_delivery_policy"),
         "{reasons:?}"
     );
+    let replacement = reasons
+        .iter()
+        .find(|r| r["code"] == "replacement_facts_pending")
+        .unwrap_or_else(|| panic!("{reasons:?}"));
+    assert_eq!(replacement["result_id"], json!(env.report.report_id));
+    assert_eq!(replacement["blocker_owner"], "aq_settlement");
+    assert_eq!(
+        replacement["wake_condition"],
+        "replacement_evidence_reconciliation"
+    );
+    assert_eq!(
+        replacement["missing_evidence"],
+        json!(["retained_source", "quiescent_effects"])
+    );
+}
+
+#[tokio::test]
+async fn a_return_with_both_replacement_facts_names_the_scheduler_and_its_wake() {
+    let env = Box::pin(super::owner_retry::held_retry_env(
+        aq_admission::transport::ProcessOutcome::Failed,
+    ))
+    .await;
+    assert_eq!(send_back(&env, "checks_failed").await, Settled::Returned);
+    let reasons = work_reasons(&env).await;
+    let replacement = reasons
+        .iter()
+        .find(|r| r["code"] == "replacement_facts_ready")
+        .unwrap_or_else(|| panic!("{reasons:?}"));
+    assert_eq!(
+        replacement["attempt_id"],
+        json!(env.report.binding.attempt_id)
+    );
+    assert_eq!(replacement["result_id"], json!(env.report.report_id));
+    assert_eq!(replacement["blocker_owner"], "aq_scheduler");
+    assert_eq!(replacement["wake_condition"], "worker_poll");
+    assert_eq!(replacement["missing_evidence"], json!([]));
 }
 
 /// The conclusion-text heuristics are gone: a failed report whose agent

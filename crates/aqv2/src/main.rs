@@ -68,6 +68,14 @@ fn report_error(error: &Value, json_output: bool, program: &str) {
         if let Some(recovery) = error["recovery"].as_str() {
             eprintln!("Recover with: {recovery}");
         }
+        // `environment try`: the job (and its result) is still the output.
+        #[cfg(feature = "project_environments")]
+        if error["job"].is_object() {
+            println!(
+                "{}",
+                aqv2::render::render(aqv2::render::Render::Json, &error["job"])
+            );
+        }
     }
 }
 /// `result submit|status` is worker-local: it needs no connection, and it prints

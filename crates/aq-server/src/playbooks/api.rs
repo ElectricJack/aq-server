@@ -160,13 +160,6 @@ async fn answer_decision(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GrantRequest {
-    grant_id: Uuid,
-    scope: GrantScope,
-    expires_at_ms: i64,
-}
 async fn status(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
@@ -189,11 +182,17 @@ async fn binding(
 async fn grant(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
-    Json(r): Json<GrantRequest>,
+    Json(r): Json<grants::GrantRequest>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
     d.service
-        .grant(user.id, r.grant_id, r.scope, r.expires_at_ms)
+        .grant_for(
+            user.id,
+            r.grant_id,
+            r.scope,
+            r.expires_at_ms,
+            r.resume_delivery_operation_id,
+        )
         .await?;
     Ok(Json(
         json!({"grant_id":r.grant_id,"disposition":"retained"}),

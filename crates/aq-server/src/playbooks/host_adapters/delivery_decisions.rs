@@ -12,7 +12,7 @@
 //! no external effect: their rows commit with the final intent row.
 use super::*;
 use aq_playbook_domain::{
-    delivery_decisions::{self as decisions, Decision, Named, Settled},
+    delivery_decisions::{self as decisions, Named, Settled},
     delivery_runs,
 };
 pub use decisions::DeliverySettlement;
@@ -55,16 +55,17 @@ impl Service {
     }
 
     /// `work.complete` and `work.return`.
-    pub(super) async fn work_decide(
+    pub(in crate::playbooks) async fn work_decide(
         &self,
         owner: &RuntimeOwner,
         command: HostIntent<'_>,
+        retained_only: bool,
     ) -> Result<HostResult> {
         let id = command.grant;
         let intent = command.intent;
         let input = &intent.input;
         let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
-        let (task, result) = match stage.ok_or(Error::Unknown)? {
+        let subject = match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
                 return Ok(result);
@@ -75,6 +76,7 @@ impl Service {
                 let id = |field| Uuid::parse_str(text(input, field)?).map_err(|_| Error::Invalid);
                 (id("task")?, id("result_id")?)
             }
+            Stage::Fresh if retained_only => return Err(Error::Unknown),
             Stage::Fresh => {
                 let early = self.pending_decision(&mut tx, intent).await?;
                 let named = match early {
@@ -94,7 +96,15 @@ impl Service {
                 named
             }
         };
-        let answer = self.settle_decision(intent, task, result).await?;
+        let answer = decisions::settle(
+            &*self.settlement,
+            &self.pool,
+            || self.now(),
+            &intent.command.name,
+            input,
+            subject,
+        )
+        .await?;
         self.finish(intent, &identity, answer).await
     }
 
@@ -114,41 +124,6 @@ impl Service {
         };
         let decided = decisions::decision(tx, named.1).await?;
         Ok(decisions::already(&intent.command.name, decided.as_deref()).map_or(Ok(named), Err))
-    }
-
-    async fn settle_decision(
-        &self,
-        intent: &Intent,
-        task: Uuid,
-        result: Uuid,
-    ) -> Result<HostResult> {
-        let input = &intent.input;
-        let reason = input["reason"].as_str();
-        let settled = match intent.command.name.as_str() {
-            "work.complete" => self.settlement.complete(result).await?,
-            _ => {
-                (self.settlement)
-                    .send_back(result, reason.ok_or(Error::Invalid)?)
-                    .await?
-            }
-        };
-        // No Graph answer yet: the intent stays pending for a replay.
-        let (answer, decision) =
-            decisions::settled(&intent.command.name, settled).ok_or(Error::Unknown)?;
-        if let Some(decision) = decision {
-            let d = Decision {
-                task,
-                result,
-                decision,
-                reason,
-                detail: input["detail"].as_str(),
-                update_from_main: input["update_from_main"].as_bool(),
-            };
-            let mut tx = self.tx().await?;
-            decisions::record(&mut tx, &d, self.now()?).await?;
-            tx.commit().await?;
-        }
-        Ok(answer)
     }
 
     /// `work.hold`: the hold on the task's latest result, unless a decision

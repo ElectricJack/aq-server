@@ -50,6 +50,10 @@ delivery_playbook = [
     "dep:hyper",
     "dep:hyper-util",
 ]
+# Spec 0017 §6.2 (aq-environments' `delivery_playbook`): an attempt may also
+# force-push its own `refs/heads/aq-try/<attempt>`, the `aq environment try`
+# checkpoint, which delivery never publishes.
+environment_try = ["delivery_playbook"]
 # With `delivery_playbook`: a fake aq-git git-HTTP socket backed by
 # `git http-backend`, for tests of the server that depends on this crate.
 test-support = ["nix/signal"]

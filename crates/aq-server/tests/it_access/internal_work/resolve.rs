@@ -323,7 +323,13 @@ fn recent_observation_older_than_the_policy_age_without_cooldown_does_not_skip()
     let catalog = snapshot_with(&TWO, &["observation_max_age_ms: 1000"]);
     let mut old = observation(&login, Availability::QuotaUnavailable, NOW + 60_000, 0);
     old.received_at_ms = NOW - 5_000;
-    let resolved = resolve(&catalog, &registry, observed(std::slice::from_ref(&old)), "internal").unwrap();
+    let resolved = resolve(
+        &catalog,
+        &registry,
+        observed(std::slice::from_ref(&old)),
+        "internal",
+    )
+    .unwrap();
     assert_eq!(resolved.candidates[0].provider, "anthropic");
     old.received_at_ms = NOW - 500;
     let resolved = resolve(&catalog, &registry, observed(&[old]), "internal").unwrap();

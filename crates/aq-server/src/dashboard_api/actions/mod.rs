@@ -204,20 +204,19 @@ pub(crate) async fn submit_legacy(
         .submit_observed(request, None, RequestOrigin::Legacy)
         .await
 }
-async fn finish(
+pub(crate) async fn finish(
     state: &AppState,
     user: &User,
     original: Operation,
     outcome: Outcome,
 ) -> Result<Operation, ApiError> {
-    let Some(completed) = outcome.apply_to(&original, aq_machine_control::holds::valid_code) else {
+    let now = (state.clock)();
+    let timestamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let Some(completed) =
+        original.with_outcome(outcome, timestamp, aq_machine_control::holds::valid_code)
+    else {
         return Ok(original);
     };
-    let now = (state.clock)();
-    let completed = completed.bounded_update(
-        &original,
-        now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    );
     if journal::finish(&state.store.pool, user.id, &completed, now)
         .await
         .is_err()

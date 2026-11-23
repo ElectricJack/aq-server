@@ -57,6 +57,7 @@ pub struct Prior {
     pub offered_at_ms: Option<u64>,
     pub holds_task: bool,
     pub released: bool,
+    pub released_at_ms: Option<u64>,
     pub status: Status,
     pub execution_deadline_ms: Option<u64>,
     pub stop: Stop,
@@ -89,6 +90,13 @@ pub struct Replacement {
     pub effect_reconciliation_receipt: ArtifactRef,
     /// The predecessor still holds the task claim and must be released first.
     pub needs_release: bool,
+}
+impl Replacement {
+    /// The closure owner frees a verified nonstart before scheduling can
+    /// admit its successor. That release starts any launch backoff.
+    pub fn waiting_for_launch_release(&self) -> bool {
+        self.needs_release && launch_stop_receipt(&self.stop_receipt)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,15 +135,60 @@ fn failed(prior: &Prior, now: u64) -> bool {
 /// Which attempts (in order) are not charged: forgiven by an owner override, or exempt up to
 /// the cap, which counts only exemptions since that override.
 fn uncharged(ordered: &[&Prior], limits: &Limits) -> Vec<bool> {
-    let exempt = ordered.iter().map(|p| p.exempt && !p.forgiven);
+    let exempt = ordered
+        .iter()
+        .map(|p| p.exempt && !p.forgiven && !p.proven_nonstart());
     let capped = aq_machine_control::cap_exempt(exempt, limits.max_uncharged_continuations);
     (ordered.iter().zip(capped))
-        .map(|(p, exempt)| p.forgiven || exempt)
+        .map(|(p, exempt)| p.forgiven || p.proven_nonstart() || exempt)
         .collect()
 }
+
+impl Prior {
+    /// The closure settlement owner writes this state only after verifying the
+    /// launch never ran. A failed or absent result does not establish nonstart.
+    pub fn proven_nonstart(&self) -> bool {
+        self.status == Status::Finished
+            && matches!(&self.stop, Stop::NotStarted { receipt } if launch_stop_receipt(receipt))
+    }
+}
+
+fn launch_stop_receipt(receipt: &ArtifactRef) -> bool {
+    let id = receipt.id.as_str();
+    id.starts_with(aq_machine_control::lapse::RECEIPT) || id.starts_with("aq.launch-closure/")
+}
+
+pub const LAUNCH_BACKOFF: &str = "launch_retry_backoff";
+
+/// A first verified nonstart can continue right away. Repeated launch failures
+/// wait 30s, doubling up to 5m. The clock starts when AQ releases the claim,
+/// so the backoff never delays freeing the worker slot.
+pub fn launch_retry_after(priors: &[Prior]) -> Option<(Uuid, u64)> {
+    let mut ordered = priors.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
+    launch_retry_after_ordered(&ordered)
+}
+
+fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
+    let last = ordered.last()?;
+    if last.holds_task {
+        return None;
+    }
+    let consecutive = ordered
+        .iter()
+        .rev()
+        .take_while(|p| p.proven_nonstart() && !p.forgiven)
+        .take(6)
+        .count();
+    if consecutive < 2 {
+        return None;
+    }
+    let delay = (30_000u64 << (consecutive - 2)).min(300_000);
+    Some((last.attempt_id, last.released_at_ms?.saturating_add(delay)))
+}
 /// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
-/// and service stops are exempt: S8/Q1 in aq-server `docs/implementation/0007-P1-server.md`),
-/// and the latest attempt.
+/// and service stops may be exempt under spec 0007 Q1, and proven nonstarts
+/// are always uncharged), and the latest attempt.
 pub fn charged(priors: &[Prior], limits: &Limits) -> (u32, Option<Uuid>) {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
@@ -190,6 +243,16 @@ pub fn blockers(prior: &Prior, now: u64) -> Vec<&'static str> {
 /// Pure replacement decision over the complete started-attempt history.
 pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     assess_lineage(priors, limits, now, true)
+}
+
+/// Scheduling assessment for one Graph-ready task.
+/// The decision attempt counts alone settle: an exhausted never-granted
+/// retry bound blocks, and no started attempt is an ordinary first attempt.
+pub fn precheck(counts: &aq_machine_control::attempts::AttemptCounts) -> Option<Assessment> {
+    if counts.never_granted_bound_exhausted() {
+        return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
+    }
+    (counts.started == 0).then_some(Assessment::Fresh)
 }
 
 /// A fresh start closes the old lineage, so its limits do not charge the new source.
@@ -308,6 +371,9 @@ fn lineage_budget(
     if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
         return Err("lineage_retry_budget_exhausted");
     }
+    if charge_budget && launch_retry_after_ordered(ordered).is_some_and(|(_, next)| now < next) {
+        return Err(LAUNCH_BACKOFF);
+    }
     // Lineage time is recorded, never charged: each attempt has its own window (its execution
     // profile's wall time) and a retry is limited by `max_attempts` alone. It is the sum of the
     // charged attempts' windows, each from its publication to the next one (or now).
@@ -374,6 +440,7 @@ mod tests {
             offered_at_ms: Some(offered_at_ms),
             holds_task: true,
             released: false,
+            released_at_ms: None,
             status: Status::Finished,
             execution_deadline_ms: Some(offered_at_ms + 60_000),
             stop: Stop::Stopped {
@@ -477,19 +544,61 @@ mod tests {
         let mut closed = failed_prior(900_000);
         closed.rejected = false;
         closed.stop = Stop::NotStarted {
-            receipt: receipt("closure"),
+            receipt: receipt("aq.launch-closure/verified"),
         };
         let Assessment::Replace(r) = assess(std::slice::from_ref(&closed), &budget(), now) else {
             panic!("settled closure must be replaceable");
         };
-        assert_eq!(r.stop_receipt, receipt("closure"));
+        assert_eq!(r.stop_receipt, receipt("aq.launch-closure/verified"));
         assert!(r.needs_release);
+        assert!(r.waiting_for_launch_release());
         // An unsettled closure (stop still unknown) blocks.
         closed.stop = Stop::Unknown;
         closed.status = Status::Cancelling;
         assert_eq!(
             assess(&[closed], &budget(), now),
             Assessment::Blocked("replacement_prior_execution_uncertain")
+        );
+    }
+
+    #[test]
+    fn repeated_verified_nonstarts_wait_without_spending_the_execution_budget() {
+        let limits = Limits {
+            max_attempts: 1,
+            max_uncharged_continuations: 0,
+        };
+        let first = released(failed_prior(1_000));
+        let second = released(failed_prior(2_000));
+        let mut failures = [first, second];
+        for attempt in &mut failures {
+            attempt.stop = Stop::NotStarted {
+                receipt: receipt(&format!(
+                    "{}{}",
+                    aq_machine_control::lapse::RECEIPT,
+                    attempt.attempt_id
+                )),
+            };
+            attempt.released_at_ms = Some(3_000);
+        }
+        assert_eq!(charged(&failures, &limits).0, 0);
+        assert_eq!(
+            launch_retry_after(&failures),
+            Some((failures[1].attempt_id, 33_000))
+        );
+        assert_eq!(
+            assess(&failures, &limits, 32_999),
+            Assessment::Blocked(LAUNCH_BACKOFF)
+        );
+        let Assessment::Replace(retry) = assess(&failures, &limits, 33_000) else {
+            panic!("the same ticket can continue when the backoff elapses");
+        };
+        assert_eq!((retry.attempts_started, retry.exempt_attempts), (2, 2));
+        assert!(!retry.needs_release);
+        let mut actual_failure = failures.to_vec();
+        actual_failure.push(failed_prior(34_000));
+        assert_eq!(
+            assess(&actual_failure, &limits, 35_000),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
         );
     }
 

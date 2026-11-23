@@ -10,6 +10,12 @@ pub(crate) struct Env {
     pub(crate) binding: Value,
     pub(crate) time: Arc<std::sync::atomic::AtomicI64>,
     pub(super) node_token: String,
+    /// The state `app` and `admin` serve, for a test that rebuilds them.
+    #[cfg_attr(
+        not(all(feature = "project_environments", feature = "delivery_playbook")),
+        allow(dead_code)
+    )]
+    pub(crate) state: aq_server::AppState,
 }
 pub(crate) async fn setup() -> Env {
     setup_with(None).await
@@ -70,7 +76,7 @@ pub(crate) async fn setup_graph_with_attempt(
     let runtime = runtime(endpoint.url, endpoint.mutation_actor_id, &directory).await;
     let (state, time) = state(store, runtime);
     let app = aq_server::build_worker_router(state.clone());
-    let admin = aq_server::build_admin_router(state);
+    let admin = aq_server::build_admin_router(state.clone());
     launch.provision(&admin, grants).await;
     let token = launch.issue(&app, &node_token).await;
     Env {
@@ -82,6 +88,7 @@ pub(crate) async fn setup_graph_with_attempt(
         binding: launch.binding,
         time,
         node_token,
+        state,
     }
 }
 async fn runtime(

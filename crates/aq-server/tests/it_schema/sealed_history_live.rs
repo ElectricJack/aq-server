@@ -60,6 +60,68 @@ async fn artifact_usage_counts_live_links_and_pending_rows_only() {
 }
 
 #[tokio::test]
+async fn offer_stage_pins_charge_once_and_release_independently() {
+    use aq_history_caps::offer_stage;
+
+    let db = aq_server::test_support::TestDb::create().await;
+    let _store = db.store().await;
+    let pool = db.pool().await;
+    let project = Uuid::new_v4();
+    let mut tx = sealed::replica(&pool).await;
+    let artifact = sealed::artifact(&mut tx, project, NOW).await;
+    sqlx::query("UPDATE admission_artifacts SET offer_staged=true WHERE artifact_id=$1")
+        .bind(artifact)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let use_at = |at| sealed::usage(&pool, "admission_artifacts", Some(project), at, None);
+    let first = Uuid::new_v4();
+    let sibling = Uuid::new_v4();
+    for stage in [first, sibling] {
+        offer_stage::open(&pool, stage, Uuid::new_v4(), project, NOW as u64)
+            .await
+            .unwrap();
+        assert!(
+            offer_stage::pin(
+                &mut pool.acquire().await.unwrap(),
+                stage,
+                artifact,
+                NOW as u64
+            )
+            .await
+            .unwrap()
+        );
+    }
+    assert_eq!(use_at(NOW).await, (1, 1, 1, 1));
+    offer_stage::close(&pool, first, NOW as u64 + 1)
+        .await
+        .unwrap();
+    assert_eq!(use_at(NOW + 1).await, (1, 1, 1, 1));
+    assert!(
+        !offer_stage::pin(
+            &mut pool.acquire().await.unwrap(),
+            first,
+            artifact,
+            NOW as u64 + 1
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(use_at(NOW + 600_000).await, (0, 0, 0, 0));
+
+    // Committed attempt links take over the charge when the stage closes.
+    let mut tx = sealed::replica(&pool).await;
+    let live = sealed::attempt(&mut tx, true, None).await;
+    sealed::link_artifact(&mut tx, live, artifact).await;
+    tx.commit().await.unwrap();
+    offer_stage::close(&pool, sibling, NOW as u64 + 2)
+        .await
+        .unwrap();
+    assert_eq!(use_at(NOW + 2).await, (1, 1, 1, 1));
+}
+
+#[tokio::test]
 async fn decision_usage_counts_linked_live_and_pending_only() {
     let db = aq_server::test_support::TestDb::create().await;
     let _store = db.store().await;

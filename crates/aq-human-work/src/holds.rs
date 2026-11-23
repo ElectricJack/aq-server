@@ -162,7 +162,15 @@ pub async fn recorded_hold(
 /// code, `phrase` its fixed description), about `attempt_id` (with its authority `status`).
 pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Value {
     let message = format!("AQ does not offer this task: {phrase} (hold reason: {code}).");
-    json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code})
+    let mut reason = json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code});
+    if aq_machine_control::holds::is_budget_hold(code) {
+        reason["blocker_owner"] = json!("project_owner");
+        reason["wake_condition"] = json!("owner_retry_authorized");
+        reason["message"] = json!(format!(
+            "{message} The project owner can authorize a retry."
+        ));
+    }
+    reason
 }
 
 /// A delivery hold has a result and reason even after the playbook has ended.
@@ -170,6 +178,7 @@ pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Va
 pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&str>) -> Value {
     let why = match reason {
         "returns_exhausted" => "the delivery playbook reached its repair-return limit",
+        "publish_conflict" => "the forge branch could not be published under the recorded lease",
         _ => "the delivery playbook held the recorded result",
     };
     let mut shown = task_hold(
@@ -178,6 +187,20 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
         reason,
         &format!("{why} for result {result}"),
     );
+    shown["result_id"] = json!(result);
+    if reason == "returns_exhausted" {
+        shown["blocker_owner"] = json!("project_owner");
+        shown["wake_condition"] = json!("owner_retry_authorized");
+        shown["message"] = json!(format!(
+            "Delivery reached its repair-return limit for result {result}. The project owner can authorize a retry."
+        ));
+    } else if reason == "publish_conflict" {
+        shown["blocker_owner"] = json!("repository_maintainer");
+        shown["wake_condition"] = json!("forge_branch_matches_result_or_publish_lease");
+        shown["message"] = json!(format!(
+            "Delivery is holding result {result} after a branch publication conflict. AQ rechecks the forge branch on its delivery interval and resumes when the result is present or the lease is usable."
+        ));
+    }
     if let Some(evidence) = evidence {
         shown["message"] = json!(format!(
             "{} {evidence}",
@@ -194,15 +217,207 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
 /// delivery playbook is active for the task's project.
 #[cfg(feature = "delivery_playbook")]
 pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Value {
-    let (code, message) = match delivery_policy {
+    let (code, owner, wake, message) = match delivery_policy {
         false => (
             "result_ready_no_delivery_policy",
-            "Result ready, no delivery policy: the attempt has stopped with a result, and no delivery playbook is active to decide it. AQ does not complete, publish or send back a result by itself, so the result waits.",
+            "delivery_policy_owner",
+            "delivery_policy_activated",
+            "Result ready, no delivery policy is active. AQ will recheck the result after the owner activates the project's delivery playbook.",
         ),
         true => (
             "result_ready",
+            "aq_delivery",
+            "delivery_reconciliation",
             "Result ready: the attempt has stopped with a result, which waits for the delivery playbook's decision.",
         ),
     };
-    json!({"code": code, "attempt_id": attempt, "result_id": result, "message": message})
+    json!({"code": code, "attempt_id": attempt, "result_id": result, "message": message,
+        "blocker_owner": owner, "wake_condition": wake})
+}
+
+/// Recovery evidence for the exact attempt that still holds the task.
+pub async fn attempt_recovery_wait(pool: &PgPool, h: &Hold) -> Option<Value> {
+    if !h.stopped && h.status != "cancelling" {
+        return None;
+    }
+    let (stop, closure, has_result): (Option<String>, Option<Vec<u8>>, bool) = sqlx::query_as(
+        "SELECT a.state#>>'{stop,kind}', c.request_bytes,
+            EXISTS(SELECT 1 FROM profiled_result_reports r WHERE r.attempt_id=e.attempt_id)
+         FROM execution_attempts e JOIN profiled_authority_hot a USING(attempt_id)
+         LEFT JOIN profiled_launch_closures c USING(attempt_id)
+         WHERE e.attempt_id=$1 AND e.holds_task",
+    )
+    .bind(h.attempt_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let proof = closure.and_then(|bytes| {
+        serde_json::from_slice::<aq_admission::granted_closure::Request>(&bytes)
+            .ok()
+            .filter(|request| request.binding.attempt_id == h.attempt_id)
+            .map(|request| request.evidence.proves_never_started())
+    });
+    recovery_reason(h.attempt_id, stop.as_deref(), proof, has_result)
+}
+
+pub(crate) fn recovery_reason(
+    attempt: Uuid,
+    stop: Option<&str>,
+    proof: Option<bool>,
+    has_result: bool,
+) -> Option<Value> {
+    let (code, owner, wake, message) = match (stop, proof, has_result) {
+        (Some("unknown"), Some(false), _) => (
+            "closure_does_not_prove_nonstart",
+            "aq_operator",
+            "original_launch_evidence_reconciled",
+            "The host stopped and the harness may have run. The AQ operator needs to reconcile the original attempt's result and effects before its claim can be released.",
+        ),
+        (Some("unknown" | "not_started"), Some(true), _) | (Some("not_started"), None, _) => (
+            "closed_launch_settlement_pending",
+            "aq_scheduler",
+            "closed_launch_settlement",
+            "AQ will check the original launch closure, retained source, and effects before freeing the claim.",
+        ),
+        (Some("stopped"), _, false) => (
+            "stopped_result_recovery_pending",
+            "aq_worker",
+            "stopped_result_reconciled",
+            "The attempt stopped without a recorded result. The worker needs to reconcile the retained workspace and the stopped result.",
+        ),
+        _ => return None,
+    };
+    Some(
+        json!({"code":code,"attempt_id":attempt,"blocker_owner":owner,"wake_condition":wake,"message":message}),
+    )
+}
+
+/// The original Graph operation stays visible while AQ verifies its receipt.
+pub async fn graph_completion_wait(pool: &PgPool, hold: &Hold) -> Option<Value> {
+    let (result, operation, reason, next): (Uuid, Uuid, Option<String>, Option<i64>) = sqlx::query_as(
+        "SELECT report_id,operation_id,reason,next_graph_check_at_ms FROM profiled_auto_settlements \
+         WHERE attempt_id=$1 AND (disposition IN ('prepared','possible') \
+           OR (disposition='held' AND reason IN ('graph_version_conflict','graph_completion_receipt_conflict'))) \
+         ORDER BY created_at_ms DESC,report_id LIMIT 1",
+    )
+    .bind(hold.attempt_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let (code, owner, wake, message) = match reason.as_deref() {
+        Some("graph_completion_identity_required") => (
+            "graph_completion_identity_required",
+            "aq_operator",
+            "original_graph_service_restored",
+            "Restore the Graph origin and actor pinned to this completion. AQ will recheck the original operation.",
+        ),
+        Some("graph_completion_permission_required") => (
+            "graph_completion_permission_required",
+            "graph_workspace_admin",
+            "graph_mutation_permission_restored",
+            "Restore mutation permission for the configured Graph service actor. AQ will recheck the original completion operation.",
+        ),
+        Some("graph_version_conflict") => (
+            "graph_version_conflict",
+            "project_owner",
+            "current_task_version_reconciled",
+            "Graph refused this completion at the task version AQ originally admitted. Review the current task and result.",
+        ),
+        Some("graph_completion_receipt_conflict") => (
+            "graph_completion_receipt_conflict",
+            "graph_operator",
+            "original_graph_receipt_reconciled",
+            "Graph recorded a different request for this operation key. Reconcile the original Graph receipt.",
+        ),
+        _ => (
+            "graph_completion_receipt_pending",
+            "aq_graph_settlement",
+            "scheduled_graph_receipt_check",
+            "AQ will check Graph for the original completion receipt before resending the same request.",
+        ),
+    };
+    Some(
+        json!({"code":code,"attempt_id":hold.attempt_id,"result_id":result,"operation_id":operation,
+        "message":message,"blocker_owner":owner,"wake_condition":wake,"next_check_at_ms":next}),
+    )
+}
+
+/// The retry approval has a durable check date even if its request was interrupted.
+pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Option<Value> {
+    let (operation, next, owner_available, predecessor, reason): (
+        Uuid,
+        i64,
+        bool,
+        Option<Uuid>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT i.operation_id,floor(extract(epoch FROM i.next_check_at)*1000)::bigint,
+          COALESCE(u.role='owner',false),i.predecessor,
+          CASE WHEN i.released_at IS NULL THEN to_jsonb(i)->>'wait_reason' END
+         FROM owner_task_retry_intents i JOIN dashboard_operations d USING(operation_id)
+         LEFT JOIN users u ON u.id=d.principal_id
+         WHERE i.project_id=$1 AND i.task_id=$2 AND d.disposition IN ('pending','unknown')
+         ORDER BY d.created_at DESC,i.operation_id DESC LIMIT 1",
+    )
+    .bind(project)
+    .bind(task)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let (owner, wake, message) = match (owner_available, reason.as_deref()) {
+        (false, _) => (
+            "project_owner",
+            "original_retry_authority_restored",
+            "Restore owner permission for the principal who approved this retry. AQ will recheck the original approval.",
+        ),
+        (true, Some("replacement_prior_execution_uncertain")) => (
+            "aq_worker",
+            "prior_execution_verified",
+            "AQ will recheck the approved retry once the original attempt's execution and stop evidence is verified.",
+        ),
+        (true, Some("replacement_effects_unreconciled")) => (
+            "aq_effects",
+            "original_effects_reconciled",
+            "AQ will recheck the approved retry once the original attempt's effects have settled.",
+        ),
+        (true, Some("replacement_source_retention_unknown")) => (
+            "aq_worker",
+            "original_source_retained",
+            "AQ will recheck the approved retry once it can verify retention of the original attempt's source.",
+        ),
+        (true, Some("replacement_lineage_history_unknown")) => (
+            "aq_operator",
+            "original_lineage_history_restored",
+            "Restore the original attempt history. AQ will recheck the approved retry.",
+        ),
+        _ => (
+            "aq_scheduler",
+            "scheduled_owner_retry_check",
+            "AQ will resume the original retry approval at its scheduled check.",
+        ),
+    };
+    Some(
+        json!({"code":"owner_retry_pending","operation_id":operation,"attempt_id":predecessor,
+        "hold_reason":reason,"message":message,"blocker_owner":owner,
+        "wake_condition":wake,"next_check_at_ms":next}),
+    )
+}
+
+/// The scheduler releases a verified nonstart before waiting to reoffer.
+pub async fn launch_retry_wait(pool: &PgPool, task: Uuid, now_ms: i64) -> Option<Value> {
+    use aq_profiled_state::{replacement, replacement_sql};
+    let now = u64::try_from(now_ms).ok()?;
+    let mut conn = pool.acquire().await.ok()?;
+    let priors = replacement_sql::load(&mut conn, task).await.ok()?;
+    let (attempt, next) = replacement::launch_retry_after(&priors)?;
+    (now < next).then(|| {
+        json!({
+            "code": replacement::LAUNCH_BACKOFF,
+            "attempt_id": attempt,
+            "message": "Repeated verified launch failures released the task's previous claim. AQ will recheck worker placement after the backoff.",
+            "blocker_owner": "aq_scheduler",
+            "wake_condition": "launch_retry_backoff_elapsed",
+            "next_check_at_ms": next,
+        })
+    })
 }

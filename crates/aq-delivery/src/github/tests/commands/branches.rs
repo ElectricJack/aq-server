@@ -84,13 +84,23 @@ async fn publishing_a_recorded_result_checks_its_source_and_recovers_an_existing
                 json!({"outcome":"already_present","observed_target":source})
             }
             Some(hex) if hex == sha('b') => json!({"error":{"code":"source_moved"}}),
+            Some(hex) if hex == sha('d') || hex == sha('e') => json!({
+                "outcome":"rejected","reason":"target_moved",
+                "observed_target":{"algorithm":"sha1","hex":sha('d')}
+            }),
             _ => {
                 json!({"outcome":"already_present","observed_target":{"algorithm":"sha1","hex":sha('a')}})
             }
         }
     });
     let (delivery, _) = delivery(&git).await;
-    for (head, outcome) in [('a', "published"), ('b', "conflict"), ('c', "refused")] {
+    for (head, outcome) in [
+        ('a', "published"),
+        ('b', "conflict"),
+        ('c', "refused"),
+        ('d', "published"),
+        ('e', "conflict"),
+    ] {
         let step = delivery
             .branch_publish(
                 TaskOperation::new(Uuid::new_v4(), &target(), TASK),
@@ -100,6 +110,42 @@ async fn publishing_a_recorded_result_checks_its_source_and_recovers_an_existing
             .await;
         assert_eq!(done(step).outcome, outcome);
     }
+}
+
+#[tokio::test]
+async fn publish_recheck_distinguishes_a_usable_lease_from_missing_access() {
+    let git = FakeGit::start(healthy);
+    let (delivery, mock) = delivery(&git).await;
+    let reference = task_branch(TASK);
+    let exact = |head| json!({"ref": reference, "object":{"type":"commit","sha":sha(head)}});
+    mock.reply(200, vec![], json!([exact('a')]));
+    mock.reply(200, vec![], json!([exact('b')]));
+    mock.reply(200, vec![], json!([exact('c')]));
+    mock.reply(
+        200,
+        vec![],
+        json!([{"ref":format!("{reference}-other"),"object":{"type":"commit","sha":sha('c')}}]),
+    );
+    mock.reply(200, vec![], json!([]));
+    mock.reply(404, vec![], json!({"message":"Not Found"}));
+    for (lease, usable) in [
+        (None, true),
+        (Some(sha('b')), true),
+        (None, false),
+        (None, true),
+        (Some(sha('b')), false),
+        (None, false),
+    ] {
+        assert_eq!(
+            delivery
+                .publish_lease_usable(&target(), TASK, &sha('a'), lease.as_deref())
+                .await,
+            usable
+        );
+    }
+    let get = ("GET".into(), format!("/git/matching-refs/heads/aq/{TASK}"));
+    assert_eq!(paths(&mock), vec![get; 6]);
+    assert!(git.operations().is_empty());
 }
 
 #[tokio::test]

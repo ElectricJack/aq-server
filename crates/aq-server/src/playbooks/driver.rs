@@ -1,5 +1,5 @@
 //! One explicitly started owner and bounded service quanta. Never start another
-//! owner because a request timed out. No automatic external mutation retries.
+//! owner because a request timed out.
 use super::{domain::*, service::*};
 use aq_playbook_domain::driver_outcomes::{
     Partial, decision_dispatch, delivery_error, host_error, host_result, message_dispatch,
@@ -31,6 +31,8 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    #[cfg(feature = "delivery_playbook")]
+    delivery_recovery: aq_playbook_domain::delivery_decisions::Recovery,
     /// Order binding mutations with their bridge projections.
     binding_gate: tokio::sync::Mutex<()>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
@@ -146,7 +148,7 @@ impl Driver {
             },
         )
         .await
-        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|e| (e.to_string(), Error::from(e)))
         .map_err(|(why, error)| (error, why))?;
         let taken = proof.lock().map_err(|_| Error::Unknown);
         let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
@@ -165,6 +167,8 @@ impl Driver {
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_recovery: Default::default(),
             binding_gate: tokio::sync::Mutex::new(()),
             deadline: settings.deadline,
             tick_deadline: settings.tick_deadline,
@@ -223,7 +227,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         let known: Option<KeyedAdmissionReceipt> = serde_json::from_value(value)?;
         let receipt = if let Some(receipt) = known {
             receipt
@@ -240,7 +244,7 @@ impl Driver {
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
                         requested_at_ms: None,
-                        now_ms: (self.service_clock()),
+                        now_ms: self.service.current_time(),
                     },
                     self.deadline,
                 )
@@ -263,14 +267,11 @@ impl Driver {
             .acknowledge_admission(&self.runtime, id, receipt)
             .await
     }
-    fn service_clock(&self) -> i64 {
-        self.service.current_time()
-    }
     pub async fn recover(&self) -> Result<serde_json::Value> {
         self.owner
             .call(
                 Request::Recover {
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -372,12 +373,12 @@ impl Driver {
                     epoch: 0,
                     event: Box::new(event),
                     requested_at_ms: None,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
     }
 }

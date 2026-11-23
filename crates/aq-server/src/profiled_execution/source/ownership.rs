@@ -23,6 +23,15 @@ pub async fn retain_admission(
     observation: &Observation,
     retain_until_ms: u64,
 ) -> Result<RetainedArtifact, AppError> {
+    retain_for(state, operation, observation, retain_until_ms, None).await
+}
+pub(in crate::profiled_execution) async fn retain_for(
+    state: &AppState,
+    operation: Uuid,
+    observation: &Observation,
+    retain_until_ms: u64,
+    stage: Option<Uuid>,
+) -> Result<RetainedArtifact, AppError> {
     let verified = observation::verify_stored(&observation.bytes, observation.admission.project_id)
         .ok_or_else(refused)?;
     let artifact = observation::artifact(&observation.bytes).ok_or_else(refused)?;
@@ -35,7 +44,7 @@ pub async fn retain_admission(
     {
         return Err(refused());
     }
-    super::super::artifacts::retain(
+    super::super::artifacts::retain_for(
         state,
         super::super::artifacts::Retain {
             artifact_id: operation,
@@ -46,6 +55,7 @@ pub async fn retain_admission(
             bytes: &observation.bytes,
             retain_until_ms,
         },
+        stage,
     )
     .await
 }

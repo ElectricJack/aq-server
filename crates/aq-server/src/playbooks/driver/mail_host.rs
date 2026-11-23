@@ -17,6 +17,19 @@ impl DomainHost for MailHost {
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }
+    #[cfg(feature = "delivery_playbook")]
+    fn reconcile_delivery(&mut self, intent: &Intent) -> Option<DispatchResult> {
+        let command = intent.command.name.as_str();
+        if !matches!(command, "work.complete" | "work.return") {
+            return Some(self.reconcile(intent));
+        }
+        let (id, revision) = grant_actor(&intent.authority).ok()?;
+        let command = super::super::host_adapters::HostIntent::new(id, revision, intent);
+        match (self.handle).block_on(self.service.work_decide(&self.runtime, command, true)) {
+            Ok(answer) => Some(host_result(answer, intent)),
+            Err(_) => Some(self.reconcile(intent)),
+        }
+    }
     fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
         self.dispatch_adapter(intent, false)
     }

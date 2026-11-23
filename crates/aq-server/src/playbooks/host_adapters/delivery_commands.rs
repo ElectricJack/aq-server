@@ -74,7 +74,7 @@ impl DeliveryOps for ServerDelivery {
 }
 
 impl Service {
-    fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
+    pub(super) fn delivery_runs(&self) -> Result<DeliveryRuns<'_>> {
         Ok(DeliveryRuns {
             pool: &self.pool,
             namespace: &self.namespace,
@@ -161,12 +161,16 @@ impl Service {
         self.runtime(&ns, owner)?;
         let (namespace, generation) = (self.namespace.namespace_id, self.namespace.generation);
         let now = self.now()?;
+        #[allow(unused_mut)]
+        let mut commands = DELIVERY_COMMANDS.to_vec();
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        commands.extend(aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS);
         let due = delivery::due_operations(
             &mut tx,
             delivery::DueOperations {
                 namespace,
                 generation,
-                commands: &DELIVERY_COMMANDS,
+                commands: &commands,
                 limit,
                 now_ms: now,
             },
@@ -189,11 +193,23 @@ impl Service {
         let Some(op) = self.load_operation(&self.pool, operation).await? else {
             return Ok(false);
         };
-        if !DELIVERY_COMMANDS.contains(&op.command.as_str()) {
-            return Err(Error::Invalid);
-        }
         if op.status != "running" {
             return Ok(true);
+        }
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        if aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&op.command.as_str()) {
+            let Some(result) = self
+                .environment_step(operation, &op.command, &op.request)
+                .await?
+            else {
+                return Ok(false);
+            };
+            let key = OperationKey::new(operation, &op.command, &op.intent_id);
+            self.complete_operation(key, result, None).await?;
+            return Ok(true);
+        }
+        if !DELIVERY_COMMANDS.contains(&op.command.as_str()) {
+            return Err(Error::Invalid);
         }
         let mut fence = self.tx().await?;
         let completion = self

@@ -118,7 +118,7 @@ impl Request {
     }
     fn mode(&self) -> HostMode {
         match self {
-            Request::Recover { .. } => HostMode::Reconcile,
+            Request::Recover { .. } | Request::ReconcileDelivery { .. } => HostMode::Reconcile,
             Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
             _ => HostMode::Dispatch,
         }
@@ -288,6 +288,17 @@ impl<S: Storage, H: DomainHost> Runtime<'_, S, H> {
             Admission { key } => self.admission(&key),
             CancelEffects { now_ms } => self.cancel_effects(now_ms),
             Recover { now_ms } => self.recover(now_ms),
+            ReconcileDelivery {
+                intents,
+                scan_after,
+                now_ms,
+            } => reconcile_delivery(
+                self.engine,
+                self.host,
+                &intents,
+                scan_after.as_deref(),
+                now_ms,
+            ),
             Cancel { run, now_ms } => self.cancel(&run, now_ms),
             Install { artifact } => install(self.engine, self.shared, *artifact),
             Activate {

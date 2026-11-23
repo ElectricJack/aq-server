@@ -193,7 +193,7 @@ pub(super) async fn check_base_download(h: &Harness, socket: &std::path::Path, r
     );
     assert_eq!(
         h.request(
-            Request::get(&format!("/v1/execution/sources/base/{}", Uuid::new_v4()))
+            Request::get(format!("/v1/execution/sources/base/{}", Uuid::new_v4()))
                 .header("content-type", "application/json"),
             vec![],
             Some(&h.token)

@@ -346,3 +346,119 @@ async fn open(name: &str, registry: Registry) -> Result<Owner, Error> {
     )
     .await
 }
+
+#[tokio::test]
+async fn recovery_retires_a_routing_deadline_only_before_any_dispatch() {
+    use aq_playbook_host::runner::{Engine, IntentStatus, RunStatus};
+
+    let store = MemoryStorage::default();
+    let seed = Engine::new(store.clone(), "routing-deadline", "fixture").unwrap();
+    let command = CommandContract {
+        name: "work.route".into(),
+        ..contract()
+    };
+    let registry = Registry {
+        commands: BTreeMap::from([(command.name.clone(), command.clone())]),
+        events: BTreeMap::new(),
+    };
+    let mut content = common::artifact().content;
+    content.registry = registry.clone();
+    content.playbook.entries.get_mut("main").unwrap().start = "route".into();
+    content.playbook.steps.insert(
+        "route".into(),
+        Step {
+            op: Operation::Invoke {
+                command: ContractRef {
+                    name: command.name.clone(),
+                    fingerprint: command.fingerprint().unwrap(),
+                },
+                input: Expr::literal(Value::Null),
+                bind: "result".into(),
+                retry: None,
+            },
+            edges: BTreeMap::from([("queued".into(), "done".into())]),
+            on_error: Some("done".into()),
+        },
+    );
+    let artifact = Artifact::seal(content).unwrap();
+    let digest = artifact.digest.clone();
+    seed.install(artifact).unwrap();
+    seed.activate("test", &digest, common::authority()).unwrap();
+    let admit = || {
+        seed.admit("test", "main", Value::Null, common::authority(), 1)
+            .unwrap()
+    };
+    let unissued = admit();
+    let disputed = admit();
+    seed.advance(&unissued, 2).unwrap();
+    seed.advance(&disputed, 2).unwrap();
+
+    // Reproduce the durable states left when an old blocked run was recovered
+    // and the next dispatch deadline expired. One had an earlier dispatch.
+    let mut snapshot = store.load("routing-deadline").unwrap();
+    for run in [&unissued, &disputed] {
+        snapshot.state.runs.get_mut(run).unwrap().status = RunStatus::Blocked;
+        let id = snapshot
+            .state
+            .intents
+            .values()
+            .find(|intent| &intent.run == run)
+            .unwrap()
+            .id
+            .clone();
+        let intent = snapshot.state.intents.get_mut(&id).unwrap();
+        intent.status = IntentStatus::Rejected;
+        intent.reason = Some("command deadline expired before dispatch".into());
+        intent.dispatch_sequence = (run == &disputed).then_some(1);
+    }
+    store
+        .compare_and_swap(
+            "routing-deadline",
+            "fixture",
+            snapshot.revision,
+            &snapshot.state,
+        )
+        .unwrap();
+    seed.release().unwrap();
+
+    let inspect = store.clone();
+    let owner = Owner::start_registered(
+        Registration::new(
+            "routing-deadline".into(),
+            aq_playbook_host::Limits::default(),
+            registry,
+        ),
+        move || Ok(store),
+        |_| {
+            Ok(Peer {
+                counts: Counts::default(),
+                mode: HostMode::Dispatch,
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let result = owner
+        .call(
+            Request::ReconcileDelivery {
+                intents: vec![],
+                scan_after: None,
+                now_ms: 2_000,
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["reconciled"], 1);
+    let snapshot = inspect.load("routing-deadline").unwrap().state;
+    assert!(
+        snapshot.runs.get(&unissued).is_none_or(|run| {
+            matches!(run.status, RunStatus::Cancelling | RunStatus::Cancelled)
+        })
+    );
+    assert_eq!(
+        snapshot.runs.get(&disputed).unwrap().status,
+        RunStatus::Blocked
+    );
+    owner.call(Request::Stop, DEADLINE).await.unwrap();
+}

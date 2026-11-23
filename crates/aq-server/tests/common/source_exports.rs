@@ -82,6 +82,7 @@ fn reader_runtime() -> QualifiedRuntime {
         super::profiled::artifact("synthetic-source-reader-qualification", b"qualification");
     let features = vec![aq_admission::transport::Feature::ArtifactTransferV1];
     QualifiedRuntime {
+        backend_kind: None,
         runtime: runtime_ref,
         qualification,
         capabilities: vec![],

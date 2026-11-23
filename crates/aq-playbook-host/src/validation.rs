@@ -82,6 +82,15 @@ impl Request {
             } => authorized(binding, entry, a),
             Self::Runs { after, limit } => valid_page(after.as_deref(), *limit, 100),
             Self::Cancel { run, .. } => valid(run),
+            Self::ReconcileDelivery {
+                intents,
+                scan_after,
+                ..
+            } => {
+                intents.len() <= 4
+                    && intents.iter().all(|id| valid(id))
+                    && scan_after.as_deref().is_none_or(valid)
+            }
             Self::Install { .. }
             | Self::Recover { .. }
             | Self::CancelEffects { .. }
@@ -129,7 +138,11 @@ fn supported_command(name: &str) -> bool {
         "pull_request.close",
     ];
     let delivery = cfg!(feature = "delivery_playbook");
-    COMMANDS.contains(&name) || (delivery && DELIVERY.contains(&name))
+    // Host catalog 2.5.0 (spec 0017), with both features.
+    let environments = delivery && cfg!(feature = "project_environments");
+    COMMANDS.contains(&name)
+        || (delivery && DELIVERY.contains(&name))
+        || (environments && ["environment.build", "environment.admit"].contains(&name))
 }
 
 fn valid_command(name: &str, command: &CommandContract) -> bool {

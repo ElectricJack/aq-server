@@ -36,7 +36,28 @@ pub fn readiness(
         held.clear();
         dependencies.hierarchy.clear();
     }
-    let state = dependencies.state(task_state, hold, !held.is_empty());
+    // The original attempt's own retry hold replaces the generic budget hold.
+    if hold.is_some_and(|h| {
+        held.iter().any(|reason| {
+            reason["code"] == "owner_retry_pending" && reason["attempt_id"] == json!(h.attempt_id)
+        })
+    }) {
+        held.retain(|reason| reason["wake_condition"] != "owner_retry_authorized");
+    }
+    if held
+        .iter()
+        .any(|reason| reason["wake_condition"] == "owner_retry_authorized")
+    {
+        held.retain(|reason| reason["code"] != "replacement_facts_ready");
+    }
+    let closed_launch = held.iter().any(|reason| {
+        matches!(
+            reason["code"].as_str(),
+            Some("closure_does_not_prove_nonstart" | "closed_launch_settlement_pending")
+        )
+    });
+    let running = !closed_launch && hold.is_some_and(Hold::running);
+    let state = dependencies.state(task_state, running, hold.is_some() || !held.is_empty());
     let TaskDependencies {
         blockers,
         hierarchy,
@@ -55,13 +76,13 @@ pub fn readiness(
 }
 
 impl TaskDependencies {
-    fn state<'a>(&self, task_state: Option<&'a str>, hold: Option<&Hold>, held: bool) -> &'a str {
+    fn state<'a>(&self, task_state: Option<&'a str>, running: bool, held: bool) -> &'a str {
         let waiting =
             !self.hierarchy.is_empty() || self.blockers.iter().any(|b| b["satisfied"] != true);
         match task_state {
             Some(s @ ("completed" | "canceled" | "draft")) => s,
-            _ if hold.is_some_and(Hold::running) => "running",
-            _ if hold.is_some() || held => "held",
+            _ if running => "running",
+            _ if held => "held",
             _ if waiting => "waiting",
             _ if !self.complete => "unknown",
             _ => "ready",

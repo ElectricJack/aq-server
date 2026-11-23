@@ -82,6 +82,10 @@ impl Allowlist {
             .collect::<Result<_, _>>()?;
         Ok(Self { entries })
     }
+    /// Each entry's environment name, version and image digest, in file order.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, &Digest)> {
+        (self.entries.iter()).map(|e| (e.name.as_str(), e.version.as_str(), &e.digest))
+    }
 }
 
 /// Pins each environment reference (`name@version` exactly, or a bare `name`)

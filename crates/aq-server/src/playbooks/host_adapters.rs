@@ -7,7 +7,7 @@
 //! conflict. External effects (graph mutation, B3 cancel) are two-phase: a
 //! `pending` row commits first, then the effect runs with a stable idempotency
 //! key, then the final row and its outbox event commit together. Reconcile
-//! only reads a retained final row and never performs an effect.
+//! may read a retained answer or close an expired admission without performing the effect.
 use super::{domain::*, service::*};
 use aq_playbook_domain::work_mutations::{work_change_body, work_ensure_body};
 pub use aq_playbook_domain::{
@@ -43,6 +43,8 @@ mod effects;
 mod events;
 use events::HostEvent;
 pub(super) use events::OutboxEntry;
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+mod environment_commands;
 mod integration;
 mod messages;
 mod requests;
@@ -53,6 +55,8 @@ pub use delivery_commands::{DeliveryOps, ServerDelivery};
 #[cfg(feature = "delivery_playbook")]
 pub use delivery_decisions::{DeliverySettlement, ServerSettlement};
 pub use delivery_port::*;
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub use environment_commands::ServerEnvironments;
 pub use integration::*;
 pub use requests::*;
 pub use routing::{RoutingPort, ServerRouting};
@@ -73,6 +77,9 @@ pub struct HostPorts {
     /// delivered, and the commands over the forge and central aq-git.
     #[cfg(feature = "delivery_playbook")]
     pub delivery_ops: Arc<dyn DeliveryOps>,
+    /// Catalog 2.5.0: the project's recipes on aq-git and its binding.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    pub environment_ops: Arc<dyn aq_environments::commands::EnvironmentOps>,
 }
 
 /// Typed graph gateway port. Only node reads by UUID and validated
@@ -227,7 +234,7 @@ impl Service {
             "work.change" => self.work_change(owner, command).await,
             super::review_domain::WORK_ACTIVATE => self.work_activate(owner, command).await,
             #[cfg(feature = "delivery_playbook")]
-            "work.complete" | "work.return" => self.work_decide(owner, command).await,
+            "work.complete" | "work.return" => self.work_decide(owner, command, false).await,
             #[cfg(feature = "delivery_playbook")]
             "work.hold" => self.work_hold(owner, command).await,
             #[cfg(feature = "delivery_playbook")]
@@ -241,6 +248,12 @@ impl Service {
             "candidate.publish" => self.candidate_publish(owner, command).await,
             "message.send" => self.host_message_send(owner, command).await,
             "decision.request" => self.host_decision_request(owner, command).await,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            name if self.profile.has_environments()
+                && aq_playbook_domain::review_domain::ENVIRONMENT_COMMANDS.contains(&name) =>
+            {
+                self.environment_command(owner, id, revision, intent).await
+            }
             #[cfg(feature = "delivery_playbook")]
             name if self.profile.is_delivery()
                 && aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) =>
@@ -251,8 +264,7 @@ impl Service {
         }
     }
 
-    /// Reconcile reads only the retained final result; it never performs an
-    /// effect and never refreshes write authority.
+    /// Read a retained reply, or close an expired delivery intent whose effect never began.
     pub async fn host_retained(
         &self,
         id: Uuid,
@@ -260,12 +272,25 @@ impl Service {
         intent: &Intent,
     ) -> Result<Option<HostResult>> {
         let command = HostIntent::new(id, revision, intent);
-        let (tx, stage, _) = self.begin(None, command).await?;
-        tx.commit().await?;
-        Ok(match stage {
+        let (mut tx, stage, identity) = self.begin(None, command).await?;
+        let reply = match stage {
             Some(Stage::Retained(result)) => Some(result),
+            None if self.profile.is_delivery() => {
+                aq_playbook_domain::host_operations::close_unadmitted_delivery(
+                    &mut tx,
+                    &self.namespace,
+                    (id, revision),
+                    intent,
+                    &identity,
+                    self.operation(intent)?,
+                    self.now()?,
+                )
+                .await?
+            }
             _ => None,
-        })
+        };
+        tx.commit().await?;
+        Ok(reply)
     }
 
     /// Validates the intent, locks the namespace, and resolves the retained
@@ -286,6 +311,24 @@ impl Service {
         }
         let retained = Effects(&self.namespace).lock(&mut tx, intent).await?;
         let live = owner.is_some() && retained.as_ref().is_none_or(|r| r.status == PENDING);
+        let resumed = match &retained {
+            Some(row)
+                if live
+                    && matches!(
+                        intent.command.name.as_str(),
+                        "work.complete" | "work.return"
+                    ) =>
+            {
+                aq_playbook_domain::grants::delivery_resume_current(
+                    &mut tx,
+                    row.operation_id,
+                    self.now()?,
+                )
+                .await?
+            }
+            _ => false,
+        };
+        let live = live && !resumed;
         let scope = self
             .grant_locked(
                 &mut tx,

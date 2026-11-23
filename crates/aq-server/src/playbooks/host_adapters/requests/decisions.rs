@@ -208,7 +208,7 @@ impl PendingDecision<'_> {
         profile: aq_playbook_domain::review_domain::CatalogProfile,
     ) -> Completion<'a> {
         let mut output = self.request.output(answer.handle);
-        if profile == aq_playbook_domain::review_domain::CatalogProfile::Host11 {
+        if profile.has_notes() {
             output["note"] = json!(answer.note.unwrap_or_default());
         }
         Completion {

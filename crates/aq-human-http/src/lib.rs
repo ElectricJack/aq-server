@@ -99,6 +99,8 @@ pub struct Client {
     /// None on a channel: the proxy behind the socket holds the credential.
     auth_header: Option<(HeaderName, HeaderValue)>,
     limits: Limits,
+    /// The sandbox channel, whose proxy forwards the agent routes too.
+    channel: bool,
 }
 impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -233,10 +235,12 @@ fn parse_origin(origin: &str) -> Result<Url, Error> {
     }
     Ok(url)
 }
-fn valid_api_path(path: &str) -> bool {
+/// `agent`: a channel client may also reach the agent routes (`/v1/agent/`).
+fn valid_api_path(path: &str, agent: bool) -> bool {
     let valid_segments = !path.contains("//") && !path.split('/').any(|s| matches!(s, "." | ".."));
     let allowed = |b: u8| b.is_ascii_alphanumeric() || b"/-_.".contains(&b);
-    path.starts_with("/api/") && path.len() <= 2048 && valid_segments && path.bytes().all(allowed)
+    let prefix = path.starts_with("/api/") || (agent && path.starts_with("/v1/agent/"));
+    prefix && path.len() <= 2048 && valid_segments && path.bytes().all(allowed)
 }
 fn valid_query(query: &[(&str, &str)]) -> bool {
     query.len() <= 16 && query.iter().all(|(k, v)| k.len() <= 64 && v.len() <= 4096)
@@ -261,6 +265,7 @@ impl Client {
             origin_header: None,
             auth_header: None,
             limits,
+            channel: true,
         })
     }
     pub fn new(
@@ -309,10 +314,14 @@ impl Client {
             origin_header: Some(origin_header),
             auth_header,
             limits,
+            channel: false,
         })
     }
     fn endpoint(&self, path: &str, query: &[(&str, &str)]) -> Result<Url, Error> {
-        if !valid_api_path(path) || !valid_query(query) {
+        // Spec 0017: `environment try` posts to its agent route, where the
+        // node's channel proxy pushes the workspace first.
+        let agent = cfg!(feature = "project_environments") && self.channel;
+        if !valid_api_path(path, agent) || !valid_query(query) {
             return Err(Error::Configuration);
         }
         let mut url = self.origin.join(path).map_err(|_| Error::Configuration)?;
@@ -733,5 +742,25 @@ mod tests {
         )
         .unwrap();
         assert!(token(&fifo).is_err());
+    }
+    /// Spec 0017: only a channel client reaches the agent routes, and only
+    /// with `project_environments`.
+    #[test]
+    fn only_a_channel_reaches_the_agent_routes() {
+        let channel = Client::channel(
+            std::path::Path::new("/aq/channel/aq.sock"),
+            Limits::default(),
+        );
+        let owner = Client::new("http://127.0.0.1:1/", auth(), Limits::default());
+        let path = "/v1/agent/environments/try";
+        let reached = channel.unwrap().endpoint(path, &[]).is_ok();
+        assert_eq!(reached, cfg!(feature = "project_environments"));
+        assert!(owner.unwrap().endpoint(path, &[]).is_err());
+        assert!(
+            Client::channel(std::path::Path::new("/s"), Limits::default())
+                .unwrap()
+                .endpoint("/v2/worker/x", &[])
+                .is_err()
+        );
     }
 }

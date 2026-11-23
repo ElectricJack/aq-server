@@ -1,9 +1,6 @@
 //! Map retained bridge outcomes into their engine dispatch and recovery status.
-use crate::{Error, Result, host_values::HostResult, intent_store::MessageResult};
-use aq_playbook_host::{
-    plugins::command_plugin,
-    runner::{DispatchResult, Intent},
-};
+use crate::{Error, Result, intent_store::MessageResult};
+use aq_playbook_host::runner::DispatchResult;
 use serde_json::Value;
 #[derive(Debug, Clone)]
 pub enum DecisionResult {
@@ -58,19 +55,7 @@ impl Partial {
     }
 }
 /// An asynchronous host command's `accepted` outcome is its durable handle.
-pub fn host_result(result: HostResult, intent: &Intent) -> DispatchResult {
-    let acknowledged =
-        command_plugin(&intent.command.name).is_none() && result.outcome == "accepted";
-    if let Some(handle) = result.output["handle"].as_str().filter(|_| acknowledged) {
-        return DispatchResult::Accepted {
-            handle: handle.to_string(),
-        };
-    }
-    DispatchResult::Completed {
-        outcome: result.outcome,
-        output: result.output,
-    }
-}
+pub use crate::host_values::dispatch_result as host_result;
 pub fn decision_dispatch(result: Result<DecisionResult>) -> DispatchResult {
     match result {
         Ok(DecisionResult::Accepted { handle }) => DispatchResult::Accepted { handle },

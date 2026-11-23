@@ -93,6 +93,11 @@ impl Driver {
             "announcing results",
             self.service.collect_result_ready(&self.runtime, 8).await,
         );
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        partial.defer(
+            "announcing base changes",
+            self.service.collect_base_changes(&self.runtime, 8).await,
+        );
         #[cfg(feature = "delivery_playbook")]
         partial.defer(
             "running delivery operations",
@@ -121,7 +126,7 @@ impl Driver {
                 self.owner
                     .call(
                         Request::CollectIntervalEvents {
-                            now_ms: self.service_clock(),
+                            now_ms: self.service.current_time(),
                         },
                         self.deadline,
                     )
@@ -198,12 +203,23 @@ impl Driver {
     }
 
     async fn tick_runs(&self, partial: &mut Partial) -> Result<serde_json::Value> {
-        let now_ms = self.service_clock();
+        let now_ms = self.service.current_time();
         let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
         let cancelled = cancel.await.map_err(host_error);
         partial.defer("cancelling effects", cancelled.clone());
         cancelled?;
-        let now_ms = self.service_clock();
+        #[cfg(feature = "delivery_playbook")]
+        if self.service.profile.is_delivery() {
+            let recovery = self.delivery_recovery.tick(
+                &self.service.pool,
+                &self.service.namespace,
+                &self.owner,
+                self.tick_deadline,
+                self.service.current_time(),
+            );
+            partial.defer("reconciling delivery decisions", recovery.await);
+        }
+        let now_ms = self.service.current_time();
         let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
         let tick = ticked.await.map_err(host_error);
         partial.defer("ticking runs", tick.clone());
@@ -241,7 +257,7 @@ impl Driver {
                 epoch: 0,
                 event: Box::new(event.clone()),
                 requested_at_ms: None,
-                now_ms: self.service_clock(),
+                now_ms: self.service.current_time(),
             };
             let receipt = match self.owner.call(request, self.deadline).await {
                 Err(aq_playbook_host::Error::Stale(_)) => {
@@ -260,7 +276,7 @@ impl Driver {
         let fanout = Request::Fanout {
             event_key: key.clone(),
             limit: 64,
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         let status = match self.owner.call(fanout, self.deadline).await {
             Ok(_) => {

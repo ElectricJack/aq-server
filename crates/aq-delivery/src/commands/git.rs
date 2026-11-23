@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
 pub const TASK_BRANCH_PREFIX: &str = "refs/heads/aq/";
+/// Spec 0017 §6.2: the namespace of the attempts' try refs, never published.
+pub const TRY_PREFIX: &str = "refs/heads/aq-try/";
 
 /// A commit retained under a handle by `repo.retain_ref`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +199,28 @@ impl SocketGit {
             _ => Err(GitFailure::protocol()),
         }
     }
+
+    /// Spec 0017 §6.2: deletes an attempt's try ref (`refs/heads/aq-try/…`)
+    /// from the central repository only (`ref.delete` with `remote: false`);
+    /// an absent ref is already deleted. Never touches GitHub.
+    pub async fn delete_try_ref(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<RefDeletion, GitFailure> {
+        if !reference.starts_with(TRY_PREFIX) {
+            return Err(GitFailure::protocol());
+        }
+        let params = json!({"ref": reference, "remote": false, "expected_old": null});
+        let result = self
+            .call((Uuid::new_v4(), "ref.delete"), repo, params)
+            .await?;
+        match result["outcome"].as_str() {
+            Some("deleted") => Ok(RefDeletion::Deleted),
+            Some("already_absent") => Ok(RefDeletion::AlreadyAbsent),
+            _ => Err(GitFailure::protocol()),
+        }
+    }
 }
 
 fn sha1_hex(oid: &Value) -> Result<String, GitFailure> {
@@ -230,7 +254,11 @@ impl RefPublication {
             }
             Some("already_present") => sha1_hex(&result["observed_target"])?,
             Some("rejected") if result["reason"] == "target_moved" => {
-                return Ok(RefPublication::Moved);
+                let observed = sha1_hex(&result["observed_target"]).ok();
+                match observed {
+                    Some(head) if expected_source == Some(head.as_str()) => head,
+                    _ => return Ok(RefPublication::Moved),
+                }
             }
             Some("rejected") => {
                 return Err(GitFailure {

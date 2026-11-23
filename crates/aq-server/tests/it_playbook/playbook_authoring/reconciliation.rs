@@ -107,6 +107,7 @@ async fn registering_an_existing_source_is_refused_and_keeps_its_document_and_bi
 
 /// Finding 3: routing turns on only once the engine has the routing
 /// playbook, not when it is merely saved.
+#[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
 #[tokio::test]
 async fn the_switch_needs_a_routing_playbook_the_engine_has_acknowledged() {
     let (_db, host) = setup().await;

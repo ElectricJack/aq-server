@@ -111,6 +111,7 @@ async fn setup() -> Case {
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: registration.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],

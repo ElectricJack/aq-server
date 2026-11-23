@@ -501,7 +501,9 @@ async fn latest_task(host: &Host) -> Uuid {
 // ---- Fix round 2 (Codex review of the routing switch-on) ----
 
 /// The routing source's id and binding with the worked example's commands,
-/// so the example's draft is its playbook.
+/// so the example's draft is its playbook (a 2.2.0 one: with spec 0017 the
+/// routing source is authored against catalog 2.5.0).
+#[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
 async fn routing_like_source(host: &Host) -> (i64, Uuid) {
     let record = SourceRecord {
         id: "routing".into(),

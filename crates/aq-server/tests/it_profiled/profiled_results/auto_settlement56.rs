@@ -5,7 +5,10 @@ use super::*;
 use aq_server::profiled_execution::settlement::{self, AutoDisposition, AutoSettlement};
 use axum::{Json, Router, routing::post};
 use serde_json::Value;
-use std::sync::{Mutex, atomic::AtomicUsize};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicUsize},
+};
 
 fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions::Definition {
     let body = format!(
@@ -19,6 +22,13 @@ fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions:
     .unwrap()
 }
 
+struct GraphRecovery {
+    write_status: AtomicU16,
+    lookup_status: AtomicU16,
+    has_receipt: AtomicBool,
+    lookups: Mutex<Vec<Value>>,
+}
+
 pub(crate) struct AutoEnv {
     pub(crate) f: Fixture,
     pub(crate) report: ResultReport,
@@ -29,6 +39,7 @@ pub(crate) struct AutoEnv {
     expected_version: u64,
     pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
+    recovery: Arc<GraphRecovery>,
     _directory: tempfile::TempDir,
     #[cfg(feature = "delivery_playbook")]
     _task_ref: Option<super::pushed_ref::TaskRef>,
@@ -176,6 +187,7 @@ async fn finish_auto_env(
         expected_version,
         writes: graph.writes,
         bodies: graph.bodies,
+        recovery: graph.recovery,
         _directory: graph.directory,
         #[cfg(feature = "delivery_playbook")]
         _task_ref: task_ref,

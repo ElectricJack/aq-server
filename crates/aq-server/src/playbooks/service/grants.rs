@@ -27,6 +27,18 @@ impl Service {
         scope: GrantScope,
         expires: i64,
     ) -> Result<()> {
+        self.grant_for(actor, id, scope, expires, None).await
+    }
+    /// A grant, and with `resume` the approval to resume that delivery
+    /// decision under it; both commit together.
+    pub(in crate::playbooks) async fn grant_for(
+        &self,
+        actor: Uuid,
+        id: Uuid,
+        scope: GrantScope,
+        expires: i64,
+        resume: Option<Uuid>,
+    ) -> Result<()> {
         self.validate_new_scope(&scope)?;
         if actor != self.namespace.owner_user_id {
             return Err(Error::Forbidden);
@@ -34,35 +46,19 @@ impl Service {
         if !self.scoped_grant(id, &scope) {
             return Err(Error::Forbidden);
         }
-        let payload = digest(&(
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            id,
-            &scope,
-            expires,
-            actor,
-        ))?;
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
         Self::owner(&mut tx, actor).await?;
-        if let Some(old) = sqlx::query_scalar::<_, String>(
-            "SELECT payload_digest FROM playbook_grants WHERE grant_id=$1",
+        aq_playbook_domain::grants::retain(
+            &mut tx,
+            &self.namespace,
+            id,
+            &scope,
+            expires,
+            self.now()?,
+            resume,
         )
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            if old != payload {
-                return Err(Error::Conflict);
-            }
-            tx.commit().await?;
-            return Ok(());
-        }
-        let now = self.now()?;
-        if expires <= now || expires > now.saturating_add(86_400_000) {
-            return Err(Error::Invalid);
-        }
-        sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7)").bind(id).bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
+        .await?;
         tx.commit().await?;
         Ok(())
     }

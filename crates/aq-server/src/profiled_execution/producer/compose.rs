@@ -89,7 +89,27 @@ pub async fn compile(
     #[cfg(not(feature = "project_environments"))]
     let environment = execution.environment.clone();
     #[cfg(feature = "project_environments")]
-    let environment = place(state, binding, execution, metadata, predecessor, context).await?;
+    let (catalog, environment) = {
+        let catalog = super::super::definitions::catalog(state, &state.store.pool).await?;
+        let (pool, pinned) = (&state.store.pool, execution.environment.as_deref());
+        let routed = route.and_then(|r| r.e.as_deref());
+        let placed = aq_environments::place(
+            pool,
+            &catalog,
+            binding,
+            pinned,
+            routed,
+            metadata,
+            predecessor,
+        );
+        match placed.await {
+            Ok(environment) => (catalog, environment),
+            Err(hold) => {
+                let (task, project) = (context.revision.task_id, binding.project_id);
+                return Err(crate::role_settings::offer_refused(state, task, project, &hold).await);
+            }
+        }
+    };
     if !binding.allowed_environments.contains(&environment) {
         return Err(refused());
     }
@@ -159,7 +179,8 @@ pub async fn compile(
     harnesses.dedup_by(|a, b| a.harness == b.harness);
     #[cfg(feature = "project_environments")]
     if harnesses.is_empty() {
-        return Err(unlisted(state, binding.project_id, context, &environment).await);
+        let (task, project) = (context.revision.task_id, binding.project_id);
+        return Err(unlisted(state, task, project, &environment).await);
     }
     if harnesses.is_empty() || harnesses.len() > 16 {
         return Err(refused());
@@ -191,12 +212,16 @@ pub async fn compile(
         "{}:{}:{}",
         context.revision.task_id, context.revision.version, context.revision.content_revision
     );
+    let platform = roles::platform_text(&environment);
+    // An admitted version's own platform text wins over the shipped one.
+    #[cfg(feature = "project_environments")]
+    let platform = catalog.platform_text(&environment).unwrap_or(platform);
     let mut prepared = Vec::new();
     for harness in harnesses {
         let reporting = super::result_startup::for_adapter(state, &harness.adapter)?;
         let assembled = roles::assemble_startup(
             &StartupInput {
-                platform: roles::platform_text(&environment),
+                platform,
                 role: launch.role,
                 project_notes: binding.role_notes.get(&role).map(String::as_str),
                 // Spec 0014 §11 q3 (a): the platform text tells the agent to
@@ -274,73 +299,18 @@ pub async fn compile(
         snapshot: active,
     })
 }
-/// Spec 0017 §5.4: the default rule of [`aq_project_policy::environments::place`],
-/// fed the profile's pin, the predecessor's environment and the definitions'
-/// `provides`. A task no environment can serve is refused for its work read.
-#[cfg(feature = "project_environments")]
-async fn place(
-    state: &AppState,
-    binding: &crate::project_bindings::domain::ProjectBinding,
-    execution: &roles::Execution,
-    metadata: &Value,
-    predecessor: Option<Uuid>,
-    context: &TaskContext,
-) -> Result<String, AppError> {
-    use aq_project_policy::environments as env;
-    let kept = match predecessor {
-        Some(attempt) => aq_role_settings::environments::ran_in(&state.store.pool, attempt).await,
-        None => None,
-    };
-    let config = state.config.profiled_execution.as_deref();
-    let bodies = config
-        .map(|c| c.definition_bodies.as_slice())
-        .unwrap_or_default();
-    fn body(d: &crate::profiled_execution::definitions::Definition) -> (&str, &str, &str) {
-        (
-            d.artifact().id.as_str(),
-            d.artifact().version.as_str(),
-            d.body(),
-        )
-    }
-    let provides = |e: &str| env::provided(e, bodies.iter().map(body));
-    let (pinned, needs) = (execution.environment.as_deref(), env::needs(metadata));
-    let missing = match env::place(
-        binding,
-        env::FixedEnvironments {
-            pinned,
-            kept: kept.as_deref(),
-        },
-        &needs,
-        provides,
-    ) {
-        Ok(environment) => return Ok(environment),
-        Err(env::Missing {
-            environment,
-            missing,
-        }) => refusals::OfferRefusal::EnvironmentMissingCapability {
-            environment,
-            missing,
-        },
-    };
-    let (task, project) = (context.revision.task_id, binding.project_id);
-    Err(crate::role_settings::offer_refused(state, task, project, &missing).await)
-}
 /// This node does not list `environment`: another node may take the task, or,
 /// when no node lists it, the task waits with that reason (spec 0017 §5.4).
 #[cfg(feature = "project_environments")]
-async fn unlisted(
-    state: &AppState,
-    project: Uuid,
-    context: &TaskContext,
-    environment: &str,
-) -> AppError {
+async fn unlisted(state: &AppState, task: Uuid, project: Uuid, environment: &str) -> AppError {
     let now = (state.clock)().timestamp_millis();
     if aq_role_settings::environments::listed(&state.store.pool, environment, now).await {
         return AppError::Conflict(format!("{INELIGIBLE}environment_not_on_node"));
     }
-    let environment = environment.to_owned();
-    let refusal = refusals::OfferRefusal::NoNodeHasEnvironment { environment };
-    crate::role_settings::offer_refused(state, context.revision.task_id, project, &refusal).await
+    let refusal = refusals::OfferRefusal::NoNodeHasEnvironment {
+        environment: environment.into(),
+    };
+    crate::role_settings::offer_refused(state, task, project, &refusal).await
 }
 fn digest<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
     aq_profiles::digest(value).map_err(|_| AppError::Internal)

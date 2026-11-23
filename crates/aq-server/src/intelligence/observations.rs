@@ -60,13 +60,13 @@ pub(super) async fn previous(
     tx: &mut Transaction<'_, Postgres>,
     key: &aq_selection::Digest,
 ) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar(
+    sqlx::query_scalar(
         "SELECT sequence FROM intelligence_observations WHERE scope_source_digest=$1",
     )
     .bind(key.as_str())
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db)?)
+    .map_err(db)
 }
 
 pub(super) async fn save(

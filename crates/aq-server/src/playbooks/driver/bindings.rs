@@ -63,7 +63,7 @@ impl Driver {
                     binding: binding.clone(),
                     artifact,
                     authority: active_authority,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -119,7 +119,7 @@ impl Driver {
         }
         let cancel = Request::Cancel {
             run: run.clone(),
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         match self.owner.call(cancel, self.deadline).await {
             Ok(_) => Ok(()),
@@ -171,7 +171,7 @@ impl Driver {
                     may_activate,
                     schedules: schedules.to_vec(),
                     interval_event,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -195,7 +195,7 @@ impl Driver {
                 Request::DeactivateBinding {
                     binding: binding.clone(),
                     revision,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )

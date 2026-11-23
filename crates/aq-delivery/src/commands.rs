@@ -20,11 +20,11 @@ mod host;
 
 pub use git::{
     GitFailure, GitPort, RefDeletion, RefPublication, RetainedRef, SocketGit, TASK_BRANCH_PREFIX,
-    object_id,
+    TRY_PREFIX, object_id,
 };
 pub use host::{
     Accepting, DeliveryRuntime, DueOperations, due_operations, frozen_request, onboarded_target,
-    pull_request_text, run_step,
+    published_head, pull_request_text, run_step,
 };
 
 use crate::github::GitHubApiError;
@@ -200,6 +200,25 @@ pub struct Delivery {
 }
 
 impl Delivery {
+    /// Confirm the exact result is on the forge or the existing publish lease is usable.
+    pub async fn publish_lease_usable(
+        &self,
+        target: &DeliveryTarget,
+        task: Uuid,
+        head: &str,
+        expected_old: Option<&str>,
+    ) -> bool {
+        match self
+            .github
+            .branch_head(&target.github, &task_branch(task))
+            .await
+        {
+            Ok(Some(observed)) => observed == head || expected_old == Some(observed.as_str()),
+            Ok(None) => expected_old.is_none(),
+            Err(_) => false,
+        }
+    }
+
     pub fn new(git: Arc<dyn GitPort>, github: Arc<dyn GitHubAdapter>) -> Self {
         Self { git, github }
     }

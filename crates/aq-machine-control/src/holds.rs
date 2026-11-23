@@ -152,6 +152,17 @@ pub async fn record_override(
     }
     let mut tx = conn.begin().await?;
     lock_budget(&mut tx, task).await?;
+    if super::owner_retry::available(&mut tx).await?
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM owner_task_retry_intents WHERE operation_id=$1)",
+        )
+        .bind(o.operation_id)
+        .fetch_one(&mut *tx)
+        .await?
+        && !super::owner_retry::authorized(&mut tx, o.operation_id, task, o.attempt_id).await?
+    {
+        return Err(Error::Invalid("owner retry anchor changed"));
+    }
     let inserted = sqlx::query(
         "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",

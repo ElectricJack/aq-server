@@ -17,6 +17,14 @@ impl CommandSpec {
         agent: Option<AgentRequest<'_>>,
     ) -> Result<Forward, BuildError> {
         let mut params = request.params.clone();
+        // Spec 0017: only the node names a try's commit, on the agent route it
+        // rewrites after pushing the workspace; a command request never does.
+        #[cfg(feature = "project_environments")]
+        if self.name == "environment.try" && params.contains_key("commit") {
+            return Err(BuildError(
+                "commit is the node's to attest: `aq environment try` posts to /v1/agent/environments/try, where the node pushes the workspace",
+            ));
+        }
         let mut uri = route_path(route, &mut params)?;
         let body = match route.body {
             Body::Local => None,

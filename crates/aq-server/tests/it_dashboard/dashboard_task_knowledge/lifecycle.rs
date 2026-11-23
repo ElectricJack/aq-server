@@ -25,22 +25,115 @@ async fn task_retry_creates_replacement_attempt() {
         )
     };
 
-    // B4 alone decides: an unsettled predecessor is never force-replaced.
-    let (status, body) = x.act(&retry(Uuid::new_v4())).await;
-    assert_eq!(body["data"]["disposition"], "rejected", "{status} {body}");
-    // Review M-5: the receipt names the reason.
-    assert_eq!(
-        body["data"]["reason"], "replacement_prior_execution_uncertain",
-        "{body}"
-    );
-    assert!(holds().await, "rejected retry leaves the claim untouched");
+    let operation = Uuid::new_v4();
+    let confirmed_retry = retry(operation);
+    let (status, body) = x.act(&confirmed_retry).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["data"]["disposition"], "pending", "{body}");
+    assert!(holds().await, "pending retry preserves the original claim");
+    let wait = aq_human_work::owner_retry_wait(&pool, x.project(), task)
+        .await
+        .unwrap();
+    assert_eq!(wait["operation_id"], json!(operation));
+    assert_eq!(wait["attempt_id"], json!(predecessor));
+    assert_eq!(wait["hold_reason"], "replacement_prior_execution_uncertain");
+    assert_eq!(wait["blocker_owner"], "aq_worker");
+    assert_eq!(wait["wake_condition"], "prior_execution_verified");
+    assert!(wait["next_check_at_ms"].as_i64().is_some());
 
     settle_predecessor(&x, &pool, predecessor, hot).await;
     link_source_export(&x, &pool, predecessor).await;
-    let confirmed_retry = retry(Uuid::new_v4());
-    let (status, body) = x.act(&confirmed_retry).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let schedule = || async {
+        sqlx::query("UPDATE owner_task_retry_intents SET next_check_at=to_timestamp(1) WHERE operation_id=$1")
+            .bind(operation).execute(&pool).await.unwrap();
+    };
+    let wait_for_check = async |n| {
+        tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                let count: i32 = sqlx::query_scalar(
+                    "SELECT checks FROM owner_task_retry_intents WHERE operation_id=$1",
+                )
+                .bind(operation)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                if count >= n {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("AQ checked the original approval");
+    };
+    sqlx::raw_sql("CREATE FUNCTION fail_retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.kind='task.retry' AND NEW.disposition='confirmed' THEN RAISE EXCEPTION 'lost acknowledgement'; END IF;
+      RETURN NEW; END $$;
+      CREATE TRIGGER fail_retry_receipt BEFORE UPDATE ON dashboard_operations
+      FOR EACH ROW EXECUTE FUNCTION fail_retry_receipt();")
+        .execute(&pool).await.unwrap();
+    let set_role = async |role| {
+        sqlx::query("UPDATE users SET role=$2 WHERE id=(SELECT principal_id FROM dashboard_operations WHERE operation_id=$1)")
+            .bind(operation).bind(role).execute(&pool).await.unwrap();
+    };
+    set_role("viewer").await;
+    schedule().await;
+    let reason = aq_human_work::owner_retry_wait(&pool, x.project(), task)
+        .await
+        .unwrap();
+    assert_eq!(reason["operation_id"], json!(operation));
+    assert_eq!(
+        reason["wake_condition"],
+        "original_retry_authority_restored"
+    );
+
+    let (stop, receiver) = tokio::sync::watch::channel(false);
+    let sweep = tokio::spawn(aq_server::profiled_execution::expiry::run(
+        x.f.state.clone(),
+        receiver,
+    ));
+    wait_for_check(1).await;
+    assert!(
+        holds().await,
+        "retry remains held while owner permission is missing"
+    );
+    set_role("owner").await;
+    schedule().await;
+    wait_for_check(2).await;
+    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        while holds().await {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect(
+        "AQ releases the same predecessor after its evidence and the approver's permission return",
+    );
+
+    sqlx::query("DROP TRIGGER fail_retry_receipt ON dashboard_operations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    schedule().await;
+    let body: Value = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let receipt: Value = sqlx::query_scalar(
+                "SELECT response FROM dashboard_operations WHERE operation_id=$1",
+            )
+            .bind(operation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if receipt["disposition"] == "confirmed" {
+                break json!({"data":receipt});
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("AQ completes the original operation without another request");
+    let _ = stop.send(true);
+    sweep.await.unwrap();
     assert_eq!(
         body["data"]["receipt_refs"][0],
         json!({"type":"replacement_release","id":predecessor})

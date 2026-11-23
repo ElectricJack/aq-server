@@ -24,7 +24,7 @@ pub const DEFAULT_MAX_DEPTH: u32 = 2;
 pub fn default_coding() -> GrantSet {
     use Scope::*;
     let g = Grant::new;
-    GrantSet::new(vec![
+    let grants = vec![
         g(op::TASK_READ, ProjectSelf),
         g(op::COMMENT_READ, ProjectSelf),
         g(op::KNOWLEDGE_READ, ProjectSelf),
@@ -45,8 +45,11 @@ pub fn default_coding() -> GrantSet {
         g(op::MESSAGE_SEND, TaskSubtree),
         g(op::MESSAGE_READ, TaskSubtree),
         g(op::MESSAGE_ACK, TaskSubtree),
-    ])
-    .expect("static default grants")
+    ];
+    // Spec 0017 §6.2: a coding agent tries its project's environment recipes.
+    #[cfg(feature = "project_environments")]
+    let grants = [grants, vec![g(op::ENVIRONMENT_TRY, ProjectSelf)]].concat();
+    GrantSet::new(grants).expect("static default grants")
 }
 
 /// A project's agent-grant policy (`ProjectPolicy.agent_grants`).

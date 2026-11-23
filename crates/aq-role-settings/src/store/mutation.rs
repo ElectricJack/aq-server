@@ -145,6 +145,8 @@ impl Candidate {
             Change::DeliveryDocument(_) => self.state.delivery_revision,
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryLimits(_) => self.state.delivery_limits_revision,
+            #[cfg(feature = "project_environments")]
+            Change::EnvironmentLimits(_) => environment_limits_on(conn).await?.1,
         })
     }
     fn position(&self, kind: Kind, id: &str) -> Option<usize> {
@@ -210,6 +212,11 @@ impl Candidate {
             Change::DeliveryDocument(markdown) => self.validate_markdown("delivery", markdown)?,
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryLimits(limits) => {
+                limits.validate().map_err(|message| invalid(&message))?
+            }
+            // The environment limits, too, compile and activate nothing.
+            #[cfg(feature = "project_environments")]
+            Change::EnvironmentLimits(limits) => {
                 limits.validate().map_err(|message| invalid(&message))?
             }
             _ => {
@@ -287,6 +294,8 @@ async fn persist(conn: &mut PgConnection, change: &Change, version: Version) -> 
         Change::DeliveryDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton", revision,markdown).await?,
         #[cfg(feature = "delivery_playbook")]
         Change::DeliveryLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,limits).await?,
+        #[cfg(feature = "project_environments")]
+        Change::EnvironmentLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",revision,limits).await?,
     }
     Ok(())
 }

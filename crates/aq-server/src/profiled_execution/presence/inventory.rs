@@ -118,6 +118,7 @@ pub async fn record(
         delivery,
         observed,
         expires,
+        runtime.backend_kind,
     )
     .await?;
     if !request.provisionable_only.is_empty() {
@@ -165,8 +166,10 @@ pub async fn record(
     } else {
         1
     };
+    #[cfg(feature = "project_environments")]
+    let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
     let snapshot = CapabilitySnapshot {
-        backend_kind: None,
+        backend_kind: runtime.backend_kind,
         target: ExecutionTarget::Worker {
             node_id: auth.id(),
             boot_id: request.identity.boot_id,

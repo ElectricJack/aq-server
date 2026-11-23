@@ -1,5 +1,19 @@
 use super::*;
 
+// The synthetic result fixtures do not pass through native offer publication.
+pub(super) async fn seed_native_offer_clock(pool: &sqlx::PgPool, attempt: Uuid) {
+    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
+        .bind(attempt).bind(NOW as i64).execute(pool).await.unwrap();
+    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 /// MS1 retry (B4): after a final rework, the D3 policy actor records the
 /// replacement facts that only owning domains prove (the central retention
 /// receipt pinned by the report; a settled read-only AQ effect ledger), so the
@@ -64,7 +78,7 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
 
     // B4 now admits a replacement of the failed predecessor, which still holds
     // the task until the replacement owner releases it.
-    record_offer_time(&pool, attempt).await;
+    seed_native_offer_clock(&pool, attempt).await;
     let task = env.f.selection.lineage.task_id;
     match replacement::assess_task(&env.f.state, task, NOW + 1)
         .await
@@ -111,7 +125,7 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
     let pool = env.f.db.pool().await;
     let attempt = env.report.binding.attempt_id;
     // B4 needs the original offer instant (as the read-only test sets it).
-    record_offer_time(&pool, attempt).await;
+    seed_native_offer_clock(&pool, attempt).await;
     let shown = || async {
         let mut conn = pool.acquire().await.unwrap();
         inspect(&mut conn, attempt, NOW + 1).await.unwrap().unwrap()
@@ -203,19 +217,6 @@ async fn replacement_facts_are_never_recorded_for_a_confirmed_result() {
     let hot: aq_server::execution::authority::hot::HotState = serde_json::from_value(v).unwrap();
     assert!(matches!(hot.retention, Retention::Pending));
     assert!(matches!(hot.effects, Effects::Unknown));
-}
-
-async fn record_offer_time(pool: &sqlx::PgPool, attempt: Uuid) {
-    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
-        .bind(attempt).bind(NOW as i64).execute(pool).await.unwrap();
-    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
-        .execute(pool)
-        .await
-        .unwrap();
 }
 
 fn writer_profile() -> Value {

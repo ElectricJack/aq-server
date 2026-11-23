@@ -15,14 +15,15 @@ pub async fn set_timeouts(tx: &mut Tx<'_>) -> Result<(), sqlx::Error> {
         .await?;
     Ok(())
 }
-pub async fn lock_retention(tx: &mut Tx<'_>, id: Uuid) -> Result<bool, sqlx::Error> {
+/// Takes the inline quota lock; `Some(offer_staged)` when the artifact already exists.
+pub async fn lock_retention(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<bool>, sqlx::Error> {
     set_timeouts(tx).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-inline-artifact-quota-v1',0))")
         .execute(&mut **tx)
         .await?;
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admission_artifacts WHERE artifact_id=$1)")
+    sqlx::query_scalar("SELECT offer_staged FROM admission_artifacts WHERE artifact_id=$1")
         .bind(id)
-        .fetch_one(&mut **tx)
+        .fetch_optional(&mut **tx)
         .await
 }
 pub async fn row_locked(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<PgRow>, sqlx::Error> {
@@ -114,8 +115,9 @@ impl Record {
         &self,
         tx: &mut Tx<'_>,
         request: &Retain<'_>,
+        offer_staged: bool,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        sqlx::query("INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms,offer_staged) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(request.artifact_id)
             .bind(&self.value)
             .bind(self.descriptor.artifact.digest.as_str())
@@ -125,6 +127,7 @@ impl Record {
             .bind(request.bytes)
             .bind(self.descriptor.retained_at_ms as i64)
             .bind(request.retain_until_ms as i64)
+            .bind(offer_staged)
             .execute(&mut **tx).await?;
         Ok(())
     }

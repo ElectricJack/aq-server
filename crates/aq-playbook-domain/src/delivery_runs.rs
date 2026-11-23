@@ -112,6 +112,15 @@ pub struct Prepared {
     subject_id: String,
     request: Value,
 }
+impl Prepared {
+    /// A request another command family (catalog 2.5.0's environments) froze.
+    pub fn new(subject_id: String, request: Value) -> Self {
+        Self {
+            subject_id,
+            request,
+        }
+    }
+}
 
 impl DeliveryRuns<'_> {
     /// Resolve the subject, fence it to the initiating event and freeze the operation request.

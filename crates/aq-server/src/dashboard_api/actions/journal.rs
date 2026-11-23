@@ -87,6 +87,7 @@ pub(in crate::dashboard_api) async fn lookup(
     retained(&row, principal)
 }
 pub(super) struct NewEntry<'a> {
+    request: &'a ActionRequest,
     kind: &'a str,
     operation: Operation,
     at: DateTime<Utc>,
@@ -101,6 +102,7 @@ impl<'a> NewEntry<'a> {
         let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let operation = Operation::pending(request, scope, digest, stamp);
         Self {
+            request,
             kind: &request.kind,
             operation,
             at: now,
@@ -125,6 +127,19 @@ impl<'a> NewEntry<'a> {
         };
         if !self.insert(&mut tx, principal, response).await? {
             return Ok((self.previous(&mut tx, principal).await?, false));
+        }
+        if self.kind == "task.retry"
+            && let Scope::Project { project_id } = &self.operation.scope
+        {
+            aq_machine_control::owner_retry::admit(
+                &mut tx,
+                self.operation.operation_id,
+                *project_id,
+                &self.request.subject.id,
+                serde_json::to_value(self.request).map_err(|_| ApiError::invalid())?,
+                self.at,
+            )
+            .await?;
         }
         self.reserve(&mut tx, principal, admission.and_then(|a| a.reservation))
             .await?;

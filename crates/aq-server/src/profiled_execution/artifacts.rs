@@ -46,19 +46,27 @@ pub async fn load_locked(
 /// Independent transaction. No external I/O, eviction or fabricated source
 /// bundle receipt. The caller must not hold node/project locks while retaining.
 pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArtifact, AppError> {
+    retain_for(state, request, None).await
+}
+pub(super) async fn retain_for(
+    state: &AppState,
+    request: Retain<'_>,
+    stage: Option<Uuid>,
+) -> Result<RetainedArtifact, AppError> {
     validate_request(&request)?;
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     let exists = storage::lock_retention(&mut tx, request.artifact_id)
         .await
         .map_err(db)?;
-    if exists {
+    if let Some(staged) = exists {
         let old = load_locked(&mut tx, request.artifact_id).await?;
-        if !request.matches(&old) {
+        if !request.matches(&old) || (staged && stage.is_none()) {
             return Err(refused());
         }
         old.descriptor
             .verify(&old.bytes, now(state)?)
             .map_err(|_| refused())?;
+        pin(state, &mut tx, stage, request.artifact_id).await?;
         tx.commit().await.map_err(db)?;
         return Ok(old.descriptor);
     }
@@ -73,15 +81,31 @@ pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArt
         .map_err(|_| AppError::Internal)?
         .ok_or_else(refused)?;
     record
-        .insert_body(&mut tx, &request)
+        .insert_body(&mut tx, &request, stage.is_some())
         .await
         .map_err(|_| refused())?;
     let descriptor = record
         .insert_receipt(&mut tx, request.artifact_id)
         .await
         .map_err(db)?;
+    pin(state, &mut tx, stage, request.artifact_id).await?;
     tx.commit().await.map_err(|_| refused())?;
     Ok(descriptor)
+}
+async fn pin(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    stage: Option<Uuid>,
+    id: Uuid,
+) -> Result<(), AppError> {
+    if let Some(stage) = stage
+        && !aq_history_caps::offer_stage::pin(tx, stage, id, now(state)?)
+            .await
+            .map_err(db)?
+    {
+        return Err(refused());
+    }
+    Ok(())
 }
 fn validate_request(request: &Retain<'_>) -> Result<(), AppError> {
     if !request.valid() {

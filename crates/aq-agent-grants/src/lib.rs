@@ -36,8 +36,11 @@ pub mod op {
     pub const MESSAGE_READ: &str = "message.read";
     pub const MESSAGE_ACK: &str = "message.ack";
     pub const RESULT_READ: &str = "result.read";
+    /// Spec 0017 §6.2: build a recipe from the task's pushed head and run a command in it.
+    #[cfg(feature = "project_environments")]
+    pub const ENVIRONMENT_TRY: &str = "environment.try";
     /// Every grantable operation, in the order the spec lists them.
-    pub const ALL: [&str; 18] = [
+    pub const ALL: [&str; 18 + cfg!(feature = "project_environments") as usize] = [
         TASK_READ,
         TASK_CREATE_SUBTASK,
         TASK_CREATE_PROJECT,
@@ -56,6 +59,8 @@ pub mod op {
         MESSAGE_READ,
         MESSAGE_ACK,
         RESULT_READ,
+        #[cfg(feature = "project_environments")]
+        ENVIRONMENT_TRY,
     ];
 }
 
@@ -442,7 +447,8 @@ pub fn check(grants: &GrantSet, holder: Holder, request: GrantRequest<'_>) -> De
 /// Grant each `/v1/agent/*` question, comment, wait and result route requires, with
 /// the registry command it maps to (spec 0006 §9). The graph and message
 /// routes keep checking their agent-access-1 profile capability.
-pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
+pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str);
+    14 + 2 * cfg!(feature = "project_environments") as usize] = [
     ("/v1/agent/questions", "question.ask", op::QUESTION_ASK),
     (
         "/v1/agent/questions/show",
@@ -485,6 +491,18 @@ pub const AGENT_ROUTE_GRANTS: [(&str, &str, &str); 14] = [
         "result.review.patch",
         op::RESULT_READ,
     ),
+    #[cfg(feature = "project_environments")]
+    (
+        "/v1/agent/environments/try",
+        "environment.try",
+        op::ENVIRONMENT_TRY,
+    ),
+    #[cfg(feature = "project_environments")]
+    (
+        "/v1/agent/environments/try/{job_id}",
+        "environment.job.show",
+        op::ENVIRONMENT_TRY,
+    ),
 ];
 /// `(command, grant, target)` for an agent route path. Comments act on a
 /// task thread related to the attempt's task as `relation` (its own task
@@ -500,9 +518,9 @@ pub fn route_grant(
             project: holder.project,
             relation,
         }
-    } else if *grant == op::RESULT_READ {
-        // Results are read by project: `result.read@project:self` reaches them
-        // and no narrower scope does.
+    } else if *grant == op::RESULT_READ || grant.starts_with("environment.") {
+        // Results are read, and environments tried, by project:
+        // `project:self` reaches them and no narrower scope does.
         Target::Project(holder.project)
     } else {
         Target::OwnAttempt

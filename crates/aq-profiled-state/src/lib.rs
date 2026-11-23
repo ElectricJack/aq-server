@@ -1,8 +1,10 @@
 //! Actual profiled state representation. It is deliberately separate from the
 //! legacy fixture wire/state. No HTTP handler accepts this stored projection.
 pub mod authority_cache;
+pub mod graph_completion;
 pub mod hot;
 pub mod inline_artifact;
+pub mod reconciliation;
 pub mod source_export;
 use aq_session_protocol::{ArtifactRef, ProfiledGrant, ProfiledOffer, Validate};
 use aq_worker_protocol::{GraphBinding, SourceBinding};

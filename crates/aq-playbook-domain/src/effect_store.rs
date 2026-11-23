@@ -31,11 +31,12 @@ pub struct Retained {
     pub request_digest: String,
     pub status: String,
     pub receipt: Value,
+    pub operation_id: Uuid,
 }
 pub struct Effects<'a>(pub &'a Namespace);
 impl Effects<'_> {
     pub async fn lock(&self, db: &mut PgConnection, intent: &Intent) -> Result<Option<Retained>> {
-        let row = sqlx::query("SELECT command_name,request_digest,status,receipt FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 FOR UPDATE")
+        let row = sqlx::query("SELECT command_name,request_digest,status,receipt,operation_id FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 AND intent_id=$3 FOR UPDATE")
             .bind(self.0.namespace_id)
             .bind(self.0.generation)
             .bind(&intent.id)
@@ -46,6 +47,7 @@ impl Effects<'_> {
             request_digest: row.get("request_digest"),
             status: row.get("status"),
             receipt: row.get("receipt"),
+            operation_id: row.get("operation_id"),
         }))
     }
     pub async fn insert(

@@ -167,6 +167,13 @@ pub trait GitHubAdapter: Send + Sync {
         expected_base: &str,
     ) -> GitHubResult<MergeOutcome>;
     async fn close(&self, repo: &GitHubRepository, pr: u64) -> GitHubResult<PullRequest>;
+    async fn branch_head(
+        &self,
+        _repo: &GitHubRepository,
+        _branch: &str,
+    ) -> GitHubResult<Option<String>> {
+        Err(GitHubApiError::Unconfigured)
+    }
     async fn delete_branch(
         &self,
         repo: &GitHubRepository,

@@ -193,7 +193,7 @@ pub(super) use profile::matches_offer;
 fn observation(facts: &crate::stall::freshness::Facts, now: u64) -> Result<ProcessObservation> {
     // The ladder's own windows decide the state (`stall::runtime::run`).
     let (observation_state, reason) =
-        crate::stall::freshness::state(&facts, &crate::stall::policy::ExecutionPolicy::v1(), now);
+        crate::stall::freshness::state(facts, &crate::stall::policy::ExecutionPolicy::v1(), now);
     Ok(ProcessObservation {
         state: observation_state.as_str().into(),
         observed_at: timestamp(now)?,

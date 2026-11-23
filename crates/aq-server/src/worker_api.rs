@@ -168,6 +168,22 @@ async fn node_locked(
         .map_err(crate::error::db)?;
     current.ok_or(AppError::CredentialRevoked)
 }
+#[cfg(feature = "project_environments")]
+impl aq_environments::worker::Host<AppError> for AppState {
+    async fn node(&self, headers: &HeaderMap) -> Result<uuid::Uuid, AppError> {
+        Ok(authenticate_context(self, headers).await?.id())
+    }
+    async fn agent(
+        &self,
+        h: &HeaderMap,
+        p: &str,
+    ) -> Result<(uuid::Uuid, uuid::Uuid), axum::response::Response> {
+        crate::agent_access::results::project(self, h, p).await
+    }
+    fn git_socket(&self) -> Option<&std::path::Path> {
+        Some(&self.source_retention.as_ref()?.config.git_socket)
+    }
+}
 /// Existing callers keep the Node snapshot API and its authentication behavior.
 pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Node, AppError> {
     Ok(authenticate_context(state, headers).await?.node)

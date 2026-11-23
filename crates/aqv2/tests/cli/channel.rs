@@ -753,3 +753,6 @@ fn conversation_messages_print_cursor_author_time_and_body() {
 
 #[path = "channel/binary.rs"]
 mod binary;
+#[cfg(feature = "project_environments")]
+#[path = "channel/environment_try.rs"]
+mod environment_try;

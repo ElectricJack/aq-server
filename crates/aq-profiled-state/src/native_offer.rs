@@ -1,5 +1,4 @@
 //! Central Graph read provenance and the stored original native offer.
-pub mod scheduling;
 use crate::git_author::OfferDelivery;
 use aq_admission::{Digest, Invalid, Result, TaskRevision};
 use serde::{Deserialize, Serialize};
@@ -30,6 +29,76 @@ pub struct ReadyPage {
     pub next_cursor: Option<String>,
     pub stamp: GraphReadStamp,
 }
+pub fn bounded_cursor(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+}
+pub fn graph_task_revision(node: &Value, workspace: Uuid) -> Result<TaskRevision> {
+    let task_id = node["id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or(Invalid("invalid Graph task observation"))?;
+    if node["workspace_id"] != workspace.to_string() || node["kind"] != "task" {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    let revision = TaskRevision {
+        workspace_id: workspace,
+        task_id,
+        version: node["version"]
+            .as_u64()
+            .ok_or(Invalid("invalid Graph task observation"))?,
+        content_revision: node["content_revision"]
+            .as_u64()
+            .ok_or(Invalid("invalid Graph task observation"))?,
+    };
+    revision
+        .validate()
+        .map_err(|_| Invalid("invalid Graph task observation"))?;
+    Ok(revision)
+}
+pub fn graph_ready_page(
+    workspace: Uuid,
+    limit: u16,
+    cursor: Option<&str>,
+    value: &Value,
+    stamp: GraphReadStamp,
+) -> Result<ReadyPage> {
+    let raw = value["items"]
+        .as_array()
+        .ok_or(Invalid("invalid Graph task observation"))?;
+    if raw.len() > limit as usize {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut items = Vec::new();
+    for node in raw {
+        let revision = graph_task_revision(node, workspace)?;
+        if node["task_state"] != "active"
+            || node["retired"] != false
+            || node["deleted"] != false
+            || !ids.insert(revision.task_id)
+        {
+            return Err(Invalid("invalid Graph task observation"));
+        }
+        items.push(ReadyTask {
+            revision,
+            node: node.clone(),
+        });
+    }
+    let next_cursor = value["next_cursor"].as_str().map(str::to_owned);
+    if next_cursor
+        .as_ref()
+        .is_some_and(|c| !bounded_cursor(c) || Some(c.as_str()) == cursor)
+    {
+        return Err(Invalid("invalid Graph task observation"));
+    }
+    Ok(ReadyPage {
+        workspace_id: workspace,
+        items,
+        next_cursor,
+        stamp,
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskContext {
     pub revision: TaskRevision,

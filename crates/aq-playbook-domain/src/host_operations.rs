@@ -34,6 +34,80 @@ impl<'a> OperationRequest<'a> {
     }
 }
 
+/// Records one host decision under the caller's namespace lock.
+pub async fn record_effect(
+    db: &mut PgConnection,
+    namespace: &Namespace,
+    (grant, revision): (Uuid, i64),
+    intent: &aq_playbook_host::runner::Intent,
+    identity: &str,
+    (operation, status, receipt, at): (Uuid, &str, &Value, i64),
+) -> Result<()> {
+    sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
+        .bind(namespace.namespace_id)
+        .bind(namespace.generation)
+        .bind(&intent.id)
+        .bind(&intent.run)
+        .bind(&intent.command.name)
+        .bind(identity)
+        .bind(intent.command.fingerprint().map_err(|_| Error::Invalid)?)
+        .bind(&intent.input_digest)
+        .bind(grant)
+        .bind(revision)
+        .bind(operation)
+        .bind(status)
+        .bind(receipt)
+        .bind(at)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// The caller proved absence of the effect row and validated the original intent
+/// under the same namespace lock that admission requires. The expiry marker
+/// keeps that intent closed even if its engine reply is lost or the clock moves.
+pub async fn close_unadmitted_delivery(
+    db: &mut PgConnection,
+    namespace: &Namespace,
+    grant: (Uuid, i64),
+    intent: &aq_playbook_host::runner::Intent,
+    identity: &str,
+    operation: Uuid,
+    now: i64,
+) -> Result<Option<HostResult>> {
+    if intent.deadline_at_ms > now
+        || !aq_playbook_host::DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
+    {
+        return Ok(None);
+    }
+    let admitted: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM playbook_host_operations WHERE namespace_id=$1
+         AND generation=$2 AND intent_id=$3)",
+    )
+    .bind(namespace.namespace_id)
+    .bind(namespace.generation)
+    .bind(&intent.id)
+    .fetch_one(&mut *db)
+    .await?;
+    if admitted {
+        return Ok(None);
+    }
+    let output = json!({"reason":aq_playbook_host::DELIVERY_ADMISSION_EXPIRED});
+    record_effect(
+        db,
+        namespace,
+        grant,
+        intent,
+        identity,
+        (operation, "expired", &output, now),
+    )
+    .await?;
+    Ok(Some(HostResult {
+        outcome: "expired".into(),
+        output,
+    }))
+}
+
 pub struct Operation {
     pub command: String,
     pub intent_id: String,

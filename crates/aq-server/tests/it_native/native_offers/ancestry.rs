@@ -105,6 +105,12 @@ impl Fixture {
                     let mut items = vec![&root];
                     items.extend(sibling_ready.then_some(&sibling_node));
                     json!({"items":items,"next_cursor":null})
+                } else if uri.path().ends_with(&format!("/ready/{task}")) {
+                    json!({"items":[root],"next_cursor":null})
+                } else if uri.path().ends_with(&format!("/ready/{sibling}")) {
+                    let items: Vec<_> =
+                        sibling_ready.then_some(&sibling_node).into_iter().collect();
+                    json!({"items":items,"next_cursor":null})
                 } else if uri.path().ends_with(&format!("/nodes/{task}/context")) {
                     match peer_reads.fetch_add(1, Ordering::SeqCst) {
                         0 if peer_late.load(Ordering::SeqCst) => initial_context.clone(),

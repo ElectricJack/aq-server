@@ -268,6 +268,9 @@ fn vocabulary_matches_published_contract() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
+    // The published vocabulary is the default build's (spec 0017 adds one).
+    #[cfg(feature = "project_environments")]
+    let ops = [ops, vec![op::ENVIRONMENT_TRY]].concat();
     assert_eq!(ops, op::ALL);
     let codes = schema["$defs"]["RefusalCode"]["enum"].as_array().unwrap();
     for code in CODES {

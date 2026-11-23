@@ -69,11 +69,11 @@ fn hold_text(code: HoldCode) -> (&'static str, Option<&'static str>) {
         HistoryRateLimited => ("Rate limit reached", None),
         HistoryCapReached => (
             "Live history cap reached",
-            Some("Wait for running agents to settle"),
+            Some("AQ rechecks usage when workers poll"),
         ),
         TasksHeld => (
             "Tasks are held",
-            Some("Open a held task to see why; an owner can retire it"),
+            Some("Open a held task to see how it can resume"),
         ),
     }
 }
