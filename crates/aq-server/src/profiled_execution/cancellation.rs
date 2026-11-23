@@ -133,13 +133,7 @@ pub async fn cancel(
                 .ok_or(AppError::Internal)?;
             sqlx::query("INSERT INTO profiled_cancellations(attempt_id,cancellation_id,binding,reason,authority_revision,recorded_at_ms) VALUES($1,$2,$3,$4,$5,$6)")
                 .bind(attempt).bind(operation).bind(json!(binding)).bind(reason).bind(revision).bind(now as i64).execute(&mut *tx).await.map_err(db)?;
-            hot.cancellation_id = Some(operation);
-            hot.revoked = true;
-            if hot.grant.is_some() && !hot.stop.known_stopped() {
-                hot.status = Status::Cancelling;
-            }
-            hot.validate_against(&binding)
-                .map_err(|_| AppError::Internal)?;
+            revoke_hot(&mut hot, &binding, operation)?;
             sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
                 .bind(attempt)
                 .bind(json!(hot))
@@ -183,6 +177,21 @@ pub async fn cancel(
         .bind(operation).bind(attempt).bind(request).bind(json!(receipt)).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(receipt)
+}
+
+fn revoke_hot(
+    hot: &mut HotState,
+    binding: &LaunchBinding,
+    operation: Uuid,
+) -> Result<(), AppError> {
+    hot.cancellation_id = Some(operation);
+    hot.revoked = true;
+    if hot.grant.is_some() && !hot.stop.known_stopped() {
+        hot.status = Status::Cancelling;
+    }
+    hot.validate_against(binding)
+        .map_err(|_| AppError::Internal)?;
+    Ok(())
 }
 
 /// Called only with the common node/attempt locks held, after the actual stop

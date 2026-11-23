@@ -105,45 +105,8 @@ impl ProfiledConfig {
         {
             return Err("profiled policy bounds".into());
         }
-        let mut runtimes = BTreeSet::new();
-        for item in &self.qualified_runtimes {
-            artifact(&item.runtime)?;
-            artifact(&item.qualification)?;
-            if !runtimes.insert((item.runtime.id.clone(), item.runtime.version.clone()))
-                || item.features.len() > 4
-                || item.features.iter().collect::<BTreeSet<_>>().len() != item.features.len()
-            {
-                return Err("duplicate or unbounded qualified runtime".into());
-            }
-            aq_session_protocol::require_capabilities(&item.capabilities, &item.capabilities)
-                .map_err(|_| "invalid qualified runtime capabilities")?;
-            if let Some(delivery) = &item.material_delivery {
-                artifact(&delivery.adapter)?;
-                if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
-                    return Err("unsupported configured material delivery".into());
-                }
-            }
-        }
-        let mut projects = BTreeSet::new();
-        for project in &self.projects {
-            if project.project_id.is_nil()
-                || !projects.insert(project.project_id)
-                || project.retention_handle.is_nil()
-                || !(-1_000_000..=1_000_000).contains(&project.priority)
-            {
-                return Err("project source policy bounds".into());
-            }
-            project
-                .source
-                .validate()
-                .map_err(|_| "explicit immutable object or safe source ref required")?;
-            if let Some(g) = &project.agent_grants {
-                g.validate().map_err(|e| e.to_string())?;
-            }
-            if let Some(placement) = &project.placement {
-                placement.validate()?;
-            }
-        }
+        validate_runtimes(&self.qualified_runtimes)?;
+        validate_projects(&self.projects)?;
         Ok(())
     }
     /// Compact authority anchor. Private immutable Definition construction proves
@@ -225,4 +188,51 @@ pub fn deserialize<'de, D: serde::Deserializer<'de>>(
             Ok(std::sync::Arc::new(config))
         })
         .transpose()
+}
+
+fn validate_runtimes(items: &[QualifiedRuntime]) -> Result<(), String> {
+    let mut runtimes = BTreeSet::new();
+    for item in items {
+        artifact(&item.runtime)?;
+        artifact(&item.qualification)?;
+        if !runtimes.insert((item.runtime.id.clone(), item.runtime.version.clone()))
+            || item.features.len() > 4
+            || item.features.iter().collect::<BTreeSet<_>>().len() != item.features.len()
+        {
+            return Err("duplicate or unbounded qualified runtime".into());
+        }
+        aq_session_protocol::require_capabilities(&item.capabilities, &item.capabilities)
+            .map_err(|_| "invalid qualified runtime capabilities")?;
+        if let Some(delivery) = &item.material_delivery {
+            artifact(&delivery.adapter)?;
+            if delivery.version != 1 || !item.features.contains(&Feature::ServerMaterialV1) {
+                return Err("unsupported configured material delivery".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_projects(items: &[ProjectPolicy]) -> Result<(), String> {
+    let mut projects = BTreeSet::new();
+    for project in items {
+        if project.project_id.is_nil()
+            || !projects.insert(project.project_id)
+            || project.retention_handle.is_nil()
+            || !(-1_000_000..=1_000_000).contains(&project.priority)
+        {
+            return Err("project source policy bounds".into());
+        }
+        project
+            .source
+            .validate()
+            .map_err(|_| "explicit immutable object or safe source ref required")?;
+        if let Some(g) = &project.agent_grants {
+            g.validate().map_err(|e| e.to_string())?;
+        }
+        if let Some(placement) = &project.placement {
+            placement.validate()?;
+        }
+    }
+    Ok(())
 }

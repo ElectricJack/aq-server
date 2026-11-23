@@ -16,6 +16,27 @@ struct ConfigurationOwner {
     revision: u64,
     configuration_digest: Digest,
 }
+impl ConfigurationOwner {
+    fn decode(value: &str) -> Result<Self, AppError> {
+        if value.len() > 4096 {
+            return Err(AppError::Internal);
+        }
+        serde_json::from_str(value).map_err(|_| AppError::Internal)
+    }
+    fn require_installable(&self, revision: u64, digest: &Digest) -> Result<(), AppError> {
+        if self.schema_version != 1 || self.revision == 0 || self.revision > i64::MAX as u64 {
+            return Err(AppError::Internal);
+        }
+        if revision < self.revision
+            || (revision == self.revision && digest != &self.configuration_digest)
+        {
+            return Err(conflict(
+                "profiled configuration revision is stale or has changed content",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, PartialEq, Eq)]
 pub struct InstallReport {
     pub configured: bool,
@@ -91,49 +112,10 @@ pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
             .await
             .map_err(db)?;
     if let Some(previous) = previous {
-        if previous.len() > 4096 {
-            return Err(AppError::Internal);
-        }
-        let previous: ConfigurationOwner =
-            serde_json::from_str(&previous).map_err(|_| AppError::Internal)?;
-        if previous.schema_version != 1
-            || previous.revision == 0
-            || previous.revision > i64::MAX as u64
-        {
-            return Err(AppError::Internal);
-        }
-        if config.revision < previous.revision
-            || (config.revision == previous.revision
-                && configuration_digest != previous.configuration_digest)
-        {
-            return Err(conflict(
-                "profiled configuration revision is stale or has changed content",
-            ));
-        }
+        ConfigurationOwner::decode(&previous)?
+            .require_installable(config.revision, &configuration_digest)?;
     }
-    let rows=sqlx::query("SELECT project_id,revision,policy_digest,policy FROM admission_source_policies ORDER BY project_id LIMIT 1025").fetch_all(&mut *tx).await.map_err(db)?;
-    if rows.len() > MAX_RETAINED {
-        return Err(conflict("retained project policy quota exhausted"));
-    }
-    let mut old = BTreeMap::new();
-    for row in rows {
-        let project: Uuid = row.get("project_id");
-        let prior: ProjectPolicyRecord = serde_json::from_value(row.get("policy"))
-            .map_err(|_| conflict("existing source policy requires explicit owner migration"))?;
-        let reference = prior.artifact().map_err(|_| AppError::Internal)?;
-        if prior.project_id != project
-            || prior.revision as i64 != row.get::<i64, _>("revision")
-            || reference.digest.as_str() != row.get::<String, _>("policy_digest")
-        {
-            return Err(AppError::Internal);
-        }
-        if prior.revision > config.revision {
-            return Err(conflict(
-                "installed project policy is newer than configuration",
-            ));
-        }
-        old.insert(project, prior);
-    }
+    let old = load_policies(&mut tx, config.revision).await?;
     let requested: BTreeSet<_> = old.keys().chain(configured.keys()).copied().collect();
     // Project predicates precede source rows in the admission lock order.
     // Missing projects are reported ineligible; no project binding is fabricated.
@@ -220,10 +202,7 @@ pub async fn fence_configuration_locked(
         .await
         .map_err(db)?
         .ok_or_else(|| conflict("profiled configuration is not installed"))?;
-    if value.len() > 4096 {
-        return Err(AppError::Internal);
-    }
-    let owner: ConfigurationOwner = serde_json::from_str(&value).map_err(|_| AppError::Internal)?;
+    let owner = ConfigurationOwner::decode(&value)?;
     if owner.schema_version != 1
         || owner.revision != config.revision
         || owner.configuration_digest
@@ -234,4 +213,34 @@ pub async fn fence_configuration_locked(
         return Err(conflict("profiled configuration is stale"));
     }
     Ok(())
+}
+
+async fn load_policies(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    revision: u64,
+) -> Result<BTreeMap<Uuid, ProjectPolicyRecord>, AppError> {
+    let rows=sqlx::query("SELECT project_id,revision,policy_digest,policy FROM admission_source_policies ORDER BY project_id LIMIT 1025").fetch_all(&mut **tx).await.map_err(db)?;
+    if rows.len() > MAX_RETAINED {
+        return Err(conflict("retained project policy quota exhausted"));
+    }
+    let mut old = BTreeMap::new();
+    for row in rows {
+        let project: Uuid = row.get("project_id");
+        let prior: ProjectPolicyRecord = serde_json::from_value(row.get("policy"))
+            .map_err(|_| conflict("existing source policy requires explicit owner migration"))?;
+        let reference = prior.artifact().map_err(|_| AppError::Internal)?;
+        if prior.project_id != project
+            || prior.revision as i64 != row.get::<i64, _>("revision")
+            || reference.digest.as_str() != row.get::<String, _>("policy_digest")
+        {
+            return Err(AppError::Internal);
+        }
+        if prior.revision > revision {
+            return Err(conflict(
+                "installed project policy is newer than configuration",
+            ));
+        }
+        old.insert(project, prior);
+    }
+    Ok(old)
 }

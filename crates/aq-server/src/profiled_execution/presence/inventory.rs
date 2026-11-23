@@ -120,23 +120,7 @@ pub async fn record(
         expires,
     )
     .await?;
-    if !request.provisionable_only.is_empty() {
-        bindings.retain(|b| {
-            request
-                .provisionable_only
-                .iter()
-                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
-        });
-        if bindings.len() != request.provisionable_only.len() {
-            return Err(changed());
-        }
-    }
-    if bindings
-        .iter()
-        .any(|b| b.available || b.preparation.is_none())
-    {
-        return Err(changed());
-    }
+    validate_bindings(&mut bindings, request)?;
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
@@ -152,19 +136,7 @@ pub async fn record(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(storage::db)?;
-    let revision = if let Some(old) = old {
-        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
-            && old.get::<i64, _>("sequence") as u64 >= request.sequence
-        {
-            return Err(changed());
-        }
-        old.get::<i64, _>("revision")
-            .checked_add(1)
-            .ok_or_else(unavailable)? as u64
-    } else {
-        1
-    };
+    let revision = next_revision_locked(&mut tx, request).await?;
     let snapshot = CapabilitySnapshot {
         backend_kind: None,
         target: ExecutionTarget::Worker {
@@ -200,12 +172,7 @@ pub async fn record(
     let value = serde_json::to_value(&snapshot).map_err(|_| AppError::Internal)?;
     sqlx::query("INSERT INTO intelligence_node_snapshots(node_id,boot_id,sequence,revision,snapshot) VALUES($1,$2,$3,$4,$5) ON CONFLICT(node_id) DO UPDATE SET boot_id=excluded.boot_id,sequence=excluded.sequence,revision=excluded.revision,snapshot=excluded.snapshot").bind(auth.id()).bind(request.identity.boot_id).bind(request.sequence as i64).bind(revision as i64).bind(&value).execute(&mut *tx).await.map_err(storage::db)?;
     let recorded = now(state)?;
-    if recorded < observed
-        || recorded >= observed.checked_add(2000).ok_or_else(unavailable)?
-        || recorded >= expires
-    {
-        return Err(unavailable());
-    }
+    require_fresh(recorded, observed, observed, expires)?;
     let receipt = InventoryReceipt {
         schema_version: 1,
         identity: request.identity.clone(),
@@ -223,12 +190,61 @@ pub async fn record(
     storage::retain_inventory(&mut tx, request, &receipt, epoch).await?;
     sqlx::query("INSERT INTO execution_receipts(node_id,operation_id,kind,payload_digest,response) VALUES($1,$2,'scoped_inventory_v2',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(request.digest().map_err(|_|changed())?.as_str()).bind(serde_json::to_value(&receipt).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(storage::db)?;
     let final_time = now(state)?;
-    if final_time < recorded
-        || final_time >= observed.checked_add(2000).ok_or_else(unavailable)?
-        || final_time >= expires
+    require_fresh(final_time, recorded, observed, expires)?;
+    tx.commit().await.map_err(|_| unavailable())?;
+    Ok(receipt)
+}
+
+fn validate_bindings(
+    bindings: &mut Vec<aq_selection::CredentialBinding>,
+    request: &InventoryV2,
+) -> Result<(), AppError> {
+    if !request.provisionable_only.is_empty() {
+        bindings.retain(|b| {
+            request
+                .provisionable_only
+                .iter()
+                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
+        });
+        if bindings.len() != request.provisionable_only.len() {
+            return Err(changed());
+        }
+    }
+    if bindings
+        .iter()
+        .any(|b| b.available || b.preparation.is_none())
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+async fn next_revision_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request: &InventoryV2,
+) -> Result<u64, AppError> {
+    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(request.identity.node_id).fetch_optional(&mut **tx).await.map_err(storage::db)?;
+    if let Some(old) = old {
+        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
+            && old.get::<i64, _>("sequence") as u64 >= request.sequence
+        {
+            return Err(changed());
+        }
+        Ok(old
+            .get::<i64, _>("revision")
+            .checked_add(1)
+            .ok_or_else(unavailable)? as u64)
+    } else {
+        Ok(1)
+    }
+}
+
+fn require_fresh(time: u64, not_before: u64, observed: u64, expires: u64) -> Result<(), AppError> {
+    if time < not_before
+        || time >= observed.checked_add(2000).ok_or_else(unavailable)?
+        || time >= expires
     {
         return Err(unavailable());
     }
-    tx.commit().await.map_err(|_| unavailable())?;
-    Ok(receipt)
+    Ok(())
 }

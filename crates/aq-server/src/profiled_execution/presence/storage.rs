@@ -41,11 +41,9 @@ pub async fn inventory(
     node: Uuid,
     operation: Uuid,
 ) -> Result<Option<Inventory>, AppError> {
-    let row=sqlx::query("SELECT kind,request_bytes,request_digest,receipt_bytes,compatibility_epoch FROM profiled_presence_operations WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(node).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?;
-    let Some(row) = row else { return Ok(None) };
-    if row.get::<String, _>("kind") != "inventory_v2" {
-        return Err(changed());
-    }
+    let Some(row) = operation_locked(tx, node, operation, "inventory_v2").await? else {
+        return Ok(None);
+    };
     let request =
         decode_inventory(&row.get::<Vec<u8>, _>("request_bytes")).map_err(|_| changed())?;
     let receipt: InventoryReceipt =
@@ -170,11 +168,9 @@ pub async fn fact(
     node: Uuid,
     operation: Uuid,
 ) -> Result<Option<Fact>, AppError> {
-    let row=sqlx::query("SELECT kind,request_bytes,request_digest,receipt_bytes,compatibility_epoch FROM profiled_presence_operations WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(node).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?;
-    let Some(row) = row else { return Ok(None) };
-    if row.get::<String, _>("kind") != "presence" {
-        return Err(changed());
-    }
+    let Some(row) = operation_locked(tx, node, operation, "presence").await? else {
+        return Ok(None);
+    };
     let request =
         aq_admission::scoped_presence::decode_report(&row.get::<Vec<u8>, _>("request_bytes"))
             .map_err(|_| changed())?;
@@ -235,4 +231,20 @@ pub async fn accepted(
         return Err(changed());
     }
     Ok(accepted)
+}
+
+async fn operation_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    operation: Uuid,
+    kind: &str,
+) -> Result<Option<sqlx::postgres::PgRow>, AppError> {
+    let row=sqlx::query("SELECT kind,request_bytes,request_digest,receipt_bytes,compatibility_epoch FROM profiled_presence_operations WHERE node_id=$1 AND operation_id=$2 FOR SHARE").bind(node).bind(operation).fetch_optional(&mut **tx).await.map_err(db)?;
+    if row
+        .as_ref()
+        .is_some_and(|row| row.get::<String, _>("kind") != kind)
+    {
+        return Err(changed());
+    }
+    Ok(row)
 }

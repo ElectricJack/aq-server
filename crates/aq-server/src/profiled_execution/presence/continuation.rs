@@ -60,14 +60,7 @@ pub(crate) async fn scoped_locked(
     }
     let q = current.qualification;
     let runtime = registration::current_runtime_locked(state, tx, node_id, boot_id).await?;
-    if !snapshot.credential_bindings.iter().any(|b| {
-        b.credential_profile == lease.credential_profile
-            && b.credential_revision == lease.credential_revision
-            && !b.available
-            && b.preparation.is_some()
-    }) {
-        return Err(changed());
-    }
+    require_provisionable_binding(snapshot, lease)?;
     if now(state)? >= current.receipt.expires_at_ms {
         return Err(unavailable());
     }
@@ -138,4 +131,19 @@ pub(crate) async fn scoped_locked(
             .min(snapshot.expires_at_ms)
             .min(current.receipt.expires_at_ms),
     ))
+}
+
+fn require_provisionable_binding(
+    snapshot: &CapabilitySnapshot,
+    lease: &MaterialLease,
+) -> Result<(), AppError> {
+    if !snapshot.credential_bindings.iter().any(|b| {
+        b.credential_profile == lease.credential_profile
+            && b.credential_revision == lease.credential_revision
+            && !b.available
+            && b.preparation.is_some()
+    }) {
+        return Err(changed());
+    }
+    Ok(())
 }
