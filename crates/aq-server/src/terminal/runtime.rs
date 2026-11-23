@@ -4,6 +4,7 @@ use crate::error::AppError;
 use aq_session_protocol::*;
 use aq_terminal_relay::{
     Access, Ledger,
+    api::ViewQuery,
     output::{Replay, View},
 };
 use std::{
@@ -59,6 +60,27 @@ struct Buffers {
     items: BTreeMap<Uuid, Buffer>,
     node_rate: BTreeMap<Uuid, Rate>,
 }
+impl Buffers {
+    fn upload(
+        &mut self,
+        terminal: &TerminalIdentity,
+        now: u64,
+    ) -> Result<Option<(&mut Buffer, &mut Rate)>, AppError> {
+        let Some(buffer) = self.items.get(&terminal.terminal_id) else {
+            return Ok(None);
+        };
+        if now >= buffer.until {
+            self.items.remove(&terminal.terminal_id);
+            return Ok(None);
+        }
+        let node_rate = self.node_rate.get_mut(&buffer.node).ok_or_else(fail)?;
+        let entry = self.items.get_mut(&terminal.terminal_id).ok_or_else(fail)?;
+        if entry.terminal != *terminal {
+            return Err(AppError::Conflict("terminal subscription expired".into()));
+        }
+        Ok(Some((entry, node_rate)))
+    }
+}
 struct PollState {
     slot: Arc<Semaphore>,
     output_slot: Arc<Semaphore>,
@@ -113,14 +135,46 @@ pub struct Runtime {
 fn fail() -> AppError {
     AppError::Internal
 }
+pub(super) struct Watch<'a> {
+    ledger: &'a Ledger,
+    pub access: Access,
+    query: &'a ViewQuery,
+    at: u64,
+}
+impl super::persistence::LoadedLedger {
+    pub(super) fn watch<'a>(
+        &'a self,
+        mut access: Access,
+        query: &'a ViewQuery,
+        at: u64,
+    ) -> Result<Watch<'a>, AppError> {
+        access.session_revision = self.authority_revision;
+        self.ledger
+            .authorize_watch(&access, query.subscription_id, at)
+            .map_err(super::persistence::relay)?;
+        Ok(Watch {
+            ledger: &self.ledger,
+            access,
+            query,
+            at,
+        })
+    }
+}
+impl Watch<'_> {
+    pub(super) fn expires_at(&self) -> Result<u64, AppError> {
+        self.ledger
+            .summary()
+            .subscriptions
+            .into_iter()
+            .find(|s| s.subscription_id == self.query.subscription_id)
+            .map(|s| s.expires_at_ms)
+            .ok_or(AppError::Internal)
+    }
+}
 impl Runtime {
-    pub fn reserve(
-        &self,
-        t: &TerminalIdentity,
-        policy: &TerminalPolicy,
-        until: u64,
-        now: u64,
-    ) -> Result<(), AppError> {
+    pub fn reserve(&self, ledger: &Ledger, until: u64, now: u64) -> Result<(), AppError> {
+        let t = ledger.terminal();
+        let policy = ledger.terminal_policy();
         let SessionIdentity::Remote { node_id, .. } = t.session else {
             return Err(AppError::Conflict(
                 "central terminal authority unsupported".into(),
@@ -158,20 +212,20 @@ impl Runtime {
         );
         Ok(())
     }
-    pub fn view(
-        &self,
-        l: &Ledger,
-        a: &Access,
-        subscription: Uuid,
-        after: u64,
-        now: u64,
-    ) -> Result<Option<View>, AppError> {
-        let b = self.buffers.lock().map_err(|_| fail())?;
-        b.items
-            .get(&l.terminal().terminal_id)
+    pub(super) fn view(&self, watch: &Watch<'_>) -> Result<Option<View>, AppError> {
+        let buffers = self.buffers.lock().map_err(|_| fail())?;
+        buffers
+            .items
+            .get(&watch.ledger.terminal().terminal_id)
             .map(|v| {
                 v.ring
-                    .view(l, a, subscription, after, now)
+                    .view(
+                        watch.ledger,
+                        &watch.access,
+                        watch.query.subscription_id,
+                        watch.query.after_sequence,
+                        watch.at,
+                    )
                     .map_err(super::persistence::relay)
             })
             .transpose()
@@ -186,22 +240,9 @@ impl Runtime {
         // Output is disposable. A worker may finish an upload after its watch
         // expired (or before anyone watches). Authority is checked by upload_in;
         // absence of a replay consumer must not cause an endless upload retry.
-        let Some(buffer) = b.items.get(&frame.terminal.terminal_id) else {
+        let Some((entry, node_rate)) = b.upload(&frame.terminal, now)? else {
             return Ok(None);
         };
-        if now >= buffer.until {
-            b.items.remove(&frame.terminal.terminal_id);
-            return Ok(None);
-        }
-        let node = buffer.node;
-        let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
-        let entry = b
-            .items
-            .get_mut(&frame.terminal.terminal_id)
-            .ok_or_else(fail)?;
-        if entry.terminal != frame.terminal || now >= entry.until {
-            return Err(AppError::Conflict("terminal subscription expired".into()));
-        }
         if frame.bytes.len() > entry.policy.max_frame_bytes as usize {
             return Err(AppError::BadRequest(
                 "frame exceeds sealed terminal policy".into(),
@@ -215,6 +256,7 @@ impl Runtime {
             return Ok(None);
         }
         let mut sr = entry.rate.clone();
+        let mut nr = node_rate.clone();
         if !sr.take(frame.bytes.len(), now) || !nr.take(frame.bytes.len(), now) {
             let gap = OutputGap {
                 terminal: frame.terminal.clone(),
@@ -232,7 +274,7 @@ impl Runtime {
             .frame(peer, frame, now)
             .map_err(super::persistence::relay)?;
         entry.rate = sr;
-        b.node_rate.insert(node, nr);
+        *node_rate = nr;
         Ok(None)
     }
     pub fn snapshot(
@@ -242,22 +284,9 @@ impl Runtime {
         now: u64,
     ) -> Result<(), AppError> {
         let mut b = self.buffers.lock().map_err(|_| fail())?;
-        let Some(buffer) = b.items.get(&snapshot.terminal.terminal_id) else {
+        let Some((entry, node_rate)) = b.upload(&snapshot.terminal, now)? else {
             return Ok(());
         };
-        if now >= buffer.until {
-            b.items.remove(&snapshot.terminal.terminal_id);
-            return Ok(());
-        }
-        let node = buffer.node;
-        let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
-        let entry = b
-            .items
-            .get_mut(&snapshot.terminal.terminal_id)
-            .ok_or_else(fail)?;
-        if entry.terminal != snapshot.terminal || now >= entry.until {
-            return Err(AppError::Conflict("terminal subscription expired".into()));
-        }
         if !entry
             .ring
             .is_new_snapshot(peer, &snapshot)
@@ -266,6 +295,7 @@ impl Runtime {
             return Ok(());
         }
         let mut sr = entry.rate.clone();
+        let mut nr = node_rate.clone();
         if !sr.take(snapshot.state.len(), now) || !nr.take(snapshot.state.len(), now) {
             return Err(AppError::IdentityUnavailable(
                 "terminal snapshot output quota exhausted".into(),
@@ -276,7 +306,7 @@ impl Runtime {
             .snapshot(peer, snapshot, now)
             .map_err(super::persistence::relay)?;
         entry.rate = sr;
-        b.node_rate.insert(node, nr);
+        *node_rate = nr;
         Ok(())
     }
     pub fn gap(

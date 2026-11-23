@@ -1,12 +1,13 @@
 //! Authorized, disposable literal output only. This never claims a screen
 //! snapshot, complete history, live process observation or input permission.
-use super::persistence::{self, Result, Right, authorize, configured, identity, load, now};
+use super::persistence::{self, AccessSubject, Result, Right, configured, identity, load, now};
 use crate::{
     AppState,
     error::AppError,
     execution::authority::{self, Policy},
 };
 use aq_session_protocol::{OutputFrame, OutputGap, TerminalIdentity};
+use aq_terminal_relay::output::View;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub const MAX_FRAMES: usize = 64;
@@ -73,28 +74,14 @@ async fn read_inner(
         Policy::TerminalHistorical,
     )
     .await?;
-    let mut access = authorize(state, &mut tx, &view, &terminal, actor, Right::Inspect).await?;
+    let access = AccessSubject::new(&view, &terminal, actor)
+        .authorize(state, &mut tx, Right::Inspect)
+        .await?;
     let loaded = load(state, &mut tx, &terminal, &view).await?;
-    access.session_revision = loaded.authority_revision;
     let checked_at = now(state);
-    loaded
-        .ledger
-        .authorize_watch(&access, query.subscription_id, checked_at)
-        .map_err(persistence::relay)?;
-    let subscription = loaded
-        .ledger
-        .summary()
-        .subscriptions
-        .into_iter()
-        .find(|s| s.subscription_id == query.subscription_id)
-        .ok_or(AppError::Internal)?;
-    let replay = config.runtime.view(
-        &loaded.ledger,
-        &access,
-        query.subscription_id,
-        query.after_sequence,
-        checked_at,
-    )?;
+    let watch = loaded.watch(access, query, checked_at)?;
+    let expires_at = watch.expires_at()?;
+    let replay = config.runtime.view(&watch)?;
     let active = match authority::read(state, &mut tx, &terminal.session, Policy::TerminalActive)
         .await
     {
@@ -104,31 +91,16 @@ async fn read_inner(
         }
         Err(_) => false,
     };
-    let before_commit = now(state);
-    if before_commit < checked_at
-        || before_commit >= access.valid_until_ms
-        || before_commit >= subscription.expires_at_ms
-    {
-        return Err(AppError::IdentityUnavailable(
-            "terminal inspection or watch expired".into(),
-        ));
-    }
+    let until = watch.access.valid_until_ms.min(expires_at);
+    let before_commit = checked_clock(state, checked_at, until)?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
-    let clock = now(state);
-    if clock < before_commit
-        || clock >= access.valid_until_ms
-        || clock >= subscription.expires_at_ms
-    {
-        return Err(AppError::IdentityUnavailable(
-            "terminal inspection or watch expired".into(),
-        ));
-    }
+    let clock = checked_clock(state, before_commit, until)?;
     let mut reply = TailReply {
         terminal,
         subscription_id: query.subscription_id,
         session_revision: loaded.authority_revision,
         server_time_ms: clock,
-        expires_at_ms: subscription.expires_at_ms,
+        expires_at_ms: expires_at,
         last_observed_at_ms: None,
         availability: Availability::NotRetained,
         disconnected: true,
@@ -140,33 +112,42 @@ async fn read_inner(
         more: false,
     };
     if let Some(replay) = replay {
-        reply.grid = replay.snapshot.as_ref().map(|s| (s.columns, s.rows));
-        let observed = checked_at.saturating_sub(replay.age_ms);
-        if observed > 0 {
-            reply.last_observed_at_ms = Some(observed);
-            reply.availability = Availability::ResidentTail;
-        }
         reply.disconnected = !active
             || view.active_at(clock).is_err()
             || loaded.runtime_id != config.runtime_id
             || replay.disconnected
             || clock.saturating_sub(loaded.peer_observed_at) > 25000;
-        let count = replay.frames.len();
-        let mut bytes = 0;
-        for frame in replay.frames {
-            if reply.frames.len() >= MAX_FRAMES || bytes + frame.bytes.len() > MAX_RAW_BYTES {
-                break;
-            }
-            bytes += frame.bytes.len();
-            reply.frames.push(frame);
+        reply.apply(replay, checked_at);
+    }
+    super::service::require_wire_bound(&reply, MAX_WIRE_BYTES)?;
+    Ok(reply)
+}
+
+fn checked_clock(state: &AppState, after: u64, until: u64) -> Result<u64> {
+    let clock = now(state);
+    if (after..until).contains(&clock) {
+        Ok(clock)
+    } else {
+        Err(AppError::IdentityUnavailable(
+            "terminal inspection or watch expired".into(),
+        ))
+    }
+}
+impl TailReply {
+    fn apply(&mut self, replay: View, checked_at: u64) {
+        let after = self.next_sequence;
+        self.grid = replay.snapshot.as_ref().map(|s| (s.columns, s.rows));
+        let observed = checked_at.saturating_sub(replay.age_ms);
+        if observed > 0 {
+            self.last_observed_at_ms = Some(observed);
+            self.availability = Availability::ResidentTail;
         }
-        reply.more = reply.frames.len() < count;
-        let last_frame = reply
-            .frames
-            .last()
-            .map_or(query.after_sequence, |f| f.sequence);
+        let count = replay.frames.len();
+        self.frames = super::service::bounded_frames(replay.frames, MAX_FRAMES, MAX_RAW_BYTES);
+        self.more = self.frames.len() < count;
+        let last_frame = self.frames.last().map_or(after, |f| f.sequence);
         // Do not advance over a retained frame omitted by the response budget.
-        let cutoff = if reply.more {
+        let cutoff = if self.more {
             last_frame
         } else {
             replay
@@ -176,23 +157,16 @@ async fn read_inner(
                 .chain(replay.snapshot.as_ref().map(|s| s.through_sequence))
                 .fold(last_frame, u64::max)
         }
-        .max(query.after_sequence);
-        reply.gaps = replay
+        .max(after);
+        self.gaps = replay
             .gaps
             .into_iter()
             .filter_map(|mut gap| {
-                gap.first_missing = gap
-                    .first_missing
-                    .max(query.after_sequence.saturating_add(1));
+                gap.first_missing = gap.first_missing.max(after.saturating_add(1));
                 gap.last_missing = gap.last_missing.min(cutoff);
                 (gap.first_missing <= gap.last_missing).then_some(gap)
             })
             .collect();
-        reply.next_sequence = cutoff;
+        self.next_sequence = cutoff;
     }
-    let wire = serde_json::to_vec(&reply).map_err(|_| AppError::Internal)?;
-    if wire.len() > MAX_WIRE_BYTES {
-        return Err(AppError::Internal);
-    }
-    Ok(reply)
 }
