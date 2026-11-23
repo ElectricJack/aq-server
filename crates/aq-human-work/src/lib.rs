@@ -630,11 +630,17 @@ pub fn readiness_in(
     complete: bool,
 ) -> Value {
     let open = blockers.iter().any(|b| b["satisfied"] != true);
-    let held = if task_state == Some("active") {
+    let mut held = if task_state == Some("active") {
         held
     } else {
         Vec::new()
     };
+    if held
+        .iter()
+        .any(|reason| reason["wake_condition"] == "owner_retry_authorized")
+    {
+        held.retain(|reason| reason["code"] != "replacement_facts_ready");
+    }
     let hierarchy = if task_state == Some("active") {
         hierarchy
     } else {
@@ -961,6 +967,23 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn an_owner_retry_hold_takes_precedence_over_ready_replacement_evidence() {
+        let proof = json!({"code":"replacement_facts_ready","wake_condition":"worker_poll"});
+        let budget = json!({"code":"task_held","wake_condition":"owner_retry_authorized"});
+        let blocked = readiness_with(
+            Some("active"),
+            None,
+            vec![budget.clone(), proof.clone()],
+            vec![],
+            true,
+        );
+        assert_eq!(blocked["state"], "held");
+        assert_eq!(blocked["reasons"], json!([budget]));
+        let waiting = readiness_with(Some("active"), None, vec![proof.clone()], vec![], true);
+        assert_eq!(waiting["reasons"], json!([proof]));
     }
 
     #[test]
