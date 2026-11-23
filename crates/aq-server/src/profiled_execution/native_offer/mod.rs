@@ -68,17 +68,15 @@ fn decode_stored_offer(row: &PgRow) -> Result<StoredOffer, AppError> {
 /// stored original offer exactly.
 fn verify_launch_row(row: &PgRow, attempt: Uuid, offered: &OfferedLaunch) -> Result<(), AppError> {
     let offer = &offered.offer;
-    if offer.binding.attempt_id != attempt
-        || row.get::<serde_json::Value, _>("launch_binding") != to_json(&offer.binding)?
-        || row.get::<serde_json::Value, _>("launch_manifest") != to_json(&offer.manifest)?
-        || row.get::<String, _>("manifest_digest") != offer.binding.launch_manifest_digest.as_str()
-        || row.get::<String, _>("execution_spec_digest")
-            != offer.binding.execution_spec_digest.as_str()
-        || row.get::<i64, _>("offer_expires_at_ms") as u64 != offered.clock.expires_at_ms
-    {
-        return Err(refused());
-    }
-    Ok(())
+    let binding = &offer.binding;
+    require(binding.attempt_id == attempt)?;
+    require(row.get::<serde_json::Value, _>("launch_binding") == to_json(binding)?)?;
+    require(row.get::<serde_json::Value, _>("launch_manifest") == to_json(&offer.manifest)?)?;
+    require(row.get::<String, _>("manifest_digest") == binding.launch_manifest_digest.as_str())?;
+    require(
+        row.get::<String, _>("execution_spec_digest") == binding.execution_spec_digest.as_str(),
+    )?;
+    require(row.get::<i64, _>("offer_expires_at_ms") as u64 == offered.clock.expires_at_ms)
 }
 
 /// Decodes the retained execution spec after checking its canonical digest
@@ -88,9 +86,7 @@ fn decode_retained_spec(
     offered: &OfferedLaunch,
 ) -> Result<ProfiledExecutionSpec, AppError> {
     let spec_bytes = canonical(&row.get::<serde_json::Value, _>("execution_spec"))?;
-    if Digest::of(&spec_bytes) != offered.offer.binding.execution_spec_digest {
-        return Err(refused());
-    }
+    require(Digest::of(&spec_bytes) == offered.offer.binding.execution_spec_digest)?;
     decode_profiled_spec(&spec_bytes).map_err(|_| refused())
 }
 
@@ -109,12 +105,9 @@ fn verify_spec_provenance(
         .ready_expires_at_ms
         .min(provenance.context_expires_at_ms)
         .min(spec.source.expires_at_ms);
-    if offered.clock.expires_at_ms > latest_expiry
-        || provenance.task != spec.task
-        || provenance.authorized_context_digest != spec.task_context.digest
-    {
-        return Err(refused());
-    }
+    require(offered.clock.expires_at_ms <= latest_expiry)?;
+    require(provenance.task == spec.task)?;
+    require(provenance.authorized_context_digest == spec.task_context.digest)?;
     spec.validate_retained(&offered.offer, &offered.artifacts, published)
         .map_err(|_| refused())
 }
@@ -136,14 +129,10 @@ fn verify_artifact_inventory(
     offered: &[RetainedArtifact],
     retained_count: usize,
 ) -> Result<(), AppError> {
-    if retained_count != offered.len()
-        || retained_count > MAX_OFFER_ARTIFACTS
-        || !within_byte_bound(offered)
-        || !digests_unique(offered)
-    {
-        return Err(refused());
-    }
-    Ok(())
+    require(retained_count == offered.len())?;
+    require(retained_count <= MAX_OFFER_ARTIFACTS)?;
+    require(within_byte_bound(offered))?;
+    require(digests_unique(offered))
 }
 
 fn within_byte_bound(artifacts: &[RetainedArtifact]) -> bool {
@@ -187,10 +176,7 @@ async fn verify_retained_artifacts(
         }
         remaining.remove(index);
     }
-    if !remaining.is_empty() {
-        return Err(refused());
-    }
-    Ok(())
+    require(remaining.is_empty())
 }
 
 /// Matches descriptors by their serialized form, as the wire compares them.
@@ -205,6 +191,11 @@ fn position_of(
         .ok_or_else(|| refused())
 }
 
+/// Refuses unless `holds`; the refusal records the checking caller's location.
+#[track_caller]
+fn require(holds: bool) -> Result<(), AppError> {
+    if holds { Ok(()) } else { Err(refused()) }
+}
 #[track_caller]
 fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
@@ -274,6 +265,12 @@ mod tests {
         assert!(verify_artifact_inventory(&over, 2).is_err());
         let overflow = [artifact("a", u64::MAX), artifact("b", 1)];
         assert!(verify_artifact_inventory(&overflow, 2).is_err());
+    }
+
+    #[test]
+    fn require_refuses_only_when_the_check_fails() {
+        assert!(require(true).is_ok());
+        assert!(matches!(require(false), Err(AppError::Conflict(_))));
     }
 
     #[test]
