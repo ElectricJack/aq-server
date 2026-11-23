@@ -317,9 +317,18 @@ async fn service_machine_reports_control_and_service_state() {
         protocol_version: 1,
     };
     let at = chrono::Utc::now();
-    let minted = mc::mint_slots(&mut c, &caller, 3, &new, &hashes, at)
-        .await
-        .unwrap();
+    let minted = mc::mint_slots(
+        &mut c,
+        &caller,
+        mc::SlotRequest {
+            wanted: 3,
+            template: &new,
+            hashes: &hashes,
+        },
+        at,
+    )
+    .await
+    .unwrap();
     for m in &minted {
         sqlx::query(
             "UPDATE nodes SET last_seen_at=to_timestamp($2::double precision/1000) WHERE id=$1",
@@ -338,10 +347,12 @@ async fn service_machine_reports_control_and_service_state() {
         &mut c,
         "desk",
         mc::DesiredState::Draining,
-        1,
-        owner,
-        Uuid::new_v4(),
-        at,
+        mc::OwnerChange {
+            expected_generation: 1,
+            actor: owner,
+            operation_id: Uuid::new_v4(),
+            now: at,
+        },
     )
     .await
     .unwrap();

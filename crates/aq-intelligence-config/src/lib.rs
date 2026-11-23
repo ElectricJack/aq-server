@@ -43,6 +43,12 @@ pub fn credential_scope(c: &AuthorizedCredential) -> aq_selection::ObservationSc
 }
 /// Lifetime of a synthesized owner attestation (the validator's maximum).
 pub const OWNER_ATTESTATION_TTL_MS: u64 = 3_600_000;
+/// The registry revision and decision time used to synthesize availability evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttestationTime {
+    pub revision: u64,
+    pub now_ms: u64,
+}
 /// Spec 0007 Q2: while the owner's switch is on (`switch` = its principal and
 /// generation), selection treats every authorized credential as attested
 /// available at `now_ms`, with no observation row. A credential with unexpired
@@ -56,8 +62,7 @@ pub fn owner_attestations(
     credentials: &[AuthorizedCredential],
     observed: &[aq_selection::AvailabilityObservation],
     (principal, generation): (uuid::Uuid, u64),
-    revision: u64,
-    now_ms: u64,
+    AttestationTime { revision, now_ms }: AttestationTime,
 ) -> Vec<aq_selection::AvailabilityObservation> {
     use sha2::Digest;
     let negative = |c: &AuthorizedCredential| {
@@ -424,7 +429,15 @@ mod tests {
         let c = credential(serde_json::json!({})).credential;
         let who = uuid::Uuid::from_u128(9);
         let on = |g, observed: &[aq_selection::AvailabilityObservation], now| {
-            owner_attestations(std::slice::from_ref(&c), observed, (who, g), 4, now)
+            owner_attestations(
+                std::slice::from_ref(&c),
+                observed,
+                (who, g),
+                AttestationTime {
+                    revision: 4,
+                    now_ms: now,
+                },
+            )
         };
         let a = on(2, &[], 1_000);
         assert_eq!(a.len(), 1);

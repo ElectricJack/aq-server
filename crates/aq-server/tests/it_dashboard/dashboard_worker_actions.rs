@@ -76,9 +76,18 @@ async fn machine(slots: u32) -> (Fixture, PgPool, Router) {
             worker_version: "0.1.0",
             protocol_version: 1,
         };
-        mc::mint_slots(&mut c, &caller, slots, &new, &hashes, chrono::Utc::now())
-            .await
-            .unwrap();
+        mc::mint_slots(
+            &mut c,
+            &caller,
+            mc::SlotRequest {
+                wanted: slots,
+                template: &new,
+                hashes: &hashes,
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
     }
     drop(c);
     let app = aq_server::build_admin_router(f.state.clone());

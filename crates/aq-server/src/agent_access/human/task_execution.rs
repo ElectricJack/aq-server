@@ -135,7 +135,16 @@ async fn fresh_start(
         project_revision: revision,
     };
     replacement::release_as(state, task, &r, Some(&f)).await?;
-    fresh::post(&state.store.pool, p.project_id, task, &f, (state.clock)()).await;
+    fresh::post(
+        &state.store.pool,
+        aq_task_comments::Thread {
+            project_id: p.project_id,
+            task_id: task,
+        },
+        &f,
+        (state.clock)(),
+    )
+    .await;
     Ok(Outcome::confirmed(
         vec![existing::entity("replacement_release", r.predecessor, None)],
         vec![existing::entity("execution_attempt", r.predecessor, None)],

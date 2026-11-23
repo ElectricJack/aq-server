@@ -174,7 +174,16 @@ pub async fn override_budget(
     if !matches!(again, Assessment::Blocked(_)) {
         tx.commit().await.map_err(internal)?;
         tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a limit hold; the task's budgets start again");
-        holds::post_override(&state.store.pool, project, task, &o, at).await;
+        holds::post_override(
+            &state.store.pool,
+            aq_task_comments::Thread {
+                project_id: project,
+                task_id: task,
+            },
+            &o,
+            at,
+        )
+        .await;
     }
     Ok(again)
 }
@@ -247,7 +256,15 @@ pub async fn release_as(
     }
     if let Some(f) = fresh {
         let at = (state.clock)();
-        let recorded = aq_machine_control::fresh::record(&mut tx, task, locked.predecessor, f, at);
+        let recorded = aq_machine_control::fresh::record(
+            &mut tx,
+            aq_machine_control::fresh::ReleasedAttempt {
+                task,
+                released: locked.predecessor,
+            },
+            f,
+            at,
+        );
         recorded.await.map_err(internal)?;
     }
     tx.commit().await.map_err(db)?;

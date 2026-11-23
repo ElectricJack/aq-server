@@ -604,7 +604,17 @@ async fn offers(
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
                         if let Assessment::Blocked(reason) = a {
-                            holds::selection_hold(pool, seen, project, task, reason, at).await;
+                            holds::selection_hold(
+                                pool,
+                                seen,
+                                holds::SelectionRefusal {
+                                    project,
+                                    task,
+                                    reason,
+                                },
+                                at,
+                            )
+                            .await;
                         } else if placement == Some(&Placement::Reroute) {
                             let attempt = a.replacement().map(|r| (r.predecessor, seen));
                             let r = crate::routing::reroute(state, project, items, task, attempt);

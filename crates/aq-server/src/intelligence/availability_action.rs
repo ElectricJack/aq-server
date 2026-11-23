@@ -109,7 +109,16 @@ impl ActionKind for SetAvailability {
             let mut tx = state.store.pool.begin().await?;
             let (available, actor, now) = (p.available, user.id, (state.clock)());
             let op = p.operation_id;
-            let set = mc::set_owner_availability(&mut tx, available, expected, actor, op, now);
+            let set = mc::set_owner_availability(
+                &mut tx,
+                available,
+                mc::OwnerChange {
+                    expected_generation: expected,
+                    actor,
+                    operation_id: op,
+                    now,
+                },
+            );
             let set = set.await?;
             tx.commit().await?;
             Ok::<_, mc::Error>(set.generation)

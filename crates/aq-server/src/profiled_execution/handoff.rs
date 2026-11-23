@@ -152,8 +152,16 @@ pub async fn successor_base(
         }
     }
     let mut conn = pool.acquire().await.map_err(internal)?;
-    aq_machine_control::set_handoff_candidate(&mut conn, predecessor, operation, &oid, note)
-        .await?;
+    aq_machine_control::set_handoff_candidate(
+        &mut conn,
+        predecessor,
+        aq_machine_control::HandoffCandidate {
+            operation,
+            oid: &oid,
+            note_comment: note,
+        },
+    )
+    .await?;
     Ok(Some(HandoffBase {
         oid,
         retention_handle: operation,

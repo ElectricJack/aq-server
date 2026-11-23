@@ -2117,10 +2117,12 @@ mod service {
         let off = aq_machine_control::set_owner_availability(
             &mut conn,
             false,
-            1,
-            owner,
-            Uuid::new_v4(),
-            chrono::Utc::now(),
+            aq_machine_control::OwnerChange {
+                expected_generation: 1,
+                actor: owner,
+                operation_id: Uuid::new_v4(),
+                now: chrono::Utc::now(),
+            },
         )
         .await
         .unwrap();
