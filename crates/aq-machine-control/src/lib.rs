@@ -14,8 +14,8 @@ pub mod fresh;
 mod handoffs;
 pub mod holds;
 pub use handoffs::{
-    HandoffCandidate, export_scope, handoff_of, lineage_base, pending_counts, pending_handoffs,
-    record_handoff, request_handoffs, set_handoff_candidate,
+    HandoffCandidate, MAX_LINEAGE_HOPS, export_scope, handoff_of, lineage_base, pending_counts,
+    pending_handoffs, record_handoff, request_handoffs, set_handoff_candidate,
 };
 mod owner_availability;
 pub use owner_availability::{
