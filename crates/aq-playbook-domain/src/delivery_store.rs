@@ -644,22 +644,53 @@ impl Due {
         now_ms: i64,
         contract: &EventContract,
     ) -> Result<(Uuid, EventEnvelope)> {
-        // The facts are in the key: a send repeated at once because they moved
-        // may fall in the millisecond of the send before it.
-        let key = format!(
-            "{}/{}/{now_ms}/{}",
-            self.pending.task_id, self.pending.result_id, self.facts
-        );
-        let id = stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)?;
+        let id = result_event_id(namespace, &self.pending, now_ms, &self.facts)?;
         let event = host10::result_ready_event(id, &self.ready(version), now_ms, contract);
         Ok((id, event.map_err(|_| crate::Error::Invalid)?))
     }
 }
 
+fn result_event_id(
+    namespace: (Uuid, i64),
+    pending: &Pending,
+    at: i64,
+    facts: &str,
+) -> Result<Uuid> {
+    // Changed facts may call for a fresh event in the same millisecond.
+    let key = format!("{}/{}/{at}/{facts}", pending.task_id, pending.result_id);
+    stable_id("aq.work.result_ready", namespace.0, namespace.1, &key)
+}
+
+/// The last emitted event has a stable key even before its payload fans out.
+/// A missing row or a legacy acknowledgement uses the work.read history.
+async fn event_outstanding(
+    db: &mut PgConnection,
+    namespace: (Uuid, i64),
+    event: Uuid,
+) -> Result<Option<bool>> {
+    let status = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT CASE
+           WHEN status='pending' OR (status='engine_accepted' AND NOT fanout_complete) THEN TRUE
+           WHEN status='engine_accepted' AND jsonb_typeof(engine_receipt->'runs')='array' THEN
+             EXISTS (SELECT 1 FROM jsonb_array_elements_text(engine_receipt->'runs') AS r(id)
+                     WHERE NOT playbook_run_finished($1,$2,r.id))
+           WHEN status='unknown' THEN FALSE
+         END
+         FROM playbook_outbox
+         WHERE namespace_id=$1 AND generation=$2 AND producer='aq.host.bridge@1' AND event_id=$3",
+    )
+    .bind(namespace.0)
+    .bind(namespace.1)
+    .bind(event)
+    .fetch_optional(db)
+    .await?;
+    Ok(status.flatten())
+}
+
 /// The pending results to send now ([`result_ready_due`]); the others are
 /// marked as looked at, so that they go behind those not looked at yet.
-/// `run_bound_ms` is how long a run that read the task still holds back a
-/// repeat, whether or not its end is on record.
+/// `run_bound_ms` bounds the work.read fallback for legacy emissions without
+/// an exact event receipt.
 async fn due(
     db: &mut PgConnection,
     namespace: (Uuid, i64),
@@ -690,18 +721,28 @@ async fn due(
             emission.emitted_facts = row.get("emitted_facts");
         }
         if emission.emitted_result == Some(p.result_id) {
-            emission.run_unfinished = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
-                 AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
-                 AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
-            )
-            .bind(namespace.0)
-            .bind(namespace.1)
-            .bind(p.task_id.to_string())
-            .bind(emission.emitted_at_ms)
-            .bind(now_ms - run_bound_ms)
-            .fetch_one(&mut *db)
-            .await?;
+            let exact = match emission.emitted_facts.as_deref() {
+                Some(facts) => {
+                    let event = result_event_id(namespace, &p, emission.emitted_at_ms, facts)?;
+                    event_outstanding(db, namespace, event).await?
+                }
+                None => None,
+            };
+            emission.run_unfinished = match exact {
+                Some(outstanding) => outstanding,
+                None => sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM playbook_effects e WHERE e.namespace_id=$1 AND e.generation=$2 \
+                     AND e.command_name='work.read' AND e.receipt->'subject'->>'id'=$3 \
+                     AND e.created_at_ms>=$4 AND e.created_at_ms>$5 AND NOT playbook_run_finished($1,$2,e.run_id))",
+                )
+                .bind(namespace.0)
+                .bind(namespace.1)
+                .bind(p.task_id.to_string())
+                .bind(emission.emitted_at_ms)
+                .bind(now_ms - run_bound_ms)
+                .fetch_one(&mut *db)
+                .await?,
+            };
         }
         let moving = result_facts(db, p.task_id, p.project_id, None).await?;
         let facts = facts_digest(&moving.main_head, moving.pull_request.as_ref());

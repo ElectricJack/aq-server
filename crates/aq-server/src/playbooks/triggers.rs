@@ -148,7 +148,7 @@ impl Service {
     /// attempt has stopped and recorded a result that no playbook decision
     /// settled, while a delivery artifact is active. It is repeated every
     /// `decision_repeat_ms` (Settings), at once when main or the pull request
-    /// moves, and never while a run that read the task is unfinished.
+    /// moves, while the previous event or its run is no longer outstanding.
     #[cfg(feature = "delivery_playbook")]
     pub async fn collect_result_ready(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
         use aq_playbook_domain::delivery_store as store;

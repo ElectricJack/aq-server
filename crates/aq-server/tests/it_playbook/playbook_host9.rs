@@ -2049,6 +2049,36 @@ mod delivery {
                 .map(|e| e.2.payload)
                 .collect()
         }
+        async fn acknowledge_ready(&self, runs: Option<&[String]>, complete: bool) {
+            let (_, id, event) = self
+                .service
+                .outbox(&self.runtime, 0, 16)
+                .await
+                .unwrap()
+                .into_iter()
+                .rfind(|(_, _, e)| e.contract.name == "aq.work.result_ready")
+                .unwrap();
+            let key = digest(&(&event.producer, 0_u64, &event.event_id)).unwrap();
+            self.service
+                .acknowledge_event(
+                    &self.runtime,
+                    id,
+                    aq_playbook_host::runner::EventDisposition {
+                        key,
+                        duplicate: false,
+                        destinations: runs.map_or(1, <[String]>::len),
+                    },
+                    complete,
+                )
+                .await
+                .unwrap();
+            if let Some(runs) = runs {
+                self.service
+                    .record_delivery_runs(&self.runtime, id, &event, &json!(runs))
+                    .await
+                    .unwrap();
+            }
+        }
         /// main moved to `head` in `project`.
         async fn main_moved(&self, project: Uuid, head: &str) {
             let sql = "INSERT INTO delivery_main_heads(project_id,head,observed_at_ms) VALUES($1,$2,$3) ON CONFLICT(project_id) DO UPDATE SET head=$2,observed_at_ms=$3";
@@ -2102,13 +2132,35 @@ mod delivery {
                 "version": 3})
             ]
         );
-        // Level-triggered: not again until the setting has passed.
+        h.acknowledge_ready(Some(&[]), true).await;
+        // A completed fanout with no invocation is eligible after the repeat.
         assert_eq!(h.asked().await, 0);
         h.later(29_999);
         assert_eq!(h.asked().await, 0);
         h.later(1);
         assert_eq!(h.asked().await, 1);
-        assert_eq!(h.events().await.len(), 2);
+        assert_eq!(h.events().await, events);
+    }
+
+    #[tokio::test]
+    async fn queued_and_admitted_delivery_block_a_second_event_before_work_read() {
+        let h = delivery(false).await;
+        h.activated().await;
+        let (task, _) = h.stopped(h.scope.project_id, "success");
+        assert_eq!(h.asked().await, 1);
+        h.later(120_000);
+        h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 0, "the queued event owns the result");
+
+        h.acknowledge_ready(None, false).await;
+        h.pull_request(task, "pending", json!([])).await;
+        assert_eq!(h.asked().await, 0, "accepted fanout is still in progress");
+
+        let run = format!("event-sha256:{}", "a".repeat(64));
+        h.acknowledge_ready(Some(&[run]), true).await;
+        h.later(3_820_000);
+        h.pull_request(task, "failed", json!(["unit"])).await;
+        assert_eq!(h.asked().await, 0, "the exact run has no terminal receipt");
     }
 
     #[tokio::test]
@@ -2135,12 +2187,13 @@ mod delivery {
     }
 
     #[tokio::test]
-    async fn nothing_is_announced_while_a_run_that_read_the_task_is_unfinished() {
+    async fn legacy_fanout_falls_back_to_the_bounded_work_read_guard() {
         let h = delivery(false).await;
         h.activated().await;
         let (task, _) = h.stopped(h.scope.project_id, "success");
         assert_eq!(h.asked().await, 1);
-        // The run the event started reads the task and has not finished.
+        // Older completed fanouts may lack their run list.
+        h.acknowledge_ready(None, true).await;
         assert_eq!(h.read(task).await.outcome, "observed");
         // Neither the repeat interval nor main moving announces it again...
         h.later(120_000);
@@ -2157,18 +2210,21 @@ mod delivery {
         h.activated().await;
         let (task, _) = h.stopped(h.scope.project_id, "success");
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         // Main moves.
         h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         // A pull request appears, and its checks finish.
         h.pull_request(task, "pending", json!([])).await;
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         h.pull_request(task, "failed", json!(["unit"])).await;
         assert_eq!(h.asked().await, 1);
-        assert_eq!(h.events().await.len(), 4);
+        assert_eq!(h.events().await.len(), 1);
     }
 
     #[tokio::test]
