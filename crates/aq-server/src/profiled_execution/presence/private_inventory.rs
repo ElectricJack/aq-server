@@ -1,7 +1,7 @@
 //! Private provisioning reads cannot occupy Tokio's shared blocking queue.
 use super::unavailable;
 use crate::{error::AppError, intelligence::config::LoadedRegistry};
-use aq_selection::{CredentialBinding, DeliveryCapability};
+use aq_selection::{BackendKind, CredentialBinding, DeliveryCapability};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use uuid::Uuid;
@@ -12,6 +12,7 @@ struct Job {
     delivery: DeliveryCapability,
     observed: u64,
     expires: u64,
+    backend_kind: Option<BackendKind>,
     reply: oneshot::Sender<Vec<CredentialBinding>>,
     _permit: OwnedSemaphorePermit,
 }
@@ -43,7 +44,7 @@ impl Readers {
                             &job.delivery,
                             job.observed,
                             job.expires,
-                            None,
+                            job.backend_kind,
                         );
                         let _ = job.reply.send(result);
                     }
@@ -63,6 +64,7 @@ pub(super) async fn observe(
     delivery: DeliveryCapability,
     observed: u64,
     expires: u64,
+    backend_kind: Option<BackendKind>,
 ) -> Result<Vec<CredentialBinding>, AppError> {
     static READERS: OnceLock<Result<Readers, ()>> = OnceLock::new();
     let readers = READERS
@@ -84,6 +86,7 @@ pub(super) async fn observe(
             delivery,
             observed,
             expires,
+            backend_kind,
             reply,
             _permit: permit,
         })

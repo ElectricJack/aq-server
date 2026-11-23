@@ -326,6 +326,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: runtime.clone(),
             qualification: runtime_q,
             capabilities: capabilities.clone(),
