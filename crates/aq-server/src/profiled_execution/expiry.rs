@@ -162,6 +162,7 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
     let mut closures = ClosureSweep::default();
     let mut graph_completion = None;
     let mut terminations = crate::agent_access::human::task_termination::Sweep::default();
+    let retry_reads = crate::agent_access::human::ReadRuntime::new(&state);
     let mut tick_count: u32 = 0;
     let mut ticks = tokio::time::interval(Duration::from_secs(1));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -175,6 +176,13 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
         tick_count = tick_count.wrapping_add(1);
         if tick_count.is_multiple_of(3) {
             let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
+        }
+        if tick_count.is_multiple_of(3) {
+            let retry =
+                crate::agent_access::human::task_execution::check_retry(&state, &retry_reads);
+            if let Ok(Err(error)) = tokio::time::timeout(Duration::from_secs(8), retry).await {
+                tracing::debug!(?error, "owner task retry check deferred");
+            }
         }
         if tick_count.is_multiple_of(REWORK_SWEEP_EVERY) {
             tokio::select! {

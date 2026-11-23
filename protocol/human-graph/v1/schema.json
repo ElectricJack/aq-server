@@ -1224,6 +1224,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanResultHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanOwnerRetryWait"
                     }
                   ]
                 }
@@ -1953,6 +1956,20 @@
           "role",
           "message"
         ],
+        "additionalProperties": false
+      },
+      "HumanOwnerRetryWait": {
+        "type": "object",
+        "description": "An original owner retry approval awaiting its automatic check.",
+        "properties": {
+          "code": { "const": "owner_retry_pending" },
+          "operation_id": { "type": "string", "format": "uuid" },
+          "blocker_owner": { "enum": ["aq_scheduler", "project_owner"] },
+          "wake_condition": { "enum": ["scheduled_owner_retry_check", "original_retry_authority_restored"] },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "operation_id", "blocker_owner", "wake_condition", "next_check_at_ms", "message"],
         "additionalProperties": false
       },
       "HumanResultHoldReason": {

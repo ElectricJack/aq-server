@@ -378,6 +378,40 @@ pub async fn graph_completion_wait(pool: &PgPool, hold: &Hold) -> Option<Value> 
     )
 }
 
+/// The retry approval has a durable check date even if its request was interrupted.
+pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Option<Value> {
+    let (operation, next, owner_available): (Uuid, i64, bool) = sqlx::query_as(
+        "SELECT i.operation_id,floor(extract(epoch FROM i.next_check_at)*1000)::bigint,
+          COALESCE(u.role='owner',false)
+         FROM owner_task_retry_intents i JOIN dashboard_operations d USING(operation_id)
+         LEFT JOIN users u ON u.id=d.principal_id
+         WHERE i.project_id=$1 AND i.task_id=$2 AND d.disposition IN ('pending','unknown')
+         ORDER BY d.created_at DESC,i.operation_id DESC LIMIT 1",
+    )
+    .bind(project)
+    .bind(task)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let (owner, wake, message) = if owner_available {
+        (
+            "aq_scheduler",
+            "scheduled_owner_retry_check",
+            "AQ will resume the original retry approval at its scheduled check.",
+        )
+    } else {
+        (
+            "project_owner",
+            "original_retry_authority_restored",
+            "Restore owner permission for the principal who approved this retry. AQ will recheck the original approval.",
+        )
+    };
+    Some(
+        json!({"code":"owner_retry_pending","operation_id":operation,"message":message,
+        "blocker_owner":owner,"wake_condition":wake,"next_check_at_ms":next}),
+    )
+}
+
 /// Whether the latest confirmed default-policy settlement of `task` found no
 /// file change (owner ruling 4b).
 pub async fn completed_without_changes(pool: &sqlx::PgPool, task: Uuid) -> bool {

@@ -181,6 +181,13 @@ pub async fn record_replacement_facts(
 /// Resolve the current report from the task so an earlier result cannot authorize a retry.
 #[cfg(feature = "delivery_playbook")]
 pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
+    recover_held_for_retry_exact(state, task, None).await
+}
+pub(crate) async fn recover_held_for_retry_exact(
+    state: &AppState,
+    task: Uuid,
+    predecessor: Option<Uuid>,
+) -> Result<()> {
     let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
         .await
         .map_err(db)?;
@@ -190,7 +197,11 @@ pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> 
             .await
             .map_err(db)?,
     };
-    if let Some(report) = report {
+    if let Some(report) = report
+        && aq_delivery::git_grant::is_retry_report(&state.store.pool, report, predecessor)
+            .await
+            .map_err(db)?
+    {
         Box::pin(replacement_facts(state, report, true)).await?;
     }
     Ok(())

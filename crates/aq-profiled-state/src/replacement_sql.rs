@@ -90,6 +90,16 @@ pub async fn load(
     rows.into_iter().map(decode).collect()
 }
 
+/// Loads started-attempt owner facts only when the history matches the central count.
+pub async fn load_complete(
+    conn: &mut sqlx::PgConnection,
+    task: uuid::Uuid,
+    started: u32,
+) -> Result<Option<Vec<crate::replacement::Prior>>, aq_machine_control::Error> {
+    let priors = load(conn, task).await?;
+    Ok((priors.len() == started as usize).then_some(priors))
+}
+
 /// First `state_format_version` carrying `profiled_auto_settlements` (migration 59, D3).
 pub const AUTO_SETTLEMENT_FORMAT: u32 = 59;
 /// First `state_format_version` carrying `stall_quarantines` (migration 81, H3).

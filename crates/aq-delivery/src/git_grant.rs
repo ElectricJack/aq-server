@@ -731,3 +731,21 @@ where
         .map_err(|_| Refusal::Unavailable)?
         .map_err(|_| Refusal::Unavailable)
 }
+
+/// Fence a selected result before recovering it for a resumed owner authorization.
+pub async fn is_retry_report(
+    pool: &sqlx::PgPool,
+    report: Uuid,
+    attempt: Option<Uuid>,
+) -> sqlx::Result<bool> {
+    let Some(attempt) = attempt else {
+        return Ok(true);
+    };
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE report_id=$1 AND attempt_id=$2)",
+    )
+    .bind(report)
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+}

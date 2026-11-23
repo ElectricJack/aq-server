@@ -201,6 +201,16 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     assess_lineage(priors, limits, now, true)
 }
 
+/// Scheduling assessment for one Graph-ready task.
+/// The decision attempt counts alone settle: an exhausted never-granted
+/// retry bound blocks, and no started attempt is an ordinary first attempt.
+pub fn precheck(counts: &aq_machine_control::attempts::AttemptCounts) -> Option<Assessment> {
+    if counts.never_granted_bound_exhausted() {
+        return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
+    }
+    (counts.started == 0).then_some(Assessment::Fresh)
+}
+
 /// A fresh start closes the old lineage, so its limits do not charge the new source.
 /// Stop, effect, retention, settlement and release proofs still apply in full.
 pub fn assess_for_fresh_start(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {

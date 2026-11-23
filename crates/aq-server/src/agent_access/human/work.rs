@@ -139,7 +139,8 @@ pub(super) async fn work(
         .chain(role_hold)
         .chain(level_hold)
         .chain(offer_hold)
-        .chain(graph_wait);
+        .chain(graph_wait)
+        .chain(aq_human_work::owner_retry_wait(&r.pool, p, id).await);
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),

@@ -831,10 +831,113 @@ async fn task_retry_creates_replacement_attempt() {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let confirmed_retry = retry(Uuid::new_v4());
+    let operation = Uuid::new_v4();
+    let confirmed_retry = retry(operation);
+    // Interrupt the release transaction, leaving the original approval in the journal.
+    sqlx::raw_sql(
+        "CREATE FUNCTION fail_retry_release() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.released_at IS NOT NULL THEN RAISE EXCEPTION 'interrupted release'; END IF;
+      RETURN NEW; END $$;
+      CREATE TRIGGER fail_retry_release BEFORE UPDATE ON owner_task_retry_intents
+      FOR EACH ROW EXECUTE FUNCTION fail_retry_release();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let (status, body) = x.act(&confirmed_retry).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["data"]["disposition"], "unknown", "{body}");
+    assert!(holds().await, "interrupted release rolled back");
+    let schedule = || async {
+        sqlx::query("UPDATE owner_task_retry_intents SET next_check_at=to_timestamp(1) WHERE operation_id=$1")
+            .bind(operation).execute(&pool).await.unwrap();
+    };
+    let wait_for_check = |n| async {
+        tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                let count: i32 = sqlx::query_scalar(
+                    "SELECT checks FROM owner_task_retry_intents WHERE operation_id=$1",
+                )
+                .bind(operation)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                if count >= n {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("AQ checked the original approval");
+    };
+    sqlx::raw_sql("DROP TRIGGER fail_retry_release ON owner_task_retry_intents;
+      CREATE FUNCTION fail_retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.kind='task.retry' AND NEW.disposition='confirmed' THEN RAISE EXCEPTION 'lost acknowledgement'; END IF;
+      RETURN NEW; END $$;
+      CREATE TRIGGER fail_retry_receipt BEFORE UPDATE ON dashboard_operations
+      FOR EACH ROW EXECUTE FUNCTION fail_retry_receipt();")
+        .execute(&pool).await.unwrap();
+    let set_role = |role| async {
+        sqlx::query("UPDATE users SET role=$2 WHERE id=(SELECT principal_id FROM dashboard_operations WHERE operation_id=$1)")
+            .bind(operation).bind(role).execute(&pool).await.unwrap();
+    };
+    set_role("viewer").await;
+    schedule().await;
+    let reason = aq_human_work::owner_retry_wait(&pool, x.project(), task)
+        .await
+        .unwrap();
+    assert_eq!(reason["operation_id"], json!(operation));
+    assert_eq!(
+        reason["wake_condition"],
+        "original_retry_authority_restored"
+    );
+
+    let (stop, receiver) = tokio::sync::watch::channel(false);
+    let sweep = tokio::spawn(aq_server::profiled_execution::expiry::run(
+        x.f.state.clone(),
+        receiver,
+    ));
+    wait_for_check(1).await;
+    assert!(
+        holds().await,
+        "retry remains held while owner permission is missing"
+    );
+    set_role("owner").await;
+    schedule().await;
+    wait_for_check(2).await;
+    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        while holds().await {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("AQ releases the same predecessor when permission returns");
+
+    sqlx::query("DROP TRIGGER fail_retry_receipt ON dashboard_operations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    schedule().await;
+    let body: Value = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let receipt: Value = sqlx::query_scalar(
+                "SELECT response FROM dashboard_operations WHERE operation_id=$1",
+            )
+            .bind(operation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if receipt["disposition"] == "confirmed" {
+                break json!({"data":receipt});
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("AQ completes the original operation without another request");
+    let _ = stop.send(true);
+    sweep.await.unwrap();
     assert_eq!(
         body["data"]["receipt_refs"][0],
         json!({"type":"replacement_release","id":predecessor})
