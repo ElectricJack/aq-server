@@ -242,7 +242,12 @@ pub(super) async fn publish(
         return Err(refused());
     }
     on_heap(|| {
-        source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection)
+        source_exports::link_locked(
+            state,
+            &mut tx,
+            &binding.session,
+            source_exports::LinkEvidence::new(export, fact, inspection),
+        )
     })
     .await?;
     let effective: Vec<_> = m

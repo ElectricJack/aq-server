@@ -496,9 +496,7 @@ async fn link_export(
         &f.state,
         &mut tx,
         &f.profiled.offer.binding.session,
-        &token,
-        &fact,
-        &observation,
+        source_exports::LinkEvidence::new(&token, &fact, &observation),
     )
     .await
     .unwrap();

@@ -4,6 +4,7 @@
 //! database triggers, these Rust mirror checks, the poll gate and the swarm read
 //! all call them. Before 0103 (frozen-format fixtures) every row counts, as it
 //! did before spec 0008.
+pub mod source_exports;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
