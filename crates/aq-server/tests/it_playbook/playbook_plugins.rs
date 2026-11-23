@@ -217,21 +217,9 @@ fn reference(name: &str, fingerprint: String) -> ContractRef {
     }
 }
 
-#[tokio::test]
-async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
-    let e = setup().await;
-    let files = PluginFiles::new();
-    let service = e.service.clone().with_plugins(files.discover());
-    let grant = plugin_grant(&e, &service).await;
-    let driver = Driver::start(
-        service.clone(),
-        aq_playbook_host::Limits::default(),
-        protected_factory(source_url(&e)),
-    )
-    .await
-    .unwrap();
-
-    let command = service.registry().commands[COMMAND].clone();
+fn producer_artifact(registry: &Registry) -> Artifact {
+    let command = &registry.commands[COMMAND];
+    let event = &registry.events[EVENT];
     let mut producer = pure_artifact().content;
     producer
         .registry
@@ -275,12 +263,14 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
             on_error: None,
         },
     );
-    let event = service.registry().events[EVENT].clone();
     producer.registry.events.insert(EVENT.into(), event.clone());
     let producer = Artifact::seal(producer).unwrap();
     producer.verify().unwrap();
-    let artifact = producer.digest.clone();
+    producer
+}
 
+fn consumer_artifact(registry: &Registry) -> Artifact {
+    let event = &registry.events[EVENT];
     let mut consumer = pure_artifact().content;
     consumer.registry.events.insert(EVENT.into(), event.clone());
     consumer.playbook.triggers.push(Trigger {
@@ -289,7 +279,28 @@ async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
         entry: "main".into(),
         input: Expr::literal(Value::Null),
     });
-    let consumer = Artifact::seal(consumer).unwrap();
+    Artifact::seal(consumer).unwrap()
+}
+
+#[tokio::test]
+async fn plugin_timeout_retries_and_trigger_delivery_replays_once() {
+    let e = setup().await;
+    let files = PluginFiles::new();
+    let service = e.service.clone().with_plugins(files.discover());
+    let grant = plugin_grant(&e, &service).await;
+    let driver = Driver::start(
+        service.clone(),
+        aq_playbook_host::Limits::default(),
+        protected_factory(source_url(&e)),
+    )
+    .await
+    .unwrap();
+
+    let command = service.registry().commands[COMMAND].clone();
+    let event = service.registry().events[EVENT].clone();
+    let producer = producer_artifact(service.registry());
+    let artifact = producer.digest.clone();
+    let consumer = consumer_artifact(service.registry());
     let consumer_id = consumer.digest.clone();
     driver.install(consumer).await.unwrap();
     driver

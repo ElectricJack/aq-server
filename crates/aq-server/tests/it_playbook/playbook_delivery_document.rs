@@ -80,6 +80,53 @@ async fn put(app: &axum::Router, markdown: &str, revision: u64) -> (u16, Value) 
     )
 }
 
+fn protection_keys(directory: &std::path::Path) -> Keyring {
+    let path = directory.join("key");
+    std::fs::write(&path, [9_u8; 32]).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    Keyring::load(&ProtectionConfig {
+        active_key_id: "test".into(),
+        keys: vec![KeyFile {
+            id: "test".into(),
+            file: path,
+        }],
+    })
+    .unwrap()
+}
+
+async fn start_driver(service: Service, url: reqwest::Url) -> Arc<Driver> {
+    let factory = move || {
+        let config = url
+            .as_str()
+            .parse::<aq_playbook_host::postgres_client::Config>();
+        let client = (config.unwrap()).connect(aq_playbook_host::postgres_client::NoTls);
+        let keys = aq_playbook_host::postgres_storage::ProtectionKeyring::new(
+            "delivery",
+            BTreeMap::from([("delivery".into(), [9; 32])]),
+        );
+        aq_playbook_host::protected::storage(
+            client.map_err(|_| aq_playbook_host::Error::Unknown)?,
+            keys.unwrap(),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(500),
+        )
+    };
+    let limits = aq_playbook_host::Limits::default();
+    Arc::new(Driver::start(service, limits, factory).await.unwrap())
+}
+
+fn delivery_artifact(delivery: &authoring::SourceRecord) -> aq_playbook_host::model::Artifact {
+    let catalog = authoring::request::pinned_catalog(delivery).unwrap();
+    let workspace = draft::Workspace {
+        markdown: DOCUMENT.into(),
+        record: authoring::request::engine_record(delivery, "settings-1"),
+        catalog: authoring::request::catalog_for(delivery, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_str(READS_THE_TASK).unwrap(),
+    };
+    draft::seal(&workspace).unwrap_or_else(|faults| panic!("{faults:?}"))
+}
+
 #[tokio::test]
 async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_receives_result_ready()
  {
@@ -96,17 +143,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
 
     // A host_v10 namespace on the server's own ports, announcing one result.
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Keyring::load(&ProtectionConfig {
-        active_key_id: "test".into(),
-        keys: vec![KeyFile {
-            id: "test".into(),
-            file: path,
-        }],
-    })
-    .unwrap();
+    let keys = protection_keys(directory.path());
     let namespace = Namespace {
         namespace_id: Uuid::new_v4(),
         generation: 1,
@@ -150,24 +187,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     service.initialize(actor).await.unwrap();
     let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
     url.set_path(c.env.env._db.options().get_database().unwrap());
-    let factory = move || {
-        let config = url
-            .as_str()
-            .parse::<aq_playbook_host::postgres_client::Config>();
-        let client = (config.unwrap()).connect(aq_playbook_host::postgres_client::NoTls);
-        let keys = aq_playbook_host::postgres_storage::ProtectionKeyring::new(
-            "delivery",
-            BTreeMap::from([("delivery".into(), [9; 32])]),
-        );
-        aq_playbook_host::protected::storage(
-            client.map_err(|_| aq_playbook_host::Error::Unknown)?,
-            keys.unwrap(),
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_millis(500),
-        )
-    };
-    let limits = aq_playbook_host::Limits::default();
-    let driver = Arc::new(Driver::start(service, limits, factory).await.unwrap());
+    let driver = start_driver(service, url).await;
     state.internal_work.test_engine(driver.clone());
 
     // (1) The built-in source exists, with the delivery record; no document, no run.
@@ -232,15 +252,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     // (3) The artifact the agent saves is put into effect on `aq.delivery`
     // under the source's grant: the server's deployer installs and activates it.
     let delivery = authoring::builtin::delivery();
-    let catalog = authoring::request::pinned_catalog(&delivery).unwrap();
-    let workspace = draft::Workspace {
-        markdown: DOCUMENT.into(),
-        record: authoring::request::engine_record(&delivery, "settings-1"),
-        catalog: authoring::request::catalog_for(&delivery, &catalog).unwrap(),
-        facts: BTreeMap::new(),
-        draft: serde_json::from_str(READS_THE_TASK).unwrap(),
-    };
-    let artifact = draft::seal(&workspace).unwrap_or_else(|faults| panic!("{faults:?}"));
+    let artifact = delivery_artifact(&delivery);
     state
         .ensure_grant(DELIVERY, &delivery.capabilities)
         .await
