@@ -393,27 +393,46 @@ pub enum Decision {
     Allow(Grant),
     Deny(Refusal),
 }
+/// A command and the operation grant it requires.
+#[derive(Debug, Clone, Copy)]
+pub struct RequiredGrant<'a> {
+    pub command: &'a str,
+    pub operation: &'a str,
+}
+impl<'a> RequiredGrant<'a> {
+    pub fn new(command: &'a str, operation: &'a str) -> Self {
+        Self { command, operation }
+    }
+}
+/// The grant requirement and target used in one authorization decision.
+#[derive(Debug, Clone, Copy)]
+pub struct GrantRequest<'a> {
+    pub required: RequiredGrant<'a>,
+    pub target: Target,
+}
+impl<'a> GrantRequest<'a> {
+    pub fn new(command: &'a str, operation: &'a str, target: Target) -> Self {
+        Self {
+            required: RequiredGrant::new(command, operation),
+            target,
+        }
+    }
+}
 /// Check `operation` for `command` against `grants` and the resolved target.
-pub fn check(
-    grants: &GrantSet,
-    holder: Holder,
-    command: &str,
-    operation: &str,
-    target: Target,
-) -> Decision {
+pub fn check(grants: &GrantSet, holder: Holder, request: GrantRequest<'_>) -> Decision {
+    let operation = request.required.operation;
+    let target = request.target;
     // Anything outside the grantable vocabulary is owner-only: deny by default.
     if owner_only(operation) || !grantable(operation) {
-        return Decision::Deny(Refusal::owner_only(command, operation));
+        return Decision::Deny(Refusal::owner_only(request.required));
     }
     match grants.get(operation) {
         None => Decision::Deny(Refusal::grant_missing(
-            command,
-            operation,
+            request.required,
             grants.related(operation),
         )),
         Some(g) if !allows(g.scope, holder, target) => Decision::Deny(Refusal::scope_denied(
-            command,
-            operation,
+            request.required,
             grants.related(operation),
         )),
         Some(g) => Decision::Allow(g.clone()),
@@ -474,7 +493,7 @@ pub fn route_grant(
     path: &str,
     holder: Holder,
     relation: Relation,
-) -> Option<(&'static str, &'static str, Target)> {
+) -> Option<GrantRequest<'static>> {
     let (_, command, grant) = AGENT_ROUTE_GRANTS.iter().find(|(p, _, _)| *p == path)?;
     let target = if grant.starts_with("comment.") {
         Target::Task {
@@ -488,7 +507,7 @@ pub fn route_grant(
     } else {
         Target::OwnAttempt
     };
-    Some((command, grant, target))
+    Some(GrantRequest::new(command, grant, target))
 }
 
 impl Target {
@@ -544,20 +563,37 @@ pub struct AttemptIds {
     pub task_id: Uuid,
     pub project_id: Uuid,
 }
+/// Identity recorded on an audit row, including attempt provenance for agents.
+pub struct AuditCaller {
+    pub kind: &'static str,
+    pub id: Uuid,
+    pub attempt: Option<AttemptIds>,
+}
+/// The authorization decision as the server saw it, before the audit grant is resolved.
+pub struct AuditDecision<'a> {
+    pub command: &'a str,
+    pub grant: Option<&'a str>,
+    pub target: Option<&'a Target>,
+    pub decision: &'a Decision,
+}
 impl AuditEntry {
-    /// Any caller's decision; `ids` is the attempt for an agent.
-    #[allow(clippy::too_many_arguments)]
     pub fn caller(
-        caller_kind: &'static str,
-        caller_id: Uuid,
-        ids: Option<AttemptIds>,
-        command: &str,
-        grant: Option<&str>,
-        target: Option<&Target>,
-        decision: &Decision,
+        caller: AuditCaller,
+        checked: AuditDecision<'_>,
         operation_id: Option<Uuid>,
         request_id: Uuid,
     ) -> Self {
+        let AuditCaller {
+            kind: caller_kind,
+            id: caller_id,
+            attempt: ids,
+        } = caller;
+        let AuditDecision {
+            command,
+            grant,
+            target,
+            decision,
+        } = checked;
         Self {
             caller_kind,
             caller_id,
@@ -578,12 +614,15 @@ impl AuditEntry {
     }
     pub fn agent(
         ids: AttemptIds,
-        command: &str,
-        grant: &str,
-        target: Target,
+        request: GrantRequest<'_>,
         decision: &Decision,
         request_id: Uuid,
     ) -> Self {
+        let RequiredGrant {
+            command,
+            operation: grant,
+        } = request.required;
+        let target = request.target;
         Self {
             caller_kind: "agent",
             caller_id: ids.attempt_id,

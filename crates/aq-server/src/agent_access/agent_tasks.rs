@@ -66,7 +66,8 @@ async fn admit(
         .expect("registered");
     let (decision, target) = a.authorize(state, spec, &mut params).await;
     let grant = aq_command_registry::required_grant(spec, &target).unwrap_or_default();
-    let entry = |d: &Decision| AuditEntry::agent(a.ids, spec.name, grant, target, d, request_id);
+    let checked = aq_agent_grants::GrantRequest::new(spec.name, grant, target);
+    let entry = |d: &Decision| AuditEntry::agent(a.ids, checked, d, request_id);
     if DISPATCHED.try_with(|_| ()).is_err() {
         audit(state, &entry(&decision)).await;
     }
@@ -75,7 +76,7 @@ async fn admit(
         Decision::Deny(r) => return Err(r),
     };
     if b.sets_hint() {
-        let r = Refusal::scope_denied(spec.name, grant, a.grants.related(grant));
+        let r = Refusal::scope_denied(checked.required, a.grants.related(grant));
         let r = Refusal {
             message: "An agent cannot set intelligence_hint on a task it creates.".into(),
             ..r

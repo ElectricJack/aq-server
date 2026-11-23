@@ -169,15 +169,14 @@ mod tests {
         let command:aq_command_registry::CommandRequest=serde_json::from_value(serde_json::json!({"operation_id":action["operation_id"],"subject":action["subject"],"expected_versions":action["expected_versions"],"params":action["payload"]})).unwrap();
         let registry = aq_server::commands::registry();
         let spec = registry.get("task.create").unwrap();
-        let forward = aq_command_registry::forward(
-            spec,
-            spec.route(aq_command_registry::Principal::Supervisor)
-                .unwrap(),
-            &command,
-            None,
-            uuid::Uuid::new_v4(),
-        )
-        .unwrap();
+        let forward = spec
+            .forward(
+                spec.route(aq_command_registry::Principal::Supervisor)
+                    .unwrap(),
+                &command,
+                None,
+            )
+            .unwrap();
         assert_eq!(forward.body, Some(action));
     }
 }
