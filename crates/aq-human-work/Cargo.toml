@@ -16,6 +16,7 @@ aq-machine-control = { path = "../aq-machine-control" }
 aq-playbook-domain = { path = "../aq-playbook-domain", optional = true }
 aq-human-cursor = { path = "../aq-human-cursor" }
 aq-project-policy = { path = "../aq-project-policy" }
+aq-profiled-state = { path = "../aq-profiled-state" }
 aq-role-settings = { path = "../aq-role-settings" }
 chrono.workspace = true
 sha2.workspace = true

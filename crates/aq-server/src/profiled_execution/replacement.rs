@@ -92,6 +92,12 @@ pub async fn assess_task_for_revision(
     project_revision: u64,
 ) -> Result<Assessment, AppError> {
     let assessment = assess_task(state, task, now).await?;
+    if assessment
+        .replacement()
+        .is_some_and(Replacement::waiting_for_launch_release)
+    {
+        return Ok(Assessment::Blocked("closed_launch_settlement_pending"));
+    }
     if let Assessment::Blocked(code) = assessment
         && aq_machine_control::holds::is_budget_hold(code)
     {

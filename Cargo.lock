@@ -325,6 +325,7 @@ dependencies = [
  "aq-human-cursor",
  "aq-machine-control",
  "aq-playbook-domain",
+ "aq-profiled-state",
  "aq-project-policy",
  "aq-role-settings",
  "chrono",

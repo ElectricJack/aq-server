@@ -366,7 +366,7 @@ fn recovery_reason(
             "original_launch_evidence_reconciled",
             "The host stopped and the harness may have run. The AQ operator needs to reconcile the original attempt's result and effects before its claim can be released.",
         ),
-        (Some("unknown"), Some(true), _) => (
+        (Some("unknown" | "not_started"), Some(true), _) | (Some("not_started"), None, _) => (
             "closed_launch_settlement_pending",
             "aq_scheduler",
             "closed_launch_settlement",
@@ -494,6 +494,25 @@ pub async fn owner_retry_wait(pool: &PgPool, project: Uuid, task: Uuid) -> Optio
         "hold_reason":reason,"message":message,"blocker_owner":owner,
         "wake_condition":wake,"next_check_at_ms":next}),
     )
+}
+
+/// The scheduler releases a verified nonstart before waiting to reoffer.
+pub async fn launch_retry_wait(pool: &PgPool, task: Uuid, now_ms: i64) -> Option<Value> {
+    use aq_profiled_state::{replacement, replacement_sql};
+    let now = u64::try_from(now_ms).ok()?;
+    let mut conn = pool.acquire().await.ok()?;
+    let priors = replacement_sql::load(&mut conn, task).await.ok()?;
+    let (attempt, next) = replacement::launch_retry_after(&priors)?;
+    (now < next).then(|| {
+        json!({
+            "code": replacement::LAUNCH_BACKOFF,
+            "attempt_id": attempt,
+            "message": "Repeated verified launch failures released the task's previous claim. AQ will recheck worker placement after the backoff.",
+            "blocker_owner": "aq_scheduler",
+            "wake_condition": "launch_retry_backoff_elapsed",
+            "next_check_at_ms": next,
+        })
+    })
 }
 
 /// Whether the latest confirmed default-policy settlement of `task` found no
