@@ -84,21 +84,22 @@ impl DomainHost for Peer {
         self.mode = mode
     }
 }
-#[tokio::test]
-async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
-    let counts = Counts::default();
+async fn registered(
+    counts: &Counts,
+    store: MemoryStorage,
+    c: &CommandContract,
+) -> (Owner, Registry) {
     let host_counts = counts.clone();
-    let store = MemoryStorage::default();
-    let check = store.clone();
-    let c = contract();
     let registry = Registry {
         commands: BTreeMap::from([(c.name.clone(), c.clone())]),
         events: BTreeMap::new(),
     };
     let owner = Owner::start_registered(
-        "registered".into(),
-        aq_playbook_host::Limits::default(),
-        registry.clone(),
+        aq_playbook_host::Registration::new(
+            "registered".into(),
+            aq_playbook_host::Limits::default(),
+            registry.clone(),
+        ),
         move || Ok(store),
         move |acquired| {
             assert_eq!(acquired.namespace, "registered");
@@ -111,6 +112,10 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
     )
     .await
     .unwrap();
+    (owner, registry)
+}
+
+fn artifact(registry: Registry, c: &CommandContract) -> Artifact {
     let mut a = common::artifact();
     a.content.registry = registry;
     a.content.playbook.entries.get_mut("main").unwrap().start = "prepare".into();
@@ -139,7 +144,10 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
     *bind = "prepared".into();
     prepare.edges.insert("queued".into(), "send".into());
     a.content.playbook.steps.insert("prepare".into(), prepare);
-    let a = Artifact::seal(a.content).unwrap();
+    Artifact::seal(a.content).unwrap()
+}
+
+async fn activate(owner: &Owner, a: Artifact) {
     let digest = a.digest.clone();
     let mut altered = a.clone();
     altered
@@ -180,6 +188,9 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         )
         .await
         .unwrap();
+}
+
+async fn replay(owner: &Owner) {
     let activation = owner
         .call(
             Request::Binding {
@@ -221,6 +232,16 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .unwrap();
     assert_eq!(first["receipt"], replay["receipt"]);
     assert_eq!(replay["duplicate"], true);
+}
+
+#[tokio::test]
+async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
+    let counts = Counts::default();
+    let store = MemoryStorage::default();
+    let contract = contract();
+    let (owner, registry) = registered(&counts, store.clone(), &contract).await;
+    activate(&owner, artifact(registry, &contract)).await;
+    replay(&owner).await;
     owner
         .call(Request::Tick { now_ms: 3 }, DEADLINE)
         .await
@@ -233,7 +254,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
         .unwrap();
     assert_eq!(counts.reconcile.load(Ordering::SeqCst), 1);
     assert_eq!(counts.dispatch.load(Ordering::SeqCst), 1);
-    assert_eq!(check.load("registered").unwrap().state.runs.len(), 1);
+    assert_eq!(store.load("registered").unwrap().state.runs.len(), 1);
 }
 #[tokio::test]
 async fn generic_command_and_unsafe_recovery_catalogs_refuse_before_factory() {
@@ -247,12 +268,14 @@ async fn generic_command_and_unsafe_recovery_catalogs_refuse_before_factory() {
         let observed = counts.dispatch.clone();
         let factory_counts = counts.clone();
         let result = Owner::start_registered(
-            "invalid".into(),
-            aq_playbook_host::Limits::default(),
-            Registry {
-                commands: BTreeMap::from([(c.name.clone(), c)]),
-                events: BTreeMap::new(),
-            },
+            aq_playbook_host::Registration::new(
+                "invalid".into(),
+                aq_playbook_host::Limits::default(),
+                Registry {
+                    commands: BTreeMap::from([(c.name.clone(), c)]),
+                    events: BTreeMap::new(),
+                },
+            ),
             move || {
                 factory_counts.dispatch.fetch_add(1, Ordering::SeqCst);
                 Ok(MemoryStorage::default())
@@ -279,41 +302,14 @@ async fn d4_host_catalog_recovery_classes_are_admitted() {
         digest(&("1.0.0", &registry)).unwrap(),
         "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1"
     );
-    let counts = Counts::default();
-    let owner = Owner::start_registered(
-        "d4-catalog".into(),
-        aq_playbook_host::Limits::default(),
-        registry,
-        || Ok(MemoryStorage::default()),
-        move |_| {
-            Ok(Peer {
-                counts,
-                mode: HostMode::Dispatch,
-            })
-        },
-    )
-    .await;
-    assert!(owner.is_ok());
+    assert!(open("d4-catalog", registry).await.is_ok());
     // Host catalog 2.2.0 (sixteen commands) is admitted whole.
     let registry: Registry = serde_json::from_str(include_str!(
         "../../../vendor/aq-host-catalog-2.2.0/registry.json"
     ))
     .unwrap();
     assert_eq!(registry.commands.len(), 16);
-    let owner = Owner::start_registered(
-        "host-2-2-0".into(),
-        aq_playbook_host::Limits::default(),
-        registry,
-        || Ok(MemoryStorage::default()),
-        move |_| {
-            Ok(Peer {
-                counts: Counts::default(),
-                mode: HostMode::Dispatch,
-            })
-        },
-    )
-    .await;
-    assert!(owner.is_ok());
+    assert!(open("host-2-2-0", registry).await.is_ok());
     // Host catalog 2.3.0 (twenty-six commands, Epic 0) is admitted whole, with
     // the feature `delivery_playbook` only.
     #[cfg(feature = "delivery_playbook")]
@@ -323,40 +319,30 @@ async fn d4_host_catalog_recovery_classes_are_admitted() {
         ))
         .unwrap();
         assert_eq!(registry.commands.len(), 26);
-        let owner = Owner::start_registered(
-            "host-2-3-0".into(),
-            aq_playbook_host::Limits::default(),
-            registry,
-            || Ok(MemoryStorage::default()),
-            move |_| {
-                Ok(Peer {
-                    counts: Counts::default(),
-                    mode: HostMode::Dispatch,
-                })
-            },
-        )
-        .await;
-        assert!(owner.is_ok());
+        assert!(open("host-2-3-0", registry).await.is_ok());
     }
     for refused in [Recovery::Unsafe, Recovery::NaturallyIdempotent] {
         let mut c = contract();
         c.recovery = refused;
-        let result = Owner::start_registered(
-            "d4-refused".into(),
-            aq_playbook_host::Limits::default(),
-            Registry {
-                commands: BTreeMap::from([(c.name.clone(), c)]),
-                events: BTreeMap::new(),
-            },
-            || Ok(MemoryStorage::default()),
-            move |_| {
-                Ok(Peer {
-                    counts: Counts::default(),
-                    mode: HostMode::Dispatch,
-                })
-            },
-        )
-        .await;
+        let registry = Registry {
+            commands: BTreeMap::from([(c.name.clone(), c)]),
+            events: BTreeMap::new(),
+        };
+        let result = open("d4-refused", registry).await;
         assert!(matches!(result, Err(Error::Invalid)));
     }
+}
+
+async fn open(name: &str, registry: Registry) -> Result<Owner, Error> {
+    Owner::start_registered(
+        Registration::new(name.into(), aq_playbook_host::Limits::default(), registry),
+        || Ok(MemoryStorage::default()),
+        |_| {
+            Ok(Peer {
+                counts: Counts::default(),
+                mode: HostMode::Dispatch,
+            })
+        },
+    )
+    .await
 }

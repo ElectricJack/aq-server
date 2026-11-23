@@ -98,9 +98,11 @@ impl DomainHost for Idle {
 async fn a_host8_coding_artifact_installs_in_a_host9_namespace() {
     let registry: Registry = CatalogProfile::Host9.registry();
     let owner = Owner::start_registered(
-        "host9-coding".into(),
-        aq_playbook_host::Limits::default(),
-        registry,
+        aq_playbook_host::Registration::new(
+            "host9-coding".into(),
+            aq_playbook_host::Limits::default(),
+            registry,
+        ),
         || Ok(MemoryStorage::default()),
         |_| Ok(Idle),
     )

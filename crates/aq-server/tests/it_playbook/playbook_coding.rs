@@ -221,9 +221,11 @@ async fn start(
     let registry = CatalogProfile::Host8.registry();
     let peer_registry = registry.clone();
     Owner::start_registered(
-        namespace.into(),
-        aq_playbook_host::Limits::default(),
-        registry,
+        aq_playbook_host::Registration::new(
+            namespace.into(),
+            aq_playbook_host::Limits::default(),
+            registry,
+        ),
         move || Ok(store),
         move |_| {
             Ok(Peer {

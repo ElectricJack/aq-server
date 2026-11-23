@@ -354,8 +354,7 @@ impl Runtime {
         };
         let task = tokio::spawn(aq_playbook_host::drive::run(
             receiver,
-            config.interval,
-            config.timeouts.statement(),
+            aq_playbook_host::drive::Backoff::new(config.interval, config.timeouts.statement()),
             quantum,
             |error, delay| tracing::warn!(?error, ?delay, "playbook quantum failed; retrying"),
         ));

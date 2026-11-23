@@ -413,9 +413,7 @@ impl Driver {
             Ok(store)
         };
         let owner = Owner::start_registered(
-            namespace,
-            limits,
-            service.registry().clone(),
+            aq_playbook_host::Registration::new(namespace, limits, service.registry().clone()),
             guarded_factory,
             move |acquired| {
                 if acquired.namespace != expected_namespace {
