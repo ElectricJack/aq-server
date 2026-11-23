@@ -2282,6 +2282,48 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn work_return_retries_a_contended_settlement_for_the_same_result() {
+        use std::time::Duration;
+
+        let env = auto_env("not_required", axum::http::StatusCode::OK).await;
+        let pool = env.f.db.pool().await;
+        let report_id = env.report.report_id;
+        let mut lock = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+            .bind(format!("aq-auto-settlement:{report_id}"))
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+        let backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
+        let unlock_after_timeout = async {
+            let waiting = || {
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted AND locktype='advisory' AND $1=ANY(pg_blocking_pids(pid)))")
+                    .bind(backend_pid)
+                    .fetch_one(&pool)
+            };
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !waiting().await.unwrap() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                // Keep the lock through the first timeout. The return will
+                // have to open a new transaction once the lock is released.
+                tokio::time::sleep(Duration::from_millis(520)).await;
+            })
+            .await
+            .unwrap();
+            lock.commit().await.unwrap();
+        };
+        let (_, outcome) = tokio::join!(unlock_after_timeout, send_back(&env, "policy"));
+        assert_eq!(outcome, Settled::Returned);
+        assert_eq!(settlement_row(&env.f, report_id).await.0, "rework_required");
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+        assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
     async fn work_return_reworks_the_result_once_and_leaves_the_claim_to_the_replacement() {
         let env = auto_env("not_required", axum::http::StatusCode::OK).await;
         assert_eq!(

@@ -665,6 +665,21 @@ pub async fn return_by_playbook(
     report_id: Uuid,
     reason: &str,
 ) -> Result<Settled> {
+    for delay_ms in [100, 250, 500] {
+        match return_once(state, report_id, reason).await {
+            // The contended transaction has rolled back. Reacquire the locks
+            // and check the same report and current authority again.
+            Err(crate::error::AppError::Busy) => {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            outcome => return outcome,
+        }
+    }
+    return_once(state, report_id, reason).await
+}
+
+#[cfg(feature = "delivery_playbook")]
+async fn return_once(state: &AppState, report_id: Uuid, reason: &str) -> Result<Settled> {
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
     let held = existing
         .as_ref()
