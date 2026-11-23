@@ -52,10 +52,11 @@ delivery_playbook = [
 ]
 # With `delivery_playbook`: a fake aq-git git-HTTP socket backed by
 # `git http-backend`, for tests of the server that depends on this crate.
-test-support = []
+test-support = ["nix/signal"]
 
 [dev-dependencies]
 axum.workspace = true
+nix = { workspace = true, features = ["signal"] }
 rand.workspace = true
 rsa.workspace = true
 tempfile.workspace = true
