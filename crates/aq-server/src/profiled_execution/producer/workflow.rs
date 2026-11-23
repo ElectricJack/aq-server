@@ -656,14 +656,6 @@ async fn offers(
             None => None,
         };
         if let Some(replacement) = &replacement {
-            tracing::info!(
-                task_id = %task.task_id,
-                predecessor = %replacement.predecessor,
-                attempts_started = replacement.attempts_started,
-                lineage_elapsed_ms = replacement.elapsed_ms,
-                sandbox_ms_charged = replacement.sandbox_ms,
-                "replacement attempt admitted within the lineage budget"
-            );
             // The failed predecessor's claim is released under its locks before
             // the successor's generation; a later refusal retries idempotently.
             on_heap(|| replacement::release(state, task.task_id, replacement)).await?;
@@ -951,10 +943,18 @@ async fn offers(
             return Err(refused());
         }
         let inspection = on_heap(|| profiled_base::inspect_retained(state, &token, &fact)).await?;
-        let offer =
-            on_heap(|| publication::publish(state, auth, built, &token, &fact, &inspection, slot))
-                .await?;
-        tracing::info!(task_id = %task.task_id, "offer assembly: publication finished");
+        // A definitive database rollback permits retry with the same artifacts and expiry.
+        let publish =
+            || publication::publish(state, auth, &built, &token, &fact, &inspection, slot);
+        let mut offer = on_heap(publish).await;
+        for delay in [50, 150] {
+            if !matches!(offer, Err(AppError::Busy)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            offer = on_heap(publish).await;
+        }
+        let offer = offer?;
         aq_machine_control::recent::forget(auth.id()).await;
         let offer = match offer {
             publication::Outcome::Published(offer) => *offer,
@@ -964,6 +964,7 @@ async fn offers(
                 continue;
             }
         };
+        tracing::info!(task_id = %task.task_id, "offer assembly: offer published");
         if crate::role_settings::tables(state) {
             aq_role_settings::refusals::clear(&state.store.pool, task.task_id).await;
         }
