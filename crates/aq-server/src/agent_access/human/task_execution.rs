@@ -121,7 +121,8 @@ async fn fresh_start(
         return Ok(Outcome::refused("fresh_retry_not_applicable"));
     }
     let now = now(state)?;
-    let replacement::Assessment::Replace(r) = replacement::assess_task(state, task, now).await?
+    let replacement::Assessment::Replace(r) =
+        replacement::fresh_predecessor(state, task, now).await?
     else {
         return Ok(rejected());
     };
@@ -188,6 +189,22 @@ impl ActionKind for TaskRetry {
             let now = now(state)?;
             let mut assessment =
                 replacement::assess_task_for_revision(state, task, now, revision).await?;
+            #[cfg(feature = "delivery_playbook")]
+            if !p.fresh
+                && matches!(
+                    assessment,
+                    replacement::Assessment::Blocked(
+                        "replacement_effects_unreconciled" | "replacement_source_retention_unknown"
+                    )
+                )
+            {
+                Box::pin(
+                    crate::profiled_execution::settlement::recover_held_for_retry(state, task),
+                )
+                .await?;
+                assessment =
+                    replacement::assess_task_for_revision(state, task, now, revision).await?;
+            }
             if p.fresh {
                 return fresh_start(state, user, request, &p, (task, revision), assessment).await;
             }

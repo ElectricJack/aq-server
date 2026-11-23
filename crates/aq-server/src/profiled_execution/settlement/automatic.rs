@@ -212,9 +212,10 @@ async fn replacement_facts_after_rework(state: &AppState, report_id: Uuid) {
 ///
 /// - `retention = retained`: a central aq-git import receipt pinned by the
 ///   report is confirmed (`source_retention::load_confirmed_locked`);
-/// - `effects = quiescent`: the attempt's complete AQ effect ledger is settled
-///   (`effects::inspect_aq_effects_locked`; a read-only Graph profile with no
-///   messaging and only terminal operations). Anything else stays `unknown`.
+/// - `effects = quiescent`: every operation of the attempt's complete AQ effect
+///   ledger is final (`effects::inspect_aq_effects_locked`,
+///   `AqEffectsSnapshot::quiescent`), whatever its profile may write or mail.
+///   Anything else stays `unknown`.
 ///
 /// Nothing else changes: no Graph write, no completion, no claim release. Only
 /// a stopped attempt that still holds its task, whose current report head was
@@ -224,6 +225,27 @@ async fn replacement_facts_after_rework(state: &AppState, report_id: Uuid) {
 pub async fn record_replacement_facts(
     state: &AppState,
     report_id: Uuid,
+) -> Result<ReplacementFacts> {
+    replacement_facts(state, report_id, false).await
+}
+
+/// Reconcile the current delivery hold supported by its recorded worker and PR outcomes.
+/// Resolve the current report from the task so an earlier result cannot authorize a retry.
+#[cfg(feature = "delivery_playbook")]
+pub async fn recover_held_for_retry(state: &AppState, task: Uuid) -> Result<()> {
+    let report = aq_delivery::git_grant::held_report(&state.store.pool, task)
+        .await
+        .map_err(db)?;
+    if let Some(report) = report {
+        Box::pin(replacement_facts(state, report, true)).await?;
+    }
+    Ok(())
+}
+
+async fn replacement_facts(
+    state: &AppState,
+    report_id: Uuid,
+    owner_retry: bool,
 ) -> Result<ReplacementFacts> {
     use crate::execution::{
         authority::{self, hot::HotState},
@@ -238,6 +260,13 @@ pub async fn record_replacement_facts(
         .map_err(db)?;
     let reworked = match lock_row(&mut tx, report_id).await? {
         Some(row) => status(&row)?.disposition == AutoDisposition::ReworkRequired,
+        #[cfg(feature = "delivery_playbook")]
+        None if owner_retry => {
+            aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
+                .await
+                .map_err(db)?
+                == Some(report_id)
+        }
         None => false,
     };
     let view = authority::load_locked(
@@ -272,6 +301,7 @@ pub async fn record_replacement_facts(
         || !r.is_current_report_head
         || !view.holds_task
         || !view.stopped
+        || (owner_retry && (view.revoked || view.cancellation_id.is_some()))
         || !hot.stop.known_stopped()
         || owner_settled
     {
@@ -312,12 +342,16 @@ pub async fn record_replacement_facts(
     }
     if !matches!(hot.effects, Effects::Quiescent { .. }) {
         let ledger = super::effects::inspect_aq_effects_locked(state, &mut tx, &r).await?;
-        if ledger.disposition() == super::effects::LedgerDisposition::Settled {
+        // Quiescence (every operation final), not the read-only acceptance verdict: a
+        // messaging or write profile's finished, returned attempt is replaceable too.
+        if ledger.quiescent() {
+            let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
+            if ledger.disposition() != super::effects::LedgerDisposition::Settled {
+                fact["ledger_disposition"] = json!(ledger.disposition().name());
+            }
+            let id = format!("aq.replacement-effects/{report_id}");
             hot.effects = Effects::Quiescent {
-                receipt: reference(
-                    format!("aq.replacement-effects/{report_id}"),
-                    &json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR}),
-                )?,
+                receipt: reference(id, &fact)?,
             };
             changed = true;
         }

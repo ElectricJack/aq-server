@@ -99,11 +99,12 @@ impl Service {
         command: &str,
         intent_id: &str,
         result: HostResult,
+        note: Option<&str>,
     ) -> Result<HostResult> {
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
         let result = self
-            .retain_completion(&mut tx, operation, command, intent_id, result, None)
+            .retain_completion(&mut tx, operation, command, intent_id, result, note)
             .await?;
         tx.commit().await?;
         Ok(result)
@@ -211,7 +212,7 @@ impl Service {
         let Some(result) = work_completion(&op.request, node.as_ref())? else {
             return Ok(None);
         };
-        self.complete_operation(operation, &op.command, &op.intent_id, result)
+        self.complete_operation(operation, &op.command, &op.intent_id, result, None)
             .await
             .map(Some)
     }
@@ -407,7 +408,7 @@ impl Service {
         let Some(result) = check_completion(operation, &op.request, observed, self.now()?)? else {
             return Ok(None);
         };
-        self.complete_operation(operation, &op.command, &op.intent_id, result)
+        self.complete_operation(operation, &op.command, &op.intent_id, result, None)
             .await
             .map(Some)
     }
@@ -656,7 +657,7 @@ impl Service {
         )
         .await;
         let result = job.completion(reply.ok())?;
-        self.complete_operation(job.operation, &job.command, &job.intent_id, result)
+        self.complete_operation(job.operation, &job.command, &job.intent_id, result, None)
             .await
     }
 
@@ -716,6 +717,7 @@ impl Service {
                 outcome: "expired".into(),
                 output: request.output(operation),
             },
+            None,
         )
         .await
         .map(Some)
@@ -921,6 +923,7 @@ impl Service {
                         outcome: "failed".into(),
                         output,
                     },
+                    None,
                 )
                 .await?,
             )

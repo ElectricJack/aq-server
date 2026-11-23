@@ -549,6 +549,30 @@ async fn project_supervisor_activates_and_comments_in_its_own_project() {
 }
 
 #[tokio::test]
+async fn project_supervisor_can_submit_the_retry_form_from_a_budget_notification() {
+    let o = project_owner().await;
+    let (task, _) = o.draft();
+    let operation = Uuid::new_v4();
+    let (status, out) = o
+        .command(
+            "task.retry",
+            json!({
+                "operation_id":operation, "reason":"The reported prerequisite has been resolved.",
+                "params":{"project_id":o.project,"task_id":task,"expected_version":"3"}
+            }),
+        )
+        .await;
+    // The registered action examined this exact task. It has never had an attempt.
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["disposition"], "rejected", "{out}");
+    assert_eq!(out["data"]["operation_id"], operation.to_string());
+    assert_eq!(
+        out["data"]["subject_refs"],
+        json!([{"type":"task","id":task,"revision":"3"}])
+    );
+}
+
+#[tokio::test]
 async fn project_supervisor_is_refused_outside_its_project() {
     let o = project_owner().await;
     let (_, mut a) = o.draft();

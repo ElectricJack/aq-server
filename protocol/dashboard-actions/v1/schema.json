@@ -141,6 +141,298 @@
         {
           "properties": {
             "kind": {
+              "const": "epic.retirement.close"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:epic.retirement.close:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "registration_id": {
+                  "description": "The `epic.retirement.register` registration record.",
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "registration_id",
+                "expected_version"
+              ],
+              "title": "Close",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "epic.retirement.decide"
+            },
+            "payload": {
+              "$defs": {
+                "Artifact": {
+                  "additionalProperties": false,
+                  "description": "A retained artifact identity the owner inspected.",
+                  "properties": {
+                    "artifact_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact_id",
+                    "sha256"
+                  ],
+                  "type": "object"
+                },
+                "Choice": {
+                  "enum": [
+                    "approve",
+                    "request_changes"
+                  ],
+                  "type": "string"
+                }
+              },
+              "$id": "urn:aq:dashboard-actions:1:epic.retirement.decide:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "choice": {
+                  "$ref": "#/$defs/Choice"
+                },
+                "evidence": {
+                  "$ref": "#/$defs/Artifact"
+                },
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "registration_id": {
+                  "description": "The `epic.retirement.register` registration record.",
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "One more than the previous decision's revision, starting at 1.",
+                  "format": "int32",
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "vetted": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "The vetted full commit SHA of each registered repository.",
+                  "type": "object"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "registration_id",
+                "expected_version",
+                "revision",
+                "choice",
+                "vetted",
+                "evidence"
+              ],
+              "title": "Decide",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "epic.retirement.evidence"
+            },
+            "payload": {
+              "$defs": {
+                "Artifact": {
+                  "additionalProperties": false,
+                  "description": "A retained artifact identity the owner inspected.",
+                  "properties": {
+                    "artifact_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact_id",
+                    "sha256"
+                  ],
+                  "type": "object"
+                },
+                "EvidenceKind": {
+                  "enum": [
+                    "merge",
+                    "ordinary",
+                    "integrated"
+                  ],
+                  "type": "string"
+                }
+              },
+              "$id": "urn:aq:dashboard-actions:1:epic.retirement.evidence:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "approval_revision": {
+                  "description": "The approved decision's revision.",
+                  "format": "int32",
+                  "maximum": 2147483647,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "builds": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Artifact"
+                  },
+                  "description": "Each repository's passing ordinary-build artifact (integrated).",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "evidence": {
+                  "$ref": "#/$defs/Artifact"
+                },
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "flag_absent": {
+                  "description": "Whether the source, manifests and active workflows no longer\nreference the flag (ordinary).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/$defs/EvidenceKind"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "passed": {
+                  "description": "Whether the check passed (ordinary, integrated).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "pull_request": {
+                  "description": "The merged pull request's HTTPS URL (merge).",
+                  "maxLength": 2048,
+                  "minLength": 9,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "registration_id": {
+                  "description": "The `epic.retirement.register` registration record.",
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "repository": {
+                  "maxLength": 96,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revisions": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Each registered repository's merge SHA (integrated).",
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "sha": {
+                  "description": "The full merge commit SHA (merge, ordinary).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "supersedes_merge": {
+                  "description": "The repository's current merge receipt a repair merge replaces.",
+                  "format": "uuid",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "registration_id",
+                "expected_version",
+                "kind",
+                "approval_revision",
+                "evidence"
+              ],
+              "title": "Evidence",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
               "const": "epic.retirement.register"
             },
             "payload": {
@@ -220,6 +512,56 @@
                 "adopt"
               ],
               "title": "Register",
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "payload"
+          ]
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "epic.retirement.restore"
+            },
+            "payload": {
+              "$id": "urn:aq:dashboard-actions:1:epic.retirement.restore:payload",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "expected_version": {
+                  "pattern": "^[1-9][0-9]{0,18}$",
+                  "type": "string"
+                },
+                "operation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "project_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "registration_id": {
+                  "description": "The `epic.retirement.register` registration record.",
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "The closure gate's guarded revision from its Graph history: the\nregistration's verified draft with its epic relationship.",
+                  "format": "int64",
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "operation_id",
+                "project_id",
+                "registration_id",
+                "expected_version",
+                "revision"
+              ],
+              "title": "Restore",
               "type": "object"
             }
           },
@@ -2973,6 +3315,25 @@
         }
       ]
     },
+    "Artifact": {
+      "additionalProperties": false,
+      "description": "A retained artifact identity the owner inspected.",
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256"
+      ],
+      "type": "object"
+    },
     "ArtifactPin": {
       "additionalProperties": false,
       "properties": {
@@ -3033,7 +3394,7 @@
     "Choice": {
       "enum": [
         "approve",
-        "reject"
+        "request_changes"
       ],
       "type": "string"
     },
@@ -3281,6 +3642,14 @@
         "retryable"
       ],
       "type": "object"
+    },
+    "EvidenceKind": {
+      "enum": [
+        "merge",
+        "ordinary",
+        "integrated"
+      ],
+      "type": "string"
     },
     "InitialState": {
       "enum": [

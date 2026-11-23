@@ -600,19 +600,12 @@ async fn offers(
                         {
                             return Ok(Assessment::Blocked("git_author_unsupported"));
                         }
-                        let seen = holds::attempts(pool, task).await;
+                        let seen = holds::history(pool, task).await;
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
                         if let Assessment::Blocked(reason) = a {
-                            let d = seen.map(|seen| holds::Decision {
-                                project,
-                                task,
-                                reason,
-                                seen,
-                                attempt: None,
-                            });
-                            holds::hold(pool, d, at).await;
+                            holds::selection_hold(pool, seen, project, task, reason, at).await;
                         } else if placement == Some(&Placement::Reroute) {
                             let attempt = a.replacement().map(|r| (r.predecessor, seen));
                             let r = crate::routing::reroute(state, project, items, task, attempt);
@@ -658,7 +651,7 @@ async fn offers(
                 project: policy.project_id,
                 task: task.task_id,
                 predecessor: r.predecessor,
-                seen: holds::attempts(&state.store.pool, task.task_id).await,
+                seen: holds::history(&state.store.pool, task.task_id).await,
             }),
             None => None,
         };
@@ -668,8 +661,7 @@ async fn offers(
                 predecessor = %replacement.predecessor,
                 attempts_started = replacement.attempts_started,
                 lineage_elapsed_ms = replacement.elapsed_ms,
-                sandbox_ms_charged = replacement.sandbox_ms,
-                "replacement attempt admitted within the lineage budget"
+                "replacement attempt admitted within the retry budget"
             );
             // The failed predecessor's claim is released under its locks before
             // the successor's generation; a later refusal retries idempotently.

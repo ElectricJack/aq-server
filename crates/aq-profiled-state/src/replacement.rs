@@ -30,8 +30,6 @@ pub fn evidence(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_attempts: u32,
-    pub max_lineage_elapsed_ms: u64,
-    pub max_lineage_sandbox_ms: u64,
     pub max_uncharged_continuations: u32,
 }
 impl Limits {
@@ -44,12 +42,6 @@ impl Limits {
     ) -> Self {
         Self {
             max_attempts: pinned.map_or(settings.max_attempts, |p| p.max_attempts),
-            max_lineage_elapsed_ms: pinned.map_or(settings.max_lineage_elapsed_ms, |p| {
-                p.max_lineage_elapsed_ms
-            }),
-            max_lineage_sandbox_ms: pinned
-                .and_then(|p| p.max_lineage_sandbox_ms)
-                .unwrap_or(settings.max_lineage_sandbox_ms),
             max_uncharged_continuations: pinned
                 .and_then(|p| p.max_uncharged_continuations)
                 .unwrap_or(settings.max_uncharged_continuations),
@@ -66,7 +58,6 @@ pub struct Prior {
     pub holds_task: bool,
     pub released: bool,
     pub status: Status,
-    pub granted: bool,
     pub execution_deadline_ms: Option<u64>,
     pub stop: Stop,
     pub retention: Retention,
@@ -91,8 +82,8 @@ pub struct Replacement {
     /// Started attempts not charged to the budgets: exempt (spec 0007 Q1) or forgiven by an
     /// owner override.
     pub exempt_attempts: u32,
+    /// Lineage time the charged attempts used, as the selection decision records it.
     pub elapsed_ms: u64,
-    pub sandbox_ms: u64,
     pub stop_receipt: ArtifactRef,
     pub retained_source_receipt: ArtifactRef,
     pub effect_reconciliation_receipt: ArtifactRef,
@@ -112,6 +103,16 @@ impl Assessment {
         match self {
             Self::Replace(r) => Some(r.as_ref()),
             _ => None,
+        }
+    }
+    /// The decision as an inspector shows it: its kind, and the hold code or predecessor.
+    pub fn view(&self) -> serde_json::Value {
+        match self {
+            Self::Fresh => serde_json::json!({"kind": "fresh"}),
+            Self::Replace(r) => serde_json::json!({"kind": "replace",
+                "predecessor": r.predecessor, "needs_release": r.needs_release,
+                "attempts_started": r.attempts_started, "exempt_attempts": r.exempt_attempts}),
+            Self::Blocked(code) => serde_json::json!({"kind": "blocked", "code": code}),
         }
     }
 }
@@ -150,8 +151,54 @@ pub fn latest(priors: &[Prior]) -> Option<Uuid> {
     last.map(|p| p.attempt_id)
 }
 
+/// Every fact of one started attempt that keeps [`assess`] from replacing it, in [`assess`]'s
+/// order; empty when that attempt alone blocks nothing (lineage budgets are not per attempt).
+/// This is what an inspector names for a `replacement_effects_unreconciled` or
+/// `replacement_prior_execution_uncertain` hold: which owner fact is missing.
+pub fn blockers(prior: &Prior, now: u64) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let mut add = |blocked: bool, code| {
+        if blocked {
+            out.push(code);
+        }
+    };
+    add(prior.offered_at_ms.is_none(), "lineage_history_unknown");
+    add(prior.accepted, "settlement_accepted");
+    add(!prior.stop.known_stopped(), "stop_not_proven");
+    add(matches!(prior.effects, Effects::Unknown), "effects_unknown");
+    add(
+        matches!(prior.effects, Effects::Pending { .. }),
+        "effects_pending",
+    );
+    add(
+        prior.needs_reconciliation,
+        "settlement_needs_reconciliation",
+    );
+    add(prior.completion.is_some(), "task_completion_recorded");
+    add(
+        !matches!(prior.retention, Retention::Retained { .. }),
+        "source_not_retained",
+    );
+    add(
+        !prior.holds_task && !prior.released,
+        "claim_release_unknown",
+    );
+    add(!failed(prior, now), "not_failed");
+    out
+}
+
 /// Pure replacement decision over the complete started-attempt history.
 pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, true)
+}
+
+/// A fresh start closes the old lineage, so its limits do not charge the new source.
+/// Stop, effect, retention, settlement and release proofs still apply in full.
+pub fn assess_for_fresh_start(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
+    assess_lineage(priors, limits, now, false)
+}
+
+fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bool) -> Assessment {
     use Assessment::Blocked;
     let mut ordered = priors.iter().collect::<Vec<_>>();
     if ordered.is_empty() {
@@ -205,11 +252,12 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
     let exempt = uncharged(&ordered, limits);
     let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
-    if attempts_started - exempt_attempts >= limits.max_attempts {
+    if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
         return Blocked("lineage_retry_budget_exhausted");
     }
-    // Lineage time is the sum of the charged attempts' windows, each from its
-    // publication to the next one (or now); without exemptions, now - first.
+    // Lineage time is recorded, never charged: each attempt has its own window (its execution
+    // profile's wall time) and a retry is limited by `max_attempts` alone. It is the sum of the
+    // charged attempts' windows, each from its publication to the next one (or now).
     let elapsed_ms = (0..ordered.len())
         .filter(|&i| !exempt[i])
         .map(|i| {
@@ -218,28 +266,11 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
                 .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
         })
         .fold(0u64, u64::saturating_add);
-    if elapsed_ms >= limits.max_lineage_elapsed_ms {
-        return Blocked("lineage_time_budget_exhausted");
-    }
-    // Conservative sandbox charge: each granted attempt is billed its full
-    // admitted window from publication to execution deadline.
-    let sandbox_ms = (ordered.iter().zip(&exempt))
-        .filter(|(p, e)| p.granted && !**e)
-        .map(|(p, _)| {
-            p.execution_deadline_ms
-                .unwrap_or(u64::MAX)
-                .saturating_sub(p.offered_at_ms.unwrap_or(0))
-        })
-        .fold(0u64, u64::saturating_add);
-    if sandbox_ms >= limits.max_lineage_sandbox_ms {
-        return Blocked("task_sandbox_minutes_budget_exhausted");
-    }
     Assessment::Replace(Box::new(Replacement {
         predecessor: predecessor.attempt_id,
         attempts_started,
         exempt_attempts,
         elapsed_ms,
-        sandbox_ms,
         stop_receipt: stop.clone(),
         retained_source_receipt: retained.clone(),
         effect_reconciliation_receipt: effects.clone(),
@@ -261,7 +292,6 @@ mod tests {
             attempts_started: 1,
             exempt_attempts: 0,
             elapsed_ms: 1,
-            sandbox_ms: 0,
             stop_receipt: receipt("stop"),
             retained_source_receipt: receipt("retained"),
             effect_reconciliation_receipt: receipt("effects"),
@@ -297,7 +327,6 @@ mod tests {
             holds_task: true,
             released: false,
             status: Status::Finished,
-            granted: true,
             execution_deadline_ms: Some(offered_at_ms + 60_000),
             stop: Stop::Stopped {
                 receipt: receipt("stop"),
@@ -321,8 +350,6 @@ mod tests {
     fn budget() -> Limits {
         Limits {
             max_attempts: 3,
-            max_lineage_elapsed_ms: 24 * 3_600_000,
-            max_lineage_sandbox_ms: 240 * 60_000,
             max_uncharged_continuations: 5,
         }
     }
@@ -439,28 +466,6 @@ mod tests {
             1,
             "an owner stop is not charged"
         );
-        assert_eq!(
-            assess(
-                &history,
-                &Limits {
-                    max_lineage_elapsed_ms: 200_000,
-                    ..budget()
-                },
-                now
-            ),
-            Assessment::Blocked("lineage_time_budget_exhausted")
-        );
-        assert_eq!(
-            assess(
-                &history,
-                &Limits {
-                    max_lineage_sandbox_ms: 120_000,
-                    ..budget()
-                },
-                now
-            ),
-            Assessment::Blocked("task_sandbox_minutes_budget_exhausted")
-        );
         // Uncertain prior execution blocks before any budget question.
         let mut running = failed_prior(900_000);
         running.stop = Stop::Running;
@@ -492,6 +497,57 @@ mod tests {
             assess(&[unreleased, failed_prior(900_000)], &budget(), now),
             Assessment::Blocked("replacement_prior_execution_uncertain")
         );
+    }
+
+    /// A finished attempt whose result was returned but whose effects were never recorded
+    /// quiescent (the 2026-11-21 attachment-task hold) names exactly that fact, and every
+    /// per-attempt refusal of `assess` has a blocker name.
+    #[test]
+    fn blockers_name_the_missing_owner_fact() {
+        let now = 1_000_000;
+        assert!(blockers(&failed_prior(900_000), now).is_empty());
+        let mut held = failed_prior(900_000);
+        held.effects = Effects::Unknown;
+        assert_eq!(blockers(&held, now), ["effects_unknown"]);
+        assert_eq!(
+            assess(std::slice::from_ref(&held), &budget(), now),
+            Assessment::Blocked("replacement_effects_unreconciled")
+        );
+        for (edit, code) in [
+            (
+                (|p| p.effects = Effects::Pending { count: 2 }) as fn(&mut Prior),
+                "effects_pending",
+            ),
+            (
+                |p| p.needs_reconciliation = true,
+                "settlement_needs_reconciliation",
+            ),
+            (
+                |p| p.completion = Some("conflict".into()),
+                "task_completion_recorded",
+            ),
+            (|p| p.stop = Stop::Running, "stop_not_proven"),
+            (|p| p.retention = Retention::Pending, "source_not_retained"),
+            (|p| p.accepted = true, "settlement_accepted"),
+            (|p| p.offered_at_ms = None, "lineage_history_unknown"),
+            (|p| p.holds_task = false, "claim_release_unknown"),
+            (
+                |p| {
+                    p.rejected = false;
+                    p.status = Status::Granted;
+                    p.execution_deadline_ms = Some(u64::MAX);
+                },
+                "not_failed",
+            ),
+        ] {
+            let mut p = failed_prior(900_000);
+            edit(&mut p);
+            assert_eq!(blockers(&p, now), [code]);
+            assert!(
+                !matches!(assess(&[p], &budget(), now), Assessment::Replace(_)),
+                "{code} must also block assess"
+            );
+        }
     }
 
     fn exempt(mut prior: Prior) -> Prior {
@@ -532,30 +588,45 @@ mod tests {
             panic!("the exempt window is not charged");
         };
         assert_eq!(r.elapsed_ms, 2 * HOUR);
-        assert_eq!(
-            assess(&history(failed_prior(0)), &budget(), now),
-            Assessment::Blocked("lineage_time_budget_exhausted")
-        );
+        // Lineage time is recorded and never refuses a retry.
+        let Assessment::Replace(r) = assess(&history(failed_prior(0)), &budget(), now) else {
+            panic!("lineage time limits nothing");
+        };
+        assert_eq!(r.elapsed_ms, 25 * HOUR);
     }
+    /// Each attempt has its own window: however long earlier attempts were admitted for or ran,
+    /// only `max_attempts` limits a retry.
     #[test]
-    fn exempt_attempts_cost_no_sandbox_minutes() {
-        let now = 10 * HOUR;
+    fn however_long_attempts_ran_only_max_attempts_limits_a_retry() {
         let long = |offered: u64| {
             let mut p = failed_prior(offered);
-            p.execution_deadline_ms = Some(offered + 150 * MIN);
+            p.execution_deadline_ms = Some(offered + 250 * MIN);
             p
         };
-        let history = |e: bool| {
-            let first = if e { exempt(long(0)) } else { long(0) };
-            [released(first), long(3 * HOUR)]
+        let limits = Limits {
+            max_attempts: 4,
+            ..budget()
         };
-        let Assessment::Replace(r) = assess(&history(true), &budget(), now) else {
-            panic!("an exempt attempt costs no sandbox minutes");
-        };
-        assert_eq!(r.sandbox_ms, 150 * MIN);
+        let mut history = Vec::new();
+        for attempt in 0..4u64 {
+            let now = (attempt * 50 + 5) * HOUR;
+            let outcome = assess(&history, &limits, now);
+            if attempt == 0 {
+                assert_eq!(outcome, Assessment::Fresh);
+            } else {
+                assert!(
+                    matches!(outcome, Assessment::Replace(_)),
+                    "attempt {attempt} of 4 is refused: {outcome:?}"
+                );
+            }
+            if let Some(last) = history.pop() {
+                history.push(released(last));
+            }
+            history.push(long(now));
+        }
         assert_eq!(
-            assess(&history(false), &budget(), now),
-            Assessment::Blocked("task_sandbox_minutes_budget_exhausted")
+            assess(&history, &limits, 300 * HOUR),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
         );
     }
     #[test]
@@ -567,11 +638,10 @@ mod tests {
         };
         assert_eq!(r.exempt_attempts, 0);
         assert_eq!(r.elapsed_ms, now - 800_000);
-        assert_eq!(r.sandbox_ms, 2 * 60_000);
     }
 
     /// Owner decision 2026-11-18: an owner override of a budget hold starts the budget again.
-    /// Attempts before it are charged to nothing: not attempts, not time, not sandbox time.
+    /// Attempts before it are charged to nothing: not attempts and not time.
     #[test]
     fn an_owner_override_gives_a_fresh_budget_and_never_lifts_a_safety_hold() {
         let now = 30 * HOUR;
@@ -580,7 +650,7 @@ mod tests {
             p.execution_deadline_ms = Some(offered + 100 * MIN);
             p
         };
-        // Three attempts over 29 hours with 300 sandbox minutes: every budget is used up.
+        // Three attempts: the retry budget is used up.
         let history = [released(long(0)), released(long(HOUR)), long(29 * HOUR)];
         assert_eq!(
             assess(&history, &budget(), now),
@@ -594,7 +664,7 @@ mod tests {
             panic!("the override releases the task");
         };
         assert_eq!((r.attempts_started, r.exempt_attempts), (3, 3));
-        assert_eq!((r.elapsed_ms, r.sandbox_ms), (0, 0));
+        assert_eq!(r.elapsed_ms, 0);
         assert_eq!(charged(&forgiven, &budget()).0, 0);
         // The next attempt is charged from its own offer on, against the whole budget.
         let mut after = forgiven.clone().map(released).to_vec();
@@ -603,12 +673,11 @@ mod tests {
             panic!("one charged attempt of three");
         };
         assert_eq!((r.attempts_started, r.exempt_attempts), (4, 3));
-        assert_eq!((r.elapsed_ms, r.sandbox_ms), (HOUR, 100 * MIN));
+        assert_eq!(r.elapsed_ms, HOUR);
         // Forgiven exemptions do not use up the cap on uncharged continuations.
         let one = Limits {
             max_uncharged_continuations: 1,
             max_attempts: 1,
-            ..budget()
         };
         let mut stopped = forgiven.clone().map(released).map(exempt).to_vec();
         stopped.push(exempt(long(now)));
@@ -663,39 +732,20 @@ mod tests {
         let history = [released(failed_prior(0)), failed_prior(5 * MIN)];
         let wide = Limits {
             max_attempts: 32,
-            max_lineage_elapsed_ms: u64::MAX,
-            max_lineage_sandbox_ms: u64::MAX,
             max_uncharged_continuations: 0,
         };
         assert!(matches!(
             assess(&history, &wide, now),
             Assessment::Replace(_)
         ));
-        for (limits, code) in [
-            (
-                Limits {
-                    max_attempts: 2,
-                    ..wide
-                },
-                "lineage_retry_budget_exhausted",
-            ),
-            (
-                Limits {
-                    max_lineage_elapsed_ms: 10 * MIN,
-                    ..wide
-                },
-                "lineage_time_budget_exhausted",
-            ),
-            (
-                Limits {
-                    max_lineage_sandbox_ms: 2 * MIN,
-                    ..wide
-                },
-                "task_sandbox_minutes_budget_exhausted",
-            ),
-        ] {
-            assert_eq!(assess(&history, &limits, now), Assessment::Blocked(code));
-        }
+        let limits = Limits {
+            max_attempts: 2,
+            ..wide
+        };
+        assert_eq!(
+            assess(&history, &limits, now),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
+        );
         // No uncharged continuation is allowed: an owner stop is charged like any attempt.
         let stopped = [released(exempt(failed_prior(0))), failed_prior(5 * MIN)];
         let two = Limits {
@@ -719,34 +769,24 @@ mod tests {
     fn limits_are_the_pinned_policy_and_else_the_current_settings() {
         let settings = aq_profiles::roles::SelectionDefaults {
             max_attempts: 4,
-            max_lineage_elapsed_ms: 7,
-            max_lineage_sandbox_ms: 8,
             max_uncharged_continuations: 9,
             ..Default::default()
         };
         let all = |n: u64| Limits {
             max_attempts: n as u32,
-            max_lineage_elapsed_ms: n + 3,
-            max_lineage_sandbox_ms: n + 4,
             max_uncharged_continuations: n as u32 + 5,
         };
         assert_eq!(Limits::of(None, &settings), all(4));
         let mut pinned = aq_profiles::roles::SelectionDefaults {
             max_attempts: 1,
-            max_lineage_elapsed_ms: 4,
-            max_lineage_sandbox_ms: 5,
             max_uncharged_continuations: 6,
             ..Default::default()
         }
         .policy(1, Vec::new());
         assert_eq!(Limits::of(Some(&pinned), &settings), all(1));
-        // A policy pinned before the sandbox and continuation limits were Settings.
-        (
-            pinned.max_lineage_sandbox_ms,
-            pinned.max_uncharged_continuations,
-        ) = (None, None);
+        // A policy pinned before the continuation limit was a Setting.
+        pinned.max_uncharged_continuations = None;
         let mixed = Limits {
-            max_lineage_sandbox_ms: 8,
             max_uncharged_continuations: 9,
             ..all(1)
         };

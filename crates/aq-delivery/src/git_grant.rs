@@ -111,7 +111,8 @@ pub enum Refusal {
 /// The grant of a new attempt's offer: the task ref of `task` on the
 /// source's repository from the source's commit. The lease is the task ref's
 /// head in central aq-git now, or absent when it has none. `update_from_main`
-/// is the task's latest delivery decision's, when that sent it back.
+/// follows the return decision. An authorized retry after the return limit
+/// also refreshes a retained head with a recorded PR conflict on that result.
 pub async fn offer(
     pool: &PgPool,
     git: &SocketGit,
@@ -126,10 +127,19 @@ pub async fn offer(
     let task_ref = task_branch(task);
     let lease = git.show_ref(&target, &task_ref).await?;
     let update_from_main: Option<bool> = sqlx::query_scalar(
-        "SELECT decision='returned' AND COALESCE(update_from_main,false) FROM delivery_decisions \
-         WHERE task_id=$1 ORDER BY decided_at_ms DESC LIMIT 1",
+        "SELECT (decision='returned' AND COALESCE(update_from_main,false)) OR
+                (decision='held' AND COALESCE(reason='returns_exhausted',false) AND EXISTS(
+                  SELECT 1 FROM playbook_host_operations o
+                  WHERE o.subject_id=d.task_id::text AND o.command_name IN ('pull_request.await_checks','pull_request.merge')
+                    AND o.status='conflict' AND o.request#>>'{result_ready,result_id}'=d.result_id::text
+                    AND COALESCE(o.request->>'result_head',o.request->>'expected_head_sha')=$2
+                    AND COALESCE(o.request->'check_target',o.request->'merge_target')->'git'
+                      @> $3::jsonb))
+         FROM delivery_decisions d WHERE task_id=$1 ORDER BY decided_at_ms DESC,result_id LIMIT 1",
     )
     .bind(task)
+    .bind(lease.as_deref())
+    .bind(serde_json::json!({"repository_id":repository,"binding_generation":source.repository_binding_generation}))
     .fetch_optional(pool)
     .await
     .map_err(|_| GitFailure::transport())?;
@@ -162,6 +172,31 @@ pub async fn record_locked(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// Current report of a stopped attempt whose delivery decision retained it for supervisor handling.
+pub async fn held_report<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    task: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT h.report_id FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
+         JOIN delivery_git_grants g USING(attempt_id) JOIN delivery_decisions d ON d.result_id=h.report_id
+         JOIN profiled_result_reports r ON r.report_id=h.report_id
+         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held'
+         AND CASE convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'
+           WHEN 'failed' THEN d.reason IN ('policy','returns_exhausted')
+           WHEN 'success' THEN d.reason='returns_exhausted' AND EXISTS(
+             SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+               AND o.request#>>'{result_ready,result_id}'=r.report_id::text
+               AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+               AND ((o.command_name='pull_request.await_checks' AND o.status IN ('failed','conflict'))
+                 OR (o.command_name='pull_request.merge' AND o.status='conflict')))
+             AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+               AND o.request#>>'{result_ready,result_id}'=r.report_id::text
+               AND o.command_name='pull_request.merge' AND o.status NOT IN ('conflict','refused','not_mergeable'))
+           ELSE false END",
+    ).bind(task).fetch_optional(db).await
 }
 
 /// The frozen delivery selector, independent of the attempt's lifecycle.

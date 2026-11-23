@@ -10,7 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -39,6 +39,7 @@ struct Counts {
     dispatch: Arc<AtomicUsize>,
     reconcile: Arc<AtomicUsize>,
     revoked: Arc<AtomicBool>,
+    clock: Arc<AtomicI64>,
 }
 struct Peer {
     counts: Counts,
@@ -49,7 +50,18 @@ impl Host for Peer {
         c == &contract()
             && (self.mode == HostMode::Reconcile || !self.counts.revoked.load(Ordering::SeqCst))
     }
-    fn dispatch(&mut self, _: &Intent) -> DispatchResult {
+    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
+        if intent.step == "prepare" {
+            self.counts.clock.store(12_000, Ordering::SeqCst);
+            return DispatchResult::Completed {
+                outcome: "queued".into(),
+                output: Value::Null,
+            };
+        }
+        assert_eq!(
+            intent.deadline_at_ms,
+            12_000 + contract().deadline_ms as i64
+        );
         self.counts.dispatch.fetch_add(1, Ordering::SeqCst);
         DispatchResult::Unknown {
             reason: "synthetic response loss".into(),
@@ -65,6 +77,9 @@ impl Host for Peer {
     }
 }
 impl DomainHost for Peer {
+    fn transition_time(&self, now_ms: i64) -> i64 {
+        now_ms.max(self.counts.clock.load(Ordering::SeqCst))
+    }
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }
@@ -98,7 +113,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
     .unwrap();
     let mut a = common::artifact();
     a.content.registry = registry;
-    a.content.playbook.entries.get_mut("main").unwrap().start = "send".into();
+    a.content.playbook.entries.get_mut("main").unwrap().start = "prepare".into();
     a.content.playbook.steps.insert(
         "send".into(),
         Step {
@@ -115,6 +130,15 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
             on_error: Some("done".into()),
         },
     );
+    // The first host call takes longer than the following command's entire
+    // timeout. The second intent must still get its full dispatch window.
+    let mut prepare = a.content.playbook.steps["send"].clone();
+    let Operation::Invoke { bind, .. } = &mut prepare.op else {
+        unreachable!()
+    };
+    *bind = "prepared".into();
+    prepare.edges.insert("queued".into(), "send".into());
+    a.content.playbook.steps.insert("prepare".into(), prepare);
     let a = Artifact::seal(a.content).unwrap();
     let digest = a.digest.clone();
     let mut altered = a.clone();
@@ -204,7 +228,7 @@ async fn explicit_registry_keyed_replay_and_reconcile_mode_do_not_redispatch() {
     assert_eq!(counts.dispatch.load(Ordering::SeqCst), 1);
     counts.revoked.store(true, Ordering::SeqCst);
     owner
-        .call(Request::Recover { now_ms: 4 }, DEADLINE)
+        .call(Request::Recover { now_ms: 12_001 }, DEADLINE)
         .await
         .unwrap();
     assert_eq!(counts.reconcile.load(Ordering::SeqCst), 1);

@@ -95,7 +95,6 @@ async fn successor_reuses_predecessor_export_only_with_exact_release_receipt() {
         attempts_started: 1,
         exempt_attempts: 0,
         elapsed_ms: 1,
-        sandbox_ms: 0,
         stop_receipt: profiled::artifact("stop", b"stop"),
         retained_source_receipt: profiled::artifact("retained", b"retained"),
         effect_reconciliation_receipt: profiled::artifact("effects", b"effects"),

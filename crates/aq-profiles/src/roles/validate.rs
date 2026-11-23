@@ -130,8 +130,22 @@ impl Snapshot {
     /// unreadable. The caller compares [`Snapshot::digest`] with the digest
     /// the bytes were stored under.
     pub fn from_stored_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let content: Content =
-            serde_json::from_slice(bytes).map_err(|e| format!("is not readable: {e}"))?;
+        let unreadable = |e: serde_json::Error| format!("is not readable: {e}");
+        // A snapshot stored before the lineage time budgets were removed
+        // still has their keys; they are left out of what is read.
+        let mut stored: serde_json::Value = serde_json::from_slice(bytes).map_err(unreadable)?;
+        if let Some(defaults) = stored.get_mut("selection_defaults") {
+            super::drop_removed_keys(defaults);
+        }
+        if let Some(profiles) = stored
+            .get_mut("intelligence")
+            .and_then(|profiles| profiles.as_object_mut())
+        {
+            for selection in profiles.values_mut().filter_map(|p| p.get_mut("selection")) {
+                super::drop_removed_keys(selection);
+            }
+        }
+        let content: Content = serde_json::from_value(stored).map_err(unreadable)?;
         if content.schema_version != 1 {
             return Err("has an unknown schema version".into());
         }

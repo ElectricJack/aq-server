@@ -60,7 +60,6 @@ fn decode(
         holds_task: row.get("holds_task"),
         released: row.get("released"),
         status: hot.status,
-        granted: hot.grant.is_some() || hot.execution_deadline_ms.is_some(),
         execution_deadline_ms: hot.execution_deadline_ms,
         stop: hot.stop,
         retention: hot.retention,
@@ -137,15 +136,129 @@ pub async fn delivery_unpublished(
 }
 
 /// The project revision pinned by an attempt's linked source export request.
-pub async fn predecessor_project_revision(
-    pool: &sqlx::PgPool,
+pub async fn predecessor_project_revision<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
     attempt: uuid::Uuid,
 ) -> Result<Option<u64>, aq_machine_control::Error> {
     let pinned: Option<Option<i64>> = sqlx::query_scalar(
         "SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1",
     )
     .bind(attempt)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(pinned.flatten().and_then(|r| u64::try_from(r).ok()))
+}
+
+/// `attempt.show` for a profiled attempt: the owner facts B4 decides on, read-only and
+/// server-owned (no worker text, no input). `None` when `attempt` is not a profiled attempt.
+/// `blockers` names each fact that keeps this attempt from being replaced
+/// ([`crate::replacement::blockers`]); `in_history` is false for an attempt B4 does not count
+/// (never granted, or left out by an owner's fresh start).
+pub async fn inspect(
+    conn: &mut sqlx::PgConnection,
+    attempt: uuid::Uuid,
+    now: u64,
+) -> Result<Option<serde_json::Value>, aq_machine_control::Error> {
+    use sqlx::Row;
+    let Some(row) = sqlx::query("SELECT a.task_id,a.holds_task,h.state FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1 AND a.kind='profiled_v1'")
+        .bind(attempt).fetch_optional(&mut *conn).await?
+    else {
+        return Ok(None);
+    };
+    let task: uuid::Uuid = row.get("task_id");
+    let hot: serde_json::Value = row.get("state");
+    let prior = load(&mut *conn, task).await?;
+    let prior = prior.into_iter().find(|p| p.attempt_id == attempt);
+    let evaluations: Vec<String> = sqlx::query_scalar("SELECT disposition FROM profiled_settlement_evaluations WHERE attempt_id=$1 ORDER BY operation_id")
+        .bind(attempt).fetch_all(&mut *conn).await?;
+    let settlements: Vec<serde_json::Value> = if format(conn).await? >= AUTO_SETTLEMENT_FORMAT {
+        sqlx::query_scalar("SELECT jsonb_build_object('report_id',report_id,'disposition',disposition,'reason',reason,'decided_by',evidence->>'decided_by') FROM profiled_auto_settlements WHERE attempt_id=$1 ORDER BY created_at_ms,report_id")
+            .bind(attempt).fetch_all(&mut *conn).await?
+    } else {
+        Vec::new()
+    };
+    let facts = prior.as_ref().map(|p| {
+        serde_json::json!({"released": p.released, "accepted": p.accepted, "rejected": p.rejected,
+            "needs_reconciliation": p.needs_reconciliation, "cancelled_settled": p.cancelled_settled,
+            "completion": p.completion, "exempt": p.exempt, "forgiven": p.forgiven,
+            "blockers": crate::replacement::blockers(p, now)})
+    });
+    Ok(Some(serde_json::json!({
+        "kind": "profiled_v1", "attempt_id": attempt, "task_id": task,
+        "holds_task": row.get::<bool, _>("holds_task"), "status": hot["status"],
+        "execution_deadline_ms": hot["execution_deadline_ms"], "stop": hot["stop"],
+        "retention": hot["retention"], "effects": hot["effects"], "in_history": prior.is_some(),
+        "replacement": facts, "settlement_evaluations": evaluations, "auto_settlements": settlements,
+    })))
+}
+
+use crate::replacement::Assessment;
+pub async fn fence_revision<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    assessment: Assessment,
+    project_revision: u64,
+) -> Result<Assessment, aq_machine_control::Error> {
+    let Some(replacement) = assessment.replacement() else {
+        return Ok(assessment);
+    };
+    let pinned = predecessor_project_revision(executor, replacement.predecessor);
+    let pinned = pinned.await?;
+    if pinned != Some(project_revision) {
+        return Ok(Assessment::Blocked("replacement_project_revision_changed"));
+    }
+    Ok(assessment)
+}
+
+/// Persist the predecessor's immutable release receipt and clear its claim on the caller's transaction.
+pub async fn record_release(
+    conn: &mut sqlx::PgConnection,
+    task: uuid::Uuid,
+    release: &crate::replacement::Replacement,
+    now: u64,
+) -> Result<(), aq_machine_control::Error> {
+    sqlx::query("INSERT INTO profiled_replacement_releases(attempt_id,task_id,reason,stop_receipt_digest,retained_source_receipt_digest,effect_reconciliation_receipt_digest,attempts_started,recorded_at_ms) VALUES($1,$2,'failed_attempt_replacement',$3,$4,$5,$6,$7)")
+            .bind(release.predecessor)
+            .bind(task)
+            .bind(release.stop_receipt.digest.as_str())
+            .bind(release.retained_source_receipt.digest.as_str())
+            .bind(release.effect_reconciliation_receipt.digest.as_str())
+            .bind(i32::try_from(release.attempts_started).map_err(|_| aq_machine_control::Error::Invalid("release counter out of range"))?)
+            .bind(i64::try_from(now).map_err(|_| aq_machine_control::Error::Invalid("release counter out of range"))?)
+            .execute(&mut *conn)
+            .await?;
+    sqlx::query(
+        "UPDATE execution_attempts SET holds_task=FALSE WHERE attempt_id=$1 AND holds_task",
+    )
+    .bind(release.predecessor)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Acquire the standard node then attempt locks before validating a predecessor release.
+pub async fn lock_release(
+    conn: &mut sqlx::PgConnection,
+    task: uuid::Uuid,
+    attempt: uuid::Uuid,
+) -> Result<(), sqlx::Error> {
+    let node: uuid::Uuid = sqlx::query_scalar("SELECT node_id FROM execution_attempts WHERE attempt_id=$1 AND task_id=$2 AND kind='profiled_v1'")
+        .bind(attempt)
+        .bind(task)
+        .fetch_one(&mut *conn)
+        .await?;
+    for setting in [
+        "SET LOCAL lock_timeout='2s'",
+        "SET LOCAL statement_timeout='5s'",
+    ] {
+        sqlx::query(setting).execute(&mut *conn).await?;
+    }
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .fetch_one(&mut *conn)
+        .await?;
+    sqlx::query("SELECT 1 FROM execution_attempts a JOIN profiled_authority_hot h USING(attempt_id) WHERE a.attempt_id=$1 FOR UPDATE OF a,h")
+        .bind(attempt)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(())
 }

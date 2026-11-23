@@ -301,7 +301,7 @@ impl Fixture {
 
     /// A result `task` pushed to its task ref in the project's repository
     /// (spec 0016 section 5.2): the record that it has changes to deliver.
-    async fn insert_pushed_result(&self, task: Uuid) {
+    async fn insert_pushed_result(&self, task: Uuid, head: &str) {
         let pool = &self.case.env.env.pool;
         let repository = self.case.env.frozen.project.binding.repository_id;
         let attempt = Uuid::new_v4();
@@ -313,7 +313,7 @@ impl Fixture {
             .bind(attempt).bind(repository).bind(OLD).bind(&task_ref)
             .execute(pool).await.unwrap();
         sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
-            .bind(Uuid::new_v4()).bind(attempt).bind(&task_ref).bind(UNRELATED)
+            .bind(Uuid::new_v4()).bind(attempt).bind(&task_ref).bind(head)
             .execute(pool).await.unwrap();
     }
 
@@ -562,8 +562,8 @@ async fn a_completed_blocker_whose_pushed_result_is_not_merged_keeps_its_depende
     let f = Fixture::new(true, false).await;
     let [first, second, ..] = f.blockers;
     // `first` and `second` pushed results; the report-only blocker pushed none.
-    f.insert_pushed_result(first).await;
-    f.insert_pushed_result(second).await;
+    f.insert_pushed_result(first, UNRELATED).await;
+    f.insert_pushed_result(second, UNRELATED).await;
     f.insert_merges(false).await;
     let (status, body) = poll(&f.case).await;
     assert_eq!(status, 200, "{body}");
@@ -592,9 +592,10 @@ async fn a_completed_blocker_whose_pushed_result_is_not_merged_keeps_its_depende
 }
 
 #[tokio::test]
-async fn blockers_without_pushed_results_are_satisfied_at_once() {
+async fn unchanged_and_report_only_blockers_are_satisfied_at_once() {
     let f = Fixture::new(true, false).await;
-    // No blocker pushed anything and no merge is recorded: nothing to deliver.
+    // A completed approval can have a result at its offered base; there is no code to land.
+    f.insert_pushed_result(f.blockers[0], OLD).await;
     let offered = f.offer().await;
     assert_eq!(
         offered.offered.lifecycle_binding.task_id,
@@ -608,7 +609,7 @@ async fn blockers_without_pushed_results_are_satisfied_at_once() {
 async fn settings_can_stop_requiring_landed_results() {
     let f = Fixture::new(true, false).await;
     let [first, ..] = f.blockers;
-    f.insert_pushed_result(first).await;
+    f.insert_pushed_result(first, UNRELATED).await;
     let pool = &f.case.env.env.pool;
     let limits = aq_role_settings::delivery::DeliveryLimits {
         require_landed_results: false,

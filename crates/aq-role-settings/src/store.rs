@@ -59,7 +59,7 @@ async fn read_settings(conn: &mut PgConnection, lock: Lock) -> Result<Settings> 
     Ok(Settings {
         revision: row.get("revision"),
         active_digest: row.get("active_digest"),
-        selection_defaults: stored(row.get("selection_defaults"))?,
+        selection_defaults: stored_selection_defaults(row.get("selection_defaults"))?,
         selection_defaults_revision: row.get("selection_defaults_revision"),
         limits: stored(row.get("limits"))?,
         limits_revision: row.get("limits_revision"),
@@ -138,10 +138,17 @@ pub async fn selection_defaults(conn: &mut PgConnection) -> Result<SelectionDefa
         sqlx::query_scalar("SELECT selection_defaults FROM role_settings WHERE singleton")
             .fetch_optional(conn)
             .await?;
-    match stored.flatten() {
-        Some(value) => serde_json::from_value(value).map_err(|_| Error::Internal),
-        None => Ok(SelectionDefaults::default()),
-    }
+    stored_selection_defaults(stored.flatten())
+}
+/// The selection defaults as stored. A document saved before the lineage time
+/// budgets were removed still has their keys; reading leaves them out, and the
+/// next save writes the document without them.
+fn stored_selection_defaults(value: Option<serde_json::Value>) -> Result<SelectionDefaults> {
+    let Some(mut value) = value else {
+        return Ok(SelectionDefaults::default());
+    };
+    roles::drop_removed_keys(&mut value);
+    serde_json::from_value(value).map_err(|_| Error::Internal)
 }
 pub async fn settings(pool: &PgPool) -> Result<Settings> {
     read_settings(&mut *pool.acquire().await?, Lock::None).await

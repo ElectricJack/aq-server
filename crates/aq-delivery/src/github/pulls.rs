@@ -2,6 +2,7 @@
 //! checks, mergeability, merge, close and branch deletion. Each call uses an
 //! installation token for the one repository it touches. Every refusal comes
 //! back as a typed outcome or [`GitHubApiError`]; nothing retries or waits.
+use super::log_tail;
 use super::{
     Auth, GitHubApiError, GitHubApp, GitHubResult, InstallationToken, valid_login, valid_repository,
 };
@@ -245,6 +246,34 @@ impl<'a> Session<'a> {
         Ok(required)
     }
 
+    /// The ids of the failed check runs on `sha` named in `names`, by name. A
+    /// GitHub Actions check run's id is its job's id.
+    async fn failed_runs(
+        &self,
+        sha: &str,
+        names: &[String],
+    ) -> GitHubResult<BTreeMap<String, u64>> {
+        let runs = self
+            .pages(&format!("/commits/{sha}/check-runs"), |v| {
+                array(v, Some("check_runs"))
+            })
+            .await?;
+        let mut failed = BTreeMap::new();
+        for run in runs {
+            let broken = run["status"] == "completed"
+                && !matches!(
+                    run["conclusion"].as_str(),
+                    Some("success" | "neutral" | "skipped") | None
+                );
+            if let (true, Some(name), Some(id)) = (broken, run["name"].as_str(), run["id"].as_u64())
+                && names.iter().any(|n| n == name)
+            {
+                failed.entry(name.to_string()).or_insert(id);
+            }
+        }
+        Ok(failed)
+    }
+
     /// Check runs and commit statuses on `sha`, grouped by name and App.
     async fn reported_checks(&self, sha: &str) -> GitHubResult<ReportedChecks> {
         let mut reported = ReportedChecks::new();
@@ -444,6 +473,49 @@ impl GitHubAdapter for GitHubApp {
             required: requirements.into_keys().collect(),
             pull_request,
         })
+    }
+
+    async fn failed_check_log(
+        &self,
+        repo: &GitHubRepository,
+        head_sha: &str,
+        failed: &[String],
+        bytes: u64,
+    ) -> GitHubResult<Option<String>> {
+        let bytes = usize::try_from(bytes).unwrap_or(usize::MAX);
+        if bytes == 0 || failed.is_empty() {
+            return Ok(None);
+        }
+        let s = Session::new(self, repo).await?;
+        let runs = s.failed_runs(commit_sha(head_sha)?, failed).await?;
+        if runs.is_empty() {
+            return Ok(None);
+        }
+        // The bound is for the whole record: the failed jobs share it.
+        let share = bytes / runs.len();
+        let mut sections = Vec::new();
+        for (name, job) in runs {
+            let title: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
+            let header = format!("== {title} ==\n");
+            let Some(room) = share.checked_sub(header.len() + 1).filter(|r| *r > 0) else {
+                continue;
+            };
+            let fetched = s
+                .app
+                .client()
+                .send_text_tail(
+                    &format!("{}/actions/jobs/{job}/logs", s.path),
+                    Auth::Installation(&s.token),
+                    room,
+                )
+                .await;
+            // A job whose log cannot be read leaves the others.
+            if let Some(tail) = fetched.ok().and_then(|w| log_tail::log_tail(&w, room)) {
+                sections.push(format!("{header}{tail}\n"));
+            }
+        }
+        let joined = sections.concat();
+        Ok((!joined.is_empty()).then(|| joined.trim_end().to_owned()))
     }
 
     async fn merge(

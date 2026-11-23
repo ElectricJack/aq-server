@@ -35,6 +35,7 @@ chrono.workspace = true
 # Enabled only by this crate's own dev-dependency below.
 test-support = []
 supervisor_full_access = ["aq-server/supervisor_full_access"]
+project_environments = ["aq-server/project_environments"]
 
 [dev-dependencies]
 aq-supervisor-host = { path = ".", features = ["test-support"] }

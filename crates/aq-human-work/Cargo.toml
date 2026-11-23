@@ -6,9 +6,16 @@ publish = false
 description = "Work-view projections for AQ's owner Graph reads: readiness, hold reasons, state counts and history change summaries"
 
 [features]
+<<<<<<< HEAD
+=======
+# Epic 0 (spec 0016): the hold reason of a result waiting for a playbook.
+delivery_playbook = ["aq-playbook-domain/delivery_playbook"]
+>>>>>>> refs/remotes/central/main
 project_environments = ["aq-project-policy/project_environments"]
 
 [dependencies]
+aq-machine-control = { path = "../aq-machine-control" }
+aq-playbook-domain = { path = "../aq-playbook-domain", optional = true }
 aq-human-cursor = { path = "../aq-human-cursor" }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-role-settings = { path = "../aq-role-settings" }
@@ -20,3 +27,6 @@ serde.workspace = true
 schemars = "1"
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v5"] }
+
+[dev-dependencies]
+tokio.workspace = true

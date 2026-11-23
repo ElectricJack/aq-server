@@ -220,9 +220,8 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
         host.verify_startup(&startup)?;
         let actor = central.subject.actor_id();
         let _fence = self.fence(actor).await?;
-        if let Some(old) = Box::pin(self.owner(None).inspect(actor)).await?
-            && old.run.plan() == &central
-        {
+        let old = Box::pin(self.owner(None).inspect(actor)).await?;
+        if old.as_ref().is_some_and(|s| s.run.plan() == &central) {
             let s = Box::pin(self.reconcile_locked(actor)).await?;
             ensure!(active(&s), "existing generation is not live");
             return Ok(s);
@@ -234,15 +233,34 @@ impl<A: PlanAuthority, H: HostAdapter + Send + Sync + 'static> Supervisor<A, H> 
                 && now.boot_ms < host.deadline_boot_ms,
             "host admission boot/deadline"
         );
+        // Reconciliation and preparation share the new plan's authenticated admission
+        // clock. Advancing the prior generation past it would invalidate this plan.
+        let admitted = Clock {
+            machine_boot_id: host.machine_boot_id,
+            boot_ms: host.admitted_boot_ms,
+        };
+        if let Some(old) = old
+            && old.run.plan().generation.checked_add(1) == Some(central.generation)
+            && old.run.phase() == Phase::StoppedReported
+            && matches!(old.run.dispatch(), DispatchState::Unknown { .. })
+        {
+            let mut tx = self.pool.begin().await?;
+            let evidence = verifier::not_started(&mut tx, &old.run).await?;
+            tx.rollback().await?;
+            if let Some(evidence) = evidence {
+                accepted(
+                    self.owner(None)
+                        .report(
+                            &old.run.plan().binding()?,
+                            Event::ReconcileHandoff { evidence },
+                            admitted.clone(),
+                        )
+                        .await?,
+                )?;
+            }
+        }
         let owner = self.owner(Some(host.clone()));
-        let prepared = Box::pin(owner.prepare(
-            central.clone(),
-            Clock {
-                machine_boot_id: host.machine_boot_id,
-                boot_ms: host.admitted_boot_ms,
-            },
-        ))
-        .await?;
+        let prepared = Box::pin(owner.prepare(central.clone(), admitted)).await?;
         ensure!(
             prepared.run.original_deadline_boot_ms() == host.deadline_boot_ms,
             "original deadline join"

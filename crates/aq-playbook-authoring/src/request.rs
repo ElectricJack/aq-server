@@ -77,7 +77,12 @@ fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
         .get("work.read")
         .is_some_and(|c| c.version == "2.3.0")
     {
-        return docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid);
+        let mut notes =
+            docs::catalog_2_3(&record.commands, &record.events).map_err(Error::Invalid)?;
+        if record.id == crate::builtin::DELIVERY {
+            notes.push_str(include_str!("delivery_review_contract.md"));
+        }
+        return Ok(notes);
     }
     docs::catalog(&record.commands, &record.events).map_err(Error::Invalid)
 }

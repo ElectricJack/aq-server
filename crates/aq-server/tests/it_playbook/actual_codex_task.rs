@@ -801,39 +801,7 @@ async fn execute_case(
         Ok::<_,anyhow::Error>(json!({"scope":"actual pinned Codex finite local peer only; simulated fixture Owner approval","runtime":recipe.runtime,"qualification":recipe.qualification,"execution_deadline_boot_ns":deadline,"request_count":peer.requests.lock().unwrap().len(),"model_input":model_input,"tool_validation":tools,"terminal":terminal,"physical_running":true,"physical_stopped_echild":true,"started_ack":true,"stopped_ack":true,"private_auth_removed":true,"b1_receipt":attempt["result"]["receipt"],"settlement":settled,"actual_graph_task":task}))
     }).await;
     if result.is_err() {
-        // Private forensic bytes remain outside source control and stdout. They
-        // are history only, never reopened as launch or current-state authority.
-        if let Ok(bytes) = transferred
-            .state
-            .read(Path::new("journal/journal.json"), 4 * 1024 * 1024)
-        {
-            let _ = private(&root.join("refused-journal.json"), &bytes, 0o600);
-        }
-        // Retain bounded private observations before the PID/mount view closes.
-        // These bytes support offline fixture assertions, never live authority.
-        let requests = peer.requests.lock().unwrap().clone();
-        if let Ok(bytes) = serde_json::to_vec(&requests) {
-            let _ = private(&root.join("refused-provider-requests.json"), &bytes, 0o600);
-        }
-        if let Ok(state) = journal(&transferred.state, actual.env.node)
-            && let Some(attempt) = state["attempts"]
-                .as_object()
-                .and_then(|a| a.values().next())
-            && let Some(path) = attempt["result"]["scope"]["workspace"]["path"].as_str()
-            && let Ok(relative) = Path::new(path).strip_prefix(STATE)
-            && let Ok(bytes) = transferred
-                .state
-                .read(&relative.join("gate04-proof.txt"), 128)
-        {
-            let _ = private(&root.join("refused-proof-bytes"), &bytes, 0o600);
-        }
-        let metadata = diagnostics(&transferred, actual.env.node, &observed);
-        eprintln!("GATE04_DIAGNOSTICS {metadata}");
-        let _ = private(
-            &root.join("refused-metadata.json"),
-            &serde_json::to_vec_pretty(&metadata).unwrap_or_default(),
-            0o600,
-        );
+        retain_failure_evidence(root, &transferred, actual.env.node, &peer, &observed);
     }
     let cleanup = worker.cleanup().await;
     control.abort();
@@ -841,6 +809,48 @@ async fn execute_case(
     cleanup.context("wrapper cleanup uncertain")?;
     result
 }
+fn retain_failure_evidence(
+    root: &Path,
+    transferred: &native_runner_transport::Transferred,
+    node: Uuid,
+    peer: &codex_finite_provider::FinitePeer,
+    observed: &codex_terminal_output::Observed,
+) {
+    // Private forensic bytes remain outside source control and stdout. They
+    // are history only, never reopened as launch or current-state authority.
+    if let Ok(bytes) = transferred
+        .state
+        .read(Path::new("journal/journal.json"), 4 * 1024 * 1024)
+    {
+        let _ = private(&root.join("refused-journal.json"), &bytes, 0o600);
+    }
+    // Retain bounded private observations before the PID/mount view closes.
+    // These bytes support offline fixture assertions, never live authority.
+    let requests = peer.requests.lock().unwrap().clone();
+    if let Ok(bytes) = serde_json::to_vec(&requests) {
+        let _ = private(&root.join("refused-provider-requests.json"), &bytes, 0o600);
+    }
+    if let Ok(state) = journal(&transferred.state, node)
+        && let Some(attempt) = state["attempts"]
+            .as_object()
+            .and_then(|a| a.values().next())
+        && let Some(path) = attempt["result"]["scope"]["workspace"]["path"].as_str()
+        && let Ok(relative) = Path::new(path).strip_prefix(STATE)
+        && let Ok(bytes) = transferred
+            .state
+            .read(&relative.join("gate04-proof.txt"), 128)
+    {
+        let _ = private(&root.join("refused-proof-bytes"), &bytes, 0o600);
+    }
+    let metadata = diagnostics(transferred, node, observed);
+    eprintln!("GATE04_DIAGNOSTICS {metadata}");
+    let _ = private(
+        &root.join("refused-metadata.json"),
+        &serde_json::to_vec_pretty(&metadata).unwrap_or_default(),
+        0o600,
+    );
+}
+
 async fn actual_case() -> Result<Value> {
     ensure!(
         unsafe { nix::libc::getsid(0) } == unsafe { nix::libc::getpid() },

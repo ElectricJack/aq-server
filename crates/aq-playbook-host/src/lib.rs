@@ -46,6 +46,10 @@ pub struct AcquiredOwner {
 
 pub trait DomainHost: Host {
     fn set_mode(&mut self, mode: HostMode);
+    /// Use the caller's logical time unless this host owns a live clock.
+    fn transition_time(&self, now_ms: i64) -> i64 {
+        now_ms
+    }
     fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
         DispatchResult::Unknown {
             reason: "plugin contract is unavailable".into(),
@@ -913,6 +917,7 @@ fn execute<S: Storage>(
         )
         .map_err(engine_error)?,
         Request::Tick { now_ms } => {
+            let mut now_ms = now_ms.max(host.transition_time(now_ms));
             if shared.plugin_artifacts.load(Ordering::Acquire)
                 && engine
                     .snapshot()
@@ -942,7 +947,22 @@ fn execute<S: Storage>(
                     .get()
                     .filter(|stale| !stale.is_empty()),
             };
-            serde_json::json!({"transitions": engine.drive(&mut guarded, now_ms, shared.limits.transitions).map_err(engine_error)?})
+            // A slow host operation can use most of a tick. Start each new
+            // command's deadline when its own transition runs and check an
+            // existing deadline against the current time before dispatch.
+            let mut transitions = 0;
+            while transitions < shared.limits.transitions {
+                now_ms = now_ms.max(guarded.host.transition_time(now_ms));
+                if engine
+                    .drive(&mut guarded, now_ms, 1)
+                    .map_err(engine_error)?
+                    == 0
+                {
+                    break;
+                }
+                transitions += 1;
+            }
+            serde_json::json!({"transitions": transitions})
         }
         Request::Cancel { run, now_ms } => {
             engine.cancel(&run, now_ms).map_err(engine_error)?;

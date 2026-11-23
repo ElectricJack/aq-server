@@ -10,7 +10,7 @@
 //! task closed or retired in Graph ([`clear_closed`] from the task view, [`sweep`]).
 use crate::Error;
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{Connection, PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 /// First `state_format_version` with `task_holds` and `successor_skips`.
@@ -38,12 +38,7 @@ pub fn valid_code(code: &str) -> bool {
 pub fn phrase(code: &str) -> String {
     let fixed = match code {
         "lineage_retry_budget_exhausted" => "its retry budget is exhausted",
-        "lineage_time_budget_exhausted" => "its lineage time budget is exhausted",
-        "lineage_time_budget_exhausted_or_unknown" => {
-            "its lineage time budget is exhausted or unknown"
-        }
         "lineage_cost_budget_exhausted" => "its cost budget is exhausted",
-        "task_sandbox_minutes_budget_exhausted" => "its sandbox minutes budget is exhausted",
         "replacement_policy_retry_budget_exhausted" => {
             "the catalog retry policy's maximum attempts are used up"
         }
@@ -96,9 +91,8 @@ pub fn retry_refusal(code: &str) -> String {
     )
 }
 
-/// A hold that is only a limit: attempts, lineage time, sandbox time, cost or never-granted
-/// offers used up (the `replacement_policy_*` codes are holds recorded before the budgets
-/// became one; `..._or_unknown` is selection's own time check). An owner retry overrides it and
+/// A hold that is only a limit: attempts, cost or never-granted offers used up (the
+/// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner retry overrides it and
 /// every budget starts again (owner decision 2026-11-18). Every other hold is about what
 /// happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
@@ -106,12 +100,9 @@ pub fn is_budget_hold(code: &str) -> bool {
 }
 /// `code` as the fixed code of a limit hold, if it is one.
 pub fn budget_code(code: &str) -> Option<&'static str> {
-    const CODES: [&str; 8] = [
+    const CODES: [&str; 5] = [
         "lineage_retry_budget_exhausted",
-        "lineage_time_budget_exhausted",
-        "lineage_time_budget_exhausted_or_unknown",
         "lineage_cost_budget_exhausted",
-        "task_sandbox_minutes_budget_exhausted",
         "never_granted_retry_bound_exhausted",
         "replacement_policy_retry_budget_exhausted",
         "replacement_policy_time_budget_exhausted",
@@ -156,7 +147,9 @@ pub async fn record_override(
     {
         return Err(Error::Invalid("limit override"));
     }
-    sqlx::query(
+    let mut tx = conn.begin().await?;
+    lock_budget(&mut tx, task).await?;
+    let inserted = sqlx::query(
         "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
     )
@@ -168,15 +161,19 @@ pub async fn record_override(
     .bind(&o.actor)
     .bind(o.recorded_at_ms)
     .bind(o.spent_microunits)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
+    if inserted.rows_affected() == 0 {
+        return Ok(());
+    }
     sqlx::query(
         "UPDATE task_holds SET cleared_at=$2,cleared_by='owner_override' WHERE task_id=$1 AND cleared_at IS NULL",
     )
     .bind(task)
     .bind(now)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 /// Names a recorded override in the task's history: one system comment whose id is derived
@@ -261,8 +258,7 @@ pub fn is_hold(code: &str) -> bool {
     code.ends_with("_budget_exhausted")
         || matches!(
             code,
-            "lineage_time_budget_exhausted_or_unknown"
-                | "never_granted_retry_bound_exhausted"
+            "never_granted_retry_bound_exhausted"
                 | "replacement_project_revision_changed"
                 | "replacement_after_unpublished_delivery_needs_new_source"
                 | "stall_quarantined"
@@ -306,6 +302,51 @@ pub async fn attempts_in(conn: &mut PgConnection, task: Uuid) -> Result<i32, Err
 pub async fn attempts(pool: &PgPool, task: Uuid) -> Option<i32> {
     let n = sqlx::query_scalar(COUNT).bind(task).fetch_one(pool).await;
     n.inspect_err(|e| tracing::warn!(%task, error = ?e, "task attempts not counted"))
+        .ok()
+}
+
+/// Serialize a budget decision and an owner retry until the caller's transaction commits.
+async fn lock_budget(conn: &mut PgConnection, task: Uuid) -> Result<(), Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-task-budget:' || $1, 0))")
+        .bind(task.to_string())
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// A lost-attempt decision already has a transaction. Hold the budget lock through assessment
+/// and recording so a concurrent override either clears that decision or precedes it.
+pub async fn lost_attempts(conn: &mut PgConnection, task: Uuid) -> Result<i32, Error> {
+    lock_budget(conn, task).await?;
+    attempts_in(conn, task).await
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct History {
+    pub attempts: i32,
+    overrides: i64,
+}
+
+const OVERRIDE_COUNT: &str = "SELECT count(*) FROM task_limit_overrides WHERE task_id=$1";
+
+/// Observe both counters before selection. An override can answer a refusal even when the
+/// replacement worker has not started and the attempt count still matches.
+pub async fn history(pool: &PgPool, task: Uuid) -> Option<History> {
+    let read = async {
+        let mut conn = pool.acquire().await?;
+        let (attempts, overrides) = if has_overrides(&mut conn).await? {
+            sqlx::query_as("SELECT (SELECT count(*)::INT FROM execution_attempts WHERE task_id=$1), (SELECT count(*) FROM task_limit_overrides WHERE task_id=$1)")
+                .bind(task).fetch_one(&mut *conn).await?
+        } else {
+            (attempts_in(&mut conn, task).await?, 0)
+        };
+        Ok::<_, Error>(History {
+            attempts,
+            overrides,
+        })
+    };
+    read.await
+        .inspect_err(|e| tracing::warn!(%task, error = ?e, "task hold history unreadable"))
         .ok()
 }
 
@@ -451,12 +492,58 @@ pub async fn post(
 /// and named in one system comment. Never fails the poll; a refusal that is not a hold
 /// ([`is_hold`]), or a decision without its attempt count, records nothing.
 pub async fn hold(pool: &PgPool, d: Option<Decision<'_>>, now: DateTime<Utc>) {
+    record_hold(pool, d, None, now).await;
+}
+
+/// Record selection's refusal only if its budget history is still current.
+pub async fn selection_hold(
+    pool: &PgPool,
+    history: Option<History>,
+    project: Uuid,
+    task: Uuid,
+    reason: &str,
+    now: DateTime<Utc>,
+) {
+    if let Some(h) = history {
+        let d = Decision {
+            project,
+            task,
+            reason,
+            seen: h.attempts,
+            attempt: None,
+        };
+        record_hold(pool, Some(d), Some(h.overrides), now).await;
+    }
+}
+
+async fn record_hold(
+    pool: &PgPool,
+    d: Option<Decision<'_>>,
+    overrides: Option<i64>,
+    now: DateTime<Utc>,
+) {
     let Some(d) = d.filter(|d| is_hold(d.reason)) else {
         return;
     };
     let noted = async {
-        let mut conn = pool.acquire().await?;
-        note(&mut conn, &d, None, now).await
+        let mut tx = pool.begin().await?;
+        if is_budget_hold(d.reason) {
+            lock_budget(&mut tx, d.task).await?;
+            if let Some(seen) = overrides
+                && has_overrides(&mut tx).await?
+            {
+                let current: i64 = sqlx::query_scalar(OVERRIDE_COUNT)
+                    .bind(d.task)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                if current != seen {
+                    return Ok::<_, Error>(None);
+                }
+            }
+        }
+        let noted = note(&mut tx, &d, None, now).await?;
+        tx.commit().await?;
+        Ok(noted)
     };
     let noted = match noted.await {
         Ok(Some(n)) => n,
@@ -486,6 +573,24 @@ pub struct Current {
     pub status: String,
     pub held_at: DateTime<Utc>,
 }
+/// Count Graph-ready tasks that an attempt or a current scheduling hold does not claim.
+pub async fn unclaimed_count(pool: &PgPool, tasks: &[Uuid]) -> Result<usize, Error> {
+    if tasks.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = pool.acquire().await?;
+    let sql = if has_holds(&mut conn).await? {
+        "SELECT count(*) FROM unnest($1::uuid[]) t(id) WHERE NOT EXISTS(SELECT 1 FROM execution_attempts a WHERE a.task_id=t.id AND a.holds_task) AND NOT EXISTS(SELECT 1 FROM task_holds_current h WHERE h.task_id=t.id)"
+    } else {
+        "SELECT count(*) FROM unnest($1::uuid[]) t(id) WHERE NOT EXISTS(SELECT 1 FROM execution_attempts a WHERE a.task_id=t.id AND a.holds_task)"
+    };
+    let count: i64 = sqlx::query_scalar(sql)
+        .bind(tasks)
+        .fetch_one(&mut *conn)
+        .await?;
+    usize::try_from(count).map_err(|_| Error::Invalid("ready count"))
+}
+
 pub async fn current(pool: &PgPool, project: Uuid, task: Uuid) -> Result<Option<Current>, Error> {
     let mut conn = pool.acquire().await?;
     if !has_holds(&mut conn).await? {
@@ -645,7 +750,7 @@ pub struct Successor {
     pub project: Uuid,
     pub task: Uuid,
     pub predecessor: Uuid,
-    pub seen: Option<i32>,
+    pub seen: Option<History>,
 }
 impl Successor {
     fn decision(self, reason: &str) -> Option<Decision<'_>> {
@@ -653,7 +758,7 @@ impl Successor {
             project: self.project,
             task: self.task,
             reason,
-            seen: self.seen?,
+            seen: self.seen?.attempts,
             attempt: Some(self.predecessor),
         })
     }
@@ -667,7 +772,7 @@ pub async fn selection_refused(
     now: DateTime<Utc>,
 ) {
     match reasons.iter().find(|c| is_hold(c)) {
-        Some(code) => hold(pool, s.decision(code), now).await,
+        Some(code) => record_hold(pool, s.decision(code), s.seen.map(|h| h.overrides), now).await,
         None => skipped(pool, s, &format!("selection refused: {reasons:?}"), now).await,
     }
 }
@@ -712,10 +817,7 @@ mod tests {
     fn every_known_code_has_its_own_phrase_and_an_unknown_one_the_fallback() {
         let known = [
             "lineage_retry_budget_exhausted",
-            "lineage_time_budget_exhausted",
-            "lineage_time_budget_exhausted_or_unknown",
             "lineage_cost_budget_exhausted",
-            "task_sandbox_minutes_budget_exhausted",
             "replacement_policy_retry_budget_exhausted",
             "replacement_policy_time_budget_exhausted",
             "never_granted_retry_bound_exhausted",
@@ -772,10 +874,7 @@ mod tests {
     fn only_limits_are_budget_holds_an_owner_retry_overrides() {
         for code in [
             "lineage_retry_budget_exhausted",
-            "lineage_time_budget_exhausted",
-            "lineage_time_budget_exhausted_or_unknown",
             "lineage_cost_budget_exhausted",
-            "task_sandbox_minutes_budget_exhausted",
             "never_granted_retry_bound_exhausted",
             "replacement_policy_retry_budget_exhausted",
             "replacement_policy_time_budget_exhausted",

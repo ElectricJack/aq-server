@@ -59,6 +59,9 @@ struct MailHost {
     lose_host_reply: Arc<Mutex<Option<String>>>,
 }
 impl DomainHost for MailHost {
+    fn transition_time(&self, _: i64) -> i64 {
+        self.service.current_time()
+    }
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
     }

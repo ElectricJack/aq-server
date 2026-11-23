@@ -20,18 +20,7 @@ pub fn validate(paths: &[PathBuf]) -> Result<Vec<(u32, PathBuf)>, String> {
     let mut entries = Vec::new();
     for (index, path) in paths.iter().enumerate() {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let (prefix, slug) = name.split_once('_').unwrap_or(("", ""));
-        if prefix.len() != 4
-            || !prefix.bytes().all(|b| b.is_ascii_digit())
-            || !slug.ends_with(".sql")
-            || slug.len() <= 4
-            || !slug[..slug.len() - 4]
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        {
-            return Err(format!("{name}: expected NNNN_lowercase_description.sql"));
-        }
-        let number: u32 = prefix.parse().map_err(|e| format!("{name}: {e}"))?;
+        let number = migration_number(name)?;
         let expected = index as u32 + 1;
         if number != expected {
             return Err(format!(
@@ -42,6 +31,21 @@ pub fn validate(paths: &[PathBuf]) -> Result<Vec<(u32, PathBuf)>, String> {
         entries.push((number, path.clone()));
     }
     Ok(entries)
+}
+
+fn migration_number(name: &str) -> Result<u32, String> {
+    let (prefix, slug) = name.split_once('_').unwrap_or(("", ""));
+    let valid_prefix = prefix.len() == 4 && prefix.bytes().all(|b| b.is_ascii_digit());
+    let valid_slug = slug.strip_suffix(".sql").is_some_and(|description| {
+        !description.is_empty()
+            && description
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    });
+    if !valid_prefix || !valid_slug {
+        return Err(format!("{name}: expected NNNN_lowercase_description.sql"));
+    }
+    prefix.parse().map_err(|e| format!("{name}: {e}"))
 }
 
 pub fn rust_source(entries: &[(u32, PathBuf)]) -> String {

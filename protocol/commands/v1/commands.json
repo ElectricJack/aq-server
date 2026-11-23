@@ -346,37 +346,6 @@
     {
       "cli": [
         "conversation",
-        "global"
-      ],
-      "grant": "message.read",
-      "kind": "read",
-      "name": "conversation.global",
-      "owner_only": false,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:97ec454c38d8d3404fdf13f7e1dcf6c98310e57896976eaeb0f9f48dfc660f24",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {},
-            "required": [],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/human/conversations/global"
-          }
-        }
-      },
-      "summary": "The supervisor conversation",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "conversation",
         "messages"
       ],
       "grant": "message.read",
@@ -470,45 +439,6 @@
         }
       },
       "summary": "A conversation send operation",
-      "target": {
-        "rule": "own"
-      }
-    },
-    {
-      "cli": [
-        "conversation",
-        "project"
-      ],
-      "grant": "message.read",
-      "kind": "read",
-      "name": "conversation.project",
-      "owner_only": false,
-      "principals": {
-        "owner": {
-          "body": "query",
-          "params_digest": "sha256:60784403aa8cbeaac274d7d2407a5e6e47e698e8e7a7eb302605f9995f7dddb7",
-          "params_schema": {
-            "additionalProperties": false,
-            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
-            "properties": {
-              "project": {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "project"
-            ],
-            "type": "object"
-          },
-          "route": {
-            "method": "GET",
-            "path": "/api/human/conversations/projects/{project}"
-          }
-        }
-      },
-      "summary": "A project's supervisor conversation",
       "target": {
         "rule": "own"
       }
@@ -768,6 +698,108 @@
       "cli": [
         "epic",
         "retirement",
+        "close"
+      ],
+      "grant": "epic.retirement.close",
+      "kind": "mutation",
+      "name": "epic.retirement.close",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:fa216fb90d25418b68ee5fa65067a986a2b9c54eb8208fa9d2a8f01b1f569748",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.close"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Close an approved epic after its cleanup, ordinary builds and integrated check",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "decide"
+      ],
+      "grant": "epic.retirement.decide",
+      "kind": "mutation",
+      "name": "epic.retirement.decide",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:64f9a2e0976fb24db51d5249bffe5d6f033c0afd09b75b988bc15cbb35e90a42",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.decide"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Approve vetted revisions or request changes; approval releases the cleanup task",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "evidence"
+      ],
+      "grant": "epic.retirement.evidence",
+      "kind": "mutation",
+      "name": "epic.retirement.evidence",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:23811448a013316d0e21264157bb368829b0b09b5d7a48a87e642c21ddfa6dd7",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.evidence"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Record a cleanup merge, ordinary build or integrated check for an approved epic",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
         "register"
       ],
       "grant": "epic.retirement.register",
@@ -794,6 +826,40 @@
         }
       },
       "summary": "Register an epic flag and adopt its blocked draft cleanup tasks",
+      "target": {
+        "rule": "subject"
+      }
+    },
+    {
+      "cli": [
+        "epic",
+        "retirement",
+        "restore"
+      ],
+      "grant": "epic.retirement.restore",
+      "kind": "mutation",
+      "name": "epic.retirement.restore",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "action_request",
+          "params_digest": "sha256:8dbe87f337d0fae2192bd0c2a82132f974d9cb29ef99eb61cbc676aeeb6dc6f7",
+          "params_schema": {
+            "$ref": "protocol/dashboard-actions/v1/schema.json#kind=epic.retirement.restore"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/v1/actions"
+          },
+          "subject": {
+            "id_param": "registration_id",
+            "revision_param": "expected_version",
+            "type": "knowledge",
+            "version_key": "knowledge"
+          }
+        }
+      },
+      "summary": "Restore a registration's deleted closure gate at its verified revision",
       "target": {
         "rule": "subject"
       }
@@ -4162,6 +4228,35 @@
             "method": "GET",
             "path": "/api/v1/results/{id}/revisions/{revision}"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:cb6374690ea58e94849a65d4dcf17e7d02fca207074ca9bc38dd5ff5a2862f55",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "result_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "result_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}"
+          }
         }
       },
       "summary": "One result in the feed",
@@ -4372,6 +4467,42 @@
           "route": {
             "method": "GET",
             "path": "/api/human/results"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "after": {
+                "description": "The last result of the previous page",
+                "format": "uuid",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/results"
           }
         }
       },
@@ -4625,6 +4756,44 @@
           "route": {
             "method": "GET",
             "path": "/api/human/results/{id}/revisions/{revision}"
+          }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "profile": {
+                "enum": [
+                  "recorded_native_v2"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "result_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "result_id",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}"
           }
         }
       },

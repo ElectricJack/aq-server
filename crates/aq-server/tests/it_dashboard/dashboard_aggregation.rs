@@ -195,13 +195,16 @@ async fn overview_ready_owner_preserves_samples_failures_and_binding_fence() {
     node["metadata"] = json!({});
     node["version"] = json!(1);
     node["content_revision"] = json!(1);
+    let mut claimed = node.clone();
+    claimed["id"] = json!(f.selection.lineage.task_id);
+    node["id"] = json!(uuid::Uuid::new_v4());
     let server_mode = mode.clone();
     let reached = entered.clone();
     let proceed = release.clone();
     let graph = Router::new().route(
         "/v1/workspaces/{workspace}/ready",
         axum::routing::get(move || {
-            let node = node.clone();
+            let nodes = [node.clone(), claimed.clone()];
             let mode = server_mode.clone();
             let reached = reached.clone();
             let proceed = proceed.clone();
@@ -219,7 +222,7 @@ async fn overview_ready_owner_preserves_samples_failures_and_binding_fence() {
                     },
                     [("X-AQ-Graph-API-Version", "1")],
                     axum::Json(
-                        json!({"items":[node],"next_cursor":if mode==1 {Some("next")} else {None}}),
+                        json!({"items":nodes,"next_cursor":if mode==1 {Some("next")} else {None}}),
                     ),
                 )
             }
@@ -264,6 +267,7 @@ async fn overview_ready_owner_preserves_samples_failures_and_binding_fence() {
                 .unwrap()
                 .iter()
                 .any(|v| v["source"] == "graph_ready"
+                    && v["total"]["value"] == 1
                     && v["observation"]["observed_at"] == "1970-01-01T00:16:40.000Z")
         );
     }

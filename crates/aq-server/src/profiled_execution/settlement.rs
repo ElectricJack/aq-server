@@ -17,7 +17,13 @@ pub use automatic::{
     AutoDisposition, AutoSettlement, ReplacementFacts, record_replacement_facts,
     reworked_without_facts,
 };
+<<<<<<< HEAD
 pub use automatic::{complete_by_playbook, return_by_playbook};
+=======
+#[cfg(feature = "delivery_playbook")]
+pub use automatic::{complete_by_playbook, recover_held_for_retry, return_by_playbook};
+#[cfg(feature = "delivery_playbook")]
+>>>>>>> refs/remotes/central/main
 pub use facts::record_facts;
 
 /// The review requirement an offer must name for this validation policy body:

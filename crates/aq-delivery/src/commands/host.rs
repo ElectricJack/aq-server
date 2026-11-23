@@ -115,6 +115,8 @@ pub struct Accepting<'a> {
     /// `pull_request.await_checks`: Settings
     /// `delivery-limits.longest_check_wait_ms`.
     pub longest_check_wait_ms: Option<u64>,
+    /// `pull_request.await_checks`: Settings `delivery-limits.check_log_bytes`.
+    pub check_log_bytes: Option<u64>,
     /// Check and merge operations pin the resolved target at acceptance.
     pub target: Option<DeliveryTarget>,
     /// The latest attempt/result for merge evidence.
@@ -203,6 +205,9 @@ pub async fn frozen_request(
             let asked = input["deadline_ms"]
                 .as_u64()
                 .ok_or(DeliveryError::InvalidInput("deadline_ms"))?;
+            // Frozen with the request, like the wait, so one operation reads
+            // its logs under the limit it was accepted with.
+            request["check_log_bytes"] = json!(accepting.check_log_bytes.unwrap_or(0));
             let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
             request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
             request["required"] = input["required"].clone();
@@ -411,11 +416,17 @@ async fn record_pull_request(
 ) -> Result<(), DeliveryError> {
     let number = i64::try_from(seen.number).map_err(|_| DeliveryError::InvalidInput("number"))?;
     let failed = json!(seen.checks_failed);
+    // The log tail replaces the last one with each look, so it rolls with the
+    // pull request row and never outlives the head it was read for.
+    let (log_head, log_tail) = match &seen.checks_log {
+        Some(log) => (Some(log.head.as_str()), Some(log.tail.as_str())),
+        None => (None, None),
+    };
     let query = match &seen.url {
-        Some(url) => sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(task_id) DO UPDATE SET number=$2,url=$3,state=$4,mergeable=$5,checks_state=$6,checks_failed=$7,updated_at_ms=$8")
-            .bind(task).bind(number).bind(url.clone()).bind(seen.state).bind(seen.mergeable).bind(seen.checks_state).bind(failed).bind(now_ms),
-        None => sqlx::query("UPDATE delivery_pull_requests SET state=$3,mergeable=$4,checks_state=$5,checks_failed=$6,updated_at_ms=$7 WHERE task_id=$1 AND number=$2")
-            .bind(task).bind(number).bind(seen.state).bind(seen.mergeable).bind(seen.checks_state).bind(failed).bind(now_ms),
+        Some(url) => sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,checks_log_head,checks_log_tail,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(task_id) DO UPDATE SET number=$2,url=$3,state=$4,mergeable=$5,checks_state=$6,checks_failed=$7,checks_log_head=$8,checks_log_tail=$9,updated_at_ms=$10")
+            .bind(task).bind(number).bind(url.clone()).bind(seen.state).bind(seen.mergeable).bind(seen.checks_state).bind(failed).bind(log_head).bind(log_tail).bind(now_ms),
+        None => sqlx::query("UPDATE delivery_pull_requests SET state=$3,mergeable=$4,checks_state=$5,checks_failed=$6,checks_log_head=$7,checks_log_tail=$8,updated_at_ms=$9 WHERE task_id=$1 AND number=$2")
+            .bind(task).bind(number).bind(seen.state).bind(seen.mergeable).bind(seen.checks_state).bind(failed).bind(log_head).bind(log_tail).bind(now_ms),
     };
     query.execute(pool).await?;
     Ok(())

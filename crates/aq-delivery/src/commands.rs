@@ -83,6 +83,17 @@ pub struct PullRequestObserved {
     /// `none`, `pending`, `passed` or `failed`.
     pub checks_state: &'static str,
     pub checks_failed: Vec<String>,
+    /// The redacted log tail of the failed checks on the head that was
+    /// checked, when the forge gave one.
+    pub checks_log: Option<CheckLog>,
+}
+
+/// The tail of the failed jobs' logs (spec 0021 section 5.3) and the pull
+/// request head it was read for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckLog {
+    pub head: String,
+    pub tail: String,
 }
 
 /// A command's one completion: a catalog outcome and its output.
@@ -92,6 +103,8 @@ pub struct Completion {
     pub output: Value,
     /// The pull request as this command left it, when it touched one.
     pub pull_request: Option<PullRequestObserved>,
+    /// Diagnostic retained with the operation, outside the versioned catalog response.
+    pub diagnostic: Option<&'static str>,
 }
 impl Completion {
     pub fn new(outcome: &'static str, output: Value) -> Self {
@@ -99,6 +112,13 @@ impl Completion {
             outcome,
             output,
             pull_request: None,
+            diagnostic: None,
+        }
+    }
+    fn behind_base() -> Self {
+        Self {
+            diagnostic: Some("behind_base"),
+            ..Self::new("conflict", json!({}))
         }
     }
     pub fn refused(reason: &'static str) -> Self {
@@ -199,6 +219,10 @@ impl Delivery {
             }
             Ok(RefPublication::Moved) => Completion::new("conflict", json!({})),
             Ok(RefPublication::NoRef) => Completion::refused("no_branch"),
+            Err(e) if e.code == "rejected" && e.message == "remote_rejected" => Completion {
+                diagnostic: Some("remote_rejected"),
+                ..Completion::refused("unreachable")
+            },
             Err(_) => Completion::refused("unreachable"),
         })
     }
@@ -247,6 +271,7 @@ impl Delivery {
                         mergeable: "unknown",
                         checks_state: "none",
                         checks_failed: vec![],
+                        checks_log: None,
                     },
                 )
             }
@@ -261,6 +286,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_log: None,
             }),
             // GitHub answers 422 when the head branch is not there.
             Err(GitHubApiError::Invalid { .. }) => Completion::refused("not_published"),
@@ -281,9 +307,17 @@ impl Delivery {
         required: Option<&[String]>,
         now_ms: i64,
         deadline_at_ms: i64,
+        log_bytes: u64,
     ) -> CheckPoll {
-        self.check_result_head(target, pr, required, now_ms, deadline_at_ms, None)
-            .await
+        self.check_result_head(
+            target,
+            pr,
+            required,
+            (now_ms, deadline_at_ms),
+            log_bytes,
+            None,
+        )
+        .await
     }
 
     async fn check_result_head(
@@ -291,8 +325,8 @@ impl Delivery {
         target: &DeliveryTarget,
         pr: u64,
         required: Option<&[String]>,
-        now_ms: i64,
-        deadline_at_ms: i64,
+        (now_ms, deadline_at_ms): (i64, i64),
+        log_bytes: u64,
         expected_head: Option<CheckHead<'_>>,
     ) -> CheckPoll {
         let repo = &target.github;
@@ -308,6 +342,7 @@ impl Delivery {
             mergeable: "unknown",
             checks_state: "none",
             checks_failed: vec![],
+            checks_log: None,
         });
         let decided = 'decide: {
             let Some(p) = &observed else {
@@ -388,6 +423,18 @@ impl Delivery {
                     ChecksState::Failed => "failed",
                     ChecksState::Pending => "pending",
                 };
+                // The log is a courtesy to the supervisor: a read that fails
+                // leaves the failed check recorded without a tail.
+                if checks.state == ChecksState::Failed && log_bytes > 0 {
+                    let log = self
+                        .github
+                        .failed_check_log(repo, &checked.head_sha, &checks.failed, log_bytes)
+                        .await;
+                    s.checks_log = log.ok().flatten().map(|tail| CheckLog {
+                        head: checked.head_sha.clone(),
+                        tail,
+                    });
+                }
             }
             match checks.state {
                 ChecksState::Failed => Some(Completion::new(
@@ -457,9 +504,8 @@ impl Delivery {
             Ok(MergeOutcome::Merged { .. }) => MergeAttempt::Unconfirmed(Step::Retry(
                 "GitHub did not report a valid merge SHA".into(),
             )),
-            Ok(MergeOutcome::Conflict | MergeOutcome::Behind) => {
-                done(Completion::new("conflict", json!({})))
-            }
+            Ok(MergeOutcome::Behind) => done(Completion::behind_base()),
+            Ok(MergeOutcome::Conflict) => done(Completion::new("conflict", json!({}))),
             Ok(MergeOutcome::NotMergeable { .. }) => {
                 done(Completion::new("not_mergeable", json!({})))
             }
@@ -512,6 +558,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "passed",
                 checks_failed: vec![],
+                checks_log: None,
             }),
         )
     }
@@ -565,6 +612,7 @@ impl Delivery {
                 mergeable: "unknown",
                 checks_state: "none",
                 checks_failed: vec![],
+                checks_log: None,
             }),
         )
     }
@@ -722,8 +770,8 @@ impl Delivery {
                         target,
                         pr,
                         required.as_deref(),
-                        now_ms,
-                        deadline,
+                        (now_ms, deadline),
+                        request["check_log_bytes"].as_u64().unwrap_or(0),
                         text("result_head").map(|sha| CheckHead {
                             sha,
                             target_is_frozen: frozen_target.is_some(),
@@ -753,7 +801,7 @@ fn check_repair(
                 seen.mergeable = "conflicting";
             }
         }
-        Mergeability::Behind if repair_behind => {}
+        Mergeability::Behind if repair_behind => return Some(Completion::behind_base()),
         _ => return None,
     }
     Some(Completion::new("conflict", json!({})))

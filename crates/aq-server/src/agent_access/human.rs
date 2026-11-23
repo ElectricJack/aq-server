@@ -136,6 +136,7 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         )
         .layer(Extension(runtime.clone()))
         .layer(middleware::from_fn_with_state(runtime, gate))
+        .merge(crate::profiled_execution::human_results::routes())
 }
 async fn gate(State(r): State<Arc<ReadRuntime>>, request: Request, next: Next) -> Response {
     let Some(_permits) = r.gate.enter().await else {

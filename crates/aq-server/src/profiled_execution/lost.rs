@@ -137,7 +137,7 @@ async fn retry(
     .map_err(database)?;
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| AppError::Internal)?;
     let mc = super::super::machine_api::mapped;
-    let seen = holds::attempts_in(&mut tx, task).await.map_err(mc)?;
+    let seen = holds::lost_attempts(&mut tx, task).await.map_err(mc)?;
     let (release, held) = match holding {
         false => (None, None),
         true => match replacement::assess_task_in(&mut tx, task, now).await? {

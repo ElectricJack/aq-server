@@ -609,10 +609,8 @@ async fn actual_initial_grant_reconciliation_returns_history_without_live_clock_
 }
 
 #[tokio::test]
-async fn initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wall_time() {
-    let mut case = native_offer::setup().await;
-    // Every level of the fixture uses the selection defaults.
-    native_offer::pin_policy(&mut case, |p| p.max_lineage_elapsed_ms = 5000).await;
+async fn initial_deadline_is_the_execution_profiles_wall_time() {
+    let case = native_offer::setup().await;
     let (status, body) = native_offer::poll_offered(&case).await;
     assert_eq!(status, 200, "{body}");
     let aq_admission::control::ControlReply::Poll(mut page) =
@@ -622,11 +620,10 @@ async fn initial_deadline_respects_actual_pinned_lineage_policy_shorter_than_wal
     };
     assert_eq!(page.offers.len(), 1);
     let c = setup_from(case, page.offers.remove(0)).await;
-    assert!(c.offer.offered.offer.manifest.resources.wall_time_ms > 5000);
     let first = grant(&c).await.unwrap();
     assert_eq!(
         first.execution_deadline_ms - first.original.clock.server_time_ms,
-        5000
+        c.offer.offered.offer.manifest.resources.wall_time_ms
     );
     assert!(first.original.grant.expires_at_ms <= first.execution_deadline_ms);
     let replay = grant(&c).await.unwrap();

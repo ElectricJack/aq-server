@@ -89,6 +89,8 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     let working = json!({"state": "working", "last_observation_at": at, "last_progress_at": at});
     let (_, list) = read(&app, "/api/v1/sessions?limit=1", "owner@localhost").await;
     let (_, detail) = read(&app, &format!("/api/v1/sessions/{id}"), "owner@localhost").await;
+    assert_eq!(detail["data"]["last_output_at"], row["last_output_at"]);
+    assert_eq!(detail["data"]["last_activity_at"], at);
     for mut observation in [
         list["data"]["items"][0]["observation"].clone(),
         detail["data"]["observation"].clone(),

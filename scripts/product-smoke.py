@@ -145,8 +145,14 @@ class Fixture:
         def mapped(port):
             output = self.compose("port", "server", str(port), name="address-" + str(port), check=False).strip()
             return output if re.fullmatch(r"127\.0\.0\.1:[0-9]+", output) else None
-        self.admin = "http://" + self.poll("published admin address", lambda: mapped(8080))
-        self.worker = "http://" + self.poll("published worker address", lambda: mapped(8081))
+        def healthy_mapping():
+            admin, worker = mapped(8080), mapped(8081)
+            if not admin or not worker:
+                return None
+            self.admin, self.worker = "http://" + admin, "http://" + worker
+            return self.http("/healthz")
+        # A transient startup failure can restart the server again and reassign both ports.
+        self.poll("healthy published server addresses", healthy_mapping)
 
     def worker_row(self):
         rows = [row for row in self.http("/api/workers") if row["name"] == "smoke"]
@@ -331,7 +337,6 @@ class Fixture:
             self.compose("run", "--rm", "-T", "--no-deps", "worker-volume-init", name="worker-volume-init")
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "server", name="start-server")
         self.address()
-        self.poll("admin health", lambda: self.http("/healthz"))
         self.record["postgres_image"] = self.compose("images", "--format", "json", name="compose-images")
 
     def foundation(self):
@@ -367,7 +372,6 @@ class Fixture:
         before = row["last_seen_at"]
         self.compose("restart", "server", "postgres", name="restart")
         self.address()
-        self.poll("restarted health", lambda: self.http("/healthz"))
         def advanced():
             current = online()
             return current if current and current["id"] == self.node and current["last_seen_at"] > before else None

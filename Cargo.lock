@@ -322,6 +322,8 @@ name = "aq-human-work"
 version = "0.1.0"
 dependencies = [
  "aq-human-cursor",
+ "aq-machine-control",
+ "aq-playbook-domain",
  "aq-project-policy",
  "aq-role-settings",
  "chrono",
@@ -331,6 +333,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -570,6 +573,7 @@ dependencies = [
  "sqlx-postgres",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -736,6 +740,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aq-request-site"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aq-responses-transport"
 version = "0.1.0"
 dependencies = [
@@ -868,6 +883,7 @@ dependencies = [
  "aq-protocol",
  "aq-provider-quota",
  "aq-release",
+ "aq-request-site",
  "aq-result-media",
  "aq-review-protocol",
  "aq-role-settings",

@@ -48,7 +48,6 @@ impl Runtime {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/results", get(feed))
-        .route("/api/v1/results/{id}/revisions/{revision}", get(detail))
         .route(
             "/api/v1/results/{id}/revisions/{revision}/comments",
             get(comments).post(comment),
@@ -251,7 +250,7 @@ async fn feed(
         json!({"items":items,"next_cursor":next}),
     )))
 }
-async fn detail(
+pub async fn detail(
     State(state): State<AppState>,
     RequireOwner(user): RequireOwner,
     path: std::result::Result<Path<(Uuid, String)>, axum::extract::rejection::PathRejection>,

@@ -140,7 +140,6 @@ pub async fn active(pool: &sqlx::PgPool) -> Snapshot {
 pub async fn install(pool: &sqlx::PgPool, actor: Uuid) -> Snapshot {
     let defaults = SelectionDefaults {
         max_attempts: 3,
-        max_lineage_elapsed_ms: 60_000,
         observation_max_age_ms: 5_000,
         unknown_cost: aq_profiles::UnknownCostPolicy::Deny,
         ..SelectionDefaults::default()
