@@ -63,44 +63,9 @@ impl WorkGraph for FakeGraph {
         let mut staged = nodes.clone();
         let mut results = vec![];
         for op in body["operations"].as_array().unwrap() {
-            match op["op"].as_str().unwrap() {
-                "create_node" => {
-                    let id: Uuid = serde_json::from_value(op["id"].clone()).unwrap();
-                    if staged.contains_key(&id) {
-                        return Ok((409, json!({})));
-                    }
-                    let mut node = op.clone();
-                    node["version"] = json!(1);
-                    staged.insert(id, node.clone());
-                    results.push(node);
-                }
-                "update_node" => {
-                    let id: Uuid = serde_json::from_value(op["id"].clone()).unwrap();
-                    let Some(node) = staged.get_mut(&id) else {
-                        return Ok((404, json!({})));
-                    };
-                    if node["version"] != op["expected_version"] {
-                        return Ok((409, json!({})));
-                    }
-                    let patch = op["patch"].as_object().unwrap();
-                    if let Some(state) = patch.get("task_state") {
-                        assert!(
-                            key.starts_with("aq-playbook-activate-"),
-                            "no lifecycle shortcut"
-                        );
-                        assert_eq!(node["task_state"], "draft");
-                        assert_eq!(state, "active");
-                    }
-                    for (k, v) in patch {
-                        node[k] = v.clone();
-                    }
-                    if !patch.is_empty() {
-                        node["version"] = json!(node["version"].as_i64().unwrap() + 1);
-                    }
-                    results.push(node.clone());
-                }
-                "add_edge" => results.push(op.clone()),
-                other => panic!("unexpected op {other}"),
+            match stage_operation(&mut staged, &key, op) {
+                Ok(result) => results.push(result),
+                Err(status) => return Ok((status, json!({}))),
             }
         }
         *nodes = staged;
@@ -114,6 +79,57 @@ impl WorkGraph for FakeGraph {
             .insert(key, (body, reply.clone()));
         Ok(reply)
     }
+}
+
+/// Apply to the private staged map; the caller commits only a complete batch.
+fn stage_operation(
+    nodes: &mut BTreeMap<Uuid, Value>,
+    key: &str,
+    op: &Value,
+) -> std::result::Result<Value, u16> {
+    match op["op"].as_str().unwrap() {
+        "create_node" => {
+            let id: Uuid = serde_json::from_value(op["id"].clone()).unwrap();
+            if nodes.contains_key(&id) {
+                return Err(409);
+            }
+            let mut node = op.clone();
+            node["version"] = json!(1);
+            nodes.insert(id, node.clone());
+            Ok(node)
+        }
+        "update_node" => update_staged_node(nodes, key, op),
+        "add_edge" => Ok(op.clone()),
+        other => panic!("unexpected op {other}"),
+    }
+}
+
+fn update_staged_node(
+    nodes: &mut BTreeMap<Uuid, Value>,
+    key: &str,
+    op: &Value,
+) -> std::result::Result<Value, u16> {
+    let id: Uuid = serde_json::from_value(op["id"].clone()).unwrap();
+    let node = nodes.get_mut(&id).ok_or(404_u16)?;
+    if node["version"] != op["expected_version"] {
+        return Err(409);
+    }
+    let patch = op["patch"].as_object().unwrap();
+    if let Some(state) = patch.get("task_state") {
+        assert!(
+            key.starts_with("aq-playbook-activate-"),
+            "no lifecycle shortcut"
+        );
+        assert_eq!(node["task_state"], "draft");
+        assert_eq!(state, "active");
+    }
+    for (k, v) in patch {
+        node[k] = v.clone();
+    }
+    if !patch.is_empty() {
+        node["version"] = json!(node["version"].as_i64().unwrap() + 1);
+    }
+    Ok(node.clone())
 }
 
 struct Host {
@@ -575,5 +591,102 @@ fn host3_registry_runs_vendored_d4_fixtures() {
         // Asynchronous replay cases expect an admission handle, not an outcome.
         let outcome = replay["expected_outcome"].as_str().unwrap_or("accepted");
         assert!(command.outcomes.contains_key(outcome), "{replay}");
+    }
+}
+
+#[cfg(test)]
+mod fake_graph_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejected_batch_preserves_nodes_and_does_not_reserve_replay_key() {
+        let existing = Uuid::new_v4();
+        let added = Uuid::new_v4();
+        let missing = Uuid::new_v4();
+        let original = json!({"id": existing, "version": 1, "title": "original"});
+        let cases = [
+            (json!({"op": "create_node", "id": existing}), 409),
+            (
+                json!({"op": "update_node", "id": missing, "expected_version": 1, "patch": {}}),
+                404,
+            ),
+            (
+                json!({"op": "update_node", "id": existing, "expected_version": 1, "patch": {}}),
+                409,
+            ),
+        ];
+        for (rejected, status) in cases {
+            let graph = FakeGraph::default();
+            graph
+                .nodes
+                .lock()
+                .unwrap()
+                .insert(existing, original.clone());
+            let create = json!({"op": "create_node", "id": added});
+            let request = json!({"idempotency_key": "batch", "operations": [
+                create.clone(),
+                {"op": "update_node", "id": existing, "expected_version": 1, "patch": {"title": "changed"}},
+                rejected
+            ]});
+            assert_eq!(
+                graph.mutate(Uuid::nil(), request).await.unwrap(),
+                (status, json!({}))
+            );
+            assert_eq!(
+                *graph.nodes.lock().unwrap(),
+                BTreeMap::from([(existing, original.clone())])
+            );
+            assert!(graph.replies.lock().unwrap().is_empty());
+            let retry = json!({"idempotency_key": "batch", "operations": [create]});
+            assert_eq!(graph.mutate(Uuid::nil(), retry).await.unwrap().0, 200);
+            assert_eq!(graph.version(added), 1);
+            assert_eq!(graph.mutations(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_replay_keeps_reply_and_rejects_changed_request() {
+        let graph = FakeGraph::default();
+        let id = Uuid::new_v4();
+        let edge = json!({"op": "add_edge", "source": id, "target": id});
+        let request = json!({"idempotency_key": "replay", "operations": [
+            {"op": "create_node", "id": id}, edge.clone()
+        ]});
+        let reply = graph.mutate(Uuid::nil(), request.clone()).await.unwrap();
+        assert_eq!(reply.0, 200);
+        assert_eq!(reply.1["results"][1], edge);
+        assert_eq!(
+            graph.mutate(Uuid::nil(), request.clone()).await.unwrap(),
+            reply
+        );
+        let mut changed = request;
+        changed["operations"][0]["title"] = json!("changed");
+        assert_eq!(
+            graph.mutate(Uuid::nil(), changed).await.unwrap(),
+            (409, json!({}))
+        );
+        assert_eq!(graph.mutations(), 1);
+        assert_eq!(graph.version(id), 1);
+    }
+
+    #[tokio::test]
+    async fn empty_patch_keeps_version_and_activation_advances_it() {
+        let graph = FakeGraph::default();
+        let id = Uuid::new_v4();
+        graph
+            .nodes
+            .lock()
+            .unwrap()
+            .insert(id, json!({"id": id, "version": 1, "task_state": "draft"}));
+        let request = json!({"idempotency_key": "aq-playbook-activate-fixture", "operations": [
+            {"op": "update_node", "id": id, "expected_version": 1, "patch": {}},
+            {"op": "update_node", "id": id, "expected_version": 1, "patch": {"task_state": "active"}}
+        ]});
+        let (status, reply) = graph.mutate(Uuid::nil(), request).await.unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(reply["results"][0]["version"], 1);
+        assert_eq!(reply["results"][1]["version"], 2);
+        assert_eq!(reply["results"][1]["task_state"], "active");
+        assert_eq!(graph.version(id), 2);
     }
 }
