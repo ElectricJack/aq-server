@@ -606,3 +606,7 @@ pub fn node_credentials(registry: &LoadedRegistry, node: uuid::Uuid) -> Vec<Auth
         .map(|(_, credential)| credential.clone())
         .collect()
 }
+
+mod registry;
+pub use registry::CredentialDefinition;
+pub mod inventory;

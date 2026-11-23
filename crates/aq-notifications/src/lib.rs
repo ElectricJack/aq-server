@@ -1,7 +1,10 @@
 //! Bounded notification delivery plans. Persistence and authorization belong to
 //! the adapter; a pure state transition is not durable dispatch permission.
+#[cfg(unix)]
+pub mod config;
 mod delivery;
 pub mod discord;
+pub mod policy;
 use aq_lifecycle_api::{Digest, Scope, Validate};
 pub use delivery::{AttemptOutcome, Schedule};
 use serde::{Deserialize, Serialize};
@@ -260,4 +263,33 @@ pub struct RetryRequest {
     pub delivery_id: Uuid,
     pub expected_revision: u64,
     pub accept_duplicate_risk: bool,
+}
+
+impl SendRequest {
+    pub fn into_message(self, now: u64) -> Result<Message> {
+        let message = Message {
+            message_id: self.message_id,
+            revision: self.revision,
+            scope: self.scope,
+            recipient_user_id: self.recipient_user_id,
+            summary: self.summary,
+            created_at_ms: now,
+            expires_at_ms: now.checked_add(self.ttl_ms).ok_or(Error::Invalid)?,
+        };
+        message.validate()?;
+        Ok(message)
+    }
+}
+
+impl RouteRequest {
+    pub fn replaces(&self, previous: Option<&Route>) -> bool {
+        match previous {
+            Some(route) => {
+                route.revision == self.expected_revision
+                    && route.scope == self.route.scope
+                    && route.recipient_user_id == self.route.recipient_user_id
+            }
+            None => self.expected_revision == 0,
+        }
+    }
 }
