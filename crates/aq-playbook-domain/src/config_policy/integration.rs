@@ -1,9 +1,11 @@
 //! Validate commit identity and publication evidence settings.
-use super::*;
+use super::Result;
+use crate::publication_evidence::EvidencePolicy;
+use serde::Deserialize;
 /// Commit identity for central candidates and the publication evidence policy.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct IntegrationInput {
+pub struct IntegrationInput {
     commit_name: String,
     commit_email: String,
     /// Check ids each needing a passing check receipt before publication.
@@ -15,17 +17,17 @@ pub(super) struct IntegrationInput {
     judgment_choices: Vec<String>,
 }
 #[derive(Clone, Debug)]
-pub(crate) struct IntegrationSettings {
-    pub(crate) commit_name: String,
-    pub(crate) commit_email: String,
-    pub(crate) evidence: crate::playbooks::host_adapters::EvidencePolicy,
+pub struct IntegrationSettings {
+    pub commit_name: String,
+    pub commit_email: String,
+    pub evidence: EvidencePolicy,
 }
 impl IntegrationInput {
-    pub(super) fn load(self) -> Result<IntegrationSettings> {
+    pub fn load(self) -> Result<IntegrationSettings> {
         let identities = [&self.commit_name, &self.commit_email]
             .into_iter()
             .all(|v| valid_identity(v));
-        let evidence = crate::playbooks::host_adapters::EvidencePolicy {
+        let evidence = EvidencePolicy {
             checks: self.checks,
             review: self.review,
             judgment_choices: self.judgment_choices,

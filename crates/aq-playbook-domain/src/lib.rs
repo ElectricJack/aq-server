@@ -4,6 +4,7 @@ pub mod catalog_view;
 pub mod check_admission;
 pub mod check_cancellations;
 pub mod coding;
+pub mod config_policy;
 pub mod context_reads;
 pub mod daily_schedules;
 pub mod decision_effects;

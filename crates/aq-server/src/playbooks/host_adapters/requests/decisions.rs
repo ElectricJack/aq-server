@@ -122,57 +122,31 @@ impl Service {
         answer: DecisionAnswer<'_>,
         decision: PendingDecision<'_>,
     ) -> Result<HostResult> {
-        let DecisionAnswer {
-            actor,
-            handle,
-            choice,
-            note,
-        } = answer;
-        let PendingDecision {
-            operation: op,
-            request,
-            comment: task,
-        } = decision;
         let mut tx = self.tx().await?;
-        Self::owner(&mut tx, actor).await?;
+        Self::owner(&mut tx, answer.actor).await?;
         Operations(&self.namespace)
             .require_project_workspace(&mut *tx)
             .await?;
         self.namespace_locked(&mut tx).await?;
         let current = self
-            .load_operation(&mut *tx, handle)
+            .load_operation(&mut *tx, answer.handle)
             .await?
             .ok_or(Error::Forbidden)?;
         if current.status != "running" {
             return current.retained();
         }
         let now = self.now()?;
-        if now >= request.expires_at_ms {
+        if now >= decision.request.expires_at_ms {
             return Err(Error::Conflict);
         }
-        let mut output = request.output(handle);
-        if self.profile == aq_playbook_domain::review_domain::CatalogProfile::Host11 {
-            output["note"] = json!(note.unwrap_or_default());
-        }
-        let result = self
-            .retain_completion(
-                &mut tx,
-                Completion {
-                    key: OperationKey::new(handle, &op.command, &op.intent_id),
-                    result: HostResult {
-                        outcome: choice.into(),
-                        output,
-                    },
-                    note,
-                },
-            )
-            .await?;
-        if let Some((task_id, body)) = task {
+        let completion = decision.completion(&answer, self.profile);
+        let result = self.retain_completion(&mut tx, completion).await?;
+        if let Some((task_id, body)) = decision.comment {
             let id = stable_id(
                 "aq.playbook.decision.comment",
                 self.namespace.namespace_id,
                 self.namespace.generation,
-                &op.intent_id,
+                &decision.operation.intent_id,
             )?;
             aq_task_comments::add_in_tx(
                 &mut tx,
@@ -181,7 +155,9 @@ impl Service {
                     project_id: self.namespace.project_id,
                     task_id,
                 },
-                &aq_task_comments::Author::Owner { user_id: actor },
+                &aq_task_comments::Author::Owner {
+                    user_id: answer.actor,
+                },
                 body,
                 chrono::DateTime::from_timestamp_millis(now).ok_or(Error::Unknown)?,
             )
@@ -224,6 +200,30 @@ struct PendingDecision<'a> {
     operation: Operation,
     request: DecisionRequest,
     comment: Option<(Uuid, &'a str)>,
+}
+impl PendingDecision<'_> {
+    fn completion<'a>(
+        &'a self,
+        answer: &DecisionAnswer<'a>,
+        profile: aq_playbook_domain::review_domain::CatalogProfile,
+    ) -> Completion<'a> {
+        let mut output = self.request.output(answer.handle);
+        if profile == aq_playbook_domain::review_domain::CatalogProfile::Host11 {
+            output["note"] = json!(answer.note.unwrap_or_default());
+        }
+        Completion {
+            key: OperationKey::new(
+                answer.handle,
+                &self.operation.command,
+                &self.operation.intent_id,
+            ),
+            result: HostResult {
+                outcome: answer.choice.into(),
+                output,
+            },
+            note: answer.note,
+        }
+    }
 }
 impl DecisionAnswer<'_> {
     fn validate(&self, request: &DecisionRequest) -> Result<()> {
