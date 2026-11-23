@@ -172,7 +172,7 @@ impl Retained {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::result_work::{Recorded, Subject, describe, provenance_digest};
+    use crate::result_work::{Recorded, RetainedRef, Subject, describe, provenance_digest};
     use base64::Engine;
     use serde_json::Value;
     use sha2::{Digest, Sha256};
@@ -353,8 +353,15 @@ mod tests {
             .unwrap();
         assert_eq!(bytes, PATCH);
         // The digest names this revision, repository, base, head and ref.
-        let expected =
-            provenance_digest(REVISION, REPOSITORY.parse().unwrap(), BASE, HEAD, TASK_REF);
+        let expected = provenance_digest(
+            REVISION,
+            REPOSITORY.parse().unwrap(),
+            RetainedRef {
+                base: BASE,
+                head: HEAD,
+                task_ref: TASK_REF,
+            },
+        );
         assert_eq!(patch["provenance_digest"], expected);
         // Another revision of the same report binds another digest.
         let other = REVISION.replace('4', "5");

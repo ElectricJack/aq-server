@@ -348,6 +348,26 @@ pub async fn confirm_pushed(
     if row.get::<bool, _>("recorded") {
         return Ok(());
     }
+    let task_ref = confirm_head(&row, git, pushed_at).await?;
+    sqlx::query(
+        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
+         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
+    )
+    .bind(report)
+    .bind(attempt)
+    .bind(&task_ref)
+    .bind(pushed_at.map(|p| &p.head))
+    .execute(pool)
+    .await
+    .map_err(|_| PushedRefusal::Unavailable)?;
+    Ok(())
+}
+
+async fn confirm_head(
+    row: &sqlx::postgres::PgRow,
+    git: &SocketGit,
+    pushed_at: Option<&PushedRef>,
+) -> Result<String, PushedRefusal> {
     let task_ref: String = row.get("task_ref");
     if pushed_at.is_some_and(|p| p.reference != task_ref) {
         return Err(PushedRefusal::Refused(
@@ -374,18 +394,7 @@ pub async fn confirm_pushed(
         }
         _ => {}
     }
-    sqlx::query(
-        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
-         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
-    )
-    .bind(report)
-    .bind(attempt)
-    .bind(&task_ref)
-    .bind(pushed_at.map(|p| &p.head))
-    .execute(pool)
-    .await
-    .map_err(|_| PushedRefusal::Unavailable)?;
-    Ok(())
+    Ok(task_ref)
 }
 
 /// [`confirm_pushed`] of what a result request's headers name, if anything.
@@ -419,83 +428,8 @@ pub async fn pushed_of(
     }))
 }
 
-/// One `/v1/git/<repository>/<path>` request of the authenticated `node` for
-/// the attempt its `AQ-Attempt` header names, forwarded to aq-git's git
-/// socket under the attempt's recorded grant.
-pub async fn serve<B>(
-    pool: &PgPool,
-    socket: &Path,
-    node: Uuid,
-    (repository, path): (Uuid, &str),
-    request: Request<B>,
-) -> Result<Response<Incoming>, Refusal>
-where
-    B: Body<Data = Bytes> + Send + Unpin + 'static,
-    B::Error: Into<BoxError>,
-{
-    let push = route(request.method(), path, request.uri().query())?;
-    let attempt = (request.headers().get(ATTEMPT_HEADER))
-        .and_then(|v| Uuid::try_parse(v.to_str().ok()?).ok())
-        .ok_or(Refusal::BadRequest(
-            "the AQ-Attempt header must name the attempt",
-        ))?;
-    let grant = live(pool, attempt, node)
-        .await
-        .map_err(|_| Refusal::Unavailable)?;
-    let grant = (grant.filter(|g| g.repository_id == repository))
-        .ok_or(Refusal::Forbidden("no live git grant for this request"))?;
-    let (limits, _) = aq_role_settings::delivery_limits(pool)
-        .await
-        .map_err(|_| Refusal::Unavailable)?;
-    let deadline = Instant::now() + Duration::from_millis(limits.git_transfer_timeout_ms);
-    let (parts, body) = request.into_parts();
-    let declared = (parts.headers.get(header::CONTENT_LENGTH))
-        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
-    if declared.is_some_and(|n| n > limits.max_push_bytes) {
-        return Err(Refusal::TooLarge);
-    }
-    let mut body = Counted {
-        prefix: None,
-        inner: body,
-        left: limits.max_push_bytes,
-    };
-    if push {
-        if parts.headers.contains_key(header::CONTENT_ENCODING) {
-            return Err(Refusal::BadRequest(
-                "an encoded push body cannot be checked",
-            ));
-        }
-        let read = tokio::time::timeout_at(deadline, commands(&mut body, &grant)).await;
-        body.prefix = Some(read.map_err(|_| Refusal::Unavailable)??);
-    }
-    let mut uri = format!("/{repository}/{path}");
-    if let Some(query) = parts.uri.query() {
-        uri = format!("{uri}?{query}");
-    }
-    let mut out = Request::builder().method(parts.method).uri(uri);
-    for name in FORWARDED {
-        for value in parts.headers.get_all(&name) {
-            out = out.header(&name, value);
-        }
-    }
-    out = (out.header(header::HOST, "aq-git"))
-        .header("aq-repository", repository.to_string())
-        .header("aq-base", &grant.base)
-        .header("aq-task-ref", &grant.task_ref)
-        .header("aq-max-push-bytes", limits.max_push_bytes.to_string())
-        .header("aq-operation", Uuid::new_v4().to_string());
-    let request = out
-        .body(body)
-        .map_err(|_| Refusal::BadRequest("invalid git request"))?;
-    let mut response = exchange(socket, request, deadline).await?;
-    let headers = std::mem::take(response.headers_mut());
-    for name in RETURNED {
-        for value in headers.get_all(&name) {
-            response.headers_mut().append(&name, value.clone());
-        }
-    }
-    Ok(response)
-}
+mod proxy;
+pub use proxy::SmartHttp;
 
 /// Whether `method path?query` is a smart-HTTP route, and a push.
 fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
@@ -515,30 +449,48 @@ where
     B: Body<Data = Bytes> + Unpin,
 {
     let malformed = Refusal::BadRequest("malformed receive-pack commands");
-    let (mut read, mut at, mut seen) = (BytesMut::new(), 0, 0);
+    let mut read = BytesMut::new();
+    let mut list = CommandList::default();
     loop {
-        while let Some(length) = read.get(at..at + 4) {
-            let length = std::str::from_utf8(length).ok();
-            let length = length.and_then(|l| usize::from_str_radix(l, 16).ok());
-            match length.ok_or(malformed)? {
-                0 => return Ok(read.freeze()),
-                1..=4 => return Err(malformed),
-                length if read.len() < at + length => break,
-                length => {
-                    seen += 1;
-                    if seen > 1 {
-                        return Err(Refusal::Forbidden("a push may update only the task ref"));
-                    }
-                    check_command(&read[at + 4..at + length], grant)?;
-                    at += length;
-                }
-            }
+        if list.complete(&read, grant)? {
+            return Ok(read.freeze());
         }
         match body.frame().await {
             Some(Ok(frame)) => read.extend_from_slice(&frame.into_data().unwrap_or_default()),
             Some(Err(_)) => return Err(Refusal::TooLarge),
             None => return Err(malformed),
         }
+    }
+}
+
+#[derive(Default)]
+struct CommandList {
+    at: usize,
+    seen: usize,
+}
+impl CommandList {
+    fn complete(&mut self, read: &[u8], grant: &GitGrant) -> Result<bool, Refusal> {
+        let malformed = Refusal::BadRequest("malformed receive-pack commands");
+        while let Some(length) = read.get(self.at..self.at + 4) {
+            let length = std::str::from_utf8(length).ok();
+            let length = length.and_then(|l| usize::from_str_radix(l, 16).ok());
+            match length.ok_or(malformed)? {
+                0 => return Ok(true),
+                1..=4 => return Err(malformed),
+                length if read.len() < self.at + length => break,
+                length => self.consume(read, length, grant)?,
+            }
+        }
+        Ok(false)
+    }
+    fn consume(&mut self, read: &[u8], length: usize, grant: &GitGrant) -> Result<(), Refusal> {
+        self.seen += 1;
+        if self.seen > 1 {
+            return Err(Refusal::Forbidden("a push may update only the task ref"));
+        }
+        check_command(&read[self.at + 4..self.at + length], grant)?;
+        self.at += length;
+        Ok(())
     }
 }
 
