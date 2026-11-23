@@ -204,6 +204,7 @@ fn route(source: Source) -> Route {
         source,
         ended_attempts: 0,
         judgment: None,
+        environment: None,
     }
 }
 

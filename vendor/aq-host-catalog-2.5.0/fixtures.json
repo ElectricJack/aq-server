@@ -1,0 +1,5024 @@
+{
+  "assessed_guarantee": {
+    "assessed": {
+      "flags": [
+        "narrow"
+      ],
+      "labels": [
+        "bugfix",
+        "high"
+      ],
+      "provenance": {
+        "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "credential_profile": "routing-sol-low",
+        "model": "claude-sonnet",
+        "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provider": "anthropic",
+        "usage": {
+          "cost_microunits": 0,
+          "input_tokens": 812,
+          "output_tokens": 64
+        }
+      },
+      "rationale": "Touches crash recovery.",
+      "reference": "judgment:op-1",
+      "subject": {
+        "id": "task-1",
+        "revision": 3
+      }
+    },
+    "request": {
+      "budget": {
+        "deadline_ms": 120000,
+        "max_output_tokens": 2048
+      },
+      "context": {
+        "items": [
+          {
+            "label": "Title",
+            "text": "Fix the retry counter"
+          },
+          {
+            "label": "Description",
+            "text": "The retry counter resets after a restart."
+          },
+          {
+            "label": "Kind given by the filer",
+            "text": "bugfix"
+          }
+        ]
+      },
+      "fields": [
+        {
+          "choices": [
+            "feature",
+            "bugfix",
+            "refactor",
+            "test",
+            "docs",
+            "chore",
+            "sync",
+            "spec",
+            "design",
+            "plan",
+            "review",
+            "research",
+            "analysis",
+            "art",
+            "repair",
+            "unknown"
+          ],
+          "description": "What kind of work the task is.",
+          "id": "kind"
+        },
+        {
+          "choices": [
+            "low",
+            "medium",
+            "high",
+            "very_high",
+            "unknown"
+          ],
+          "description": "How much damage the change could do if it is wrong.",
+          "id": "risk"
+        }
+      ],
+      "flags": [
+        {
+          "description": "The requirements are settled and the files to change are named or obvious.",
+          "id": "narrow"
+        },
+        {
+          "description": "An existing or specified test checks the result.",
+          "id": "covered_by_test"
+        },
+        {
+          "description": "Needs advanced mathematics or unusually hard reasoning.",
+          "id": "needs_deep_reasoning"
+        },
+        {
+          "description": "Clearly harder than ordinary research.",
+          "id": "clearly_harder"
+        }
+      ],
+      "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+      "rationale_max_bytes": 1024,
+      "subject": {
+        "id": "task-1",
+        "revision": 3
+      }
+    },
+    "rule": "assessed has exactly one label per requested field, in field order, each one of that field's choices; flags are the declared flags that hold, each once. An answer that cannot meet this is failed with reason indeterminate, never assessed.",
+    "unsatisfiable": [
+      {
+        "answer": {
+          "flags": [],
+          "labels": [
+            "bugfix"
+          ]
+        },
+        "name": "one label missing",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [
+            "narrow"
+          ],
+          "labels": []
+        },
+        "name": "no labels at all",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [],
+          "labels": [
+            "bugfix",
+            "severe"
+          ]
+        },
+        "name": "a label that is not one of the field's choices",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [],
+          "labels": [
+            "high",
+            "bugfix"
+          ]
+        },
+        "name": "labels out of field order",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [],
+          "labels": [
+            "bugfix",
+            "high",
+            "medium"
+          ]
+        },
+        "name": "one label too many",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [
+            "urgent"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ]
+        },
+        "name": "a flag that was not asked for",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "flags": [
+            "narrow",
+            "narrow"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ]
+        },
+        "name": "a flag given twice",
+        "result": {
+          "outcome": "failed",
+          "output": {
+            "reason": "indeterminate",
+            "reference": "judgment:op-1",
+            "subject": {
+              "id": "task-1",
+              "revision": 3
+            }
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "contract": "work.read",
+      "kind": "input",
+      "name": "valid read of a task",
+      "valid": true,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "input",
+      "name": "invalid read without a revision",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1"
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid facts with a level hint",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid facts with no level asked for",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts without the level_hint field",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with a level hint that is not a level",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "complex-hgih",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts exposing the task priority",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "priority": 1,
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts exposing provider load",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "provider_load": 0,
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with an unknown origin",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "robot",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with too many charged failures",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1001,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts without the current route",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid refusal of a task not on the router",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "not_on_router",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid refusal of an unknown task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "pinned",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid route with its classification",
+      "valid": true,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid hold for one harness",
+      "valid": true,
+      "value": {
+        "classification": null,
+        "harnesses": [
+          "codex"
+        ],
+        "hold": true,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "held_for_harness",
+            "detail": "Art goes to Codex and waits for it."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid assumed route without a classification",
+      "valid": true,
+      "value": {
+        "classification": null,
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "risk_assumed",
+            "detail": "The risk could not be worked out, so medium was assumed."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid route with the catch-all policy reason",
+      "valid": true,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "policy",
+            "detail": "Repairs to a failed integration or build never go to a local model."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with a misspelt level",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-hgih",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with the empty level",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route pinning nothing allowed",
+      "valid": false,
+      "value": {
+        "classification": null,
+        "harnesses": [
+          "codex"
+        ],
+        "hold": true,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "nothing_allowed"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with nine harnesses",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "h0",
+          "h1",
+          "h2",
+          "h3",
+          "h4",
+          "h5",
+          "h6",
+          "h7",
+          "h8"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid classification without the judgment reference",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter."
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with a free-text reason code",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "because the task looked hard",
+            "detail": ""
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route without hold",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with a minimum level",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "minimum_level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Bug fixes are Standard, high effort."
+          },
+          {
+            "code": "escalated_after_failure"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with seventeen reasons",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          },
+          {
+            "code": "level_from_kind",
+            "detail": ""
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid route with an overlong detail",
+      "valid": false,
+      "value": {
+        "classification": {
+          "fields": [
+            "kind",
+            "risk"
+          ],
+          "flags": [
+            "narrow",
+            "covered_by_test"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "rationale": "Touches crash recovery; a test covers the counter.",
+          "reference": "judgment:op-1"
+        },
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "hold": false,
+        "level": "complex-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "valid routed with what remained at the level",
+      "outcome": "routed",
+      "valid": true,
+      "value": {
+        "harnesses": [
+          "claude",
+          "codex"
+        ],
+        "prefer": [],
+        "providers": [],
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "valid routed with no restriction",
+      "outcome": "routed",
+      "valid": true,
+      "value": {
+        "harnesses": [],
+        "prefer": [],
+        "providers": [],
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "invalid routed without what remained",
+      "outcome": "routed",
+      "valid": false,
+      "value": {
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "valid stale",
+      "outcome": "stale",
+      "valid": true,
+      "value": {
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "valid refusal of an owner route",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "owner_route",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "valid refusal of an unoffered level",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "not_offered",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "busy",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "input",
+      "name": "valid unroutable with the document's sentence",
+      "valid": true,
+      "value": {
+        "reasons": [
+          {
+            "code": "policy",
+            "detail": "Secrets rotation is never given to an agent."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "input",
+      "name": "valid unroutable with a code alone",
+      "valid": true,
+      "value": {
+        "reasons": [
+          {
+            "code": "policy"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "input",
+      "name": "invalid unroutable with a free-text code",
+      "valid": false,
+      "value": {
+        "reasons": [
+          {
+            "code": "nobody may take secrets work"
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "input",
+      "name": "invalid unroutable without reasons",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "input",
+      "name": "invalid unroutable with a route",
+      "valid": false,
+      "value": {
+        "level": "standard-high",
+        "reasons": [
+          {
+            "code": "policy",
+            "detail": "Secrets rotation is never given to an agent."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "output",
+      "name": "valid recorded",
+      "outcome": "recorded",
+      "valid": true,
+      "value": {
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "output",
+      "name": "valid stale",
+      "outcome": "stale",
+      "valid": true,
+      "value": {
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "output",
+      "name": "valid refusal without reasons",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "no_reasons",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "output",
+      "name": "valid refusal of an owner route",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "owner_route",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.unroutable",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "not_offered",
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "valid routing classification request",
+      "valid": true,
+      "value": {
+        "budget": {
+          "deadline_ms": 120000,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "chore",
+              "sync",
+              "spec",
+              "design",
+              "plan",
+              "review",
+              "research",
+              "analysis",
+              "art",
+              "repair",
+              "unknown"
+            ],
+            "description": "What kind of work the task is.",
+            "id": "kind"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 1024,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "invalid request with an overlong choice",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 120000,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ],
+            "description": "What kind of work the task is.",
+            "id": "kind"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 1024,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "invalid request with seventeen fields",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 120000,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 1024,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "invalid request with too long a rationale",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 120000,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "chore",
+              "sync",
+              "spec",
+              "design",
+              "plan",
+              "review",
+              "research",
+              "analysis",
+              "art",
+              "repair",
+              "unknown"
+            ],
+            "description": "What kind of work the task is.",
+            "id": "kind"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 4097,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "invalid request with too short a deadline",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 999,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "chore",
+              "sync",
+              "spec",
+              "design",
+              "plan",
+              "review",
+              "research",
+              "analysis",
+              "art",
+              "repair",
+              "unknown"
+            ],
+            "description": "What kind of work the task is.",
+            "id": "kind"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 1024,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "input",
+      "name": "invalid request with the 2.1.0 judgment.request budget",
+      "valid": false,
+      "value": {
+        "budget": {
+          "deadline_ms": 120000,
+          "max_cost_microunits": 0,
+          "max_input_tokens": 8192,
+          "max_output_tokens": 2048
+        },
+        "context": {
+          "items": [
+            {
+              "label": "Title",
+              "text": "Fix the retry counter"
+            },
+            {
+              "label": "Description",
+              "text": "The retry counter resets after a restart."
+            },
+            {
+              "label": "Kind given by the filer",
+              "text": "bugfix"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "choices": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "chore",
+              "sync",
+              "spec",
+              "design",
+              "plan",
+              "review",
+              "research",
+              "analysis",
+              "art",
+              "repair",
+              "unknown"
+            ],
+            "description": "What kind of work the task is.",
+            "id": "kind"
+          },
+          {
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "very_high",
+              "unknown"
+            ],
+            "description": "How much damage the change could do if it is wrong.",
+            "id": "risk"
+          }
+        ],
+        "flags": [
+          {
+            "description": "The requirements are settled and the files to change are named or obvious.",
+            "id": "narrow"
+          },
+          {
+            "description": "An existing or specified test checks the result.",
+            "id": "covered_by_test"
+          },
+          {
+            "description": "Needs advanced mathematics or unusually hard reasoning.",
+            "id": "needs_deep_reasoning"
+          },
+          {
+            "description": "Clearly harder than ordinary research.",
+            "id": "clearly_harder"
+          }
+        ],
+        "question": "Classify this task by kind of work and by risk. Go by the riskiest area; when you can't tell, answer medium.",
+        "rationale_max_bytes": 1024,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "judgment:op-1"
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "valid assessed answer",
+      "outcome": "assessed",
+      "valid": true,
+      "value": {
+        "flags": [
+          "narrow"
+        ],
+        "labels": [
+          "bugfix",
+          "high"
+        ],
+        "provenance": {
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "credential_profile": "routing-sol-low",
+          "model": "claude-sonnet",
+          "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "provider": "anthropic",
+          "usage": {
+            "cost_microunits": 0,
+            "input_tokens": 812,
+            "output_tokens": 64
+          }
+        },
+        "rationale": "Touches crash recovery.",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "invalid assessed answer without provenance",
+      "outcome": "assessed",
+      "valid": false,
+      "value": {
+        "flags": [
+          "narrow"
+        ],
+        "labels": [
+          "bugfix",
+          "high"
+        ],
+        "rationale": "Touches crash recovery.",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "invalid assessed answer with an overlong label",
+      "outcome": "assessed",
+      "valid": false,
+      "value": {
+        "flags": [
+          "narrow"
+        ],
+        "labels": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ],
+        "provenance": {
+          "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "credential_profile": "routing-sol-low",
+          "model": "claude-sonnet",
+          "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "provider": "anthropic",
+          "usage": {
+            "cost_microunits": 0,
+            "input_tokens": 812,
+            "output_tokens": 64
+          }
+        },
+        "rationale": "Touches crash recovery.",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "valid failure at the host's deadline",
+      "outcome": "failed",
+      "valid": true,
+      "value": {
+        "reason": "deadline_exceeded",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "valid failure for an answer that fits no field",
+      "outcome": "failed",
+      "valid": true,
+      "value": {
+        "reason": "indeterminate",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "invalid failure with an unlisted reason",
+      "outcome": "failed",
+      "valid": false,
+      "value": {
+        "reason": "invalid_output",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "valid refusal over budget",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "budget_exceeded",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "judgment.assess",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "stale_subject",
+        "reference": "judgment:op-1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.assessed",
+      "kind": "event",
+      "name": "valid assessed completion",
+      "valid": true,
+      "value": {
+        "outcome": "assessed",
+        "output": {
+          "flags": [
+            "narrow"
+          ],
+          "labels": [
+            "bugfix",
+            "high"
+          ],
+          "provenance": {
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_profile": "routing-sol-low",
+            "model": "claude-sonnet",
+            "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provider": "anthropic",
+            "usage": {
+              "cost_microunits": 0,
+              "input_tokens": 812,
+              "output_tokens": 64
+            }
+          },
+          "rationale": "Touches crash recovery.",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.assessed",
+      "kind": "event",
+      "name": "valid failed completion",
+      "valid": true,
+      "value": {
+        "outcome": "failed",
+        "output": {
+          "reason": "provider_unavailable",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.assessed",
+      "kind": "event",
+      "name": "valid refused completion",
+      "valid": true,
+      "value": {
+        "outcome": "refused",
+        "output": {
+          "reason": "invalid_request",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.assessed",
+      "kind": "event",
+      "name": "invalid accepted completion",
+      "valid": false,
+      "value": {
+        "outcome": "accepted",
+        "output": {
+          "handle": "judgment:op-1"
+        }
+      }
+    },
+    {
+      "contract": "aq.judgment.assessed",
+      "kind": "event",
+      "name": "invalid completion with a judgment.request answer",
+      "valid": false,
+      "value": {
+        "outcome": "assessed",
+        "output": {
+          "choice": "approve",
+          "provenance": {
+            "context_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_profile": "routing-sol-low",
+            "model": "claude-sonnet",
+            "output_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "prompt_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provider": "anthropic",
+            "usage": {
+              "cost_microunits": 0,
+              "input_tokens": 812,
+              "output_tokens": 64
+            }
+          },
+          "rationale": "",
+          "reference": "judgment:op-1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "aq.work.route_needed",
+      "kind": "event",
+      "name": "valid route needed",
+      "valid": true,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.work.route_needed",
+      "kind": "event",
+      "name": "invalid route needed carrying a reason",
+      "valid": false,
+      "value": {
+        "reason": "retried",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.work.route_needed",
+      "kind": "event",
+      "name": "invalid route needed carrying the task priority",
+      "valid": false,
+      "value": {
+        "priority": 1,
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.work.route_needed",
+      "kind": "event",
+      "name": "invalid route needed without a subject",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid facts of a task with an open pull request",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": {
+            "checks": {
+              "failed": [
+                "build",
+                "lint"
+              ],
+              "state": "failed"
+            },
+            "mergeable": "mergeable",
+            "number": 7,
+            "state": "open",
+            "url": "https://github.example/owner/repo/pull/7"
+          },
+          "returns": 2,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid facts of a task with no result yet",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "base": "",
+          "branch": "",
+          "changed": false,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts without the result facts of 2.3.0",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts without the returns count",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with a negative returns count",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": -1,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with changed as text",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": "yes",
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with a pull request in an unlisted state",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": {
+            "checks": {
+              "failed": [
+                "build",
+                "lint"
+              ],
+              "state": "failed"
+            },
+            "mergeable": "mergeable",
+            "number": 7,
+            "state": "draft",
+            "url": "https://github.example/owner/repo/pull/7"
+          },
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with a pull request without its checks",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": {
+            "mergeable": "mergeable",
+            "number": 7,
+            "state": "open",
+            "url": "https://github.example/owner/repo/pull/7"
+          },
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts with checks in an unlisted state",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": {
+            "checks": {
+              "failed": [],
+              "state": "green"
+            },
+            "mergeable": "mergeable",
+            "number": 7,
+            "state": "open",
+            "url": "https://github.example/owner/repo/pull/7"
+          },
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid facts exposing the pull request author",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 1,
+          "default_environment": "rust",
+          "description": "The retry counter resets after a restart.",
+          "ended_attempts": 2,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "bugfix",
+          "level_hint": "standard-high",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": {
+            "author": "someone",
+            "checks": {
+              "failed": [
+                "build",
+                "lint"
+              ],
+              "state": "failed"
+            },
+            "mergeable": "mergeable",
+            "number": 7,
+            "state": "open",
+            "url": "https://github.example/owner/repo/pull/7"
+          },
+          "returns": 0,
+          "route": "none",
+          "title": "Fix the retry counter"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "input",
+      "name": "valid completion of a result",
+      "valid": true,
+      "value": {
+        "result_id": "result-9",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "input",
+      "name": "invalid completion without the result",
+      "valid": false,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "valid completed",
+      "outcome": "completed",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "invalid completed carrying a decision",
+      "outcome": "completed",
+      "valid": false,
+      "value": {
+        "accepted": true
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "valid refusal: stale_result",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "stale_result"
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "valid refusal: unknown_result",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_result"
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "valid refusal: unknown_task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task"
+      }
+    },
+    {
+      "contract": "work.complete",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "input",
+      "name": "valid return with the failed check as detail",
+      "valid": true,
+      "value": {
+        "detail": "build",
+        "reason": "checks_failed",
+        "result_id": "result-9",
+        "task": "task-1",
+        "update_from_main": true
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "input",
+      "name": "valid return without detail",
+      "valid": true,
+      "value": {
+        "reason": "checks_failed",
+        "result_id": "result-9",
+        "task": "task-1",
+        "update_from_main": true
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "input",
+      "name": "invalid return with a free-text reason",
+      "valid": false,
+      "value": {
+        "detail": "build",
+        "reason": "The build is red.",
+        "result_id": "result-9",
+        "task": "task-1",
+        "update_from_main": true
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "input",
+      "name": "invalid return without update_from_main",
+      "valid": false,
+      "value": {
+        "detail": "build",
+        "reason": "checks_failed",
+        "result_id": "result-9",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "input",
+      "name": "invalid return with an overlong detail",
+      "valid": false,
+      "value": {
+        "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "checks_failed",
+        "result_id": "result-9",
+        "task": "task-1",
+        "update_from_main": true
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "output",
+      "name": "valid returned",
+      "outcome": "returned",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "work.return",
+      "kind": "output",
+      "name": "valid refusal: stale_result",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "stale_result"
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "output",
+      "name": "valid refusal: unknown_result",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_result"
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "output",
+      "name": "valid refusal: unknown_task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task"
+      }
+    },
+    {
+      "contract": "work.return",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "work.hold",
+      "kind": "input",
+      "name": "valid hold",
+      "valid": true,
+      "value": {
+        "reason": "returns_exhausted",
+        "result_id": "result-9",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.hold",
+      "kind": "input",
+      "name": "invalid hold with a free-text reason",
+      "valid": false,
+      "value": {
+        "reason": "enough",
+        "result_id": "result-9",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.hold",
+      "kind": "input",
+      "name": "invalid hold without the result",
+      "valid": false,
+      "value": {
+        "reason": "policy",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "work.hold",
+      "kind": "output",
+      "name": "valid held",
+      "outcome": "held",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "supervisor.notify",
+      "kind": "input",
+      "name": "valid notification",
+      "valid": true,
+      "value": {
+        "identity": "result-9",
+        "project": "project-1",
+        "text": "Task task-1 was held after three returns."
+      }
+    },
+    {
+      "contract": "supervisor.notify",
+      "kind": "input",
+      "name": "invalid notification without identity",
+      "valid": false,
+      "value": {
+        "project": "project-1",
+        "text": "Task task-1 was held after three returns."
+      }
+    },
+    {
+      "contract": "supervisor.notify",
+      "kind": "input",
+      "name": "invalid notification with an overlong text",
+      "valid": false,
+      "value": {
+        "identity": "result-9",
+        "project": "project-1",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "contract": "supervisor.notify",
+      "kind": "output",
+      "name": "valid sent",
+      "outcome": "sent",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "supervisor.notify",
+      "kind": "output",
+      "name": "valid duplicate",
+      "outcome": "duplicate",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "main.sync",
+      "kind": "input",
+      "name": "valid sync of a project",
+      "valid": true,
+      "value": {
+        "project": "project-1"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "input",
+      "name": "invalid sync of a task",
+      "valid": false,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "valid synced",
+      "outcome": "synced",
+      "valid": true,
+      "value": {
+        "head": "3333333333333333333333333333333333333333"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "invalid synced without head",
+      "outcome": "synced",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "valid refusal: unknown_project",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_project"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "valid refusal: unreachable",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unreachable"
+      }
+    },
+    {
+      "contract": "main.sync",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "input",
+      "name": "valid publication of a task branch",
+      "valid": true,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "input",
+      "name": "invalid publication without the task",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid published",
+      "outcome": "published",
+      "valid": true,
+      "value": {
+        "head": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "invalid published without head",
+      "outcome": "published",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid conflict",
+      "outcome": "conflict",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid refusal: no_branch",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "no_branch"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid refusal: unknown_task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "valid refusal: unreachable",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unreachable"
+      }
+    },
+    {
+      "contract": "branch.publish",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "input",
+      "name": "valid open",
+      "valid": true,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "input",
+      "name": "invalid open without the task",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "valid opened",
+      "outcome": "opened",
+      "valid": true,
+      "value": {
+        "number": 7,
+        "url": "https://github.example/owner/repo/pull/7"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "invalid opened with number zero",
+      "outcome": "opened",
+      "valid": false,
+      "value": {
+        "number": 0,
+        "url": "https://github.example/owner/repo/pull/0"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "valid refusal: not_published",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "not_published"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "valid refusal: unknown_task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "valid refusal: unreachable",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unreachable"
+      }
+    },
+    {
+      "contract": "pull_request.open",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "input",
+      "name": "valid wait for named checks",
+      "valid": true,
+      "value": {
+        "deadline_ms": 1800000,
+        "required": [
+          "build",
+          "lint"
+        ],
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "input",
+      "name": "valid wait for all checks",
+      "valid": true,
+      "value": {
+        "deadline_ms": 1800000,
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "input",
+      "name": "invalid wait without a deadline",
+      "valid": false,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "input",
+      "name": "invalid wait with a deadline of zero",
+      "valid": false,
+      "value": {
+        "deadline_ms": 0,
+        "required": [
+          "build",
+          "lint"
+        ],
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "input",
+      "name": "invalid wait with sixty-five required checks",
+      "valid": false,
+      "value": {
+        "deadline_ms": 1800000,
+        "required": [
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c",
+          "c"
+        ],
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid passed",
+      "outcome": "passed",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid failed with the failed checks",
+      "outcome": "failed",
+      "valid": true,
+      "value": {
+        "names": [
+          "build",
+          "lint"
+        ]
+      }
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "invalid failed without names",
+      "outcome": "failed",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid conflict",
+      "outcome": "conflict",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid closed",
+      "outcome": "closed",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.await_checks",
+      "kind": "output",
+      "name": "valid timeout",
+      "outcome": "timeout",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "input",
+      "name": "valid squash merge",
+      "valid": true,
+      "value": {
+        "expected_head_sha": "1111111111111111111111111111111111111111",
+        "method": "squash",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "input",
+      "name": "invalid merge with an unlisted method",
+      "valid": false,
+      "value": {
+        "expected_head_sha": "1111111111111111111111111111111111111111",
+        "method": "fast-forward",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "input",
+      "name": "invalid merge without the expected head",
+      "valid": false,
+      "value": {
+        "method": "squash",
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid merged",
+      "outcome": "merged",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid conflict",
+      "outcome": "conflict",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid not_mergeable",
+      "outcome": "not_mergeable",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid refusal: head_changed",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "head_changed"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid refusal: no_pull_request",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "no_pull_request"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid refusal: unknown_task",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_task"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "valid refusal: unreachable",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unreachable"
+      }
+    },
+    {
+      "contract": "pull_request.merge",
+      "kind": "output",
+      "name": "invalid refusal with an unlisted reason",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because"
+      }
+    },
+    {
+      "contract": "pull_request.close",
+      "kind": "input",
+      "name": "valid close",
+      "valid": true,
+      "value": {
+        "task": "task-1"
+      }
+    },
+    {
+      "contract": "pull_request.close",
+      "kind": "input",
+      "name": "invalid close without the task",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.close",
+      "kind": "output",
+      "name": "valid acceptance",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "pull_request.close",
+      "kind": "output",
+      "name": "invalid acceptance without a handle",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "pull_request.close",
+      "kind": "output",
+      "name": "valid closed",
+      "outcome": "closed",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "aq.work.result_ready",
+      "kind": "event",
+      "name": "valid result ready",
+      "valid": true,
+      "value": {
+        "attempt_id": "attempt-4",
+        "project_id": "project-1",
+        "result_id": "result-9",
+        "task_id": "task-1",
+        "version": 3
+      }
+    },
+    {
+      "contract": "aq.work.result_ready",
+      "kind": "event",
+      "name": "invalid result ready without the result",
+      "valid": false,
+      "value": {
+        "attempt_id": "attempt-4",
+        "project_id": "project-1",
+        "task_id": "task-1",
+        "version": 3
+      }
+    },
+    {
+      "contract": "aq.work.result_ready",
+      "kind": "event",
+      "name": "invalid result ready with a version as text",
+      "valid": false,
+      "value": {
+        "attempt_id": "attempt-4",
+        "project_id": "project-1",
+        "result_id": "result-9",
+        "task_id": "task-1",
+        "version": "3"
+      }
+    },
+    {
+      "contract": "aq.work.result_ready",
+      "kind": "event",
+      "name": "invalid result ready carrying the branch",
+      "valid": false,
+      "value": {
+        "attempt_id": "attempt-4",
+        "branch": "aq/task-1",
+        "project_id": "project-1",
+        "result_id": "result-9",
+        "task_id": "task-1",
+        "version": 3
+      }
+    },
+    {
+      "contract": "aq.delivery.completed",
+      "kind": "event",
+      "name": "valid passed completion",
+      "valid": true,
+      "value": {
+        "outcome": "passed",
+        "output": {}
+      }
+    },
+    {
+      "contract": "aq.delivery.completed",
+      "kind": "event",
+      "name": "valid failed completion",
+      "valid": true,
+      "value": {
+        "outcome": "failed",
+        "output": {
+          "names": [
+            "build"
+          ]
+        }
+      }
+    },
+    {
+      "contract": "aq.delivery.completed",
+      "kind": "event",
+      "name": "valid opened completion",
+      "valid": true,
+      "value": {
+        "outcome": "opened",
+        "output": {
+          "number": 7,
+          "url": "https://github.example/owner/repo/pull/7"
+        }
+      }
+    },
+    {
+      "contract": "aq.delivery.completed",
+      "kind": "event",
+      "name": "invalid accepted completion",
+      "valid": false,
+      "value": {
+        "outcome": "accepted",
+        "output": {
+          "handle": "op-1"
+        }
+      }
+    },
+    {
+      "contract": "aq.delivery.completed",
+      "kind": "event",
+      "name": "invalid completion with an unlisted outcome",
+      "valid": false,
+      "value": {
+        "outcome": "green",
+        "output": {}
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "input",
+      "name": "2.4.0: valid work.activate input ",
+      "valid": true,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "input",
+      "name": "2.4.0: invalid work.activate input ",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1"
+        }
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "name": "2.4.0: valid work.activate output activated",
+      "outcome": "activated",
+      "valid": true,
+      "value": {
+        "activated": 4,
+        "skipped": 1
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "name": "2.4.0: invalid work.activate output activated",
+      "outcome": "activated",
+      "valid": false,
+      "value": {
+        "activated": -1,
+        "skipped": 1
+      }
+    },
+    {
+      "contract": "work.activate",
+      "kind": "output",
+      "name": "2.4.0: valid work.activate output refused",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "stale_subject"
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "2.4.0: valid decision.request output approved",
+      "outcome": "approved",
+      "valid": true,
+      "value": {
+        "note": "",
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "2.4.0: valid decision.request output rejected",
+      "outcome": "rejected",
+      "valid": true,
+      "value": {
+        "note": "Include café support.",
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "2.4.0: invalid decision.request output rejected",
+      "outcome": "rejected",
+      "valid": false,
+      "value": {
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "decision.request",
+      "kind": "output",
+      "name": "2.4.0: valid decision.request output expired",
+      "outcome": "expired",
+      "valid": true,
+      "value": {
+        "reference": "decision:1",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "aq.decision.completed",
+      "kind": "event",
+      "name": "2.4.0: valid aq.decision.completed event ",
+      "valid": true,
+      "value": {
+        "outcome": "rejected",
+        "output": {
+          "note": "Include café support.",
+          "reference": "decision:1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "operation.get",
+      "kind": "output",
+      "name": "2.4.0: valid operation.get output completed",
+      "outcome": "completed",
+      "valid": true,
+      "value": {
+        "outcome": "rejected",
+        "output": {
+          "note": "Include café support.",
+          "reference": "decision:1",
+          "subject": {
+            "id": "task-1",
+            "revision": 3
+          }
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "valid work.read output observed",
+      "outcome": "observed",
+      "valid": true,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 0,
+          "default_environment": "rust",
+          "description": "Add a parser.",
+          "ended_attempts": 0,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "feature",
+          "level_hint": "",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Add a parser"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid work.read output observed",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 0,
+          "default_environment": "rust",
+          "description": "Add a parser.",
+          "ended_attempts": 0,
+          "environments": [
+            {
+              "id": "rust",
+              "provides": [
+                "rust"
+              ]
+            },
+            {
+              "id": "rust-postgres",
+              "provides": [
+                "rust",
+                "postgres"
+              ]
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "feature",
+          "level_hint": "",
+          "main_head": "3333333333333333333333333333333333333333",
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Add a parser"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.read",
+      "kind": "output",
+      "name": "invalid work.read output observed",
+      "outcome": "observed",
+      "valid": false,
+      "value": {
+        "facts": {
+          "base": "2222222222222222222222222222222222222222",
+          "branch": "aq/task-1",
+          "changed": true,
+          "charged_failures": 0,
+          "default_environment": "rust",
+          "description": "Add a parser.",
+          "ended_attempts": 0,
+          "environments": [
+            {
+              "id": "rust"
+            }
+          ],
+          "head": "1111111111111111111111111111111111111111",
+          "kind": "feature",
+          "level_hint": "",
+          "main_head": "3333333333333333333333333333333333333333",
+          "needs": [
+            "rust",
+            "postgres"
+          ],
+          "origin": "owner",
+          "outcome": "completed",
+          "pull_request": null,
+          "returns": 0,
+          "route": "none",
+          "title": "Add a parser"
+        },
+        "reference": "task-1@3",
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid work.route input",
+      "valid": true,
+      "value": {
+        "classification": null,
+        "environment": "rust-postgres",
+        "harnesses": [],
+        "hold": false,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Features are Standard."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "valid work.route input",
+      "valid": true,
+      "value": {
+        "classification": null,
+        "harnesses": [],
+        "hold": false,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Features are Standard."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "work.route",
+      "kind": "input",
+      "name": "invalid work.route input",
+      "valid": false,
+      "value": {
+        "classification": null,
+        "environment": 7,
+        "harnesses": [],
+        "hold": false,
+        "level": "standard-high",
+        "prefer": [],
+        "providers": [],
+        "reasons": [
+          {
+            "code": "level_from_kind",
+            "detail": "Features are Standard."
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "input",
+      "name": "valid environment.build input",
+      "valid": true,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "input",
+      "name": "valid environment.build input",
+      "valid": true,
+      "value": {
+        "project": "project-1"
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "input",
+      "name": "invalid environment.build input",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1"
+        }
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "valid environment.build output accepted",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "invalid environment.build output accepted",
+      "outcome": "accepted",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "valid environment.build output unchanged",
+      "outcome": "unchanged",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "valid environment.build output built",
+      "outcome": "built",
+      "valid": true,
+      "value": {
+        "builds": [
+          {
+            "digest": "sha256:aaaa",
+            "name": "rust",
+            "recipe_hash": "sha256:bbbb",
+            "toolchains": [
+              {
+                "name": "rustc",
+                "version": "1.90.0"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "invalid environment.build output built",
+      "outcome": "built",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "valid environment.build output failed",
+      "outcome": "failed",
+      "valid": true,
+      "value": {
+        "log": "error: test failed",
+        "recipe": "rust",
+        "step": "check: cargo test"
+      }
+    },
+    {
+      "contract": "environment.build",
+      "kind": "output",
+      "name": "invalid environment.build output failed",
+      "outcome": "failed",
+      "valid": false,
+      "value": {
+        "log": "error: test failed",
+        "recipe": "rust"
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "input",
+      "name": "valid environment.admit input",
+      "valid": true,
+      "value": {
+        "builds": [
+          {
+            "digest": "sha256:aaaa",
+            "name": "rust",
+            "recipe_hash": "sha256:bbbb",
+            "toolchains": [
+              {
+                "name": "rustc",
+                "version": "1.90.0"
+              }
+            ]
+          }
+        ],
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "input",
+      "name": "valid environment.admit input",
+      "valid": true,
+      "value": {
+        "builds": [
+          {
+            "digest": "sha256:aaaa",
+            "name": "rust",
+            "recipe_hash": "sha256:bbbb",
+            "toolchains": [
+              {
+                "name": "rustc",
+                "version": "1.90.0"
+              }
+            ]
+          }
+        ],
+        "project": "project-1"
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "input",
+      "name": "invalid environment.admit input",
+      "valid": false,
+      "value": {
+        "subject": {
+          "id": "task-1",
+          "revision": 3
+        }
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "output",
+      "name": "valid environment.admit output accepted",
+      "outcome": "accepted",
+      "valid": true,
+      "value": {
+        "handle": "op-1"
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "output",
+      "name": "valid environment.admit output admitted",
+      "outcome": "admitted",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "output",
+      "name": "valid environment.admit output refused",
+      "outcome": "refused",
+      "valid": true,
+      "value": {
+        "reason": "unknown_build",
+        "step": "registry"
+      }
+    },
+    {
+      "contract": "environment.admit",
+      "kind": "output",
+      "name": "invalid environment.admit output refused",
+      "outcome": "refused",
+      "valid": false,
+      "value": {
+        "reason": "because",
+        "step": "registry"
+      }
+    },
+    {
+      "contract": "aq.environment.completed",
+      "kind": "event",
+      "name": "valid aq.environment.completed event",
+      "valid": true,
+      "value": {
+        "outcome": "built",
+        "output": {
+          "builds": [
+            {
+              "digest": "sha256:aaaa",
+              "name": "rust",
+              "recipe_hash": "sha256:bbbb",
+              "toolchains": [
+                {
+                  "name": "rustc",
+                  "version": "1.90.0"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "contract": "aq.environment.completed",
+      "kind": "event",
+      "name": "valid aq.environment.completed event",
+      "valid": true,
+      "value": {
+        "outcome": "admitted",
+        "output": {}
+      }
+    },
+    {
+      "contract": "aq.environment.completed",
+      "kind": "event",
+      "name": "invalid aq.environment.completed event",
+      "valid": false,
+      "value": {
+        "outcome": "accepted",
+        "output": {}
+      }
+    },
+    {
+      "contract": "aq.environment.base_changed",
+      "kind": "event",
+      "name": "valid aq.environment.base_changed event",
+      "valid": true,
+      "value": {
+        "project": "project-1"
+      }
+    },
+    {
+      "contract": "aq.environment.base_changed",
+      "kind": "event",
+      "name": "invalid aq.environment.base_changed event",
+      "valid": false,
+      "value": {}
+    }
+  ],
+  "compatibility": {
+    "added_commands": {
+      "environment.admit": "sha256:37ddd1a1f966073d8c9154e5a10e2d6c79201427029f4f24a2549ab88b2c4a2b",
+      "environment.build": "sha256:2c8a5e5b2695ba4be89fca6cacb13863a300c2817f9034e47f2370bd32d2dc29",
+      "work.activate": "sha256:9404f3693ddcb33527ee4feceee9ba7ea8946637b30d39b861da5b260905ee6a"
+    },
+    "added_events": {
+      "aq.environment.base_changed": "sha256:54fd8d46783eb512fefa4711e7d53be4a69dcc6184ed0a941c57353cf840bc4f",
+      "aq.environment.completed": "sha256:f481d24e281ff6aa12fcb12a42393ac8b656742416afd1304d6231405d883443"
+    },
+    "base": {
+      "fingerprint": "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a",
+      "registry_sha256": "sha256:c49ee6d5de252cec3ccf3d42ba622e739da8c8b9cd2984c5ec70a4df70bbab17",
+      "version": "2.3.0"
+    },
+    "changed_commands": {
+      "decision.request": {
+        "capabilities": [
+          "decision.request"
+        ],
+        "from": "1.0.0",
+        "to": "2.0.0"
+      },
+      "operation.get": {
+        "capabilities": [
+          "operation.get"
+        ],
+        "from": "2.0.0",
+        "to": "3.0.0"
+      },
+      "work.read": {
+        "capabilities": [
+          "work.read"
+        ],
+        "from": "2.3.0",
+        "to": "2.5.0"
+      },
+      "work.route": {
+        "capabilities": [
+          "work.route"
+        ],
+        "from": "1.0.0",
+        "to": "2.5.0"
+      }
+    },
+    "changed_events": {
+      "aq.decision.completed": "sha256:362d79a3d5a6683061c1b3f12364eaeacbd4f9a57ca98e2e7787d7e9e5664879"
+    },
+    "includes": {
+      "fingerprint": "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac",
+      "registry_sha256": "sha256:2ca8bd0fc51cdf36a792d2302099572791b7a69c7447f29d3e0058c6d03c9ae2",
+      "version": "2.4.0"
+    },
+    "routing_base": {
+      "fingerprint": "sha256:ca3c3d68959d760cc761d0c39b8db8740a27b3e414ae54e76d64df944f9b677a",
+      "registry_sha256": "sha256:f98e9d008524aa271664c5f5a0bd93abc2de23b732d50986be24a582f708b0a5",
+      "version": "2.2.0"
+    },
+    "routing_commands_unchanged": [
+      "candidate.prepare",
+      "candidate.publish",
+      "check.request",
+      "context.read",
+      "findings.reconcile",
+      "judgment.assess",
+      "judgment.request",
+      "message.send",
+      "operation.cancel",
+      "work.change",
+      "work.ensure",
+      "work.unroutable"
+    ],
+    "unchanged_commands": {
+      "branch.publish": "sha256:6077e9c41d4f8bb1b12a5469c3b7a9e27cac7ec0e0c81261f52cd10e3f3e2d68",
+      "candidate.prepare": "sha256:c02ad326b7b35053945f217301c58b8485ed91645c66dbcf6f7291562a44e9c6",
+      "candidate.publish": "sha256:7a510d82b43b2b59b7f0906b4eff3823427ed7d088f793396bfce6d9348b5be5",
+      "check.request": "sha256:52e13a43e363bfd19e2e6a4c73535048685fc8dc4b25890ccdd0ffc0421bf183",
+      "context.read": "sha256:33681ea332d3d0b475fcfafe32bc3762d6037f035c9114dccf9b4f788302f6cd",
+      "findings.reconcile": "sha256:239802aecd6961c9a7ba93b0387cb2f872e42ddc4246e7901bae7219f19288d8",
+      "judgment.assess": "sha256:da4d7908c8943ade3905b9e573a7426fe36759321f6a287d5b97559ab868aa13",
+      "judgment.request": "sha256:fc7a12fca1b8af2c7ee1349a1569a711abe07120881a3ea4531da007fe6e39d9",
+      "main.sync": "sha256:15820b4ac83f342ee263d60925c219bc3f268b8147b211b179c931a6b5a78c55",
+      "message.send": "sha256:c75d3f9fceebbef2dc1f0c20ff2eda3a61aaf90cdc817d624fe349eb752eca6e",
+      "operation.cancel": "sha256:268e68958d3dadf6caae3a642ec3b8bfaf3869cbbc9f20873cb833af5c650810",
+      "pull_request.await_checks": "sha256:fdea89697cc2e7e438014b64d0199b43f1be80ebcbe2f0a71e8e22d516bde1fc",
+      "pull_request.close": "sha256:b32831f29f810dd7025154649bb86227c71fd492da87e50d1c7f4b76b5be8823",
+      "pull_request.merge": "sha256:815a345f5f76f4d32d1ca35ab20a98255b4ed787c7081c97544b141c20ada873",
+      "pull_request.open": "sha256:8f32ae911b4866b6735ceb1ef7c5ca3fb38eb11359257bf095af62cc467bde72",
+      "supervisor.notify": "sha256:087ff38f7647a5b01bd83a7fd8da75ac3bfe918a2932c5da0fd781d3d4021907",
+      "work.change": "sha256:fb3d3ed7e0d6b2a108220e684bd871663d9ce184bd8d4d952d1d065cc1a7fadd",
+      "work.complete": "sha256:e4421395ce9ca8b30cc3336ff6c112ccea6288f6171edbc5b28100e0cf6bdb34",
+      "work.ensure": "sha256:0fcf486b0ad4b1e570ff5c7f5b688d15d675be5da8d0c961f83e59a68045ea16",
+      "work.hold": "sha256:f99f3e6c6ae5b0fc12a3240ae4efca3573b5c2ebe3a430d56745491441a5c3e7",
+      "work.return": "sha256:19a5ba95d75b64b3d35c0bf908bd9eca434251d2d3186bbb3c33a54fa03afda5",
+      "work.unroutable": "sha256:c8b7a70046269860789452d9c12b5d4979957eb9dc88cc9afdd74595d32f6793"
+    },
+    "unchanged_events": {
+      "aq.artifact.recorded": "sha256:10e31a719c1d30c2825ac39913777cf07533eaa4cfd46a355d6b6a761b7427a1",
+      "aq.check.completed": "sha256:057b68bf02f62ecf38f342ea07dfd1586ccd4e566ad0ab8ec93345c61fbfd23c",
+      "aq.check.receipted": "sha256:371660367e3f2c573132704de4ecb6291d284d08f3081da5c734d998532884ef",
+      "aq.delivery.completed": "sha256:535f8708fd46b7fb35aaf3566821ae51d62568388b26a2baf063cddc59ee67c0",
+      "aq.integration.changed": "sha256:c0f20b58ee35f85af9868dd07e4c61b432de9fdd2fbfc2692e5b5b6d94a09e29",
+      "aq.judgment.assessed": "sha256:4f9c791d3aa443dd05c040061cdced74733d17403252b45ed706b21fba263b3e",
+      "aq.judgment.completed": "sha256:afb31ce80a7024fc875ced6451708798567c3cf54a98c1b3a05c8a64784f1979",
+      "aq.operation.updated": "sha256:36071ae1086d80e5fc5166df3f1300c3e6e1df08caf7d039572d8f4418965ee3",
+      "aq.signal.reported": "sha256:9d93528eb9ccf35cc71fed2072668145a25d7f7d9d8dbd567232eb67066811cd",
+      "aq.work.changed": "sha256:78aaaf08411f1d17e93e12feb21feab4bcfb6636e56738afd1305aa3c1074401",
+      "aq.work.result_ready": "sha256:29aab093e83db6d4ae206abe449024a0aa15008bea211db96758ecd7a1069b03",
+      "aq.work.route_needed": "sha256:681aa56ebbbe5183672cf227b82121a3747429c93c932b6d50e32cb4c63a973e"
+    }
+  }
+}

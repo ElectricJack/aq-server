@@ -15,7 +15,7 @@ use uuid::Uuid;
 mod ancestry;
 #[cfg(feature = "project_environments")]
 #[path = "native_offers/environments.rs"]
-mod environments;
+pub(crate) mod environments;
 #[path = "native_offers/git_author.rs"]
 mod git_author;
 #[cfg(feature = "delivery_playbook")]

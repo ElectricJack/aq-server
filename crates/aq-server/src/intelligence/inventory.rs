@@ -241,6 +241,9 @@ pub(super) async fn report(
             credential_bindings.push(preparation);
         }
     }
+    #[cfg(feature = "project_environments")]
+    let harnesses =
+        crate::profiled_execution::definitions::listed(&state, &mut tx, node.id, harnesses).await?;
     let snapshot = CapabilitySnapshot {
         backend_kind: None,
         material_delivery: delivery.clone(),

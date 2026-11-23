@@ -30,7 +30,11 @@ async fn json_post(c: &Prepared, path: &str, value: &impl serde::Serialize) -> (
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 async fn setup_presence() -> Installed {
-    let mut ready = presence_fixture::setup().await;
+    installed(presence_fixture::setup().await).await
+}
+/// The fixture's attempt, offered after `ready`'s first v2 inventory and
+/// granted with its material installed, and its first presence report.
+async fn installed(mut ready: presence_fixture::Case) -> Installed {
     let response = crate::common::native_offer::post(
         &ready.c.env.env.state,
         &ready.c.env.env.credential,
@@ -435,3 +439,72 @@ async fn normalized_binding_removal_then_restore_requires_new_scoped_read() {
 
 #[path = "presence/isolation.rs"]
 mod isolation;
+
+/// Spec 0017 §5.4, §6.3: an attempt in an admitted environment renews after
+/// a newer version of that environment is admitted and reported ready. The
+/// real inventory writer keeps the entry the attempt runs beside the newest
+/// version's, so the renewal fence still finds it.
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn an_attempt_renews_after_a_newer_version_of_its_environment_is_admitted() {
+    use crate::native_offers::environments as envs;
+    let mut ready = presence_fixture::setup().await;
+    let boot = envs::on_web(&mut ready.c).await;
+    envs::ready(&ready.c, json!([envs::TEMPLATE])).await;
+    let f = installed(ready).await;
+    let attempt = f.c.request.binding.attempt_id;
+    let environment: Value = sqlx::query_scalar(
+        "SELECT launch_manifest#>'{harness,environment}' FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(&f.c.case.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (&environment["id"], &environment["version"]),
+        (&json!("example.web"), &json!("1"))
+    );
+    let (status, body) = send_presence(&f.c, &f.report).await;
+    assert_eq!(status, 200, "{body}");
+
+    let newer = format!("sha256:{}", "e".repeat(64));
+    let carried = json!([{"harness": boot.harness, "version": boot.cli_version}]);
+    sqlx::query(
+        "INSERT INTO environment_versions(environment_id,version,project_id,template_digest,image,provides,harnesses,warm,admitted_at) \
+         VALUES('example.web','2',$1,$2,'registry.example/web@'||$2,'[]',$3,'[]',now()+interval '1 second')",
+    )
+    .bind(f.c.case.env.lineage.project_id)
+    .bind(&newer)
+    .bind(carried)
+    .execute(&f.c.case.env.env.pool)
+    .await
+    .unwrap();
+    envs::ready(&f.c.case, json!([envs::TEMPLATE, newer])).await;
+    let mut inventory = f.inventory_request.clone();
+    inventory.operation_id = Uuid::new_v4();
+    inventory.sequence += 1;
+    let (status, body) = json_post(&f.c, "/v1/worker/profiled/inventory-v2", &inventory).await;
+    assert_eq!(status, 200, "{body}");
+    let snapshot: Value =
+        sqlx::query_scalar("SELECT snapshot FROM intelligence_node_snapshots WHERE node_id=$1")
+            .bind(f.c.case.env.env.node)
+            .fetch_one(&f.c.case.env.env.pool)
+            .await
+            .unwrap();
+    let listed: Vec<String> = (snapshot["harnesses"].as_array().unwrap().iter())
+        .map(|h| {
+            format!(
+                "{}@{}",
+                h["environment"]["id"].as_str().unwrap(),
+                h["environment"]["version"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        ["confined-worktree@1", "example.web@1", "example.web@2"]
+    );
+
+    let (status, reply) = renew(&f.c, &f.initial).await;
+    assert_eq!(status, StatusCode::OK, "{reply:?}");
+}

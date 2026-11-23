@@ -56,8 +56,16 @@ pub fn engine_record(record: &SourceRecord, facts_version: &str) -> draft::Sourc
 
 /// The catalog a source is authored against, whole: catalog 2.3.0 for the
 /// built-in `delivery` source (spec 0016 §6), the pinned catalog 2.2.0 for
-/// every other.
+/// every other. With spec 0017, 2.5.0 for both built-in sources.
 pub fn pinned_catalog(record: &SourceRecord) -> Result<Registry> {
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::DELIVERY {
+        return catalog_2_5_delivery();
+    }
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::ROUTING {
+        return catalog_2_5();
+    }
     #[cfg(feature = "delivery_playbook")]
     if record.id == crate::builtin::DELIVERY {
         return catalog_2_3();
@@ -72,8 +80,60 @@ pub fn catalog_2_3() -> Result<Registry> {
         .map_err(|_| Error::Invalid("catalog 2.3.0 does not parse".into()))
 }
 
+/// Catalog 2.5.0 (spec 0017).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const CATALOG_2_5_REGISTRY: &str =
+    include_str!("../../../vendor/aq-host-catalog-2.5.0/registry.json");
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+const CATALOG_2_5_NOTES: &str = include_str!("../../../vendor/aq-host-catalog-2.5.0/notes.json");
+
+/// Catalog 2.5.0 whole: the routing source's (spec 0017 §5.4), whose
+/// `work.read` and `work.route` carry the environment.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn catalog_2_5() -> Result<Registry> {
+    serde_json::from_str(CATALOG_2_5_REGISTRY)
+        .map_err(|_| Error::Invalid("catalog 2.5.0 does not parse".into()))
+}
+
+/// The delivery source's catalog 2.5.0: the environment commands and events
+/// added, every 2.3.0 contract it uses unchanged (its `work.read` is 2.3.0's;
+/// the 2.5.0 one adds the routing facts of spec 0017 §5.4).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn catalog_2_5_delivery() -> Result<Registry> {
+    let mut catalog = catalog_2_5()?;
+    let read = catalog_2_3()?.commands.remove("work.read");
+    catalog
+        .commands
+        .extend(read.map(|c| ("work.read".to_owned(), c)));
+    Ok(catalog)
+}
+
 /// `CATALOG.md` of the catalog the workspace actually uses.
 fn catalog_notes(record: &SourceRecord, _catalog: &Registry) -> Result<String> {
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::DELIVERY {
+        // 2.5.0's notes, with 2.3.0's on the 2.3.0 work.read.
+        let parse = |text: &str| serde_json::from_str::<Value>(text).map_err(|_| Error::Corrupt);
+        let mut notes = parse(CATALOG_2_5_NOTES)?;
+        notes["commands"]["work.read"] =
+            parse(docs::CATALOG_2_3_NOTES)?["commands"]["work.read"].take();
+        let mut text = docs::catalog_with_extensions(
+            _catalog,
+            &notes.to_string(),
+            &record.commands,
+            &record.events,
+            &[],
+        )
+        .map_err(Error::Invalid)?;
+        text.push_str(include_str!("delivery_review_contract.md"));
+        return Ok(text);
+    }
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    if record.id == crate::builtin::ROUTING {
+        let (commands, events) = (&record.commands, &record.events);
+        return docs::catalog_with_extensions(_catalog, CATALOG_2_5_NOTES, commands, events, &[])
+            .map_err(Error::Invalid);
+    }
     #[cfg(feature = "delivery_playbook")]
     if _catalog
         .commands

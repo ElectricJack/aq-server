@@ -184,7 +184,11 @@ fn a_namespace_of_another_profile_is_refused_with_what_to_do() {
     }
     // A generation change alone is refused the same way.
     assert!(host9.namespace_refusal(2, Some((9, 1))).is_some());
+    // The first number after the last profile is none.
+    #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
     assert_eq!(CatalogProfile::from_number(12), None);
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    assert_eq!(CatalogProfile::from_number(13), None);
 }
 
 // ------------------------------------------------------------------------
@@ -255,6 +259,8 @@ mod adapters {
         pub attempts: Mutex<(u32, u32)>,
         pub options: Mutex<Options>,
         pub writes: Mutex<Vec<(Uuid, Option<Route>)>>,
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        pub environments: Mutex<aq_server::playbooks::domain::host10::Environments>,
     }
     #[async_trait::async_trait]
     impl RoutingPort for FakeRouting {
@@ -269,6 +275,13 @@ mod adapters {
         }
         async fn options(&self) -> Result<Options> {
             Ok(self.options.lock().unwrap().clone())
+        }
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        async fn environments(
+            &self,
+            _: Uuid,
+        ) -> Result<aq_server::playbooks::domain::host10::Environments> {
+            Ok(self.environments.lock().unwrap().clone())
         }
         async fn write(&self, at: (Uuid, Uuid, u64), route: Option<&Route>) -> Result<Written> {
             let (_, task, version) = at;
@@ -299,6 +312,7 @@ mod adapters {
         pub graph: Arc<FakeGraph>,
         pub routing: Arc<FakeRouting>,
         pub other_project: Uuid,
+        pub profile: CatalogProfile,
     }
     fn offer(provider: &str, harness: &str) -> Offer {
         Offer {
@@ -318,6 +332,23 @@ mod adapters {
         f: common::profiled::Fixture,
         installation_routing: bool,
         judgments: Option<Arc<dyn JudgmentProvider>>,
+    ) -> Host {
+        host_as(
+            f,
+            installation_routing,
+            judgments,
+            CatalogProfile::Host9,
+            |s| s,
+        )
+        .await
+    }
+    /// A host of `profile`; `with` adds the ports that profile needs.
+    pub(super) async fn host_as(
+        f: common::profiled::Fixture,
+        installation_routing: bool,
+        judgments: Option<Arc<dyn JudgmentProvider>>,
+        profile: CatalogProfile,
+        with: impl FnOnce(Service) -> Service,
     ) -> Host {
         let l = f.selection.lineage.clone();
         let directory = tempfile::tempdir().unwrap();
@@ -353,8 +384,10 @@ mod adapters {
                 described: BTreeMap::new(),
             }),
             writes: Mutex::default(),
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            environments: Mutex::default(),
         });
-        let mut service = Service::new_host2(
+        let service = Service::new_host2(
             &f.state,
             Namespace {
                 namespace_id: Uuid::new_v4(),
@@ -365,7 +398,7 @@ mod adapters {
                 owner_user_id: f.actor,
             },
             Arc::new(keys),
-            CatalogProfile::Host9,
+            profile,
             graph.clone(),
             None,
             judgments,
@@ -374,6 +407,7 @@ mod adapters {
         .await
         .unwrap()
         .with_routing(routing.clone());
+        let mut service = with(service);
         service.installation_routing = installation_routing;
         service.initialize(f.actor).await.unwrap();
         let now = (f.state.clock)().timestamp_millis();
@@ -398,6 +432,7 @@ mod adapters {
             graph,
             routing,
             other_project,
+            profile,
         }
     }
     impl Host {
@@ -408,10 +443,10 @@ mod adapters {
                 step: name.replace('.', "-"),
                 invocation: 1,
                 deadline_at_ms: (self.f.state.clock)().timestamp_millis() + 5000,
-                command: CatalogProfile::Host9.registry().commands[name].clone(),
+                command: self.profile.registry().commands[name].clone(),
                 input_digest: digest(&input).unwrap(),
                 input,
-                authority: CatalogProfile::Host9
+                authority: (self.profile)
                     .authority(self.grant, 1, &self.scope)
                     .unwrap(),
                 status: IntentStatus::Dispatched,
@@ -433,12 +468,12 @@ mod adapters {
             (intent.command.outcomes[&result.outcome].validate(&result.output)).unwrap();
             result
         }
-        async fn read(&self, task: Uuid, revision: i64) -> HostResult {
+        pub(super) async fn read(&self, task: Uuid, revision: i64) -> HostResult {
             let input = json!({"subject": {"id": task.to_string(), "revision": revision}});
             self.run(&format!("read-{}", Uuid::new_v4()), "work.read", input)
                 .await
         }
-        async fn route(&self, task: Uuid, revision: i64, change: Value) -> HostResult {
+        pub(super) async fn route(&self, task: Uuid, revision: i64, change: Value) -> HostResult {
             let mut input = json!({"subject": {"id": task.to_string(), "revision": revision},
                 "level": "standard-high", "harnesses": [], "providers": [], "prefer": [],
                 "hold": false, "reasons": [{"code": "level_from_kind", "detail": "Bug fixes are Standard, high."}],
@@ -449,7 +484,10 @@ mod adapters {
             self.run(&format!("route-{}", Uuid::new_v4()), "work.route", input)
                 .await
         }
-        async fn emission(&self, task: Uuid) -> Option<(i64, Option<String>, Option<Value>)> {
+        pub(super) async fn emission(
+            &self,
+            task: Uuid,
+        ) -> Option<(i64, Option<String>, Option<Value>)> {
             sqlx::query_as(
                 "SELECT task_version,outcome,reasons FROM route_needed_emissions WHERE task_id=$1",
             )
@@ -1037,7 +1075,7 @@ mod adapters {
 
     impl Host {
         /// A routing artifact is active: what the owner last activated on `aq.routing`.
-        async fn activated(&self, digest: &str) {
+        pub(super) async fn activated(&self, digest: &str) {
             sqlx::query("INSERT INTO playbook_engine_bindings(namespace_id,generation,binding,artifact,at_ms) VALUES($1,1,'aq.routing',$2,1) ON CONFLICT(namespace_id,generation,binding) DO UPDATE SET artifact=$2")
                 .bind(self.service.namespace.namespace_id)
                 .bind(digest)
@@ -1049,7 +1087,7 @@ mod adapters {
             (self.f.state.clock)().timestamp_millis()
         }
         /// What placement records for a ready task that waits for a route.
-        async fn wanted(&self, task: Uuid, version: i64, project: Uuid) {
+        pub(super) async fn wanted(&self, task: Uuid, version: i64, project: Uuid) {
             sqlx::query("INSERT INTO route_needed_emissions(task_id,task_version,emitted_at_ms,wanted_version,wanted_at_ms,workspace_id,project_id,wanted_since_ms) VALUES($1,0,0,$2,$3,$4,$5,$3) ON CONFLICT(task_id) DO UPDATE SET wanted_since_ms=CASE WHEN route_needed_emissions.wanted_version=$2 THEN route_needed_emissions.wanted_since_ms ELSE $3 END,wanted_version=$2,wanted_at_ms=$3")
                 .bind(task)
                 .bind(version)
@@ -1060,11 +1098,11 @@ mod adapters {
                 .await
                 .unwrap();
         }
-        async fn asked(&self) -> usize {
+        pub(super) async fn asked(&self) -> usize {
             (self.service.collect_route_needed(&self.runtime, 8).await).unwrap()
         }
         /// Time passes; placement keeps seeing the task wait.
-        async fn later(&self, ms: i64, task: Uuid, version: i64) {
+        pub(super) async fn later(&self, ms: i64, task: Uuid, version: i64) {
             self.f
                 .time
                 .fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
@@ -1302,7 +1340,10 @@ mod adapters {
 
     impl Host {
         /// What was raised about a task: (reason, cause, escalation, detail, project).
-        async fn raised(&self, task: Uuid) -> Vec<(String, String, String, String, Option<Uuid>)> {
+        pub(super) async fn raised(
+            &self,
+            task: Uuid,
+        ) -> Vec<(String, String, String, String, Option<Uuid>)> {
             sqlx::query_as("SELECT reason,request->>'input',escalation,detail,project_id FROM internal_tasks WHERE purpose='routing_classification' AND affected_kind='task' AND affected_id=$1 AND escalate ORDER BY created_at_ms,request->>'input'")
                 .bind(task.to_string())
                 .fetch_all(&self.f.db.pool().await)
@@ -1836,6 +1877,8 @@ mod delivery {
             attempts: Mutex::new((1, 2)),
             options: Mutex::new(Options::default()),
             writes: Mutex::default(),
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            environments: Mutex::default(),
         });
         let port = Arc::new(Port::default());
         let settle = Arc::new(Settle::default());
@@ -2757,9 +2800,11 @@ mod delivery {
             let task_id = json!({"task": task.to_string()});
             let branch = format!("refs/heads/aq/{task}");
 
+            // One pass each: a pass's order among same-instant operations is their ids'.
             let publish = h.accepted("branch.publish", task_id.clone()).await;
+            assert_eq!(h.pass().await, 1);
             let open = h.accepted("pull_request.open", task_id.clone()).await;
-            assert_eq!(h.pass().await, 2);
+            assert_eq!(h.pass().await, 1);
             let done = h.completions().await;
             assert_eq!(
                 done[0],
@@ -3150,3 +3195,282 @@ mod delivery {
 
 #[cfg(feature = "delivery_playbook")]
 pub(crate) use delivery::commands::GraphMergeHost;
+
+/// Catalog 2.5.0 routing on a Host12 namespace (spec 0017 §5.4): `work.read`
+/// gives the facts a routing document chooses an environment from, and
+/// `work.route` records the environment it chose.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+mod environments {
+    use super::adapters::{Host, host_as};
+    use crate::common;
+    use aq_server::playbooks::{
+        domain::{
+            Result,
+            delivery_store::{DeliveryPort, Latest, Pending},
+            host10::Environments,
+        },
+        review_domain::CatalogProfile,
+    };
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    /// Every project is bound; no task has a result.
+    struct Bound;
+    #[async_trait::async_trait]
+    impl DeliveryPort for Bound {
+        async fn pending(&self, _: Option<Uuid>, _: u32) -> Result<Vec<Pending>> {
+            Ok(vec![])
+        }
+        async fn latest(&self, _: Uuid) -> Result<Option<Latest>> {
+            Ok(None)
+        }
+        async fn bound(&self, _: Uuid) -> Result<bool> {
+            Ok(true)
+        }
+        async fn has_result(&self, _: Uuid, _: Uuid) -> Result<bool> {
+            Ok(false)
+        }
+    }
+    fn labels(items: &[&str]) -> Vec<String> {
+        items.iter().map(|l| l.to_string()).collect()
+    }
+    /// A Host12 host whose project allows `rust-base` (its default) and `rust-web`.
+    async fn host12() -> Host {
+        host12_routing(true).await
+    }
+    async fn host12_routing(installation_routing: bool) -> Host {
+        let f = common::profiled::fixture().await;
+        common::profiled::insert(&f).await;
+        let with = |s: aq_server::playbooks::service::Service| s.with_delivery(Arc::new(Bound));
+        let h = host_as(f, installation_routing, None, CatalogProfile::Host12, with).await;
+        *h.routing.environments.lock().unwrap() = Environments {
+            default: "rust-base".into(),
+            allowed: vec![
+                ("rust-base".into(), labels(&["git", "rust"])),
+                ("rust-web".into(), labels(&["git", "node", "rust"])),
+            ],
+        };
+        h
+    }
+
+    #[tokio::test]
+    async fn work_read_gives_the_needs_and_the_projects_environments() {
+        let h = host12().await;
+        let task = (h.graph).task(
+            "Add a CSV export",
+            json!({"aq:needs": ["rust", "git", "rust"]}),
+        );
+        // `read` checks the answer against the 2.5.0 contract.
+        let read = h.read(task, 3).await;
+        assert_eq!(read.outcome, "observed");
+        let facts = &read.output["facts"];
+        assert_eq!(facts["needs"], json!(["git", "rust"]));
+        assert_eq!(facts["default_environment"], "rust-base");
+        assert_eq!(
+            facts["environments"],
+            json!([{"id": "rust-base", "provides": ["git", "rust"]},
+                {"id": "rust-web", "provides": ["git", "node", "rust"]}])
+        );
+        // The 2.3.0 facts are all there.
+        assert_eq!(facts["title"], "Add a CSV export");
+        assert_eq!(facts["pull_request"], json!(null));
+        // No default environment reads as "".
+        h.routing.environments.lock().unwrap().default = String::new();
+        let read = h.read(task, 3).await;
+        assert_eq!(read.output["facts"]["default_environment"], "");
+        let bare = h.graph.task("Needs nothing", json!({}));
+        assert_eq!(h.read(bare, 3).await.output["facts"]["needs"], json!([]));
+        // Needs past the contract's bounds are cut, not a failed read.
+        let many: Vec<String> = (0..70)
+            .map(|i| format!("need-{i:02}"))
+            .chain(["x".repeat(129)])
+            .collect();
+        let task = h.graph.task("Needs a lot", json!({"aq:needs": many}));
+        let needs = h.read(task, 3).await.output["facts"]["needs"].clone();
+        assert_eq!(needs.as_array().unwrap().len(), 64);
+        assert_eq!(needs[0], "need-00");
+    }
+
+    /// Catalog 2.5.0: the host answers `work.read` only for a task on the
+    /// automatic router, and without installation routing only for one of the
+    /// namespace's project.
+    #[tokio::test]
+    async fn work_read_answers_only_for_a_task_on_the_router() {
+        let h = host12_routing(false).await;
+        let task = h.graph.task("Elsewhere", json!({}));
+        (h.routing.located.lock().unwrap()).insert(task, (Uuid::new_v4(), h.other_project));
+        let refused = h.read(task, 3).await;
+        assert_eq!(
+            (refused.outcome.as_str(), &refused.output["reason"]),
+            ("refused", &json!("not_on_router"))
+        );
+        let mine = h.graph.task("Mine", json!({}));
+        assert_eq!(h.read(mine, 3).await.outcome, "observed");
+        h.routing.on_router.lock().unwrap().clear();
+        assert_eq!(h.read(mine, 3).await.output["reason"], "not_on_router");
+    }
+
+    /// An environment refusal is raised in its own words (the environment and
+    /// what it lacks, not Settings), and the task is asked about again once
+    /// the project's environments change.
+    #[tokio::test]
+    async fn an_environment_refusal_says_why_and_is_asked_again_when_the_binding_changes() {
+        let h = host12().await;
+        h.activated("sha256:routing-1").await;
+        let task = h
+            .graph
+            .task("Train the model", json!({"aq:needs": ["gpu"]}));
+        let project = h.scope.project_id;
+        h.wanted(task, 3, project).await;
+        assert_eq!(h.asked().await, 1);
+        let gpu = json!({"environment": "gpu-box"});
+        assert_eq!(
+            h.route(task, 3, gpu.clone()).await.output["reason"],
+            "not_offered"
+        );
+        let detail = |raised: Vec<(String, String, String, String, Option<Uuid>)>| {
+            raised.last().map(|r| r.3.clone()).unwrap_or_default()
+        };
+        let words = detail(h.raised(task).await);
+        assert!(words.contains("environment `gpu-box`"), "{words}");
+        assert!(words.contains("does not allow it"), "{words}");
+        assert!(!words.contains("Settings"), "{words}");
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+        // The binding allows it now, without `gpu`: asked again, once.
+        (h.routing.environments.lock().unwrap().allowed).push(("gpu-box".into(), labels(&["git"])));
+        h.later(120_000, task, 3).await;
+        assert_eq!(h.asked().await, 1);
+        assert_eq!(h.route(task, 3, gpu).await.output["reason"], "not_offered");
+        let words = detail(h.raised(task).await);
+        assert!(words.contains("does not provide gpu"), "{words}");
+        h.later(600_000, task, 3).await;
+        assert_eq!(h.asked().await, 0);
+    }
+
+    /// The host side of the published `route-to-environment` example: for each
+    /// case, a task and project as its `work.read` answer describes them, and
+    /// the case's calls dispatched through the Host12 adapter get the answers
+    /// the case expects of the host.
+    #[tokio::test]
+    async fn the_route_to_environment_example_cases_hold_against_this_host() {
+        let root = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vendor/aq-route-to-environment-613db7c/cases"
+        );
+        let h = host12().await;
+        let mut paths: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        paths.sort();
+        assert_eq!(paths.len(), 8);
+        let sorted = |v: &Value| {
+            let mut items: Vec<String> = serde_json::from_value(v.clone()).unwrap();
+            items.sort();
+            items
+        };
+        for path in paths {
+            let case: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let name = case["name"].as_str().unwrap().to_owned();
+            let read = &case["returns"]["work.read"][0];
+            let facts = &read["output"]["facts"];
+            let task = match read["outcome"] == "observed" {
+                true => {
+                    *h.routing.environments.lock().unwrap() = Environments {
+                        default: facts["default_environment"].as_str().unwrap().into(),
+                        allowed: (facts["environments"].as_array().unwrap().iter())
+                            .map(|e| (e["id"].as_str().unwrap().into(), sorted(&e["provides"])))
+                            .collect(),
+                    };
+                    *h.routing.attempts.lock().unwrap() = (
+                        facts["charged_failures"].as_u64().unwrap() as u32,
+                        facts["ended_attempts"].as_u64().unwrap() as u32,
+                    );
+                    let mut metadata = json!({"aq:needs": facts["needs"]});
+                    if facts["route"] == "owner" {
+                        metadata["aq:route"] = json!({"c": "complex-high", "l": null, "i": "any",
+                            "d": null, "s": "owner", "n": 1});
+                    }
+                    h.graph.task(facts["title"].as_str().unwrap(), metadata)
+                }
+                false => Uuid::new_v4(),
+            };
+            let mut seen = std::collections::BTreeMap::<String, usize>::new();
+            for call in case["expect"]["calls"].as_array().unwrap() {
+                let command = call["command"].as_str().unwrap();
+                let index = seen.entry(command.into()).or_default();
+                let expected = &case["returns"][command][*index];
+                *index += 1;
+                let mut input = call["input"].clone();
+                input["subject"]["id"] = json!(task.to_string());
+                if command != "work.read" {
+                    // A route the case answers `stale` names the version before.
+                    let stale = expected["outcome"] == "stale";
+                    input["subject"]["revision"] = json!(if stale { 2 } else { 3 });
+                }
+                let id = format!("{name}-{command}-{index}");
+                let answer = h.run(&id, command, input).await;
+                assert_eq!(answer.outcome, expected["outcome"], "{name} {command}");
+                if let Some(reason) = expected["output"]["reason"].as_str() {
+                    assert_eq!(answer.output["reason"], reason, "{name} {command}");
+                }
+                if command == "work.read" && answer.outcome == "observed" {
+                    let got = &answer.output["facts"];
+                    assert_eq!(sorted(&got["needs"]), sorted(&facts["needs"]), "{name}");
+                    for fact in ["default_environment", "route", "ended_attempts"] {
+                        assert_eq!(got[fact], facts[fact], "{name} {fact}");
+                    }
+                    let ids = |v: &Value| -> Vec<Value> {
+                        v.as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|e| e["id"].clone())
+                            .collect()
+                    };
+                    assert_eq!(
+                        ids(&got["environments"]),
+                        ids(&facts["environments"]),
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_routed_environment_outside_the_binding_is_refused() {
+        let h = host12().await;
+        let task = h.graph.task("Train the ranking model", json!({}));
+        let refused = h.route(task, 3, json!({"environment": "gpu"})).await;
+        assert_eq!(
+            (refused.outcome.as_str(), &refused.output["reason"]),
+            ("refused", &json!("not_offered"))
+        );
+        assert!(h.routing.writes.lock().unwrap().is_empty());
+        // Recorded like any route that names what is not offered.
+        let (_, outcome, _) = h.emission(task).await.unwrap();
+        assert_eq!(outcome.as_deref(), Some("not_offered"));
+        // An allowed one is stored with the route.
+        let routed = h.route(task, 3, json!({"environment": "rust-web"})).await;
+        assert_eq!(routed.outcome, "routed");
+        assert_eq!(h.graph.stored(task).unwrap().e.as_deref(), Some("rust-web"));
+        let (_, route) = h.routing.writes.lock().unwrap()[0].clone();
+        assert_eq!(route.unwrap().environment.as_deref(), Some("rust-web"));
+        // An allowed one that lacks a need is refused too (catalog 2.5.0).
+        let web = h.graph.task("Add the page", json!({"aq:needs": ["node"]}));
+        let lacking = h.route(web, 3, json!({"environment": "rust-base"})).await;
+        assert_eq!(lacking.output["reason"], "not_offered");
+        assert_eq!(
+            h.route(web, 3, json!({"environment": "rust-web"}))
+                .await
+                .outcome,
+            "routed"
+        );
+        // A route that names none (a continuation keeps its own) stores none.
+        let kept = h.graph.task("Tried before", json!({}));
+        assert_eq!(h.route(kept, 3, json!({})).await.outcome, "routed");
+        assert_eq!(h.graph.stored(kept).unwrap().e, None);
+    }
+}

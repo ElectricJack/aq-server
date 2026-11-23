@@ -219,6 +219,8 @@ pub fn declared(path: &str) -> Option<&'static [QueryParam]> {
         // dashboard_api/actions/mod.rs::get_operation; the machine listener's
         // agent_access/human/enqueue/supervisor.rs::lookup; agent_access/mutations.rs::agent_get
         "/api/v1/operations/{id}" | "/v1/agent/operations/{operation_id}" => NONE,
+        // aq-environments agent.rs::job
+        "/v1/agent/environments/try/{job_id}" => NONE,
         // aq-supervisor-control read.rs (headers only)
         "/v1/supervisor/projects" => NONE,
         // results_feedback/api.rs::draft_status, ::detail

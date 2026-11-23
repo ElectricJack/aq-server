@@ -193,6 +193,85 @@ impl ResultReady {
     }
 }
 
+/// A project's environments as a routing document chooses among them (spec
+/// 0017 §5.4): the binding's default (`""` for none) and each allowed
+/// environment with what it provides.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Environments {
+    pub default: String,
+    pub allowed: Vec<(String, Vec<String>)>,
+}
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+impl Environments {
+    /// Why a route may not choose `environment` (it is refused
+    /// `not_offered`), if it may not: `{environment, allowed: false}` when the
+    /// project does not allow it, else `{environment, allowed: true, missing}`
+    /// with the needs it lacks. [`host9::routing_failure`] words it.
+    pub fn refusal(&self, environment: &str, needs: &[String]) -> Option<Value> {
+        let Some((_, provides)) = self.allowed.iter().find(|(id, _)| id == environment) else {
+            return Some(json!({"environment": environment, "allowed": false}));
+        };
+        let missing: Vec<&String> = needs.iter().filter(|n| !provides.contains(n)).collect();
+        (!missing.is_empty())
+            .then(|| json!({"environment": environment, "allowed": true, "missing": missing}))
+    }
+    /// What a `not_offered` task is asked about again on: the Settings
+    /// offers and these environments.
+    pub fn offers_digest(&self, options: &aq_routing::classify::Options) -> String {
+        let offers = (host9::options_digest(options), &self.default, &self.allowed);
+        aq_playbook_host::model::digest(&offers).unwrap_or_default()
+    }
+    /// Catalog 2.5.0 `work.read`: the 2.3.0 `output` with the task's needs
+    /// and these environments.
+    pub fn read_output(&self, mut output: Value, metadata: &Value) -> Value {
+        let environments: Vec<Value> = (self.allowed.iter())
+            .map(|(id, provides)| json!({"id": id, "provides": provides}))
+            .collect();
+        // The contract's bounds: at most 64 labels of at most 128 bytes.
+        let needs = needs(metadata).into_iter().filter(|n| n.len() <= 128);
+        output["facts"]["needs"] = json!(needs.take(64).collect::<Vec<_>>());
+        output["facts"]["default_environment"] = json!(self.default);
+        output["facts"]["environments"] = json!(environments);
+        output
+    }
+}
+
+/// What a task needs: its `aq:needs` labels, sorted and distinct (as
+/// `aq_project_policy::environments::needs` reads them for placement).
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn needs(metadata: &Value) -> Vec<String> {
+    let needs = metadata["aq:needs"].as_array().into_iter().flatten();
+    let needs: std::collections::BTreeSet<&str> = needs.filter_map(Value::as_str).collect();
+    needs.into_iter().map(str::to_owned).collect()
+}
+
+/// Catalog 2.5.0 (spec 0017 §6.4): `aq.environment.base_changed {project}`.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn base_changed_event(
+    event_id: Uuid,
+    project: Uuid,
+    now_ms: i64,
+    contract: &aq_playbook_host::model::EventContract,
+) -> Result<aq_playbook_host::model::EventEnvelope, aq_playbook_host::model::ModelError> {
+    Ok(aq_playbook_host::model::EventEnvelope {
+        producer: "aq.host.bridge@1".into(),
+        event_id: event_id.to_string(),
+        contract: aq_playbook_host::model::ContractRef {
+            name: contract.name.clone(),
+            fingerprint: contract.fingerprint()?,
+        },
+        scope: "project".into(),
+        correlation: Default::default(),
+        subject: None,
+        revision: None,
+        causation: None,
+        occurred_at_ms: Some(now_ms),
+        observed_at_ms: Some(now_ms),
+        payload: json!({"project": project.to_string()}),
+    })
+}
+
 /// The trusted `aq.work.result_ready` event.
 pub fn result_ready_event(
     event_id: Uuid,

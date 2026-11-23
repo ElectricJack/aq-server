@@ -391,6 +391,8 @@ fn build_worker_router_inner(
     };
     #[cfg(feature = "delivery_playbook")]
     let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
+    #[cfg(feature = "project_environments")]
+    let closure = closure.merge(aq_environments::worker::routes(&state.config.projects));
     let router = Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))

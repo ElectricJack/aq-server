@@ -99,6 +99,8 @@ pub struct Client {
     /// None on a channel: the proxy behind the socket holds the credential.
     auth_header: Option<(HeaderName, HeaderValue)>,
     limits: Limits,
+    /// The sandbox channel, whose proxy forwards the agent routes too.
+    channel: bool,
 }
 impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,6 +241,7 @@ impl Client {
             origin_header: None,
             auth_header: None,
             limits,
+            channel: true,
         })
     }
     pub fn new(
@@ -296,10 +299,14 @@ impl Client {
             origin_header: Some(origin_header),
             auth_header,
             limits,
+            channel: false,
         })
     }
     fn endpoint(&self, path: &str, query: &[(&str, &str)]) -> Result<Url, Error> {
-        if !path.starts_with("/api/")
+        // Spec 0017: `environment try` posts to its agent route, where the
+        // node's channel proxy pushes the workspace first.
+        let agent = cfg!(feature = "project_environments") && self.channel;
+        if !(path.starts_with("/api/") || agent && path.starts_with("/v1/agent/"))
             || path.len() > 2048
             || path.contains("//")
             || path.split('/').any(|s| s == "." || s == "..")
@@ -728,5 +735,25 @@ mod tests {
         )
         .unwrap();
         assert!(token(&fifo).is_err());
+    }
+    /// Spec 0017: only a channel client reaches the agent routes, and only
+    /// with `project_environments`.
+    #[test]
+    fn only_a_channel_reaches_the_agent_routes() {
+        let channel = Client::channel(
+            std::path::Path::new("/aq/channel/aq.sock"),
+            Limits::default(),
+        );
+        let owner = Client::new("http://127.0.0.1:1/", auth(), Limits::default());
+        let path = "/v1/agent/environments/try";
+        let reached = channel.unwrap().endpoint(path, &[]).is_ok();
+        assert_eq!(reached, cfg!(feature = "project_environments"));
+        assert!(owner.unwrap().endpoint(path, &[]).is_err());
+        assert!(
+            Client::channel(std::path::Path::new("/s"), Limits::default())
+                .unwrap()
+                .endpoint("/v2/worker/x", &[])
+                .is_err()
+        );
     }
 }
