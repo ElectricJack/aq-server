@@ -10,12 +10,19 @@ use uuid::Uuid;
 
 pub(super) use aq_profiled_state::result_facts::{CheckVerdict, DeliveryState};
 
+type SourcePin = (Uuid, String, bool);
+
+struct SourceFacts {
+    pin: Option<SourcePin>,
+    lineage_unknown: bool,
+}
+
 /// What is known of a recorded result under the report/attempt locks.
 pub(super) struct Gathered {
     /// The attempt's fences: stopped, cancelled, revoked, holds the task.
     pub view: authority::AuthorityView,
     /// The pinned central receipt: (import operation, checkpoint, changed).
-    pub source: Option<(Uuid, String, bool)>,
+    pub source: Option<SourcePin>,
     pub lineage_unknown: bool,
     /// One verdict per offered `required_checks` entry, and as evidence.
     pub checks: Vec<CheckVerdict>,
@@ -37,6 +44,25 @@ pub(super) async fn gather_locked(
         authority::Policy::IdentityOnly,
     )
     .await?;
+    let source = gather_source_locked(tx, r, enrolled).await?;
+    let (checks, check_evidence) = gather_checks_locked(tx, r, source.pin.as_ref()).await?;
+    let delivery_state =
+        delivery_state_locked(tx, r.report.binding.attempt_id, source.pin.as_ref()).await?;
+    Ok(Gathered {
+        view,
+        source: source.pin,
+        lineage_unknown: source.lineage_unknown,
+        checks,
+        check_evidence,
+        delivery_state,
+    })
+}
+
+async fn gather_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    enrolled: bool,
+) -> Result<SourceFacts> {
     // The exact retained source is the central receipt pinned by this report.
     let (mut source, mut lineage_unknown) = (None, false);
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
@@ -75,11 +101,22 @@ pub(super) async fn gather_locked(
             }
         }
     }
+    Ok(SourceFacts {
+        pin: source,
+        lineage_unknown,
+    })
+}
+
+async fn gather_checks_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    source: Option<&SourcePin>,
+) -> Result<(Vec<CheckVerdict>, Vec<Value>)> {
     let attempt = r.report.binding.attempt_id;
     let mut checks = Vec::with_capacity(r.outcome.required_checks.len());
     let mut check_evidence = Vec::with_capacity(r.outcome.required_checks.len());
     for check in &r.outcome.required_checks {
-        let verdict = match &source {
+        let verdict = match source {
             None => CheckVerdict::Missing,
             Some((op, checkpoint, _)) => {
                 let found: Option<String> = sqlx::query_scalar("SELECT verdict FROM profiled_check_evidence WHERE attempt_id=$1 AND check_id=$2 AND source_operation_id=$3 AND checkpoint=$4 AND validator_digest=$5")
@@ -96,7 +133,15 @@ pub(super) async fn gather_locked(
         checks.push(verdict);
         check_evidence.push(json!({"id":check.id.as_str(),"validator_digest":check.validator.digest.as_str(),"verdict":verdict}));
     }
-    let delivery_state = match &source {
+    Ok((checks, check_evidence))
+}
+
+async fn delivery_state_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    source: Option<&SourcePin>,
+) -> Result<DeliveryState> {
+    let delivery_state = match source {
         None => DeliveryState::Missing,
         // An unchanged source has nothing to publish (owner decision 2026-11-13).
         Some((_, _, false)) => DeliveryState::NoChange,
@@ -118,14 +163,7 @@ pub(super) async fn gather_locked(
             }
         }
     };
-    Ok(Gathered {
-        view,
-        source,
-        lineage_unknown,
-        checks,
-        check_evidence,
-        delivery_state,
-    })
+    Ok(delivery_state)
 }
 
 impl Gathered {
