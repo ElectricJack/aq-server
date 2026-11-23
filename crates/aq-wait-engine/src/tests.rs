@@ -102,10 +102,20 @@ fn fixture_policy() -> ResolvedPolicy {
         body,
     }
 }
+fn registration_context<'a>(
+    fence: &'a AuthorityFence,
+    graph: &'a KnownGraph,
+) -> RegistrationContext<'a> {
+    RegistrationContext {
+        fence,
+        graph,
+        now: 1000,
+    }
+}
 fn begin(count: usize, any: bool) -> (TransitionPlan, AuthorityFence) {
     let (request, fence, policy, ids, graph) = fixture(count, any);
     (
-        Snapshot::begin(request, &fence, policy, ids, &graph, 1000).unwrap(),
+        Snapshot::begin(request, policy, ids, registration_context(&fence, &graph)).unwrap(),
         fence,
     )
 }
@@ -863,11 +873,9 @@ fn bounded_known_cycles_and_serialized_opposing_registration_refuse_without_glob
     assert_eq!(
         Snapshot::begin(
             request.clone(),
-            &fence,
             policy.clone(),
             ids.clone(),
-            &graph,
-            1000
+            registration_context(&fence, &graph)
         )
         .unwrap_err(),
         Error::Cycle
@@ -953,7 +961,7 @@ fn bounded_restore_and_backpressure_refuse_malformed_or_duplicate_work() {
         request.validate().is_err(),
         "frozen self-wait validation refuses before resealing"
     );
-    assert!(Snapshot::begin(request, &fence, policy, ids, &graph, 1000).is_err());
+    assert!(Snapshot::begin(request, policy, ids, registration_context(&fence, &graph)).is_err());
 }
 #[test]
 fn restored_work_cannot_skip_post_install_reobserve_or_contradict_terminal_member_history() {

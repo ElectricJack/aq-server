@@ -249,10 +249,13 @@ impl ConformanceApi {
     pub fn resolve_from_fixture(
         &mut self,
         wait_id: Uuid,
-        outcomes: Vec<MemberOutcome>,
-        outcome_id: Uuid,
-        now_ms: u64,
+        verdict: FixtureVerdict,
     ) -> Result<WaitOutcome, ContractError> {
+        let FixtureVerdict {
+            members: outcomes,
+            outcome_id,
+            recorded_at_ms: now_ms,
+        } = verdict;
         let row = self.waits.get_mut(&wait_id).ok_or(ContractError::Stale)?;
         ensure(row.outcome.is_none(), "immutable outcome")?;
         validate_observations(&row.request.predicate, &outcomes)?;
@@ -287,6 +290,13 @@ impl ConformanceApi {
         row.outcome = Some(outcome.clone());
         Ok(outcome)
     }
+}
+
+/// Observations and recording metadata supplied by the conformance test owner.
+pub struct FixtureVerdict {
+    pub members: Vec<MemberOutcome>,
+    pub outcome_id: Uuid,
+    pub recorded_at_ms: u64,
 }
 
 fn fixture_registration(

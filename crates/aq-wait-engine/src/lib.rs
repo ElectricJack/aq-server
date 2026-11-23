@@ -13,6 +13,7 @@ mod snapshot;
 mod source;
 pub use cycle::*;
 pub use model::*;
+pub use reduce::RegistrationContext;
 pub const MAX_SNAPSHOT_BYTES: usize = 262_144;
 pub const MAX_TIME_MS: u64 = 9_007_199_254_740_991;
 pub const MAX_AGE_MS: u64 = 30 * 24 * 60 * 60 * 1000;

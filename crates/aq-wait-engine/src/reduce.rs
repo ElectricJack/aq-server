@@ -1,14 +1,20 @@
 use super::snapshot::outcome_digest;
 use super::*;
+/// Trusted authority, dependency graph and clock observed for this registration.
+pub struct RegistrationContext<'a> {
+    pub fence: &'a AuthorityFence,
+    pub graph: &'a KnownGraph,
+    pub now: u64,
+}
+
 impl Snapshot {
     pub fn begin(
         request: wire::Request,
-        fence: &AuthorityFence,
         policy: ResolvedPolicy,
         ids: StableIds,
-        graph: &KnownGraph,
-        now: u64,
+        context: RegistrationContext<'_>,
     ) -> Result<TransitionPlan> {
+        let RegistrationContext { fence, graph, now } = context;
         request.validate()?;
         policy.validate()?;
         instant(now)?;

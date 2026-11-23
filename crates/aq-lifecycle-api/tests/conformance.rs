@@ -96,6 +96,17 @@ fn verdicts(r: &WaitRegistration, state: MemberState) -> Vec<MemberOutcome> {
         })
         .collect()
 }
+fn fixture_verdict(
+    members: Vec<MemberOutcome>,
+    id_number: u128,
+    recorded_at_ms: u64,
+) -> FixtureVerdict {
+    FixtureVerdict {
+        members,
+        outcome_id: id(id_number),
+        recorded_at_ms,
+    }
+}
 fn registered_peer() -> (WaitRegistration, ConformanceApi) {
     let r = registration();
     let mut p = peer(&r);
@@ -107,13 +118,19 @@ fn registered_peer() -> (WaitRegistration, ConformanceApi) {
 fn any_uses_declared_order_and_immutable_outcome() {
     let (r, mut p) = registered_peer();
     let outcome = p
-        .resolve_from_fixture(r.wait_id, verdicts(&r, MemberState::Satisfied), id(40), 20)
+        .resolve_from_fixture(
+            r.wait_id,
+            fixture_verdict(verdicts(&r, MemberState::Satisfied), 40, 20),
+        )
         .unwrap();
     assert_eq!(outcome.selected_member_id, Some(id(20)));
     assert_eq!(outcome.kind, WaitOutcomeKind::Satisfied);
     assert!(
-        p.resolve_from_fixture(r.wait_id, verdicts(&r, MemberState::Satisfied), id(41), 21)
-            .is_err()
+        p.resolve_from_fixture(
+            r.wait_id,
+            fixture_verdict(verdicts(&r, MemberState::Satisfied), 41, 21)
+        )
+        .is_err()
     );
     assert!(!p.bootstrap_acknowledged());
 }
@@ -122,7 +139,10 @@ fn rejects_wrong_source_owner() {
     let (r, mut p) = registered_peer();
     let mut v = verdicts(&r, MemberState::Satisfied);
     v[0].evidence.as_mut().unwrap().owner = SourceOwner::Mailbox;
-    assert!(p.resolve_from_fixture(r.wait_id, v, id(40), 20).is_err());
+    assert!(
+        p.resolve_from_fixture(r.wait_id, fixture_verdict(v, 40, 20))
+            .is_err()
+    );
 }
 #[test]
 fn pending_any_cannot_become_failure() {
@@ -130,7 +150,10 @@ fn pending_any_cannot_become_failure() {
     let mut v = verdicts(&r, MemberState::SourceFailed);
     v[1].state = MemberState::Pending;
     v[1].evidence = None;
-    assert!(p.resolve_from_fixture(r.wait_id, v, id(40), 20).is_err());
+    assert!(
+        p.resolve_from_fixture(r.wait_id, fixture_verdict(v, 40, 20))
+            .is_err()
+    );
 }
 #[test]
 fn strict_decoding_and_envelope_bounds() {
@@ -225,7 +248,10 @@ fn invalid_source_digest_cannot_change_predicate() {
     let (r, mut p) = registered_peer();
     let mut v = verdicts(&r, MemberState::Satisfied);
     v[1].evidence.as_mut().unwrap().condition_digest = Digest::of(b"different task");
-    assert!(p.resolve_from_fixture(r.wait_id, v, id(40), 20).is_err());
+    assert!(
+        p.resolve_from_fixture(r.wait_id, fixture_verdict(v, 40, 20))
+            .is_err()
+    );
 }
 #[test]
 fn exact_successor_ack_interoperates_with_public_attachment() {

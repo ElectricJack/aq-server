@@ -466,7 +466,12 @@ pub(crate) async fn register_locked(
         outcome_id: Uuid::new_v4(),
         resume_intent_id: Uuid::new_v4(),
     };
-    let plan = match Snapshot::begin(request.clone(), &caller.fence, policy, ids, &graph, now) {
+    let context = engine::RegistrationContext {
+        fence: &caller.fence,
+        graph: &graph,
+        now,
+    };
+    let plan = match Snapshot::begin(request.clone(), policy, ids, context) {
         Ok(plan) => plan,
         Err(engine::Error::Cycle | engine::Error::Capacity) => {
             return Ok(refused(request, wire::RefusalCode::KnownCycle));
