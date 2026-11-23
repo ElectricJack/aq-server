@@ -56,7 +56,7 @@ aq-session-protocol = { path = "../../vendor/aq-session-protocol-0.1.0", version
 aq-row-retention = { path = "../aq-row-retention" }
 aq-machine-control = { path = "../aq-machine-control" }
 aq-playbook-domain = { path = "../aq-playbook-domain" }
-aq-delivery = { path = "../aq-delivery" }
+aq-delivery = { path = "../aq-delivery", features = ["source_observation"] }
 aq-project-policy = { path = "../aq-project-policy" }
 aq-provider-quota = { path = "../aq-provider-quota" }
 aq-environment-templates = { path = "../aq-environment-templates" }

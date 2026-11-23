@@ -774,13 +774,8 @@ async fn offers(
                     }
                     None => {
                         on_heap(|| {
-                            source::observe_for_offer(
-                                state,
-                                &compiled.frozen,
-                                &policy_record,
-                                &context,
-                                enrolled,
-                            )
+                            source::Observer::new(state, &compiled.frozen, &policy_record)
+                                .for_offer(&context, enrolled)
                         })
                         .await?
                     }
@@ -790,15 +785,17 @@ async fn offers(
                     None => frozen_commit(&policy.source, &observed),
                 };
                 let operation = aq_delivery::offer_source::export_operation(
-                    policy.project_id,
+                    aq_delivery::offer_source::ExportScope {
+                        project: policy.project_id,
+                        revision: record.revision,
+                        generation,
+                        enrolled,
+                    },
                     &task,
-                    record.revision,
-                    generation,
                     config
                         .project_policy_ref(policy.project_id)
                         .map_err(|_| refused())?,
                     frozen,
-                    enrolled,
                 )
                 .map_err(|_| AppError::Internal)?;
                 let reserved =
@@ -909,13 +906,8 @@ async fn offers(
                 .await?
             } else {
                 on_heap(|| {
-                    source::observe_for_offer(
-                        state,
-                        &compiled.frozen,
-                        &policy_record,
-                        &context,
-                        enrolled,
-                    )
+                    source::Observer::new(state, &compiled.frozen, &policy_record)
+                        .for_offer(&context, enrolled)
                 })
                 .await?
             };
