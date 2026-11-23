@@ -200,6 +200,68 @@ class ToolCommands(unittest.TestCase):
             self.assertNotIn("private-value", error.getvalue())
             self.assertEqual(json.loads(error.getvalue())["code"], "invalid_finite_tool_fixture")
 
+    def test_cumulative_call_definitions_preserve_identity_and_fixed_command(self):
+        command = tools.next_tool([request()])
+        definition = poll_call(command)
+        edit = normal(binding())[1]["input"][0]
+        repeated = copy.deepcopy(definition)
+        repeated["arguments"] = command["arguments"]
+        requests = [request(definition), request(repeated, edit)]
+        self.assertEqual(tools.next_tool(requests)["call_id"], tools.SUBMIT_CALL_ID)
+        repeated["arguments"] = command["arguments"] | {"cmd": "different command"}
+        with self.assertRaisesRegex(ValueError, "changed tool call identity"):
+            tools.next_tool(requests)
+        with self.assertRaisesRegex(ValueError, "fixture command differs"):
+            tools.next_tool([request(repeated, edit)])
+
+    def test_submit_requires_completed_edit_and_no_pending_tool(self):
+        submit = output(tools.SUBMIT_CALL_ID, submit_text(binding()))
+        with self.assertRaisesRegex(ValueError, "submit preceded genuine edit/check output"):
+            tools.next_tool([request(submit)])
+        edit = output(tools.EDIT_CALL_ID, "Process running with session ID 22")
+        with self.assertRaisesRegex(ValueError, "another fixture tool is still pending"):
+            tools.next_tool([request(edit, submit)])
+
+    def test_session_identity_must_be_unambiguous_bounded_and_stable(self):
+        for text, message in [
+            ("Process running with session ID 0", "changed tool session"),
+            (f"Process running with session ID {2**31}", "changed tool session"),
+            ("Process running with session ID 22\nProcess running with session ID 23",
+             "ambiguous tool session"),
+        ]:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, message):
+                tools.next_tool([request(output(tools.EDIT_CALL_ID, text))])
+        edit = output(tools.EDIT_CALL_ID, "Process running with session ID 22")
+        requests = [request(), request(edit)]
+        poll = tools.next_tool(requests)
+        requests.append(request(edit, poll_call(poll), output(
+            poll["call_id"], "Process running with session ID 23")))
+        with self.assertRaisesRegex(ValueError, "changed tool session"):
+            tools.next_tool(requests)
+
+    def test_client_phase_receipt_and_exit_code_remain_closed(self):
+        b = binding()
+        for kind, field, changed in [
+            ("accepted", "extra", True),
+            ("recorded", "extra", True),
+            ("recorded", "receipt", {"id": "other", "version": "1", "digest": "f" * 64}),
+            ("recorded", "receipt", {"id": "aq.result-record/" + b["report_id"],
+                                     "version": "2", "digest": "f" * 64}),
+            ("recorded", "receipt", {"id": "aq.result-record/" + b["report_id"],
+                                     "version": "1", "digest": "F" * 64}),
+        ]:
+            status = view(b, kind)
+            status["phase"][field] = changed
+            with self.subTest(kind=kind, field=field, changed=changed), self.assertRaises(ValueError):
+                tools.validate_tool_outputs(normal(b, status=status), b)
+        for kind, valid_code, wrong_code in [("accepted", "10", "0"), ("recorded", "0", "10")]:
+            requests = normal(b, status=view(b, kind))
+            submit = requests[-1]["input"][-1]
+            submit["output"] = submit["output"].replace(
+                "AQ_GATE04_STATUS_EXIT=" + valid_code, "AQ_GATE04_STATUS_EXIT=" + wrong_code)
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                tools.validate_tool_outputs(requests, b)
+
 
 if __name__ == "__main__":
     unittest.main()
