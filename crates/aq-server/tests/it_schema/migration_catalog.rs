@@ -22,9 +22,35 @@ fn rejects_duplicate_missing_and_out_of_order_numbers() {
 #[test]
 fn rejects_empty_and_noncanonical_catalogs() {
     assert!(catalog::validate(&[]).is_err());
-    for name in ["1_a.sql", "0000_a.sql", "0001_.sql", "0001_B.sql"] {
+    for name in [
+        "1_a.sql",
+        "0000_a.sql",
+        "0001_.sql",
+        "0001_B.sql",
+        "0001_é.sql",
+        "０００１_a.sql",
+        "0001_a.sql.sql",
+        "0001_a-b.sql",
+        "0001_a.SQL",
+    ] {
         assert!(catalog::validate(&paths(&[name])).is_err(), "{name}");
     }
+}
+
+#[test]
+fn canonical_names_preserve_generated_source_bytes() {
+    let entries = catalog::validate(&paths(&["0001_a_2.sql", "0002__.sql"])).unwrap();
+    assert_eq!(
+        catalog::rust_source(&entries),
+        concat!(
+            "pub(crate) const MIGRATIONS: &[(i32, &str)] = &[\n",
+            "    (1, include_str!(\"0001_a_2.sql\")),\n",
+            "    (2, include_str!(\"0002__.sql\")),\n",
+            "];\n",
+            "pub const STATE_FORMAT_VERSION: u32 = 2;\n",
+            "pub const READABLE_STATE_FORMATS: &[u32] = &[1,2,];\n",
+        )
+    );
 }
 
 #[test]
