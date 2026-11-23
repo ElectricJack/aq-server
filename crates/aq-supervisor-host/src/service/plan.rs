@@ -74,12 +74,12 @@ Respect human review gates unless the owner has delegated that review to you.
 Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
 "#,
         conversation = config.conversation_id,
+        code = CODE_ACCESS,
         setup = if control.project.is_none() {
             TOOLCHAIN_SETUP
         } else {
             ""
         },
-        code = CODE_ACCESS,
     )
 }
 /// Code access needs the supervisor git route, which also needs delivery_playbook.

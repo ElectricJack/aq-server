@@ -2,79 +2,10 @@
 //! Retain outside node/project transactions; linking never acquires quota locks.
 use crate::{AppState, error::AppError};
 use aq_admission::{ArtifactKind, ArtifactRef, Digest, RetainedArtifact, Text};
-use serde::{Deserialize, Serialize};
+pub use aq_profiled_state::inline_artifacts::{OwnerKind, Receipt, Retain, Retained};
+use serde::Serialize;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OwnerKind {
-    Catalog,
-    GraphSnapshot,
-    Composition,
-    Selection,
-    Outcome,
-    SourceRetention,
-    Startup,
-}
-impl OwnerKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Catalog => "catalog",
-            Self::GraphSnapshot => "graph_snapshot",
-            Self::Composition => "composition",
-            Self::Selection => "selection",
-            Self::Outcome => "outcome",
-            Self::SourceRetention => "source_retention",
-            Self::Startup => "startup",
-        }
-    }
-    fn accepts(self, kind: ArtifactKind) -> bool {
-        matches!(
-            (self, kind),
-            (Self::Catalog, ArtifactKind::Definition)
-                | (Self::GraphSnapshot, ArtifactKind::Context)
-                | (Self::Composition, ArtifactKind::Composition)
-                | (Self::Composition, ArtifactKind::Definition)
-                | (Self::Selection, ArtifactKind::Selection)
-                | (Self::Outcome, ArtifactKind::Outcome)
-                | (Self::SourceRetention, ArtifactKind::Context)
-                | (Self::SourceRetention, ArtifactKind::Source)
-                | (Self::Startup, ArtifactKind::Context)
-                | (Self::Startup, ArtifactKind::Definition)
-        )
-    }
-}
-/// Stable artifact_id is the retain operation identity. Changed reuse conflicts.
-pub struct Retain<'a> {
-    pub artifact_id: Uuid,
-    pub project_id: Uuid,
-    pub owner: OwnerKind,
-    pub artifact: ArtifactRef,
-    pub kind: ArtifactKind,
-    pub bytes: &'a [u8],
-    pub retain_until_ms: u64,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Receipt {
-    pub schema_version: u32,
-    pub artifact_id: Uuid,
-    pub project_id: Uuid,
-    pub owner_kind: OwnerKind,
-    pub artifact: ArtifactRef,
-    pub kind: ArtifactKind,
-    pub bytes: u64,
-    pub retained_at_ms: u64,
-    pub retain_until_ms: u64,
-}
-pub struct Retained {
-    pub artifact_id: Uuid,
-    pub project_id: Uuid,
-    pub owner: OwnerKind,
-    pub descriptor: RetainedArtifact,
-    pub receipt: Vec<u8>,
-    pub bytes: Vec<u8>,
-}
 #[track_caller]
 fn refused() -> AppError {
     tracing::debug!(target: "aq_refusal", at = %std::panic::Location::caller(), "profiled refusal");
@@ -156,6 +87,13 @@ pub async fn load_locked(
 /// Independent transaction. No external I/O, eviction or fabricated source
 /// bundle receipt. The caller must not hold node/project locks while retaining.
 pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArtifact, AppError> {
+    retain_for(state, request, None).await
+}
+pub(super) async fn retain_for(
+    state: &AppState,
+    request: Retain<'_>,
+    stage: Option<Uuid>,
+) -> Result<RetainedArtifact, AppError> {
     if request.artifact_id.is_nil()
         || request.project_id.is_nil()
         || !request.owner.accepts(request.kind)
@@ -192,13 +130,13 @@ pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArt
         .execute(&mut *tx)
         .await
         .map_err(db)?;
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admission_artifacts WHERE artifact_id=$1)")
+    let staged: Option<bool> =
+        sqlx::query_scalar("SELECT offer_staged FROM admission_artifacts WHERE artifact_id=$1")
             .bind(request.artifact_id)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(db)?;
-    if exists {
+    if let Some(staged) = staged {
         let old = load_locked(&mut tx, request.artifact_id).await?;
         if old.project_id != request.project_id
             || old.owner != request.owner
@@ -206,12 +144,14 @@ pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArt
             || old.descriptor.kind != request.kind
             || old.descriptor.retain_until_ms != request.retain_until_ms
             || old.bytes != request.bytes
+            || (staged && stage.is_none())
         {
             return Err(refused());
         }
         old.descriptor
             .verify(&old.bytes, now(state)?)
             .map_err(|_| refused())?;
+        pin(state, &mut tx, stage, request.artifact_id).await?;
         tx.commit().await.map_err(db)?;
         return Ok(old.descriptor);
     }
@@ -258,11 +198,28 @@ pub async fn retain(state: &AppState, request: Retain<'_>) -> Result<RetainedArt
     if receipt.len() > 8192 {
         return Err(refused());
     }
-    sqlx::query("INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-        .bind(request.artifact_id).bind(serde_json::to_value(&descriptor).map_err(|_|AppError::Internal)?).bind(descriptor.artifact.digest.as_str()).bind(descriptor.bytes as i64).bind(request.owner.name()).bind(request.project_id.to_string()).bind(request.bytes).bind(time as i64).bind(request.retain_until_ms as i64).execute(&mut *tx).await.map_err(|_|refused())?;
+    sqlx::query("INSERT INTO admission_artifacts(artifact_id,descriptor,content_digest,byte_length,owner_kind,owner_key,body,created_at_ms,retain_until_ms,offer_staged) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        .bind(request.artifact_id).bind(serde_json::to_value(&descriptor).map_err(|_|AppError::Internal)?).bind(descriptor.artifact.digest.as_str()).bind(descriptor.bytes as i64).bind(request.owner.name()).bind(request.project_id.to_string()).bind(request.bytes).bind(time as i64).bind(request.retain_until_ms as i64).bind(stage.is_some()).execute(&mut *tx).await.map_err(|_|refused())?;
     sqlx::query("INSERT INTO admission_inline_receipts(artifact_id,receipt_bytes,receipt_digest) VALUES($1,$2,$3)").bind(request.artifact_id).bind(&receipt).bind(Digest::of(&receipt).as_str()).execute(&mut *tx).await.map_err(db)?;
+    pin(state, &mut tx, stage, request.artifact_id).await?;
     tx.commit().await.map_err(|_| refused())?;
     Ok(descriptor)
+}
+
+async fn pin(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    stage: Option<Uuid>,
+    id: Uuid,
+) -> Result<(), AppError> {
+    if let Some(stage) = stage
+        && !aq_history_caps::offer_stage::pin(tx, stage, id, now(state)?)
+            .await
+            .map_err(db)?
+    {
+        return Err(refused());
+    }
+    Ok(())
 }
 /// Caller holds the exact node/attempt admission locks. Existing artifacts are
 /// immutable; final offer links only this project's actual retained bytes.

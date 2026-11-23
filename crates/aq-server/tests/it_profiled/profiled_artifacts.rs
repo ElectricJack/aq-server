@@ -294,6 +294,7 @@ async fn assigned_native_http_ranges_require_exact_sealed_binding_and_live_offer
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: request.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],

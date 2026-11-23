@@ -409,7 +409,7 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         retained_source53::validate(&mut tx, supported).await?;
     }
     if supported >= 59 {
-        auto56::validate(&mut tx).await?;
+        auto56::validate(&mut tx, supported).await?;
     }
     if supported >= 66 {
         stopped66::validate(&mut tx, supported).await?;

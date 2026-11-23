@@ -351,11 +351,7 @@ impl Service {
         Ok(at)
     }
     pub(super) async fn tx(&self) -> Result<Transaction<'_, Postgres>> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT set_config('statement_timeout','2000ms',true),set_config('lock_timeout','500ms',true)")
-            .execute(&mut *tx)
-            .await?;
-        Ok(tx)
+        aq_playbook_domain::bridge_tx(&self.pool).await
     }
     pub(super) async fn owner(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<()> {
         let role: Option<String> =
@@ -485,6 +481,16 @@ impl Service {
         scope: GrantScope,
         expires: i64,
     ) -> Result<()> {
+        self.grant_for(actor, id, scope, expires, None).await
+    }
+    pub(super) async fn grant_for(
+        &self,
+        actor: Uuid,
+        id: Uuid,
+        scope: GrantScope,
+        expires: i64,
+        resume: Option<Uuid>,
+    ) -> Result<()> {
         self.validate_new_scope(&scope)?;
         if actor != self.namespace.owner_user_id
             || id.is_nil()
@@ -493,35 +499,19 @@ impl Service {
         {
             return Err(Error::Forbidden);
         }
-        let payload = digest(&(
-            self.namespace.namespace_id,
-            self.namespace.generation,
-            id,
-            &scope,
-            expires,
-            actor,
-        ))?;
         let mut tx = self.tx().await?;
         self.namespace_locked(&mut tx).await?;
         Self::owner(&mut tx, actor).await?;
-        if let Some(old) = sqlx::query_scalar::<_, String>(
-            "SELECT payload_digest FROM playbook_grants WHERE grant_id=$1",
+        aq_playbook_domain::grants::retain(
+            &mut tx,
+            &self.namespace,
+            id,
+            &scope,
+            expires,
+            self.now()?,
+            resume,
         )
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            if old != payload {
-                return Err(Error::Conflict);
-            }
-            tx.commit().await?;
-            return Ok(());
-        }
-        let now = self.now()?;
-        if expires <= now || expires > now.saturating_add(86_400_000) {
-            return Err(Error::Invalid);
-        }
-        sqlx::query("INSERT INTO playbook_grants(grant_id,namespace_id,generation,revision,owner_user_id,scope,expires_at_ms,payload_digest) VALUES($1,$2,$3,1,$4,$5,$6,$7)").bind(id).bind(self.namespace.namespace_id).bind(self.namespace.generation).bind(actor).bind(json!(scope)).bind(expires).bind(payload).execute(&mut *tx).await?;
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -575,22 +565,14 @@ impl Service {
         live: bool,
         check_owner: bool,
     ) -> Result<GrantScope> {
-        let row=sqlx::query("SELECT * FROM playbook_grants WHERE grant_id=$1 AND namespace_id=$2 AND generation=$3 FOR UPDATE").bind(id).bind(self.namespace.namespace_id).bind(self.namespace.generation).fetch_optional(&mut **tx).await?.ok_or(Error::Forbidden)?;
-        if row.get::<i64, _>("revision") != revision
-            || row.get::<Uuid, _>("owner_user_id") != self.namespace.owner_user_id
-        {
-            return Err(Error::Forbidden);
-        }
         if check_owner {
             Self::owner(tx, self.namespace.owner_user_id).await?;
         }
-        if live
-            && (row.get::<Option<i64>, _>("revoked_at_ms").is_some()
-                || row.get::<i64, _>("expires_at_ms") <= self.now()?)
-        {
-            return Err(Error::Forbidden);
-        }
-        let scope: GrantScope = serde_json::from_value(row.get("scope"))?;
+        let scope =
+            aq_playbook_domain::grants::scope_locked(tx, &self.namespace, id, revision, || {
+                live.then(|| self.now()).transpose()
+            })
+            .await?;
         self.grant_authority(id, revision, &scope)?;
         Ok(scope)
     }

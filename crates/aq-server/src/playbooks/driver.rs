@@ -1,6 +1,7 @@
 //! One explicitly started owner and bounded service quanta. Never start another
-//! owner because a request timed out. No automatic external mutation retries.
+//! owner because a request timed out.
 use super::{domain::*, service::*};
+use aq_playbook_domain::host_values::dispatch_result as host_result;
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
     model::{CommandContract, EventEnvelope},
@@ -15,12 +16,6 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-fn host_error(error: aq_playbook_host::Error) -> Error {
-    match error {
-        aq_playbook_host::Error::Overloaded => Error::Overloaded,
-        _ => Error::Unknown,
-    }
-}
 /// An engine answer to a new event or admission: an unknown outcome or a
 /// storage failure is `Unknown` (left pending, delivered again); a refusal
 /// is `Invalid` (held).
@@ -64,6 +59,24 @@ impl DomainHost for MailHost {
     }
     fn set_mode(&mut self, mode: HostMode) {
         self.mode = mode
+    }
+    #[cfg(feature = "delivery_playbook")]
+    fn reconcile_delivery(&mut self, intent: &Intent) -> Option<DispatchResult> {
+        let command = intent.command.name.as_str();
+        if !matches!(command, "work.complete" | "work.return") {
+            return Some(self.reconcile(intent));
+        }
+        let (id, revision) = grant_actor(&intent.authority).ok()?;
+        match self.handle.block_on(self.service.work_decide(
+            &self.runtime,
+            id,
+            revision,
+            intent,
+            true,
+        )) {
+            Ok(answer) => Some(host_result(answer, intent)),
+            Err(_) => Some(self.reconcile(intent)),
+        }
     }
     fn dispatch_unavailable_plugin(&mut self, intent: &Intent) -> DispatchResult {
         self.dispatch_adapter(intent, false)
@@ -300,21 +313,6 @@ impl MailHost {
                 && self.service.registry().commands.contains_key(name))
     }
 }
-/// An asynchronous host command's `accepted` outcome is its durable handle.
-fn host_result(result: super::host_adapters::HostResult, intent: &Intent) -> DispatchResult {
-    if command_plugin(&intent.command.name).is_none()
-        && result.outcome == "accepted"
-        && let Some(handle) = result.output["handle"].as_str()
-    {
-        return DispatchResult::Accepted {
-            handle: handle.to_string(),
-        };
-    }
-    DispatchResult::Completed {
-        outcome: result.outcome,
-        output: result.output,
-    }
-}
 fn decision_dispatch(result: Result<DecisionResult>) -> DispatchResult {
     match result {
         Ok(DecisionResult::Accepted { handle }) => DispatchResult::Accepted { handle },
@@ -339,6 +337,8 @@ pub struct Driver {
     pub(super) loaded_definitions:
         std::sync::OnceLock<super::inspection::definitions::LoadedDefinitions>,
     gate: tokio::sync::Mutex<i64>,
+    #[cfg(feature = "delivery_playbook")]
+    delivery_recovery: aq_playbook_domain::delivery_decisions::Recovery,
     /// Order binding mutations with their bridge projections.
     binding_gate: tokio::sync::Mutex<()>,
     /// Owner-call deadlines, from the engine timeouts: one commit, and a tick.
@@ -440,7 +440,7 @@ impl Driver {
             },
         )
         .await
-        .map_err(|e| (e.to_string(), host_error(e)))
+        .map_err(|e| (e.to_string(), Error::from(e)))
         .map_err(|(why, error)| (error, why))?;
         let taken = proof.lock().map_err(|_| Error::Unknown);
         let runtime = taken.and_then(|mut proof| proof.take().ok_or(Error::Unknown));
@@ -451,6 +451,8 @@ impl Driver {
             runtime,
             loaded_definitions: std::sync::OnceLock::new(),
             gate: tokio::sync::Mutex::new(0),
+            #[cfg(feature = "delivery_playbook")]
+            delivery_recovery: Default::default(),
             binding_gate: tokio::sync::Mutex::new(()),
             deadline,
             tick_deadline,
@@ -509,7 +511,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         // G11 X30/X32 read model only: a registry failure leaves the run's
         // definition view null and never refuses an owner-committed install.
         if self.service.register_definition(&registered).await.is_err() {
@@ -549,14 +551,14 @@ impl Driver {
                     binding: binding.clone(),
                     artifact,
                     authority: active_authority,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
             .map_err(|error| match error {
                 aq_playbook_host::Error::Invalid => Error::Invalid,
-                other => host_error(other),
+                other => Error::from(other),
             })?;
         let current = Request::Binding {
             binding: binding.clone(),
@@ -590,7 +592,7 @@ impl Driver {
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         let known: Option<KeyedAdmissionReceipt> = serde_json::from_value(value)?;
         let receipt = if let Some(receipt) = known {
             receipt
@@ -607,7 +609,7 @@ impl Driver {
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
                         requested_at_ms: None,
-                        now_ms: (self.service_clock()),
+                        now_ms: self.service.current_time(),
                     },
                     self.deadline,
                 )
@@ -627,14 +629,11 @@ impl Driver {
             .acknowledge_admission(&self.runtime, id, receipt)
             .await
     }
-    fn service_clock(&self) -> i64 {
-        self.service.current_time()
-    }
     pub async fn recover(&self) -> Result<serde_json::Value> {
         self.owner
             .call(
                 Request::Recover {
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -779,12 +778,12 @@ impl Driver {
                 self.owner
                     .call(
                         Request::CollectIntervalEvents {
-                            now_ms: self.service_clock(),
+                            now_ms: self.service.current_time(),
                         },
                         self.deadline,
                     )
                     .await
-                    .map_err(host_error),
+                    .map_err(Error::from),
             );
         }
         if self.service.profile == super::review_domain::CatalogProfile::Monitoring6
@@ -841,14 +840,25 @@ impl Driver {
             }
             *cursor = *sequence;
         }
-        let now_ms = self.service_clock();
+        let now_ms = self.service.current_time();
         let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
-        let cancelled = cancel.await.map_err(host_error);
+        let cancelled = cancel.await.map_err(Error::from);
         partial.defer("cancelling effects", cancelled.clone());
         cancelled?;
-        let now_ms = self.service_clock();
+        #[cfg(feature = "delivery_playbook")]
+        if self.service.profile.is_delivery() {
+            let recovery = self.delivery_recovery.tick(
+                &self.service.pool,
+                &self.service.namespace,
+                &self.owner,
+                self.tick_deadline,
+                self.service.current_time(),
+            );
+            partial.defer("reconciling delivery decisions", recovery.await);
+        }
+        let now_ms = self.service.current_time();
         let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
-        let tick = ticked.await.map_err(host_error);
+        let tick = ticked.await.map_err(Error::from);
         partial.defer("ticking runs", tick.clone());
         let tick = tick?;
         if self.owner.has_plugin_artifacts() {
@@ -892,7 +902,7 @@ impl Driver {
                 epoch: 0,
                 event: Box::new(event.clone()),
                 requested_at_ms: None,
-                now_ms: self.service_clock(),
+                now_ms: self.service.current_time(),
             };
             let receipt = match self.owner.call(request, self.deadline).await {
                 Err(aq_playbook_host::Error::Stale(_)) => {
@@ -908,7 +918,7 @@ impl Driver {
         let fanout = Request::Fanout {
             event_key: key.clone(),
             limit: 64,
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         let status = match self.owner.call(fanout, self.deadline).await {
             Ok(_) => {
@@ -937,7 +947,7 @@ impl Driver {
             // missing record fails the fan-out), or `EventStatus` does not.
             Err(aq_playbook_host::Error::NotFound(what)) if what == key => true,
             Err(aq_playbook_host::Error::Invalid) => true,
-            Err(error) => return Err(host_error(error)),
+            Err(error) => return Err(Error::from(error)),
         };
         if complete {
             self.service.complete_event(&self.runtime, id).await?;
@@ -978,7 +988,7 @@ impl Driver {
         }
         let cancel = Request::Cancel {
             run: run.clone(),
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         match self.owner.call(cancel, self.deadline).await {
             Ok(_) => Ok(()),
@@ -986,7 +996,7 @@ impl Driver {
             // engine no longer finds it. Cancelling it stays the no-op it is
             // for a terminal run.
             Err(aq_playbook_host::Error::Engine(_)) if self.finished(run).await? => Ok(()),
-            Err(error) => Err(host_error(error)),
+            Err(error) => Err(Error::from(error)),
         }
     }
     async fn finished(&self, run: String) -> Result<bool> {
@@ -1030,12 +1040,12 @@ impl Driver {
                     may_activate,
                     schedules: schedules.to_vec(),
                     interval_event,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         match active.as_bool() {
             Some(true) => self.service.binding_activated(&binding, &artifact).await,
             Some(false) => self.service.binding_deactivated(&binding).await,
@@ -1054,12 +1064,12 @@ impl Driver {
                 Request::DeactivateBinding {
                     binding: binding.clone(),
                     revision,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         match result.as_bool() {
             Some(true) => self.service.binding_deactivated(&binding).await,
             Some(false) => Err(Error::Conflict),
@@ -1164,12 +1174,12 @@ impl Driver {
                     epoch: 0,
                     event: Box::new(event),
                     requested_at_ms: None,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(Error::from)?;
         serde_json::from_value(value).map_err(|_| Error::Unknown)
     }
 }

@@ -23,12 +23,16 @@ pub(super) enum Outcome {
 pub(super) async fn publish(
     state: &AppState,
     auth: &AuthenticatedNode,
-    built: Built,
+    built: &Built,
     export: &source_exports::ReservedExport,
     fact: &VerifiedExport,
     inspection: &RetentionObservation,
     slot: u32,
 ) -> Result<Outcome, AppError> {
+    let at = now(state)?;
+    if at >= built.deadline || at >= inspection.expires_at_ms() {
+        return Ok(Outcome::Unavailable);
+    }
     let mut digests = built
         .native
         .offered
@@ -57,14 +61,13 @@ pub(super) async fn publish(
         .await
         .map_err(db)?;
     // Recheck stop/drain/availability after the poll's early gate.
-    let mc = |_| refused();
-    if !aq_machine_control::lock_publishing_node(&mut tx, auth.id())
+    if !aq_machine_control::lock_publishing_node(&mut tx, auth.id()).await? {
+        return Err(AppError::Busy);
+    }
+    if aq_machine_control::offer_hold(&mut tx, auth.id())
         .await
-        .map_err(mc)?
-        || aq_machine_control::offer_hold(&mut tx, auth.id())
-            .await
-            .map_err(mc)?
-            .is_some()
+        .map_err(crate::machine_api::mapped)?
+        .is_some()
     {
         return Ok(Outcome::Unavailable);
     }
@@ -159,13 +162,13 @@ pub(super) async fn publish(
     }
     // Final publication clock is sampled after locks, while absolute original
     // expiry is fixed. No persisted original is later retimed on replay.
-    let mut native = built.native;
+    let mut native = built.native.clone();
     native.offered.clock =
         aq_admission::transport::DeliveryClock::new(time, built.deadline).map_err(|_| refused())?;
     let delivery = OfferDelivery { native, git_author };
     let original = StoredOffer {
         schema_version: 1,
-        read_provenance: built.read_provenance,
+        read_provenance: built.read_provenance.clone(),
         native_offer: delivery.clone(),
     }
     .value()
@@ -280,10 +283,6 @@ pub(super) async fn publish(
     aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
         .await
         .map_err(crate::machine_api::mapped)?;
-    match tx.commit().await {
-        Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(Outcome::Unavailable),
-        done => done
-            .map(|_| Outcome::Published(Box::new(delivery)))
-            .map_err(db),
-    }
+    tx.commit().await.map_err(db)?;
+    Ok(Outcome::Published(Box::new(delivery)))
 }

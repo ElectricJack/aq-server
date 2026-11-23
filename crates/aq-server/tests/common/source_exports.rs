@@ -28,6 +28,7 @@ pub async fn setup() -> (Fixture, Request, tempfile::TempDir) {
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: runtime_ref.clone(),
             qualification,
             capabilities: vec![],

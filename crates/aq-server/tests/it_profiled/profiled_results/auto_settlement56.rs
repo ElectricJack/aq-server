@@ -5,7 +5,10 @@ use super::*;
 use aq_server::profiled_execution::settlement::{self, AutoDisposition, AutoSettlement};
 use axum::{Json, Router, routing::post};
 use serde_json::Value;
-use std::sync::{Mutex, atomic::AtomicUsize};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicUsize},
+};
 
 fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions::Definition {
     let body = format!(
@@ -19,6 +22,13 @@ fn default_policy(delivery: &str) -> aq_server::profiled_execution::definitions:
     .unwrap()
 }
 
+struct GraphRecovery {
+    write_status: AtomicU16,
+    lookup_status: AtomicU16,
+    has_receipt: AtomicBool,
+    lookups: Mutex<Vec<Value>>,
+}
+
 pub(crate) struct AutoEnv {
     pub(crate) f: Fixture,
     pub(crate) report: ResultReport,
@@ -29,6 +39,7 @@ pub(crate) struct AutoEnv {
     expected_version: u64,
     pub(crate) writes: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
+    recovery: Arc<GraphRecovery>,
     _directory: tempfile::TempDir,
     #[cfg(feature = "delivery_playbook")]
     _task_ref: Option<super::pushed_ref::TaskRef>,
@@ -228,35 +239,63 @@ async fn finish_auto_env(
     assert_eq!(graph["node"]["version"], json!(expected_version));
     let writes = Arc::new(AtomicUsize::new(0));
     let bodies = Arc::new(Mutex::new(Vec::new()));
-    let (wc, bc) = (writes.clone(), bodies.clone());
-    // The human work read's Context of the task (spec 0016 section 7's task read).
-    let read = graph.clone();
-    let app = Router::new().route(
-        "/v1/workspaces/{workspace}/nodes/{id}/context",
-        axum::routing::get(move || {
-            std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(read.clone())))
-        }),
+    let recovery = Arc::new(GraphRecovery {
+        write_status: AtomicU16::new(graph_status.as_u16()),
+        lookup_status: AtomicU16::new(200),
+        has_receipt: AtomicBool::new(false),
+        lookups: Mutex::default(),
+    });
+    let mut node = graph["node"].clone();
+    node["task_state"] = json!("completed");
+    node["version"] = json!(node["version"].as_u64().unwrap() + 1);
+    node["content_revision"] = json!(node["content_revision"].as_u64().unwrap() + 1);
+    let receipt = json!({"change_set_id":"00000000-0000-0000-0000-000000000052","results":[node]});
+    let (wc, bc, writer, committed) = (
+        writes.clone(),
+        bodies.clone(),
+        recovery.clone(),
+        receipt.clone(),
     );
-    let app = app.route(
-        "/v1/workspaces/{workspace}/mutations",
-        post(move |Json(body): Json<Value>| {
-            let (g, wc, bc) = (graph.clone(), wc.clone(), bc.clone());
-            async move {
+    let reader = recovery.clone();
+    let app = Router::new()
+        .route(
+            "/v1/workspaces/{workspace}/nodes/{id}/context",
+            axum::routing::get(move || {
+                std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(graph.clone())))
+            }),
+        )
+        .route(
+            "/v1/workspaces/{workspace}/mutations",
+            post(move |Json(body): Json<Value>| {
                 wc.fetch_add(1, Ordering::SeqCst);
                 bc.lock().unwrap().push(body);
-                let mut node = g["node"].clone();
-                node["task_state"] = json!("completed");
-                node["version"] = json!(node["version"].as_u64().unwrap() + 1);
-                node["content_revision"] = json!(node["content_revision"].as_u64().unwrap() + 1);
-                let reply = if graph_status.is_success() {
-                    json!({"change_set_id":"00000000-0000-0000-0000-000000000052","results":[node]})
+                let code =
+                    axum::http::StatusCode::from_u16(writer.write_status.load(Ordering::SeqCst))
+                        .unwrap();
+                let reply = if code.is_success() {
+                    writer.has_receipt.store(true, Ordering::SeqCst);
+                    committed.clone()
                 } else {
-                    json!({"error":"version_conflict"})
+                    json!({"error":"write unavailable"})
                 };
-                (graph_status, [("X-AQ-Graph-API-Version", "1")], Json(reply))
-            }
-        }),
-    );
+                std::future::ready((code, [("X-AQ-Graph-API-Version", "1")], Json(reply)))
+            }),
+        )
+        .route(
+            "/v1/workspaces/{workspace}/mutations/receipt",
+            post(move |Json(body): Json<Value>| {
+                reader.lookups.lock().unwrap().push(body);
+                let code =
+                    axum::http::StatusCode::from_u16(reader.lookup_status.load(Ordering::SeqCst))
+                        .unwrap();
+                let reply = if code.is_success() && reader.has_receipt.load(Ordering::SeqCst) {
+                    receipt.clone()
+                } else {
+                    Value::Null
+                };
+                std::future::ready((code, [("X-AQ-Graph-API-Version", "1")], Json(reply)))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -285,6 +324,7 @@ async fn finish_auto_env(
         expected_version,
         writes,
         bodies,
+        recovery,
         _directory: directory,
         #[cfg(feature = "delivery_playbook")]
         _task_ref: task_ref,
@@ -477,6 +517,119 @@ async fn accepted_result_completes_task_with_expected_version() {
     assert_eq!(
         settlement_row(&env.f, env.report.report_id).await.0,
         "confirmed"
+    );
+}
+
+async fn pending_completion() -> (AutoEnv, Arc<AtomicI64>, AutoSettlement) {
+    let mut env = auto_env("not_required", axum::http::StatusCode::SERVICE_UNAVAILABLE).await;
+    env.check(env.source, &env.checkpoint, &env.validator, "passed")
+        .await;
+    let clock = Arc::new(AtomicI64::new((env.f.state.clock)().timestamp_millis()));
+    let source = clock.clone();
+    env.f.state.clock = Arc::new(move || {
+        chrono::DateTime::from_timestamp_millis(source.load(Ordering::SeqCst)).unwrap()
+    });
+    let initial = env.settle().await;
+    assert_eq!(initial.disposition, AutoDisposition::Possible);
+    assert_eq!(initial.dispatch_count, 1);
+    assert!(env.holds_task().await);
+    (env, clock, initial)
+}
+
+#[tokio::test]
+async fn automatic_sweep_recovers_exact_graph_receipt_after_the_old_send_limit() {
+    let (env, clock, initial) = pending_completion().await;
+    let pool = env.f.db.pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('aq.settlement_owner','aq.settlement-owner.auto.1',true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_auto_settlements SET dispatch_count=8 WHERE report_id=$1")
+        .bind(env.report.report_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    env.recovery.has_receipt.store(true, Ordering::SeqCst);
+    let mut cursor = None;
+    aq_server::profiled_execution::expiry::check_graph_completion(&env.f.state, &mut cursor)
+        .await
+        .unwrap();
+    assert!(cursor.is_none());
+    assert!(env.recovery.lookups.lock().unwrap().is_empty());
+    clock.store(initial.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    aq_server::profiled_execution::expiry::check_graph_completion(&env.f.state, &mut cursor)
+        .await
+        .unwrap();
+    assert_eq!(cursor, Some(env.report.report_id));
+    let confirmed = env.settle().await;
+    assert_eq!(confirmed.disposition, AutoDisposition::Confirmed);
+    assert_eq!(confirmed.operation_id, initial.operation_id);
+    assert_eq!(confirmed.dispatch_count, 8);
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *env.recovery.lookups.lock().unwrap(),
+        *env.bodies.lock().unwrap()
+    );
+    assert!(!env.holds_task().await);
+}
+
+#[tokio::test]
+async fn graph_permission_restoration_replays_only_the_original_completion() {
+    let (env, clock, initial) = pending_completion().await;
+    env.recovery.lookup_status.store(403, Ordering::SeqCst);
+    clock.store(initial.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    let blocked = env.settle().await;
+    assert_eq!(
+        blocked.reason.as_deref(),
+        Some("graph_completion_permission_required")
+    );
+    assert_eq!(blocked.operation_id, initial.operation_id);
+    assert!(env.holds_task().await);
+    assert_eq!(env.writes.load(Ordering::SeqCst), 1);
+    let attempt = env.report.binding.attempt_id;
+    let hold = aq_human_work::attempt_hold(&env.f.db.pool().await, &json!(attempt))
+        .await
+        .unwrap()
+        .unwrap();
+    let wait = aq_human_work::graph_completion_wait(&env.f.db.pool().await, &hold)
+        .await
+        .unwrap();
+    assert_eq!(wait["blocker_owner"], "graph_workspace_admin");
+    assert_eq!(
+        wait["next_check_at_ms"],
+        json!(blocked.next_graph_check_at_ms)
+    );
+    #[cfg(feature = "delivery_playbook")]
+    assert!(playbook::work_reasons(&env).await.contains(&wait));
+
+    env.recovery.lookup_status.store(200, Ordering::SeqCst);
+    env.recovery.write_status.store(200, Ordering::SeqCst);
+    clock.store(blocked.next_graph_check_at_ms.unwrap(), Ordering::SeqCst);
+    let (first, second) = tokio::join!(env.settle(), env.settle());
+    assert!(matches!(
+        first.disposition,
+        AutoDisposition::Confirmed | AutoDisposition::Possible
+    ));
+    assert!(matches!(
+        second.disposition,
+        AutoDisposition::Confirmed | AutoDisposition::Possible
+    ));
+    let confirmed = env.settle().await;
+    assert_eq!(confirmed.disposition, AutoDisposition::Confirmed);
+    assert_eq!(confirmed.operation_id, initial.operation_id);
+    assert_eq!(confirmed.dispatch_count, 2);
+    assert!(!env.holds_task().await);
+    let bodies = env.bodies.lock().unwrap();
+    let lookups = env.recovery.lookups.lock().unwrap();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(lookups.len(), 2);
+    assert!(
+        bodies
+            .iter()
+            .chain(lookups.iter())
+            .all(|body| body == &bodies[0])
     );
 }
 
@@ -1189,6 +1342,20 @@ async fn ambiguous_or_foreign_presence_stays_held_without_a_source_head() {
     }
 }
 
+// The synthetic result fixtures do not pass through native offer publication.
+async fn seed_native_offer_clock(pool: &sqlx::PgPool, attempt: Uuid) {
+    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
+        .bind(attempt).bind(NOW as i64).execute(pool).await.unwrap();
+    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 /// MS1 retry (B4): after a final rework, the D3 policy actor records the
 /// replacement facts that only owning domains prove (the central retention
 /// receipt pinned by the report; a settled read-only AQ effect ledger), so the
@@ -1295,16 +1462,7 @@ async fn reworked_failed_attempt_records_replacement_facts_and_becomes_replaceab
 
     // B4 now admits a replacement of the failed predecessor, which still holds
     // the task until the replacement owner releases it.
-    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
-        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
-    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
+    seed_native_offer_clock(&pool, attempt).await;
     let task = env.f.selection.lineage.task_id;
     match replacement::assess_task(&env.f.state, task, NOW + 1)
         .await
@@ -1352,16 +1510,7 @@ async fn reworked_writer_attempt_with_final_ledger_becomes_replaceable() {
     let pool = env.f.db.pool().await;
     let attempt = env.report.binding.attempt_id;
     // B4 needs the original offer instant (as the read-only test sets it).
-    sqlx::query("ALTER TABLE profiled_launches DISABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE profiled_launches SET graph_task_observation=jsonb_set(graph_task_observation,'{native_offer}',jsonb_build_object('offered',jsonb_build_object('clock',jsonb_build_object('server_time_ms',$2::BIGINT)))) WHERE attempt_id=$1")
-        .bind(attempt).bind(NOW as i64).execute(&pool).await.unwrap();
-    sqlx::query("ALTER TABLE profiled_launches ENABLE TRIGGER profiled_launch_guard")
-        .execute(&pool)
-        .await
-        .unwrap();
+    seed_native_offer_clock(&pool, attempt).await;
     let shown = || async {
         let mut conn = pool.acquire().await.unwrap();
         inspect(&mut conn, attempt, NOW + 1).await.unwrap().unwrap()
@@ -1665,6 +1814,9 @@ mod playbook {
         let reasons = work_reasons(&env).await;
         assert!(reasons.iter().any(|r| r["code"] == "task_held"
             && r["hold_reason"] == "returns_exhausted"
+            && r["result_id"] == json!(result)
+            && r["blocker_owner"] == "project_owner"
+            && r["wake_condition"] == "owner_retry_authorized"
             && r["message"].as_str().unwrap().contains(&result.to_string())));
         let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
         let calls = AtomicUsize::new(0);
@@ -2190,6 +2342,67 @@ mod playbook {
     }
 
     #[tokio::test]
+    async fn liveness_owner_retry_reconciles_a_stopped_cancellation_with_a_pushed_failure() {
+        use aq_delivery::git_grant::cancelled_failed_report;
+        use aq_server::profiled_execution::{cancellation, replacement};
+
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
+        let task = env.f.selection.lineage.task_id;
+        let attempt = env.report.binding.attempt_id;
+        let pool = env.f.db.pool().await;
+        seed_native_offer_clock(&pool, attempt).await;
+        assert_eq!(cancelled_failed_report(&pool, task).await.unwrap(), None);
+        let cancelled = cancellation::cancel(
+            &env.f.state,
+            attempt,
+            Uuid::new_v4(),
+            "Stop after the stored credential expired",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            cancelled.disposition,
+            cancellation::Disposition::Requested
+        ));
+        assert_eq!(
+            cancelled_failed_report(&pool, task).await.unwrap(),
+            Some(env.report.report_id)
+        );
+        assert_eq!(send_back(&env, "policy").await, Settled::Stale);
+        assert_eq!(
+            replacement::assess_task(&env.f.state, task, NOW + 1)
+                .await
+                .unwrap(),
+            replacement::Assessment::Blocked("replacement_effects_unreconciled")
+        );
+        for _ in 0..2 {
+            settlement::recover_held_for_retry(&env.f.state, task)
+                .await
+                .unwrap();
+        }
+        let facts: (String, String) = sqlx::query_as(
+            "SELECT state#>>'{retention,kind}',state#>>'{effects,kind}'
+             FROM profiled_authority_hot WHERE attempt_id=$1",
+        )
+        .bind(attempt)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(facts, ("retained".into(), "quiescent".into()));
+        assert!(matches!(
+            replacement::assess_task(&env.f.state, task, NOW + 1)
+                .await
+                .unwrap(),
+            replacement::Assessment::Replace(_)
+        ));
+        assert!(env.holds_task().await);
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn exhausted_success_retry_requires_a_final_pr_failure_for_this_exact_result() {
         use aq_delivery::git_grant::held_report;
         let env = Box::pin(held_retry_env(
@@ -2377,9 +2590,11 @@ mod playbook {
         let reasons = work_reasons(&env).await;
         let evidence = format!("returned result {result}. Worker outcome: success.");
         assert!(reasons.iter().any(|r| {
-            r["message"]
-                .as_str()
-                .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
+            r["blocker_owner"] == "project_owner"
+                && r["wake_condition"] == "owner_retry_authorized"
+                && r["message"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
         }));
         assert!(
             aq_playbook_domain::delivery_store::returned_result_evidence(
@@ -2434,6 +2649,48 @@ mod playbook {
         .unwrap();
         assert_eq!(complete(&env).await, Settled::Stale);
         assert_eq!(send_back(&env, "policy").await, Settled::Stale);
+        assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+        assert!(env.holds_task().await);
+    }
+
+    #[tokio::test]
+    async fn work_return_retries_a_contended_settlement_for_the_same_result() {
+        use std::time::Duration;
+
+        let env = auto_env("not_required", axum::http::StatusCode::OK).await;
+        let pool = env.f.db.pool().await;
+        let report_id = env.report.report_id;
+        let mut lock = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+            .bind(format!("aq-auto-settlement:{report_id}"))
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+        let backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
+        let unlock_after_timeout = async {
+            let waiting = || {
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted AND locktype='advisory' AND $1=ANY(pg_blocking_pids(pid)))")
+                    .bind(backend_pid)
+                    .fetch_one(&pool)
+            };
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !waiting().await.unwrap() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                // Keep the lock through the first timeout. The return will
+                // have to open a new transaction once the lock is released.
+                tokio::time::sleep(Duration::from_millis(520)).await;
+            })
+            .await
+            .unwrap();
+            lock.commit().await.unwrap();
+        };
+        let (_, outcome) = tokio::join!(unlock_after_timeout, send_back(&env, "policy"));
+        assert_eq!(outcome, Settled::Returned);
+        assert_eq!(settlement_row(&env.f, report_id).await.0, "rework_required");
         assert_eq!(env.writes.load(Ordering::SeqCst), 0);
         assert!(env.holds_task().await);
     }
@@ -2535,7 +2792,7 @@ mod playbook {
 
     /// The reasons of the task's work read (`GET .../tasks/{task}/work`),
     /// checked against the human-graph-1 schema.
-    async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
+    pub(super) async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let lineage = &env.f.selection.lineage;
@@ -2581,6 +2838,8 @@ mod playbook {
             .unwrap_or_else(|| panic!("{reasons:?}"));
         assert_eq!(waiting["result_id"], json!(env.report.report_id));
         assert_eq!(waiting["attempt_id"], json!(env.report.binding.attempt_id));
+        assert_eq!(waiting["blocker_owner"], "delivery_policy_owner");
+        assert_eq!(waiting["wake_condition"], "delivery_policy_activated");
         let message = waiting["message"].as_str().unwrap();
         assert!(message.starts_with("Result ready, no delivery policy"));
         // A playbook's decision ends the wait (here it sends the result back).
@@ -2592,6 +2851,42 @@ mod playbook {
                 .all(|r| r["code"] != "result_ready_no_delivery_policy"),
             "{reasons:?}"
         );
+        let replacement = reasons
+            .iter()
+            .find(|r| r["code"] == "replacement_facts_pending")
+            .unwrap_or_else(|| panic!("{reasons:?}"));
+        assert_eq!(replacement["result_id"], json!(env.report.report_id));
+        assert_eq!(replacement["blocker_owner"], "aq_settlement");
+        assert_eq!(
+            replacement["wake_condition"],
+            "replacement_evidence_reconciliation"
+        );
+        assert_eq!(
+            replacement["missing_evidence"],
+            json!(["retained_source", "quiescent_effects"])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_return_with_both_replacement_facts_names_the_scheduler_and_its_wake() {
+        let env = Box::pin(held_retry_env(
+            aq_admission::transport::ProcessOutcome::Failed,
+        ))
+        .await;
+        assert_eq!(send_back(&env, "checks_failed").await, Settled::Returned);
+        let reasons = work_reasons(&env).await;
+        let replacement = reasons
+            .iter()
+            .find(|r| r["code"] == "replacement_facts_ready")
+            .unwrap_or_else(|| panic!("{reasons:?}"));
+        assert_eq!(
+            replacement["attempt_id"],
+            json!(env.report.binding.attempt_id)
+        );
+        assert_eq!(replacement["result_id"], json!(env.report.report_id));
+        assert_eq!(replacement["blocker_owner"], "aq_scheduler");
+        assert_eq!(replacement["wake_condition"], "worker_poll");
+        assert_eq!(replacement["missing_evidence"], json!([]));
     }
 
     /// The conclusion-text heuristics are gone: a failed report whose agent

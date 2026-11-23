@@ -117,6 +117,7 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: registration.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],

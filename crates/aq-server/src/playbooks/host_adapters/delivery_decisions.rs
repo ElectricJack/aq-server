@@ -12,7 +12,7 @@
 //! no external effect: their rows commit with the final intent row.
 use super::*;
 use aq_playbook_domain::{
-    delivery_decisions::{self as decisions, Decision, Named, Settled},
+    delivery_decisions::{self as decisions, Named, Settled},
     delivery_runs,
 };
 pub use decisions::DeliverySettlement;
@@ -55,16 +55,17 @@ impl Service {
     }
 
     /// `work.complete` and `work.return`.
-    pub(super) async fn work_decide(
+    pub(in crate::playbooks) async fn work_decide(
         &self,
         owner: &RuntimeOwner,
         id: Uuid,
         revision: i64,
         intent: &Intent,
+        retained_only: bool,
     ) -> Result<HostResult> {
         let (command, input) = (intent.command.name.as_str(), &intent.input);
         let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
-        let (task, result) = match stage.ok_or(Error::Unknown)? {
+        let subject = match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
                 return Ok(result);
@@ -75,6 +76,7 @@ impl Service {
                 let id = |field| Uuid::parse_str(text(input, field)?).map_err(|_| Error::Invalid);
                 (id("task")?, id("result_id")?)
             }
+            Stage::Fresh if retained_only => return Err(Error::Unknown),
             Stage::Fresh => {
                 if let Some(origin) =
                     delivery_runs::origin(&mut tx, &self.namespace, &intent.run).await?
@@ -106,30 +108,15 @@ impl Service {
                 named
             }
         };
-        let reason = input["reason"].as_str();
-        let settled = match command {
-            "work.complete" => self.settlement.complete(result).await?,
-            _ => {
-                (self.settlement)
-                    .send_back(result, reason.ok_or(Error::Invalid)?)
-                    .await?
-            }
-        };
-        // No Graph answer yet: the intent stays pending for a replay.
-        let (answer, decision) = decisions::settled(command, settled).ok_or(Error::Unknown)?;
-        if let Some(decision) = decision {
-            let d = Decision {
-                task,
-                result,
-                decision,
-                reason,
-                detail: input["detail"].as_str(),
-                update_from_main: input["update_from_main"].as_bool(),
-            };
-            let mut tx = self.tx().await?;
-            decisions::record(&mut tx, &d, self.now()?).await?;
-            tx.commit().await?;
-        }
+        let answer = decisions::settle(
+            &*self.settlement,
+            &self.pool,
+            || self.now(),
+            command,
+            input,
+            subject,
+        )
+        .await?;
         self.finish(intent, &identity, answer).await
     }
 

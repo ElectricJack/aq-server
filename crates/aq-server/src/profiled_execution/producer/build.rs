@@ -181,6 +181,7 @@ async fn snapshot_definitions(
     })
 }
 pub struct Assembly<'a> {
+    pub stage: Uuid,
     pub state: &'a AppState,
     pub runtime: &'a RegisteredRuntime,
     pub compiled: Compiled,
@@ -212,6 +213,7 @@ fn confinement_mode(
 }
 pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let Assembly {
+        stage,
         state,
         runtime,
         mut compiled,
@@ -344,6 +346,16 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let definitions = (unique.iter())
         .map(|r| body(r).map(|b| (r, b)).ok_or_else(|| refused()))
         .collect::<Result<Vec<_>, _>>()?;
+    aq_history_caps::offer_stage::open(
+        &state.store.pool,
+        stage,
+        attempt_id,
+        set.project,
+        now(state)?,
+    )
+    .await
+    .map_err(crate::error::db)?;
+    set.stage = Some(stage);
     for (artifact, body) in definitions {
         on_heap(|| {
             set.retain(
@@ -451,11 +463,12 @@ pub async fn assemble(input: Assembly<'_>) -> Result<Built, AppError> {
     let source_retention_id =
         Uuid::new_v5(&source_operation, &canonical(&(&source.artifact, until))?);
     let source_retained = on_heap(|| {
-        crate::profiled_execution::source::retain_admission(
+        crate::profiled_execution::source::retain_for(
             state,
             source_retention_id,
             &source,
             until,
+            Some(stage),
         )
     })
     .await?;

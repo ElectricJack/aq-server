@@ -90,6 +90,7 @@ pub async fn accept(
     .await?;
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
     let selection = before.selection.clone();
+    let backend_kind = before.backend_kind;
     let binding = q.original.acceptance.binding.clone();
     let lease_id = Uuid::new_v5(&q.original.operation_id, binding.attempt_id.as_bytes());
     let head = super::super::login_refresh::newest_source(
@@ -112,7 +113,7 @@ pub async fn accept(
                 lease_id,
                 received,
                 expiry,
-                None,
+                backend_kind,
                 head.as_ref(),
             )
         }),

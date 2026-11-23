@@ -30,6 +30,18 @@ struct WireRef {
     name: String,
 }
 #[derive(Deserialize)]
+struct WireGitRef {
+    #[serde(rename = "ref")]
+    name: String,
+    object: WireGitObject,
+}
+#[derive(Deserialize)]
+struct WireGitObject {
+    #[serde(rename = "type")]
+    kind: String,
+    sha: String,
+}
+#[derive(Deserialize)]
 struct WirePull {
     number: u64,
     html_url: String,
@@ -635,6 +647,36 @@ impl GitHubAdapter for GitHubApp {
             )
             .await?;
         closed.pull()
+    }
+
+    async fn branch_head(
+        &self,
+        repo: &GitHubRepository,
+        branch: &str,
+    ) -> GitHubResult<Option<String>> {
+        let branch = short_branch(branch)?;
+        let reference = format!("heads/{branch}");
+        let s = Session::new(self, repo).await?;
+        let refs: Vec<WireGitRef> = s
+            .call(
+                Method::GET,
+                &format!("/git/matching-refs/{reference}"),
+                &[],
+                None,
+            )
+            .await?;
+        // A successful listing can prove absence. A 404 can also mean lost access.
+        let full = format!("refs/{reference}");
+        let Some(reference) = refs.iter().find(|reference| reference.name == full) else {
+            return Ok(None);
+        };
+        if reference.object.kind != "commit" {
+            return Err(GitHubApiError::Protocol(
+                "unexpected branch reference".into(),
+            ));
+        }
+        let sha = commit_sha(&reference.object.sha)?;
+        Ok(Some(sha.to_owned()))
     }
 
     async fn delete_branch(

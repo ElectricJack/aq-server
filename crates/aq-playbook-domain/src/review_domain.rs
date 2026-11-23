@@ -198,14 +198,7 @@ pub const HOST10_COMMANDS: [&str; 26] = [
 ];
 /// The asynchronous delivery commands: each completes by `aq.delivery.completed`.
 #[cfg(feature = "delivery_playbook")]
-pub const DELIVERY_COMMANDS: [&str; 6] = [
-    "main.sync",
-    "branch.publish",
-    "pull_request.open",
-    "pull_request.await_checks",
-    "pull_request.merge",
-    "pull_request.close",
-];
+pub use aq_playbook_host::ASYNC_DELIVERY_COMMANDS as DELIVERY_COMMANDS;
 #[cfg(feature = "delivery_playbook")]
 fn host10_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
