@@ -195,37 +195,14 @@ impl Service {
         // First dispatch is cancellation/project/review fenced. Once possible,
         // retries reconcile the SAME admitted effect even after cancellation.
         if count == 0 {
-            let v = crate::execution::authority::load_locked(
-                &self.state,
+            self.fence_first_dispatch_locked(
                 &mut tx,
-                &r.report.binding.session,
-                crate::execution::authority::Policy::IdentityOnly,
-            )
-            .await?;
-            if v.revoked || v.cancellation_id.is_some() || !v.holds_task || !v.stopped {
-                return Err(conflict());
-            }
-            let source = crate::source_retention::load_confirmed_locked(
-                &mut tx,
-                peek.get("source_operation_id"),
                 &r,
+                &e,
+                peek.get("source_operation_id"),
+                observation.as_ref(),
             )
             .await?;
-            observation
-                .as_ref()
-                .ok_or_else(unavailable)?
-                .verify_locked(&self.state, &mut tx, &r, &source)
-                .await?;
-            let decision: Uuid = sqlx::query_scalar(
-                "SELECT decision_id FROM profiled_settlement_evaluations WHERE operation_id=$1",
-            )
-            .bind(e.operation_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?;
-            self.reviews
-                .combined_completion_in_tx(&mut tx, decision)
-                .await?;
         }
         let time = now(&self.state)?;
         if time < row.get::<i64, _>("created_at_ms")
@@ -306,6 +283,41 @@ impl Service {
         let s = status(&row)?;
         tx.commit().await.map_err(db)?;
         Ok(s)
+    }
+
+    async fn fence_first_dispatch_locked(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        r: &results::RecordedResult,
+        e: &EvaluationReceipt,
+        source_operation: Uuid,
+        observation: Option<&super::applicability::Observation>,
+    ) -> Result<()> {
+        let v = crate::execution::authority::load_locked(
+            &self.state,
+            tx,
+            &r.report.binding.session,
+            crate::execution::authority::Policy::IdentityOnly,
+        )
+        .await?;
+        if v.revoked || v.cancellation_id.is_some() || !v.holds_task || !v.stopped {
+            return Err(conflict());
+        }
+        let source =
+            crate::source_retention::load_confirmed_locked(tx, source_operation, r).await?;
+        observation
+            .ok_or_else(unavailable)?
+            .verify_locked(&self.state, tx, r, &source)
+            .await?;
+        let decision: Uuid = sqlx::query_scalar(
+            "SELECT decision_id FROM profiled_settlement_evaluations WHERE operation_id=$1",
+        )
+        .bind(e.operation_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+        self.reviews.combined_completion_in_tx(tx, decision).await?;
+        Ok(())
     }
 
     /// Preserve the immutable launch fields and project the owner-verified hot

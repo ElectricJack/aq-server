@@ -264,38 +264,15 @@ pub async fn accept(
         before.source.fact(),
     )
     .await?;
-    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
-    let selection = before.selection.clone();
-    let binding = request.acceptance.binding.clone();
-    let head = super::login_refresh::newest_source(
-        &state.store.pool,
-        &registry,
-        &selection.choice.credential_profile,
-        selection.credential_revision,
+    let lease = issue_material(
+        state,
+        &before.selection,
+        &request.acceptance.binding,
+        lease_id,
+        issued,
+        expiry,
     )
     .await?;
-    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
-    let permit = permit.ok_or_else(|| refused())?;
-    let lease = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            material::issue_for_selection_from(
-                &registry,
-                &selection,
-                &binding,
-                lease_id,
-                issued,
-                expiry,
-                None,
-                head.as_ref(),
-            )
-        }),
-    )
-    .await
-    .map_err(|_| refused())?
-    .map_err(|_| AppError::Internal)?
-    .map_err(|_| refused())?;
     let mut tx = begin(state).await?;
     let after = locked(state, &mut tx, auth, request).await?;
     if before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()? {
@@ -348,6 +325,47 @@ pub async fn accept(
     reply.validate_for(request, nonce).map_err(|_| refused())?;
     tx.commit().await.map_err(db)?;
     Ok(reply)
+}
+async fn issue_material(
+    state: &AppState,
+    selection: &aq_selection::ResolvedSelection,
+    binding: &LaunchBinding,
+    lease_id: Uuid,
+    issued: u64,
+    expiry: u64,
+) -> Result<MaterialLease, AppError> {
+    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
+    let selection = selection.clone();
+    let binding = binding.clone();
+    let head = super::login_refresh::newest_source(
+        &state.store.pool,
+        &registry,
+        &selection.choice.credential_profile,
+        selection.credential_revision,
+    )
+    .await?;
+    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
+    let permit = permit.ok_or_else(|| refused())?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            material::issue_for_selection_from(
+                &registry,
+                &selection,
+                &binding,
+                lease_id,
+                issued,
+                expiry,
+                None,
+                head.as_ref(),
+            )
+        }),
+    )
+    .await
+    .map_err(|_| refused())?
+    .map_err(|_| AppError::Internal)?
+    .map_err(|_| refused())
 }
 fn same_material(a: &MaterialLease, b: &MaterialLease) -> bool {
     a.lease_id == b.lease_id

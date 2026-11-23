@@ -146,6 +146,30 @@ pub(super) async fn load_locked(
         }
     }
 }
+async fn require_legacy_row_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &PgRow,
+    node: Uuid,
+) -> Result<()> {
+    if row.get::<Uuid, _>("node_id") != node {
+        return Err(conflict());
+    }
+    match row.try_get::<String, _>("initial_authority_kind") {
+        Ok(kind) if kind == "legacy_prepare_v1" => (),
+        Err(sqlx::Error::ColumnNotFound(_)) => {
+            let version: String =
+                sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(db)?;
+            if version.parse::<u32>().map_err(|_| AppError::Internal)? >= 33 {
+                return Err(conflict());
+            }
+        }
+        _ => return Err(conflict()),
+    }
+    Ok(())
+}
 async fn legacy(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
@@ -166,23 +190,7 @@ async fn legacy(
             .map_err(db)?
             .ok_or_else(conflict)?;
     for row in [&start, &stop] {
-        if row.get::<Uuid, _>("node_id") != node {
-            return Err(conflict());
-        }
-        match row.try_get::<String, _>("initial_authority_kind") {
-            Ok(kind) if kind == "legacy_prepare_v1" => (),
-            Err(sqlx::Error::ColumnNotFound(_)) => {
-                let version: String =
-                    sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-                        .fetch_one(&mut **tx)
-                        .await
-                        .map_err(db)?;
-                if version.parse::<u32>().map_err(|_| AppError::Internal)? >= 33 {
-                    return Err(conflict());
-                }
-            }
-            _ => return Err(conflict()),
-        }
+        require_legacy_row_locked(tx, row, node).await?;
     }
     let q: started::Request = started::decode_request(&start.get::<Vec<u8>, _>("request_bytes"))
         .map_err(|_| AppError::Internal)?;

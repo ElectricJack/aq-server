@@ -310,54 +310,8 @@ async fn replacement_facts(
         tx.commit().await.map_err(db)?;
         return Ok(facts);
     }
-    let mut changed = false;
-    if !matches!(hot.retention, Retention::Retained { .. }) {
-        let enrolled = super::super::has_delivery_grant(&mut *tx, attempt).await?;
-        #[cfg(feature = "delivery_playbook")]
-        if enrolled
-            && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut *tx, report_id)
-                .await
-                .map_err(db)?
-        {
-            let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
-            hot.retention = Retention::Retained { receipt: reference };
-            changed = true;
-        }
-        if !enrolled {
-            for op in &r.report.source_receipt_ids {
-                match crate::source_retention::load_confirmed_locked(&mut tx, *op, &r).await {
-                    Ok(confirmed) => {
-                        hot.retention = Retention::Retained {
-                            receipt: reference(
-                                format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
-                                &confirmed.acknowledgement,
-                            )?,
-                        };
-                        changed = true;
-                        break;
-                    }
-                    Err(crate::error::AppError::Conflict(_)) => {}
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-    }
-    if !matches!(hot.effects, Effects::Quiescent { .. }) {
-        let ledger = super::effects::inspect_aq_effects_locked(state, &mut tx, &r).await?;
-        // Quiescence (every operation final), not the read-only acceptance verdict: a
-        // messaging or write profile's finished, returned attempt is replaceable too.
-        if ledger.quiescent() {
-            let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
-            if ledger.disposition() != super::effects::LedgerDisposition::Settled {
-                fact["ledger_disposition"] = json!(ledger.disposition().name());
-            }
-            let id = format!("aq.replacement-effects/{report_id}");
-            hot.effects = Effects::Quiescent {
-                receipt: reference(id, &fact)?,
-            };
-            changed = true;
-        }
-    }
+    let mut changed = retain_replacement_source_locked(&mut tx, &r, &mut hot).await?;
+    changed |= settle_replacement_effects_locked(state, &mut tx, &r, &mut hot).await?;
     if changed {
         hot.validate_against(&r.report.binding)
             .map_err(|_| crate::error::AppError::Internal)?;
@@ -374,6 +328,76 @@ async fn replacement_facts(
     };
     tx.commit().await.map_err(db)?;
     Ok(facts)
+}
+
+async fn retain_replacement_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    hot: &mut crate::execution::authority::hot::HotState,
+) -> Result<bool> {
+    use crate::execution::profiled::Retention;
+    let attempt = r.report.binding.attempt_id;
+    #[cfg(feature = "delivery_playbook")]
+    let report_id = r.report.report_id;
+    if matches!(hot.retention, Retention::Retained { .. }) {
+        return Ok(false);
+    }
+    let enrolled = super::super::has_delivery_grant(&mut **tx, attempt).await?;
+    #[cfg(feature = "delivery_playbook")]
+    if enrolled
+        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, report_id)
+            .await
+            .map_err(db)?
+    {
+        let reference = reference(format!("aq.git-task-ref/{report_id}"), &json!(pushed))?;
+        hot.retention = Retention::Retained { receipt: reference };
+        return Ok(true);
+    }
+    if !enrolled {
+        for op in &r.report.source_receipt_ids {
+            match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
+                Ok(confirmed) => {
+                    hot.retention = Retention::Retained {
+                        receipt: reference(
+                            format!("aq.git-import-receipt/{}", confirmed.receipt.receipt_id),
+                            &confirmed.acknowledgement,
+                        )?,
+                    };
+                    return Ok(true);
+                }
+                Err(crate::error::AppError::Conflict(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(false)
+}
+async fn settle_replacement_effects_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    hot: &mut crate::execution::authority::hot::HotState,
+) -> Result<bool> {
+    use crate::execution::profiled::Effects;
+    let report_id = r.report.report_id;
+    if matches!(hot.effects, Effects::Quiescent { .. }) {
+        return Ok(false);
+    }
+    let ledger = super::effects::inspect_aq_effects_locked(state, tx, r).await?;
+    // Quiescence (every operation final), not the read-only acceptance verdict: a
+    // messaging or write profile's finished, returned attempt is replaceable too.
+    if !ledger.quiescent() {
+        return Ok(false);
+    }
+    let mut fact = json!({"report": r.receipt_artifact, "stopped": r.receipt.stopped_receipt, "ledger": ledger.digest(), "operations": ledger.operation_count(), "policy_actor": ACTOR});
+    if ledger.disposition() != super::effects::LedgerDisposition::Settled {
+        fact["ledger_disposition"] = json!(ledger.disposition().name());
+    }
+    let id = format!("aq.replacement-effects/{report_id}");
+    hot.effects = Effects::Quiescent {
+        receipt: reference(id, &fact)?,
+    };
+    Ok(true)
 }
 
 /// Reworked attempts that still hold their task without both replacement
