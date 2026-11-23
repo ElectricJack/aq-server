@@ -16,289 +16,14 @@ use std::{
     time::Duration,
 };
 
+mod evidence;
+mod peer;
+mod scenario;
+
+use peer::{Completions, Log, Peer, candidate_source};
+use scenario::{authority, checks, launch, owner, request, root_outcomes, settle};
+
 const DEADLINE: Duration = Duration::from_secs(5);
-pub(crate) type Log = Arc<Mutex<Vec<(String, Value)>>>;
-
-/// Answers every Host8 command synchronously. `reviews` are the review
-/// dispositions in order; `checks` the check outcomes in order (default pass).
-pub(crate) struct Peer {
-    pub log: Log,
-    pub reviews: Vec<&'static str>,
-    /// Human decision outcomes in order (default `approved`).
-    pub decisions: Vec<&'static str>,
-    pub registry: Registry,
-    /// When set, work.ensure answers like the real Host7 adapter: `accepted`
-    /// with a handle, its completion queued here as (handle, event payload).
-    pub async_work: Option<Completions>,
-}
-pub(crate) type Completions = Arc<Mutex<Vec<(String, Value)>>>;
-impl Peer {
-    /// The host's completion for this work, from the production mapping of a
-    /// terminal graph task to the aq.operation.updated payload.
-    fn accept_work(&self, queue: &Completions, n: usize, input: &Value) -> DispatchResult {
-        let review = self
-            .log
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(c, v)| c == "work.ensure" && v["kind"] == "review")
-            .count();
-        let mut node = json!({"version": 2, "task_state": "completed", "metadata": {}});
-        if input["kind"] == "review" {
-            node["metadata"]["aq:review_disposition"] =
-                json!(self.reviews.get(review - 1).copied().unwrap_or("accepted"));
-        }
-        let task = format!("work-{n}");
-        let request = json!({"kind": input["kind"], "reference": format!("aq.playbook.work/{task}"),
-            "subject": {"id": task, "revision": 1}});
-        let done = aq_server::playbooks::host_adapters::work_completion(&request, Some(&node))
-            .unwrap()
-            .unwrap();
-        let handle = format!("operation-{n}");
-        queue.lock().unwrap().push((
-            handle.clone(),
-            json!({"outcome": done.outcome, "output": done.output}),
-        ));
-        DispatchResult::Accepted { handle }
-    }
-    fn count(&self, name: &str) -> usize {
-        self.log
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(n, _)| n == name)
-            .count()
-    }
-}
-/// Catalog form of the n-th prepared candidate's OID (distinct from the
-/// request's `source`, so a check bound to `input.source` is visible).
-pub(crate) fn candidate_source(n: usize) -> Value {
-    json!({"format": "sha1", "hex": format!("{n:040x}")})
-}
-fn subject(id: String) -> Value {
-    json!({"id": id, "revision": 1})
-}
-impl Host for Peer {
-    fn authorize(&self, _: &Authority, c: &CommandContract) -> bool {
-        self.registry.commands.get(&c.name) == Some(c)
-    }
-    fn dispatch(&mut self, intent: &Intent) -> DispatchResult {
-        let name = intent.command.name.clone();
-        let n = self.count(&name) + 1;
-        let input = intent.input.clone();
-        self.log.lock().unwrap().push((name.clone(), input.clone()));
-        if let (Some(queue), "work.ensure") = (&self.async_work, name.as_str()) {
-            return self.accept_work(queue, n, &input);
-        }
-        let (outcome, output) = match name.as_str() {
-            "work.ensure" if input["kind"] == "review" => {
-                let i = self
-                    .log
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(c, v)| c == "work.ensure" && v["kind"] == "review")
-                    .count();
-                let disposition = self.reviews.get(i - 1).copied().unwrap_or("accepted");
-                (
-                    "completed",
-                    json!({"disposition": disposition,
-                           "reference": format!("aq.review.decision/r{i}"),
-                           "subject": input["subject"]}),
-                )
-            }
-            "work.ensure" => (
-                "completed",
-                json!({"disposition": "accepted", "reference": format!("work:{n}"),
-                       "subject": subject(format!("change-{n}"))}),
-            ),
-            "candidate.prepare" => (
-                "prepared",
-                json!({"reference": format!("candidate:{n}"),
-                       "source": candidate_source(n),
-                       "subject": subject(format!("candidate-{n}"))}),
-            ),
-            "check.request" => (
-                "passed",
-                json!({
-                    "check": input["check"],
-                    "disposition": "passed",
-                    "receipt": {
-                        "digest": hash_bytes(format!("receipt-{n}").as_bytes()),
-                        "executor_version": "fake",
-                        "exit": {"code": 0, "stop": "exited"},
-                        "inputs_digest": hash_bytes(b"inputs"),
-                        "result_artifacts": [],
-                    },
-                    "reference": format!("check-receipt:{n}"),
-                    "source": input["source"],
-                    "subject": input["subject"],
-                }),
-            ),
-            "decision.request" => (
-                self.decisions.get(n - 1).copied().unwrap_or("approved"),
-                json!({"reference": format!("aq.decision/d{n}"),
-                       "subject": input["subject"]}),
-            ),
-            "candidate.publish" => (
-                "published",
-                json!({"reference": format!("publication:{n}"),
-                       "subject": input["destination"]}),
-            ),
-            _ => {
-                return DispatchResult::Unknown {
-                    reason: format!("unexpected {name}"),
-                };
-            }
-        };
-        DispatchResult::Completed {
-            outcome: outcome.into(),
-            output,
-        }
-    }
-    fn reconcile(&mut self, intent: &Intent) -> DispatchResult {
-        DispatchResult::Unknown {
-            reason: format!("no reconcile for {}", intent.command.name),
-        }
-    }
-}
-impl DomainHost for Peer {
-    fn set_mode(&mut self, _: HostMode) {}
-}
-
-pub(crate) fn authority() -> Authority {
-    Authority {
-        actor: "owner".into(),
-        scope: "project".into(),
-        capabilities: HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect(),
-    }
-}
-pub(crate) fn checks() -> Vec<RequiredCheck> {
-    vec![RequiredCheck {
-        id: "cargo-test".into(),
-        validator_id: "rust.cargo-test".into(),
-        validator_version: "1".into(),
-        validator_digest: hash_bytes(b"validator"),
-    }]
-}
-pub(crate) fn request(key: &str) -> CodingRequest {
-    CodingRequest {
-        subject: json!({"id": "task-1", "revision": 1}),
-        context: "Implement the thing".into(),
-        base: json!({"id": "main", "revision": 1}),
-        destination: json!({"id": "main", "revision": 1}),
-        source: json!({"format": "sha1", "hex": "0".repeat(40)}),
-        visibility: "project".into(),
-        key: key.into(),
-        decision_expires_at_ms: None,
-    }
-}
-pub(crate) async fn owner(
-    namespace: &str,
-    store: MemoryStorage,
-    log: Log,
-    reviews: Vec<&'static str>,
-) -> Owner {
-    owner_with(namespace, store, log, reviews, vec![]).await
-}
-pub(crate) async fn owner_with(
-    namespace: &str,
-    store: MemoryStorage,
-    log: Log,
-    reviews: Vec<&'static str>,
-    decisions: Vec<&'static str>,
-) -> Owner {
-    start(namespace, store, log, reviews, decisions, None).await
-}
-async fn start(
-    namespace: &str,
-    store: MemoryStorage,
-    log: Log,
-    reviews: Vec<&'static str>,
-    decisions: Vec<&'static str>,
-    async_work: Option<Completions>,
-) -> Owner {
-    let registry = CatalogProfile::Host8.registry();
-    let peer_registry = registry.clone();
-    Owner::start_registered(
-        aq_playbook_host::Registration::new(
-            namespace.into(),
-            aq_playbook_host::Limits::default(),
-            registry,
-        ),
-        move || Ok(store),
-        move |_| {
-            Ok(Peer {
-                log,
-                reviews,
-                decisions,
-                registry: peer_registry,
-                async_work,
-            })
-        },
-    )
-    .await
-    .unwrap()
-}
-pub(crate) async fn install(owner: &Owner, artifacts: &CodingArtifacts) {
-    for a in artifacts.install_order() {
-        owner
-            .call(
-                Request::Install {
-                    artifact: Box::new(a.clone()),
-                },
-                DEADLINE,
-            )
-            .await
-            .unwrap();
-    }
-}
-/// Ticks until every run is terminal; returns the root runs' outcomes.
-pub(crate) async fn settle(
-    owner: &Owner,
-    store: &MemoryStorage,
-    namespace: &str,
-) -> Vec<(String, Option<String>)> {
-    for now in 10..200 {
-        owner
-            .call(Request::Tick { now_ms: now }, DEADLINE)
-            .await
-            .unwrap();
-        let state = store.clone().load(namespace).unwrap().state;
-        if state.runs.values().all(|r| r.status.terminal()) {
-            return root_outcomes(owner).await;
-        }
-    }
-    panic!("coding runs did not settle");
-}
-/// Root runs' artifacts and outcomes through inspection, which serves live
-/// runs and the history finished runs leave the State for.
-pub(crate) async fn root_outcomes(owner: &Owner) -> Vec<(String, Option<String>)> {
-    let mut roots = Vec::new();
-    let mut after = None;
-    loop {
-        let query = aq_playbook_host::runner::InspectionQuery {
-            kind: aq_playbook_host::runner::InspectionKind::Runs,
-            run: None,
-            after,
-            limit: 32,
-        };
-        let page = owner
-            .call(Request::Inspect { query }, DEADLINE)
-            .await
-            .unwrap();
-        for run in page["items"].as_array().unwrap() {
-            if run["parent"].is_null() {
-                let outcome = run["outcome"].as_str().map(String::from);
-                roots.push((run["artifact"].as_str().unwrap().into(), outcome));
-            }
-        }
-        match page["next"].as_str() {
-            Some(next) => after = Some(next.into()),
-            None => return roots,
-        }
-    }
-}
 
 #[tokio::test]
 async fn coding_policy_review_rejection_creates_rework_attempt() {
@@ -313,82 +38,20 @@ async fn coding_policy_review_rejection_creates_rework_attempt() {
         vec!["changes_requested"],
     )
     .await;
-    install(&owner, &artifacts).await;
-    owner
-        .call(
-            Request::Activate {
-                binding: ROOT.into(),
-                artifact: artifacts.root.digest.clone(),
-                authority: authority(),
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    owner
-        .call(
-            Request::Admit {
-                binding: ROOT.into(),
-                entry: "main".into(),
-                input: policy.input(&request("task-1")),
-                authority: authority(),
-                now_ms: 1,
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
+    launch(
+        &owner,
+        &artifacts,
+        authority(),
+        policy.input(&request("task-1")),
+    )
+    .await;
     let roots = settle(&owner, &store, "coding").await;
     assert_eq!(
         roots,
         vec![(artifacts.root.digest.clone(), Some("published".into()))]
     );
 
-    let log = log.lock().unwrap().clone();
-    let work: Vec<_> = log
-        .iter()
-        .filter(|(c, _)| c == "work.ensure")
-        .map(|(_, v)| v)
-        .collect();
-    let kinds: Vec<_> = work.iter().map(|v| v["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["implementation", "review", "repair", "review"]);
-    // The rework attempt carries the rejecting review's evidence reference.
-    assert_eq!(work[2]["context"], "aq.review.decision/r1");
-    assert_eq!(work[2]["logical_key"], "task-1/a1/work");
-    // Review is cross-family and keyed per attempt.
-    assert!(
-        work[1]["context"]
-            .as_str()
-            .unwrap()
-            .contains("reviewer_family=openai")
-    );
-    assert_ne!(work[1]["logical_key"], work[3]["logical_key"]);
-    // The repaired change is a new candidate: checks run again on it.
-    let checks: Vec<_> = log
-        .iter()
-        .filter(|(c, _)| c == "check.request")
-        .map(|(_, v)| v)
-        .collect();
-    assert_eq!(checks.len(), 2);
-    assert_ne!(checks[0]["subject"], checks[1]["subject"]);
-    // Each check binds the prepared candidate's source, not the request's.
-    assert_eq!(checks[0]["source"], candidate_source(1));
-    assert_eq!(checks[1]["source"], candidate_source(2));
-    // Publish only once, with the check receipt and the review as evidence.
-    let publish: Vec<_> = log
-        .iter()
-        .filter(|(c, _)| c == "candidate.publish")
-        .map(|(_, v)| v)
-        .collect();
-    assert_eq!(publish.len(), 1);
-    let evidence: Vec<_> = publish[0]["evidence"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["id"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(evidence, ["check-receipt:2", "aq.review.decision/r2"]);
-    assert_eq!(publish[0]["candidate"], checks[1]["subject"]);
+    evidence::rework(&log.lock().unwrap());
 }
 
 /// Delivers one trusted aq.operation.updated event exactly as the driver
@@ -448,40 +111,16 @@ async fn coding_policy_consumes_async_work_completion() {
     let store = MemoryStorage::default();
     let log: Log = Arc::default();
     let queue: Completions = Arc::default();
-    let owner = start(
-        "coding-async",
-        store.clone(),
-        log.clone(),
-        vec!["changes_requested"],
-        vec![],
-        Some(queue.clone()),
+    let mut peer = Peer::new(log.clone(), vec!["changes_requested"]);
+    peer.async_work = Some(queue.clone());
+    let owner = peer.start("coding-async", store.clone()).await;
+    launch(
+        &owner,
+        &artifacts,
+        authority(),
+        policy.input(&request("task-1")),
     )
     .await;
-    install(&owner, &artifacts).await;
-    owner
-        .call(
-            Request::Activate {
-                binding: ROOT.into(),
-                artifact: artifacts.root.digest.clone(),
-                authority: authority(),
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    owner
-        .call(
-            Request::Admit {
-                binding: ROOT.into(),
-                entry: "main".into(),
-                input: policy.input(&request("task-1")),
-                authority: authority(),
-                now_ms: 1,
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
     let mut roots = None;
     for now in 10..400 {
         owner
@@ -585,104 +224,26 @@ async fn coding_policy_human_decision_follows_review_and_gates_publish() {
     let log: Log = Arc::default();
     // Attempt 0: review requests changes (no decision asked). Attempt 1:
     // review approves, the human rejects. Attempt 2: both approve.
-    let owner = owner_with(
-        "decision",
-        store.clone(),
+    let mut peer = Peer::new(
         log.clone(),
         vec!["changes_requested", "accepted", "accepted"],
-        vec!["rejected", "approved"],
-    )
-    .await;
-    install(&owner, &artifacts).await;
+    );
+    peer.decisions = vec!["rejected", "approved"];
+    let owner = peer.start("decision", store.clone()).await;
     let authority = Authority {
         capabilities: decision_grant(),
         ..authority()
     };
-    owner
-        .call(
-            Request::Activate {
-                binding: ROOT.into(),
-                artifact: artifacts.root.digest.clone(),
-                authority: authority.clone(),
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
     let mut req = request("task-2");
     req.decision_expires_at_ms = Some(86_400_000);
-    owner
-        .call(
-            Request::Admit {
-                binding: ROOT.into(),
-                entry: "main".into(),
-                input: policy.input(&req),
-                authority,
-                now_ms: 1,
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
+    launch(&owner, &artifacts, authority, policy.input(&req)).await;
     let roots = settle(&owner, &store, "decision").await;
     assert_eq!(
         roots,
         vec![(artifacts.root.digest.clone(), Some("published".into()))]
     );
 
-    let log = log.lock().unwrap().clone();
-    let steps: Vec<String> = log
-        .iter()
-        .filter(|(c, _)| c != "check.request" && c != "candidate.prepare")
-        .map(|(c, v)| match c.as_str() {
-            "work.ensure" => v["kind"].as_str().unwrap().to_string(),
-            other => other.to_string(),
-        })
-        .collect();
-    assert_eq!(
-        steps,
-        [
-            "implementation",
-            "review",
-            "repair",
-            "review",
-            "decision.request",
-            "repair",
-            "review",
-            "decision.request",
-            "candidate.publish",
-        ]
-    );
-    let of = |name: &str| -> Vec<Value> {
-        log.iter()
-            .filter(|(c, _)| c == name)
-            .map(|(_, v)| v.clone())
-            .collect()
-    };
-    let (decisions, reviews) = (of("decision.request"), of("work.ensure"));
-    // Each decision is on the reviewed candidate, with the policy's question.
-    assert_eq!(decisions[0]["subject"], reviews[3]["subject"]);
-    assert_eq!(decisions[1]["subject"], reviews[5]["subject"]);
-    assert_eq!(decisions[0]["question"], "Ship this reviewed change?");
-    assert_eq!(decisions[0]["responders"], json!(["user:owner"]));
-    assert_eq!(decisions[0]["choices"], json!(["approved", "rejected"]));
-    assert_eq!(decisions[0]["expires_at_ms"], 86_400_000);
-    // The human rejection is the next repair's evidence.
-    assert_eq!(reviews[4]["context"], "aq.decision/d1");
-    // Publish carries the check receipt, the review and the decision.
-    let publish = of("candidate.publish");
-    assert_eq!(publish.len(), 1);
-    let evidence: Vec<_> = publish[0]["evidence"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["id"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(
-        evidence,
-        ["check-receipt:3", "aq.review.decision/r3", "aq.decision/d2"]
-    );
-    assert_eq!(publish[0]["candidate"], decisions[1]["subject"]);
+    evidence::decision_gate(&log.lock().unwrap());
 }
 
 mod artifacts;
