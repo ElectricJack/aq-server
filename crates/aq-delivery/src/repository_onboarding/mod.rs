@@ -1,6 +1,8 @@
 //! Repository onboarding requests, external observations and persisted receipts.
 mod adoption;
 mod metadata;
+mod transition;
+pub use transition::Transition;
 
 pub use adoption::{AdoptRequest, Adoption, AdoptionError};
 pub use metadata::{Github, Meta};
