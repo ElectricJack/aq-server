@@ -57,6 +57,95 @@ pub async fn load_locked(
     auth: &AuthenticatedNode,
     request: &Renew,
 ) -> Result<Pinned, AppError> {
+    let (view, hot, versions) = load_live_authority_locked(state, tx, auth, request).await?;
+    verify_agent_binding_locked(tx, auth.id(), request, &view).await?;
+    let owner = hot.owner.as_ref().ok_or_else(invalid)?;
+    let original = initial_grant::load_original_grant_locked(
+        tx,
+        auth.id(),
+        &request.binding,
+        request.grant_id,
+    )
+    .await?;
+    if original.body.guardian_id != owner.guardian_id
+        || original.body.launch_id != owner.launch_id
+        || original.body.reservation_id != owner.reservation_id
+        || hot.execution_deadline_ms != Some(original.execution_deadline_ms)
+        || original.body.materials.len() != 1
+    {
+        return Err(invalid());
+    }
+    let material = original.body.materials[0].clone();
+    let installation = initial_grant::load_installed_receipt_locked(
+        tx,
+        &material,
+        original.body.clock.server_time_ms,
+    )
+    .await?;
+    let LaunchInputs {
+        offer,
+        spec,
+        selection,
+        project,
+        decision_id,
+    } = load_launch_inputs_locked(tx, auth.id(), request, &view, &material).await?;
+    let source = source_exports::load_linked_locked(tx, request.binding.attempt_id).await?;
+    if source.manifest().attempt != view.attempt
+        || &source.manifest().source != view.source.as_ref().ok_or_else(invalid)?
+        || source.manifest().resolved_spec_digest != view.execution_spec_digest
+        || source.token().request().project_revision != spec.project_revision
+    {
+        return Err(invalid());
+    }
+    let context = load_context_locked(tx, &view, &spec, request).await?;
+    let policy =
+        crate::profiled_execution::continuation_policy::load_locked(tx, &request.binding).await?;
+    if policy.budget.max_cost_microunits.is_some()
+        || policy.budget.require_complete_accounting
+        || policy.budget.require_hard_cost_enforcement
+        || project.binding.ceilings.cost_limit_microunits.is_some()
+        || project.binding.ceilings.require_hard_cost_enforcement
+    {
+        return Err(AppError::Conflict(
+            "qualified continuing cost accounting is not available".into(),
+        ));
+    }
+    let record=sqlx::query("SELECT m.state,m.lease FROM admission_material_leases m JOIN profiled_launch_materials x ON x.lease_id=m.lease_id AND x.attempt_id=$3 WHERE m.lease_id=$1 AND m.node_id=$2 AND m.admitted_attempt_id=$3 FOR SHARE OF m,x").bind(material.lease_id).bind(auth.id()).bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
+    if record.get::<String, _>("state") != "admitted"
+        || record.get::<Value, _>("lease") != json(&material)?
+    {
+        return Err(invalid());
+    }
+    let counts =
+        crate::profiled_execution::no_grant::attempt_counts_locked(tx, view.task_id).await?;
+    if counts.started != 1 {
+        return Err(AppError::Conflict(
+            "continuing lineage budget is not fully known for this profile".into(),
+        ));
+    }
+    Ok(Pinned {
+        offer,
+        spec,
+        selection,
+        original,
+        project,
+        decision_id,
+        source,
+        context,
+        policy,
+        installation,
+        material,
+        hot,
+        versions,
+    })
+}
+// These helpers share the caller's transaction and preserve its lock order.
+async fn load_live_authority_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    request: &Renew,
+) -> Result<(authority::AuthorityView, HotState, Versions), AppError> {
     crate::worker_api::lock_current_node(tx, auth).await?;
     if auth.id() != request.identity.node_id {
         return Err(invalid());
@@ -106,6 +195,14 @@ pub async fn load_locked(
         return Err(invalid());
     }
     registration::current_runtime_locked(state, tx, auth.id(), request.identity.boot_id).await?;
+    Ok((view, hot, versions))
+}
+async fn verify_agent_binding_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    request: &Renew,
+    view: &authority::AuthorityView,
+) -> Result<(), AppError> {
     let agent = sqlx::query("SELECT binding,profile,context,revoked,node_id FROM agent_launch_bindings WHERE attempt_id=$1 FOR SHARE")
         .bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
     let graph = serde_json::to_value(view.graph.as_ref().ok_or_else(invalid)?)
@@ -114,7 +211,7 @@ pub async fn load_locked(
     let profile: Value = agent.get("profile");
     let context: Value = agent.get("context");
     if agent.get::<bool, _>("revoked")
-        || agent.get::<Uuid, _>("node_id") != auth.id()
+        || agent.get::<Uuid, _>("node_id") != node
         || agent.get::<Value, _>("binding") != expected
         || !aq_agent_api::valid("ResolvedProfile", &profile)
         || !aq_agent_api::valid("ContextSnapshot", &context)
@@ -129,28 +226,22 @@ pub async fn load_locked(
     {
         return Err(invalid());
     }
-    let original = initial_grant::load_original_grant_locked(
-        tx,
-        auth.id(),
-        &request.binding,
-        request.grant_id,
-    )
-    .await?;
-    if original.body.guardian_id != owner.guardian_id
-        || original.body.launch_id != owner.launch_id
-        || original.body.reservation_id != owner.reservation_id
-        || hot.execution_deadline_ms != Some(original.execution_deadline_ms)
-        || original.body.materials.len() != 1
-    {
-        return Err(invalid());
-    }
-    let material = original.body.materials[0].clone();
-    let installation = initial_grant::load_installed_receipt_locked(
-        tx,
-        &material,
-        original.body.clock.server_time_ms,
-    )
-    .await?;
+    Ok(())
+}
+struct LaunchInputs {
+    offer: ProfiledOffer,
+    spec: ProfiledExecutionSpec,
+    selection: ResolvedSelection,
+    project: ProjectRecord,
+    decision_id: Uuid,
+}
+async fn load_launch_inputs_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    request: &Renew,
+    view: &authority::AuthorityView,
+    material: &MaterialLease,
+) -> Result<LaunchInputs, AppError> {
     let row=sqlx::query("SELECT l.launch_binding,l.launch_manifest,l.execution_spec,l.execution_spec_digest,l.graph_task_observation#>'{native_offer,offered,offer,required_capabilities}' AS required,d.decision#>'{project,project}' AS project,l.decision_id,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d ON d.decision_id=l.decision_id JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s").bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
     if row.get::<Value, _>("launch_binding") != json(&request.binding)? {
         return Err(invalid());
@@ -181,7 +272,7 @@ pub async fn load_locked(
         || row.get::<String, _>("selection_digest") != spec.selection_digest.as_str()
         || selection.target
             != (ExecutionTarget::Worker {
-                node_id: auth.id(),
+                node_id: node,
                 boot_id: request.identity.boot_id,
             })
         || selection.lineage.project_id != view.project_id
@@ -203,14 +294,20 @@ pub async fn load_locked(
     {
         return Err(invalid());
     }
-    let source = source_exports::load_linked_locked(tx, request.binding.attempt_id).await?;
-    if source.manifest().attempt != view.attempt
-        || source.manifest().source != view.source.ok_or_else(invalid)?
-        || source.manifest().resolved_spec_digest != view.execution_spec_digest
-        || source.token().request().project_revision != spec.project_revision
-    {
-        return Err(invalid());
-    }
+    Ok(LaunchInputs {
+        offer,
+        spec,
+        selection,
+        project,
+        decision_id: row.get("decision_id"),
+    })
+}
+async fn load_context_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    view: &authority::AuthorityView,
+    spec: &ProfiledExecutionSpec,
+    request: &Renew,
+) -> Result<Value, AppError> {
     let refs=sqlx::query_scalar::<_,Uuid>("SELECT a.artifact_id FROM profiled_launch_artifacts x JOIN admission_artifacts a USING(artifact_id) WHERE x.attempt_id=$1 AND a.descriptor->>'kind'='context' AND a.descriptor#>>'{artifact,id}'=$2 AND a.descriptor#>>'{artifact,version}'=$3 ORDER BY a.artifact_id LIMIT 2").bind(request.binding.attempt_id).bind(spec.task_context.id.as_str()).bind(spec.task_context.version.as_str()).fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
     if refs.len() != 1 {
         return Err(invalid());
@@ -227,46 +324,7 @@ pub async fn load_locked(
     if !aq_agent_api::valid("ContextSnapshot", &context) {
         return Err(invalid());
     }
-    let policy =
-        crate::profiled_execution::continuation_policy::load_locked(tx, &request.binding).await?;
-    if policy.budget.max_cost_microunits.is_some()
-        || policy.budget.require_complete_accounting
-        || policy.budget.require_hard_cost_enforcement
-        || project.binding.ceilings.cost_limit_microunits.is_some()
-        || project.binding.ceilings.require_hard_cost_enforcement
-    {
-        return Err(AppError::Conflict(
-            "qualified continuing cost accounting is not available".into(),
-        ));
-    }
-    let record=sqlx::query("SELECT m.state,m.lease FROM admission_material_leases m JOIN profiled_launch_materials x ON x.lease_id=m.lease_id AND x.attempt_id=$3 WHERE m.lease_id=$1 AND m.node_id=$2 AND m.admitted_attempt_id=$3 FOR SHARE OF m,x").bind(material.lease_id).bind(auth.id()).bind(request.binding.attempt_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
-    if record.get::<String, _>("state") != "admitted"
-        || record.get::<Value, _>("lease") != json(&material)?
-    {
-        return Err(invalid());
-    }
-    let counts =
-        crate::profiled_execution::no_grant::attempt_counts_locked(tx, view.task_id).await?;
-    if counts.started != 1 {
-        return Err(AppError::Conflict(
-            "continuing lineage budget is not fully known for this profile".into(),
-        ));
-    }
-    Ok(Pinned {
-        offer,
-        spec,
-        selection,
-        original,
-        project,
-        decision_id: row.get("decision_id"),
-        source,
-        context,
-        policy,
-        installation,
-        material,
-        hot,
-        versions,
-    })
+    Ok(context)
 }
 pub fn same_immutable(a: &Pinned, b: &Pinned) -> Result<bool, AppError> {
     Ok(a.offer.binding == b.offer.binding

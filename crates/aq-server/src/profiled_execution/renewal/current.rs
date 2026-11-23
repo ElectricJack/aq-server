@@ -58,31 +58,7 @@ pub async fn fence_locked(
     crate::project_bindings::fence_for_offer(state, tx, fresh).await?;
     let registry_revision = crate::intelligence::fence_current_registry(state, tx).await?;
     let loaded = state.config.intelligence.as_ref().ok_or_else(invalid)?;
-    let c = &p.selection.choice;
-    let (index, credential) = loaded
-        .credentials
-        .iter()
-        .enumerate()
-        .find(|(_, credential)| {
-            credential.profile == c.credential_profile
-                && credential.revision == p.selection.credential_revision
-        })
-        .ok_or_else(invalid)?;
-    if !credential.enabled
-        || !credential.provisionable
-        || credential.material_owner.is_none()
-        || credential.provider != c.provider
-        || credential.account_reference != c.account_reference
-        || credential.endpoint_reference != c.endpoint_reference
-        || !loaded
-            .config
-            .credentials
-            .get(index)
-            .ok_or_else(invalid)?
-            .allows(request.identity.node_id)
-    {
-        return Err(invalid());
-    }
+    let index = authorized_credential_index(loaded, p, request)?;
     // C5b: a refreshed version of the same login is continuity; an operator
     // replace or a rotated configured file is not (credential identity).
     if !crate::profiled_execution::login_refresh::continuous_locked(tx, loaded, index, &p.material)
@@ -90,50 +66,9 @@ pub async fn fence_locked(
     {
         return Err(invalid());
     }
-    let row=sqlx::query("SELECT boot_id,revision,snapshot FROM intelligence_node_snapshots WHERE node_id=$1 FOR SHARE").bind(request.identity.node_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
-    let snapshot: CapabilitySnapshot =
-        serde_json::from_value(row.get("snapshot")).map_err(|_| invalid())?;
-    let time = now(state)?;
-    let revision = row.get::<i64, _>("revision") as u64;
-    if row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
-        || snapshot.target
-            != (ExecutionTarget::Worker {
-                node_id: request.identity.node_id,
-                boot_id: request.identity.boot_id,
-            })
-        || snapshot.revision != revision
-        || revision < p.selection.node_revision
-        || snapshot.revision == 0
-        || snapshot.harnesses.len() > 16
-        || snapshot.credential_bindings.len() > 32
-        || snapshot.observed_at_ms == 0
-        || snapshot
-            .expires_at_ms
-            .checked_sub(snapshot.observed_at_ms)
-            .is_none_or(|ttl| ttl == 0 || ttl > 120_000)
-        || snapshot.observed_at_ms > time
-        || time >= snapshot.expires_at_ms
-        || !snapshot.harnesses.iter().any(|h| harness_supports(h, p))
-        || !loaded
-            .config
-            .qualified_harnesses
-            .iter()
-            .any(|h| harness_supports(h, p))
-    {
-        return Err(invalid());
-    }
-    if snapshot
-        .credential_bindings
-        .iter()
-        .filter(|binding| {
-            binding.credential_profile == c.credential_profile
-                && binding.credential_revision == p.selection.credential_revision
-        })
-        .count()
-        > 1
-    {
-        return Err(invalid());
-    }
+    let (snapshot, revision, time) =
+        load_inventory_locked(state, tx, request, p, &loaded.config.qualified_harnesses).await?;
+    let c = &p.selection.choice;
     let binding = snapshot.credential_bindings.iter().find(|binding| {
         binding.credential_profile == c.credential_profile
             && binding.credential_revision == p.selection.credential_revision
@@ -176,6 +111,107 @@ pub async fn fence_locked(
         p.selection.lineage.project_id,
     )
     .await?;
+    let evidence = load_health_locked(state, tx, request, p).await?;
+    Ok(Current {
+        health: evidence,
+        registry_revision,
+        inventory_revision: revision,
+        inventory_expires_at_ms: inventory_ceiling,
+    })
+}
+
+fn authorized_credential_index(
+    loaded: &crate::intelligence::config::LoadedRegistry,
+    p: &Pinned,
+    request: &Renew,
+) -> Result<usize, AppError> {
+    let c = &p.selection.choice;
+    let (index, credential) = loaded
+        .credentials
+        .iter()
+        .enumerate()
+        .find(|(_, credential)| {
+            credential.profile == c.credential_profile
+                && credential.revision == p.selection.credential_revision
+        })
+        .ok_or_else(invalid)?;
+    if !credential.enabled
+        || !credential.provisionable
+        || credential.material_owner.is_none()
+        || credential.provider != c.provider
+        || credential.account_reference != c.account_reference
+        || credential.endpoint_reference != c.endpoint_reference
+        || !loaded
+            .config
+            .credentials
+            .get(index)
+            .ok_or_else(invalid)?
+            .allows(request.identity.node_id)
+    {
+        return Err(invalid());
+    }
+    Ok(index)
+}
+async fn load_inventory_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    request: &Renew,
+    p: &Pinned,
+    qualified_harnesses: &[InstalledHarness],
+) -> Result<(CapabilitySnapshot, u64, u64), AppError> {
+    let row=sqlx::query("SELECT boot_id,revision,snapshot FROM intelligence_node_snapshots WHERE node_id=$1 FOR SHARE").bind(request.identity.node_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
+    let snapshot: CapabilitySnapshot =
+        serde_json::from_value(row.get("snapshot")).map_err(|_| invalid())?;
+    let time = now(state)?;
+    let revision = row.get::<i64, _>("revision") as u64;
+    if row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
+        || snapshot.target
+            != (ExecutionTarget::Worker {
+                node_id: request.identity.node_id,
+                boot_id: request.identity.boot_id,
+            })
+        || snapshot.revision != revision
+        || revision < p.selection.node_revision
+        || snapshot.revision == 0
+        || snapshot.harnesses.len() > 16
+        || snapshot.credential_bindings.len() > 32
+        || snapshot.observed_at_ms == 0
+        || snapshot
+            .expires_at_ms
+            .checked_sub(snapshot.observed_at_ms)
+            .is_none_or(|ttl| ttl == 0 || ttl > 120_000)
+        || snapshot.observed_at_ms > time
+        || time >= snapshot.expires_at_ms
+    {
+        return Err(invalid());
+    }
+    if !snapshot.harnesses.iter().any(|h| harness_supports(h, p))
+        || !qualified_harnesses.iter().any(|h| harness_supports(h, p))
+    {
+        return Err(invalid());
+    }
+    let c = &p.selection.choice;
+    if snapshot
+        .credential_bindings
+        .iter()
+        .filter(|binding| {
+            binding.credential_profile == c.credential_profile
+                && binding.credential_revision == p.selection.credential_revision
+        })
+        .count()
+        > 1
+    {
+        return Err(invalid());
+    }
+    Ok((snapshot, revision, time))
+}
+async fn load_health_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    request: &Renew,
+    p: &Pinned,
+) -> Result<health::Evidence, AppError> {
+    let c = &p.selection.choice;
     let observations:Vec<serde_json::Value>=sqlx::query_scalar("SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1025 FOR SHARE").fetch_all(&mut **tx).await.map_err(|_|AppError::Internal)?;
     if observations.len() > 1024 {
         return Err(invalid());
@@ -205,12 +241,7 @@ pub async fn fence_locked(
             "fresh scoped provider failure or cooldown prevents continuation".into(),
         ));
     }
-    Ok(Current {
-        health: evidence,
-        registry_revision,
-        inventory_revision: revision,
-        inventory_expires_at_ms: inventory_ceiling,
-    })
+    Ok(evidence)
 }
 
 // Only an actual retained matching installation can supersede the original

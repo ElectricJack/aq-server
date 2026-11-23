@@ -1,7 +1,7 @@
 //! Continuing health is not candidate selection. Unknown never means available,
 //! and this helper cannot create a grant or choose another account/model.
 use crate::error::AppError;
-use aq_selection::{ArtifactRef, Availability, AvailabilityObservation, Digest};
+use aq_selection::{ArtifactRef, Availability, AvailabilityObservation, Digest, ObservationScope};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -44,36 +44,13 @@ pub fn evaluate(
     let mut latest: BTreeMap<Digest, &AvailabilityObservation> = BTreeMap::new();
     for observation in observations {
         observation.validate().map_err(|_| invalid())?;
-        let scope = &observation.scope;
-        if scope.credential_profile != *subject.profile
-            || scope.credential_revision != subject.revision
-            || scope.provider != subject.provider
-            || scope.account_reference != subject.account
-            || scope.endpoint_reference != subject.endpoint
-            || scope.model.as_ref().is_some_and(|m| m != subject.model)
-            || scope.node_id.is_some_and(|id| id != subject.node)
-        {
+        if !subject.matches(&observation.scope) {
             continue;
         }
         if observation.received_at_ms > now {
             return Err(invalid());
         }
-        let key = aq_selection::digest(&(&observation.scope, &observation.source))
-            .map_err(|_| invalid())?;
-        if let Some(old) = latest.get(&key) {
-            if observation.sequence < old.sequence {
-                continue;
-            }
-            if observation.sequence == old.sequence {
-                if aq_selection::digest(observation).map_err(|_| invalid())?
-                    != aq_selection::digest(old).map_err(|_| invalid())?
-                {
-                    return Err(invalid());
-                }
-                continue;
-            }
-        }
-        latest.insert(key, observation);
+        retain_latest(&mut latest, observation)?;
     }
     let mut state = State::Unknown;
     for observation in latest.values() {
@@ -97,6 +74,39 @@ pub fn evaluate(
         matching_sources,
         evaluated_at_ms: now,
     })
+}
+impl Subject<'_> {
+    fn matches(&self, scope: &ObservationScope) -> bool {
+        scope.credential_profile == *self.profile
+            && scope.credential_revision == self.revision
+            && scope.provider == self.provider
+            && scope.account_reference == self.account
+            && scope.endpoint_reference == self.endpoint
+            && scope.model.as_ref().is_none_or(|model| model == self.model)
+            && scope.node_id.is_none_or(|node| node == self.node)
+    }
+}
+fn retain_latest<'a>(
+    latest: &mut BTreeMap<Digest, &'a AvailabilityObservation>,
+    observation: &'a AvailabilityObservation,
+) -> Result<(), AppError> {
+    let key =
+        aq_selection::digest(&(&observation.scope, &observation.source)).map_err(|_| invalid())?;
+    if let Some(old) = latest.get(&key) {
+        if observation.sequence < old.sequence {
+            return Ok(());
+        }
+        if observation.sequence == old.sequence {
+            if aq_selection::digest(observation).map_err(|_| invalid())?
+                != aq_selection::digest(old).map_err(|_| invalid())?
+            {
+                return Err(invalid());
+            }
+            return Ok(());
+        }
+    }
+    latest.insert(key, observation);
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -177,6 +187,24 @@ mod tests {
         negative.cooldown_until_ms = 900;
         assert_eq!(run(&[negative.clone()], 800).state, State::Denied);
         assert_eq!(run(&[negative], 901).state, State::Unknown);
+    }
+    #[test]
+    fn latest_evidence_digest_is_independent_of_input_order_and_duplicates() {
+        let old = observation();
+        let mut newer = old.clone();
+        newer.sequence += 1;
+        newer.revision += 1;
+        newer.received_at_ms = 90;
+        let mut independent = observation();
+        independent.scope.model = None;
+        independent.scope.node_id = None;
+        independent.state = Availability::QuotaUnavailable;
+        let expected = run(&[newer.clone(), independent.clone()], 150);
+        let reordered = run(&[independent, newer.clone(), old, newer], 150);
+        assert_eq!(reordered.matching_sources, 2);
+        assert_eq!(reordered.state, State::Denied);
+        assert_eq!(reordered.observations_digest, expected.observations_digest);
+        assert_eq!(reordered.evaluated_at_ms, expected.evaluated_at_ms);
     }
     #[test]
     fn source_sequence_wins_clock_correction_and_conflicting_same_sequence_refuses() {
