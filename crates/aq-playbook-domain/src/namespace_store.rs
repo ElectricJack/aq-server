@@ -1,4 +1,6 @@
 //! Persistent metadata identifying a playbook namespace and its catalog generation.
+pub mod startup;
+
 use crate::{Error, Namespace, Result, digest, review_domain::CatalogProfile};
 use sqlx::{PgConnection, Row, postgres::PgRow};
 use uuid::Uuid;
