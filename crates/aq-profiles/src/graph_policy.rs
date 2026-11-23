@@ -1,5 +1,6 @@
 //! The model-independent graph access policy of a launch. A resolved API01
 //! profile is derived only after a concrete intelligence choice exists.
+mod context;
 use crate::*;
 use aq_session_api::Permission;
 use aq_session_protocol::{ArtifactRef, Text};
@@ -63,30 +64,7 @@ impl GraphAccessPolicy {
         ] {
             ensure(valid_digest(value), "graph policy digest")?;
         }
-        ensure(
-            !self.scope.repository_id.is_nil()
-                && !self.scope.workspace_id.is_nil()
-                && !self.scope.task_id.is_nil()
-                && !self.scope.record_ids.is_empty()
-                && self.scope.record_ids.len() <= 256
-                && self.scope.record_ids.contains(&self.scope.task_id)
-                && self.scope.record_ids.iter().all(|id| !id.is_nil())
-                && self.scope.record_ids.iter().collect::<BTreeSet<_>>().len()
-                    == self.scope.record_ids.len(),
-            "graph policy record scope",
-        )?;
-        ensure(
-            self.scope.edge_types.len() <= 8
-                && self
-                    .scope
-                    .edge_types
-                    .iter()
-                    .map(|e| serde_json::to_string(e).unwrap())
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    == self.scope.edge_types.len(),
-            "graph policy edge scope",
-        )?;
+        self.scope.validate()?;
         ensure(
             self.effective_permissions.len() <= 128,
             "graph policy permission bound",
@@ -124,6 +102,32 @@ impl GraphAccessPolicy {
         })
     }
 }
+impl GraphAccessScope {
+    fn validate(&self) -> Result<()> {
+        ensure(
+            [self.repository_id, self.workspace_id, self.task_id]
+                .iter()
+                .all(|id| !id.is_nil())
+                && (1..=256).contains(&self.record_ids.len())
+                && self.record_ids.contains(&self.task_id)
+                && self.record_ids.iter().all(|id| !id.is_nil())
+                && self.record_ids.iter().collect::<BTreeSet<_>>().len() == self.record_ids.len(),
+            "graph policy record scope",
+        )?;
+        ensure(
+            self.edge_types.len() <= 8
+                && self
+                    .edge_types
+                    .iter()
+                    .map(|e| serde_json::to_string(e).unwrap())
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    == self.edge_types.len(),
+            "graph policy edge scope",
+        )?;
+        Ok(())
+    }
+}
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
@@ -148,59 +152,6 @@ pub struct GraphRetryBudget {
     pub max_delay_ms: u64,
 }
 impl GraphAccessPolicy {
-    /// Current native mode grants the finite observed record projection for
-    /// task/knowledge reads. Source writes remain a separate repository grant.
-    pub fn validate_context(&self, context: &serde_json::Value) -> Result<()> {
-        self.validate()?;
-        ensure(
-            aq_agent_api::valid("ContextSnapshot", context)
-                && digest(context)? == self.context_digest,
-            "graph policy context digest/shape",
-        )?;
-        ensure(
-            context["root_ids"] == serde_json::json!([self.scope.task_id])
-                && context["coverage"]["status"] == "complete",
-            "graph policy required context coverage",
-        )?;
-        let mut actual = BTreeSet::new();
-        for key in ["nodes", "pinned_revisions"] {
-            for node in context[key].as_array().expect("validated context") {
-                let operation = if node["kind"] == "task" {
-                    "task.read"
-                } else {
-                    "knowledge.read"
-                };
-                let resource = format!("project:{}", self.project_binding_id);
-                ensure(
-                    self.effective_permissions
-                        .iter()
-                        .any(|p| p.operation == operation && p.scope_reference == resource),
-                    "required context record lacks typed read permission",
-                )?;
-                actual.insert(node["id"].as_str().expect("validated UUID").to_string());
-            }
-        }
-        ensure(
-            actual.contains(&self.scope.task_id.to_string())
-                && actual == self.scope.record_ids.iter().map(Uuid::to_string).collect(),
-            "graph policy exact context record scope",
-        )?;
-        let allowed = self
-            .scope
-            .edge_types
-            .iter()
-            .map(|e| serde_json::to_value(e).unwrap())
-            .collect::<Vec<_>>();
-        for edge in context["edges"].as_array().expect("validated context") {
-            ensure(
-                actual.contains(edge["source"].as_str().unwrap())
-                    && actual.contains(edge["target"].as_str().unwrap())
-                    && allowed.contains(&edge["edge_type"]),
-                "graph policy context edge scope",
-            )?;
-        }
-        Ok(())
-    }
     pub fn resolve_profile(
         &self,
         model: &ResolvedGraphModel,
