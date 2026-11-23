@@ -42,8 +42,13 @@ pub(super) async fn swarm(
         .collect();
     let staging = (state.source_retention.as_ref())
         .map(|r| (r.config.max_staging_bytes, r.config.max_bundle_bytes));
-    let history =
-        aq_history_caps::swarm_holds(&mut tx, &online, &projects_of(state), now, staging).await?;
+    let history = aq_history_caps::swarm_holds(
+        &mut tx,
+        &online,
+        &projects_of(state),
+        aq_history_caps::Snapshot::new(now, staging),
+    )
+    .await?;
     // R6: tasks a server-side hold keeps from being offered, per project and reason.
     let task_holds = aq_machine_control::holds::counts(&mut tx, &projects_of(state)).await;
     let task_holds = task_holds.map_err(|_| Error::Unavailable)?;

@@ -462,8 +462,7 @@ async fn offers(
         &mut conn,
         auth.id(),
         &config.enabled_projects(),
-        now(state)?,
-        staging,
+        aq_history_caps::Snapshot::new(now(state)?, staging),
     )
     .await
     .map_err(|_| refused())?;
