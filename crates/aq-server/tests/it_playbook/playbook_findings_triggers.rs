@@ -12,12 +12,11 @@ use aq_server::playbooks::{
     service::*,
     triggers::{DailySchedule, Misfire},
 };
-use aq_server::protected_storage::{KeyFile, Keyring, ProtectionConfig};
+use aq_server::protected_storage::Keyring;
 use serde_json::{Value, json};
 use sqlx::Row;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    os::unix::fs::PermissionsExt,
     sync::Arc,
 };
 use uuid::Uuid;
@@ -45,20 +44,7 @@ async fn setup() -> Env {
 async fn setup_profile(profile: CatalogProfile) -> Env {
     let f = common::profiled::fixture().await;
     common::profiled::insert(&f).await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Arc::new(
-        Keyring::load(&ProtectionConfig {
-            active_key_id: "test".into(),
-            keys: vec![KeyFile {
-                id: "test".into(),
-                file: path,
-            }],
-        })
-        .unwrap(),
-    );
+    let keys = Arc::new(super::playbook_fixtures::keyring());
     let l = &f.selection.lineage;
     let ns = Namespace {
         namespace_id: Uuid::new_v4(),

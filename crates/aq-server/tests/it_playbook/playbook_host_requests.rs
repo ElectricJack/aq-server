@@ -20,7 +20,6 @@ use aq_server::{
         review_domain::{CatalogProfile, HOST7_CAPABILITIES},
         service::*,
     },
-    protected_storage::{KeyFile, Keyring, ProtectionConfig},
 };
 use serde_json::{Value, json};
 use std::{
@@ -143,18 +142,7 @@ async fn host(
     judgments: Option<Arc<dyn JudgmentProvider>>,
 ) -> Host {
     let l = &f.selection.lineage;
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Keyring::load(&ProtectionConfig {
-        active_key_id: "test".into(),
-        keys: vec![KeyFile {
-            id: "test".into(),
-            file: path,
-        }],
-    })
-    .unwrap();
+    let keys = super::playbook_fixtures::keyring();
     let graph = Arc::new(FakeGraph::default());
     let service = Service::new_host7(
         &f.state,
