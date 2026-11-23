@@ -7,7 +7,7 @@
 //! conflict. External effects (graph mutation, B3 cancel) are two-phase: a
 //! `pending` row commits first, then the effect runs with a stable idempotency
 //! key, then the final row and its outbox event commit together. Reconcile
-//! only reads a retained final row and never performs an effect.
+//! may read a retained answer or close an expired admission without performing the effect.
 use super::{domain::*, service::*};
 use aq_playbook_domain::work_mutations::{work_change_body, work_ensure_body};
 pub use aq_playbook_domain::{
@@ -199,20 +199,32 @@ impl Service {
         }
     }
 
-    /// Reconcile reads only the retained final result; it never performs an
-    /// effect and never refreshes write authority.
+    /// Read a retained reply, or close an expired async intent whose effect never began.
     pub async fn host_retained(
         &self,
         id: Uuid,
         revision: i64,
         intent: &Intent,
     ) -> Result<Option<HostResult>> {
-        let (tx, stage, _) = self.begin(None, id, revision, intent).await?;
-        tx.commit().await?;
-        Ok(match stage {
+        let (mut tx, stage, identity) = self.begin(None, id, revision, intent).await?;
+        let reply = match stage {
             Some(Stage::Retained(result)) => Some(result),
+            None if self.profile.is_delivery() => {
+                aq_playbook_domain::host_operations::close_unadmitted_delivery(
+                    &mut tx,
+                    &self.namespace,
+                    (id, revision),
+                    intent,
+                    &identity,
+                    self.operation(intent)?,
+                    self.now()?,
+                )
+                .await?
+            }
             _ => None,
-        })
+        };
+        tx.commit().await?;
+        Ok(reply)
     }
 
     /// Validates the intent, locks the namespace, and resolves the retained
@@ -340,24 +352,15 @@ impl Service {
         if status != PENDING && status != PLUGIN_COMPLETED {
             self.validated(intent, status, receipt)?;
         }
-        sqlx::query("INSERT INTO playbook_effects(namespace_id,generation,intent_id,run_id,command_name,request_digest,command_fingerprint,input_digest,grant_id,grant_revision,operation_id,status,receipt,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
-            .bind(self.namespace.namespace_id)
-            .bind(self.namespace.generation)
-            .bind(&intent.id)
-            .bind(&intent.run)
-            .bind(&intent.command.name)
-            .bind(identity)
-            .bind(intent.command.fingerprint().map_err(|_| Error::Invalid)?)
-            .bind(&intent.input_digest)
-            .bind(id)
-            .bind(revision)
-            .bind(self.operation(intent)?)
-            .bind(status)
-            .bind(receipt)
-            .bind(self.now()?)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
+        aq_playbook_domain::host_operations::record_effect(
+            tx,
+            &self.namespace,
+            (id, revision),
+            intent,
+            identity,
+            (self.operation(intent)?, status, receipt, self.now()?),
+        )
+        .await
     }
 
     /// Fresh-stage commit: recheck expiry and deadline after lock waits.

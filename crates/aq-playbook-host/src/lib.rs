@@ -50,8 +50,8 @@ pub trait DomainHost: Host {
     fn transition_time(&self, now_ms: i64) -> i64 {
         now_ms
     }
-    /// Resume only an effect already admitted by the domain owner, or read
-    /// its final receipt. An absent admission or authority returns None.
+    /// Resume an admitted decision, read an exact retained receipt, or prove
+    /// that an expired asynchronous operation was never admitted.
     fn reconcile_delivery(&mut self, _intent: &Intent) -> Option<DispatchResult> {
         None
     }
@@ -224,6 +224,7 @@ pub enum Request {
     },
     ReconcileDelivery {
         intents: Vec<String>,
+        scan_after: Option<String>,
         now_ms: i64,
     },
     Binding {
@@ -278,8 +279,14 @@ impl Request {
                 event_key, limit, ..
             } => valid(event_key) && (1..=64).contains(limit),
             Self::Recover { .. } | Self::CancelEffects { .. } => true,
-            Self::ReconcileDelivery { intents, .. } => {
-                (1..=4).contains(&intents.len()) && intents.iter().all(|id| valid(id))
+            Self::ReconcileDelivery {
+                intents,
+                scan_after,
+                ..
+            } => {
+                intents.len() <= 4
+                    && intents.iter().all(|id| valid(id))
+                    && scan_after.as_deref().is_none_or(valid)
             }
             Self::EventStatus { event_key } => valid(event_key),
             Self::Inspect { query } => query.validate().is_ok() && query.limit <= 32,
@@ -831,10 +838,11 @@ fn execute<S: Storage>(
         Request::Recover { now_ms } => {
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
         }
-        Request::ReconcileDelivery { intents, now_ms } => {
-            let count = reconcile_delivery(engine, host, &intents, now_ms)?;
-            serde_json::json!({"reconciled": count})
-        }
+        Request::ReconcileDelivery {
+            intents,
+            scan_after,
+            now_ms,
+        } => reconcile_delivery(engine, host, &intents, scan_after.as_deref(), now_ms)?,
         Request::Install { artifact } => {
             let registry = artifact.content.registry.clone();
             engine.install(*artifact).map_err(engine_error)?;
@@ -996,16 +1004,17 @@ fn reconcile_delivery<S: Storage>(
     engine: &Engine<S>,
     host: &mut impl DomainHost,
     ids: &[String],
+    scan_after: Option<&str>,
     now_ms: i64,
-) -> Result<usize, Error> {
+) -> Result<Value, Error> {
     use runner::transition::{TransitionOutcome, TransitionRequest};
-    let mut candidates = Vec::new();
+    let mut page = (Vec::new(), None);
     let mut plan = |state: &mut runner::State| {
-        candidates = admitted_delivery(state, ids)?;
+        page = delivery_recovery_page(state, ids, scan_after, now_ms)?;
         Ok(false)
     };
     let request = &mut TransitionRequest {
-        operation: "read_admitted_delivery",
+        operation: "read_delivery_recovery_page",
         plan: &mut plan,
     };
     match engine
@@ -1014,25 +1023,79 @@ fn reconcile_delivery<S: Storage>(
         .map_err(engine_error)?
     {
         TransitionOutcome::Unsupported => {
-            candidates = admitted_delivery(&engine.snapshot().map_err(engine_error)?, ids)
-                .map_err(engine_error)?;
+            page = delivery_recovery_page(
+                &engine.snapshot().map_err(engine_error)?,
+                ids,
+                scan_after,
+                now_ms,
+            )
+            .map_err(engine_error)?;
         }
         TransitionOutcome::Unchanged => {}
         TransitionOutcome::Committed { .. } => return Err(Error::Unknown),
     }
+    let (candidates, next_after) = page;
     let mut count = 0;
     for intent in candidates {
-        // The deadline applies to admission. The host must establish that this
-        // particular effect was already admitted before it can resume it.
-        if let Some(answer @ DispatchResult::Completed { .. }) = host.reconcile_delivery(&intent) {
-            let at = host.transition_time(now_ms).max(now_ms);
+        let Some(answer) = host.reconcile_delivery(&intent) else {
+            continue;
+        };
+        let close = matches!(&answer, DispatchResult::Rejected { reason } if reason == DELIVERY_ADMISSION_EXPIRED);
+        if !close
+            && !matches!(
+                answer,
+                DispatchResult::Accepted { .. } | DispatchResult::Completed { .. }
+            )
+        {
+            continue;
+        }
+        let at = host.transition_time(now_ms).max(now_ms);
+        if intent.status != IntentStatus::Rejected {
             engine
                 .record_result(&intent.id, answer, at)
                 .map_err(engine_error)?;
-            count += 1;
+        }
+        if close {
+            // A rejected reply leaves an already blocked run blocked in the
+            // engine. Retire this exact run after sealing its no-effect result.
+            // A later page also finds the rejected intent if the process stops
+            // between these two engine commits.
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+        }
+        count += 1;
+    }
+    Ok(serde_json::json!({"reconciled":count,"next_after":next_after}))
+}
+
+pub const DELIVERY_ADMISSION_EXPIRED: &str = "delivery_request_expired_before_admission";
+
+fn delivery_recovery_page(
+    state: &runner::State,
+    ids: &[String],
+    after: Option<&str>,
+    now_ms: i64,
+) -> runner::Result<(Vec<Intent>, Option<String>)> {
+    const SCAN: usize = 32;
+    let mut candidates = admitted_delivery(state, ids)?;
+    let keys = state.intents.keys_after(after, SCAN);
+    let mut expired = 0;
+    for key in &keys {
+        if ids.contains(key) {
+            continue;
+        }
+        if let Some(intent) = admitted_delivery(state, std::slice::from_ref(key))?.pop()
+            && ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+            && intent.deadline_at_ms <= now_ms
+        {
+            candidates.push(intent);
+            expired += 1;
+            if expired == 4 {
+                return Ok((candidates, Some(key.clone())));
+            }
         }
     }
-    Ok(count)
+    let next = (keys.len() == SCAN).then(|| keys.last().cloned()).flatten();
+    Ok((candidates, next))
 }
 
 /// Commands that durably admit an asynchronous delivery operation before doing any external work.
@@ -1056,7 +1119,9 @@ fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Ve
                     intent.status,
                     IntentStatus::Dispatched | IntentStatus::Unknown
                 ) || (intent.status == IntentStatus::Prepared
-                    && intent.dispatch_sequence.is_some()))
+                    && intent.dispatch_sequence.is_some())
+                    || (intent.status == IntentStatus::Rejected
+                        && intent.reason.as_deref() == Some(DELIVERY_ADMISSION_EXPIRED)))
                 && !intent.cancel_requested
         }) else {
             continue;
@@ -1067,6 +1132,8 @@ fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Ve
         let authority = &intent.authority;
         let scope = model::digest(&(&authority.actor, &authority.scope))?;
         if run.status.terminal()
+            || (ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+                && !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id))
             || state.execution_denied.contains(&run.artifact)
             || state
                 .authority_revocations

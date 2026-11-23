@@ -2,6 +2,7 @@
 //! outcome, subjects and handles, input checks and the completion of a
 //! tracked work node. No I/O.
 use crate::{Error, Result};
+use aq_playbook_host::runner::{DispatchResult, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -13,6 +14,30 @@ pub struct HostResult {
     pub output: Value,
 }
 
+/// An asynchronous host command's `accepted` outcome is its durable handle.
+pub fn dispatch_result(result: HostResult, intent: &Intent) -> DispatchResult {
+    let expired = aq_playbook_host::DELIVERY_ADMISSION_EXPIRED;
+    if result.outcome == "expired"
+        && result.output["reason"] == expired
+        && aq_playbook_host::ASYNC_DELIVERY_COMMANDS.contains(&intent.command.name.as_str())
+    {
+        return DispatchResult::Rejected {
+            reason: expired.into(),
+        };
+    }
+    if aq_playbook_host::plugins::command_plugin(&intent.command.name).is_none()
+        && result.outcome == "accepted"
+        && let Some(handle) = result.output["handle"].as_str()
+    {
+        return DispatchResult::Accepted {
+            handle: handle.to_string(),
+        };
+    }
+    DispatchResult::Completed {
+        outcome: result.outcome,
+        output: result.output,
+    }
+}
 /// The handle prefix of a tracked work node.
 pub const WORK_REF: &str = "aq.playbook.work/";
 

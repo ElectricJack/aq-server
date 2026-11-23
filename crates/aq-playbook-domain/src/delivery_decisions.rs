@@ -54,7 +54,13 @@ pub trait DeliverySettlement: Send + Sync {
 /// Rotate through admitted decisions, including final receipts for which the
 /// engine may have lost the answer. Only the engine owner drives a replay.
 #[derive(Default)]
-pub struct Recovery(Mutex<String>);
+pub struct Recovery(Mutex<RecoveryCursor>);
+
+#[derive(Clone, Default)]
+struct RecoveryCursor {
+    ledger: String,
+    engine: Option<String>,
+}
 
 impl Recovery {
     pub async fn tick(
@@ -65,17 +71,21 @@ impl Recovery {
         deadline: Duration,
         now_ms: i64,
     ) -> Result<()> {
-        let after = self.0.lock().map_err(|_| Error::Unknown)?.clone();
-        let intents = recovery_batch(pool, namespace, &after).await?;
-        *self.0.lock().map_err(|_| Error::Unknown)? = intents.last().cloned().unwrap_or_default();
-        if !intents.is_empty() {
-            owner
-                .call(
-                    aq_playbook_host::Request::ReconcileDelivery { intents, now_ms },
-                    deadline,
-                )
-                .await?;
-        }
+        let cursor = self.0.lock().map_err(|_| Error::Unknown)?.clone();
+        let intents = recovery_batch(pool, namespace, &cursor.ledger).await?;
+        let ledger = intents.last().cloned().unwrap_or_default();
+        let page = owner
+            .call(
+                aq_playbook_host::Request::ReconcileDelivery {
+                    intents,
+                    scan_after: cursor.engine,
+                    now_ms,
+                },
+                deadline,
+            )
+            .await?;
+        let engine = serde_json::from_value(page["next_after"].clone())?;
+        *self.0.lock().map_err(|_| Error::Unknown)? = RecoveryCursor { ledger, engine };
         Ok(())
     }
 }

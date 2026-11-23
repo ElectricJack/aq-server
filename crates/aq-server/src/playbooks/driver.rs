@@ -1,6 +1,7 @@
 //! One explicitly started owner and bounded service quanta. Never start another
-//! owner because a request timed out. Only admitted delivery decisions replay.
+//! owner because a request timed out.
 use super::{domain::*, service::*};
+use aq_playbook_domain::host_values::dispatch_result as host_result;
 use aq_playbook_host::{
     DomainHost, HostMode, Limits, Owner, Request,
     model::{CommandContract, EventEnvelope},
@@ -308,21 +309,6 @@ impl MailHost {
         command_plugin(name).is_some()
             || (self.service.profile.is_host()
                 && self.service.registry().commands.contains_key(name))
-    }
-}
-/// An asynchronous host command's `accepted` outcome is its durable handle.
-fn host_result(result: super::host_adapters::HostResult, intent: &Intent) -> DispatchResult {
-    if command_plugin(&intent.command.name).is_none()
-        && result.outcome == "accepted"
-        && let Some(handle) = result.output["handle"].as_str()
-    {
-        return DispatchResult::Accepted {
-            handle: handle.to_string(),
-        };
-    }
-    DispatchResult::Completed {
-        outcome: result.outcome,
-        output: result.output,
     }
 }
 fn decision_dispatch(result: Result<DecisionResult>) -> DispatchResult {

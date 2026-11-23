@@ -212,15 +212,13 @@ async fn a_lost_settlement_answer_leaves_work_complete_pending_until_a_replay() 
     assert_eq!(h.decision(p.result_id).await.unwrap().0, "completed");
 }
 
-#[tokio::test]
-async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() {
+async fn publication_driver(h: &D) -> aq_server::playbooks::driver::Driver {
     use aq_playbook_authoring::{builtin, request};
     use aq_playbook_host::{Error, postgres_client as pg, postgres_storage as store, protected};
     use aq_playbooks_compiler::draft;
     use aq_server::playbooks::driver::Driver;
     use std::{collections::BTreeMap, time::Duration};
 
-    let h = delivery(false).await;
     h.service.retire_runtime(&h.runtime).await.unwrap();
     let (_task, _) = h.stopped(h.scope.project_id, "success");
     let source = builtin::delivery();
@@ -265,6 +263,13 @@ async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() 
         .activate(source.binding, artifact.digest, h.grant, 1)
         .await
         .unwrap();
+    driver
+}
+
+#[tokio::test]
+async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
     driver.test_lose_next_host_reply("branch.publish");
     let pool = h.pool().await;
     let records = || {
@@ -299,6 +304,110 @@ async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() 
         .unwrap();
     assert_eq!(runs.items.len(), 1);
     assert_eq!(runs.items[0].status, "completed");
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run() {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
+    let pool = h.pool().await;
+    sqlx::raw_sql("CREATE FUNCTION interrupt_publish_admission() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.command_name='branch.publish' THEN RAISE EXCEPTION 'interrupted admission'; END IF;
+      RETURN NEW; END $$;
+      CREATE TRIGGER interrupt_publish_admission BEFORE INSERT ON playbook_host_operations
+      FOR EACH ROW EXECUTE FUNCTION interrupt_publish_admission();")
+        .execute(&pool).await.unwrap();
+    let mut blocked = None;
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        let runs = driver
+            .inspect_runs(h.f.actor, Default::default())
+            .await
+            .unwrap();
+        blocked = runs.items.into_iter().find(|r| r.status == "blocked");
+        if blocked.is_some() {
+            break;
+        }
+    }
+    let blocked = blocked.expect("the engine recorded the interrupted admission");
+    let detail = driver
+        .inspect_run_timeline(h.f.actor, blocked.id.clone(), Default::default())
+        .await
+        .unwrap();
+    let original = detail
+        .effects
+        .items
+        .into_iter()
+        .find(|e| e.command == "branch.publish")
+        .unwrap();
+    let deadline = original.deadline_at_ms.unwrap();
+    assert_eq!(original.status, "unknown");
+    let status = || {
+        sqlx::query_scalar::<_, String>("SELECT status FROM playbook_effects WHERE intent_id=$1")
+            .bind(&original.id)
+            .fetch_optional(&pool)
+    };
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "admission rolled back atomically"
+    );
+
+    sqlx::query("DROP TRIGGER interrupt_publish_admission ON playbook_host_operations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert!(h.clock() < deadline);
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "a live deadline is kept open"
+    );
+
+    h.later((deadline - h.clock()).max(120_000) + 1);
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(status().await.unwrap().as_deref(), Some("expired"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM playbook_host_operations WHERE intent_id=$1",
+        )
+        .bind(&original.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM playbook_host_operations WHERE command_name='branch.publish'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "only the fresh run admitted publication"
+    );
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id == blocked.id && r.status == "cancelled")
+    );
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id != blocked.id && r.status == "completed")
+    );
     driver.stop().await.unwrap();
 }
 
