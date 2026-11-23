@@ -315,7 +315,12 @@ impl Hold {
         }
     }
     pub fn remedy(&self) -> &'static str {
-        "Wait for running agents to settle"
+        match self.kind.as_str() {
+            "admission_artifacts" => {
+                "AQ rechecks on worker polls as staged artifacts age out or task claims are released"
+            }
+            _ => "AQ rechecks usage when workers poll",
+        }
     }
     pub fn log_line(&self) -> String {
         format!(
@@ -489,7 +494,7 @@ mod tests {
             let h = hold(kind, Scope::Node(Uuid::nil()), false, 31, 30);
             assert_eq!(h.code_name(), "history_cap_reached");
             assert!(!h.message().contains("rate"), "{}", h.message());
-            assert_eq!(h.remedy(), "Wait for running agents to settle");
+            assert_eq!(h.remedy(), "AQ rechecks usage when workers poll");
         }
         assert_eq!(
             hold(
@@ -517,7 +522,10 @@ mod tests {
             h.message(),
             "Project 00000000-0000-0000-0000-000000000001: live admission artifacts cap reached: 449 of 512"
         );
-        assert_eq!(h.remedy(), "Wait for running agents to settle");
+        assert_eq!(
+            h.remedy(),
+            "AQ rechecks on worker polls as staged artifacts age out or task claims are released"
+        );
         assert_eq!(h.code_name(), "history_cap_reached");
     }
 

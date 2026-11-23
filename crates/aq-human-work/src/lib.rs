@@ -432,7 +432,15 @@ pub async fn recorded_hold(
 /// code, `phrase` its fixed description), about `attempt_id` (with its authority `status`).
 pub fn task_hold(attempt_id: Uuid, status: &str, code: &str, phrase: &str) -> Value {
     let message = format!("AQ does not offer this task: {phrase} (hold reason: {code}).");
-    json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code})
+    let mut reason = json!({"code":"task_held","attempt_id":attempt_id,"status":status,"message":message,"hold_reason":code});
+    if aq_machine_control::holds::is_budget_hold(code) {
+        reason["blocker_owner"] = json!("project_owner");
+        reason["wake_condition"] = json!("owner_retry_authorized");
+        reason["message"] = json!(format!(
+            "{message} The project owner can authorize a retry."
+        ));
+    }
+    reason
 }
 
 /// A delivery hold has a result and reason even after the playbook has ended.
@@ -464,17 +472,22 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
 /// delivery playbook is active for the task's project.
 #[cfg(feature = "delivery_playbook")]
 pub fn result_waiting(attempt: Uuid, result: Uuid, delivery_policy: bool) -> Value {
-    let (code, message) = match delivery_policy {
+    let (code, owner, wake, message) = match delivery_policy {
         false => (
             "result_ready_no_delivery_policy",
-            "Result ready, no delivery policy: the attempt has stopped with a result, and no delivery playbook is active to decide it. AQ does not complete, publish or send back a result by itself, so the result waits.",
+            "delivery_policy_owner",
+            "delivery_policy_activated",
+            "Result ready, no delivery policy is active. AQ will recheck the result after the owner activates the project's delivery playbook.",
         ),
         true => (
             "result_ready",
+            "aq_delivery",
+            "delivery_reconciliation",
             "Result ready: the attempt has stopped with a result, which waits for the delivery playbook's decision.",
         ),
     };
-    json!({"code": code, "attempt_id": attempt, "result_id": result, "message": message})
+    json!({"code": code, "attempt_id": attempt, "result_id": result, "message": message,
+        "blocker_owner": owner, "wake_condition": wake})
 }
 
 /// Work-view readiness. The state is the first match of: the task's own

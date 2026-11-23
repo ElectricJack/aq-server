@@ -2220,9 +2220,11 @@ mod playbook {
         let reasons = work_reasons(&env).await;
         let evidence = format!("returned result {result}. Worker outcome: success.");
         assert!(reasons.iter().any(|r| {
-            r["message"]
-                .as_str()
-                .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
+            r["blocker_owner"] == "project_owner"
+                && r["wake_condition"] == "owner_retry_authorized"
+                && r["message"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(&evidence) && text.contains(&"4".repeat(40)))
         }));
         assert!(
             aq_playbook_domain::delivery_store::returned_result_evidence(
@@ -2466,6 +2468,8 @@ mod playbook {
             .unwrap_or_else(|| panic!("{reasons:?}"));
         assert_eq!(waiting["result_id"], json!(env.report.report_id));
         assert_eq!(waiting["attempt_id"], json!(env.report.binding.attempt_id));
+        assert_eq!(waiting["blocker_owner"], "delivery_policy_owner");
+        assert_eq!(waiting["wake_condition"], "delivery_policy_activated");
         let message = waiting["message"].as_str().unwrap();
         assert!(message.starts_with("Result ready, no delivery policy"));
         // A playbook's decision ends the wait (here it sends the result back).

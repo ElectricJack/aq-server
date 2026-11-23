@@ -1630,6 +1630,12 @@
             "minLength": 1,
             "maxLength": 96
           },
+          "blocker_owner": {
+            "const": "project_owner"
+          },
+          "wake_condition": {
+            "const": "owner_retry_authorized"
+          },
           "attempt_id": {
             "type": "string",
             "format": "uuid"
@@ -1975,7 +1981,7 @@
             "enum": ["aq_delivery", "delivery_policy_owner", "aq_scheduler", "aq_settlement"]
           },
           "wake_condition": {
-            "enum": ["delivery_reconciliation", "scoped_delivery_authorization", "worker_poll", "replacement_evidence_reconciliation"]
+            "enum": ["delivery_reconciliation", "delivery_policy_activated", "scoped_delivery_authorization", "worker_poll", "replacement_evidence_reconciliation"]
           },
           "missing_evidence": {
             "type": "array",
