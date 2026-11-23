@@ -3,19 +3,15 @@
 //! operation.cancel reaches the actual B3 native cancellation owner.
 use crate::common;
 use aq_playbook_host::runner::{Intent, IntentStatus};
-use aq_server::{
-    playbooks::{
-        domain::*,
-        host_adapters::{HostResult, WorkGraph},
-        review_domain::CatalogProfile,
-        service::*,
-    },
-    protected_storage::{KeyFile, Keyring, ProtectionConfig},
+use aq_server::playbooks::{
+    domain::*,
+    host_adapters::{HostResult, WorkGraph},
+    review_domain::CatalogProfile,
+    service::*,
 };
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    os::unix::fs::PermissionsExt,
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
@@ -139,18 +135,7 @@ async fn host_with_profile(
     project: Uuid,
     profile: CatalogProfile,
 ) -> Host {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Keyring::load(&ProtectionConfig {
-        active_key_id: "test".into(),
-        keys: vec![KeyFile {
-            id: "test".into(),
-            file: path,
-        }],
-    })
-    .unwrap();
+    let keys = super::playbook_fixtures::keyring();
     let graph = Arc::new(FakeGraph::default());
     let namespace = Namespace {
         namespace_id: Uuid::new_v4(),
