@@ -1135,7 +1135,11 @@ impl<P: GraphPayload> GraphAction<P> {
             return route(state, workspace, subject, expected, change).await;
         }
         let mutations = if let Some(action) = payload.retirement() {
-            retirement::plan(state, rt, (workspace, user.id, project), &node, action).await?
+            let reads = retirement::GraphReads {
+                graph: rt,
+                pool: &state.store.pool,
+            };
+            retirement::plan(reads, (workspace, user.id, project), &node, action).await?
         } else if P::ACTIVATE_SUBTREE {
             match subtree::plan(rt, workspace, subject, expected).await? {
                 Ok(operations) => operations,
