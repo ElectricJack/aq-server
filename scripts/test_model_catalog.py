@@ -17,9 +17,9 @@ class CatalogTests(unittest.TestCase):
   self.assertEqual({c['reasoning'] for c in choices if c['model']=='level-model'},{'low','high'})
   self.assertEqual([c['options'] for c in choices if c['model']=='budget-model'],[{'thinking_budget':128}])
  def test_the_cache_lists_each_model_once_per_harness_without_reasoning(self):
-  first=catalog.choice('openai','gpt-x','low',{},'codex','Codex CLI','2026-11-16T00:00:00Z')
-  again=catalog.choice('openai','gpt-x','high',{'effort':'high'},'codex','OpenCode public metadata',None)
-  other=catalog.choice('openai','gpt-x','high',{},'opencode','OpenCode public metadata',None)
+  first=catalog.CatalogSource('openai', 'codex', 'Codex CLI', '2026-11-16T00:00:00Z').choice('gpt-x', 'low', {})
+  again=catalog.CatalogSource('openai', 'codex', 'OpenCode public metadata', None).choice('gpt-x', 'high', {'effort':'high'})
+  other=catalog.CatalogSource('openai', 'opencode', 'OpenCode public metadata', None).choice('gpt-x', 'high', {})
   self.assertEqual(catalog.suggestions([first,again,other]),[
    {'provider':'openai','model':'gpt-x','harness':'codex','source':'Codex CLI','observed_at':'2026-11-16T00:00:00Z'},
    {'provider':'openai','model':'gpt-x','harness':'opencode','source':'OpenCode public metadata'}])
