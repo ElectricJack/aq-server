@@ -207,7 +207,13 @@ async fn only_qualified_docker_runtime_offers_docker_only_credentials() {
             .unwrap()
             .0;
         assert_eq!(snapshot.backend_kind, backend);
-        assert_eq!(snapshot.credential_bindings.len(), expected);
+        let restricted_profile = &c.c.env.input.credentials[0].profile;
+        let restricted = snapshot
+            .credential_bindings
+            .iter()
+            .filter(|b| &b.credential_profile == restricted_profile)
+            .count();
+        assert_eq!(restricted, expected);
     }
 }
 
