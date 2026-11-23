@@ -68,7 +68,7 @@ Use /usr/local/bin/aq-supervisor-host tool commands to discover commands, or too
 {ATTACHMENTS}
 Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify the task's current execution and history before reporting that a worker started.
 {setup}This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
-Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
+{code}Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
 Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
 Respect human review gates unless the owner has delegated that review to you.
 Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
@@ -78,9 +78,17 @@ Your final answer is published automatically to this conversation with any confi
             TOOLCHAIN_SETUP
         } else {
             ""
-        }
+        },
+        code = CODE_ACCESS,
     )
 }
+/// Code access needs the supervisor git route, which also needs delivery_playbook.
+#[cfg(feature = "supervisor_full_access")]
+const CODE_ACCESS: &str = if cfg!(feature = "delivery_playbook") {
+    "To read a project's code, run `/usr/local/bin/aq-supervisor-host repo sync PROJECT_ID`, then read `/workspace/repos/<name>` with git and rg; task branches are `origin/aq/<task-id>`. Code access is read-only: never commit or push; delegate changes to worker tasks.\n"
+} else {
+    ""
+};
 pub(super) fn assemble(
     config: &ServiceConfig,
     control: &Control,
@@ -445,6 +453,12 @@ mod tests {
             let scoped = instructions(&config, &scoped);
             assert!(scoped.contains("task.work and task.history"));
             assert!(!scoped.contains("dashboard.swarm"));
+            assert_eq!(
+                text.contains(
+                    "repo sync PROJECT_ID`, then read `/workspace/repos/<name>` with git and rg"
+                ),
+                cfg!(feature = "delivery_playbook")
+            );
             for gone in [
                 "Create draft tasks for proposals",
                 "owner-only configuration",

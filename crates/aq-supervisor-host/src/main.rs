@@ -44,6 +44,20 @@ async fn run() -> Result<()> {
     if args.get(1).is_some_and(|s| s == "tool") {
         return aq_supervisor_host::tool::run(&args[2..]).await;
     }
+    #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+    if args.len() == 4 && args[1] == "repo" && args[2] == "sync" {
+        let project = args[3]
+            .parse()
+            .context("usage: aq-supervisor-host repo sync PROJECT_ID")?;
+        // repo sync errors are built for the agent (token masked, no placement), so show them.
+        if let Err(error) =
+            aq_supervisor_host::repo::sync(project, std::path::Path::new("/workspace")).await
+        {
+            eprintln!("repo sync failed: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.len() == 3 && args[1] == "serve" {
         return aq_supervisor_host::service::run(std::path::Path::new(&args[2])).await;
     }

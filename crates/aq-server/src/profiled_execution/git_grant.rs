@@ -55,7 +55,8 @@ pub(super) async fn confirm(
     }
 }
 pub fn routes(state: AppState) -> axum::Router<AppState> {
-    let routes = axum::Router::new().route("/v1/git/{repository}/{*path}", any(proxy));
+    let routes = aq_supervisor_control::git_routes(&state.store.pool, &state.clock, socket(&state));
+    let routes = routes.route("/v1/git/{repository}/{*path}", any(proxy));
     let routes = routes.route("/v1/git/grants/{attempt}", get(grant));
     routes.with_state(state)
 }

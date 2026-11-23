@@ -245,3 +245,66 @@ async fn delivery_never_publishes_try_refs() {
     let confirmed = confirm_pushed(&pool, &git, ids, &pushed).await;
     assert!(matches!(confirmed, Err(PushedRefusal::BadRequest(_))));
 }
+
+#[tokio::test]
+async fn serve_read_refuses_push_routes() {
+    // Refused before Settings are read, so the pool is never connected.
+    let pool = PgPool::connect_lazy("postgres://unused.invalid/unused").unwrap();
+    let repository = Uuid::new_v4();
+    for (method, path, uri) in [
+        (Method::POST, "git-receive-pack", "/git-receive-pack"),
+        (
+            Method::GET,
+            "info/refs",
+            "/info/refs?service=git-receive-pack",
+        ),
+        (Method::GET, "info/refs", "/info/refs"),
+        (Method::PUT, "git-upload-pack", "/git-upload-pack"),
+    ] {
+        let request = Request::builder().method(&method).uri(uri);
+        let request = request.body(http_body_util::Empty::<Bytes>::new()).unwrap();
+        let refused = serve_read(&pool, Path::new("/unused.sock"), repository, path, request);
+        assert_eq!(
+            refused.await.err(),
+            Some(Refusal::Forbidden("Supervisors can only fetch")),
+            "{method} {uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn serve_read_sends_the_read_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let repository = Uuid::new_v4();
+    let fake = fake::FakeGitHttp::start(dir.path(), repository, "refs/heads/main").await;
+    let request = Request::get("/info/refs?service=git-upload-pack")
+        .header(header::AUTHORIZATION, "Bearer supervisor")
+        .header(header::USER_AGENT, "git/2")
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
+    let (parts, body) = request.into_parts();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let route = (fake.socket.as_path(), repository, "info/refs");
+    let response = to_aq_git(route, parts, body, (READ_GRANT, None), deadline).await;
+    let response = response.unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let advertised = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&advertised).contains(&fake.base));
+    let seen = fake.seen.lock().unwrap();
+    let mut names: Vec<&str> = seen[0].keys().map(|n| n.as_str()).collect();
+    names.sort_unstable();
+    let grant = [
+        "aq-base",
+        "aq-max-push-bytes",
+        "aq-operation",
+        "aq-repository",
+        "aq-task-ref",
+    ];
+    assert_eq!(names, [&grant[..], &["host", "user-agent"]].concat());
+    let header = |name: &str| seen[0][name].to_str().unwrap().to_owned();
+    assert_eq!(header("aq-repository"), repository.to_string());
+    assert_eq!(header("aq-base"), "0".repeat(40));
+    assert_eq!(header("aq-task-ref"), "refs/heads/aq/supervisor-read");
+    assert_eq!(header("aq-max-push-bytes"), "1");
+    assert!(Uuid::try_parse(&header("aq-operation")).is_ok());
+}
