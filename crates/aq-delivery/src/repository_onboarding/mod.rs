@@ -110,18 +110,18 @@ pub enum Git {
 }
 pub async fn aq_git(
     socket: Option<&Path>,
-    operation_id: Uuid,
+    context: crate::OperationContext,
     operation: &str,
-    repository_id: Uuid,
-    generation: u64,
     params: Value,
 ) -> Git {
     let Some(socket) = socket else {
         return Git::Unavailable;
     };
-    let request_id = operation_id.to_string();
-    let request = json!({"protocol_version":1,"request_id":request_id,"operation":operation,"repository_id":repository_id,
-        "operation_id":operation_id,"expected_binding_generation":generation,"params":params,"deadline_ms":30000});
+    let request_id = context.operation_id.to_string();
+    let request = json!({
+        "protocol_version":1,"request_id":request_id,"operation":operation,"repository_id":context.repository_id,
+        "operation_id":context.operation_id,"expected_binding_generation":context.binding_generation,"params":params,"deadline_ms":30000
+    });
     let mut bytes = match serde_json::to_vec(&request) {
         Ok(bytes) => bytes,
         Err(_) => return Git::Unavailable,
@@ -131,7 +131,11 @@ pub async fn aq_git(
         Ok(raw) => serde_json::from_slice::<Value>(&raw).ok(),
         Err(_) => None,
     };
-    match v.filter(|v| v["protocol_version"] == 1 && v["request_id"] == request_id.as_str()) {
+    git_reply(v, &request_id)
+}
+
+fn git_reply(v: Option<Value>, request_id: &str) -> Git {
+    match v.filter(|v| v["protocol_version"] == 1 && v["request_id"] == request_id) {
         Some(v) if v["ok"] == true && v["result"].is_object() => Git::Ok(v["result"].clone()),
         Some(v) if v["ok"] == false => match v["error"]["code"].as_str() {
             Some(code) => Git::Refused {
@@ -168,19 +172,32 @@ pub async fn load(conn: &mut PgConnection, operation_id: Uuid) -> Result<Option<
         state: r.get(3),
     }))
 }
+
+/// The actor and canonical digest bound to an idempotent onboarding operation.
+#[derive(Clone, Copy)]
+pub struct RequestOwner<'a> {
+    pub actor: Uuid,
+    pub digest: &'a str,
+}
+
+/// The persisted state and step are advanced together.
+pub struct Progress<'a> {
+    pub step: &'a str,
+    pub state: &'a Value,
+}
+
 pub async fn save(
     pool: &PgPool,
     operation_id: Uuid,
-    step: &str,
-    value: &Value,
+    progress: Progress<'_>,
     now_ms: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE repository_onboardings SET step=$2,state=$3,updated_at_ms=$4 WHERE operation_id=$1 AND step NOT IN ('bound','refused')",
     )
     .bind(operation_id)
-    .bind(step)
-    .bind(value)
+    .bind(progress.step)
+    .bind(progress.state)
     .bind(now_ms)
     .execute(pool).await?;
     Ok(())
@@ -217,22 +234,29 @@ fn branch_ref(branch: &str) -> Option<String> {
     (target.len() <= 1024 && crate::branch(&target).is_ok()).then_some(target)
 }
 
+pub struct NewOnboarding<'a> {
+    pub request: &'a OnboardRequest,
+    pub remote_url: String,
+}
+
 pub async fn start(
     conn: &mut PgConnection,
-    actor: Uuid,
-    digest: &str,
-    request: &OnboardRequest,
-    remote_url: String,
+    owner: RequestOwner<'_>,
+    onboarding: NewOnboarding<'_>,
     now_ms: i64,
 ) -> Result<(), sqlx::Error> {
+    let NewOnboarding {
+        request,
+        remote_url,
+    } = onboarding;
     sqlx::query(
         "INSERT INTO repository_onboardings \
          (operation_id,actor_id,request_digest,project_id,repository_id,step,state,created_at_ms,updated_at_ms) \
          VALUES ($1,$2,$3,$4,$5,'started',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING",
     )
     .bind(request.operation_id)
-    .bind(actor)
-    .bind(digest)
+    .bind(owner.actor)
+    .bind(owner.digest)
     .bind(request.project_id)
     .bind(request.repository_id)
     .bind(json!({"request":request,"remote_url":remote_url}))

@@ -20,15 +20,25 @@ pub struct Unavailable;
 fn unserved(reason: &str) -> Value {
     json!({"served": false, "reason": reason})
 }
+/// The report's root repository, recorded Git binding and described work.
+pub struct WorkProvenance<'a> {
+    pub root_repository: Uuid,
+    pub recorded: &'a Recorded,
+    pub work: &'a Value,
+}
+
 /// The `patch` object for the report's `work` (see `result_work::describe`).
 /// `root_repository` is the report's source repository.
 pub async fn retained_patch(
     socket: Option<&Path>,
-    root_repository: Uuid,
-    recorded: &Recorded,
-    work: &Value,
+    provenance: WorkProvenance<'_>,
     max_bytes: u64,
 ) -> Result<Value, Unavailable> {
+    let WorkProvenance {
+        root_repository,
+        recorded,
+        work,
+    } = provenance;
     let Some(provenance) = work
         .get("provenance")
         .filter(|_| work["state"] == "pushed_ref")
@@ -54,7 +64,14 @@ pub async fn retained_patch(
         repository_id: root_repository,
         binding_generation: generation,
     };
-    match diff_patch::read(socket, repository, base, head, max_bytes).await {
+    match diff_patch::read(
+        socket,
+        repository,
+        diff_patch::CommitRange { base, target: head },
+        max_bytes,
+    )
+    .await
+    {
         Ok(patch) => Ok(json!({
             "served": true, "complete": true, "format": diff_patch::FORMAT,
             "base": patch.base, "head": patch.target, "size": patch.size,
@@ -133,9 +150,11 @@ impl Retained {
         let mut work = self.work();
         let patch = retained_patch(
             socket,
-            self.item.repository_id,
-            &self.recorded,
-            &work,
+            WorkProvenance {
+                root_repository: self.item.repository_id,
+                recorded: &self.recorded,
+                work: &work,
+            },
             max_bytes,
         )
         .await?;
@@ -196,45 +215,49 @@ mod tests {
                 reader.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
                 record.lock().unwrap().push(request.clone());
-                let typed = |hex: &str| json!({"algorithm": "sha1", "hex": hex});
-                let reply = match request["operation"].as_str().unwrap() {
-                    "capabilities" if mode == Peer::Older => ok(
-                        &request,
-                        json!({"operations": ["capabilities", "diff", "contains"], "limits": {"query_response_bytes": 65536}}),
-                    ),
-                    "capabilities" => ok(
-                        &request,
-                        json!({"operations": ["capabilities", "diff", "diff.patch"], "limits": {"diff_patch_bytes": advertised}}),
-                    ),
-                    "diff.patch" => {
-                        let params = &request["params"];
-                        let wanted = params["max_bytes"].as_u64().unwrap_or(advertised);
-                        let digest = hex::encode(Sha256::digest(PATCH));
-                        match mode {
-                            Peer::ObjectUnavailable => err(&request, "object_unavailable"),
-                            Peer::BindingMoved => err(&request, "binding_conflict"),
-                            _ if PATCH.len() as u64 > wanted => err(&request, "limit_exceeded"),
-                            _ => ok(
-                                &request,
-                                json!({
-                                    "format": "git_diff_binary_full_index_v1",
-                                    "base": params["base"],
-                                    "target": if mode == Peer::WrongTarget { typed(BASE) } else { params["target"].clone() },
-                                    "size": PATCH.len(),
-                                    "sha256": if mode == Peer::BadDigest { "0".repeat(64) } else { digest },
-                                    "patch": {"encoding": "base64", "value": base64::engine::general_purpose::STANDARD.encode(PATCH)},
-                                }),
-                            ),
-                        }
-                    }
-                    other => panic!("unexpected aq-git operation {other}"),
-                };
+                let reply = peer_reply(&request, mode, advertised);
                 let mut bytes = serde_json::to_vec(&reply).unwrap();
                 bytes.push(b'\n');
                 reader.get_mut().write_all(&bytes).await.unwrap();
             }
         });
         seen
+    }
+    fn peer_reply(request: &Value, mode: Peer, advertised: u64) -> Value {
+        match request["operation"].as_str().unwrap() {
+            "capabilities" if mode == Peer::Older => ok(
+                request,
+                json!({"operations": ["capabilities", "diff", "contains"], "limits": {"query_response_bytes": 65536}}),
+            ),
+            "capabilities" => ok(
+                request,
+                json!({"operations": ["capabilities", "diff", "diff.patch"], "limits": {"diff_patch_bytes": advertised}}),
+            ),
+            "diff.patch" => patch_reply(request, mode, advertised),
+            other => panic!("unexpected aq-git operation {other}"),
+        }
+    }
+    fn patch_reply(request: &Value, mode: Peer, advertised: u64) -> Value {
+        let typed = |hex: &str| json!({"algorithm": "sha1", "hex": hex});
+        let params = &request["params"];
+        let wanted = params["max_bytes"].as_u64().unwrap_or(advertised);
+        let digest = hex::encode(Sha256::digest(PATCH));
+        match mode {
+            Peer::ObjectUnavailable => err(request, "object_unavailable"),
+            Peer::BindingMoved => err(request, "binding_conflict"),
+            _ if PATCH.len() as u64 > wanted => err(request, "limit_exceeded"),
+            _ => ok(
+                request,
+                json!({
+                    "format": "git_diff_binary_full_index_v1",
+                    "base": params["base"],
+                    "target": if mode == Peer::WrongTarget { typed(BASE) } else { params["target"].clone() },
+                    "size": PATCH.len(),
+                    "sha256": if mode == Peer::BadDigest { "0".repeat(64) } else { digest },
+                    "patch": {"encoding": "base64", "value": base64::engine::general_purpose::STANDARD.encode(PATCH)},
+                }),
+            ),
+        }
     }
     fn ok(request: &Value, result: Value) -> Value {
         json!({"protocol_version": 1, "request_id": request["request_id"], "ok": true, "result": result})
@@ -279,9 +302,11 @@ mod tests {
     ) -> Result<Value, Unavailable> {
         retained_patch(
             socket,
-            REPOSITORY.parse().unwrap(),
-            recorded,
-            &work(REVISION, recorded),
+            WorkProvenance {
+                root_repository: REPOSITORY.parse().unwrap(),
+                recorded,
+                work: &work(REVISION, recorded),
+            },
             max_bytes,
         )
         .await
@@ -294,16 +319,35 @@ mod tests {
         let seen = peer(path.clone(), Peer::Complete, MAX);
         let recorded = recorded();
         let patch = read(Some(&path), &recorded, MAX).await.unwrap();
-        assert_eq!(patch["served"], true);
-        assert_eq!(patch["complete"], true);
-        assert_eq!(patch["format"], "git_diff_binary_full_index_v1");
+        assert_eq!(
+            (
+                patch["served"].as_bool(),
+                patch["complete"].as_bool(),
+                patch["format"].as_str()
+            ),
+            (
+                Some(true),
+                Some(true),
+                Some("git_diff_binary_full_index_v1")
+            )
+        );
         assert_eq!(
             (patch["base"].as_str(), patch["head"].as_str()),
             (Some(BASE), Some(HEAD))
         );
-        assert_eq!(patch["size"], PATCH.len());
-        assert_eq!(patch["sha256"], hex::encode(Sha256::digest(PATCH)));
-        assert_eq!(patch["encoding"], "base64");
+        let digest = hex::encode(Sha256::digest(PATCH));
+        assert_eq!(
+            (
+                patch["size"].as_u64(),
+                patch["sha256"].as_str(),
+                patch["encoding"].as_str()
+            ),
+            (
+                Some(PATCH.len() as u64),
+                Some(digest.as_str()),
+                Some("base64")
+            )
+        );
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(patch["value"].as_str().unwrap())
             .unwrap();
@@ -321,21 +365,28 @@ mod tests {
 
         // Capabilities first, then the query for exactly the recorded commits
         // of the root repository and its binding generation.
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 2);
-        assert_eq!(seen[0]["operation"], "capabilities");
-        let query = &seen[1];
-        assert_eq!(query["operation"], "diff.patch");
-        assert_eq!(query["repository_id"], REPOSITORY);
-        assert_eq!(query["expected_binding_generation"], 3);
+        check_bound_request(&seen.lock().unwrap());
+    }
+
+    fn check_bound_request(seen: &[Value]) {
+        let [capabilities, query] = seen else {
+            panic!("expected capabilities and a patch request: {seen:?}")
+        };
+        assert_eq!(capabilities["operation"], "capabilities");
         assert_eq!(
-            query["params"]["base"],
-            json!({"algorithm": "sha1", "hex": BASE})
+            (
+                query["operation"].as_str(),
+                query["repository_id"].as_str(),
+                query["expected_binding_generation"].as_u64()
+            ),
+            (Some("diff.patch"), Some(REPOSITORY), Some(3))
         );
-        assert_eq!(
-            query["params"]["target"],
-            json!({"algorithm": "sha1", "hex": HEAD})
-        );
+        for (field, oid) in [("base", BASE), ("target", HEAD)] {
+            assert_eq!(
+                query["params"][field],
+                json!({"algorithm":"sha1","hex":oid})
+            );
+        }
         assert_eq!(query["params"]["max_bytes"], MAX);
     }
 
@@ -356,9 +407,14 @@ mod tests {
         peer(path.clone(), Peer::Complete, MAX);
         let small = PATCH.len() as u64 - 1;
         let patch = read(Some(&path), &recorded(), small).await.unwrap();
-        assert_eq!(patch["served"], false);
-        assert_eq!(patch["reason"], "limit_exceeded");
-        assert_eq!(patch["limit"], small);
+        assert_eq!(
+            (
+                patch["served"].as_bool(),
+                patch["reason"].as_str(),
+                patch["limit"].as_u64()
+            ),
+            (Some(false), Some("limit_exceeded"), Some(small))
+        );
         assert!(patch.get("value").is_none());
         // An advertised limit below the patch is the bound that applied.
         let (_dir, path) = socket();
@@ -375,14 +431,21 @@ mod tests {
         let (_dir, path) = socket();
         let seen = peer(path.clone(), Peer::Older, MAX);
         let patch = read(Some(&path), &recorded(), MAX).await.unwrap();
-        assert_eq!(patch["served"], false);
-        assert_eq!(patch["reason"], "unsupported");
+        assert_eq!(
+            (
+                patch["served"].as_bool(),
+                patch["reason"].as_str(),
+                patch.get("value")
+            ),
+            (Some(false), Some("unsupported"), None)
+        );
         assert!(patch["requires"].as_str().unwrap().contains("diff.patch"));
         assert!(patch["retrieve"][2].as_str().unwrap().contains(HEAD));
-        assert!(patch.get("value").is_none());
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1, "only capabilities was asked");
-        assert_eq!(seen[0]["operation"], "capabilities");
+        let [single] = seen.as_slice() else {
+            panic!("only capabilities should be asked: {seen:?}")
+        };
+        assert_eq!(single["operation"], "capabilities");
     }
 
     #[tokio::test]

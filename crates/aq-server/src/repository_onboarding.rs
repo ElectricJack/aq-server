@@ -78,24 +78,6 @@ fn step_operation(operation_id: Uuid, step: &str) -> Uuid {
     uuid::Builder::from_random_bytes(bytes).into_uuid()
 }
 
-async fn aq_git(
-    state: &AppState,
-    operation_id: Uuid,
-    operation: &str,
-    repository_id: Uuid,
-    generation: u64,
-    params: Value,
-) -> Git {
-    wire::aq_git(
-        git_socket(state),
-        operation_id,
-        operation,
-        repository_id,
-        generation,
-        params,
-    )
-    .await
-}
 fn git_socket(state: &AppState) -> Option<&std::path::Path> {
     state
         .source_retention
@@ -106,8 +88,7 @@ async fn save(state: &AppState, operation_id: Uuid, step: &str, value: &Value) -
     wire::save(
         &state.store.pool,
         operation_id,
-        step,
-        value,
+        wire::Progress { step, state: value },
         (state.clock)().timestamp_millis(),
     )
     .await
@@ -251,10 +232,14 @@ pub async fn onboard(state: &AppState, actor: Uuid, request: OnboardRequest) -> 
         None => {
             wire::start(
                 &mut tx,
-                actor,
-                &digest,
-                &request,
-                remote_url,
+                wire::RequestOwner {
+                    actor,
+                    digest: &digest,
+                },
+                wire::NewOnboarding {
+                    request: &request,
+                    remote_url,
+                },
                 (state.clock)().timestamp_millis(),
             )
             .await
@@ -364,12 +349,14 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
                 {
                     params["allowed_target_prefixes"] = json!(["refs/heads/aq/"]);
                 }
-                match aq_git(
-                    state,
-                    step_operation(op, "repo.register"),
+                match wire::aq_git(
+                    git_socket(state),
+                    aq_delivery::OperationContext {
+                        operation_id: step_operation(op, "repo.register"),
+                        repository_id: r.repository_id,
+                        binding_generation: 0,
+                    },
                     "repo.register",
-                    r.repository_id,
-                    0,
                     params,
                 )
                 .await
@@ -430,12 +417,14 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
             "registered" => {
                 let target = format!("refs/heads/{}", s["default_branch"].as_str().unwrap_or(""));
                 let g = s["binding_generation"].as_u64().unwrap_or(0);
-                match aq_git(
-                    state,
-                    step_operation(op, "repo.sync"),
+                match wire::aq_git(
+                    git_socket(state),
+                    aq_delivery::OperationContext {
+                        operation_id: step_operation(op, "repo.sync"),
+                        repository_id: r.repository_id,
+                        binding_generation: g,
+                    },
                     "repo.sync",
-                    r.repository_id,
-                    g,
                     json!({"refs":[target]}),
                 )
                 .await
@@ -483,12 +472,14 @@ async fn advance(state: &AppState, actor: Uuid, r: &OnboardRequest, row: &mut Ro
             "synced" => {
                 let g = s["binding_generation"].as_u64().unwrap_or(0);
                 let oid = json!({"algorithm":"sha1","hex":s["base"]["oid"]});
-                match aq_git(
-                    state,
-                    step_operation(op, "tree"),
+                match wire::aq_git(
+                    git_socket(state),
+                    aq_delivery::OperationContext {
+                        operation_id: step_operation(op, "tree"),
+                        repository_id: r.repository_id,
+                        binding_generation: g,
+                    },
                     "tree",
-                    r.repository_id,
-                    g,
                     json!({"oid":oid,"limit":1000}),
                 )
                 .await
@@ -572,9 +563,14 @@ pub async fn adopt(state: &AppState, actor: Uuid, request: AdoptRequest) -> Resu
             .as_ref()
             .and_then(|d| d.github.as_ref()),
     }
-    .record(actor, digest, request, || {
-        (state.clock)().timestamp_millis()
-    })
+    .record(
+        wire::RequestOwner {
+            actor,
+            digest: &digest,
+        },
+        request,
+        || (state.clock)().timestamp_millis(),
+    )
     .await
     .map_err(|e| match e {
         AdoptionError::Invalid(reason) => bad(reason),
