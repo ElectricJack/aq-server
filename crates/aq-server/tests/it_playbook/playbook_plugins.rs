@@ -93,23 +93,23 @@ fn plugin_intent(e: &Env, service: &Service, grant: Uuid, mode: &str) -> Intent 
     intent
 }
 
-#[tokio::test]
-async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
-    let e = setup().await;
-    let files = PluginFiles::new();
-    let service = e.service.clone().with_plugins(files.discover());
-    let grant = plugin_grant(&e, &service).await;
+async fn assert_crash_replay(
+    e: &Env,
+    service: &Service,
+    files: &PluginFiles,
+    grant: Uuid,
+) -> Intent {
     let project = service.namespace.project_id;
     files.private(
         "bindings.toml",
         &format!("[projects.{project}]\nmode='first'\n"),
     );
-    let crashed = plugin_intent(&e, &service, grant, "crash");
+    let crashed = plugin_intent(e, service, grant, "crash");
     assert_eq!(
         service.host_dispatch(&e.runtime, grant, 1, &crashed).await,
         Err(Error::Unknown)
     );
-    assert_eq!(count(&e, "playbook_effects").await, 0);
+    assert_eq!(count(e, "playbook_effects").await, 0);
     let replay = service
         .host_dispatch(&e.runtime, grant, 1, &crashed)
         .await
@@ -132,14 +132,19 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
     assert_eq!(calls[0]["deadline_ms"], 1000);
     assert_eq!(calls[0]["binding"], json!({"mode":"first"}));
     assert_eq!(calls[0]["project_id"], project.to_string());
-    assert_eq!(count(&e, "playbook_effects").await, 1);
+    assert_eq!(count(e, "playbook_effects").await, 1);
 
+    crashed
+}
+
+async fn assert_invalid_responses(e: &Env, service: &Service, files: &PluginFiles, grant: Uuid) {
+    let project = service.namespace.project_id;
     files.private(
         "bindings.toml",
         &format!("[projects.{project}.nested]\nmode='reloaded'\n"),
     );
     for mode in ["nonzero", "bad_json"] {
-        let intent = plugin_intent(&e, &service, grant, mode);
+        let intent = plugin_intent(e, service, grant, mode);
         assert_eq!(
             service.host_dispatch(&e.runtime, grant, 1, &intent).await,
             Err(Error::Unknown)
@@ -155,7 +160,7 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
         "invalid_event",
         "host_event",
     ] {
-        let intent = plugin_intent(&e, &service, grant, mode);
+        let intent = plugin_intent(e, service, grant, mode);
         let result = service
             .host_dispatch(&e.runtime, grant, 1, &intent)
             .await
@@ -163,6 +168,9 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
         assert_eq!(result.outcome, "refused");
         assert_eq!(result.output, json!({"reason":"invalid_plugin_response"}));
     }
+}
+
+async fn assert_retained_plugin_event(e: &Env, service: &Service, crashed: &Intent) {
     let pool = e.f.db.pool().await;
     let notices: Vec<String> =
         sqlx::query_scalar("SELECT identity FROM playbook_plugin_notifications")
@@ -189,6 +197,18 @@ async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
             .await
             .unwrap();
     assert_eq!(retain_until, NOW as i64 + 3_600_000);
+}
+
+#[tokio::test]
+async fn plugin_transport_retains_replay_and_refuses_invalid_responses() {
+    let e = setup().await;
+    let files = PluginFiles::new();
+    let service = e.service.clone().with_plugins(files.discover());
+    let grant = plugin_grant(&e, &service).await;
+
+    let crashed = assert_crash_replay(&e, &service, &files, grant).await;
+    assert_invalid_responses(&e, &service, &files, grant).await;
+    assert_retained_plugin_event(&e, &service, &crashed).await;
 }
 
 #[test]

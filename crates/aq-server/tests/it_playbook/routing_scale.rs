@@ -153,6 +153,55 @@ async fn routing_input(p: &Pilot, template: &Value, n: usize) -> Value {
     })
 }
 
+struct RunMeasurement {
+    view: Value,
+    slowest: Duration,
+    ticks: usize,
+}
+
+async fn measure_ticks(
+    p: &Pilot,
+    run: &str,
+    n: usize,
+    recent: &mut Vec<Duration>,
+) -> Option<RunMeasurement> {
+    let mut slowest = Duration::ZERO;
+    let mut ticks = 0usize;
+    let mut view = Value::Null;
+    for _ in 0..400 {
+        let t = Instant::now();
+        let result = p.driver().quantum().await;
+        let took = t.elapsed();
+        ticks += 1;
+        slowest = slowest.max(took);
+        recent.push(took);
+        match result {
+            Ok(_) | Err(Error::Overloaded) => {}
+            Err(e) => {
+                let last: Vec<_> = recent.iter().rev().take(5).rev().collect();
+                println!(
+                    "SCALE FAILED run={n} tick_error={e:?} after {took:?}; last five ticks={last:?}; storage: {}",
+                    storage_report(p).await
+                );
+                return None;
+            }
+        }
+        view = p.view(run).await;
+        if matches!(
+            view["status"].as_str(),
+            Some("completed" | "failed" | "cancelled")
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    Some(RunMeasurement {
+        view,
+        slowest,
+        ticks,
+    })
+}
+
 async fn measure() {
     let template = routing_work_template().await;
 
@@ -188,37 +237,15 @@ async fn measure() {
         let input = routing_input(&p, &template, n).await;
         let started = Instant::now();
         let run = p.admit("routing", rev, grant, input).await;
-        let mut slowest = Duration::ZERO;
-        let mut ticks = 0usize;
-        let mut view = Value::Null;
-        for _ in 0..400 {
-            let t = Instant::now();
-            let result = p.driver().quantum().await;
-            let took = t.elapsed();
-            ticks += 1;
-            slowest = slowest.max(took);
-            recent.push(took);
-            match result {
-                Ok(_) | Err(Error::Overloaded) => {}
-                Err(e) => {
-                    let last: Vec<_> = recent.iter().rev().take(5).rev().collect();
-                    println!(
-                        "SCALE FAILED run={n} tick_error={e:?} after {took:?}; last five ticks={last:?}; storage: {}",
-                        storage_report(&p).await
-                    );
-                    p.driver.take().unwrap().stop().await.ok();
-                    return;
-                }
-            }
-            view = p.view(&run).await;
-            if matches!(
-                view["status"].as_str(),
-                Some("completed" | "failed" | "cancelled")
-            ) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
+        let Some(RunMeasurement {
+            view,
+            slowest,
+            ticks,
+        }) = measure_ticks(&p, &run, n, &mut recent).await
+        else {
+            p.driver.take().unwrap().stop().await.ok();
+            return;
+        };
         let total = started.elapsed();
         assert_eq!(
             super::outcome(&view),
