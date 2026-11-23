@@ -277,9 +277,13 @@ pub async fn follow_main(state: AppState, stop: tokio::sync::watch::Receiver<boo
             }
             SourceSelection::Immutable { .. } => None,
         });
-    let (pool, socket) = (state.store.pool.clone(), runtime.config.git_socket.clone());
-    let clock = state.clock.clone();
-    aq_delivery::main_sync::run(pool, socket, projects.collect(), move || clock(), stop).await
+    let now_ms = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
+    let follower = aq_delivery::main_sync::MainFollower::new(
+        &state.store.pool,
+        &runtime.config.git_socket,
+        now_ms,
+    );
+    follower.run(projects.collect(), stop).await
 }
 /// Resolve the actual configured repository's logical identity, never a path or
 /// guessed UUID alias. The export owner subsequently verifies the exact name.

@@ -235,16 +235,12 @@ impl Selected {
         let pool = &state.store.pool;
         let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
         let runtime = state.source_retention.as_ref().ok_or_else(refused)?;
+        let follower =
+            aq_delivery::main_sync::MainFollower::new(pool, &runtime.config.git_socket, clock);
         let verified = async {
             OfferAncestry::load(pool, repository, task, &offer.context)
                 .await?
-                .verify_or_refresh(
-                    pool,
-                    &runtime.config.git_socket,
-                    &object.hex,
-                    moving.as_ref(),
-                    clock,
-                )
+                .verify_or_refresh(&follower, &object.hex, moving.as_ref())
                 .await
         }
         .await;
@@ -278,24 +274,17 @@ async fn sync_current(
     );
     let clock = || u64::try_from((state.clock)().timestamp_millis()).unwrap_or(0);
     let (pool, socket) = (&state.store.pool, &runtime.config.git_socket);
+    let follower = aq_delivery::main_sync::MainFollower::new(pool, socket, clock);
     if let Some(offer) = offer {
         let task = offer.revision.task_id;
-        match aq_delivery::main_sync::dependent_current(
-            pool,
-            socket,
-            &scope,
-            task,
-            &offer.context,
-            clock,
-        )
-        .await
+        match follower
+            .dependent_current(&scope, task, &offer.context)
+            .await
         {
             Ok(synced) => Ok(synced),
             Err(wait) => Err(ancestry_wait(state, binding.project_id, task, wait).await),
         }
     } else {
-        aq_delivery::main_sync::current(pool, socket, &scope, clock)
-            .await
-            .map_err(|_| refused())
+        follower.current(&scope).await.map_err(|_| refused())
     }
 }

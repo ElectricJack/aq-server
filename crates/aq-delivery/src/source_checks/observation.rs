@@ -157,9 +157,11 @@ impl Body {
         let proves = crate::main_sync::proves(
             e.main_sync.as_ref(),
             &scope,
-            &a.resolved_object.hex,
-            self.retention_handle,
-            a.observed_at_ms,
+            crate::main_sync::ObservedHead {
+                head: &a.resolved_object.hex,
+                handle: self.retention_handle,
+                observed_at_ms: a.observed_at_ms,
+            },
         );
         e.reference_observation.is_none() && e.publication_head.is_none() && proves
     }
