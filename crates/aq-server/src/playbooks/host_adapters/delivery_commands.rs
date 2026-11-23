@@ -163,11 +163,13 @@ impl Service {
         let now = self.now()?;
         let due = delivery::due_operations(
             &mut tx,
-            namespace,
-            generation,
-            &DELIVERY_COMMANDS,
-            limit,
-            now,
+            delivery::DueOperations {
+                namespace,
+                generation,
+                commands: &DELIVERY_COMMANDS,
+                limit,
+                now_ms: now,
+            },
         )
         .await?;
         tx.commit().await?;

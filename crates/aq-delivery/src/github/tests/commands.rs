@@ -2,8 +2,9 @@
 //! aq-git on a unix socket: one completion per outcome.
 use super::*;
 use crate::commands::{
-    CheckPoll, Completion, Delivery, DeliveryTarget, GitPort, GitTarget, SocketGit, Step,
-    bounded_wait_ms, task_branch,
+    CheckPoll, CheckRequest, Completion, Delivery, DeliveryTarget, FrozenCommand, GitPort,
+    GitTarget, MergeGuard, OpenPullRequest, SocketGit, Step, TaskOperation, bounded_wait_ms,
+    task_branch,
 };
 use crate::policy::{GitHubRepository, MergeMethod};
 use std::path::PathBuf;
@@ -187,7 +188,11 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     let (delivery, _) = delivery(&git).await;
     let c = done(
         delivery
-            .branch_publish(Uuid::from_u128(2), &target(), TASK, None, Some(&sha('a')))
+            .branch_publish(
+                TaskOperation::new(Uuid::from_u128(2), &target(), TASK),
+                None,
+                Some(&sha('a')),
+            )
             .await,
     );
     assert_eq!(
@@ -205,7 +210,11 @@ async fn branch_publish_pushes_the_task_branch_under_a_lease() {
     let old = sha('1');
     done(
         delivery
-            .branch_publish(Uuid::from_u128(3), &target(), TASK, Some(&old), None)
+            .branch_publish(
+                TaskOperation::new(Uuid::from_u128(3), &target(), TASK),
+                Some(&old),
+                None,
+            )
             .await,
     );
     assert_eq!(git.request(1)["params"]["expected_old"]["hex"], old);
@@ -229,7 +238,11 @@ async fn publishing_a_recorded_result_checks_its_source_and_recovers_an_existing
     let (delivery, _) = delivery(&git).await;
     for (head, outcome) in [('a', "published"), ('b', "conflict"), ('c', "refused")] {
         let step = delivery
-            .branch_publish(Uuid::new_v4(), &target(), TASK, None, Some(&sha(head)))
+            .branch_publish(
+                TaskOperation::new(Uuid::new_v4(), &target(), TASK),
+                None,
+                Some(&sha(head)),
+            )
             .await;
         assert_eq!(done(step).outcome, outcome);
     }
@@ -253,7 +266,11 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
     let publish = async |old: Option<&str>| {
         done(
             delivery
-                .branch_publish(Uuid::from_u128(4), &target(), TASK, old, None)
+                .branch_publish(
+                    TaskOperation::new(Uuid::from_u128(4), &target(), TASK),
+                    old,
+                    None,
+                )
                 .await,
         )
     };
@@ -304,7 +321,15 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     mock.reply(200, vec![], pull(7, json!({})));
     let c = done(
         delivery
-            .pull_request_open(&target(), TASK, "Task", "Report")
+            .pull_request_open(
+                &target(),
+                TASK,
+                OpenPullRequest {
+                    title: "Task",
+                    body: "Report",
+                    known_pr: None,
+                },
+            )
             .await,
     );
     assert_eq!(c.outcome, "opened");
@@ -322,7 +347,15 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     mock.reply(201, vec![], pull(8, json!({})));
     let c = done(
         delivery
-            .pull_request_open(&target(), TASK, "Task", "Report")
+            .pull_request_open(
+                &target(),
+                TASK,
+                OpenPullRequest {
+                    title: "Task",
+                    body: "Report",
+                    known_pr: None,
+                },
+            )
             .await,
     );
     assert_eq!(c.output["number"], 8);
@@ -335,7 +368,15 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     mock.reply(422, vec![], json!({"message": "Validation Failed"}));
     let c = done(
         delivery
-            .pull_request_open(&target(), TASK, "Task", "Report")
+            .pull_request_open(
+                &target(),
+                TASK,
+                OpenPullRequest {
+                    title: "Task",
+                    body: "Report",
+                    known_pr: None,
+                },
+            )
             .await,
     );
     assert_eq!(
@@ -346,7 +387,15 @@ async fn pull_request_open_finds_or_opens_and_refuses_an_unpublished_branch() {
     mock.reply(503, vec![], json!({"message": "down"}));
     let c = done(
         delivery
-            .pull_request_open(&target(), TASK, "Task", "Report")
+            .pull_request_open(
+                &target(),
+                TASK,
+                OpenPullRequest {
+                    title: "Task",
+                    body: "Report",
+                    known_pr: None,
+                },
+            )
             .await,
     );
     assert_eq!(
@@ -370,7 +419,11 @@ async fn step(delivery: &Delivery, now: i64, deadline: i64) -> Option<Completion
 async fn poll_of(delivery: &Delivery, now: i64, deadline: i64) -> CheckPoll {
     let required = ["unit".to_string()];
     delivery
-        .await_checks_step(&target(), 7, Some(&required[..]), now, deadline, 0)
+        .await_checks_step(
+            &target(),
+            CheckRequest::new(7, Some(&required[..]), 0),
+            (now, deadline),
+        )
         .await
 }
 
@@ -454,13 +507,15 @@ fn the_wait_is_bounded_by_the_longest_check_wait_setting() {
 async fn poll_result(delivery: &Delivery, pr: u64, head: &str) -> Option<Completion> {
     delivery
         .step(
-            Uuid::new_v4(),
-            "pull_request.await_checks",
-            &json!({
-                "pull_request": pr, "result_head": head,
-                "check_target": target(),
-                "required": ["check", "deployment"], "deadline_at_ms": 5_000
-            }),
+            FrozenCommand::new(
+                Uuid::new_v4(),
+                "pull_request.await_checks",
+                &json!({
+                    "pull_request": pr, "result_head": head,
+                    "check_target": target(),
+                    "required": ["check", "deployment"], "deadline_at_ms": 5_000
+                }),
+            ),
             &target(),
             1_000,
         )
@@ -518,12 +573,12 @@ async fn two_independent_prs_repair_and_retest_the_second_after_the_first_lands(
         done(
             delivery
                 .pull_request_merge(
-                    Uuid::new_v4(),
-                    &target(),
-                    task,
+                    TaskOperation::new(Uuid::new_v4(), &target(), task),
                     pr,
-                    MergeMethod::Merge,
-                    &sha(head),
+                    MergeGuard {
+                        method: MergeMethod::Merge,
+                        expected_head: &sha(head),
+                    },
                 )
                 .await,
         )
@@ -561,9 +616,7 @@ async fn two_independent_prs_repair_and_retest_the_second_after_the_first_lands(
     let publish = done(
         delivery
             .branch_publish(
-                Uuid::new_v4(),
-                &target(),
-                second_task,
+                TaskOperation::new(Uuid::new_v4(), &target(), second_task),
                 Some(&sha('b')),
                 Some(&sha('e')),
             )
@@ -626,9 +679,7 @@ async fn a_check_poll_requires_a_frozen_head_and_tracked_base_for_a_behind_repai
     for (now, outcome) in [(1_000, None), (5_000, Some("timeout"))] {
         let run = delivery
             .step(
-                Uuid::new_v4(),
-                "pull_request.await_checks",
-                &stale,
+                FrozenCommand::new(Uuid::new_v4(), "pull_request.await_checks", &stale),
                 &target(),
                 now,
             )
@@ -685,12 +736,12 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
     let c = done(
         delivery
             .pull_request_merge(
-                Uuid::from_u128(6),
-                &target(),
-                TASK,
+                TaskOperation::new(Uuid::from_u128(6), &target(), TASK),
                 7,
-                MergeMethod::Merge,
-                &sha('a'),
+                MergeGuard {
+                    method: MergeMethod::Merge,
+                    expected_head: &sha('a'),
+                },
             )
             .await,
     );
@@ -715,12 +766,12 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
         done(
             delivery
                 .pull_request_merge(
-                    Uuid::from_u128(6),
-                    &target(),
-                    TASK,
+                    TaskOperation::new(Uuid::from_u128(6), &target(), TASK),
                     7,
-                    MergeMethod::Squash,
-                    &sha('a'),
+                    MergeGuard {
+                        method: MergeMethod::Squash,
+                        expected_head: &sha('a'),
+                    },
                 )
                 .await,
         )
@@ -779,12 +830,12 @@ async fn a_merged_pull_request_whose_branch_is_not_deleted_yet_is_retried_not_re
     let merge = async || {
         delivery
             .pull_request_merge(
-                Uuid::from_u128(6),
-                &target(),
-                TASK,
+                TaskOperation::new(Uuid::from_u128(6), &target(), TASK),
                 7,
-                MergeMethod::Merge,
-                &sha('a'),
+                MergeGuard {
+                    method: MergeMethod::Merge,
+                    expected_head: &sha('a'),
+                },
             )
             .await
     };
@@ -822,12 +873,12 @@ async fn merge_recovers_after_an_unknown_reply() {
     let merge = async || {
         delivery
             .pull_request_merge(
-                Uuid::from_u128(6),
-                &target(),
-                TASK,
+                TaskOperation::new(Uuid::from_u128(6), &target(), TASK),
                 7,
-                MergeMethod::Merge,
-                &sha('a'),
+                MergeGuard {
+                    method: MergeMethod::Merge,
+                    expected_head: &sha('a'),
+                },
             )
             .await
     };
@@ -879,12 +930,14 @@ async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge
     let poll_merged = async || {
         delivery
             .step(
-                Uuid::from_u128(9),
-                "pull_request.await_checks",
-                &json!({
-                    "task": TASK, "pull_request": 7, "result_head": sha('a'),
-                    "required": ["check", "deployment"], "deadline_at_ms": 1000,
-                }),
+                FrozenCommand::new(
+                    Uuid::from_u128(9),
+                    "pull_request.await_checks",
+                    &json!({
+                        "task": TASK, "pull_request": 7, "result_head": sha('a'),
+                        "required": ["check", "deployment"], "deadline_at_ms": 1000,
+                    }),
+                ),
                 &target,
                 1000,
             )
@@ -895,12 +948,12 @@ async fn a_merged_pr_is_recovered_only_at_the_checked_head_without_another_forge
         done(
             delivery
                 .pull_request_merge(
-                    Uuid::from_u128(10),
-                    &target,
-                    TASK,
+                    TaskOperation::new(Uuid::from_u128(10), &target, TASK),
                     7,
-                    MergeMethod::Merge,
-                    &sha('a'),
+                    MergeGuard {
+                        method: MergeMethod::Merge,
+                        expected_head: &sha('a'),
+                    },
                 )
                 .await,
         )
@@ -952,7 +1005,7 @@ async fn close_closes_the_pull_request_and_deletes_the_branch() {
     mock.reply(200, vec![], pull(7, json!({"state": "closed"})));
     let c = done(
         delivery
-            .pull_request_close(Uuid::from_u128(8), &target(), TASK, 7)
+            .pull_request_close(TaskOperation::new(Uuid::from_u128(8), &target(), TASK), 7)
             .await,
     );
     assert_eq!((c.outcome, c.output), ("closed", json!({})));
@@ -966,7 +1019,7 @@ async fn close_closes_the_pull_request_and_deletes_the_branch() {
     mock.reply(503, vec![], json!({"message": "down"}));
     assert!(matches!(
         delivery
-            .pull_request_close(Uuid::from_u128(8), &target(), TASK, 7)
+            .pull_request_close(TaskOperation::new(Uuid::from_u128(8), &target(), TASK), 7)
             .await,
         Step::Retry(_)
     ));
@@ -981,7 +1034,11 @@ async fn a_frozen_request_runs_as_the_command_it_was_accepted_for() {
     let operation = Uuid::from_u128(9);
     let run = async |command: &str, request: Value, now: i64| {
         delivery
-            .step(operation, command, &request, &target(), now)
+            .step(
+                FrozenCommand::new(operation, command, &request),
+                &target(),
+                now,
+            )
             .await
     };
     let task = TASK.to_string();
@@ -1096,7 +1153,11 @@ fn failed_with_log(mock: &Mock, log: Option<&str>) {
 async fn log_poll(delivery: &Delivery, log_bytes: u64) -> CheckPoll {
     let required = ["unit".to_string()];
     delivery
-        .await_checks_step(&target(), 7, Some(&required[..]), 1_000, 5_000, log_bytes)
+        .await_checks_step(
+            &target(),
+            CheckRequest::new(7, Some(&required[..]), log_bytes),
+            (1_000, 5_000),
+        )
         .await
 }
 
