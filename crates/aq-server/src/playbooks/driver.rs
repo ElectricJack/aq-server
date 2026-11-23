@@ -61,6 +61,10 @@ impl DomainHost for MailHost {
     }
     #[cfg(feature = "delivery_playbook")]
     fn reconcile_delivery(&mut self, intent: &Intent) -> Option<DispatchResult> {
+        let command = intent.command.name.as_str();
+        if !matches!(command, "work.complete" | "work.return") {
+            return Some(self.reconcile(intent));
+        }
         let (id, revision) = grant_actor(&intent.authority).ok()?;
         let answer = self
             .handle
@@ -559,7 +563,7 @@ impl Driver {
                     binding: binding.clone(),
                     artifact,
                     authority: active_authority,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -617,7 +621,7 @@ impl Driver {
                     Request::AdmitOnce {
                         request: Box::new(retained.request),
                         requested_at_ms: None,
-                        now_ms: (self.service_clock()),
+                        now_ms: self.service.current_time(),
                     },
                     self.deadline,
                 )
@@ -637,14 +641,11 @@ impl Driver {
             .acknowledge_admission(&self.runtime, id, receipt)
             .await
     }
-    fn service_clock(&self) -> i64 {
-        self.service.current_time()
-    }
     pub async fn recover(&self) -> Result<serde_json::Value> {
         self.owner
             .call(
                 Request::Recover {
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -784,7 +785,7 @@ impl Driver {
                 self.owner
                     .call(
                         Request::CollectIntervalEvents {
-                            now_ms: self.service_clock(),
+                            now_ms: self.service.current_time(),
                         },
                         self.deadline,
                     )
@@ -846,7 +847,7 @@ impl Driver {
             }
             *cursor = *sequence;
         }
-        let now_ms = self.service_clock();
+        let now_ms = self.service.current_time();
         let cancel = (self.owner).call(Request::CancelEffects { now_ms }, self.deadline);
         let cancelled = cancel.await.map_err(Error::from);
         partial.defer("cancelling effects", cancelled.clone());
@@ -858,11 +859,11 @@ impl Driver {
                 &self.service.namespace,
                 &self.owner,
                 self.tick_deadline,
-                self.service_clock(),
+                self.service.current_time(),
             );
             partial.defer("reconciling delivery decisions", recovery.await);
         }
-        let now_ms = self.service_clock();
+        let now_ms = self.service.current_time();
         let ticked = (self.owner).call(Request::Tick { now_ms }, self.tick_deadline);
         let tick = ticked.await.map_err(Error::from);
         partial.defer("ticking runs", tick.clone());
@@ -908,7 +909,7 @@ impl Driver {
                 epoch: 0,
                 event: Box::new(event.clone()),
                 requested_at_ms: None,
-                now_ms: self.service_clock(),
+                now_ms: self.service.current_time(),
             };
             let receipt = match self.owner.call(request, self.deadline).await {
                 Err(aq_playbook_host::Error::Stale(_)) => {
@@ -924,7 +925,7 @@ impl Driver {
         let fanout = Request::Fanout {
             event_key: key.clone(),
             limit: 64,
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         let status = match self.owner.call(fanout, self.deadline).await {
             Ok(_) => {
@@ -994,7 +995,7 @@ impl Driver {
         }
         let cancel = Request::Cancel {
             run: run.clone(),
-            now_ms: self.service_clock(),
+            now_ms: self.service.current_time(),
         };
         match self.owner.call(cancel, self.deadline).await {
             Ok(_) => Ok(()),
@@ -1046,7 +1047,7 @@ impl Driver {
                     may_activate,
                     schedules: schedules.to_vec(),
                     interval_event,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -1070,7 +1071,7 @@ impl Driver {
                 Request::DeactivateBinding {
                     binding: binding.clone(),
                     revision,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )
@@ -1180,7 +1181,7 @@ impl Driver {
                     epoch: 0,
                     event: Box::new(event),
                     requested_at_ms: None,
-                    now_ms: self.service_clock(),
+                    now_ms: self.service.current_time(),
                 },
                 self.deadline,
             )

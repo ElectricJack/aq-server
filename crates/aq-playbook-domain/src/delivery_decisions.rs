@@ -88,12 +88,13 @@ async fn recovery_batch(
     let mut tx = crate::bridge_tx(pool).await?;
     let ids = sqlx::query_scalar(
         "SELECT intent_id FROM playbook_effects WHERE namespace_id=$1 AND generation=$2 \
-         AND intent_id>$3 AND command_name IN ('work.complete','work.return') \
+         AND intent_id>$3 AND (command_name IN ('work.complete','work.return') OR command_name=ANY($4)) \
          AND NOT playbook_run_finished($1,$2,run_id) ORDER BY intent_id LIMIT 4",
     )
     .bind(namespace.namespace_id)
     .bind(namespace.generation)
     .bind(after)
+    .bind(aq_playbook_host::ASYNC_DELIVERY_COMMANDS.as_slice())
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

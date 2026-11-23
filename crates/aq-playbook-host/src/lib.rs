@@ -755,7 +755,7 @@ fn execute<S: Storage>(
         return Err(Error::Invalid);
     }
     host.set_mode(match request {
-        Request::Recover { .. } => HostMode::Reconcile,
+        Request::Recover { .. } | Request::ReconcileDelivery { .. } => HostMode::Reconcile,
         Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
         _ => HostMode::Dispatch,
     });
@@ -1035,18 +1035,28 @@ fn reconcile_delivery<S: Storage>(
     Ok(count)
 }
 
+/// Commands that durably admit an asynchronous delivery operation before doing any external work.
+pub const ASYNC_DELIVERY_COMMANDS: [&str; 6] = [
+    "main.sync",
+    "branch.publish",
+    "pull_request.open",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.close",
+];
+
 fn admitted_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
     let mut found = Vec::new();
     for id in ids {
         let Some(intent) = state.intents.get(id).filter(|intent| {
-            matches!(
-                intent.command.name.as_str(),
-                "work.complete" | "work.return"
-            ) && (matches!(
-                intent.status,
-                IntentStatus::Dispatched | IntentStatus::Unknown
-            ) || (intent.status == IntentStatus::Prepared
-                && intent.dispatch_sequence.is_some()))
+            let command = intent.command.name.as_str();
+            (matches!(command, "work.complete" | "work.return")
+                || ASYNC_DELIVERY_COMMANDS.contains(&command))
+                && (matches!(
+                    intent.status,
+                    IntentStatus::Dispatched | IntentStatus::Unknown
+                ) || (intent.status == IntentStatus::Prepared
+                    && intent.dispatch_sequence.is_some()))
                 && !intent.cancel_requested
         }) else {
             continue;

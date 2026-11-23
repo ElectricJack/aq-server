@@ -213,6 +213,96 @@ async fn a_lost_settlement_answer_leaves_work_complete_pending_until_a_replay() 
 }
 
 #[tokio::test]
+async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbook_host::{Error, postgres_client as pg, postgres_storage as store, protected};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    let h = delivery(false).await;
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    let (_task, _) = h.stopped(h.scope.project_id, "success");
+    let source = builtin::delivery();
+    let catalog = request::pinned_catalog(&source).unwrap();
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("branch.publish");
+    step["op"]["input"]["fields"] = json!({
+        "task":{"op":"ref","root":"input","path":["task"]}
+    });
+    step["edges"] = json!({"published":"delivered", "accepted":"delivered", "conflict":"failed", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Publish the retained result.".into(),
+        record: request::engine_record(&source, "delivery-publication-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let driver = Driver::start(h.service.clone(), Default::default(), move || {
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    })
+    .await
+    .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    driver.test_lose_next_host_reply("branch.publish");
+    let pool = h.pool().await;
+    let records = || {
+        sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT operation_id,status FROM playbook_effects WHERE command_name='branch.publish'",
+        )
+        .fetch_all(&pool)
+    };
+    let mut original = Vec::new();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        original = records().await.unwrap();
+        if !original.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].1, "accepted");
+    // Advancing the driver's normal quanta is enough. An explicit recovery
+    // request must not be necessary to retrieve the host's admission.
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(records().await.unwrap(), original);
+    assert_eq!(sqlx::query_scalar::<_,i64>(
+        "SELECT count(*) FROM playbook_host_operations WHERE operation_id=$1 AND command_name='branch.publish'",
+    ).bind(original[0].0).fetch_one(&pool).await.unwrap(), 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
     use aq_playbook_authoring::{builtin, request};
     use aq_playbooks_compiler::draft;
