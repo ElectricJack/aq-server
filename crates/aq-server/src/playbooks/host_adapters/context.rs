@@ -70,7 +70,14 @@ impl Service {
         }
         let reference = format!("aq.health/{}", self.operation(intent)?);
         let scan = self
-            .capture_health_scan(tx, &reference, query.subject, 60_000)
+            .capture_health_scan(
+                tx,
+                aq_playbook_domain::health_scans::ScanStart {
+                    observation: &reference,
+                    partition: query.subject,
+                    ttl_ms: 60_000,
+                },
+            )
             .await?;
         let snapshot = serde_json::to_string(&scan)?;
         if snapshot.len() > 4096 {

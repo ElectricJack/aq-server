@@ -92,12 +92,7 @@ pub struct RetainedAdmission {
     pub(super) grant_revision: i64,
 }
 
-#[derive(Debug, Clone)]
-pub(super) enum DecisionResult {
-    Accepted { handle: String },
-    Completed { outcome: String, output: Value },
-    Cancelled,
-}
+pub(super) use aq_playbook_domain::driver_outcomes::DecisionResult;
 fn review_error(error: crate::error::AppError) -> Error {
     use crate::error::AppError;
     match error {

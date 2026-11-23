@@ -71,19 +71,10 @@ pub fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<H
         None => ("refused", "failed", revision_of(&request["subject"])?),
         Some(node) => {
             let revision = node_version(node)?;
-            if node["deleted"] == json!(true)
-                || node["retired"] == json!(true)
-                || node["task_state"] == "canceled"
-            {
+            if unavailable(node) {
                 ("refused", "failed", revision)
             } else if node["task_state"] == "completed" {
-                let disposition = match request["kind"].as_str() {
-                    Some("review" | "fidelity_review") => node["metadata"]["aq:review_disposition"]
-                        .as_str()
-                        .filter(|d| matches!(*d, "accepted" | "changes_requested"))
-                        .unwrap_or("failed"),
-                    _ => "accepted",
-                };
+                let disposition = completed_disposition(request, node);
                 ("completed", disposition, revision)
             } else {
                 return Ok(None);
@@ -97,16 +88,28 @@ pub fn work_completion(request: &Value, node: Option<&Value>) -> Result<Option<H
     }))
 }
 
+fn unavailable(node: &Value) -> bool {
+    node["deleted"] == json!(true)
+        || node["retired"] == json!(true)
+        || node["task_state"] == "canceled"
+}
+fn completed_disposition<'a>(request: &Value, node: &'a Value) -> &'a str {
+    match request["kind"].as_str() {
+        Some("review" | "fidelity_review") => node["metadata"]["aq:review_disposition"]
+            .as_str()
+            .filter(|d| matches!(*d, "accepted" | "changes_requested"))
+            .unwrap_or("failed"),
+        _ => "accepted",
+    }
+}
+
 pub fn handle(id: &str, prefix: &str) -> Option<Uuid> {
     Uuid::parse_str(id.strip_prefix(prefix)?).ok()
 }
 /// A bounded typed reason from the port; anything else maps to `fallback`.
 pub fn token(reason: &str, fallback: &str) -> String {
-    if (1..=64).contains(&reason.len())
-        && reason
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-    {
+    let valid_char = |b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_');
+    if (1..=64).contains(&reason.len()) && reason.bytes().all(valid_char) {
         reason.into()
     } else {
         fallback.into()

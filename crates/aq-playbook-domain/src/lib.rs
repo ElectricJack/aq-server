@@ -15,7 +15,10 @@ mod delivery_review;
 pub mod delivery_runs;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
+pub mod driver_outcomes;
 pub mod effect_store;
+pub mod finding_episodes;
+pub mod health_scans;
 #[cfg(feature = "delivery_playbook")]
 pub mod hold_notice;
 #[cfg(feature = "delivery_playbook")]

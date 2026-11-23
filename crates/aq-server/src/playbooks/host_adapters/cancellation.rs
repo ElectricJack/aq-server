@@ -69,12 +69,15 @@ impl Service {
         intent: &Intent,
         handle: &str,
     ) -> Result<PreparedEffect> {
-        if self.profile.is_host2()
-            && let Ok(check) = Uuid::parse_str(handle)
+        let check = self
+            .profile
+            .is_host2()
+            .then(|| Uuid::parse_str(handle).ok())
+            .flatten();
+        if let Some(check) = check
+            && let Some(plan) = self.check_plan(tx, check).await?
         {
-            if let Some(plan) = self.check_plan(tx, check).await? {
-                return Ok(PreparedEffect::Pending(plan));
-            }
+            return Ok(PreparedEffect::Pending(plan));
         }
         let Some(attempt) = self.cancel_target(tx, handle).await? else {
             return Ok(PreparedEffect::Complete(host_result(
