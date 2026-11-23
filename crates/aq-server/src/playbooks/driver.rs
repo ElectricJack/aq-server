@@ -750,6 +750,11 @@ impl Driver {
             "announcing results",
             self.service.collect_result_ready(&self.runtime, 8).await,
         );
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        partial.defer(
+            "announcing base changes",
+            self.service.collect_base_changes(&self.runtime, 8).await,
+        );
         #[cfg(feature = "delivery_playbook")]
         partial.defer(
             "running delivery operations",

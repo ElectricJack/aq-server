@@ -10,9 +10,10 @@ description = "Spec 0017: environment versions in the database and the one catal
 project_environments = ["dep:aq-project-policy", "dep:aq-role-settings", "dep:aq-protocol", "dep:aq-selection", "dep:axum"]
 # With spec 0016's `/v1/git` route: the builder's fetch-only job grant.
 # And `aq environment try`'s checkpoint, `refs/heads/aq-try/<attempt>`.
-delivery_playbook = ["project_environments", "dep:aq-delivery", "aq-delivery/delivery_playbook", "aq-delivery/environment_try", "dep:tokio"]
+delivery_playbook = ["project_environments", "dep:aq-delivery", "aq-delivery/delivery_playbook", "aq-delivery/environment_try", "dep:tokio", "dep:async-trait"]
 
 [dependencies]
+async-trait = { workspace = true, optional = true }
 aq-admission = { path = "../aq-admission", version = "=0.1.13" }
 aq-delivery = { path = "../aq-delivery", optional = true }
 aq-environment-templates = { path = "../aq-environment-templates" }

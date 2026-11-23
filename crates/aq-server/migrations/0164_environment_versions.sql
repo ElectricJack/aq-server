@@ -18,6 +18,11 @@ CREATE TABLE environment_versions (
     -- The base this version was built on; NULL for a base itself.
     base_digest TEXT CHECK (base_digest ~ '^sha256:[0-9a-f]{64}$'),
     admitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The recipe file's git blob id at the commit it was built from, and the
+    -- server's record of when that commit's task merged (`environment.admit`):
+    -- a later merge's version is never replaced by an earlier one's.
+    recipe_blob_id TEXT CHECK (recipe_blob_id ~ '^[0-9a-f]{40}$'),
+    merged_at_ms BIGINT,
     UNIQUE (environment_id, version)
 );
 CREATE INDEX environment_versions_project ON environment_versions(project_id, environment_id);
@@ -57,6 +62,28 @@ CREATE INDEX environment_jobs_queued ON environment_jobs(created_at) WHERE state
 -- The claim's other half: a claimed job whose lease ran out.
 CREATE INDEX environment_jobs_leased ON environment_jobs(lease_until) WHERE state = 'claimed';
 CREATE INDEX environment_jobs_completed ON environment_jobs(project_id, kind, completed_at) WHERE state = 'completed';
+
+-- What a builder built and no admit has taken yet, read back by
+-- `environment.admit` (the job's row is a rolling record). Rolling: the
+-- newest `keep_versions` per recipe name and project.
+CREATE TABLE environment_builds (
+    project_id UUID NOT NULL,
+    digest TEXT NOT NULL CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+    name TEXT NOT NULL CHECK (octet_length(name) BETWEEN 1 AND 128),
+    job_id UUID NOT NULL,
+    commit TEXT NOT NULL CHECK (commit ~ '^[0-9a-f]{40}$'),
+    base_template TEXT NOT NULL,
+    build JSONB NOT NULL CHECK (jsonb_typeof(build) = 'object'),
+    built_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, digest)
+);
+
+-- The newest base each project was told of (`aq.environment.base_changed`);
+-- one row per project.
+CREATE TABLE environment_base_changes (
+    project_id UUID PRIMARY KEY,
+    base_digest TEXT NOT NULL CHECK (base_digest ~ '^sha256:[0-9a-f]{64}$')
+);
 
 -- The template digests each node has pulled and can run (rolling: each
 -- report replaces the node's previous set; only admitted digests are kept).

@@ -16,6 +16,8 @@ mod agent;
 mod harnesses;
 pub use harnesses::{Running, boot_adapter, listed};
 #[cfg(feature = "delivery_playbook")]
+pub mod commands;
+#[cfg(feature = "delivery_playbook")]
 pub mod git;
 mod store;
 pub mod worker;
@@ -138,6 +140,19 @@ impl<'a> Catalog<'a> {
         let first = boot.next()?;
         boot.all(|a| a.digest == first.digest).then_some(first)
     }
+    /// What `environment` provides: an admitted one, what its version (the
+    /// newest for a bare name) provides, so older versions do not narrow it;
+    /// a boot one, what every definition of it provides.
+    pub fn provides(&self, environment: &str) -> Vec<String> {
+        match self.admitted(environment) {
+            Some(v) => {
+                let a = &v.admitted;
+                let body = (a.environment.as_str(), a.version.as_str(), v.body.as_str());
+                env::provided(environment, [body])
+            }
+            None => env::provided(environment, self.definitions()),
+        }
+    }
     /// The platform text the admitted version of `environment` carries; none
     /// for a boot environment, whose text the server ships.
     pub fn platform_text(&self, environment: &str) -> Option<&str> {
@@ -181,7 +196,7 @@ pub async fn place(
         Some(attempt) => aq_role_settings::environments::ran_in(pool, attempt).await,
         None => None,
     };
-    let provides = |e: &str| env::provided(e, catalog.definitions());
+    let provides = |e: &str| catalog.provides(e);
     let needs = env::needs(metadata);
     env::place(binding, pinned, kept.as_deref(), &needs, provides).map_err(
         |env::Missing {
@@ -245,5 +260,15 @@ mod tests {
         assert_eq!(catalog.platform_text("p.web"), Some("p.web 2"));
         assert_eq!(catalog.platform_text("dev"), None);
         assert_eq!(env::provided("p.web", catalog.definitions()), ["rust"]);
+    }
+
+    #[test]
+    fn a_bare_name_provides_what_its_newest_version_provides() {
+        let boot = BootEnvironments::new([], None);
+        let mut newest = version("p.web", "2", 'e');
+        newest.body = newest.body.replace(r#"["rust"]"#, r#"["node","rust"]"#);
+        let catalog = Catalog::new(&boot, vec![newest, version("p.web", "1", 'd')]);
+        assert_eq!(catalog.provides("p.web"), ["node", "rust"]);
+        assert_eq!(catalog.provides("p.web@1"), ["rust"]);
     }
 }

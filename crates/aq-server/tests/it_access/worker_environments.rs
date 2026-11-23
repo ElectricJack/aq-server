@@ -124,7 +124,7 @@ fn built(job: Uuid) -> Value {
         "recipe_sha256": "e".repeat(64), "provides": ["node"],
         "toolchain": [{"command": "node --version", "output": "v24.0.0"}],
         "warm": ["pnpm install --frozen-lockfile"],
-        "harnesses": [{"harness": "claude", "version": "2.1.0"}]}]})
+        "harnesses": [{"harness": "claude", "version": "2.1.0"}], "default": true}]})
 }
 
 #[tokio::test]

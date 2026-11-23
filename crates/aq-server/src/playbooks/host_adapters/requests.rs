@@ -35,6 +35,10 @@ impl Service {
             name if aq_playbook_domain::review_domain::DELIVERY_COMMANDS.contains(&name) => {
                 (json!("delivery"), "aq.delivery.completed")
             }
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            "environment.build" | "environment.admit" => {
+                (json!("environment"), "aq.environment.completed")
+            }
             _ => return Err(Error::Invalid),
         })
     }

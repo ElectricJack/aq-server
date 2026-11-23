@@ -290,6 +290,7 @@ dependencies = [
  "aq-protocol",
  "aq-role-settings",
  "aq-selection",
+ "async-trait",
  "axum",
  "serde",
  "serde_json",

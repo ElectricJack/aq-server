@@ -194,6 +194,32 @@ impl ResultReady {
 }
 
 /// The trusted `aq.work.result_ready` event.
+/// Catalog 2.5.0 (spec 0017 §6.4): `aq.environment.base_changed {project}`.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub fn base_changed_event(
+    event_id: Uuid,
+    project: Uuid,
+    now_ms: i64,
+    contract: &aq_playbook_host::model::EventContract,
+) -> Result<aq_playbook_host::model::EventEnvelope, aq_playbook_host::model::ModelError> {
+    Ok(aq_playbook_host::model::EventEnvelope {
+        producer: "aq.host.bridge@1".into(),
+        event_id: event_id.to_string(),
+        contract: aq_playbook_host::model::ContractRef {
+            name: contract.name.clone(),
+            fingerprint: contract.fingerprint()?,
+        },
+        scope: "project".into(),
+        correlation: Default::default(),
+        subject: None,
+        revision: None,
+        causation: None,
+        occurred_at_ms: Some(now_ms),
+        observed_at_ms: Some(now_ms),
+        payload: json!({"project": project.to_string()}),
+    })
+}
+
 pub fn result_ready_event(
     event_id: Uuid,
     ready: &ResultReady,

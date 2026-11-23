@@ -203,6 +203,37 @@ impl Service {
         tx.commit().await?;
         Ok(count)
     }
+    /// Spec 0017 §6.4: `aq.environment.base_changed` once per project whose
+    /// environments were built on another base than the newest one.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    pub async fn collect_base_changes(&self, owner: &RuntimeOwner, limit: u32) -> Result<usize> {
+        use aq_environments::commands as environments;
+        if !self.profile.has_environments() || self.host.is_none() {
+            return Ok(0);
+        }
+        let (now, ns) = (self.now()?, &self.namespace);
+        let mut tx = self.tx().await?;
+        self.runtime(&self.namespace_locked(&mut tx).await?, owner)?;
+        let only = (!self.installation_routing).then_some(ns.project_id);
+        let due = environments::base_changes(&mut tx, only, limit).await?;
+        let contract = self.registry().events["aq.environment.base_changed"].clone();
+        for (project, base) in &due {
+            let key = format!("{project}/{base}");
+            let id = aq_playbook_domain::stable_id(
+                "aq.environment.base_changed",
+                ns.namespace_id,
+                ns.generation,
+                &key,
+            )?;
+            let event =
+                aq_playbook_domain::host10::base_changed_event(id, *project, now, &contract);
+            self.queue_occurrence(&mut tx, id, &event.map_err(|_| Error::Invalid)?)
+                .await?;
+            environments::told(&mut tx, *project, base).await?;
+        }
+        tx.commit().await?;
+        Ok(due.len())
+    }
     async fn queue_occurrence(
         &self,
         tx: &mut Transaction<'_, Postgres>,

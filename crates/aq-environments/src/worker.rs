@@ -299,7 +299,9 @@ async fn prune(
     sqlx::query(
         "DELETE FROM environment_jobs WHERE job_id IN (SELECT job_id FROM (SELECT job_id,\
          row_number() OVER (ORDER BY completed_at DESC,job_id DESC) AS n FROM environment_jobs \
-         WHERE project_id=$1 AND kind=$2 AND state='completed') o WHERE n>$3)",
+         WHERE project_id=$1 AND kind=$2 AND state='completed') o WHERE n>$3) \
+         AND job_id::text NOT IN (SELECT request->>'job_id' FROM playbook_host_operations \
+         WHERE command_name='environment.build' AND status='running' AND request ? 'job_id')",
     )
     .bind(project)
     .bind(kind)
@@ -312,7 +314,7 @@ async fn prune(
 /// The Job result shape (`POST /v1/worker/environments/complete`).
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct JobResult {
+pub(crate) struct JobResult {
     job_id: Uuid,
     outcome: Outcome,
     builds: Vec<Build>,
@@ -336,6 +338,10 @@ struct Build {
     toolchain: Vec<Toolchain>,
     warm: Vec<String>,
     harnesses: Vec<Harness>,
+    /// The recipe's `default: true`. Required of a builder; a Build without
+    /// it fails its job at `parse` ([`contract`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<bool>,
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -373,6 +379,32 @@ enum Step {
 struct Run {
     exit: i64,
     output: String,
+}
+/// A built job whose Build lacks `default` broke the Build contract: it is
+/// recorded as failed at `parse`.
+fn contract(result: &JobResult) -> JobResult {
+    let missing = result.builds.iter().find(|b| b.default.is_none());
+    let value = serde_json::to_value(result).unwrap_or_default();
+    let mut result: JobResult = serde_json::from_value(value).expect("a job result round-trips");
+    if let Some(name) = missing.map(|b| b.name.clone()) {
+        result.outcome = Outcome::Failed;
+        result.builds.clear();
+        result.failure = Some(Failure {
+            recipe: name,
+            step: Step::Parse,
+            log: "the builder's Build has no `default` (the Build contract requires it)".into(),
+        });
+    }
+    result
+}
+/// Records a Job result as `node` sent it, as the complete route does.
+pub async fn record(pool: &PgPool, node: Uuid, body: &[u8]) -> Result<(), String> {
+    let (limits, _) =
+        (aq_role_settings::environment_limits(pool).await).map_err(|e| e.to_string())?;
+    let result: JobResult = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    recorded(pool, node, &result, &limits)
+        .await
+        .map_err(|e| format!("{e:?}"))
 }
 /// Whether `result` is a possible answer to a job of `kind`.
 fn check(
@@ -464,6 +496,7 @@ async fn recorded(
     .map_err(failed)?;
     let (kind, run, project, state, claimed_by, stored) =
         row.ok_or(Error::NotFound("no such environment job"))?;
+    let result = &contract(result);
     if claimed_by != Some(node) {
         return Err(Error::Conflict("this node does not hold the job's claim"));
     }
@@ -486,6 +519,32 @@ async fn recorded(
         .execute(&mut *tx)
         .await
         .map_err(failed)?;
+    // What a build built, for its admit: read now, as the job row is pruned.
+    for build in &result.builds {
+        sqlx::query(
+            "INSERT INTO environment_builds(project_id,digest,name,job_id,commit,base_template,build) \
+             SELECT project_id,$2,$3,job_id,commit,base_template,$4 FROM environment_jobs WHERE job_id=$1 \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(result.job_id)
+        .bind(&build.digest)
+        .bind(&build.name)
+        .bind(json!(build))
+        .execute(&mut *tx)
+        .await
+        .map_err(failed)?;
+    }
+    let keep = i64::try_from(limits.keep_versions).unwrap_or(i64::MAX);
+    sqlx::query(
+        "DELETE FROM environment_builds WHERE (project_id,digest) IN (SELECT project_id,digest FROM (\
+         SELECT project_id,digest,row_number() OVER (PARTITION BY name ORDER BY built_at DESC,digest) AS n \
+         FROM environment_builds WHERE project_id=$1) o WHERE n>$2)",
+    )
+    .bind(project)
+    .bind(keep)
+    .execute(&mut *tx)
+    .await
+    .map_err(failed)?;
     // This job is the project's newest completed one of its kind.
     prune(&mut tx, project, &kind, limits)
         .await
