@@ -506,6 +506,14 @@ pub fn delivery_hold(hold: &Hold, result: Uuid, reason: &str, evidence: Option<&
         reason,
         &format!("{why} for result {result}"),
     );
+    shown["result_id"] = json!(result);
+    if reason == "returns_exhausted" {
+        shown["blocker_owner"] = json!("project_owner");
+        shown["wake_condition"] = json!("owner_retry_authorized");
+        if let Some(Value::String(message)) = shown.get_mut("message") {
+            message.push_str(" The project owner can use task.retry to authorize another attempt when its evidence and routing are ready.");
+        }
+    }
     if let Some(evidence) = evidence {
         shown["message"] = json!(format!(
             "{} {evidence}",
@@ -1058,6 +1066,19 @@ mod tests {
         let r = readiness(Some("canceled"), Some(&cancelled), None, vec![], true);
         assert_eq!(r["state"], "canceled");
         assert_eq!(r["reasons"][0]["code"], "cancelled_attempt_holds_task");
+    }
+
+    #[cfg(feature = "delivery_playbook")]
+    #[test]
+    fn exhausted_delivery_names_the_retry_owner_and_original_result() {
+        let attempt = Uuid::new_v4();
+        let result = Uuid::new_v4();
+        let stopped = Hold::from_authority(attempt, &authority("finished", "stopped", Value::Null));
+        let reason = delivery_hold(&stopped, result, "returns_exhausted", None);
+        assert_eq!(reason["attempt_id"], json!(attempt));
+        assert_eq!(reason["result_id"], json!(result));
+        assert_eq!(reason["blocker_owner"], "project_owner");
+        assert_eq!(reason["wake_condition"], "owner_retry_authorized");
     }
 
     #[test]

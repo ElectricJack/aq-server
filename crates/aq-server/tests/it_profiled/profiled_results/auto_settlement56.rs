@@ -1812,6 +1812,9 @@ mod playbook {
         let reasons = work_reasons(&env).await;
         assert!(reasons.iter().any(|r| r["code"] == "task_held"
             && r["hold_reason"] == "returns_exhausted"
+            && r["result_id"] == json!(result)
+            && r["blocker_owner"] == "project_owner"
+            && r["wake_condition"] == "owner_retry_authorized"
             && r["message"].as_str().unwrap().contains(&result.to_string())));
         let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
         let calls = AtomicUsize::new(0);
