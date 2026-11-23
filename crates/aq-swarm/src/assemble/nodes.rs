@@ -25,6 +25,8 @@ impl SwarmInput {
             .map(|(_, agent)| agent.clone())
             .collect();
         let node = SwarmNode {
+            capability_observed_at: n.capability_observed_at.clone(),
+            inventory_rejection: None,
             node: n.node.clone(),
             name: n.name.clone(),
             health: n.health,

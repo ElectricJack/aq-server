@@ -42,6 +42,15 @@ pub async fn record(
     auth: &AuthenticatedNode,
     request: &InventoryV2,
 ) -> Result<InventoryReceipt, AppError> {
+    record_with_stage(state, auth, request, &mut "validate").await
+}
+
+pub(super) async fn record_with_stage(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &InventoryV2,
+    stage: &mut &'static str,
+) -> Result<InventoryReceipt, AppError> {
     let reserved = state.presence_view();
     let state = &reserved;
     request
@@ -50,15 +59,18 @@ pub async fn record(
     if auth.id() != request.identity.node_id {
         return Err(changed());
     }
+    *stage = "acquire_inventory_transaction";
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
         tx.commit().await.map_err(|_| unavailable())?;
         return Ok(old);
     }
+    *stage = "verify_registered_runtime";
     let runtime =
         registration::current_runtime_locked(state, &mut tx, auth.id(), request.identity.boot_id)
             .await?;
+    *stage = "verify_presence_qualification";
     let q = Loaded::load(state, &request.negotiation.qualification)?;
     q.matches_runtime(&runtime)?;
     if request.runtime != runtime.runtime
@@ -80,6 +92,7 @@ pub async fn record(
         .clone()
         .ok_or_else(changed)?;
     let registry = state.config.intelligence.clone().ok_or_else(changed)?;
+    *stage = "verify_harness_qualifications";
     let mut harnesses = Vec::new();
     for reference in &request.qualifications {
         harnesses.push(
@@ -92,6 +105,7 @@ pub async fn record(
                 .ok_or_else(changed)?,
         );
     }
+    *stage = "verify_credential_profiles";
     let enrolled = aq_machine_control::enrolled(&mut tx, auth.id()).await;
     let enrolled = enrolled.map_err(|_| unavailable())?;
     for profile in &request.provisionable_only {
@@ -111,6 +125,7 @@ pub async fn record(
         .checked_add(request.ttl_ms)
         .filter(|t| *t <= i64::MAX as u64)
         .ok_or_else(unavailable)?;
+    *stage = "observe_provisioning";
     let mut bindings = private_inventory::observe(
         registry,
         auth.id(),
@@ -138,6 +153,7 @@ pub async fn record(
     {
         return Err(changed());
     }
+    *stage = "commit_inventory";
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {

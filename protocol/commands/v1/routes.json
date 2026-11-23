@@ -136,6 +136,7 @@
     {"path": "/v1/worker/profiled-v2/stopped", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v1/worker/profiled/artifact", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v1/worker/profiled/inventory-v2", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
+    {"path": "/v1/worker/profiled/inventory-status", "class": "node", "note": "Read-only status for the authenticated worker capability report."},
     {"path": "/v1/worker/profiled/launch-closure", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v1/worker/profiled/material", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},
     {"path": "/v1/worker/profiled/material-presence", "class": "node", "note": "Node/worker protocol under the node credential (worker_api::authenticate_context); never reachable through the agent channel, which refuses this namespace."},

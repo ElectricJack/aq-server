@@ -75,6 +75,15 @@ pub(super) async fn swarm(request: &DashboardRequest, scope: Scope) -> Result<En
     })?;
     let mut data = aq_swarm::management::apply(&state.store.pool, data).await?;
     aq_swarm::routing::apply(&mut *state.store.pool.acquire().await?, &mut data).await?;
+    for machine in &mut data.machines {
+        for node in &mut machine.nodes {
+            node.inventory_rejection = state
+                .store
+                .inventory_diagnostics
+                .get(node.node.id)
+                .rejection;
+        }
+    }
     fence(state, runtime, user, &a).await?;
     envelope(state, scope, data, reason.as_deref())
 }
