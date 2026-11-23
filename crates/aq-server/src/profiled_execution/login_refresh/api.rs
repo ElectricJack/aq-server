@@ -241,7 +241,14 @@ pub async fn write_back(
         });
     }
     // A Codex login must be the stored one refreshed: same account, later.
-    if !super::refresh_of_head(registry.clone(), index, &lineage, &dir, bytes.clone()).await? {
+    if !super::refresh_of_head(
+        registry.clone(),
+        index,
+        lineage.head_source(&dir),
+        bytes.clone(),
+    )
+    .await?
+    {
         return Err(refused());
     }
     let now = (state.clock)().timestamp_millis();
@@ -249,10 +256,12 @@ pub async fn write_back(
         &mut tx,
         &dir,
         &lineage,
-        Origin::Refresh,
-        Some(lease.lease_id),
-        bytes,
-        now,
+        aq_login_store::NewRevision {
+            origin: Origin::Refresh,
+            lease_id: Some(lease.lease_id),
+            bytes,
+            now_ms: now,
+        },
     )
     .await?;
     tx.commit().await.map_err(db)?;

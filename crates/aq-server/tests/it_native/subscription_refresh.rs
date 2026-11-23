@@ -920,8 +920,7 @@ async fn masked(
         &mut conn,
         &loaded,
         &mut credentials,
-        frozen,
-        at,
+        aq_login_store::LoginSelection::at(at, frozen),
     );
     done.await.ok().unwrap();
     credentials

@@ -194,10 +194,12 @@ pub async fn operator_replace(
         &mut tx,
         dir,
         &lineage,
-        Origin::Operator,
-        None,
-        bytes,
-        now_ms,
+        aq_login_store::NewRevision {
+            origin: Origin::Operator,
+            lease_id: None,
+            bytes,
+            now_ms,
+        },
     )
     .await
     .map_err(internal)?;

@@ -154,17 +154,27 @@ pub fn renewable(lineage: &Lineage, lease_digest: &str) -> bool {
     })
 }
 
+pub struct NewRevision {
+    pub origin: Origin,
+    pub lease_id: Option<Uuid>,
+    pub bytes: std::sync::Arc<zeroize::Zeroizing<Vec<u8>>>,
+    pub now_ms: i64,
+}
+
 /// Appends one entry after `lineage`'s head (the caller holds the lineage
 /// lock). The owner-only file is durable before the row; returns the sequence.
 pub async fn append_locked(
     tx: &mut Transaction<'_, Postgres>,
     dir: &std::path::Path,
     lineage: &Lineage,
-    origin: Origin,
-    lease_id: Option<Uuid>,
-    bytes: std::sync::Arc<zeroize::Zeroizing<Vec<u8>>>,
-    now_ms: i64,
+    revision: NewRevision,
 ) -> Result<(i64, Uuid), Error> {
+    let NewRevision {
+        origin,
+        lease_id,
+        bytes,
+        now_ms,
+    } = revision;
     let revision_id = Uuid::new_v4();
     let sequence = head(lineage).map_or(1, |e| e.sequence + 1);
     let digest = aq_admission::Digest::of(&bytes);
@@ -202,6 +212,11 @@ pub struct HeadSource {
 impl std::fmt::Debug for HeadSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadSource").finish_non_exhaustive()
+    }
+}
+impl Lineage {
+    pub fn head_source(&self, dir: &std::path::Path) -> Option<HeadSource> {
+        head(self).map(|entry| HeadSource::of(entry, dir))
     }
 }
 impl HeadSource {
@@ -255,14 +270,12 @@ pub async fn lease_refusal(
 pub async fn refresh_of_head(
     registry: std::sync::Arc<LoadedRegistry>,
     index: usize,
-    lineage: &Lineage,
-    dir: &std::path::Path,
+    source: Option<HeadSource>,
     new: std::sync::Arc<zeroize::Zeroizing<Vec<u8>>>,
 ) -> Result<bool, Error> {
     if registry.credentials[index].provider != codex::PROVIDER {
         return Ok(true);
     }
-    let source = head(lineage).map(|e| HeadSource::of(e, dir));
     tokio::task::spawn_blocking(move || {
         source_or_configured(&registry, index, source.as_ref())
             .is_ok_and(|stored| codex::refreshed(stored.bytes(), &new))
@@ -279,37 +292,70 @@ pub async fn stale_logins(
     loaded: &LoadedRegistry,
     now_ms: i64,
 ) -> Result<Vec<(usize, String)>, Error> {
-    let limit = aq_swarm_settings::providers::codex_login_max_age_days(&mut *conn).await?;
+    let Some(limit_days) =
+        aq_swarm_settings::providers::codex_login_max_age_days(&mut *conn).await?
+    else {
+        return Ok(Vec::new());
+    };
+    let check = LoginAge {
+        loaded,
+        limit_days,
+        now_ms,
+    };
     let mut stale = Vec::new();
-    if limit.is_none() {
-        return Ok(stale);
-    }
-    for (index, credential) in loaded.credentials.iter().enumerate() {
-        let (Some(configured), Some(Some(base))) = (
-            loaded.config.credentials.get(index),
-            loaded.fingerprints.get(index),
-        ) else {
-            continue;
-        };
-        if credential.provider != codex::PROVIDER
-            || configured.kind != aq_selection::CredentialKind::SubscriptionLogin
-        {
-            continue;
-        }
-        let name = identity(&credential.profile);
-        let lineage = read(&mut *conn, &name, credential.revision, base).await?;
-        let source = match (head(&lineage), &loaded.config.material_store) {
-            (Some(entry), Some(dir)) => Some(HeadSource::of(entry, dir)),
-            _ => None,
-        };
-        // One small owner-only file, read in place: selection asks rarely.
-        if let Ok(login) = source_or_configured(loaded, index, source.as_ref())
-            && let Some(reason) = codex::stale(login.bytes(), limit, now_ms)
-        {
+    for index in 0..loaded.credentials.len() {
+        if let Some(reason) = check.refusal(conn, index).await? {
             stale.push((index, reason));
         }
     }
     Ok(stale)
+}
+
+struct LoginAge<'a> {
+    loaded: &'a LoadedRegistry,
+    limit_days: i64,
+    now_ms: i64,
+}
+impl LoginAge<'_> {
+    async fn refusal(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        index: usize,
+    ) -> Result<Option<String>, Error> {
+        let loaded = self.loaded;
+        let credential = &loaded.credentials[index];
+        let (Some(configured), Some(Some(base))) = (
+            loaded.config.credentials.get(index),
+            loaded.fingerprints.get(index),
+        ) else {
+            return Ok(None);
+        };
+        if credential.provider != codex::PROVIDER
+            || configured.kind != aq_selection::CredentialKind::SubscriptionLogin
+        {
+            return Ok(None);
+        }
+        let name = identity(&credential.profile);
+        let lineage = read(&mut *conn, &name, credential.revision, base).await?;
+        let source = loaded
+            .config
+            .material_store
+            .as_ref()
+            .and_then(|dir| lineage.head_source(dir));
+        // One small owner-only file, read in place: selection asks rarely.
+        let login = source_or_configured(loaded, index, source.as_ref()).ok();
+        Ok(login.and_then(|login| codex::stale(login.bytes(), Some(self.limit_days), self.now_ms)))
+    }
+}
+
+pub enum LoginSelection<'a> {
+    At(i64),
+    Frozen(&'a [AuthorizedCredential]),
+}
+impl<'a> LoginSelection<'a> {
+    pub fn at(now_ms: i64, frozen: Option<&'a [AuthorizedCredential]>) -> Self {
+        frozen.map_or(Self::At(now_ms), Self::Frozen)
+    }
 }
 
 /// A stale Codex login ([`stale_logins`]) cannot be provisioned, so selection
@@ -320,16 +366,15 @@ pub async fn mask_stale(
     conn: &mut sqlx::PgConnection,
     loaded: &LoadedRegistry,
     credentials: &mut [AuthorizedCredential],
-    frozen: Option<&[AuthorizedCredential]>,
-    now_ms: i64,
+    selection: LoginSelection<'_>,
 ) -> Result<(), Error> {
-    if let Some(frozen) = frozen {
-        for credential in credentials {
-            let old = frozen.iter().find(|old| old.profile == credential.profile);
-            credential.provisionable &= old.is_some_and(|old| old.provisionable);
+    let now_ms = match selection {
+        LoginSelection::At(now_ms) => now_ms,
+        LoginSelection::Frozen(frozen) => {
+            mask_frozen(credentials, frozen);
+            return Ok(());
         }
-        return Ok(());
-    }
+    };
     for (index, _) in stale_logins(conn, loaded, now_ms).await? {
         let stale = &loaded.credentials[index];
         for credential in credentials.iter_mut() {
@@ -339,6 +384,13 @@ pub async fn mask_stale(
         }
     }
     Ok(())
+}
+
+fn mask_frozen(credentials: &mut [AuthorizedCredential], frozen: &[AuthorizedCredential]) {
+    for credential in credentials {
+        let old = frozen.iter().find(|old| old.profile == credential.profile);
+        credential.provisionable &= old.is_some_and(|old| old.provisionable);
+    }
 }
 
 #[cfg(test)]

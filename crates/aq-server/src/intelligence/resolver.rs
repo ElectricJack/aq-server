@@ -154,8 +154,13 @@ async fn resolve_with_principal(
         .map_err(db)?;
     let time = now(state)?;
     // A stored Codex login past the owner's age limit is a missing credential here.
-    aq_login_store::mask_stale(&mut membership, loaded, &mut credentials, None, time as i64)
-        .await?;
+    aq_login_store::mask_stale(
+        &mut membership,
+        loaded,
+        &mut credentials,
+        aq_login_store::LoginSelection::At(time as i64),
+    )
+    .await?;
     drop(membership);
     let observations: Vec<Value> = sqlx::query_scalar(
         "SELECT observation FROM intelligence_observations ORDER BY scope_source_digest LIMIT 1024",
@@ -635,7 +640,13 @@ async fn fence_snapshot(
         .await
         .map_err(db)?;
     let decided = decision.inputs.now_ms as i64;
-    aq_login_store::mask_stale(tx, loaded(state)?, &mut credentials, frozen, decided).await?;
+    aq_login_store::mask_stale(
+        tx,
+        loaded(state)?,
+        &mut credentials,
+        aq_login_store::LoginSelection::at(decided, frozen),
+    )
+    .await?;
     if digest(&credentials).map_err(|_| AppError::Internal)?
         != digest(&decision.inputs.credentials).map_err(|_| AppError::Internal)?
     {
