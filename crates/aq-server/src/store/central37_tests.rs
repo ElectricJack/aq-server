@@ -179,14 +179,61 @@ async fn same_named37_checks_keys_indexes_fks_and_nullability_cannot_bypass_star
     }
 }
 
-#[tokio::test]
-async fn retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_reenabled() {
+async fn seed_cancelled_reservation(db: &TestDb, pool: &PgPool) -> crate::AppState {
     use crate::agent_access::supervisor_conversation::reservations::{
         PreviewRequest, ReservationOwner,
     };
     use crate::{AppState, config::Config, identity::verifier_from_config};
     use chrono::{TimeZone, Utc};
     use std::sync::Arc;
+    let store = db.store_at_version(37).await;
+    let user = store
+        .find_user_by_binding("dev", "retained@localhost")
+        .await
+        .unwrap()
+        .unwrap();
+    let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='retained@localhost'\n[bootstrap]\nowner_email='retained@localhost'\nenabled=false\n").unwrap();
+    let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
+    let state = AppState {
+        internal_work: Default::default(),
+        store,
+        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
+        config: Arc::new(config),
+        clock: Arc::new(move || now),
+        agent_access: None,
+        source_retention: None,
+    };
+    let owner = ReservationOwner::new(&state);
+    let actor = Uuid::new_v4();
+    let conversation: Uuid = sqlx::query_scalar(
+        "SELECT conversation_id FROM global_supervisor_conversation WHERE singleton",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    owner.configure_actor(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"actor_id":actor,"expected_actor_revision":0,"policy":{"schema_version":1,"kind":"global_supervisor_reservation","actor_id":actor,"conversation_id":conversation,"enabled":true}})).unwrap()).await.unwrap();
+    let preview = owner
+        .preview_batch(
+            &user,
+            PreviewRequest {
+                actor_id: actor,
+                expected_actor_revision: 1,
+                scan_after: 0,
+                through_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    let reservation = Uuid::new_v4();
+    owner.reserve_batch(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"reservation_id":reservation,"actor_id":actor,"expected_actor_revision":preview.actor_revision,"expected_policy_revision":preview.policy_revision,"scan_after":preview.scan_after,"through_cursor":preview.through_cursor,"selection_digest":preview.selection_digest})).unwrap()).await.unwrap();
+    migrate_known(pool, &MIGRATIONS[..37], 37).await.unwrap();
+    owner.cancel_reservation(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"actor_id":actor,"reservation_id":reservation,"expected_reservation_revision":1})).unwrap()).await.unwrap();
+    migrate_known(pool, &MIGRATIONS[..37], 37).await.unwrap();
+    state
+}
+
+#[tokio::test]
+async fn retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_reenabled() {
     for damage in [
         "ALTER TABLE central_supervisor_actors DISABLE TRIGGER USER; UPDATE central_supervisor_actors SET retained_bytes=retained_bytes+1; ALTER TABLE central_supervisor_actors ENABLE TRIGGER USER",
         "ALTER TABLE central_supervisor_operations DISABLE TRIGGER USER; UPDATE central_supervisor_operations SET result_bytes=replace(result_bytes,result_bytes::jsonb#>>'{reservation,batch_digest}',repeat('0',64)) WHERE kind='reserve'; ALTER TABLE central_supervisor_operations ENABLE TRIGGER USER",
@@ -197,49 +244,7 @@ async fn retained_owner_reserve_and_cancel_proofs_are_revalidated_after_guards_r
     ] {
         let (db, pool) = database(37).await;
         seed_original(&pool).await;
-        let store = db.store_at_version(37).await;
-        let user = store
-            .find_user_by_binding("dev", "retained@localhost")
-            .await
-            .unwrap()
-            .unwrap();
-        let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='retained@localhost'\n[bootstrap]\nowner_email='retained@localhost'\nenabled=false\n").unwrap();
-        let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
-        let state = AppState {
-            internal_work: Default::default(),
-            store,
-            identity: verifier_from_config(&config.auth, reqwest::Client::new()),
-            config: Arc::new(config),
-            clock: Arc::new(move || now),
-            agent_access: None,
-            source_retention: None,
-        };
-        let owner = ReservationOwner::new(&state);
-        let actor = Uuid::new_v4();
-        let conversation: Uuid = sqlx::query_scalar(
-            "SELECT conversation_id FROM global_supervisor_conversation WHERE singleton",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        owner.configure_actor(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"actor_id":actor,"expected_actor_revision":0,"policy":{"schema_version":1,"kind":"global_supervisor_reservation","actor_id":actor,"conversation_id":conversation,"enabled":true}})).unwrap()).await.unwrap();
-        let preview = owner
-            .preview_batch(
-                &user,
-                PreviewRequest {
-                    actor_id: actor,
-                    expected_actor_revision: 1,
-                    scan_after: 0,
-                    through_cursor: None,
-                },
-            )
-            .await
-            .unwrap();
-        let reservation = Uuid::new_v4();
-        owner.reserve_batch(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"reservation_id":reservation,"actor_id":actor,"expected_actor_revision":preview.actor_revision,"expected_policy_revision":preview.policy_revision,"scan_after":preview.scan_after,"through_cursor":preview.through_cursor,"selection_digest":preview.selection_digest})).unwrap()).await.unwrap();
-        migrate_known(&pool, &MIGRATIONS[..37], 37).await.unwrap();
-        owner.cancel_reservation(&user,&serde_json::to_vec(&json!({"operation_id":Uuid::new_v4(),"actor_id":actor,"reservation_id":reservation,"expected_reservation_revision":1})).unwrap()).await.unwrap();
-        migrate_known(&pool, &MIGRATIONS[..37], 37).await.unwrap();
+        let _state = seed_cancelled_reservation(&db, &pool).await;
         sqlx::raw_sql(damage).execute(&pool).await.unwrap();
         let tables = [
             "central_supervisor_actors",
@@ -325,5 +330,36 @@ async fn post37_source_mutation_or_head_rewind_is_refused_without_repair() {
         assert_eq!(rows(&pool, "mailbox_messages").await, messages);
         assert_eq!(rows(&pool, "schema_migrations").await, ledger);
         assert_eq!(rows(&pool, "meta").await, meta);
+    }
+}
+
+#[test]
+fn function_bodies_follow_frozen_migration_boundaries() {
+    for name in [
+        "central_global_mailbox_key",
+        "central_global_mail_source_valid",
+        "guard_central_global_mail",
+        "guard_central_reservation_actor",
+        "guard_central_reservation_state",
+        "guard_central_reservation_immutable",
+        "check_central_reservation_consistency",
+        "central_supervisor_turn_complete",
+        "consume_central_supervisor_turn",
+        "unknown_function",
+    ] {
+        let mut expected = None;
+        for (version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version >= 37) {
+            if let Some(body) = aq_profiled_state::sql_function_body(sql, name) {
+                expected = Some(body);
+            }
+            let actual = super::central37::function_body(name, *version as u32);
+            match expected {
+                Some(body) => assert_eq!(actual.unwrap(), body, "{name} at {version}"),
+                None => assert!(
+                    matches!(actual, Err(StoreError::Corrupt(_))),
+                    "{name} at {version}"
+                ),
+            }
+        }
     }
 }

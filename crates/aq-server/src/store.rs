@@ -5,7 +5,7 @@ use crate::migration_catalog::MIGRATIONS;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow};
-use sqlx::{FromRow, PgPool, Row};
+use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -190,13 +190,21 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         .execute(&mut *tx)
         .await?;
 
+    refuse_newer_state(&mut tx, supported).await?;
+    apply_missing_migrations(&mut tx, migrations, supported).await?;
+    validate_storage(&mut tx, supported).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn refuse_newer_state(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
     let has_meta: bool = sqlx::query_scalar("SELECT to_regclass('meta') IS NOT NULL")
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
     if has_meta {
         let value: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key = 'state_format_version'")
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut **tx)
                 .await?;
         if let Some(value) = value {
             let found: u32 = value
@@ -208,16 +216,24 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         }
     }
 
+    Ok(())
+}
+
+async fn apply_missing_migrations(
+    tx: &mut Transaction<'_, Postgres>,
+    migrations: &[(i32, &str)],
+    supported: u32,
+) -> Result<()> {
     sqlx::raw_sql(
         "CREATE TABLE IF NOT EXISTS schema_migrations (\
          version INTEGER PRIMARY KEY, \
          applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     let applied: Vec<i32> = sqlx::query_scalar("SELECT version FROM schema_migrations")
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
     let newest_known = migrations.iter().map(|m| m.0).max().unwrap_or(0);
     if let Some(&found) = applied.iter().filter(|v| **v > newest_known).max() {
@@ -231,190 +247,66 @@ async fn migrate_known(pool: &PgPool, migrations: &[(i32, &str)], supported: u32
         if applied.contains(version) {
             continue;
         }
-        sqlx::raw_sql(sql).execute(&mut *tx).await?;
+        sqlx::raw_sql(sql).execute(&mut **tx).await?;
         sqlx::query("INSERT INTO schema_migrations (version) VALUES ($1)")
             .bind(version)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
+    Ok(())
+}
+
+mod migration_guards;
+
+async fn validate_storage(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
     let format: Option<String> =
         sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?;
     if format.as_deref() != Some(supported.to_string().as_str()) {
         return Err(StoreError::Corrupt(
             "state format metadata does not match applied migrations".into(),
         ));
     }
-    if supported >= 50 {
-        let intact: bool = sqlx::query_scalar(
-            r#"SELECT
-          to_regclass('delegated_permits') IS NOT NULL
-          AND to_regclass('delegated_permit_current') IS NOT NULL
-          AND to_regclass('delegated_node_boots') IS NOT NULL
-          AND to_regclass('delegated_operations') IS NOT NULL
-          AND to_regclass('delegated_permits_verifier') IS NOT NULL
-          AND to_regclass('delegated_current_verifier') IS NOT NULL
-          AND to_regclass('delegated_current_attempt') IS NOT NULL
-          AND to_regclass('delegated_current_channel') IS NOT NULL AND NOT EXISTS(
-            SELECT 1 FROM (VALUES
-              ('delegated_permits','delegated_permit_guard','delegated_permit_guard()',31),
-              ('delegated_permits','delegated_permit_truncate_guard','delegated_permit_guard()',34),
-              ('nodes','delegated_node_revoke','delegated_node_revoke()',17),
-              ('profiled_cancellations','delegated_attempt_revoke','delegated_attempt_revoke()',5)
-            ) expected(rel,name,func,kind) WHERE NOT EXISTS(
-              SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.rel)
-                AND t.tgname=expected.name AND t.tgtype=expected.kind
-                AND NOT t.tgisinternal AND t.tgenabled IN ('O','A')
-                AND t.tgfoid=to_regprocedure(expected.func)))"#,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if !intact {
-            return Err(StoreError::Corrupt(
-                "delegated permit persistence safeguards missing or disabled".into(),
-            ));
-        }
-    }
-    if supported >= 42 {
-        let intact: bool = sqlx::query_scalar("SELECT to_regclass('dashboard_operations') IS NOT NULL AND to_regprocedure('guard_dashboard_operation()') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='dashboard_operation_guard' AND tgrelid=to_regclass('dashboard_operations') AND NOT tgisinternal AND tgenabled='O') AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='dashboard_operation_truncate_guard' AND tgrelid=to_regclass('dashboard_operations') AND NOT tgisinternal AND tgenabled='O')").fetch_one(&mut *tx).await?;
-        if !intact {
-            return Err(StoreError::Corrupt(
-                "dashboard operation journal safeguards missing".into(),
-            ));
-        }
-    }
-    if supported >= 30 {
-        let complete:bool=sqlx::query_scalar("SELECT to_regclass('profiled_v2_proposals') IS NOT NULL AND to_regclass('profiled_v2_accepts') IS NOT NULL").fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "accepted preparation v2 storage missing from current schema".into(),
-            ));
-        }
-    }
-    if supported >= 31 {
-        let complete: bool = sqlx::query_scalar("SELECT to_regprocedure('profiled_provisionable_binding_set(jsonb)') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='profiled_inventory_semantic_heads' AND column_name='provisionable_binding_set' AND data_type='jsonb')")
-            .fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "scoped presence binding barrier missing from current schema".into(),
-            ));
-        }
-    }
-    if supported >= 32 {
-        let complete: bool = sqlx::query_scalar("SELECT to_regclass('profiled_phase_execution_grants') IS NOT NULL AND to_regprocedure('profiled_phase_execution_guard()') IS NOT NULL AND EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='profiled_phase_execution_immutable' AND tgrelid=to_regclass('profiled_phase_execution_grants') AND NOT tgisinternal AND tgenabled='O')")
-            .fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "phase execution history storage missing from current schema".into(),
-            ));
-        }
-    }
-    if supported >= 33 {
-        let complete:bool=sqlx::query_scalar(r#"SELECT
-          to_regclass('profiled_phase_terminal_capacity') IS NOT NULL
-          AND to_regprocedure('profiled_phase_terminal_capacity_guard()') IS NOT NULL
-          AND to_regprocedure('profiled_phase_terminal_reserve()') IS NOT NULL
-          AND to_regprocedure('profiled_phase_terminal_origin_guard()') IS NOT NULL
-          AND to_regprocedure('profiled_phase_terminal_extra_bytes(text,text,text,bytea,bytea,jsonb)') IS NOT NULL
-          AND to_regprocedure('profiled_phase_terminal_used_bytes(uuid)') IS NOT NULL
-          AND to_regprocedure('profiled_phase_unqualified_result_guard()') IS NOT NULL
-          AND NOT EXISTS(
-            SELECT 1 FROM (VALUES
-             ('profiled_phase_terminal_capacity','profiled_phase_terminal_capacity_guard'),
-             ('profiled_phase_execution_grants','profiled_phase_terminal_reserve'),
-             ('profiled_started_receipts','profiled_phase_terminal_origin_guard'),
-             ('profiled_stopped_receipts','profiled_phase_terminal_origin_guard'),
-             ('profiled_launch_closures','profiled_phase_terminal_origin_guard'),
-             ('profiled_result_reports','profiled_phase_unqualified_result_guard'),
-             ('profiled_verified_releases',CASE WHEN $1>=39 THEN 'profiled_phase_qualified_release_guard' ELSE 'profiled_phase_unqualified_release_guard' END)
-            ) expected(rel,name) WHERE NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.rel) AND t.tgname=expected.name AND NOT t.tgisinternal AND t.tgenabled IN ('O','A') AND t.tgfoid=to_regprocedure(CASE WHEN expected.name='profiled_phase_unqualified_release_guard' THEN 'profiled_phase_unqualified_result_guard()' WHEN expected.name='profiled_phase_qualified_release_guard' THEN 'settlement_release_guard()' ELSE expected.name||'()' END)))
-          AND NOT EXISTS(
-            SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel)
-            CROSS JOIN (VALUES ('initial_authority_kind','text'),('initial_authority_receipt_digest','text'),('phase_request_digest','text'),('phase_envelope_bytes','bytea'),('phase_ack_bytes','bytea'),('phase_terminal_qualification','jsonb')) col(name,kind)
-            WHERE NOT EXISTS(SELECT 1 FROM information_schema.columns c WHERE c.table_schema='public' AND c.table_name=expected.rel AND c.column_name=col.name AND c.udt_name=col.kind))
-          AND NOT EXISTS(
-            SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel)
-            CROSS JOIN (VALUES ('phase_envelope_digest'),('phase_ack_digest')) col(name)
-            WHERE NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass(expected.rel) AND a.attname=col.name AND a.attgenerated='s' AND NOT a.attisdropped))
-          AND NOT EXISTS(SELECT 1 FROM (VALUES ('profiled_started_receipts'),('profiled_stopped_receipts'),('profiled_launch_closures')) expected(rel) WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass(expected.rel) AND c.conname=expected.rel||'_phase_origin_check' AND c.contype='c' AND c.convalidated))
-          AND NOT EXISTS(
-            SELECT 1 FROM (VALUES ('legacy_origin_operation_id'),('phase_origin_operation_id')) col(name)
-            WHERE NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('profiled_launch_closures') AND a.attname=col.name AND a.attgenerated='s' AND a.atttypid='uuid'::regtype AND NOT a.attisdropped))
-          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('profiled_launch_closures') AND conname='profiled_launch_closures_legacy_origin_fk' AND contype='f' AND convalidated AND confrelid=to_regclass('profiled_execution_receipts'))
-          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('profiled_launch_closures') AND conname='profiled_launch_closures_phase_origin_fk' AND contype='f' AND convalidated AND confrelid=to_regclass('profiled_phase_execution_grants'))
-        "#).bind(supported as i32).fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "phase terminal origin/capacity storage missing or disabled in current schema"
-                    .into(),
-            ));
-        }
-    }
-    if supported >= 34 {
-        let complete: bool = sqlx::query_scalar("SELECT to_regclass('human_graph_operations') IS NOT NULL AND to_regclass('human_graph_operation_actor') IS NOT NULL AND to_regprocedure('guard_human_graph_operation_identity()') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM (VALUES ('human_graph_operation_identity_guard',19),('human_graph_operation_delete_guard',11),('human_graph_operation_truncate_guard',34)) expected(name,kind) WHERE NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('human_graph_operations') AND t.tgname=expected.name AND t.tgtype=expected.kind AND NOT t.tgisinternal AND t.tgenabled IN ('O','A') AND t.tgfoid=to_regprocedure('guard_human_graph_operation_identity()')))")
-            .fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "human Graph intent journal storage missing from current schema".into(),
-            ));
-        }
-    }
-    if supported >= 35 {
-        let complete: bool = sqlx::query_scalar("SELECT to_regclass('global_supervisor_conversation') IS NOT NULL AND to_regprocedure('guard_global_supervisor_conversation()') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM (VALUES ('global_supervisor_conversation_identity_guard',19),('global_supervisor_conversation_delete_guard',11),('global_supervisor_conversation_truncate_guard',34)) expected(name,kind) WHERE NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('global_supervisor_conversation') AND t.tgname=expected.name AND t.tgtype=expected.kind AND NOT t.tgisinternal AND t.tgenabled IN ('O','A') AND t.tgfoid=to_regprocedure('guard_global_supervisor_conversation()')))")
-            .fetch_one(&mut *tx).await?;
-        if !complete {
-            return Err(StoreError::Corrupt(
-                "global supervisor conversation storage missing or disabled".into(),
-            ));
-        }
-        let singleton: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(singleton AND revision=1 AND conversation_id<>'00000000-0000-0000-0000-000000000000'::uuid),FALSE) FROM global_supervisor_conversation")
-            .fetch_one(&mut *tx).await?;
-        if !singleton {
-            return Err(StoreError::Corrupt(
-                "global supervisor conversation singleton missing or invalid".into(),
-            ));
-        }
-    }
+    migration_guards::validate(tx, supported).await?;
     if supported >= 36 {
-        media36_storage_guard(&mut tx, supported).await?;
+        media36_storage_guard(tx, supported).await?;
     }
     if supported >= 37 {
-        central37::central37_storage_guard(&mut tx, supported).await?;
+        central37::central37_storage_guard(tx, supported).await?;
     }
     if supported == 38 {
-        result38::validate(&mut tx).await?;
+        result38::validate(tx).await?;
     }
     if supported >= 41 {
-        settlement39::validate_compute_reuse(&mut tx, supported).await?;
+        settlement39::validate_compute_reuse(tx, supported).await?;
     } else if supported >= 40 {
-        settlement39::validate_phase_absence(&mut tx).await?;
+        settlement39::validate_phase_absence(tx).await?;
     } else if supported >= 39 {
-        settlement39::validate(&mut tx).await?;
+        settlement39::validate(tx).await?;
     }
     if supported >= 43 {
-        never_granted40::validate_native_cancellation(&mut tx, supported).await?;
-        compute41::validate(&mut tx, supported).await?;
-        cancellation43::validate(&mut tx, supported).await?;
+        never_granted40::validate_native_cancellation(tx, supported).await?;
+        compute41::validate(tx, supported).await?;
+        cancellation43::validate(tx, supported).await?;
     } else if supported >= 41 {
-        never_granted40::validate_compute_reuse(&mut tx).await?;
-        compute41::validate(&mut tx, supported).await?;
+        never_granted40::validate_compute_reuse(tx).await?;
+        compute41::validate(tx, supported).await?;
     } else if supported >= 40 {
-        never_granted40::validate(&mut tx).await?;
+        never_granted40::validate(tx).await?;
     }
     if supported >= 52 {
-        replacement52::validate(&mut tx).await?;
+        replacement52::validate(tx).await?;
     }
     if supported >= 53 {
-        retained_source53::validate(&mut tx, supported).await?;
+        retained_source53::validate(tx, supported).await?;
     }
     if supported >= 59 {
-        auto56::validate(&mut tx).await?;
+        auto56::validate(tx).await?;
     }
     if supported >= 66 {
-        stopped66::validate(&mut tx, supported).await?;
+        stopped66::validate(tx, supported).await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 
