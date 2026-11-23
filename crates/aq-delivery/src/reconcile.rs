@@ -35,6 +35,9 @@ pub struct ResolveRequest {
 pub(super) fn evidence(v: &Value) -> bool {
     v.as_str().is_some_and(|s| !s.trim().is_empty()) || v.as_object().is_some_and(|o| !o.is_empty())
 }
+pub(super) fn documented(reason: &str, proof: &Value) -> bool {
+    !reason.trim().is_empty() && reason.len() <= 4096 && evidence(proof)
+}
 struct Target {
     id: Uuid,
     generation: u64,
@@ -59,9 +62,7 @@ impl DeliveryService {
         .await
     }
     pub async fn resolve(&self, r: ResolveRequest) -> Result<Receipt<ReconcileResult>> {
-        let documented =
-            !r.reason.trim().is_empty() && r.reason.len() <= 4096 && evidence(&r.evidence);
-        if !r.old_publishers_stopped || !documented {
+        if !r.old_publishers_stopped || !documented(&r.reason, &r.evidence) {
             return Err(DeliveryError::InvalidInput(
                 "resolution requires reason, evidence and old_publishers_stopped=true",
             ));

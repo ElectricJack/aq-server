@@ -113,13 +113,10 @@ pub struct ClearFenceRequest {
 }
 impl ClearFenceRequest {
     pub fn cli_envelope(&self, operation_id: Uuid) -> Result<Value> {
-        if operation_id.is_nil()
-            || self.expected_incarnation.trim().is_empty()
-            || self.reason.trim().is_empty()
-            || self.reason.len() > 4096
-            || !reconcile::evidence(&self.evidence)
-            || !self.old_environment_stopped
-        {
+        let identified = !operation_id.is_nil() && !self.expected_incarnation.trim().is_empty();
+        let documented = reconcile::documented(&self.reason, &self.evidence);
+        let confirmed = identified && documented && self.old_environment_stopped;
+        if !confirmed {
             return Err(DeliveryError::InvalidInput(
                 "clear-fence requires incarnation, reason, evidence and old_environment_stopped=true",
             ));
@@ -195,109 +192,34 @@ impl DeliveryService {
         _github: &dyn GitHubAdapter,
     ) -> Result<DeliveryOutcome> {
         policy.validate()?;
-        let operation_id = r.context.operation_id;
-        let refuse = |reason, detail: &str, observed_target, observed_at| {
-            DeliveryOutcome::Refused(PublicationRefusal {
-                operation_id,
-                reason,
-                detail: detail.into(),
-                target: policy.target.clone(),
-                expected_old: Some(r.expected_old.clone()),
-                observed_target,
-                observed_at,
-            })
+        let request = PublishRequest {
+            context: r.context,
+            candidate_id: r.candidate_id,
+            target: policy.target.clone(),
+            expected_old: r.expected_old,
         };
         if policy.mode == PublicationMode::PullRequest {
             // Never degrade to fast-forward.
-            return Ok(refuse(
+            return Ok(request.refused(
                 RefusalReason::PullRequestUnsupported,
                 "aq-git 0.2.0 cannot create pull-request branches",
-                None,
-                None,
+                (None, None),
             ));
         }
-        let receipt = match self
-            .publish(PublishRequest {
-                context: r.context.clone(),
-                candidate_id: r.candidate_id,
-                target: policy.target.clone(),
-                expected_old: r.expected_old.clone(),
-            })
-            .await
-        {
-            Ok(receipt) => receipt,
-            Err(DeliveryError::Indeterminate) => {
-                return Ok(DeliveryOutcome::Ambiguous { operation_id });
-            }
-            Err(DeliveryError::DestinationBlocked) => {
-                return Ok(DeliveryOutcome::DestinationBlocked);
-            }
+        match self.publish(request.clone()).await {
+            Ok(receipt) => Ok(request.outcome(receipt)),
+            Err(DeliveryError::Indeterminate) => Ok(DeliveryOutcome::Ambiguous {
+                operation_id: request.context.operation_id,
+            }),
+            Err(DeliveryError::DestinationBlocked) => Ok(DeliveryOutcome::DestinationBlocked),
             Err(DeliveryError::InvalidInput(CANDIDATE_NOT_READY)) => {
-                return Ok(refuse(
-                    RefusalReason::Conflicted,
-                    CANDIDATE_NOT_READY,
-                    None,
-                    None,
-                ));
+                Ok(request.refused(RefusalReason::Conflicted, CANDIDATE_NOT_READY, (None, None)))
             }
-            Err(e) => return Err(e),
-        };
-        Ok(match receipt.outcome {
-            Ok(PublishResult::Applied {
-                old,
-                new,
-                acknowledged_at,
-                ..
-            }) => DeliveryOutcome::Published {
-                operation_id,
-                old,
-                new,
-                acknowledged_at,
-            },
-            Ok(PublishResult::AlreadyPresent {
-                observed_target,
-                observed_at,
-                ..
-            }) => DeliveryOutcome::ObservedPresent {
-                operation_id,
-                observed_target,
-                observed_at,
-            },
-            Ok(PublishResult::Rejected {
-                reason,
-                observed_target,
-                observed_at,
-            }) => {
-                let kind = if reason == "target_moved" {
-                    RefusalReason::TargetMoved
-                } else {
-                    RefusalReason::Rejected
-                };
-                refuse(kind, &reason, observed_target, observed_at)
-            }
-            Err(e) if e.code == "recovery_blocked" => {
-                DeliveryOutcome::RecoveryBlocked(RecoveryBlocked {
-                    operation_id,
-                    message: e.message,
-                    details: e.details,
-                })
-            }
-            Err(e) if e.uncertain() => DeliveryOutcome::Ambiguous { operation_id },
-            Err(e) => match e.code.as_str() {
-                "target_moved" => refuse(RefusalReason::TargetMoved, &e.message, None, None),
-                "conflicted" => refuse(RefusalReason::Conflicted, &e.message, None, None),
-                "unsupported_feature" => {
-                    refuse(RefusalReason::TargetNotAllowed, &e.message, None, None)
-                }
-                _ => DeliveryOutcome::Failed {
-                    operation_id,
-                    error: e,
-                },
-            },
-        })
+            Err(error) => Err(error),
+        }
     }
 }
-
+mod outcomes;
 #[cfg(test)]
 mod tests {
     use super::*;
