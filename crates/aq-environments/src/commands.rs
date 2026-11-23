@@ -42,7 +42,9 @@ pub trait EnvironmentOps: Send + Sync {
 }
 
 /// The recipes at `commit` through aq-git's `tree` query (no blob is read):
-/// the commit's tree, then `.aq`, then `environments`.
+/// the commit's tree, then `.aq`, then `environments`. aq-git lists at most
+/// 1000 entries of one tree and takes no path or cursor, so a listing it cut
+/// short is `None` (unknown), never "no recipes".
 pub async fn recipes_at(
     socket: &Path,
     repository: Uuid,
@@ -60,8 +62,12 @@ pub async fn recipes_at(
             return None;
         };
         let entries = listed["entries"].as_array()?;
+        let complete = listed["truncated"] == false;
         let path = |e: &Value| e["path"]["value"].as_str().map(str::to_owned);
         let Some(directory) = directory else {
+            if !complete {
+                return None;
+            }
             let recipes = entries.iter().filter(|e| e["type"] == "blob");
             return Some(
                 recipes
@@ -77,8 +83,8 @@ pub async fn recipes_at(
             .find(|e| e["type"] == "tree" && path(e).as_deref() == Some(*directory));
         match next.and_then(|e| e["oid"]["hex"].as_str()) {
             Some(hex) => oid = hex.to_owned(),
-            // No recipe directory: no recipes.
-            None => return Some(vec![]),
+            // No recipe directory in a whole listing: no recipes.
+            None => return complete.then(Vec::new),
         }
     }
     None
@@ -138,30 +144,69 @@ async fn admitted(
     .await
 }
 
-/// `environment.build`, at dispatch and in its transaction: the operation's
-/// frozen request (a queued builder job, or the answer it completes with
-/// when no job is needed), or `Unreachable`.
-pub async fn build(
-    db: &mut PgConnection,
+/// The commit a build reads and the recipes aq-git lists there.
+pub struct Listing {
+    /// `None`: a project whose main head is not known yet.
+    commit: Option<String>,
+    recipes: Vec<(String, String)>,
+}
+/// Lists `target`'s recipes before the dispatch transaction opens (aq-git
+/// is not called while the namespace is locked): at the task's result
+/// head, or at the project's main head.
+pub async fn listing(
+    pool: &PgPool,
     ops: &dyn EnvironmentOps,
     target: &Target,
-) -> sqlx::Result<Result<Value, Unreachable>> {
+) -> sqlx::Result<Result<Listing, Unreachable>> {
+    let commit = match target {
+        Target::Task { head, .. } => Some(head.clone()),
+        Target::Project(project) => {
+            sqlx::query_scalar("SELECT head FROM delivery_main_heads WHERE project_id=$1")
+                .bind(project)
+                .fetch_optional(pool)
+                .await?
+        }
+    };
+    let recipes = match &commit {
+        Some(commit) => match ops.recipes(target.project(), commit).await {
+            Some(recipes) => recipes,
+            None => return Ok(Err(Unreachable)),
+        },
+        None => vec![],
+    };
+    Ok(Ok(Listing { commit, recipes }))
+}
+
+/// `environment.build`, at dispatch and in its transaction, from the
+/// [`listing`] read before it: the operation's frozen request (a queued
+/// builder job, or the answer it completes with when no job is needed).
+pub async fn build(
+    db: &mut PgConnection,
+    target: &Target,
+    listing: Listing,
+) -> sqlx::Result<Value> {
     let project = target.project();
     let answer = |(outcome, output): Answer| {
-        Ok(Ok(
-            json!({"project": project, "answer": {"outcome": outcome, "output": output}}),
-        ))
+        Ok(json!({"project": project, "answer": {"outcome": outcome, "output": output}}))
     };
     let Some(name) = project_name(db, project).await? else {
         return answer(failed("", "subject", "the project has no binding"));
     };
     let prefix = format!("{name}.");
     let admitted = admitted(db, project).await?;
+    let Listing {
+        commit,
+        recipes: at_head,
+    } = listing;
+    let Some(commit) = commit else {
+        return answer(failed(
+            "",
+            "fetch",
+            "the project's main head is not known yet",
+        ));
+    };
     let (commit, recipes) = match target {
-        Target::Task { head, .. } => {
-            let Some(at_head) = ops.recipes(project, head).await else {
-                return Ok(Err(Unreachable));
-            };
+        Target::Task { .. } => {
             let blob = |id: &str| admitted.iter().find(|(a, _)| a == id).map(|(_, b)| b);
             let mut changed: Vec<String> = (at_head.iter())
                 .filter(|(n, b)| blob(&format!("{prefix}{n}")) != Some(&Some(b.clone())))
@@ -177,29 +222,20 @@ pub async fn build(
                 (true, false) => return answer(("unchanged", json!({}))),
                 // Only a recipe removed: nothing to build.
                 (true, true) => return answer(("built", json!({"builds": []}))),
-                _ => (head.clone(), changed),
+                _ => (commit, changed),
             }
         }
         Target::Project(_) => {
-            let head: Option<String> =
-                sqlx::query_scalar("SELECT head FROM delivery_main_heads WHERE project_id=$1")
-                    .bind(project)
-                    .fetch_optional(&mut *db)
-                    .await?;
-            let Some(head) = head else {
-                return answer(failed(
-                    "",
-                    "fetch",
-                    "the project's main head is not known yet",
-                ));
-            };
-            let names: Vec<String> = (admitted.iter())
+            // The admitted recipes still on main: one gone from it would fail.
+            let mut names: Vec<String> = (admitted.iter())
                 .filter_map(|(id, _)| id.strip_prefix(&prefix).map(str::to_owned))
+                .filter(|name| at_head.iter().any(|(n, _)| n == name))
                 .collect();
+            names.sort();
             if names.is_empty() {
                 return answer(("unchanged", json!({})));
             }
-            (head, names)
+            (commit, names)
         }
     };
     if recipes.len() > MAX_BUILDS {
@@ -225,7 +261,7 @@ pub async fn build(
         base_template: &base,
     };
     let job_id = worker::enqueue(&mut *db, &job).await?;
-    Ok(Ok(json!({"project": project, "job_id": job_id})))
+    Ok(json!({"project": project, "job_id": job_id}))
 }
 
 /// One step of a running `environment.build`: its completion once its job
@@ -421,7 +457,7 @@ pub async fn admit(
     .await?;
     let mut default = None;
     for b in &builds {
-        write(&mut tx, project, merged, b, limits.keep_versions).await?;
+        write(&mut tx, project, merged, b).await?;
         let newest: Option<String> = sqlx::query_scalar(
             "SELECT template_digest FROM environment_versions WHERE environment_id=$1 ORDER BY admitted_at DESC,\
              (CASE WHEN version ~ '^[0-9]{1,18}$' THEN version::bigint END) DESC NULLS LAST LIMIT 1",
@@ -434,9 +470,11 @@ pub async fn admit(
             default = Some(b.id.clone());
         }
     }
-    tx.commit().await?;
+    // The binding changes while the versions are written but not committed:
+    // a refusal or a retry rolls them back, and nothing is pruned before the
+    // binding took them. The builds stay (rolling, from the complete route),
+    // so a pass whose completion is lost answers the same again.
     let ids: Vec<String> = builds.iter().map(|b| b.id.clone()).collect();
-    let digests: Vec<&str> = builds.iter().map(|b| b.digest.as_str()).collect();
     if !ids.is_empty() {
         match ops
             .bind(actor, project, &ids, default.as_deref(), operation)
@@ -444,33 +482,22 @@ pub async fn admit(
         {
             Bound::Done => {}
             Bound::Retry => return Ok(None),
-            Bound::Refused => {
-                // Nothing is half-registered: the versions go again.
-                sqlx::query("DELETE FROM environment_versions WHERE project_id=$1 AND template_digest=ANY($2)")
-                    .bind(project)
-                    .bind(&digests)
-                    .execute(pool)
-                    .await?;
-                return refused("unknown_project", "binding");
-            }
+            Bound::Refused => return refused("unknown_project", "binding"),
         }
     }
-    sqlx::query("DELETE FROM environment_builds WHERE project_id=$1 AND digest=ANY($2)")
-        .bind(project)
-        .bind(&digests)
-        .execute(pool)
-        .await?;
+    for id in &ids {
+        prune(&mut tx, id, limits.keep_versions).await?;
+    }
+    tx.commit().await?;
     Ok(Some(("admitted", json!({}))))
 }
 /// Writes `b` as the next version of its environment unless a version of
-/// the same image, or from a later merge, is there; then keeps the newest
-/// `keep` versions, and every version a live attempt runs.
+/// the same image, or from a later merge, is there.
 async fn write(
     tx: &mut PgConnection,
     project: Uuid,
     merged: Option<i64>,
     b: &Built,
-    keep: u64,
 ) -> sqlx::Result<()> {
     let newest: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
         "SELECT recipe_blob_id,merged_at_ms FROM environment_versions WHERE environment_id=$1 ORDER BY admitted_at DESC,\
@@ -513,7 +540,7 @@ async fn write(
     if inserted.rows_affected() == 1 {
         tracing::info!(environment = %b.id, recipe = %b.name, digest = %b.digest, "environment version admitted");
     }
-    prune(tx, &b.id, keep).await
+    Ok(())
 }
 /// Rolling records: the newest `keep` versions of `environment`, and any
 /// version an attempt that holds its task still runs (its synthesized
@@ -618,6 +645,76 @@ pub async fn told(db: &mut PgConnection, project: Uuid, digest: &str) -> sqlx::R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fake aq-git control socket answering `tree` from `trees` (by oid),
+    /// each listing `(entries, truncated)`.
+    fn aq_git(trees: Vec<(String, Value, bool)>) -> (tempfile::TempDir, std::path::PathBuf) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("aq-git.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = Vec::new();
+                reader.read_until(b'\n', &mut line).await.unwrap();
+                let r: Value = serde_json::from_slice(&line).unwrap();
+                let oid = r["params"]["oid"]["hex"].as_str().unwrap();
+                let (_, entries, truncated) = trees.iter().find(|(o, ..)| o == oid).unwrap();
+                let out = json!({"protocol_version": 1, "request_id": r["request_id"], "ok": true,
+                    "result": {"entries": entries, "truncated": truncated}});
+                let mut bytes = serde_json::to_vec(&out).unwrap();
+                bytes.push(b'\n');
+                reader.into_inner().write_all(&bytes).await.unwrap();
+            }
+        });
+        (dir, socket)
+    }
+    fn entry(kind: &str, path: &str, oid: char) -> Value {
+        json!({"mode": "100644", "type": kind, "oid": {"algorithm": "sha1", "hex": oid.to_string().repeat(40)},
+            "path": {"encoding": "utf8", "value": path}})
+    }
+
+    /// Fix round 1: a listing aq-git cut short is never "no recipes".
+    #[tokio::test]
+    async fn recipes_are_read_from_the_environments_tree_and_a_truncated_listing_is_unknown() {
+        let (c, a, e) = ("c".repeat(40), "a".repeat(40), "e".repeat(40));
+        let root = vec![entry("tree", ".aq", 'a'), entry("blob", "README.md", 'r')];
+        let aq = vec![entry("tree", "environments", 'e')];
+        let recipes = vec![
+            entry("blob", "web.md", '1'),
+            entry("blob", "notes.txt", '2'),
+        ];
+        let (_dir, socket) = aq_git(vec![
+            (c.clone(), json!(root), false),
+            (a.clone(), json!(aq), false),
+            (e.clone(), json!(recipes), false),
+        ]);
+        let listed = recipes_at(&socket, Uuid::nil(), 1, &c).await;
+        assert_eq!(listed, Some(vec![("web".to_string(), "1".repeat(40))]));
+        // The root is cut short before `.aq`: unknown, not empty.
+        let (_dir, socket) = aq_git(vec![(
+            c.clone(),
+            json!([entry("blob", "README.md", 'r')]),
+            true,
+        )]);
+        assert_eq!(recipes_at(&socket, Uuid::nil(), 1, &c).await, None);
+        // The recipe directory itself is cut short: unknown.
+        let (_dir, socket) = aq_git(vec![
+            (c.clone(), json!([entry("tree", ".aq", 'a')]), false),
+            (a, json!(aq), false),
+            (e, json!([entry("blob", "web.md", '1')]), true),
+        ]);
+        assert_eq!(recipes_at(&socket, Uuid::nil(), 1, &c).await, None);
+        // No `.aq` in a complete listing: no recipes.
+        let (_dir, socket) = aq_git(vec![(
+            c.clone(),
+            json!([entry("blob", "README.md", 'r')]),
+            false,
+        )]);
+        assert_eq!(recipes_at(&socket, Uuid::nil(), 1, &c).await, Some(vec![]));
+    }
 
     #[test]
     fn a_summary_names_each_check_and_the_first_line_of_its_output() {

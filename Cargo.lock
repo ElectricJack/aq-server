@@ -296,6 +296,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "sqlx-postgres",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",

@@ -60,6 +60,11 @@ impl EnvironmentOps for ServerEnvironments {
         {
             Ok(_) => Bound::Done,
             Err(AppError::BadRequest(_) | AppError::NotFound(_)) => Bound::Refused,
+            // A binding naming an absent or revoked worker never validates;
+            // other conflicts (a concurrent change, a peer down) pass.
+            Err(AppError::Conflict(m)) if m.contains("absent or revoked worker identity") => {
+                Bound::Refused
+            }
             Err(_) => Bound::Retry,
         }
     }
@@ -74,15 +79,6 @@ impl Service {
         revision: i64,
         intent: &Intent,
     ) -> Result<HostResult> {
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
-        match stage.ok_or(Error::Unknown)? {
-            Stage::Retained(result) => {
-                tx.commit().await?;
-                return Ok(result);
-            }
-            Stage::Pending(_) => return Err(Error::Unknown),
-            Stage::Fresh => {}
-        }
         let (input, build) = (&intent.input, intent.command.name == "environment.build");
         let ours = |p: Uuid| p == self.namespace.project_id || self.installation_routing;
         // Exactly one of `subject` and `project`, which the schema cannot say.
@@ -110,6 +106,25 @@ impl Service {
             },
             _ => return Err(Error::Invalid),
         };
+        // aq-git is read before the namespace is locked.
+        let ops = self.ports()?.environment_ops.as_ref();
+        let listing = match (&found, build) {
+            (Ok((target, _)), true) => Some(
+                environments::listing(&self.pool, ops, target)
+                    .await?
+                    .map_err(|_| Error::Unknown)?,
+            ),
+            _ => None,
+        };
+        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        match stage.ok_or(Error::Unknown)? {
+            Stage::Retained(result) => {
+                tx.commit().await?;
+                return Ok(result);
+            }
+            Stage::Pending(_) => return Err(Error::Unknown),
+            Stage::Fresh => {}
+        }
         let (request, task) = match (found, build) {
             (Err(what), false) => {
                 let refused = host_result(
@@ -129,9 +144,8 @@ impl Service {
                 )
             }
             (Ok((target, task)), true) => {
-                let ops = self.ports()?.environment_ops.as_ref();
-                let built = environments::build(&mut tx, ops, &target).await?;
-                (built.map_err(|_| Error::Unknown)?, task)
+                let listing = listing.ok_or(Error::Unknown)?;
+                (environments::build(&mut tx, &target, listing).await?, task)
             }
             (Ok((Target::Task { project, .. } | Target::Project(project), task)), false) => (
                 json!({"project": project, "task": task, "builds": input["builds"]}),

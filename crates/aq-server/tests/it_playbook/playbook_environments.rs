@@ -162,6 +162,8 @@ mod commands {
     struct Ops {
         trees: Mutex<BTreeMap<String, Vec<(String, String)>>>,
         binds: Mutex<Vec<Bind>>,
+        /// How the binding answers: 0 done, 1 retry later, 2 refused.
+        answer: std::sync::atomic::AtomicU8,
     }
     #[async_trait::async_trait]
     impl EnvironmentOps for Ops {
@@ -178,7 +180,11 @@ mod commands {
         ) -> Bound {
             let call = (project, environments.to_vec(), default.map(Into::into));
             self.binds.lock().unwrap().push(call);
-            Bound::Done
+            match self.answer.load(std::sync::atomic::Ordering::SeqCst) {
+                0 => Bound::Done,
+                1 => Bound::Retry,
+                _ => Bound::Refused,
+            }
         }
     }
     #[derive(Default)]
@@ -475,7 +481,7 @@ mod commands {
             &self,
             id: &str,
         ) -> Vec<(String, String, Option<String>, Option<i64>, Option<String>)> {
-            sqlx::query_as("SELECT version,template_digest,recipe_blob_id,merged_at_ms,base_digest FROM environment_versions WHERE environment_id=$1 ORDER BY version::bigint")
+            sqlx::query_as("SELECT version,template_digest,recipe_blob_id,merged_at_ms,base_digest FROM environment_versions WHERE environment_id=$1 ORDER BY admitted_at,version")
                 .bind(id)
                 .fetch_all(&self.pool)
                 .await
@@ -699,7 +705,8 @@ mod commands {
                 Some("acme.web".to_string())
             )]
         );
-        assert_eq!(h.builds_kept().await, 0, "an admitted build is not kept");
+        // Kept (rolling) so that a pass whose completion was lost answers the same.
+        assert_eq!(h.builds_kept().await, 2);
         // Nodes are told of the new versions.
         let boot = aq_environments::BootEnvironments::new([], None);
         let catalog = aq_environments::Catalog::load(&h.pool, &boot)
@@ -941,5 +948,167 @@ mod commands {
         let mut expected = vec![in_use.to_string(), "n2".into()];
         expected.sort();
         assert_eq!(left, expected, "the newest one, and the one in use");
+    }
+
+    async fn keep_versions(h: &H, keep: u64) {
+        let limits = json!({"max_install_steps": 64, "max_step_args": 32, "max_arg_bytes": 4096,
+            "max_prefetch": 16, "max_recipe_bytes": 1048576, "build_wall_ms": 3600000,
+            "build_cpu_millis": 4000, "build_memory_bytes": 8589934592u64, "log_bytes": 65536,
+            "try_concurrency": 2, "keep_versions": keep, "max_job_claims": 3});
+        sqlx::query("UPDATE role_settings SET environment_limits=$1 WHERE singleton")
+            .bind(limits)
+            .execute(&h.pool)
+            .await
+            .unwrap();
+    }
+    /// A task whose head changes `web`, built as `d` and merged at `at_ms`:
+    /// the admit's input.
+    async fn merged_build(h: &H, head: char, blob: char, d: char, at_ms: i64) -> Value {
+        let task = h.task(head);
+        h.tree(&oid(head), &[("web", blob)]);
+        let built = h
+            .built(
+                json!({"subject": H::subject(task)}),
+                json!([build("web", d, true)]),
+            )
+            .await;
+        h.merged(task, at_ms).await;
+        json!({"subject": H::subject(task), "builds": built["output"]["builds"]})
+    }
+
+    /// Fix round 1: the admit step is keyed idempotent. A pass whose
+    /// completion was lost after the versions and the binding were written
+    /// answers `admitted` again.
+    #[tokio::test]
+    async fn an_admit_whose_completion_is_lost_replays_to_admitted() {
+        let h = harness(false).await;
+        let input = merged_build(&h, 'c', 'e', 'a', 1_000).await;
+        let task = input["subject"]["id"].as_str().unwrap();
+        let request = json!({"project": h.project, "task": task, "builds": input["builds"]});
+        let (operation, actor) = (Uuid::new_v4(), h.f.actor);
+        for _ in 0..2 {
+            let answer = environments::admit(&h.pool, h.ops.as_ref(), actor, operation, &request)
+                .await
+                .unwrap();
+            assert_eq!(answer, Some(("admitted", json!({}))));
+        }
+        assert_eq!(h.versions("acme.web").await.len(), 1);
+    }
+
+    /// Fix round 1: a binding that refuses the change leaves the versions
+    /// that were there (nothing pruned, nothing added); one that asks to try
+    /// again completes on a later pass.
+    #[tokio::test]
+    async fn a_refused_admit_leaves_the_previous_versions_intact_and_a_retry_completes_later() {
+        let h = harness(false).await;
+        keep_versions(&h, 1).await;
+        h.version("web", "1", 'p', 'b', '1').await;
+        let input = merged_build(&h, 'c', 'e', 'a', 1_000).await;
+        h.ops.answer.store(2, std::sync::atomic::Ordering::SeqCst);
+        let refused = h.admit(input.clone()).await;
+        assert_eq!(
+            refused["output"],
+            json!({"reason": "unknown_project", "step": "binding"})
+        );
+        let kept: Vec<String> = h
+            .versions("acme.web")
+            .await
+            .into_iter()
+            .map(|v| v.1)
+            .collect();
+        assert_eq!(kept, [digest('p')]);
+        // Retry: no completion until the binding takes it.
+        h.ops.answer.store(1, std::sync::atomic::Ordering::SeqCst);
+        let handle = h.accepted("environment.admit", input).await;
+        assert_eq!(h.pass().await, 0);
+        assert!(h.completion(&handle).await.is_none());
+        h.ops.answer.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(h.pass().await, 1);
+        assert_eq!(h.completion(&handle).await.unwrap()["outcome"], "admitted");
+        let kept: Vec<String> = h
+            .versions("acme.web")
+            .await
+            .into_iter()
+            .map(|v| v.1)
+            .collect();
+        assert_eq!(kept, [digest('a')], "pruned to keep_versions once bound");
+    }
+
+    #[tokio::test]
+    async fn admit_takes_exactly_one_of_subject_and_project_and_only_its_own_recipes() {
+        let h = harness(false).await;
+        let input = merged_build(&h, 'c', 'e', 'a', 1_000).await;
+        let mut both = input.clone();
+        both["project"] = json!(h.project.to_string());
+        assert_eq!(
+            h.try_run("environment.admit", both).await.unwrap_err(),
+            Error::Invalid
+        );
+        let neither = json!({"builds": input["builds"]});
+        assert_eq!(
+            h.try_run("environment.admit", neither).await.unwrap_err(),
+            Error::Invalid
+        );
+        // A recipe name with a dot never becomes another namespace's id.
+        let task = h.task('d');
+        h.tree(&oid('d'), &[("beta.web", 'f')]);
+        let built = h
+            .built(
+                json!({"subject": H::subject(task)}),
+                json!([build("beta.web", 'b', false)]),
+            )
+            .await;
+        h.merged(task, 2_000).await;
+        let dotted = json!({"subject": H::subject(task), "builds": built["output"]["builds"]});
+        assert_eq!(
+            h.admit(dotted).await["output"],
+            json!({"reason": "unknown_build", "step": "beta.web"})
+        );
+        // Another project's build is not this project's.
+        let other = Uuid::new_v4();
+        bind(&h.pool, other, "beta").await;
+        sqlx::query("INSERT INTO environment_builds(project_id,digest,name,job_id,commit,base_template,build) VALUES($1,$2,'web',$3,$4,$5,$6)")
+            .bind(other)
+            .bind(digest('9'))
+            .bind(Uuid::new_v4())
+            .bind(oid('c'))
+            .bind(base('1').image)
+            .bind(build("web", '9', false))
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        let mut theirs = input.clone();
+        theirs["builds"][0]["digest"] = json!(digest('9'));
+        assert_eq!(
+            h.admit(theirs).await["output"],
+            json!({"reason": "unknown_build", "step": "web"})
+        );
+        assert!(h.versions("acme.web").await.is_empty());
+        assert!(h.versions("beta.web").await.is_empty());
+    }
+
+    /// Fix round 1: a rebuild on a new base skips an admitted environment
+    /// whose recipe is no longer on main.
+    #[tokio::test]
+    async fn a_project_rebuild_skips_recipes_gone_from_main() {
+        let h = harness(false).await;
+        h.version("web", "1", 'w', 'b', '1').await;
+        h.version("api", "1", 'x', 'c', '1').await;
+        sqlx::query(
+            "INSERT INTO delivery_main_heads(project_id,head,observed_at_ms) VALUES($1,$2,1)",
+        )
+        .bind(h.project)
+        .bind(oid('f'))
+        .execute(&h.pool)
+        .await
+        .unwrap();
+        h.tree(&oid('f'), &[("web", 'b')]);
+        h.accepted(
+            "environment.build",
+            json!({"project": h.project.to_string()}),
+        )
+        .await;
+        let (_, recipes, ..) = h.jobs().await.pop().unwrap();
+        assert_eq!(recipes, json!(["web"]));
     }
 }
