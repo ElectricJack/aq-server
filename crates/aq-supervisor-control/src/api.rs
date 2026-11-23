@@ -91,6 +91,16 @@ struct Control {
     #[serde(default)]
     intelligence_profile: Option<aq_manual_sessions::intelligence::Selection>,
 }
+impl Control {
+    fn validate(&self, id: Uuid) -> Result<()> {
+        if [id, self.operation_id].iter().any(Uuid::is_nil)
+            || self.expected_revision >= i64::MAX as u64
+        {
+            return Err(invalid("Invalid supervisor control identity"));
+        }
+        Ok(())
+    }
+}
 async fn control(
     State(s): State<Service>,
     headers: HeaderMap,
@@ -98,25 +108,14 @@ async fn control(
     Json(v): Json<Control>,
 ) -> Result<Json<Value>> {
     let actor = (s.owner)(headers).await?;
-    if id.is_nil() || v.operation_id.is_nil() || v.expected_revision >= i64::MAX as u64 {
-        return Err(invalid("Invalid supervisor control identity"));
-    }
+    v.validate(id)?;
     let request = json!({"conversation_id":id,"expected_revision":v.expected_revision,"enabled":v.enabled,"intelligence_profile":v.intelligence_profile});
     let mut tx = s.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(109109)")
         .execute(&mut *tx)
         .await?;
-    if let Some(old) = sqlx::query(
-        "SELECT actor_id,request,receipt FROM supervisor_control_operations WHERE operation_id=$1",
-    )
-    .bind(v.operation_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    {
-        if old.get::<Uuid, _>("actor_id") != actor || old.get::<Value, _>("request") != request {
-            return Err(conflict("Supervisor control identity is already used"));
-        }
-        return Ok(Json(old.get("receipt")));
+    if let Some(receipt) = replay_control(&mut tx, v.operation_id, actor, &request).await? {
+        return Ok(Json(receipt));
     }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM supervisor_control_operations")
         .fetch_one(&mut *tx)
@@ -136,25 +135,7 @@ async fn control(
             "Supervisor settings changed; refresh before retrying",
         ));
     }
-    let profile = if let Some(selected) = &v.intelligence_profile {
-        aq_manual_sessions::intelligence::choices(&s.pool)
-            .await?
-            .into_iter()
-            .find(|p| {
-                p["harness"] == "codex"
-                    && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
-                    && p["profile_id"] == selected.profile_id
-                    && p["candidate_id"] == selected.candidate_id
-            })
-            .map(stored)
-            .ok_or_else(|| {
-                conflict("Intelligence profile changed or is unavailable; select it again")
-            })?
-    } else {
-        current
-            .get::<Option<Value>, _>("profile")
-            .unwrap_or(Value::Null)
-    };
+    let profile = resolve_control_profile(&s.pool, &v, &current).await?;
     if v.enabled && profile.is_null() {
         return Err(invalid("Choose a supervisor intelligence profile"));
     }
@@ -176,6 +157,53 @@ async fn control(
     tx.commit().await?;
     Ok(Json(receipt))
 }
+async fn replay_control(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    op: Uuid,
+    actor: Uuid,
+    request: &Value,
+) -> Result<Option<Value>> {
+    if let Some(old) = sqlx::query(
+        "SELECT actor_id,request,receipt FROM supervisor_control_operations WHERE operation_id=$1",
+    )
+    .bind(op)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        if old.get::<Uuid, _>("actor_id") != actor || &old.get::<Value, _>("request") != request {
+            return Err(conflict("Supervisor control identity is already used"));
+        }
+        return Ok(Some(old.get("receipt")));
+    }
+    Ok(None)
+}
+
+async fn resolve_control_profile(
+    pool: &PgPool,
+    control: &Control,
+    current: &sqlx::postgres::PgRow,
+) -> Result<Value> {
+    Ok(if let Some(selected) = &control.intelligence_profile {
+        aq_manual_sessions::intelligence::choices(pool)
+            .await?
+            .into_iter()
+            .find(|p| {
+                p["harness"] == "codex"
+                    && matches!(p["reasoning"].as_str(), Some("low" | "medium" | "high"))
+                    && p["profile_id"] == selected.profile_id
+                    && p["candidate_id"] == selected.candidate_id
+            })
+            .map(stored)
+            .ok_or_else(|| {
+                conflict("Intelligence profile changed or is unavailable; select it again")
+            })?
+    } else {
+        current
+            .get::<Option<Value>, _>("profile")
+            .unwrap_or(Value::Null)
+    })
+}
+
 async fn operation(
     State(s): State<Service>,
     headers: HeaderMap,
