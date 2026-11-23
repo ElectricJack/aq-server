@@ -1,6 +1,5 @@
-use super::launch::Launch;
 use super::*;
-use aq_server::store::Store;
+use crate::agent_launch::{Launch, enroll, state};
 /// Also the agent-credential fixture for `agent_task_comments`.
 pub(crate) struct Env {
     pub(crate) db: TestDb,
@@ -57,7 +56,15 @@ pub(crate) async fn setup_graph_with_attempt(
     let store = db.store().await;
     let pool = db.pool().await;
     let (node, node_token) = enroll(&store).await;
-    let launch = Launch::new(node, attempt, edit);
+    let launch = Launch::new(node, attempt, |profile, context| {
+        for cap in ["message.send", "message.read", "message.ack"] {
+            profile["capabilities"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(cap));
+        }
+        edit(profile, context);
+    });
     launch.install(&pool, node).await;
     let directory = tempfile::tempdir().unwrap();
     let runtime = runtime(endpoint.url, endpoint.mutation_actor_id, &directory).await;
@@ -77,34 +84,6 @@ pub(crate) async fn setup_graph_with_attempt(
         node_token,
     }
 }
-async fn enroll(store: &Store) -> (Uuid, String) {
-    let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
-    let owner = store
-        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
-        .await
-        .unwrap()
-        .unwrap();
-    let node_token = tokens::new_node_credential();
-    store
-        .create_enrollment("agent-test", owner.id, now, now + Duration::minutes(5))
-        .await
-        .unwrap();
-    let node = store
-        .redeem_enrollment(
-            "agent-test",
-            NewNode {
-                name: "agent".into(),
-                credential_hash: tokens::verifier(&node_token),
-                worker_version: "0.1.0".into(),
-                protocol_version: 1,
-            },
-            now,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    (node.id, node_token)
-}
 async fn runtime(
     graph_url: &str,
     mutation_actor_id: Option<&str>,
@@ -122,37 +101,4 @@ async fn runtime(
     })
     .await
     .unwrap()
-}
-fn state(store: Store, runtime: Runtime) -> (AppState, Arc<std::sync::atomic::AtomicI64>) {
-    let config: Config = toml::from_str(
-        r#"format_version=1
-environment="development"
-[server]
-admin_bind="127.0.0.1:0"
-worker_bind="127.0.0.1:0"
-public_origin="http://127.0.0.1:8080"
-[auth]
-mode="dev"
-dev_email="owner@localhost"
-[bootstrap]
-owner_email="owner@localhost"
-enabled=true
-"#,
-    )
-    .unwrap();
-    let time = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
-    let clock_time = time.clone();
-    let state = AppState {
-        internal_work: Default::default(),
-        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
-        config: Arc::new(config),
-        store,
-        clock: Arc::new(move || {
-            Utc.timestamp_millis_opt(clock_time.load(std::sync::atomic::Ordering::SeqCst))
-                .unwrap()
-        }),
-        agent_access: Some(Arc::new(runtime)),
-        source_retention: None,
-    };
-    (state, time)
 }

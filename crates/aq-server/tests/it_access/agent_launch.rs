@@ -1,28 +1,131 @@
-use super::*;
-pub(super) struct Launch {
-    pub(super) binding: Value,
+//! Seed the granted execution attempt used by the access integration fixtures.
+use aq_server::{
+    AppState,
+    agent_access::Runtime,
+    config::Config,
+    identity::verifier_from_config,
+    store::{NewNode, Store},
+    tokens,
+};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
+use chrono::{Duration, TimeZone, Utc};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use tower::ServiceExt;
+use uuid::Uuid;
+pub(crate) async fn send(
+    app: &Router,
+    path: &str,
+    token: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut b = Request::builder()
+        .method(if body.is_some() { "POST" } else { "GET" })
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("X-AQ-Request", "1");
+    if let Some(t) = token {
+        b = b.header("authorization", format!("Bearer {t}"));
+    }
+    let r = app
+        .clone()
+        .oneshot(
+            b.body(Body::from(body.map(|v| v.to_string()).unwrap_or_default()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = r.status();
+    let bytes = r.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+pub(crate) async fn enroll(store: &Store) -> (Uuid, String) {
+    let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
+    let owner = store
+        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
+        .await
+        .unwrap()
+        .unwrap();
+    let node_token = tokens::new_node_credential();
+    store
+        .create_enrollment("agent-test", owner.id, now, now + Duration::minutes(5))
+        .await
+        .unwrap();
+    let node = store
+        .redeem_enrollment(
+            "agent-test",
+            NewNode {
+                name: "agent".into(),
+                credential_hash: tokens::verifier(&node_token),
+                worker_version: "0.1.0".into(),
+                protocol_version: 1,
+            },
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    (node.id, node_token)
+}
+pub(crate) fn state(
+    store: Store,
+    runtime: Runtime,
+) -> (AppState, Arc<std::sync::atomic::AtomicI64>) {
+    let config: Config = toml::from_str(
+        r#"format_version=1
+environment="development"
+[server]
+admin_bind="127.0.0.1:0"
+worker_bind="127.0.0.1:0"
+public_origin="http://127.0.0.1:8080"
+[auth]
+mode="dev"
+dev_email="owner@localhost"
+[bootstrap]
+owner_email="owner@localhost"
+enabled=true
+"#,
+    )
+    .unwrap();
+    let time = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
+    let clock_time = time.clone();
+    let state = AppState {
+        internal_work: Default::default(),
+        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
+        config: Arc::new(config),
+        store,
+        clock: Arc::new(move || {
+            Utc.timestamp_millis_opt(clock_time.load(std::sync::atomic::Ordering::SeqCst))
+                .unwrap()
+        }),
+        agent_access: Some(Arc::new(runtime)),
+        source_retention: None,
+    };
+    (state, time)
+}
+pub(crate) struct Launch {
+    pub(crate) binding: Value,
     profile: Value,
     context: Value,
     identity: Value,
     attempt: Value,
 }
 impl Launch {
-    pub(super) fn new(
+    pub(crate) fn new(
         node: Uuid,
         attempt: Option<Uuid>,
         edit: impl FnOnce(&mut Value, &mut Value),
     ) -> Self {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../../protocol/agent-access/v1/fixtures/base.json"
+            "../../../../protocol/agent-access/v1/fixtures/base.json"
         ))
         .unwrap();
         let mut profile = fixture["context"]["profile"].clone();
-        for cap in ["message.send", "message.read", "message.ack"] {
-            profile["capabilities"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!(cap));
-        }
         let mut context = fixture["context"]["context"].clone();
         let original_context = context.clone();
         edit(&mut profile, &mut context);
@@ -46,7 +149,7 @@ impl Launch {
             attempt,
         }
     }
-    pub(super) async fn install(&self, pool: &sqlx::PgPool, node: Uuid) {
+    pub(crate) async fn install(&self, pool: &sqlx::PgPool, node: Uuid) {
         let Self {
             binding,
             profile,
@@ -68,7 +171,7 @@ impl Launch {
             .unwrap();
         sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,state) VALUES($1,$2,$3,$4,$5,$6)").bind(attempt_id).bind(task_id).bind(node).bind(offer_id).bind(session_id).bind(execution).execute(pool).await.unwrap();
     }
-    pub(super) async fn provision(&self, admin: &Router, grants: Option<Value>) {
+    pub(crate) async fn provision(&self, admin: &Router, grants: Option<Value>) {
         let attempt_id = &self.binding["attempt_id"];
         let Self {
             profile, context, ..
@@ -92,7 +195,7 @@ impl Launch {
             StatusCode::OK
         );
     }
-    pub(super) async fn issue(&self, app: &Router, node_token: &str) -> String {
+    pub(crate) async fn issue(&self, app: &Router, node_token: &str) -> String {
         let Self {
             identity, attempt, ..
         } = self;

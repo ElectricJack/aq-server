@@ -1,10 +1,6 @@
 //! Durable AQ-11 mailboxes against disposable PostgreSQL; real routers and authority.
 use aq_server::{
-    AppState,
     agent_access::{AgentAccessConfig, Runtime},
-    config::Config,
-    identity::verifier_from_config,
-    store::NewNode,
     test_support::TestDb,
     tokens,
 };
@@ -13,49 +9,21 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{Duration, TimeZone, Utc};
-use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
 mod delivery;
 mod fixture;
-mod launch;
 mod limits;
 mod read_lock;
 mod receipts;
 mod successor;
 mod supervisor;
+pub(crate) use crate::agent_launch::send;
 pub(crate) use fixture::{
     Env, GraphEndpoint, setup, setup_graph, setup_graph_with, setup_graph_with_attempt, setup_with,
 };
-pub(crate) async fn send(
-    app: &Router,
-    path: &str,
-    token: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let mut b = Request::builder()
-        .method(if body.is_some() { "POST" } else { "GET" })
-        .uri(path)
-        .header("content-type", "application/json")
-        .header("X-AQ-Request", "1");
-    if let Some(t) = token {
-        b = b.header("authorization", format!("Bearer {t}"));
-    }
-    let r = app
-        .clone()
-        .oneshot(
-            b.body(Body::from(body.map(|v| v.to_string()).unwrap_or_default()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = r.status();
-    let bytes = r.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
 fn mailbox(e: &Env, session: bool) -> Value {
     let mut r = json!({"kind":"task","workspace_id":e.binding["workspace_id"],"project_id":e.binding["project_id"],"task_id":e.binding["task_id"]});
     if session {
