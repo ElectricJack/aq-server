@@ -1,6 +1,12 @@
 //! Compact authority loading from immutable launch facts.
+use super::{
+    AuthorityError, AuthorityView,
+    cache::{Facts, Key},
+};
 use crate::execution::profiled::Stop;
 pub use aq_profiled_state::hot::*;
+use aq_session_protocol::LaunchBinding;
+use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 /// Project locked state and verified facts; the common loader applies authorization.
 pub fn project(
@@ -74,12 +80,8 @@ pub(super) async fn load_adopted_locked(
     policy: super::Policy,
     rows: super::Rows,
 ) -> super::Result<Option<super::AuthorityView>> {
-    use super::{
-        AuthorityError, Policy,
-        cache::{Facts, Key},
-    };
-    use aq_session_protocol::{Digest, LaunchBinding};
-    use sqlx::Row;
+    use super::Policy;
+    use aq_session_protocol::Digest;
     if node.is_nil() || attempt_id.is_nil() {
         return Err(AuthorityError::Identity);
     }
@@ -105,75 +107,7 @@ pub(super) async fn load_adopted_locked(
         launch_manifest_digest: digest("manifest_digest")?,
         selection_digest: digest("selection_digest")?,
     };
-    let cached = if let Some(state) = state {
-        state
-            .store
-            .verified_profiled_facts
-            .lock()
-            .map_err(|_| AuthorityError::InvalidState)?
-            .get(&key)
-    } else {
-        None
-    };
-    let facts = if let Some(facts) = cached {
-        facts
-    } else {
-        let body = sqlx::query_scalar("SELECT state FROM execution_attempts WHERE attempt_id=$1")
-            .bind(attempt_id)
-            .fetch_one(&mut **tx)
-            .await?;
-        let verified = super::load_profiled_compat(
-            tx,
-            body,
-            attempt_id,
-            common.get("execution_deadline_ms"),
-            common.get("holds_task"),
-            revoked,
-            rows,
-        )
-        .await?;
-        if verified.selection_digest.as_ref() != Some(&key.selection_digest)
-            || verified.launch_manifest_digest.as_ref() != Some(&key.launch_manifest_digest)
-            || verified.execution_spec_digest != key.execution_spec_digest
-        {
-            return Err(AuthorityError::InvalidState);
-        }
-        let graph = verified.graph.ok_or(AuthorityError::InvalidState)?;
-        let graph_digest =
-            serde_json::from_value(serde_json::Value::String(graph.profile_digest.clone()))
-                .map_err(|_| AuthorityError::InvalidState)?;
-        let spec_digest =
-            serde_json::from_value(serde_json::Value::String(key.execution_spec_digest.clone()))
-                .map_err(|_| AuthorityError::InvalidState)?;
-        let facts = Facts {
-            binding: LaunchBinding {
-                schema_version: 1,
-                session: verified.session,
-                offer_id: verified.offer_id,
-                attempt_id: verified.attempt.attempt_id,
-                assignment_generation: verified.attempt.generation,
-                execution_spec_digest: spec_digest,
-                launch_manifest_digest: key.launch_manifest_digest.clone(),
-                graph_access_profile_digest: graph_digest,
-            },
-            project_id: verified.project_id,
-            task_id: verified.task_id,
-            graph,
-            terminal_policy: verified
-                .terminal_policy
-                .ok_or(AuthorityError::InvalidState)?,
-            source: verified.source.ok_or(AuthorityError::InvalidState)?,
-        };
-        if let Some(state) = state {
-            state
-                .store
-                .verified_profiled_facts
-                .lock()
-                .map_err(|_| AuthorityError::InvalidState)?
-                .insert_verified(key.clone(), facts.clone());
-        }
-        facts
-    };
+    let facts = load_verified_facts(state, tx, &key, &common, revoked, rows).await?;
     let hot: HotState =
         serde_json::from_value(row.get("state")).map_err(|_| AuthorityError::InvalidState)?;
     let view = project(
@@ -188,28 +122,12 @@ pub(super) async fn load_adopted_locked(
         revoked,
         common.get("holds_task"),
     )?;
-    if view.identity.node_id != node
-        || view.attempt.attempt_id != attempt_id
-        || view.task_id != common.get::<Uuid, _>("task_id")
-        || view.offer_id != common.get::<Uuid, _>("offer_id")
-        || view.attempt.session_id != common.get::<Uuid, _>("session_id")
-    {
-        return Err(AuthorityError::InvalidState);
-    }
+    view.require_record(node, attempt_id, &common)?;
     if matches!(policy, Policy::GraphActive | Policy::TerminalActive) {
         if !common.get::<bool, _>("holds_task") {
             return Err(AuthorityError::Revoked);
         }
-        let registered: Option<serde_json::Value> =
-            sqlx::query_scalar("SELECT state->'identity' FROM execution_nodes WHERE node_id=$1")
-                .bind(node)
-                .fetch_optional(&mut **tx)
-                .await?;
-        if registered
-            != Some(serde_json::to_value(&view.identity).map_err(|_| AuthorityError::InvalidState)?)
-        {
-            return Err(AuthorityError::StaleBoot);
-        }
+        super::require_current_boot(tx, &view.identity).await?;
         view.active_at(
             (state.ok_or(AuthorityError::Unsupported)?.clock)()
                 .timestamp_millis()
@@ -222,4 +140,83 @@ pub(super) async fn load_adopted_locked(
         return Err(AuthorityError::Unsupported);
     }
     Ok(Some(view))
+}
+
+async fn load_verified_facts(
+    state: Option<&crate::AppState>,
+    tx: &mut Transaction<'_, Postgres>,
+    key: &Key,
+    common: &PgRow,
+    revoked: bool,
+    rows: super::Rows,
+) -> super::Result<Facts> {
+    if let Some(state) = state
+        && let Some(facts) = state
+            .store
+            .verified_profiled_facts
+            .lock()
+            .map_err(|_| AuthorityError::InvalidState)?
+            .get(key)
+    {
+        return Ok(facts);
+    }
+    let body = sqlx::query_scalar("SELECT state FROM execution_attempts WHERE attempt_id=$1")
+        .bind(key.attempt_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    let verified = super::load_profiled_compat(
+        tx,
+        body,
+        key.attempt_id,
+        common.get("execution_deadline_ms"),
+        common.get("holds_task"),
+        revoked,
+        rows,
+    )
+    .await?;
+    let facts = facts_from_verified(verified, key)?;
+    if let Some(state) = state {
+        state
+            .store
+            .verified_profiled_facts
+            .lock()
+            .map_err(|_| AuthorityError::InvalidState)?
+            .insert_verified(key.clone(), facts.clone());
+    }
+    Ok(facts)
+}
+
+fn facts_from_verified(verified: AuthorityView, key: &Key) -> super::Result<Facts> {
+    if verified.selection_digest.as_ref() != Some(&key.selection_digest)
+        || verified.launch_manifest_digest.as_ref() != Some(&key.launch_manifest_digest)
+        || verified.execution_spec_digest != key.execution_spec_digest
+    {
+        return Err(AuthorityError::InvalidState);
+    }
+    let graph = verified.graph.ok_or(AuthorityError::InvalidState)?;
+    let graph_digest =
+        serde_json::from_value(serde_json::Value::String(graph.profile_digest.clone()))
+            .map_err(|_| AuthorityError::InvalidState)?;
+    let spec_digest =
+        serde_json::from_value(serde_json::Value::String(key.execution_spec_digest.clone()))
+            .map_err(|_| AuthorityError::InvalidState)?;
+    Ok(Facts {
+        binding: LaunchBinding {
+            schema_version: 1,
+            session: verified.session,
+            offer_id: verified.offer_id,
+            attempt_id: verified.attempt.attempt_id,
+            assignment_generation: verified.attempt.generation,
+            execution_spec_digest: spec_digest,
+            launch_manifest_digest: key.launch_manifest_digest.clone(),
+            graph_access_profile_digest: graph_digest,
+        },
+        project_id: verified.project_id,
+        task_id: verified.task_id,
+        graph,
+        terminal_policy: verified
+            .terminal_policy
+            .ok_or(AuthorityError::InvalidState)?,
+        source: verified.source.ok_or(AuthorityError::InvalidState)?,
+    })
 }

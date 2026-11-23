@@ -15,6 +15,8 @@ pub mod profiled {
 }
 #[cfg(feature = "recovery-test-support")]
 pub mod testing;
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -98,6 +100,80 @@ pub struct AttemptState {
     /// after running, uncertain, or stopped execution was reported.
     #[serde(default)]
     pub may_have_started: bool,
+}
+
+impl AttemptState {
+    fn validate_result(&self, request: &ResultReport) -> Result<()> {
+        if self.offer.identity != request.identity
+            || self.offer.spec.resolved_spec_digest != request.resolved_spec_digest
+        {
+            return Err(refuse(
+                ErrorCode::StaleGeneration,
+                "result binding mismatch",
+            ));
+        }
+        if request.supersedes_report_id != self.report.as_ref().map(|r| r.report_id) {
+            return Err(refuse(
+                ErrorCode::IdConflict,
+                "correction must identify previous report",
+            ));
+        }
+        if self.report.is_none() && self.grant.is_none() {
+            return Err(refuse(
+                ErrorCode::InvalidRequest,
+                "result requires an accepted assignment",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_stop_evidence(&self, request: &ResultReport, stopped: bool) -> Result<()> {
+        if self.stopped && !stopped {
+            return Err(refuse(
+                ErrorCode::InvalidRequest,
+                "confirmed stopped writers cannot become unresolved",
+            ));
+        }
+        if self
+            .disposition
+            .as_ref()
+            .is_some_and(|r| r.retention_release)
+            && !request.pending_operation_ids.is_empty()
+        {
+            return Err(refuse(
+                ErrorCode::InvalidRequest,
+                "released execution cannot introduce pending operations",
+            ));
+        }
+        if request.stop_certainty == StopCertainty::NotStarted && self.may_have_started {
+            return Err(refuse(
+                ErrorCode::InvalidRequest,
+                "execution evidence cannot be downgraded to nonstart",
+            ));
+        }
+        Ok(())
+    }
+
+    fn result_disposition(
+        &self,
+        identity: &NodeIdentity,
+        stopped: bool,
+        source_retained: bool,
+        now: u64,
+    ) -> ResultDisposition {
+        if !stopped || !source_retained {
+            ResultDisposition::Rejected
+        } else if self.cancellation_id.is_some() {
+            ResultDisposition::RetainedCancelled
+        } else if *identity != self.offer.identity
+            || now >= self.grant_expires_at_ms
+            || self.status != AuthorityStatus::Granted
+        {
+            ResultDisposition::RetainedStale
+        } else {
+            ResultDisposition::Accepted
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +385,38 @@ async fn record<T: Serialize>(
         .bind(node).bind(operation).bind(kind).bind(digest).bind(encode(response)?).execute(&mut **tx).await?;
     Ok(())
 }
+
+async fn register_incarnation(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &RegisterRequest,
+    kind: &str,
+    digest: &str,
+) -> Result<RegisterResponse> {
+    let body = Registered {
+        identity: request.identity.clone(),
+        capabilities: request.capabilities.clone(),
+        worker_version: request.worker_version.clone(),
+        replacement_boot: None,
+        native: None,
+    };
+    sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2::jsonb) ON CONFLICT(node_id) DO UPDATE SET state=excluded.state")
+        .bind(request.identity.node_id).bind(encode(&body)?).execute(&mut **tx).await?;
+    let response = RegisterResponse {
+        identity: request.identity.clone(),
+        protocol_version: EXECUTION_PROTOCOL_VERSION,
+        capabilities: request.capabilities.clone(),
+    };
+    record(
+        tx,
+        request.identity.node_id,
+        request.operation_id,
+        kind,
+        digest,
+        &response,
+    )
+    .await?;
+    Ok(response)
+}
 // All checks run under the node row lock. A recovery request cannot hide a
 // writer by omitting it from the local inventory, and expiry is not stop proof.
 async fn replacement_safe(tx: &mut Transaction<'_, Postgres>, node: Uuid) -> Result<bool> {
@@ -352,6 +460,60 @@ fn remaining_grant(mut receipt: GrantReceipt, state: &AttemptState, now: u64) ->
     }
     receipt.grant.valid_for_ms = remaining.min(MAX_GRANT_MS);
     Ok(receipt.grant)
+}
+
+fn reconcile_attempt(
+    state: Option<AttemptState>,
+    current: &NodeIdentity,
+    request: &ReconcileRequest,
+    local: &ReconcileAttempt,
+    clock: &AdmissionClock,
+) -> Result<ReconcileDisposition> {
+    let mut disposition = ReconcileDisposition {
+        attempt: local.attempt.clone(),
+        action: ReconcileAction::Unknown,
+        grant: None,
+        result: None,
+    };
+    let Some(state) = state else {
+        return Ok(disposition);
+    };
+    let now = clock.now_ms();
+    if state.offer.attempt != local.attempt
+        || state.offer.identity.boot_id != local.previous_boot_id
+    {
+        return Ok(disposition);
+    }
+    if let Some(result) = &state.disposition {
+        disposition.action = ReconcileAction::Acknowledged;
+        disposition.result = Some(result.clone());
+    } else if *current == request.identity
+        && state.offer.identity == request.identity
+        && state.status == AuthorityStatus::Granted
+        && state.grant_expires_at_ms > now
+    {
+        if let Some(grant) = state.grant.clone() {
+            disposition.action = ReconcileAction::Renewed;
+            disposition.grant = Some(remaining_grant(
+                GrantReceipt {
+                    grant,
+                    expires_at_ms: state.grant_expires_at_ms,
+                },
+                &state,
+                now,
+            )?);
+        }
+    } else {
+        disposition.action = if matches!(
+            local.stop_certainty,
+            StopCertainty::ConfirmedStopped | StopCertainty::NotStarted
+        ) {
+            ReconcileAction::AwaitReport
+        } else {
+            ReconcileAction::StopAndPreserve
+        };
+    }
+    Ok(disposition)
 }
 
 impl Store {
@@ -419,29 +581,7 @@ impl Store {
         {
             return Ok(response);
         }
-        let body = Registered {
-            identity: request.identity.clone(),
-            capabilities: request.capabilities.clone(),
-            worker_version: request.worker_version.clone(),
-            replacement_boot: None,
-            native: None,
-        };
-        sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2::jsonb) ON CONFLICT(node_id) DO UPDATE SET state=excluded.state")
-            .bind(request.identity.node_id).bind(encode(&body)?).execute(&mut *tx).await?;
-        let response = RegisterResponse {
-            identity: request.identity.clone(),
-            protocol_version: EXECUTION_PROTOCOL_VERSION,
-            capabilities: request.capabilities.clone(),
-        };
-        record(
-            &mut tx,
-            request.identity.node_id,
-            request.operation_id,
-            "register",
-            &digest,
-            &response,
-        )
-        .await?;
+        let response = register_incarnation(&mut tx, request, "register", &digest).await?;
         tx.commit().await?;
         Ok(response)
     }
@@ -802,54 +942,13 @@ impl Store {
         }
         let mut state = load_attempt(&mut tx, request.attempt.attempt_id).await?;
         bind_attempt(&state, request.identity.node_id, &request.attempt)?;
-        if state.offer.identity != request.identity
-            || state.offer.spec.resolved_spec_digest != request.resolved_spec_digest
-        {
-            return Err(refuse(
-                ErrorCode::StaleGeneration,
-                "result binding mismatch",
-            ));
-        }
-        if request.supersedes_report_id != state.report.as_ref().map(|r| r.report_id) {
-            return Err(refuse(
-                ErrorCode::IdConflict,
-                "correction must identify previous report",
-            ));
-        }
-        if state.report.is_none() && state.grant.is_none() {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "result requires an accepted assignment",
-            ));
-        }
+        state.validate_result(request)?;
         let node = registration(&mut tx, request.identity.node_id).await?;
         let stopped = matches!(
             request.stop_certainty,
             StopCertainty::ConfirmedStopped | StopCertainty::NotStarted
         );
-        if state.stopped && !stopped {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "confirmed stopped writers cannot become unresolved",
-            ));
-        }
-        if state
-            .disposition
-            .as_ref()
-            .is_some_and(|r| r.retention_release)
-            && !request.pending_operation_ids.is_empty()
-        {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "released execution cannot introduce pending operations",
-            ));
-        }
-        if request.stop_certainty == StopCertainty::NotStarted && state.may_have_started {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "execution evidence cannot be downgraded to nonstart",
-            ));
-        }
+        state.validate_stop_evidence(request, stopped)?;
         let source_retained = retained_source(&mut tx, &state, request).await?;
         if state
             .disposition
@@ -863,18 +962,7 @@ impl Store {
             ));
         }
         let now = clock.now_ms();
-        let disposition = if !stopped || !source_retained {
-            ResultDisposition::Rejected
-        } else if state.cancellation_id.is_some() {
-            ResultDisposition::RetainedCancelled
-        } else if node.identity != request.identity
-            || now >= state.grant_expires_at_ms
-            || state.status != AuthorityStatus::Granted
-        {
-            ResultDisposition::RetainedStale
-        } else {
-            ResultDisposition::Accepted
-        };
+        let disposition = state.result_disposition(&node.identity, stopped, source_retained, now);
         // This releases retained execution evidence only. Graph completion and
         // result policy remain separate AQ-10 operations.
         let response = ResultResponse {
@@ -1159,50 +1247,14 @@ impl Store {
             .bind(request.identity.node_id)
             .fetch_optional(&mut *tx)
             .await?;
-            let mut disposition = ReconcileDisposition {
-                attempt: local.attempt.clone(),
-                action: ReconcileAction::Unknown,
-                grant: None,
-                result: None,
-            };
-            if let Some(body) = body {
-                let state: AttemptState = serde_json::from_str(&body)?;
-                let now = clock.now_ms();
-                if state.offer.attempt == local.attempt
-                    && state.offer.identity.boot_id == local.previous_boot_id
-                {
-                    if let Some(result) = &state.disposition {
-                        disposition.action = ReconcileAction::Acknowledged;
-                        disposition.result = Some(result.clone());
-                    } else if current.identity == request.identity
-                        && state.offer.identity == request.identity
-                        && state.status == AuthorityStatus::Granted
-                        && state.grant_expires_at_ms > now
-                    {
-                        if let Some(grant) = state.grant.clone() {
-                            disposition.action = ReconcileAction::Renewed;
-                            disposition.grant = Some(remaining_grant(
-                                GrantReceipt {
-                                    grant,
-                                    expires_at_ms: state.grant_expires_at_ms,
-                                },
-                                &state,
-                                now,
-                            )?);
-                        }
-                    } else {
-                        disposition.action = if matches!(
-                            local.stop_certainty,
-                            StopCertainty::ConfirmedStopped | StopCertainty::NotStarted
-                        ) {
-                            ReconcileAction::AwaitReport
-                        } else {
-                            ReconcileAction::StopAndPreserve
-                        };
-                    }
-                }
-            }
-            attempts.push(disposition);
+            let state = body.as_deref().map(serde_json::from_str).transpose()?;
+            attempts.push(reconcile_attempt(
+                state,
+                &current.identity,
+                request,
+                local,
+                &clock,
+            )?);
         }
         tx.commit().await?;
         Ok(ReconcileResponse {
@@ -1267,29 +1319,7 @@ impl Store {
         {
             return Ok(response);
         }
-        let body = Registered {
-            identity: request.identity.clone(),
-            capabilities: request.capabilities.clone(),
-            worker_version: request.worker_version.clone(),
-            replacement_boot: None,
-            native: None,
-        };
-        sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2::jsonb) ON CONFLICT(node_id) DO UPDATE SET state=excluded.state")
-            .bind(request.identity.node_id).bind(encode(&body)?).execute(&mut *tx).await?;
-        let response = RegisterResponse {
-            identity: request.identity.clone(),
-            protocol_version: EXECUTION_PROTOCOL_VERSION,
-            capabilities: request.capabilities.clone(),
-        };
-        record(
-            &mut tx,
-            request.identity.node_id,
-            request.operation_id,
-            "replace",
-            &digest,
-            &response,
-        )
-        .await?;
+        let response = register_incarnation(&mut tx, request, "replace", &digest).await?;
         tx.commit().await?;
         Ok(response)
     }
