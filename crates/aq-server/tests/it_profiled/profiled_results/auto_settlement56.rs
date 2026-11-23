@@ -601,6 +601,8 @@ async fn graph_permission_restoration_replays_only_the_original_completion() {
         wait["next_check_at_ms"],
         json!(blocked.next_graph_check_at_ms)
     );
+    #[cfg(feature = "delivery_playbook")]
+    assert!(playbook::work_reasons(&env).await.contains(&wait));
 
     env.recovery.lookup_status.store(200, Ordering::SeqCst);
     env.recovery.write_status.store(200, Ordering::SeqCst);
@@ -2576,7 +2578,7 @@ mod playbook {
 
     /// The reasons of the task's work read (`GET .../tasks/{task}/work`),
     /// checked against the human-graph-1 schema.
-    async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
+    pub(super) async fn work_reasons(env: &AutoEnv) -> Vec<Value> {
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let lineage = &env.f.selection.lineage;
