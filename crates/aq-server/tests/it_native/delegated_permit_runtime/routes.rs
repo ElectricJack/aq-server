@@ -1,5 +1,6 @@
 //! HTTP routing qualification using decoded native bodies and an expired permit.
 use super::*;
+use aq_admission::{LaunchBinding, transport::WorkerIdentity};
 use serde_json::{Value, json};
 
 fn route_bodies(
@@ -8,7 +9,6 @@ fn route_bodies(
     started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
     revision: u64,
 ) -> Vec<(&'static str, Value)> {
-    use aq_accounting::wire::*;
     use aq_admission::transport::*;
     let p = &upgraded.permit;
     let identity = WorkerIdentity {
@@ -52,6 +52,48 @@ fn route_bodies(
         pending_effect_ids: vec![],
         conclusion: aq_admission::Label::new("route refusal fixture").unwrap(),
     };
+    let mut bodies = vec![
+        ("/v1/worker/profiled/material", json!(material)),
+        ("/v1/worker/profiled/artifact", json!(artifact)),
+        (
+            "/v1/worker/profiled-v2/prepare",
+            json!(aq_admission::preparation_refresh_v1::Document::Prepare(
+                Box::new(f.prepared.clone())
+            )),
+        ),
+        ("/v1/worker/profiled/started", json!(started.original)),
+        ("/v1/worker/profiled-v2/started", json!(started)),
+        ("/v1/worker/profiled-v2/stopped", json!(stopped)),
+        ("/v1/worker/profiled/results", json!(report)),
+        (
+            "/v1/worker/profiled/renew",
+            json!(SandboxDocument::RunnerRenewalRequest(
+                RunnerRenewalRequest {
+                    schema_version: 1,
+                    operation_id: Uuid::new_v4(),
+                    authority: upgraded.authority.clone(),
+                    permit: p.clone(),
+                    revision
+                }
+            )),
+        ),
+    ];
+    bodies.push((
+        "/v1/worker/observations/batch",
+        json!(observation_packet(started, &identity, p.issued_at_ms)),
+    ));
+    bodies.extend(terminal_route_bodies(&identity, &binding));
+    bodies.extend(mailbox_route_bodies(&identity, &binding));
+    bodies
+}
+
+fn observation_packet(
+    started: &aq_phase_terminal_protocol::refresh_v1::StartedRequest,
+    identity: &WorkerIdentity,
+    observed_at_ms: u64,
+) -> aq_accounting::wire::Packet {
+    use aq_accounting::wire::*;
+    let binding = &started.original.binding;
     let event = ObservationRecord::seal(
         Uuid::new_v4(),
         Observation {
@@ -78,12 +120,12 @@ fn route_bodies(
                 },
             },
             sequence: 1,
-            observed_at_ms: p.issued_at_ms,
+            observed_at_ms,
             kind: ObservationKind::TurnBoundary { in_turn: false },
         },
     )
     .unwrap();
-    let packet = Packet::seal(
+    Packet::seal(
         Uuid::new_v4(),
         Message::Batch(ObservationBatch {
             node_id: identity.node_id,
@@ -93,45 +135,34 @@ fn route_bodies(
             events: vec![event],
         }),
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn terminal_route_bodies(
+    identity: &WorkerIdentity,
+    binding: &LaunchBinding,
+) -> Vec<(&'static str, Value)> {
     let peer = json!({"kind":"remote","node_id":identity.node_id,"boot_id":identity.boot_id});
     let capabilities = json!([{"id":"aq.terminal-relay","version":1}]);
     let terminal = json!({"session":binding.session,"terminal_id":Uuid::new_v4(),"epoch":1});
     let poll = json!({"version":1,"capability":"aq.terminal-relay","peer":peer,"cursor":0,"hold_ms":0,"active_subscriptions":0,"active_controllers":0,"advertised_capabilities":capabilities});
     let upload = json!({"version":1,"capability":"aq.terminal-relay","peer":peer,"exchange_id":Uuid::new_v4(),"cursor":0,"receipts":[],"epoch_receipts":[],"resize_receipts":[],"fence_acks":[],"frames":[],"snapshots":[],"gaps":[]});
     let register = json!({"version":1,"capability":"aq.terminal-relay","operation_id":Uuid::new_v4(),"peer":peer,"terminal":terminal,"expected_authority_revision":1,"input_mode":"finite_v1","advertised_capabilities":capabilities});
-    let attempt = json!({"attempt_id":binding.attempt_id,"session_id":Uuid::new_v4(),"generation":binding.assignment_generation});
     vec![
-        ("/v1/worker/profiled/material", json!(material)),
-        ("/v1/worker/profiled/artifact", json!(artifact)),
-        (
-            "/v1/worker/profiled-v2/prepare",
-            json!(aq_admission::preparation_refresh_v1::Document::Prepare(
-                Box::new(f.prepared.clone())
-            )),
-        ),
-        ("/v1/worker/profiled/started", json!(started.original)),
-        ("/v1/worker/profiled-v2/started", json!(started)),
-        ("/v1/worker/profiled-v2/stopped", json!(stopped)),
-        ("/v1/worker/profiled/results", json!(report)),
-        (
-            "/v1/worker/profiled/renew",
-            json!(SandboxDocument::RunnerRenewalRequest(
-                RunnerRenewalRequest {
-                    schema_version: 1,
-                    operation_id: Uuid::new_v4(),
-                    authority: upgraded.authority.clone(),
-                    permit: p.clone(),
-                    revision
-                }
-            )),
-        ),
-        ("/v1/worker/observations/batch", json!(packet)),
         ("/v1/terminal-relay/register", register),
         ("/v1/terminal-relay/poll", poll.clone()),
         ("/v1/terminal-relay/output-poll", poll),
         ("/v1/terminal-relay/upload", upload.clone()),
         ("/v1/terminal-relay/control-upload", upload),
+    ]
+}
+
+fn mailbox_route_bodies(
+    identity: &WorkerIdentity,
+    binding: &LaunchBinding,
+) -> Vec<(&'static str, Value)> {
+    let attempt = json!({"attempt_id":binding.attempt_id,"session_id":Uuid::new_v4(),"generation":binding.assignment_generation});
+    vec![
         (
             "/v2/worker/messages/poll",
             json!({"identity":identity,"attempt":attempt,"limit":1}),
