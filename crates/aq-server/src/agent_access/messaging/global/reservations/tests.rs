@@ -109,12 +109,14 @@ impl Fixture {
         );
         message
     }
-    async fn preview(&self, after: u64) -> Preview {
-        let a = self
-            .owner
+    async fn inspect(&self) -> ActorView {
+        self.owner
             .inspect_actor(&self.user, self.actor)
             .await
-            .unwrap();
+            .unwrap()
+    }
+    async fn preview(&self, after: u64) -> Preview {
+        let a = self.inspect().await;
         self.owner
             .preview_batch(
                 &self.user,
@@ -247,7 +249,7 @@ async fn actual_mail_reservation_recovers_replays_and_cancels_without_runtime() 
         lookup.current_reservation.unwrap().state,
         ReservationState::CancelledBeforePlan
     );
-    let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let a = f.inspect().await;
     assert!(a.current_reservation.is_none());
     assert_eq!(
         f.owner
@@ -403,7 +405,7 @@ async fn count_utf8_body_budget_partial_scans_and_head_integrity_are_truthful() 
         .execute(&f.state.store.pool)
         .await
         .unwrap();
-    let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let a = f.inspect().await;
     assert!(matches!(
         f.owner
             .preview_batch(
@@ -573,18 +575,12 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
         reason: None,
         reservation: Some(wrong),
     };
-    writes::finish(
-        &mut tx,
-        &a,
-        &f.user,
-        writes::Mutation {
-            kind: "reserve",
-            request: &raw,
-            receipt: &result,
-        },
-        Some(request.reservation_id),
-        None,
-    )
+    writes::Mutation {
+        kind: "reserve",
+        request: &raw,
+        receipt: &result,
+    }
+    .finish(&mut tx, &a, &f.user, Some(request.reservation_id), None)
     .await
     .unwrap();
     let error = tx.commit().await.unwrap_err();
@@ -620,18 +616,12 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
         reason: None,
         reservation: None,
     };
-    writes::finish(
-        &mut tx,
-        &a,
-        &f.user,
-        writes::Mutation {
-            kind: "configure",
-            request: &raw,
-            receipt: &result,
-        },
-        None,
-        Some(&configure.policy),
-    )
+    writes::Mutation {
+        kind: "configure",
+        request: &raw,
+        receipt: &result,
+    }
+    .finish(&mut tx, &a, &f.user, None, Some(&configure.policy))
     .await
     .unwrap();
     let error = tx.commit().await.unwrap_err();
@@ -641,16 +631,7 @@ async fn sql_requires_exact_original_reserve_and_cancel_operation_views() {
             .contains("original cancel operation proof"),
         "{error}"
     );
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .current_reservation
-            .unwrap()
-            .id,
-        active.id
-    );
+    assert_eq!(f.inspect().await.current_reservation.unwrap().id, active.id);
 }
 // A valid synthetic persisted metadata-only journal at the lifetime boundary.
 // It records no Run, host effect, provider call or assistant reply. Actual actor,
@@ -727,14 +708,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
     f.seed("Last available reserve").await;
     let (raw, accepted) = f.reserve().await;
     let reservation = accepted.reservation.unwrap();
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .retained_operations,
-        4095
-    );
+    assert_eq!(f.inspect().await.retained_operations, 4095);
     assert!(matches!(
         f.configure(false, 4095).await,
         Err(AppError::Maintenance(_))
@@ -760,14 +734,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
     let bytes = serde_json::to_vec(&cancel).unwrap();
     let cancelled = f.owner.cancel_reservation(&f.user, &bytes).await.unwrap();
     assert_eq!(cancelled.disposition, Disposition::CancelledBeforePlan);
-    assert_eq!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .retained_operations,
-        4096
-    );
+    assert_eq!(f.inspect().await.retained_operations, 4096);
     assert_eq!(
         f.owner.cancel_reservation(&f.user, &bytes).await.unwrap(),
         cancelled
@@ -780,14 +747,7 @@ async fn last_operation_slot_preserves_exact_cancellation_but_no_other_writer() 
             .disposition,
         Disposition::Reserved
     );
-    assert!(
-        f.owner
-            .inspect_actor(&f.user, f.actor)
-            .await
-            .unwrap()
-            .current_reservation
-            .is_none()
-    );
+    assert!(f.inspect().await.current_reservation.is_none());
     let fresh = f.reserve_request(&f.preview(0).await);
     assert!(matches!(
         f.owner.reserve_batch(&f.user, &fresh).await,
@@ -802,7 +762,7 @@ async fn protected_control_bytes_allow_cancel_after_ordinary_byte_capacity_exhau
     let saved = accepted.reservation.unwrap();
     let mut reached = false;
     for _ in 0..32 {
-        let a = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+        let a = f.inspect().await;
         match f.configure(true, a.revision).await {
             Ok(_) => {}
             Err(AppError::Maintenance(_)) => {
@@ -813,11 +773,11 @@ async fn protected_control_bytes_allow_cancel_after_ordinary_byte_capacity_exhau
         }
     }
     assert!(reached);
-    let before = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let before = f.inspect().await;
     assert!(before.retained_bytes <= (MAX_BYTES - CONTROL_BYTES) as u64);
     let cancelled = f.cancel(&saved).await;
     assert_eq!(cancelled.disposition, Disposition::CancelledBeforePlan);
-    let after = f.owner.inspect_actor(&f.user, f.actor).await.unwrap();
+    let after = f.inspect().await;
     assert!(after.retained_bytes > before.retained_bytes);
     assert!(after.retained_bytes <= MAX_BYTES as u64);
     assert!(after.current_reservation.is_none());

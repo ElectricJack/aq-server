@@ -61,45 +61,47 @@ pub(super) struct Mutation<'a> {
     pub(super) request: &'a str,
     pub(super) receipt: &'a Receipt,
 }
-pub(super) async fn finish(
-    tx: &mut Transaction<'_, Postgres>,
-    a: &Actor,
-    user: &User,
-    mutation: Mutation<'_>,
-    current: Option<Uuid>,
-    policy: Option<&LocalPolicy>,
-) -> Result<()> {
-    let Mutation {
-        kind,
-        request,
-        receipt,
-    } = mutation;
-    let result = result_bytes(receipt)?;
-    let charged = charge(request, &result, receipt)?;
-    if charged > CONTROL_BYTES {
-        return Err(capacity());
-    }
-    let held = i64::from(current.is_some());
-    let next_bytes = a.bytes.checked_add(charged).ok_or_else(capacity)?;
-    if a.operations + 1 > MAX_OPS - held || next_bytes > MAX_BYTES - held * CONTROL_BYTES {
-        return Err(capacity());
-    }
-    let updated = if let Some(policy) = policy {
-        let bytes = canonical(policy)?;
-        if bytes.len() > 4096 {
-            return Err(invalid());
+impl Mutation<'_> {
+    pub(super) async fn finish(
+        self,
+        tx: &mut Transaction<'_, Postgres>,
+        a: &Actor,
+        user: &User,
+        current: Option<Uuid>,
+        policy: Option<&LocalPolicy>,
+    ) -> Result<()> {
+        let Self {
+            kind,
+            request,
+            receipt,
+        } = self;
+        let result = result_bytes(receipt)?;
+        let charged = charge(request, &result, receipt)?;
+        if charged > CONTROL_BYTES {
+            return Err(capacity());
         }
-        sqlx::query("UPDATE central_supervisor_actors SET revision=$2,policy_revision=$3,policy_bytes=$4,policy_digest=$5,approved_by=$6,approved_identity=$7,current_reservation=$8,retained_operations=retained_operations+1,retained_bytes=$9 WHERE actor_id=$1 AND revision=$10")
- .bind(a.id).bind(positive(receipt.actor_revision)?).bind(positive(receipt.policy_revision)?).bind(String::from_utf8(bytes.clone()).map_err(|_|invalid())?).bind(Digest::of(&bytes).as_str()).bind(user.id).bind(identity(user)).bind(current).bind(next_bytes).bind(a.revision).execute(&mut **tx).await.map_err(db)?.rows_affected()
-    } else {
-        sqlx::query("UPDATE central_supervisor_actors SET revision=$2,current_reservation=$3,retained_operations=retained_operations+1,retained_bytes=$4 WHERE actor_id=$1 AND revision=$5").bind(a.id).bind(positive(receipt.actor_revision)?).bind(current).bind(next_bytes).bind(a.revision).execute(&mut **tx).await.map_err(db)?.rows_affected()
-    };
-    if updated != 1 {
-        return Err(conflict());
+        let held = i64::from(current.is_some());
+        let next_bytes = a.bytes.checked_add(charged).ok_or_else(capacity)?;
+        if a.operations + 1 > MAX_OPS - held || next_bytes > MAX_BYTES - held * CONTROL_BYTES {
+            return Err(capacity());
+        }
+        let updated = if let Some(policy) = policy {
+            let bytes = canonical(policy)?;
+            if bytes.len() > 4096 {
+                return Err(invalid());
+            }
+            sqlx::query("UPDATE central_supervisor_actors SET revision=$2,policy_revision=$3,policy_bytes=$4,policy_digest=$5,approved_by=$6,approved_identity=$7,current_reservation=$8,retained_operations=retained_operations+1,retained_bytes=$9 WHERE actor_id=$1 AND revision=$10")
+     .bind(a.id).bind(positive(receipt.actor_revision)?).bind(positive(receipt.policy_revision)?).bind(String::from_utf8(bytes.clone()).map_err(|_|invalid())?).bind(Digest::of(&bytes).as_str()).bind(user.id).bind(identity(user)).bind(current).bind(next_bytes).bind(a.revision).execute(&mut **tx).await.map_err(db)?.rows_affected()
+        } else {
+            sqlx::query("UPDATE central_supervisor_actors SET revision=$2,current_reservation=$3,retained_operations=retained_operations+1,retained_bytes=$4 WHERE actor_id=$1 AND revision=$5").bind(a.id).bind(positive(receipt.actor_revision)?).bind(current).bind(next_bytes).bind(a.revision).execute(&mut **tx).await.map_err(db)?.rows_affected()
+        };
+        if updated != 1 {
+            return Err(conflict());
+        }
+        insert_operation(tx, kind, user, request, &result, receipt, charged).await?;
+        authorize(tx, user).await?;
+        Ok(())
     }
-    insert_operation(tx, kind, user, request, &result, receipt, charged).await?;
-    authorize(tx, user).await?;
-    Ok(())
 }
 async fn replay(
     tx: &mut Transaction<'_, Postgres>,
@@ -120,6 +122,42 @@ async fn replay(
         return Err(conflict());
     }
     Ok(Some(retained(tx, a, row).await?.receipt))
+}
+fn request_reservation(
+    a: &Actor,
+    kind: &str,
+    operation: Uuid,
+    req: &Value,
+) -> Result<Option<Uuid>> {
+    Ok(match kind {
+        "configure" => {
+            let r: Configure = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
+            r.policy.validate().map_err(|_| unavailable())?;
+            if r.operation_id != operation
+                || r.actor_id != a.id
+                || r.policy.actor_id != a.id
+                || r.policy.conversation_id != a.conversation
+            {
+                return Err(unavailable());
+            }
+            None
+        }
+        "reserve" => {
+            let r: Reserve = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
+            if r.operation_id != operation || r.actor_id != a.id {
+                return Err(unavailable());
+            }
+            Some(r.reservation_id)
+        }
+        "cancel" => {
+            let r: Cancel = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
+            if r.operation_id != operation || r.actor_id != a.id {
+                return Err(unavailable());
+            }
+            Some(r.reservation_id)
+        }
+        _ => return Err(unavailable()),
+    })
 }
 pub(super) async fn retained(
     tx: &mut Transaction<'_, Postgres>,
@@ -155,36 +193,7 @@ pub(super) async fn retained(
     {
         return Err(unavailable());
     }
-    let req = &payload["request"];
-    let request_reservation = match kind.as_str() {
-        "configure" => {
-            let r: Configure = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
-            r.policy.validate().map_err(|_| unavailable())?;
-            if r.operation_id != operation
-                || r.actor_id != a.id
-                || r.policy.actor_id != a.id
-                || r.policy.conversation_id != a.conversation
-            {
-                return Err(unavailable());
-            }
-            None
-        }
-        "reserve" => {
-            let r: Reserve = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
-            if r.operation_id != operation || r.actor_id != a.id {
-                return Err(unavailable());
-            }
-            Some(r.reservation_id)
-        }
-        "cancel" => {
-            let r: Cancel = serde_json::from_value(req.clone()).map_err(|_| unavailable())?;
-            if r.operation_id != operation || r.actor_id != a.id {
-                return Err(unavailable());
-            }
-            Some(r.reservation_id)
-        }
-        _ => return Err(unavailable()),
-    };
+    let request_reservation = request_reservation(a, &kind, operation, &payload["request"])?;
     let success = matches!(
         receipt.disposition,
         Disposition::Configured | Disposition::Reserved | Disposition::CancelledBeforePlan
@@ -246,6 +255,57 @@ pub(super) async fn retained(
         current_reservation: current,
     })
 }
+enum ReserveSelection {
+    Selected(Preview),
+    Refused(Reason),
+}
+async fn reserve_selection(
+    tx: &mut Transaction<'_, Postgres>,
+    a: &Actor,
+    r: &Reserve,
+) -> Result<ReserveSelection> {
+    use ReserveSelection::{Refused, Selected};
+    if r.expected_actor_revision != a.revision as u64
+        || r.expected_policy_revision != a.policy_revision as u64
+    {
+        return Ok(Refused(Reason::RevisionChanged));
+    }
+    if !a.policy.enabled {
+        return Ok(Refused(Reason::PolicyDisabled));
+    }
+    if a.current.is_some() {
+        return Ok(Refused(Reason::ReservationOutstanding));
+    }
+    let preview = reads::selection(
+        tx,
+        a,
+        &PreviewRequest {
+            actor_id: a.id,
+            expected_actor_revision: r.expected_actor_revision,
+            scan_after: r.scan_after,
+            through_cursor: Some(r.through_cursor),
+        },
+    )
+    .await?;
+    if preview.selection_digest != r.selection_digest {
+        return Ok(Refused(Reason::SelectionChanged));
+    }
+    if preview.batch.is_none() {
+        return Ok(Refused(Reason::NoEligibleMail));
+    }
+    let used: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE reservation_id=$1)",
+    )
+    .bind(r.reservation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db)?;
+    Ok(if used {
+        Refused(Reason::ReservationIdConflict)
+    } else {
+        Selected(preview)
+    })
+}
 impl ReservationOwner {
     pub(super) async fn configure(&self, user: &User, bytes: &[u8]) -> Result<Receipt> {
         let r: Configure = parse(bytes)?;
@@ -275,30 +335,24 @@ impl ReservationOwner {
                 user,
                 r.operation_id,
                 digest,
-                if matches {
-                    Disposition::Configured
-                } else {
-                    Disposition::NotConfigured
-                },
-                if matches {
-                    None
-                } else {
-                    Some(Reason::RevisionChanged)
-                },
+                Disposition::NotConfigured,
+                Some(Reason::RevisionChanged),
                 None,
             );
             if matches {
+                result.disposition = Disposition::Configured;
+                result.reason = None;
                 result.policy_revision += 1;
             }
-            finish(
+            Mutation {
+                kind: "configure",
+                request: &request,
+                receipt: &result,
+            }
+            .finish(
                 &mut tx,
                 &a,
                 user,
-                Mutation {
-                    kind: "configure",
-                    request: &request,
-                    receipt: &result,
-                },
                 a.current,
                 if matches { Some(&r.policy) } else { None },
             )
@@ -362,44 +416,11 @@ impl ReservationOwner {
             tx.commit().await.map_err(db)?;
             return Ok(old);
         }
-        let mut reason = if r.expected_actor_revision != a.revision as u64
-            || r.expected_policy_revision != a.policy_revision as u64
-        {
-            Some(Reason::RevisionChanged)
-        } else if !a.policy.enabled {
-            Some(Reason::PolicyDisabled)
-        } else if a.current.is_some() {
-            Some(Reason::ReservationOutstanding)
-        } else {
-            None
+        let selection = reserve_selection(&mut tx, &a, &r).await?;
+        let reason = match &selection {
+            ReserveSelection::Selected(_) => None,
+            ReserveSelection::Refused(reason) => Some(*reason),
         };
-        let mut selected = None;
-        if reason.is_none() {
-            let preview = reads::selection(
-                &mut tx,
-                &a,
-                &PreviewRequest {
-                    actor_id: a.id,
-                    expected_actor_revision: r.expected_actor_revision,
-                    scan_after: r.scan_after,
-                    through_cursor: Some(r.through_cursor),
-                },
-            )
-            .await?;
-            if preview.selection_digest != r.selection_digest {
-                reason = Some(Reason::SelectionChanged);
-            } else if preview.batch.is_none() {
-                reason = Some(Reason::NoEligibleMail);
-            } else {
-                selected = Some(preview);
-            }
-        }
-        if reason.is_none() {
-            let used:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM central_supervisor_reservations WHERE reservation_id=$1)").bind(r.reservation_id).fetch_one(&mut *tx).await.map_err(db)?;
-            if used {
-                reason = Some(Reason::ReservationIdConflict);
-            }
-        }
         let mut result = receipt(
             &a,
             user,
@@ -410,8 +431,7 @@ impl ReservationOwner {
             None,
         );
         let mut current = a.current;
-        if result.reason.is_none() {
-            let preview = selected.ok_or_else(unavailable)?;
+        if let ReserveSelection::Selected(preview) = selection {
             let batch = preview.batch.ok_or_else(unavailable)?;
             let batch_digest = batch.digest().map_err(|_| unavailable())?;
             sqlx::query("INSERT INTO central_supervisor_reservations(reservation_id,actor_id,reserve_operation_id,admission_actor_revision,policy_revision,revision,state,through_cursor,batch_digest,message_count,body_bytes) VALUES($1,$2,$3,$4,$5,1,'awaiting_prepared_plan',$6,$7,$8,$9)").bind(r.reservation_id).bind(a.id).bind(r.operation_id).bind(positive(result.actor_revision)?).bind(a.policy_revision).bind(positive(batch.through_cursor)?).bind(batch_digest.as_str()).bind(batch.messages.len() as i16).bind(positive(preview.body_bytes)?).execute(&mut *tx).await.map_err(db)?;
@@ -441,18 +461,12 @@ impl ReservationOwner {
             });
             current = Some(r.reservation_id);
         }
-        finish(
-            &mut tx,
-            &a,
-            user,
-            Mutation {
-                kind: "reserve",
-                request: &request,
-                receipt: &result,
-            },
-            current,
-            None,
-        )
+        Mutation {
+            kind: "reserve",
+            request: &request,
+            receipt: &result,
+        }
+        .finish(&mut tx, &a, user, current, None)
         .await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
@@ -510,18 +524,12 @@ impl ReservationOwner {
             result.reservation = Some(saved);
             next = None;
         }
-        finish(
-            &mut tx,
-            &a,
-            user,
-            Mutation {
-                kind: "cancel",
-                request: &request,
-                receipt: &result,
-            },
-            next,
-            None,
-        )
+        Mutation {
+            kind: "cancel",
+            request: &request,
+            receipt: &result,
+        }
+        .finish(&mut tx, &a, user, next, None)
         .await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
@@ -552,17 +560,11 @@ pub(super) async fn disable_for_test(
         None,
     );
     result.policy_revision += 1;
-    finish(
-        tx,
-        a,
-        user,
-        Mutation {
-            kind: "configure",
-            request: &raw,
-            receipt: &result,
-        },
-        a.current,
-        Some(&r.policy),
-    )
+    Mutation {
+        kind: "configure",
+        request: &raw,
+        receipt: &result,
+    }
+    .finish(tx, a, user, a.current, Some(&r.policy))
     .await
 }
