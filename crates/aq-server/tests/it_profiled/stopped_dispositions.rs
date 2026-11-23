@@ -300,13 +300,8 @@ async fn admitted_automatic_completion_cannot_be_terminally_disposed() {
 #[tokio::test]
 async fn an_owner_disposition_clears_the_tasks_hold_in_both_reads() {
     use aq_machine_control::holds;
-    let (mut f, start) = setup(true).await;
-    let auth = context(&f).await;
-    started::record(&f.state, &auth, &start).await.unwrap();
+    let (mut f, start) = stopped_attempt().await;
     let attempt = start.binding.attempt_id;
-    stopped::record(&f.state, &auth, &stop_request(&start))
-        .await
-        .unwrap();
     let pool = f.db.pool().await;
     let (project, task) = (f.selection.lineage.project_id, f.selection.lineage.task_id);
     let seen = holds::attempts(&pool, task).await.unwrap();

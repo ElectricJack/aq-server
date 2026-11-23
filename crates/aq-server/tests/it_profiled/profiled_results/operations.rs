@@ -47,16 +47,16 @@ async fn seed_stall_and_nudges(pool: &sqlx::PgPool, attempt: Uuid, task: Uuid) -
         .await
         .unwrap();
     let (handed, inbox) = (Uuid::new_v4(), Uuid::new_v4());
-    for (cursor, id, inbox_only, owner) in [(1i64, handed, false, true), (2, inbox, true, false)] {
+    for (cursor, id, inbox_only) in [(1i64, handed, false), (2, inbox, true)] {
         sqlx::query("INSERT INTO mailbox_messages(message_id,mailbox_key,cursor,thread_id,sender,recipient,payload_digest,body,created_at_ms) VALUES($1,'g10-ops',$2,$1,'{}','{}','x','nudge',$3)")
             .bind(id).bind(cursor).bind(NOW as i64).execute(pool).await.unwrap();
-        let action = if owner {
-            None
-        } else {
+        let action = if inbox_only {
             let action = Uuid::new_v4();
             sqlx::query("INSERT INTO stall_actions(action_id,episode_id,kind,ordinal,expected_revision,intent,created_at_ms,receipt,receipted_at_ms,delivery) VALUES($1,$2,'nudge',1,1,'{}',$3,'{}',$3,'deferred')")
                 .bind(action).bind(ep.episode_id).bind(NOW as i64).execute(pool).await.unwrap();
             Some(action)
+        } else {
+            None
         };
         sqlx::query("INSERT INTO stall_nudges(message_id,attempt_id,action_id,inbox_only,created_at_ms) VALUES($1,$2,$3,$4,$5)")
             .bind(id).bind(attempt).bind(action).bind(inbox_only).bind((NOW + cursor as u64) as i64)
