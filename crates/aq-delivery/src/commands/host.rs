@@ -155,11 +155,7 @@ pub async fn frozen_request(
                 return Ok(Err("no_branch"));
             };
             // The lease: the head the last publication put on the forge.
-            let last: Option<String> = sqlx::query_scalar("SELECT output->>'head' FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1 ORDER BY completed_at_ms DESC LIMIT 1")
-                .bind(task.to_string())
-                .fetch_optional(pool)
-                .await?
-                .flatten();
+            let last = published_head(pool, task).await?;
             request["expected_old"] = json!(last);
             request["pull_request"] = json!(known.as_ref().map(number));
             request["result_head"] = json!(accepting.head);
@@ -215,6 +211,18 @@ pub async fn frozen_request(
         _ => {}
     }
     Ok(Ok(request))
+}
+
+/// The forge lease recorded by a previous successful publication of this task.
+pub async fn published_head<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    task: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    Ok(sqlx::query_scalar("SELECT output->>'head' FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1 ORDER BY completed_at_ms DESC LIMIT 1")
+        .bind(task.to_string())
+        .fetch_optional(db)
+        .await?
+        .flatten())
 }
 
 /// Marks at most `limit` running operations of `commands` in one namespace

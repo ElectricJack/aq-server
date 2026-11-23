@@ -149,7 +149,7 @@ pub struct ResultEmission {
     pub emitted_at_ms: i64,
     /// [`facts_digest`] when it was last sent.
     pub emitted_facts: Option<String>,
-    /// A run that read this task since the last send has not finished.
+    /// The previous event is queued or its delivery run has not finished.
     pub run_unfinished: bool,
 }
 

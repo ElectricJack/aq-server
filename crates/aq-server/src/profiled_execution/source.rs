@@ -539,4 +539,5 @@ fn verify_retention(
 }
 
 mod ownership;
+pub(super) use ownership::retain_for;
 pub use ownership::{retain_admission, validate_body, validate_stored_body};

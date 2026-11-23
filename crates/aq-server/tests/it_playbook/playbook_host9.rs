@@ -2049,6 +2049,36 @@ mod delivery {
                 .map(|e| e.2.payload)
                 .collect()
         }
+        async fn acknowledge_ready(&self, runs: Option<&[String]>, complete: bool) {
+            let (_, id, event) = self
+                .service
+                .outbox(&self.runtime, 0, 16)
+                .await
+                .unwrap()
+                .into_iter()
+                .rfind(|(_, _, e)| e.contract.name == "aq.work.result_ready")
+                .unwrap();
+            let key = digest(&(&event.producer, 0_u64, &event.event_id)).unwrap();
+            self.service
+                .acknowledge_event(
+                    &self.runtime,
+                    id,
+                    aq_playbook_host::runner::EventDisposition {
+                        key,
+                        duplicate: false,
+                        destinations: runs.map_or(1, <[String]>::len),
+                    },
+                    complete,
+                )
+                .await
+                .unwrap();
+            if let Some(runs) = runs {
+                self.service
+                    .record_delivery_runs(&self.runtime, id, &event, &json!(runs))
+                    .await
+                    .unwrap();
+            }
+        }
         /// main moved to `head` in `project`.
         async fn main_moved(&self, project: Uuid, head: &str) {
             let sql = "INSERT INTO delivery_main_heads(project_id,head,observed_at_ms) VALUES($1,$2,$3) ON CONFLICT(project_id) DO UPDATE SET head=$2,observed_at_ms=$3";
@@ -2102,13 +2132,35 @@ mod delivery {
                 "version": 3})
             ]
         );
-        // Level-triggered: not again until the setting has passed.
+        h.acknowledge_ready(Some(&[]), true).await;
+        // A completed fanout with no invocation is eligible after the repeat.
         assert_eq!(h.asked().await, 0);
         h.later(29_999);
         assert_eq!(h.asked().await, 0);
         h.later(1);
         assert_eq!(h.asked().await, 1);
-        assert_eq!(h.events().await.len(), 2);
+        assert_eq!(h.events().await, events);
+    }
+
+    #[tokio::test]
+    async fn queued_and_admitted_delivery_block_a_second_event_before_work_read() {
+        let h = delivery(false).await;
+        h.activated().await;
+        let (task, _) = h.stopped(h.scope.project_id, "success");
+        assert_eq!(h.asked().await, 1);
+        h.later(120_000);
+        h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 0, "the queued event owns the result");
+
+        h.acknowledge_ready(None, false).await;
+        h.pull_request(task, "pending", json!([])).await;
+        assert_eq!(h.asked().await, 0, "accepted fanout is still in progress");
+
+        let run = format!("event-sha256:{}", "a".repeat(64));
+        h.acknowledge_ready(Some(&[run]), true).await;
+        h.later(3_820_000);
+        h.pull_request(task, "failed", json!(["unit"])).await;
+        assert_eq!(h.asked().await, 0, "the exact run has no terminal receipt");
     }
 
     #[tokio::test]
@@ -2135,12 +2187,13 @@ mod delivery {
     }
 
     #[tokio::test]
-    async fn nothing_is_announced_while_a_run_that_read_the_task_is_unfinished() {
+    async fn legacy_fanout_falls_back_to_the_bounded_work_read_guard() {
         let h = delivery(false).await;
         h.activated().await;
         let (task, _) = h.stopped(h.scope.project_id, "success");
         assert_eq!(h.asked().await, 1);
-        // The run the event started reads the task and has not finished.
+        // Older completed fanouts may lack their run list.
+        h.acknowledge_ready(None, true).await;
         assert_eq!(h.read(task).await.outcome, "observed");
         // Neither the repeat interval nor main moving announces it again...
         h.later(120_000);
@@ -2157,18 +2210,21 @@ mod delivery {
         h.activated().await;
         let (task, _) = h.stopped(h.scope.project_id, "success");
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         // Main moves.
         h.main_moved(h.scope.project_id, &"c".repeat(40)).await;
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         // A pull request appears, and its checks finish.
         h.pull_request(task, "pending", json!([])).await;
         assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
         assert_eq!(h.asked().await, 0);
         h.pull_request(task, "failed", json!(["unit"])).await;
         assert_eq!(h.asked().await, 1);
-        assert_eq!(h.events().await.len(), 4);
+        assert_eq!(h.events().await.len(), 1);
     }
 
     #[tokio::test]
@@ -2312,6 +2368,7 @@ mod delivery {
             mergeability: Mutex<Mergeability>,
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
+            branch_head: Mutex<String>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2383,7 +2440,7 @@ mod delivery {
                 _: &str,
             ) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push(format!("open {title}"));
-                Ok(pull(self.pr_state.lock().unwrap().clone()))
+                Ok(pull(*self.pr_state.lock().unwrap()))
             }
             async fn pull_request(
                 &self,
@@ -2392,7 +2449,7 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
-                    ..pull(self.pr_state.lock().unwrap().clone())
+                    ..pull(*self.pr_state.lock().unwrap())
                 })
             }
             async fn checks(
@@ -2428,6 +2485,14 @@ mod delivery {
             async fn close(&self, _: &GitHubRepository, _: u64) -> GitHubResult<PullRequest> {
                 self.log.lock().unwrap().push("close".into());
                 Ok(pull(PullRequestState::Closed))
+            }
+            async fn branch_head(
+                &self,
+                _: &GitHubRepository,
+                branch: &str,
+            ) -> GitHubResult<Option<String>> {
+                self.log.lock().unwrap().push(format!("observe {branch}"));
+                Ok(Some(self.branch_head.lock().unwrap().clone()))
             }
             async fn delete_branch(
                 &self,
@@ -2475,12 +2540,94 @@ mod delivery {
                 mergeability: Mutex::new(Mergeability::Clean),
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
+                branch_head: Mutex::new(oid('b')),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
                 .service
                 .with_delivery_ops(Arc::new(Ops(fake.clone(), target)));
             (h, fake)
+        }
+
+        #[tokio::test]
+        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+            let (h, forge) = harness().await;
+            h.activated().await;
+            let pool = h.pool().await;
+            let attempt = h.f.profiled.offer.binding.attempt_id;
+            let task = h.f.selection.lineage.task_id;
+            let result = Uuid::new_v4();
+            h.graph.nodes.lock().unwrap().insert(
+                task,
+                json!({"id": task, "kind": "task", "version": 3, "task_state": "active"}),
+            );
+            let spec = json!({"lifecycle":{"project_id":h.scope.project_id},
+                "source":{"repository_binding_generation":1}, "task":{"workspace_id":h.scope.workspace_id}});
+            let mut tx = pool.begin().await.unwrap();
+            // Only the delivery evidence is needed here. Result submission is tested separately.
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE profiled_launches SET execution_spec=$2 WHERE attempt_id=$1")
+                .bind(attempt)
+                .bind(spec)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let hot = json!({"schema_version":1,"status":"finished","stop":{"kind":"stopped"}});
+            sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
+                .bind(attempt).bind(hot).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO profiled_result_heads(attempt_id,report_id) VALUES($1,$2)")
+                .bind(attempt)
+                .bind(result)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let branch = aq_delivery::commands::task_branch(task);
+            sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,$3,$4)")
+                .bind(attempt).bind(Uuid::from_u128(1)).bind(oid('c')).bind(&branch).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
+                .bind(result).bind(attempt).bind(&branch).bind(oid('a')).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','publish_conflict',$3)")
+                .bind(result).bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "a divergent forge branch remains held");
+            *forge.branch_head.lock().unwrap() = oid('a');
+            assert_eq!(
+                h.asked().await,
+                0,
+                "forge probes are spaced by the delivery interval"
+            );
+            h.later(120_000);
+            assert_eq!(h.asked().await, 1);
+            assert_eq!(
+                h.events().await,
+                [json!({"task_id":task,"attempt_id":attempt,
+                "project_id":h.scope.project_id,"result_id":result,"version":3})]
+            );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "the queued event owns the resumed result"
+            );
+            assert_eq!(
+                &*forge.log.lock().unwrap(),
+                &vec![format!("observe {branch}"); 3]
+            );
+            let hold: String =
+                sqlx::query_scalar("SELECT decision FROM delivery_decisions WHERE result_id=$1")
+                    .bind(result)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                hold, "held",
+                "the playbook still owns the delivery decision"
+            );
         }
         /// A disposable Host10 producer with its real operation/evidence store.
         /// Only central Git and the forge response are scripted.

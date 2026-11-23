@@ -215,3 +215,35 @@ pub async fn head_report(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result
         .fetch_optional(conn)
         .await
 }
+
+/// What the policy actor could record for B4 after a final rework.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplacementFacts {
+    /// The attempt's hot state now records `retention = retained`.
+    pub source_retained: bool,
+    /// The attempt's hot state now records `effects = quiescent`.
+    pub effects_quiescent: bool,
+    /// This call wrote at least one of the two facts.
+    pub changed: bool,
+}
+
+/// Reworked attempts that still hold their task without both replacement
+/// facts, in report order after `after`. Bounded; the cursor is disposable.
+pub async fn reworked_without_facts(
+    pool: &sqlx::PgPool,
+    after: Option<Uuid>,
+    limit: i64,
+) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT s.report_id FROM profiled_auto_settlements s \
+         JOIN execution_attempts a USING(attempt_id) JOIN profiled_authority_hot h USING(attempt_id) \
+         WHERE s.disposition='rework_required' AND a.kind='profiled_v1' AND a.holds_task \
+         AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
+         AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
+         AND ($1::UUID IS NULL OR s.report_id>$1) ORDER BY s.report_id LIMIT $2",
+    )
+    .bind(after)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}

@@ -102,6 +102,7 @@ pub async fn setup_with_capabilities(qualified_required: bool, registered_journa
         revision: 1,
         definition_bodies: vec![],
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: runtime.clone(),
             qualification,
             capabilities: qualified_capabilities,

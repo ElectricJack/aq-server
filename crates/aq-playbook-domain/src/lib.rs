@@ -1,4 +1,14 @@
 //! Fixed host contracts and typed grant scope. No generic SQL/endpoint/command proxy.
+
+/// Give an individual AQ bridge transaction a bounded lock and statement wait.
+pub async fn bridge_tx(pool: &sqlx::PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT set_config('statement_timeout','2000ms',true),set_config('lock_timeout','500ms',true)")
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
 pub mod artifacts;
 pub mod catalog_view;
 pub mod coding;
@@ -11,6 +21,7 @@ mod delivery_review;
 pub mod delivery_runs;
 #[cfg(feature = "delivery_playbook")]
 pub mod delivery_store;
+pub mod grants;
 #[cfg(feature = "delivery_playbook")]
 pub mod hold_notice;
 #[cfg(feature = "delivery_playbook")]
@@ -94,6 +105,14 @@ pub enum Error {
     Unknown,
 }
 pub type Result<T> = std::result::Result<T, Error>;
+impl From<aq_playbook_host::Error> for Error {
+    fn from(error: aq_playbook_host::Error) -> Self {
+        match error {
+            aq_playbook_host::Error::Overloaded => Self::Overloaded,
+            _ => Self::Unknown,
+        }
+    }
+}
 impl From<sqlx::Error> for Error {
     fn from(_: sqlx::Error) -> Self {
         Self::Unknown

@@ -1224,6 +1224,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanResultHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanOwnerRetryWait"
                     }
                   ]
                 }
@@ -1630,6 +1633,16 @@
             "minLength": 1,
             "maxLength": 96
           },
+          "blocker_owner": {
+            "const": "project_owner"
+          },
+          "result_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wake_condition": {
+            "const": "owner_retry_authorized"
+          },
           "attempt_id": {
             "type": "string",
             "format": "uuid"
@@ -1945,14 +1958,37 @@
         ],
         "additionalProperties": false
       },
+      "HumanOwnerRetryWait": {
+        "type": "object",
+        "description": "An original owner retry approval awaiting its automatic check.",
+        "properties": {
+          "code": { "const": "owner_retry_pending" },
+          "operation_id": { "type": "string", "format": "uuid" },
+          "blocker_owner": { "enum": ["aq_scheduler", "project_owner"] },
+          "wake_condition": { "enum": ["scheduled_owner_retry_check", "original_retry_authority_restored"] },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "operation_id", "blocker_owner", "wake_condition", "next_check_at_ms", "message"],
+        "additionalProperties": false
+      },
       "HumanResultHoldReason": {
         "type": "object",
-        "description": "Why a stopped attempt's recorded result still holds an active task (spec 0016 §7, servers built with delivery by playbook): no playbook has decided the result. `result_ready_no_delivery_policy`: no delivery playbook is active for the project, so the result waits; `result_ready`: one is active and has not decided yet.",
+        "description": "The next action on a stopped attempt's recorded result, including delivery and Graph settlement.",
         "properties": {
           "code": {
             "enum": [
               "result_ready_no_delivery_policy",
-              "result_ready"
+              "result_ready",
+              "delivery_settlement_pending",
+              "delivery_settlement_grant_required",
+              "replacement_facts_pending",
+              "replacement_facts_ready",
+              "graph_completion_identity_required",
+              "graph_completion_permission_required",
+              "graph_version_conflict",
+              "graph_completion_receipt_conflict",
+              "graph_completion_receipt_pending"
             ]
           },
           "attempt_id": {
@@ -1962,6 +1998,26 @@
           "result_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "blocker_owner": {
+            "enum": ["aq_delivery", "delivery_policy_owner", "aq_scheduler", "aq_settlement", "aq_operator", "graph_workspace_admin", "project_owner", "graph_operator", "aq_graph_settlement"]
+          },
+          "wake_condition": {
+            "enum": ["delivery_reconciliation", "delivery_policy_activated", "scoped_delivery_authorization", "worker_poll", "replacement_evidence_reconciliation", "original_graph_service_restored", "graph_mutation_permission_restored", "current_task_version_reconciled", "original_graph_receipt_reconciled", "scheduled_graph_receipt_check"]
+          },
+          "next_check_at_ms": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "missing_evidence": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": { "enum": ["retained_source", "quiescent_effects"] }
           },
           "message": {
             "type": "string",

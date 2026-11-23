@@ -50,6 +50,11 @@ pub trait DomainHost: Host {
     fn transition_time(&self, now_ms: i64) -> i64 {
         now_ms
     }
+    /// Resume an admitted decision, read an exact retained receipt, or prove
+    /// that an expired asynchronous operation was never admitted.
+    fn reconcile_delivery(&mut self, _intent: &Intent) -> Option<DispatchResult> {
+        None
+    }
     fn dispatch_unavailable_plugin(&mut self, _intent: &Intent) -> DispatchResult {
         DispatchResult::Unknown {
             reason: "plugin contract is unavailable".into(),
@@ -217,6 +222,11 @@ pub enum Request {
     Recover {
         now_ms: i64,
     },
+    ReconcileDelivery {
+        intents: Vec<String>,
+        scan_after: Option<String>,
+        now_ms: i64,
+    },
     Binding {
         binding: String,
     },
@@ -269,6 +279,15 @@ impl Request {
                 event_key, limit, ..
             } => valid(event_key) && (1..=64).contains(limit),
             Self::Recover { .. } | Self::CancelEffects { .. } => true,
+            Self::ReconcileDelivery {
+                intents,
+                scan_after,
+                ..
+            } => {
+                intents.len() <= 4
+                    && intents.iter().all(|id| valid(id))
+                    && scan_after.as_deref().is_none_or(valid)
+            }
             Self::EventStatus { event_key } => valid(event_key),
             Self::Inspect { query } => query.validate().is_ok() && query.limit <= 32,
             Self::Activate {
@@ -743,7 +762,7 @@ fn execute<S: Storage>(
         return Err(Error::Invalid);
     }
     host.set_mode(match request {
-        Request::Recover { .. } => HostMode::Reconcile,
+        Request::Recover { .. } | Request::ReconcileDelivery { .. } => HostMode::Reconcile,
         Request::Cancel { .. } | Request::CancelEffects { .. } => HostMode::Cancel,
         _ => HostMode::Dispatch,
     });
@@ -819,6 +838,11 @@ fn execute<S: Storage>(
         Request::Recover { now_ms } => {
             serde_json::json!({"reconciled":engine.recover(host, now_ms).map_err(engine_error)?})
         }
+        Request::ReconcileDelivery {
+            intents,
+            scan_after,
+            now_ms,
+        } => reconcile_delivery(engine, host, &intents, scan_after.as_deref(), now_ms)?,
         Request::Install { artifact } => {
             let registry = artifact.content.registry.clone();
             engine.install(*artifact).map_err(engine_error)?;
@@ -974,6 +998,197 @@ fn execute<S: Storage>(
         Request::Stop => Value::Null,
     };
     Ok(value)
+}
+
+fn reconcile_delivery<S: Storage>(
+    engine: &Engine<S>,
+    host: &mut impl DomainHost,
+    ids: &[String],
+    scan_after: Option<&str>,
+    now_ms: i64,
+) -> Result<Value, Error> {
+    use runner::transition::{TransitionOutcome, TransitionRequest};
+    let mut page = (Vec::new(), None);
+    let mut plan = |state: &mut runner::State| {
+        page = delivery_recovery_page(state, ids, scan_after, now_ms)?;
+        Ok(false)
+    };
+    let request = &mut TransitionRequest {
+        operation: "read_delivery_recovery_page",
+        plan: &mut plan,
+    };
+    match engine
+        .store
+        .transition_v1(&engine.namespace, &engine.owner, request)
+        .map_err(engine_error)?
+    {
+        TransitionOutcome::Unsupported => {
+            page = delivery_recovery_page(
+                &engine.snapshot().map_err(engine_error)?,
+                ids,
+                scan_after,
+                now_ms,
+            )
+            .map_err(engine_error)?;
+        }
+        TransitionOutcome::Unchanged => {}
+        TransitionOutcome::Committed { .. } => return Err(Error::Unknown),
+    }
+    let (candidates, next_after) = page;
+    let mut count = 0;
+    for intent in candidates {
+        if routing_expired_before_dispatch(&intent) {
+            let at = host.transition_time(now_ms).max(now_ms);
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+            count += 1;
+            continue;
+        }
+        let Some(answer) = host.reconcile_delivery(&intent) else {
+            continue;
+        };
+        let close = matches!(&answer, DispatchResult::Rejected { reason } if reason == DELIVERY_ADMISSION_EXPIRED);
+        if !close
+            && !matches!(
+                answer,
+                DispatchResult::Accepted { .. } | DispatchResult::Completed { .. }
+            )
+        {
+            continue;
+        }
+        let at = host.transition_time(now_ms).max(now_ms);
+        if !close || intent.reason.as_deref() != Some(DELIVERY_ADMISSION_EXPIRED) {
+            engine
+                .record_result(&intent.id, answer, at)
+                .map_err(engine_error)?;
+        }
+        if close {
+            // A rejected reply leaves an already blocked run blocked in the
+            // engine. Retire this exact run after sealing its no-effect result.
+            // A later page also finds the rejected intent if the process stops
+            // between these two engine commits.
+            engine.cancel(&intent.run, at).map_err(engine_error)?;
+        }
+        count += 1;
+    }
+    Ok(serde_json::json!({"reconciled":count,"next_after":next_after}))
+}
+
+pub const DELIVERY_ADMISSION_EXPIRED: &str = "delivery_request_expired_before_admission";
+
+fn delivery_recovery_page(
+    state: &runner::State,
+    ids: &[String],
+    after: Option<&str>,
+    now_ms: i64,
+) -> runner::Result<(Vec<Intent>, Option<String>)> {
+    const SCAN: usize = 32;
+    let mut candidates = reconcilable_delivery(state, ids)?;
+    let keys = state.intents.keys_after(after, SCAN);
+    let mut expired = 0;
+    for key in &keys {
+        if ids.contains(key) {
+            continue;
+        }
+        if let Some(intent) = reconcilable_delivery(state, std::slice::from_ref(key))?.pop()
+            && intent.deadline_at_ms <= now_ms
+        {
+            candidates.push(intent);
+            expired += 1;
+            if expired == 4 {
+                return Ok((candidates, Some(key.clone())));
+            }
+        }
+    }
+    let next = (keys.len() == SCAN).then(|| keys.last().cloned()).flatten();
+    Ok((candidates, next))
+}
+
+/// Commands that durably admit an asynchronous delivery operation before doing any external work.
+pub const ASYNC_DELIVERY_COMMANDS: [&str; 6] = [
+    "main.sync",
+    "branch.publish",
+    "pull_request.open",
+    "pull_request.await_checks",
+    "pull_request.merge",
+    "pull_request.close",
+];
+
+/// The async delivery operations and the locally fenced delivery effects.
+/// A receipt or pending record commits before any change outside that transaction.
+pub const DELIVERY_RECOVERY_COMMANDS: [&str; 11] = [
+    ASYNC_DELIVERY_COMMANDS[0],
+    ASYNC_DELIVERY_COMMANDS[1],
+    ASYNC_DELIVERY_COMMANDS[2],
+    ASYNC_DELIVERY_COMMANDS[3],
+    ASYNC_DELIVERY_COMMANDS[4],
+    ASYNC_DELIVERY_COMMANDS[5],
+    "work.read",
+    "work.complete",
+    "work.return",
+    "work.hold",
+    "supervisor.notify",
+];
+
+/// Rejected routing commands can have external effects. Retire only an expiry
+/// the engine recorded before ever handing the command to the host.
+fn routing_expired_before_dispatch(intent: &Intent) -> bool {
+    matches!(
+        intent.command.name.as_str(),
+        "work.route" | "work.unroutable"
+    ) && intent.status == IntentStatus::Rejected
+        && intent.dispatch_sequence.is_none()
+        && intent.reason.as_deref() == Some("command deadline expired before dispatch")
+}
+
+fn reconcilable_delivery(state: &runner::State, ids: &[String]) -> runner::Result<Vec<Intent>> {
+    let mut found = Vec::new();
+    for id in ids {
+        let Some(intent) = state
+            .intents
+            .get(id)
+            .filter(|intent| !intent.cancel_requested)
+        else {
+            continue;
+        };
+        let Some(run) = state.runs.get(&intent.run) else {
+            continue;
+        };
+        if run.status.terminal()
+            || !matches!(&run.pending, Some(runner::Pending::Effect { intent: pending }) if pending == &intent.id)
+        {
+            continue;
+        }
+        let blocked_rejection =
+            run.status == runner::RunStatus::Blocked && intent.status == IntentStatus::Rejected;
+        if blocked_rejection && routing_expired_before_dispatch(intent) {
+            found.push(intent.clone());
+            continue;
+        }
+        if !DELIVERY_RECOVERY_COMMANDS.contains(&intent.command.name.as_str())
+            || !(blocked_rejection
+                || (intent.status == IntentStatus::Rejected
+                    && intent.reason.as_deref() == Some(DELIVERY_ADMISSION_EXPIRED))
+                || matches!(
+                    intent.status,
+                    IntentStatus::Dispatched | IntentStatus::Unknown
+                )
+                || (intent.status == IntentStatus::Prepared && intent.dispatch_sequence.is_some()))
+        {
+            continue;
+        }
+        let authority = &intent.authority;
+        let scope = model::digest(&(&authority.actor, &authority.scope))?;
+        if state.execution_denied.contains(&run.artifact)
+            || state
+                .authority_revocations
+                .get(&scope)
+                .is_some_and(|revoked| !revoked.is_disjoint(&intent.command.capabilities))
+        {
+            continue;
+        }
+        found.push(intent.clone());
+    }
+    Ok(found)
 }
 
 /// Run-local pins remain available to the owner even after an extension

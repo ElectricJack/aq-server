@@ -200,6 +200,41 @@ pub async fn held_report<'e>(
     ).bind(task).fetch_optional(db).await
 }
 
+/// The current failed result an owner can reconcile after a proven cancellation.
+/// A stopped attempt with no result needs a separate source-custody proof.
+pub async fn cancelled_failed_report<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    task: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT h.report_id FROM execution_attempts a
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_cancelled_settlements c USING(attempt_id)
+         JOIN profiled_authority_hot hot USING(attempt_id)
+         JOIN delivery_git_grants g USING(attempt_id)
+         JOIN profiled_result_reports r ON r.report_id=h.report_id
+         JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         WHERE a.task_id=$1 AND a.holds_task AND p.head IS NOT NULL AND p.task_ref=g.task_ref
+         AND hot.state#>>'{stop,kind}'='stopped'
+         AND hot.state#>>'{stop,receipt,digest}'=c.stop_receipt_digest
+         AND hot.state->>'cancellation_id'=c.cancellation_id::text
+         AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='failed'
+         AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id
+                        AND d.decision='completed')
+         AND NOT EXISTS(SELECT 1 FROM profiled_delivery_evidence d WHERE d.attempt_id=a.attempt_id
+                        AND d.state IN ('indeterminate','published'))
+         AND NOT EXISTS(SELECT 1 FROM delivery_merge_evidence m WHERE m.attempt_id=a.attempt_id)
+         AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o
+                        WHERE o.subject_id=a.task_id::text
+                        AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+                        AND o.command_name='pull_request.merge'
+                        AND o.status NOT IN ('conflict','refused','not_mergeable'))",
+    )
+    .bind(task)
+    .fetch_optional(db)
+    .await
+}
+
 /// The frozen delivery selector, independent of the attempt's lifecycle.
 pub async fn exists<'e>(db: impl sqlx::PgExecutor<'e>, attempt: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM delivery_git_grants WHERE attempt_id=$1)")
@@ -695,4 +730,22 @@ where
         .await
         .map_err(|_| Refusal::Unavailable)?
         .map_err(|_| Refusal::Unavailable)
+}
+
+/// Fence a selected result before recovering it for a resumed owner authorization.
+pub async fn is_retry_report(
+    pool: &sqlx::PgPool,
+    report: Uuid,
+    attempt: Option<Uuid>,
+) -> sqlx::Result<bool> {
+    let Some(attempt) = attempt else {
+        return Ok(true);
+    };
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE report_id=$1 AND attempt_id=$2)",
+    )
+    .bind(report)
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
 }

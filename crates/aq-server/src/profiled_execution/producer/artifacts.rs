@@ -24,6 +24,7 @@ pub struct RetainedSet {
     pub entries: Vec<(Uuid, RetainedArtifact)>,
     pub project: Uuid,
     pub until: u64,
+    pub stage: Option<Uuid>,
 }
 impl RetainedSet {
     pub fn new(project: Uuid, until: u64) -> Self {
@@ -31,6 +32,7 @@ impl RetainedSet {
             entries: vec![],
             project,
             until,
+            stage: None,
         }
     }
     pub async fn retain(
@@ -74,7 +76,7 @@ impl RetainedSet {
             &Uuid::from_bytes(*b"aq-offer-retain!"),
             &canonical(&(self.project, &artifact, kind, self.until))?,
         );
-        let retained = artifacts::retain(
+        let retained = artifacts::retain_for(
             state,
             artifacts::Retain {
                 artifact_id: id,
@@ -85,6 +87,7 @@ impl RetainedSet {
                 bytes,
                 retain_until_ms: self.until,
             },
+            self.stage,
         )
         .await?;
         self.entries.push((id, retained.clone()));

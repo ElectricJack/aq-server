@@ -336,68 +336,19 @@ async fn submit_observed(
     }
     Ok(completed)
 }
-async fn finish(
+pub(crate) async fn finish(
     state: &AppState,
     user: &User,
     original: Operation,
     outcome: Outcome,
 ) -> Result<Operation, ApiError> {
-    let mut completed = original.clone();
-    if outcome.receipt_refs.len() <= 100
-        && outcome.affected_entities.len() <= 100
-        && outcome
-            .receipt_refs
-            .iter()
-            .chain(&outcome.affected_entities)
-            .all(EntityRef::valid)
-        && (outcome.disposition == Disposition::Confirmed
-            || (outcome.receipt_refs.is_empty() && outcome.affected_entities.is_empty()))
-        && (outcome.current_versions.is_empty()
-            || (outcome.disposition == Disposition::Conflict
-                && outcome.current_versions.len() <= 32
-                && outcome
-                    .current_versions
-                    .iter()
-                    .all(|(k, v)| contract::safe(k, 128) && contract::revision(v))))
-        && outcome.reason.is_none_or(|r| {
-            outcome.disposition == Disposition::Rejected && aq_machine_control::holds::valid_code(r)
-        })
-        && outcome.activation.is_none_or(|counts| {
-            outcome.disposition == Disposition::Confirmed
-                && counts.activated as usize == outcome.affected_entities.len()
-        })
-    {
-        completed.disposition = outcome.disposition;
-        completed.receipt_refs = outcome.receipt_refs;
-        completed.affected_entities = outcome.affected_entities;
-        completed.current_versions = outcome.current_versions;
-        completed.reason = outcome.reason.map(str::to_owned);
-        completed.activation = outcome.activation;
-    } else {
-        completed.disposition = Disposition::Unknown;
-    }
-    if completed.disposition == original.disposition
-        && completed.receipt_refs == original.receipt_refs
-        && completed.affected_entities == original.affected_entities
-        && completed.current_versions == original.current_versions
-        && completed.reason == original.reason
-        && completed.activation == original.activation
-    {
-        return Ok(original);
-    }
-    completed.recovery = match completed.disposition {
-        Disposition::Pending | Disposition::Unknown => Recovery::LookupOriginal,
-        Disposition::Conflict | Disposition::Rejected => Recovery::RefreshAndReview,
-        Disposition::Confirmed => Recovery::None,
-    };
     let now = (state.clock)();
-    completed.updated_at = now
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        .max(original.updated_at.clone());
-    if serde_json::to_vec(&completed).map_or(true, |v| v.len() > 60000) {
-        completed = original.clone();
-        completed.disposition = Disposition::Unknown;
-    }
+    let timestamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let Some(completed) =
+        original.with_outcome(outcome, timestamp, aq_machine_control::holds::valid_code)
+    else {
+        return Ok(original);
+    };
     if journal::finish(&state.store.pool, user.id, &completed, now)
         .await
         .is_err()

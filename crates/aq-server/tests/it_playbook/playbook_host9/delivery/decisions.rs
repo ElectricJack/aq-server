@@ -212,6 +212,439 @@ async fn a_lost_settlement_answer_leaves_work_complete_pending_until_a_replay() 
     assert_eq!(h.decision(p.result_id).await.unwrap().0, "completed");
 }
 
+async fn publication_driver(h: &D) -> aq_server::playbooks::driver::Driver {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbook_host::{Error, postgres_client as pg, postgres_storage as store, protected};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    let (_task, _) = h.stopped(h.scope.project_id, "success");
+    let source = builtin::delivery();
+    let catalog = request::pinned_catalog(&source).unwrap();
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("branch.publish");
+    step["op"]["input"]["fields"] = json!({
+        "task":{"op":"ref","root":"input","path":["task"]}
+    });
+    step["edges"] = json!({"published":"delivered", "accepted":"delivered", "conflict":"failed", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Publish the retained result.".into(),
+        record: request::engine_record(&source, "delivery-publication-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let driver = Driver::start(h.service.clone(), Default::default(), move || {
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    })
+    .await
+    .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    driver
+}
+
+#[tokio::test]
+async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
+    driver.test_lose_next_host_reply("branch.publish");
+    let pool = h.pool().await;
+    let records = || {
+        sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT operation_id,status FROM playbook_effects WHERE command_name='branch.publish'",
+        )
+        .fetch_all(&pool)
+    };
+    let mut original = Vec::new();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        original = records().await.unwrap();
+        if !original.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].1, "accepted");
+    // Advancing the driver's normal quanta is enough. An explicit recovery
+    // request must not be necessary to retrieve the host's admission.
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(records().await.unwrap(), original);
+    assert_eq!(sqlx::query_scalar::<_,i64>(
+        "SELECT count(*) FROM playbook_host_operations WHERE operation_id=$1 AND command_name='branch.publish'",
+    ).bind(original[0].0).fetch_one(&pool).await.unwrap(), 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("branch.publish", "playbook_host_operations").await;
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_read_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("work.read", "playbook_effects").await;
+}
+
+async fn expired_unadmitted_delivery(command: &str, table: &str) {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
+    let pool = h.pool().await;
+    let interrupt = format!(
+        "CREATE FUNCTION interrupt_delivery_admission() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.command_name='{command}' THEN RAISE EXCEPTION 'interrupted admission'; END IF;
+         RETURN NEW; END $$;
+         CREATE TRIGGER interrupt_delivery_admission BEFORE INSERT ON {table}
+         FOR EACH ROW EXECUTE FUNCTION interrupt_delivery_admission();"
+    );
+    sqlx::raw_sql(&interrupt).execute(&pool).await.unwrap();
+    let mut blocked = None;
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        let runs = driver
+            .inspect_runs(h.f.actor, Default::default())
+            .await
+            .unwrap();
+        blocked = runs.items.into_iter().find(|r| r.status == "blocked");
+        if blocked.is_some() {
+            break;
+        }
+    }
+    let blocked = blocked.expect("the engine recorded the interrupted admission");
+    let detail = driver
+        .inspect_run_timeline(h.f.actor, blocked.id.clone(), Default::default())
+        .await
+        .unwrap();
+    let original = detail
+        .effects
+        .items
+        .into_iter()
+        .find(|e| e.command == command)
+        .unwrap();
+    let deadline = original.deadline_at_ms.unwrap();
+    assert_eq!(original.status, "unknown");
+    let status = || {
+        sqlx::query_scalar::<_, String>("SELECT status FROM playbook_effects WHERE intent_id=$1")
+            .bind(&original.id)
+            .fetch_optional(&pool)
+    };
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "admission rolled back atomically"
+    );
+
+    sqlx::query(&format!(
+        "DROP TRIGGER interrupt_delivery_admission ON {table}"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert!(h.clock() < deadline);
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "a live deadline is kept open"
+    );
+
+    h.later((deadline - h.clock()).max(120_000) + 1);
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(status().await.unwrap().as_deref(), Some("expired"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM playbook_host_operations WHERE intent_id=$1",
+        )
+        .bind(&original.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(DISTINCT run_id) FROM playbook_effects WHERE command_name=$1 AND status<>'expired'",
+        )
+        .bind(command)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "only the fresh run admitted the interrupted command"
+    );
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id == blocked.id && r.status == "cancelled")
+    );
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id != blocked.id && r.status == "completed")
+    );
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    let h = delivery(false).await;
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    h.answers(Settled::Pending);
+    let (task, pending) = h.stopped(h.scope.project_id, "failed");
+    let source = builtin::delivery();
+    let catalog = request::pinned_catalog(&source).unwrap();
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("work.return");
+    step["op"]["input"]["fields"]["update_from_main"] = json!({"op":"literal","value":false});
+    step["edges"] = json!({"returned":"delivered", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Return an already stopped result to the queue.".into(),
+        record: request::engine_record(&source, "delivery-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let factory = move || {
+        use aq_playbook_host::{
+            Error, postgres_client as pg, postgres_storage as store, protected,
+        };
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    };
+    let driver = Driver::start(h.service.clone(), Default::default(), factory.clone())
+        .await
+        .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if !h.settled().is_empty() {
+            break;
+        }
+    }
+    let pool = h.pool().await;
+    let retained = || {
+        sqlx::query_as::<_, (String, Uuid, String)>(
+        "SELECT intent_id,operation_id,status FROM playbook_effects WHERE command_name='work.return'",
+    ).fetch_one(&pool)
+    };
+    let (intent, operation, status) = retained().await.unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(h.decision(pending.result_id).await, None);
+    driver.stop().await.unwrap();
+
+    h.later(15_000);
+    h.answers(Settled::Returned);
+    let driver = Driver::start(h.service.clone(), Default::default(), factory)
+        .await
+        .unwrap();
+    driver.recover().await.unwrap();
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        retained().await.unwrap(),
+        (intent, operation, "returned".into())
+    );
+    assert_eq!(h.decision(pending.result_id).await.unwrap().0, "returned");
+    let returns: i64 =
+        sqlx::query_scalar("SELECT returns::bigint FROM delivery_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(returns, 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    assert_eq!(h.settled(), vec![("policy".into(), pending.result_id); 2]);
+
+    // A final receipt also survives losing the answer before the engine sees it.
+    let (_, lost) = h.stopped(h.scope.project_id, "failed");
+    driver.test_lose_next_host_reply("work.return");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.decision(lost.result_id).await.is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.decision(lost.result_id).await.unwrap().0, "returned");
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(runs.items.iter().all(|run| run.status == "completed"));
+    assert_eq!(h.settled().len(), 3);
+
+    // An admitted decision can wait for authority. It must never run on a revoked grant.
+    h.answers(Settled::Pending);
+    let (_, revoked) = h.stopped(h.scope.project_id, "failed");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.settled()
+            .iter()
+            .any(|(_, result)| *result == revoked.result_id)
+        {
+            break;
+        }
+    }
+    assert_eq!(h.settled().len(), 4);
+    h.service.revoke(h.f.actor, h.grant).await.unwrap();
+    h.answers(Settled::Returned);
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.settled().len(), 4);
+    assert_eq!(h.decision(revoked.result_id).await, None);
+
+    h.service
+        .grant(
+            h.f.actor,
+            Uuid::new_v4(),
+            h.scope.clone(),
+            h.clock() + 60_000,
+        )
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "a general grant cannot resume a pending effect"
+    );
+
+    let operation: Uuid = sqlx::query_scalar(
+        "SELECT operation_id FROM playbook_effects WHERE status='pending' AND receipt->>'result_id'=$1",
+    )
+    .bind(revoked.result_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    use tower::ServiceExt;
+    let driver = std::sync::Arc::new(driver);
+    let app = aq_server::build_admin_router_with_playbooks(h.f.state.clone(), Some(driver.clone()));
+    let approve =
+        |grant: Uuid, op: Uuid| {
+            app.clone().oneshot(
+            axum::http::Request::post("/api/playbooks/grants")
+                .header("x-aq-request", "1")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({
+                    "grant_id": grant, "scope": h.scope, "expires_at_ms": h.clock() + 60_000,
+                    "resume_delivery_operation_id": op
+                }).to_string()))
+                .unwrap(),
+        )
+        };
+    let grant = Uuid::new_v4();
+    assert_eq!(approve(grant, Uuid::new_v4()).await.unwrap().status(), 404);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    h.service.revoke(h.f.actor, grant).await.unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "revoking the renewed grant fences the effect"
+    );
+
+    assert_eq!(
+        approve(Uuid::new_v4(), operation).await.unwrap().status(),
+        200
+    );
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.decision(revoked.result_id).await.unwrap().0, "returned");
+    assert_eq!(h.settled().len(), 5);
+    let (after, original): (String, Uuid) =
+        sqlx::query_as("SELECT status,grant_id FROM playbook_effects WHERE operation_id=$1")
+            .bind(operation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((after.as_str(), original), ("returned", h.grant));
+    driver.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     let h = delivery(false).await;

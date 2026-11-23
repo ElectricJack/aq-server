@@ -141,6 +141,19 @@ pub(super) async fn admit(
     let inserted=sqlx::query("INSERT INTO dashboard_operations(operation_id,principal_id,kind,scope,request_digest,disposition,response,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$7) ON CONFLICT(operation_id) DO NOTHING")
         .bind(request.operation_id).bind(principal).bind(&request.kind).bind(serde_json::json!(scope)).bind(&digest).bind(response).bind(now).execute(&mut *tx).await?.rows_affected()==1;
     if inserted {
+        if request.kind == "task.retry"
+            && let Scope::Project { project_id } = scope
+        {
+            aq_machine_control::owner_retry::admit(
+                &mut tx,
+                request.operation_id,
+                project_id,
+                &request.subject.id,
+                serde_json::to_value(request).map_err(|_| ApiError::invalid())?,
+                now,
+            )
+            .await?;
+        }
         if let Some(reservation) = admission.and_then(|a| a.reservation) {
             if principal != reservation.ids.attempt_id
                 || scope

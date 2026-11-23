@@ -111,23 +111,42 @@ pub(super) async fn work(
         true => aq_role_settings::refusals::shown(&r.pool, id).await,
         false => None,
     };
-    let held = (held.into_iter().chain(role_hold).chain(level_hold)).chain(offer_hold);
-    #[cfg(feature = "delivery_playbook")]
-    let held = held.chain(match (&hold, open) {
-        (Some(h), true) if h.stopped => {
-            let namespace = s
-                .config
-                .playbooks
-                .as_deref()
-                .filter(|pb| {
-                    pb.profile.is_delivery()
-                        && (pb.installation_routing || pb.namespace.project_id == p)
-                })
-                .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
-            aq_human_work::delivery::waiting(&r.pool, namespace, h).await
-        }
+    let graph_wait = match (&hold, open) {
+        (Some(h), true) if h.stopped => aq_human_work::graph_completion_wait(&r.pool, h).await,
         _ => None,
-    });
+    };
+    #[cfg(feature = "delivery_playbook")]
+    let graph_wait = aq_human_work::delivery::completion_wait(
+        graph_wait,
+        match (&hold, open) {
+            (Some(h), true) if h.stopped => {
+                let namespace = s
+                    .config
+                    .playbooks
+                    .as_deref()
+                    .filter(|pb| {
+                        pb.profile.is_delivery()
+                            && (pb.installation_routing || pb.namespace.project_id == p)
+                    })
+                    .map(|pb| (pb.namespace.namespace_id, pb.namespace.generation));
+                aq_human_work::delivery::waiting(&r.pool, namespace, h, a.requested).await
+            }
+            _ => None,
+        },
+    );
+    let recovery = match (&hold, open) {
+        (Some(h), true) => aq_human_work::attempt_recovery_wait(&r.pool, h).await,
+        _ => None,
+    };
+    let held = held
+        .into_iter()
+        .chain(recovery)
+        .chain(role_hold)
+        .chain(level_hold)
+        .chain(offer_hold)
+        .chain(graph_wait)
+        .chain(aq_human_work::launch_retry_wait(&r.pool, id, (s.clock)().timestamp_millis()).await)
+        .chain(aq_human_work::owner_retry_wait(&r.pool, p, id).await);
     let (hierarchy, complete) = match open {
         true => hierarchy_of(&s, w, id, &raw).await?,
         false => (Vec::new(), complete),

@@ -283,7 +283,11 @@ impl GitPort for SocketGit {
             }
             Some("already_present") => sha1_hex(&result["observed_target"])?,
             Some("rejected") if result["reason"] == "target_moved" => {
-                return Ok(RefPublication::Moved);
+                let observed = sha1_hex(&result["observed_target"]).ok();
+                match observed {
+                    Some(head) if expected_source == Some(head.as_str()) => head,
+                    _ => return Ok(RefPublication::Moved),
+                }
             }
             Some("rejected") => {
                 return Err(GitFailure {
