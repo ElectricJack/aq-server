@@ -318,6 +318,47 @@ async fn prepare_from_parts(c: Case, p: phase::Proposal, q: AcceptRequest) -> Pr
         .await
         .unwrap()
         .receipt;
+    let artifacts = on_heap(|| artifact_receipts(&c, &p, &q)).await;
+    let materials = vec![on_heap(|| material_receipt(&c, &q, &a)).await];
+    let prepared = phase::PrepareRequest {
+        schema_version: 2,
+        negotiation: q.negotiation.clone(),
+        accepted_receipt_digest: a.digest().unwrap(),
+        expected_preparation_revision: a.lease.revision,
+        original: aq_admission::transport::Prepare {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            identity: q.original.identity.clone(),
+            binding: q.original.acceptance.binding.clone(),
+            reservation: q.original.reservation.clone(),
+            guardian_id: q.original.guardian_id,
+            launch_id: q.original.launch_id,
+            journal_revision: q.original.journal_revision + 1,
+            journal_digest: Digest::of(b"synthetic durable Prepared record"),
+            artifacts,
+            materials,
+        },
+    };
+
+    prepared.validate_for(&a, &q, &p).unwrap();
+    if let Some(clock) = &c.controlled_clock {
+        // Explicit logical Prepared boundary after the actual fetch/receipt.
+        // Existing acceptance/selection/health timestamps remain immutable.
+        clock.fetch_add(100, std::sync::atomic::Ordering::SeqCst);
+    }
+    Prepared {
+        c,
+        p,
+        q,
+        a,
+        prepared,
+    }
+}
+async fn artifact_receipts(
+    c: &Case,
+    p: &phase::Proposal,
+    q: &AcceptRequest,
+) -> Vec<aq_admission::transport::ArtifactReceipt> {
     let mut artifacts = p
         .original
         .offered
@@ -359,7 +400,14 @@ async fn prepare_from_parts(c: Case, p: phase::Proposal, q: AcceptRequest) -> Pr
             digest,
         });
     }
+    artifacts
+}
 
+async fn material_receipt(
+    c: &Case,
+    q: &AcceptRequest,
+    a: &phase::AcceptedReceipt,
+) -> aq_admission::MaterialReceipt {
     let fetch = aq_admission::transport::MaterialFetch {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -409,41 +457,9 @@ async fn prepare_from_parts(c: Case, p: phase::Proposal, q: AcceptRequest) -> Pr
             .unwrap(),
         delivery,
     };
-    let materials = vec![record.receipt().unwrap()];
-    let prepared = phase::PrepareRequest {
-        schema_version: 2,
-        negotiation: q.negotiation.clone(),
-        accepted_receipt_digest: a.digest().unwrap(),
-        expected_preparation_revision: a.lease.revision,
-        original: aq_admission::transport::Prepare {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            identity: q.original.identity.clone(),
-            binding: q.original.acceptance.binding.clone(),
-            reservation: q.original.reservation.clone(),
-            guardian_id: q.original.guardian_id,
-            launch_id: q.original.launch_id,
-            journal_revision: q.original.journal_revision + 1,
-            journal_digest: Digest::of(b"synthetic durable Prepared record"),
-            artifacts,
-            materials,
-        },
-    };
-
-    prepared.validate_for(&a, &q, &p).unwrap();
-    if let Some(clock) = &c.controlled_clock {
-        // Explicit logical Prepared boundary after the actual fetch/receipt.
-        // Existing acceptance/selection/health timestamps remain immutable.
-        clock.fetch_add(100, std::sync::atomic::Ordering::SeqCst);
-    }
-    Prepared {
-        c,
-        p,
-        q,
-        a,
-        prepared,
-    }
+    record.receipt().unwrap()
 }
+
 pub async fn assert_unissued(c: &Case) {
     let row=sqlx::query("SELECT (SELECT count(*) FROM profiled_phase_execution_grants) AS grants,(SELECT count(*) FROM admission_material_receipts) AS materials,state FROM profiled_authority_hot").fetch_one(&c.env.env.pool).await.unwrap();
     assert_eq!(row.get::<i64, _>("grants"), 0);
