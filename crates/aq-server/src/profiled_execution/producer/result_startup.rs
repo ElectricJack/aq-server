@@ -8,6 +8,8 @@ use serde::Deserialize;
 
 pub(super) const STARTUP_ID: &str = "aq.agent-result-startup";
 const STARTUP_DIGEST: &str = "667d48a537baa35335fb3da1e589846e9d294a2bc24a8df58cf682181b15229a";
+/// Byte length of the pinned startup instruction.
+const STARTUP_LEN: usize = 1929;
 const CONTRACT_DIGEST: &str = "4fe711c405ead85b55a54de2d7446b2c106c4b8809b16bc57497ba2af1d35ef9";
 const ADAPTER_ID: &str = "aq.codex-result-local-adapter";
 /// Docker-local executors (long phase, no terminal input): `DOCKER_LOCAL_PROFILES`.
@@ -51,6 +53,31 @@ pub(super) fn from_definitions(
     if !result_adapter(adapter.id.as_str()) {
         return Ok(None);
     }
+    let opt = selected_opt_in(adapter, definitions)?;
+    // A docker-local adapter identity carries only its own profile.
+    let sandbox = DOCKER_LOCAL_PROFILES
+        .iter()
+        .find(|p| p.adapter == adapter.id.as_str());
+    if sandbox.is_some_and(|p| p.profile != opt.profile) {
+        return Err(refused());
+    }
+    if opt.schema_version != 1
+        || !recipe_matches(&opt, adapter)?
+        || opt.contract != public_reference("aq.agent-result-local", CONTRACT_DIGEST)?
+    {
+        return Err(refused());
+    }
+    let (artifact, text) = startup_instruction(definitions)?;
+    let interactive = opt.profile == INTERACTIVE_PROFILE;
+    Ok(Some(ReportingInstruction {
+        artifact,
+        text,
+        interactive,
+        long_phase: interactive || sandbox.is_some(),
+    }))
+}
+/// The opt-in metadata of the whole definition selected for `adapter`.
+fn selected_opt_in(adapter: &ArtifactRef, definitions: &[Definition]) -> Result<OptIn, AppError> {
     // Definition revisions advance when whole runtime/environment bytes change.
     // The Definition owner validates the revision; protocol versions stay below.
     let selected = definitions
@@ -60,14 +87,16 @@ pub(super) fn from_definitions(
     if Digest::of(selected.body().as_bytes()) != adapter.digest {
         return Err(refused());
     }
-    let opt: OptIn = serde_json::from_str(selected.body()).map_err(|_| refused())?;
-    let recipe_matches = match opt.profile.as_str() {
-        PROFILE => {
-            opt.recipe.id.as_str() == "aq.codex-result-local-recipe"
-                && opt.recipe.version.as_str() == "1"
-        }
+    serde_json::from_str(selected.body()).map_err(|_| refused())
+}
+/// The opt-in names the recipe its profile pins for `adapter`.
+fn recipe_matches(opt: &OptIn, adapter: &ArtifactRef) -> Result<bool, AppError> {
+    let recipe = &opt.recipe;
+    let version_one = recipe.version.as_str() == "1";
+    Ok(match opt.profile.as_str() {
+        PROFILE => recipe.id.as_str() == "aq.codex-result-local-recipe" && version_one,
         INTERACTIVE_PROFILE => {
-            opt.recipe
+            *recipe
                 == public_reference(
                     "aq.codex-interactive-result-local-recipe",
                     INTERACTIVE_RECIPE_DIGEST,
@@ -76,41 +105,29 @@ pub(super) fn from_definitions(
         profile => DOCKER_LOCAL_PROFILES.iter().any(|p| {
             p.profile == profile
                 && p.adapter == adapter.id.as_str()
-                && p.recipe_id == opt.recipe.id.as_str()
-                && opt.recipe.version.as_str() == "1"
-                && p.recipe_digest
-                    .is_none_or(|d| d == opt.recipe.digest.as_str())
+                && p.recipe_id == recipe.id.as_str()
+                && version_one
+                && p.recipe_digest.is_none_or(|d| d == recipe.digest.as_str())
         }),
-    };
-    // A docker-local adapter identity carries only its own profile.
-    let sandbox = DOCKER_LOCAL_PROFILES
-        .iter()
-        .find(|p| p.adapter == adapter.id.as_str());
-    if sandbox.is_some_and(|p| p.profile != opt.profile) {
-        return Err(refused());
-    }
-    if opt.schema_version != 1
-        || !recipe_matches
-        || opt.contract != public_reference("aq.agent-result-local", CONTRACT_DIGEST)?
-    {
-        return Err(refused());
-    }
+    })
+}
+/// The exact public startup instruction, by pinned reference and length.
+fn startup_instruction(definitions: &[Definition]) -> Result<(ArtifactRef, String), AppError> {
     let artifact = public_reference(STARTUP_ID, STARTUP_DIGEST)?;
     let instruction = definitions
         .iter()
         .find(|d| d.artifact() == &artifact)
         .ok_or_else(|| refused())?;
-    if instruction.body().len() != 1929
+    if instruction.body().len() != STARTUP_LEN
         || Digest::of(instruction.body().as_bytes()) != artifact.digest
     {
         return Err(refused());
     }
-    Ok(Some(ReportingInstruction {
-        artifact,
-        text: instruction.body().to_owned(),
-        interactive: opt.profile == INTERACTIVE_PROFILE,
-        long_phase: opt.profile == INTERACTIVE_PROFILE || sandbox.is_some(),
-    }))
+    Ok((artifact, instruction.body().to_owned()))
+}
+/// Profiles that run under the long (schema 3) phase policy.
+fn long_phase_profile(profile: &str) -> bool {
+    profile == INTERACTIVE_PROFILE || DOCKER_LOCAL_PROFILES.iter().any(|p| p.profile == profile)
 }
 pub(super) fn interactive_runtime(
     runtime: &ArtifactRef,
@@ -121,17 +138,12 @@ pub(super) fn interactive_runtime(
         runtime: ArtifactRef,
         profile: String,
     }
-    for definition in definitions {
-        if !result_adapter(definition.artifact().id.as_str()) {
-            continue;
-        }
+    let result_definitions = definitions
+        .iter()
+        .filter(|d| result_adapter(d.artifact().id.as_str()));
+    for definition in result_definitions {
         let pin: RuntimePin = serde_json::from_str(definition.body()).map_err(|_| refused())?;
-        if pin.runtime == *runtime
-            && (pin.profile == INTERACTIVE_PROFILE
-                || DOCKER_LOCAL_PROFILES
-                    .iter()
-                    .any(|p| p.profile == pin.profile))
-        {
+        if pin.runtime == *runtime && long_phase_profile(&pin.profile) {
             return Ok(from_definitions(definition.artifact(), definitions)?
                 .is_some_and(|value| value.long_phase));
         }
@@ -184,6 +196,18 @@ mod tests {
             "client_manifest":reference("aq.agent-result-client-installation"),"client_executable":reference("client"),
             "contract":public_reference("aq.agent-result-local",CONTRACT_DIGEST).unwrap(),"recipe":reference("aq.codex-result-local-recipe"),
             "permission_digest":Digest::of(b"whole existing compiled permission plan"),"reserved_client_bytes":67108864})
+    }
+    fn interactive_body() -> Value {
+        let mut value = body();
+        value["profile"] = json!(INTERACTIVE_PROFILE);
+        value["recipe"] = json!(
+            public_reference(
+                "aq.codex-interactive-result-local-recipe",
+                INTERACTIVE_RECIPE_DIGEST,
+            )
+            .unwrap()
+        );
+        value
     }
     fn definitions(body: Value) -> (ArtifactRef, Vec<Definition>) {
         let bytes = serde_json::to_string(&body).unwrap();
@@ -259,15 +283,7 @@ mod tests {
     }
     #[test]
     fn interactive_profile_requires_its_exact_public_recipe_and_keeps_counted_startup() {
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let mut value = interactive_body();
         let (adapter, defs) = definitions(value.clone());
         let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
         assert_eq!(reporting.text, TEXT);
@@ -294,15 +310,7 @@ mod tests {
             .unwrap();
             (adapter, defs)
         }
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let value = interactive_body();
         let (adapter, defs) = revision_two(value.clone());
         assert!(
             from_definitions(&adapter, &defs)
@@ -334,15 +342,7 @@ mod tests {
         let runtime = reference("runtime-code");
         let (_, defs) = definitions(body());
         assert!(!interactive_runtime(&runtime, &defs).unwrap());
-        let mut value = body();
-        value["profile"] = json!(INTERACTIVE_PROFILE);
-        value["recipe"] = json!(
-            public_reference(
-                "aq.codex-interactive-result-local-recipe",
-                INTERACTIVE_RECIPE_DIGEST,
-            )
-            .unwrap()
-        );
+        let mut value = interactive_body();
         let (_, defs) = definitions(value.clone());
         assert!(interactive_runtime(&runtime, &defs).unwrap());
         assert!(!interactive_runtime(&reference("other-runtime"), &defs).unwrap());

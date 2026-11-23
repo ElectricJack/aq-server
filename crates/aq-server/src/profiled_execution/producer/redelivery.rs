@@ -2,81 +2,52 @@ use super::{now, refused};
 use crate::{
     AppState,
     error::{AppError, db},
+    execution::authority::{self, AuthorityView},
     machine_api::mapped,
     worker_api::AuthenticatedNode,
 };
 use aq_admission::transport::{DeliveryClock, Poll};
 use aq_machine_control::slots;
 use aq_profiled_state::git_author::OfferDelivery;
-use sqlx::Row;
+use aq_session_protocol::SessionIdentity;
+use sqlx::{Postgres, Row, Transaction};
+use uuid::Uuid;
+
+type Tx = Transaction<'static, Postgres>;
+
 pub async fn existing(
     state: &AppState,
     auth: &AuthenticatedNode,
     request: &Poll,
     slot: u32,
 ) -> Result<Option<OfferDelivery>, AppError> {
-    // Most polls have nothing to redeliver and share the node row with their
-    // sibling slots. Loading an offer locks that row FOR UPDATE, and two slots
-    // that each upgrade a shared lock wait for each other until one times out,
-    // the same one on every poll. A slot that finds an offer under the shared
-    // lock therefore releases it and looks again under the exclusive one.
-    let mut exclusive = false;
-    let (mut tx, attempt) = loop {
-        let mut tx = state.store.pool.begin().await.map_err(db)?;
-        if exclusive {
-            crate::worker_api::lock_current_node(&mut tx, auth).await?;
-        } else {
-            crate::worker_api::read_current_node(&mut tx, auth).await?;
-        }
-        if !slots::redelivery_allowed(&mut tx, auth.id())
-            .await
-            .map_err(mapped)?
-        {
-            return Ok(None);
-        }
-        let boot = request.identity.boot_id;
-        super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
-        let offered = slots::offered_attempt(&mut tx, auth.id(), request.after_offer, slot);
-        let Some(attempt) = offered.await.map_err(mapped)? else {
-            return Ok(None);
-        };
-        if exclusive {
-            break (tx, attempt);
-        }
-        tx.rollback().await.map_err(db)?;
-        exclusive = true;
+    let poll = SlotPoll {
+        state,
+        auth,
+        request,
+        slot,
     };
-    let view = crate::execution::authority::load_attempt_locked(
+    let Some((mut tx, attempt)) = poll.exclusively_offered_attempt().await? else {
+        return Ok(None);
+    };
+    let view = authority::load_attempt_locked(
         state,
         &mut tx,
         auth.id(),
         attempt,
-        crate::execution::authority::Policy::IdentityOnly,
+        authority::Policy::IdentityOnly,
     )
     .await
     .map_err(AppError::from)?;
-    let hot: serde_json::Value =
-        sqlx::query("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|_| AppError::Internal)?
-            .get("state");
-    if !view.holds_task
-        || view.revoked
-        || view.cancellation_id.is_some()
-        || view.grant_id.is_some()
-        || view.stopped
-        || hot["revoked"] != false
-    {
+    let hot = hot_state(&mut tx, attempt).await?;
+    if !redeliverable(&view, &hot) {
         return Err(refused());
     }
     let mut offer =
         super::super::native_offer::load_original_delivery_locked(&mut tx, attempt).await?;
     let offered = &mut offer.native.offered;
-    if offered.lifecycle_binding.session != view.session
-        || !matches!(view.session,aq_session_protocol::SessionIdentity::Remote{boot_id,..}if boot_id==request.identity.boot_id)
-    {
+    let boot = request.identity.boot_id;
+    if !same_remote_session(&offered.lifecycle_binding.session, &view.session, boot) {
         return Err(refused());
     }
     let time = now(state)?;
@@ -87,4 +58,83 @@ pub async fn existing(
     offer.validate().map_err(|_| refused())?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
     Ok(Some(offer))
+}
+
+/// One slot's redelivery poll.
+struct SlotPoll<'a> {
+    state: &'a AppState,
+    auth: &'a AuthenticatedNode,
+    request: &'a Poll,
+    slot: u32,
+}
+
+impl SlotPoll<'_> {
+    /// The slot's offered attempt, with its transaction holding the node row
+    /// exclusively.
+    ///
+    /// Most polls have nothing to redeliver and share the node row with their
+    /// sibling slots. Loading an offer locks that row FOR UPDATE, and two slots
+    /// that each upgrade a shared lock wait for each other until one times out,
+    /// the same one on every poll. A slot that finds an offer under the shared
+    /// lock therefore releases it and looks again under the exclusive one.
+    async fn exclusively_offered_attempt(&self) -> Result<Option<(Tx, Uuid)>, AppError> {
+        let Some((shared, _)) = self.offered_attempt(NodeLock::Shared).await? else {
+            return Ok(None);
+        };
+        shared.rollback().await.map_err(db)?;
+        self.offered_attempt(NodeLock::Exclusive).await
+    }
+
+    /// Looks for the slot's offered attempt under `lock` on the node row.
+    async fn offered_attempt(&self, lock: NodeLock) -> Result<Option<(Tx, Uuid)>, AppError> {
+        let (state, auth) = (self.state, self.auth);
+        let mut tx = state.store.pool.begin().await.map_err(db)?;
+        match lock {
+            NodeLock::Exclusive => crate::worker_api::lock_current_node(&mut tx, auth).await?,
+            NodeLock::Shared => crate::worker_api::read_current_node(&mut tx, auth).await?,
+        };
+        if !slots::redelivery_allowed(&mut tx, auth.id())
+            .await
+            .map_err(mapped)?
+        {
+            return Ok(None);
+        }
+        let boot = self.request.identity.boot_id;
+        super::super::registration::current_runtime_locked(state, &mut tx, auth.id(), boot).await?;
+        let after = self.request.after_offer;
+        let offered = slots::offered_attempt(&mut tx, auth.id(), after, self.slot);
+        let attempt = offered.await.map_err(mapped)?;
+        Ok(attempt.map(|attempt| (tx, attempt)))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NodeLock {
+    Shared,
+    Exclusive,
+}
+
+async fn hot_state(tx: &mut Tx, attempt: Uuid) -> Result<serde_json::Value, AppError> {
+    Ok(
+        sqlx::query("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|_| AppError::Internal)?
+            .get("state"),
+    )
+}
+
+/// The attempt still holds its task with no revocation, cancellation, grant
+/// or stop recorded in either the authority view or the hot state.
+fn redeliverable(view: &AuthorityView, hot: &serde_json::Value) -> bool {
+    let live = !view.revoked && hot["revoked"] == false && view.cancellation_id.is_none();
+    view.holds_task && live && view.grant_id.is_none() && !view.stopped
+}
+
+/// The offer is bound to the attempt's session, and that session is the
+/// remote one of the polling boot.
+fn same_remote_session(bound: &SessionIdentity, current: &SessionIdentity, boot: Uuid) -> bool {
+    bound == current
+        && matches!(current, SessionIdentity::Remote { boot_id, .. } if *boot_id == boot)
 }
