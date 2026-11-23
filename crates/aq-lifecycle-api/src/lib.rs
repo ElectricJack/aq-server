@@ -287,27 +287,7 @@ impl Response {
         }
         match (&request.body.command, &self.body) {
             (Command::RegisterWait(wanted), ResponseBody::WaitRegistered(got)) => {
-                ensure(
-                    got.predicate == wanted.predicate
-                        && got.scope == wanted.scope
-                        && got.binding == wanted.binding
-                        && got.wait == wanted.wait_ref()
-                        && got.continuation.generation == wanted.continuation_generation,
-                    "registration response binding",
-                )?;
-                let members = wanted.predicate.members();
-                ensure(
-                    got.boundaries.len() == members.len(),
-                    "source boundary completeness",
-                )?;
-                for (member, boundary) in members.iter().zip(&got.boundaries) {
-                    ensure(
-                        boundary.member_id == member.member_id
-                            && boundary.owner == member.condition.owner()
-                            && boundary.condition_digest == canonical_digest(&member.condition)?,
-                        "source boundary identity",
-                    )?;
-                }
+                got.validate_request(wanted)?;
             }
             (Command::RegisterWait(wanted), ResponseBody::WaitOutcome(got)) => {
                 ensure(
@@ -339,32 +319,64 @@ impl Response {
                 "checkpoint response binding",
             )?,
             (Command::Inspect(wanted), ResponseBody::Inspection(got)) => {
-                ensure(
-                    got.scope == wanted.scope && got.items.len() <= wanted.page.limit as usize,
-                    "inspection response scope/page",
-                )?;
-                for item in &got.items {
-                    match (&wanted.target, item) {
-                        (InspectTarget::Session { binding }, InspectionItem::Session(view)) => {
-                            ensure(view.binding == *binding, "session projection binding")?
-                        }
-                        (InspectTarget::Wait { wait }, InspectionItem::Wait(view)) => {
-                            ensure(view.registration.wait == *wait, "wait projection binding")?
-                        }
-                        (
-                            InspectTarget::Notification { message_id },
-                            InspectionItem::Notification(view),
-                        ) => ensure(
-                            view.message.message_id == *message_id,
-                            "notification projection binding",
-                        )?,
-                        _ => return Err(ContractError::Invalid("projection type mismatch")),
-                    }
-                }
+                got.validate_request(wanted)?;
             }
             (Command::Operator(_), ResponseBody::OperatorRequested { .. })
             | (_, ResponseBody::Refused { .. }) => {}
             _ => return Err(ContractError::Invalid("response class mismatch")),
+        }
+        Ok(())
+    }
+}
+impl RegisteredWait {
+    fn validate_request(&self, wanted: &WaitRegistration) -> Result<(), ContractError> {
+        ensure(
+            self.predicate == wanted.predicate
+                && self.scope == wanted.scope
+                && self.binding == wanted.binding
+                && self.wait == wanted.wait_ref()
+                && self.continuation.generation == wanted.continuation_generation,
+            "registration response binding",
+        )?;
+        let members = wanted.predicate.members();
+        ensure(
+            self.boundaries.len() == members.len(),
+            "source boundary completeness",
+        )?;
+        for (member, boundary) in members.iter().zip(&self.boundaries) {
+            ensure(
+                boundary.member_id == member.member_id
+                    && boundary.owner == member.condition.owner()
+                    && boundary.condition_digest == canonical_digest(&member.condition)?,
+                "source boundary identity",
+            )?;
+        }
+        Ok(())
+    }
+}
+impl InspectionPage {
+    fn validate_request(&self, wanted: &InspectRequest) -> Result<(), ContractError> {
+        ensure(
+            self.scope == wanted.scope && self.items.len() <= wanted.page.limit as usize,
+            "inspection response scope/page",
+        )?;
+        for item in &self.items {
+            match (&wanted.target, item) {
+                (InspectTarget::Session { binding }, InspectionItem::Session(view)) => {
+                    ensure(view.binding == *binding, "session projection binding")?
+                }
+                (InspectTarget::Wait { wait }, InspectionItem::Wait(view)) => {
+                    ensure(view.registration.wait == *wait, "wait projection binding")?
+                }
+                (
+                    InspectTarget::Notification { message_id },
+                    InspectionItem::Notification(view),
+                ) => ensure(
+                    view.message.message_id == *message_id,
+                    "notification projection binding",
+                )?,
+                _ => return Err(ContractError::Invalid("projection type mismatch")),
+            }
         }
         Ok(())
     }
@@ -407,76 +419,75 @@ pub fn negotiate_api(
         c.validate()?;
         ensure(names.insert(c.id.clone()), "duplicate API capability")?;
     }
-    if required.version != 1
-        || !matches!(
-            required.id.as_str(),
-            WAIT_CAPABILITY
-                | INSPECT_CAPABILITY
-                | NOTIFICATION_CAPABILITY
-                | OPERATOR_CAPABILITY
-                | ACK_CAPABILITY
-        )
-        || !advertised.contains(required)
-    {
+    let supported_id = matches!(
+        required.id.as_str(),
+        WAIT_CAPABILITY
+            | INSPECT_CAPABILITY
+            | NOTIFICATION_CAPABILITY
+            | OPERATOR_CAPABILITY
+            | ACK_CAPABILITY
+    );
+    let supported_version = supported_id && required.version == 1;
+    if !supported_version || !advertised.contains(required) {
         return Err(ContractError::Unsupported);
     }
     Ok(())
 }
-fn bounded_schema<T: JsonSchema>(maximum: usize) -> serde_json::Value {
-    fn annotate(value: &mut serde_json::Value) {
-        if let Some(object) = value.as_object_mut() {
-            match object.get("format").and_then(|v| v.as_str()) {
-                Some("uint64") => {
-                    object.insert("maximum".into(), serde_json::json!(u64::MAX));
-                }
-                Some("uint32") => {
-                    object.insert("maximum".into(), serde_json::json!(u32::MAX));
-                }
-                _ => {}
-            }
-            if let Some(props) = object.get_mut("properties").and_then(|v| v.as_object_mut()) {
-                for (name, shape) in props {
-                    if name == "api_version" {
-                        shape["const"] = serde_json::json!(API_VERSION);
-                    }
-                    if matches!(
-                        name.as_str(),
-                        "members" | "outcomes" | "boundaries" | "pending_operation_ids" | "reasons"
-                    ) {
-                        shape["maxItems"] = serde_json::json!(MAX_MEMBERS);
-                    }
-                    if name == "items" {
-                        shape["maxItems"] = serde_json::json!(MAX_PAGE);
-                    }
-                    if name == "limit" {
-                        shape["minimum"] = serde_json::json!(1);
-                        shape["maximum"] = serde_json::json!(MAX_PAGE);
-                    }
-                    if matches!(
-                        name.as_str(),
-                        "generation"
-                            | "continuation_generation"
-                            | "wait_generation"
-                            | "expected_revision"
-                            | "revision"
-                            | "message_revision"
-                            | "question_revision"
-                    ) {
-                        shape["minimum"] = serde_json::json!(1);
-                    }
-                }
-            }
-            for child in object.values_mut() {
-                annotate(child);
-            }
-        } else if let Some(array) = value.as_array_mut() {
-            for child in array {
-                annotate(child);
-            }
+fn annotate_property(name: &str, shape: &mut serde_json::Value) {
+    use serde_json::json;
+    match name {
+        "api_version" => shape["const"] = json!(API_VERSION),
+        "members" | "outcomes" | "boundaries" | "pending_operation_ids" | "reasons" => {
+            shape["maxItems"] = json!(MAX_MEMBERS)
+        }
+        "items" => shape["maxItems"] = json!(MAX_PAGE),
+        "limit" => {
+            shape["minimum"] = json!(1);
+            shape["maximum"] = json!(MAX_PAGE);
+        }
+        "generation"
+        | "continuation_generation"
+        | "wait_generation"
+        | "expected_revision"
+        | "revision"
+        | "message_revision"
+        | "question_revision" => shape["minimum"] = json!(1),
+        _ => {}
+    }
+}
+
+fn annotate_object(object: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    match object.get("format").and_then(Value::as_str) {
+        Some("uint64") => {
+            object.insert("maximum".into(), serde_json::json!(u64::MAX));
+        }
+        Some("uint32") => {
+            object.insert("maximum".into(), serde_json::json!(u32::MAX));
+        }
+        _ => {}
+    }
+    if let Some(props) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, shape) in props {
+            annotate_property(name, shape);
         }
     }
+}
+
+fn annotate_schema(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Object(object) => {
+            annotate_object(object);
+            object.values_mut().for_each(annotate_schema);
+        }
+        Value::Array(array) => array.iter_mut().for_each(annotate_schema),
+        _ => {}
+    }
+}
+fn bounded_schema<T: JsonSchema>(maximum: usize) -> serde_json::Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(T)).expect("schema serialization");
-    annotate(&mut schema);
+    annotate_schema(&mut schema);
     schema["x-max-wire-bytes"] = serde_json::json!(maximum);
     schema
 }

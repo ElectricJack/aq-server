@@ -101,167 +101,13 @@ impl ConformanceApi {
         ensure(self.seen.len() < 1024, "API receipt capacity")?;
         let body = match &request.body.command {
             Command::RegisterWait(value) => {
-                self.own(&value.binding)?;
-                if value.scope != self.context.scope {
-                    return Err(ContractError::Stale);
-                }
-                value.reject_self(
-                    self.context.current_operation_id,
-                    self.context.current_run_id,
-                )?;
-                if let Some(old) = self.waits.get(&value.wait_id) {
-                    if old.request != *value {
-                        return Err(ContractError::Conflict);
-                    }
-                    ResponseBody::WaitRegistered(Box::new(old.registration.clone()))
-                } else {
-                    ensure(self.waits.len() < 256, "fake wait registry capacity")?;
-                    ensure(
-                        !self.waits.values().any(|old| {
-                            old.request.binding.attempt_id == value.binding.attempt_id
-                                && old.outcome.is_none()
-                        }),
-                        "one active suspension wait per attempt",
-                    )?;
-                    let registration = RegisteredWait {
-                        scope: value.scope.clone(),
-                        binding: value.binding.clone(),
-                        wait: value.wait_ref(),
-                        predicate: value.predicate.clone(),
-                        continuation: ContinuationRef {
-                            continuation_id: request.body.operation_id,
-                            generation: value.continuation_generation,
-                            wait: value.wait_ref(),
-                        },
-                        original_created_at_ms: now_ms,
-                        central_hold_receipt: reference("fake-central-hold-only"),
-                        boundaries: value
-                            .predicate
-                            .members()
-                            .iter()
-                            .map(|member| SourceBoundary {
-                                member_id: member.member_id,
-                                owner: member.condition.owner(),
-                                condition_digest: canonical_digest(&member.condition).unwrap(),
-                                committed_revision: Text::new("fixture-committed-revision")
-                                    .unwrap(),
-                                committed_replay_cursor: Text::new(
-                                    "fixture-committed-replay-boundary",
-                                )
-                                .unwrap(),
-                                subscription_receipt: reference(
-                                    "fake-subscription-not-runtime-proof",
-                                ),
-                                snapshot_digest: Digest::of(b"fixture-source-snapshot"),
-                            })
-                            .collect(),
-                        cycle_assessment: CycleAssessment::ExternalUnknown {
-                            reason: Text::new(
-                                "runtime graph/source cycle verification remains required",
-                            )
-                            .unwrap(),
-                        },
-                        execution: WaitExecutionState::PolicyPending,
-                    };
-                    registration.validate()?;
-                    self.waits.insert(
-                        value.wait_id,
-                        WaitRecord {
-                            request: value.clone(),
-                            registration: registration.clone(),
-                            outcome: None,
-                        },
-                    );
-                    ResponseBody::WaitRegistered(Box::new(registration))
-                }
+                self.register_wait(value, request.body.operation_id, now_ms)
             }
-            Command::Checkpoint(value) => {
-                self.own(&value.binding)?;
-                let wait = self
-                    .waits
-                    .get(&value.continuation.wait.wait_id)
-                    .ok_or(ContractError::Stale)?;
-                ensure(
-                    wait.registration.continuation == value.continuation,
-                    "checkpoint continuation binding",
-                )?;
-                ResponseBody::CheckpointRecorded {
-                    continuation: value.continuation.clone(),
-                    claim_digest: canonical_digest(&value.claim)?,
-                }
-            }
-            Command::ContinuationAck(value) => {
-                self.own(&value.successor)?;
-                let attachment = self.attachment.as_ref().ok_or(ContractError::Stale)?;
-                if value.admission_id != attachment.admission_id
-                    || value.continuation != attachment.continuation
-                    || value.attachment_digest != canonical_digest(attachment)?
-                    || value.outcome != attachment.outcome
-                {
-                    return Err(ContractError::Stale);
-                }
-                ensure(
-                    self.acknowledgment.is_none(),
-                    "continuation ack already recorded",
-                )?;
-                let receipt = reference("fake-authenticated-api-receipt-not-runtime-proof");
-                self.acknowledgment = Some(receipt.clone());
-                ResponseBody::ContinuationAcknowledged {
-                    admission_id: value.admission_id,
-                    continuation: value.continuation.clone(),
-                    acknowledgment_receipt: receipt,
-                }
-            }
-            Command::Inspect(value) => {
-                if value.scope != self.context.scope {
-                    return Err(ContractError::Stale);
-                }
-                if self.context.role == ActorRole::SessionAgent {
-                    match &value.target {
-                        InspectTarget::Session { binding } => self.own(binding)?,
-                        InspectTarget::Wait { wait } => {
-                            let row = self.waits.get(&wait.wait_id).ok_or(ContractError::Stale)?;
-                            self.own(&row.registration.binding)?;
-                            ensure(row.registration.wait == *wait, "inspection wait revision")?;
-                        }
-                        InspectTarget::Notification { .. } => {
-                            return Err(ContractError::Unsupported);
-                        }
-                    }
-                }
-                let items = if let InspectTarget::Wait { wait } = &value.target {
-                    let row = self.waits.get(&wait.wait_id).ok_or(ContractError::Stale)?;
-                    vec![InspectionItem::Wait(Box::new(WaitView {
-                        registration: row.registration.clone(),
-                        outcome: row.outcome.clone(),
-                        continuation: ContinuationState::PendingPolicy,
-                        parking_report: None,
-                    }))]
-                } else {
-                    Vec::new()
-                };
-                ResponseBody::Inspection(InspectionPage {
-                    scope: value.scope.clone(),
-                    items,
-                    next_cursor: None,
-                    complete_for_authorized_scope: false,
-                    reasons: vec![
-                        Text::new("fake peer has no runtime projection/source scan").unwrap(),
-                    ],
-                })
-            }
-            Command::Operator(value) => {
-                if self.context.role != ActorRole::Operator {
-                    return Err(ContractError::Unsupported);
-                }
-                if value.scope != self.context.scope {
-                    return Err(ContractError::Stale);
-                }
-                ResponseBody::OperatorRequested {
-                    receipt: reference("fake-operator-request-not-executed"),
-                }
-            }
-        };
+            Command::Checkpoint(value) => self.checkpoint(value),
+            Command::ContinuationAck(value) => self.acknowledge(value),
+            Command::Inspect(value) => self.inspect(value),
+            Command::Operator(value) => self.operator(value),
+        }?;
         let response = Response {
             api_version: API_VERSION,
             operation_id: request.body.operation_id,
@@ -275,6 +121,129 @@ impl ConformanceApi {
         );
         Ok(response)
     }
+    fn register_wait(
+        &mut self,
+        value: &WaitRegistration,
+        operation_id: Uuid,
+        now_ms: u64,
+    ) -> Result<ResponseBody, ContractError> {
+        self.own(&value.binding)?;
+        if value.scope != self.context.scope {
+            return Err(ContractError::Stale);
+        }
+        value.reject_self(
+            self.context.current_operation_id,
+            self.context.current_run_id,
+        )?;
+        if let Some(old) = self.waits.get(&value.wait_id) {
+            if old.request != *value {
+                return Err(ContractError::Conflict);
+            }
+            return Ok(ResponseBody::WaitRegistered(Box::new(
+                old.registration.clone(),
+            )));
+        }
+        ensure(self.waits.len() < 256, "fake wait registry capacity")?;
+        ensure(
+            !self.waits.values().any(|old| {
+                old.request.binding.attempt_id == value.binding.attempt_id && old.outcome.is_none()
+            }),
+            "one active suspension wait per attempt",
+        )?;
+        let registration = fixture_registration(value, operation_id, now_ms);
+        registration.validate()?;
+        self.waits.insert(
+            value.wait_id,
+            WaitRecord {
+                request: value.clone(),
+                registration: registration.clone(),
+                outcome: None,
+            },
+        );
+        Ok(ResponseBody::WaitRegistered(Box::new(registration)))
+    }
+    fn checkpoint(&self, value: &Checkpoint) -> Result<ResponseBody, ContractError> {
+        self.own(&value.binding)?;
+        let wait = self
+            .waits
+            .get(&value.continuation.wait.wait_id)
+            .ok_or(ContractError::Stale)?;
+        ensure(
+            wait.registration.continuation == value.continuation,
+            "checkpoint continuation binding",
+        )?;
+        Ok(ResponseBody::CheckpointRecorded {
+            continuation: value.continuation.clone(),
+            claim_digest: canonical_digest(&value.claim)?,
+        })
+    }
+    fn acknowledge(&mut self, value: &AckRequest) -> Result<ResponseBody, ContractError> {
+        self.own(&value.successor)?;
+        let attachment = self.attachment.as_ref().ok_or(ContractError::Stale)?;
+        value.validate_attachment(attachment)?;
+        ensure(
+            self.acknowledgment.is_none(),
+            "continuation ack already recorded",
+        )?;
+        let receipt = reference("fake-authenticated-api-receipt-not-runtime-proof");
+        self.acknowledgment = Some(receipt.clone());
+        Ok(ResponseBody::ContinuationAcknowledged {
+            admission_id: value.admission_id,
+            continuation: value.continuation.clone(),
+            acknowledgment_receipt: receipt,
+        })
+    }
+    fn authorize_inspection(&self, target: &InspectTarget) -> Result<(), ContractError> {
+        match target {
+            InspectTarget::Session { binding } => self.own(binding)?,
+            InspectTarget::Wait { wait } => {
+                let row = self.waits.get(&wait.wait_id).ok_or(ContractError::Stale)?;
+                self.own(&row.registration.binding)?;
+                ensure(row.registration.wait == *wait, "inspection wait revision")?;
+            }
+            InspectTarget::Notification { .. } => {
+                return Err(ContractError::Unsupported);
+            }
+        }
+        Ok(())
+    }
+    fn inspect(&self, value: &InspectRequest) -> Result<ResponseBody, ContractError> {
+        if value.scope != self.context.scope {
+            return Err(ContractError::Stale);
+        }
+        if self.context.role == ActorRole::SessionAgent {
+            self.authorize_inspection(&value.target)?;
+        }
+        let items = if let InspectTarget::Wait { wait } = &value.target {
+            let row = self.waits.get(&wait.wait_id).ok_or(ContractError::Stale)?;
+            vec![InspectionItem::Wait(Box::new(WaitView {
+                registration: row.registration.clone(),
+                outcome: row.outcome.clone(),
+                continuation: ContinuationState::PendingPolicy,
+                parking_report: None,
+            }))]
+        } else {
+            Vec::new()
+        };
+        Ok(ResponseBody::Inspection(InspectionPage {
+            scope: value.scope.clone(),
+            items,
+            next_cursor: None,
+            complete_for_authorized_scope: false,
+            reasons: vec![Text::new("fake peer has no runtime projection/source scan").unwrap()],
+        }))
+    }
+    fn operator(&self, value: &OperatorRequest) -> Result<ResponseBody, ContractError> {
+        if self.context.role != ActorRole::Operator {
+            return Err(ContractError::Unsupported);
+        }
+        if value.scope != self.context.scope {
+            return Err(ContractError::Stale);
+        }
+        Ok(ResponseBody::OperatorRequested {
+            receipt: reference("fake-operator-request-not-executed"),
+        })
+    }
     /// Supply already verified owner observations in a fake test. There is no wire
     /// command that lets an agent submit these verdicts or a transport ack as truth.
     pub fn resolve_from_fixture(
@@ -286,45 +255,14 @@ impl ConformanceApi {
     ) -> Result<WaitOutcome, ContractError> {
         let row = self.waits.get_mut(&wait_id).ok_or(ContractError::Stale)?;
         ensure(row.outcome.is_none(), "immutable outcome")?;
-        let members = row.request.predicate.members();
-        ensure(
-            outcomes.len() == members.len(),
-            "all source members reobserved",
-        )?;
-        for (member, result) in members.iter().zip(&outcomes) {
-            result.validate()?;
-            ensure(result.member_id == member.member_id, "member outcome order")?;
-            if let Some(evidence) = &result.evidence {
-                ensure(
-                    evidence.owner == member.condition.owner()
-                        && evidence.condition_digest == canonical_digest(&member.condition)?,
-                    "source owner/condition mismatch",
-                )?;
-            }
-        }
+        validate_observations(&row.request.predicate, &outcomes)?;
         let satisfied: Vec<Uuid> = outcomes
             .iter()
             .filter(|v| v.state == MemberState::Satisfied)
             .map(|v| v.member_id)
             .collect();
         let any = matches!(row.request.predicate, Predicate::Any { .. });
-        let kind = if (any && !satisfied.is_empty()) || (!any && satisfied.len() == members.len()) {
-            WaitOutcomeKind::Satisfied
-        } else if any && outcomes.iter().any(|v| v.state == MemberState::Pending) {
-            return Err(ContractError::Invalid("wait remains pending"));
-        } else if outcomes
-            .iter()
-            .any(|v| v.state == MemberState::SourceFailed)
-        {
-            WaitOutcomeKind::SourceFailed
-        } else if outcomes
-            .iter()
-            .any(|v| v.state == MemberState::SourceUnavailable)
-        {
-            WaitOutcomeKind::SourceUnavailable
-        } else {
-            return Err(ContractError::Invalid("wait remains pending"));
-        };
+        let kind = fixture_outcome_kind(any, satisfied.len(), &outcomes)?;
         let outcome = WaitOutcome {
             outcome: OutcomeRef {
                 outcome_id,
@@ -349,4 +287,114 @@ impl ConformanceApi {
         row.outcome = Some(outcome.clone());
         Ok(outcome)
     }
+}
+
+fn fixture_registration(
+    value: &WaitRegistration,
+    operation_id: Uuid,
+    now_ms: u64,
+) -> RegisteredWait {
+    RegisteredWait {
+        scope: value.scope.clone(),
+        binding: value.binding.clone(),
+        wait: value.wait_ref(),
+        predicate: value.predicate.clone(),
+        continuation: ContinuationRef {
+            continuation_id: operation_id,
+            generation: value.continuation_generation,
+            wait: value.wait_ref(),
+        },
+        original_created_at_ms: now_ms,
+        central_hold_receipt: reference("fake-central-hold-only"),
+        boundaries: value
+            .predicate
+            .members()
+            .iter()
+            .map(|member| SourceBoundary {
+                member_id: member.member_id,
+                owner: member.condition.owner(),
+                condition_digest: canonical_digest(&member.condition).unwrap(),
+                committed_revision: Text::new("fixture-committed-revision").unwrap(),
+                committed_replay_cursor: Text::new("fixture-committed-replay-boundary").unwrap(),
+                subscription_receipt: reference("fake-subscription-not-runtime-proof"),
+                snapshot_digest: Digest::of(b"fixture-source-snapshot"),
+            })
+            .collect(),
+        cycle_assessment: CycleAssessment::ExternalUnknown {
+            reason: Text::new("runtime graph/source cycle verification remains required").unwrap(),
+        },
+        execution: WaitExecutionState::PolicyPending,
+    }
+}
+
+impl AckRequest {
+    fn validate_attachment(
+        &self,
+        attachment: &ContinuationAttachment,
+    ) -> Result<(), ContractError> {
+        let same_admission = self.admission_id == attachment.admission_id
+            && self.continuation == attachment.continuation;
+        if !same_admission {
+            return Err(ContractError::Stale);
+        }
+        if self.attachment_digest != canonical_digest(attachment)?
+            || self.outcome != attachment.outcome
+        {
+            return Err(ContractError::Stale);
+        }
+        Ok(())
+    }
+}
+
+fn validate_observations(
+    predicate: &Predicate,
+    outcomes: &[MemberOutcome],
+) -> Result<(), ContractError> {
+    let members = predicate.members();
+    ensure(
+        outcomes.len() == members.len(),
+        "all source members reobserved",
+    )?;
+    for (member, result) in members.iter().zip(outcomes) {
+        result.validate()?;
+        ensure(result.member_id == member.member_id, "member outcome order")?;
+        if let Some(evidence) = &result.evidence {
+            ensure(
+                evidence.owner == member.condition.owner()
+                    && evidence.condition_digest == canonical_digest(&member.condition)?,
+                "source owner/condition mismatch",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn fixture_outcome_kind(
+    any: bool,
+    satisfied_count: usize,
+    outcomes: &[MemberOutcome],
+) -> Result<WaitOutcomeKind, ContractError> {
+    let complete = if any {
+        satisfied_count > 0
+    } else {
+        satisfied_count == outcomes.len()
+    };
+    let kind = if complete {
+        WaitOutcomeKind::Satisfied
+    } else if any && outcomes.iter().any(|v| v.state == MemberState::Pending) {
+        return Err(ContractError::Invalid("wait remains pending"));
+    } else if outcomes
+        .iter()
+        .any(|v| v.state == MemberState::SourceFailed)
+    {
+        WaitOutcomeKind::SourceFailed
+    } else if outcomes
+        .iter()
+        .any(|v| v.state == MemberState::SourceUnavailable)
+    {
+        WaitOutcomeKind::SourceUnavailable
+    } else {
+        return Err(ContractError::Invalid("wait remains pending"));
+    };
+    Ok(kind)
 }

@@ -96,12 +96,16 @@ fn verdicts(r: &WaitRegistration, state: MemberState) -> Vec<MemberOutcome> {
         })
         .collect()
 }
-#[test]
-fn any_uses_declared_order_and_immutable_outcome() {
+fn registered_peer() -> (WaitRegistration, ConformanceApi) {
     let r = registration();
     let mut p = peer(&r);
     let q = Request::seal(id(30), Command::RegisterWait(r.clone())).unwrap();
     p.receive(&q, 10).unwrap();
+    (r, p)
+}
+#[test]
+fn any_uses_declared_order_and_immutable_outcome() {
+    let (r, mut p) = registered_peer();
     let outcome = p
         .resolve_from_fixture(r.wait_id, verdicts(&r, MemberState::Satisfied), id(40), 20)
         .unwrap();
@@ -115,23 +119,14 @@ fn any_uses_declared_order_and_immutable_outcome() {
 }
 #[test]
 fn rejects_wrong_source_owner() {
-    let r = registration();
-    let mut p = peer(&r);
-    let q = Request::seal(id(30), Command::RegisterWait(r.clone())).unwrap();
-    p.receive(&q, 10).unwrap();
+    let (r, mut p) = registered_peer();
     let mut v = verdicts(&r, MemberState::Satisfied);
     v[0].evidence.as_mut().unwrap().owner = SourceOwner::Mailbox;
     assert!(p.resolve_from_fixture(r.wait_id, v, id(40), 20).is_err());
 }
 #[test]
 fn pending_any_cannot_become_failure() {
-    let r = registration();
-    let mut p = peer(&r);
-    p.receive(
-        &Request::seal(id(30), Command::RegisterWait(r.clone())).unwrap(),
-        10,
-    )
-    .unwrap();
+    let (r, mut p) = registered_peer();
     let mut v = verdicts(&r, MemberState::SourceFailed);
     v[1].state = MemberState::Pending;
     v[1].evidence = None;
@@ -227,13 +222,7 @@ fn no_ack_without_current_admitted_attachment() {
 }
 #[test]
 fn invalid_source_digest_cannot_change_predicate() {
-    let r = registration();
-    let mut p = peer(&r);
-    p.receive(
-        &Request::seal(id(30), Command::RegisterWait(r.clone())).unwrap(),
-        10,
-    )
-    .unwrap();
+    let (r, mut p) = registered_peer();
     let mut v = verdicts(&r, MemberState::Satisfied);
     v[1].evidence.as_mut().unwrap().condition_digest = Digest::of(b"different task");
     assert!(p.resolve_from_fixture(r.wait_id, v, id(40), 20).is_err());
