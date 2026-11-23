@@ -400,13 +400,12 @@ impl MergeStep<'_> {
             std::ops::ControlFlow::Continue(pair) => pair,
             std::ops::ControlFlow::Break(step) => return Ok(step),
         };
-        if retained.is_none() {
-            if let std::ops::ControlFlow::Break(step) = self
+        if retained.is_none()
+            && let std::ops::ControlFlow::Break(step) = self
                 .confirm(pool, (delivery, target), (pr, &current))
                 .await?
-            {
-                return Ok(step);
-            }
+        {
+            return Ok(step);
         }
         Ok(Some(
             delivery
