@@ -25,10 +25,10 @@ pub struct Binding {
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Position {
-    binding: Binding,
-    pub snapshot: String,
-    pub position: String,
+pub struct Position<Text = String, Context = Binding> {
+    binding: Context,
+    pub snapshot: Text,
+    pub position: Text,
     pub issued: u64,
     pub expires: u64,
 }
@@ -51,23 +51,23 @@ impl Default for CursorCodec {
     }
 }
 impl Binding {
-    pub fn position(
-        &self,
-        snapshot: &str,
-        position: &str,
+    pub fn position<'a>(
+        &'a self,
+        snapshot: &'a str,
+        position: &'a str,
         validity: std::ops::Range<u64>,
-    ) -> Position {
+    ) -> Position<&'a str, &'a Binding> {
         Position {
-            binding: self.clone(),
-            snapshot: snapshot.into(),
-            position: position.into(),
+            binding: self,
+            snapshot,
+            position,
             issued: validity.start,
             expires: validity.end,
         }
     }
 }
 
-impl Position {
+impl Position<&str, &Binding> {
     fn valid(&self) -> bool {
         let valid_snapshot = (1..=512).contains(&self.snapshot.len());
         let valid_page = (1..=100).contains(&self.binding.page_size) && self.position.len() <= 512;
@@ -76,7 +76,7 @@ impl Position {
 }
 
 impl CursorCodec {
-    pub fn encode(&self, value: Position) -> Result<String, CursorError> {
+    pub fn encode(&self, value: Position<&str, &Binding>) -> Result<String, CursorError> {
         if !value.valid() {
             return Err(CursorError::Unavailable);
         }
