@@ -145,74 +145,7 @@ pub async fn renew_delegated(
     let retained = if let Some(replay) = replay {
         replay
     } else {
-        let time = now(state)?;
-        observed.validate_for(&after.input, time)?;
-        current.fresh_at(time)?;
-        // As at phase issuance, fresh facts authorize a bounded execution lease.
-        // Their observation timestamps are never rewritten. The original hard
-        // deadline and the negotiated maximum lease remain absolute ceilings.
-        let expiry = time
-            .checked_add(
-                after
-                    .history
-                    .proposal
-                    .policy
-                    .maximum_execution_lease_ms
-                    .min(120_000),
-            )
-            .ok_or_else(|| refused())?
-            .min(q.authority.hard_deadline_ms);
-        if time >= previous_expiry || expiry <= previous_expiry {
-            return Err(refused());
-        }
-        let mut next = old.clone();
-        next.record.issued_at_ms = time;
-        next.record.expires_at_ms = expiry;
-        next.revision = next.revision.checked_add(1).ok_or_else(|| refused())?;
-        after
-            .hot
-            .grant
-            .as_mut()
-            .ok_or_else(|| refused())?
-            .expires_at_ms = expiry;
-        after
-            .hot
-            .validate_against(&q.authority.grant.binding)
-            .map_err(|_| refused())?;
-        sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-            .bind(q.permit.binding.attempt_id)
-            .bind(runtime::json(&after.hot)?)
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
-        runtime::save(&mut tx, &next).await?;
-        next.record
-            .authorize(
-                &runtime::context(&mut tx, &next).await?,
-                aq_admission_sandbox::sandbox::RunnerOperation::Renew,
-                time,
-            )
-            .map_err(|_| refused())?;
-        let retained = Retained {
-            current: next,
-            provenance: runtime::json(&make_provenance(&after, &observed, &current))?,
-        };
-        // Bounded replay history shares a node lock with issuance and is capped
-        // globally under a separate short-lived quota lock.
-        sqlx::query(
-            "SELECT pg_advisory_xact_lock(hashtextextended('aq-delegated-history-quota',0))",
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
-        let (total, local): (i64, i64) = sqlx::query_as("SELECT COALESCE(sum(octet_length(evidence::text)+512),0)::BIGINT,COALESCE(sum(octet_length(evidence::text)+512) FILTER(WHERE node_id=$1),0)::BIGINT FROM delegated_operations")
-            .bind(auth.id()).fetch_one(&mut *tx).await.map_err(db)?;
-        let incoming = serde_json::to_vec(&retained).map_err(|_| refused())?.len() as i64 + 512;
-        if total + incoming > 67_108_864 || local + incoming > 4_194_304 {
-            return Err(refused());
-        }
-        handoff::remember(&mut tx, auth.id(), q.operation_id, "renewal", q, &retained).await?;
-        retained
+        extend_locked(state, &mut tx, auth, q, &mut after, &observed, &current).await?
     };
     let time = now(state)?;
     observed.validate_for(&after.input, time)?;
@@ -248,4 +181,127 @@ pub async fn renew_delegated(
         )
     })?;
     Ok(reply)
+}
+
+async fn extend_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    q: &RunnerRenewalRequest,
+    after: &mut pinned::Pinned,
+    observed: &observations::Observed,
+    current: &current::Current,
+) -> Result<Retained, AppError> {
+    let old = &auth.delegated().ok_or_else(|| refused())?.current;
+    let previous_expiry = after
+        .hot
+        .grant
+        .as_ref()
+        .ok_or_else(|| refused())?
+        .expires_at_ms;
+    let time = now(state)?;
+    observed.validate_for(&after.input, time)?;
+    current.fresh_at(time)?;
+    // As at phase issuance, fresh facts authorize a bounded execution lease.
+    // Their observation timestamps are never rewritten. The original hard
+    // deadline and the negotiated maximum lease remain absolute ceilings.
+    let expiry = renewed_expiry(
+        time,
+        previous_expiry,
+        after.history.proposal.policy.maximum_execution_lease_ms,
+        q.authority.hard_deadline_ms,
+    )?;
+    let mut next = old.clone();
+    next.record.issued_at_ms = time;
+    next.record.expires_at_ms = expiry;
+    next.revision = next.revision.checked_add(1).ok_or_else(|| refused())?;
+    after
+        .hot
+        .grant
+        .as_mut()
+        .ok_or_else(|| refused())?
+        .expires_at_ms = expiry;
+    after
+        .hot
+        .validate_against(&q.authority.grant.binding)
+        .map_err(|_| refused())?;
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(q.permit.binding.attempt_id)
+        .bind(runtime::json(&after.hot)?)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+    runtime::save(tx, &next).await?;
+    next.record
+        .authorize(
+            &runtime::context(tx, &next).await?,
+            aq_admission_sandbox::sandbox::RunnerOperation::Renew,
+            time,
+        )
+        .map_err(|_| refused())?;
+    let retained = Retained {
+        current: next,
+        provenance: runtime::json(&make_provenance(after, observed, current))?,
+    };
+    remember_renewal_locked(tx, auth.id(), q, &retained).await?;
+    Ok(retained)
+}
+
+async fn remember_renewal_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    q: &RunnerRenewalRequest,
+    retained: &Retained,
+) -> Result<(), AppError> {
+    // Bounded replay history shares a node lock with issuance and is capped
+    // globally under a separate short-lived quota lock.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('aq-delegated-history-quota',0))")
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+    let (total, local): (i64, i64) = sqlx::query_as("SELECT COALESCE(sum(octet_length(evidence::text)+512),0)::BIGINT,COALESCE(sum(octet_length(evidence::text)+512) FILTER(WHERE node_id=$1),0)::BIGINT FROM delegated_operations")
+        .bind(node).fetch_one(&mut **tx).await.map_err(db)?;
+    let incoming = serde_json::to_vec(retained).map_err(|_| refused())?.len() as i64 + 512;
+    if total + incoming > 67_108_864 || local + incoming > 4_194_304 {
+        return Err(refused());
+    }
+    handoff::remember(tx, node, q.operation_id, "renewal", q, retained).await?;
+    Ok(())
+}
+
+fn renewed_expiry(
+    time: u64,
+    previous_expiry: u64,
+    maximum_lease_ms: u64,
+    hard_deadline_ms: u64,
+) -> Result<u64, AppError> {
+    let expiry = time
+        .checked_add(maximum_lease_ms.min(120_000))
+        .ok_or_else(|| refused())?
+        .min(hard_deadline_ms);
+    if time >= previous_expiry || expiry <= previous_expiry {
+        return Err(refused());
+    }
+    Ok(expiry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renewal_respects_policy_lease_cap_and_original_hard_deadline() {
+        assert_eq!(renewed_expiry(10, 20, 50, 1_000_000).unwrap(), 60);
+        assert_eq!(renewed_expiry(10, 20, 200_000, 1_000_000).unwrap(), 120_010);
+        assert_eq!(renewed_expiry(10, 20, 50, 40).unwrap(), 40);
+    }
+
+    #[test]
+    fn renewal_cannot_revive_expired_grants_or_fail_to_extend_them() {
+        assert!(renewed_expiry(20, 20, 50, 100).is_err());
+        assert!(renewed_expiry(21, 20, 50, 100).is_err());
+        assert!(renewed_expiry(10, 20, 10, 100).is_err());
+        assert!(renewed_expiry(10, 20, 50, 20).is_err());
+        assert!(renewed_expiry(u64::MAX - 10, u64::MAX, 50, u64::MAX).is_err());
+    }
 }

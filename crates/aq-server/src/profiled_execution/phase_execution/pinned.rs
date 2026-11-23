@@ -25,13 +25,36 @@ pub(super) struct Pinned {
     pub issuance_ceiling: u64,
     pub registry_at_load: super::RegistrySnapshot,
 }
+// Preparation, immutable replay, and delegated continuation have distinct
+// grant checks. Only continuation permits the live grant expiry to advance.
+#[derive(Clone, Copy)]
+enum LoadMode<'a> {
+    Fresh,
+    Replay(&'a history::PhaseExecutionHistory),
+    Continuing(&'a history::PhaseExecutionHistory),
+}
+impl<'a> LoadMode<'a> {
+    fn issued(self) -> Option<&'a history::PhaseExecutionHistory> {
+        match self {
+            Self::Fresh => None,
+            Self::Replay(issued) | Self::Continuing(issued) => Some(issued),
+        }
+    }
+}
+
+struct PinnedSelection {
+    spec: aq_admission::execution_spec::ProfiledExecutionSpec,
+    decision: crate::intelligence::resolver::Decision,
+    selection: aq_selection::ResolvedSelection,
+}
+
 pub(super) async fn load_locked(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     auth: &AuthenticatedNode,
     q: &PrepareRequest,
 ) -> Result<Pinned, AppError> {
-    Box::pin(load_for_locked(state, tx, auth, q, None, false)).await
+    Box::pin(load_for_locked(state, tx, auth, q, LoadMode::Fresh)).await
 }
 
 /// Only the actual immutable issued-history owner supplies this receipt. This
@@ -45,7 +68,14 @@ pub(super) async fn load_replay_locked(
     q: &PrepareRequest,
     issued: &history::PhaseExecutionHistory,
 ) -> Result<Pinned, AppError> {
-    Box::pin(load_for_locked(state, tx, auth, q, Some(issued), false)).await
+    Box::pin(load_for_locked(
+        state,
+        tx,
+        auth,
+        q,
+        LoadMode::Replay(issued),
+    ))
+    .await
 }
 
 /// Continuing permission is authenticated against the live delegated record.
@@ -64,8 +94,7 @@ pub(super) async fn load_continuing_locked(
         tx,
         auth,
         &issued.request,
-        Some(issued),
-        true,
+        LoadMode::Continuing(issued),
     ))
     .await
 }
@@ -75,10 +104,10 @@ async fn load_for_locked(
     tx: &mut Transaction<'_, Postgres>,
     auth: &AuthenticatedNode,
     q: &PrepareRequest,
-    issued: Option<&history::PhaseExecutionHistory>,
-    continuing: bool,
+    mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
     use aq_session_protocol::Validate;
+    let issued = mode.issued();
     q.original.binding.validate().map_err(|_| refused())?;
     if auth.id() != q.original.identity.node_id
         || !matches!(q.original.binding.session,aq_admission::SessionIdentity::Remote{node_id,boot_id,..} if node_id==auth.id()&&boot_id==q.original.identity.boot_id)
@@ -134,6 +163,85 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
+    let (hot, versions) = load_hot_locked(tx, q, &h).await?;
+    require_hot_state(mode, &hot, q, &h)?;
+    if issued.is_some() {
+        view.active_at(now(state)?)?;
+    }
+    let offer =
+        super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
+            .await?;
+    if !same(&offer, &h.proposal.original)? {
+        return Err(refused());
+    }
+    require_runtime_capabilities(state, &runtime, &current_registration, &offer)?;
+
+    let PinnedSelection {
+        spec,
+        decision,
+        selection,
+    } = load_selection_locked(tx, auth, q, &h, &view).await?;
+    let material = h.receipt.lease.materials[0].clone();
+    if material.credential_profile != selection.choice.credential_profile
+        || material.credential_revision != selection.credential_revision
+        || material.provider.as_str() != selection.choice.provider
+        || material.account_reference.as_str() != selection.choice.account_reference
+        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
+    {
+        return Err(refused());
+    }
+    let source = source_exports::load_linked_locked(tx, q.original.binding.attempt_id).await?;
+    if source.manifest().attempt != view.attempt
+        || source.manifest().source != view.source.ok_or_else(|| refused())?
+        || source.manifest().resolved_spec_digest != view.execution_spec_digest
+        || source.token().request().project_revision != spec.project_revision
+        || source.token().request().project_id != view.project_id
+    {
+        return Err(refused());
+    }
+    let ceiling = match issued {
+        Some(h) => hot
+            .grant
+            .as_ref()
+            .ok_or_else(|| refused())?
+            .expires_at_ms
+            .min(h.receipt.execution_deadline_ms),
+        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
+    };
+    let (context, ceiling) =
+        load_artifacts_locked(state, tx, q, &spec, &offer, &source, ceiling).await?;
+    let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
+    require_supported_budget(&offer, &policy, &decision, &h)?;
+    let input = observations::Input {
+        full_context_digest: h.proposal.full_context_digest.clone(),
+        spec,
+        context: context.ok_or_else(|| refused())?,
+        decision,
+        selection,
+        offer,
+        source,
+        material,
+    };
+    let registry_at_load = super::registry_at_load(state, tx, &h).await?;
+    Ok(Pinned {
+        registry_at_load,
+        history: h,
+        input,
+        policy,
+        capabilities: current_registration.request.capabilities.clone(),
+        hot,
+        versions,
+        registration_id: registration.id,
+        qualification,
+        issuance_ceiling: ceiling,
+    })
+}
+
+async fn load_hot_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    q: &PrepareRequest,
+    history: &AcceptedHistory,
+) -> Result<(HotState, Versions), AppError> {
     let row=sqlx::query("SELECT state,record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE").bind(q.original.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
     let hot: HotState = serde_json::from_value(row.get("state")).map_err(|_| refused())?;
     hot.validate_against(&q.original.binding)
@@ -144,39 +252,17 @@ async fn load_for_locked(
         grant_revision: row.get::<i64, _>("grant_revision") as u64,
     };
     versions
-        .validate_after(&h.receipt.versions)
+        .validate_after(&history.receipt.versions)
         .map_err(|_| refused())?;
-    if let Some(issued) = issued {
-        let live = hot.grant.as_ref().ok_or_else(|| refused())?;
-        let grant_matches = if continuing {
-            live.binding == issued.receipt.grant.binding
-                && live.grant_id == issued.receipt.grant.grant_id
-                && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
-                && live.expires_at_ms <= issued.receipt.execution_deadline_ms
-        } else {
-            same(live, &issued.receipt.grant)?
-        };
-        if !grant_matches
-            || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
-            || hot.preparation_operation_id != Some(h.request.original.operation_id)
-            || hot.owner.as_ref().is_none_or(|o| {
-                o.guardian_id != q.original.guardian_id
-                    || o.launch_id != q.original.launch_id
-                    || o.reservation_id != q.original.reservation.reservation_id
-            })
-        {
-            return Err(refused());
-        }
-        view.active_at(now(state)?)?;
-    } else if hot.grant.is_some() || hot.execution_deadline_ms.is_some() {
-        return Err(refused());
-    }
-    let offer =
-        super::super::native_offer::load_original_offer_locked(tx, q.original.binding.attempt_id)
-            .await?;
-    if !same(&offer, &h.proposal.original)? {
-        return Err(refused());
-    }
+    Ok((hot, versions))
+}
+
+fn require_runtime_capabilities(
+    state: &AppState,
+    runtime: &registration::RegisteredRuntime,
+    current_registration: &registration::NativeRegistration,
+    offer: &aq_admission::startup::NativeOffer,
+) -> Result<(), AppError> {
     // Protocol/host capabilities belong to the actual worker runtime. Installed
     // harness entries separately prove the selected harness/model configuration.
     let qualified = state
@@ -209,6 +295,16 @@ async fn load_for_locked(
         .map_err(|_| refused())?;
     }
 
+    Ok(())
+}
+
+async fn load_selection_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+    view: &authority::AuthorityView,
+) -> Result<PinnedSelection, AppError> {
     let row=sqlx::query("SELECT l.execution_spec,l.execution_spec_digest,l.graph_task_observation,l.decision_id,d.decision,s.selection,s.selection_digest FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) JOIN intelligence_attempt_selections s USING(attempt_id) WHERE l.attempt_id=$1 FOR SHARE OF l,d,s").bind(q.original.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
     let spec: aq_admission::execution_spec::ProfiledExecutionSpec =
         serde_json::from_value(row.get("execution_spec")).map_err(|_| refused())?;
@@ -251,35 +347,24 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let material = h.receipt.lease.materials[0].clone();
-    if material.credential_profile != selection.choice.credential_profile
-        || material.credential_revision != selection.credential_revision
-        || material.provider.as_str() != selection.choice.provider
-        || material.account_reference.as_str() != selection.choice.account_reference
-        || material.endpoint_reference.as_str() != selection.choice.endpoint_reference
-    {
-        return Err(refused());
-    }
-    let source = source_exports::load_linked_locked(tx, q.original.binding.attempt_id).await?;
-    if source.manifest().attempt != view.attempt
-        || source.manifest().source != view.source.ok_or_else(|| refused())?
-        || source.manifest().resolved_spec_digest != view.execution_spec_digest
-        || source.token().request().project_revision != spec.project_revision
-        || source.token().request().project_id != view.project_id
-    {
-        return Err(refused());
-    }
+    Ok(PinnedSelection {
+        spec,
+        decision,
+        selection,
+    })
+}
+
+async fn load_artifacts_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    q: &PrepareRequest,
+    spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
+    offer: &aq_admission::startup::NativeOffer,
+    source: &source_exports::LinkedExport,
+    mut ceiling: u64,
+) -> Result<(Option<serde_json::Value>, u64), AppError> {
     let mut expected = Vec::new();
     let mut context = None;
-    let mut ceiling = match issued {
-        Some(h) => hot
-            .grant
-            .as_ref()
-            .ok_or_else(|| refused())?
-            .expires_at_ms
-            .min(h.receipt.execution_deadline_ms),
-        None => h.receipt.lease.expires_at_ms.min(material.expires_at_ms),
-    };
     let ids:Vec<Uuid>=sqlx::query_scalar("SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127").bind(q.original.binding.attempt_id).fetch_all(&mut **tx).await.map_err(db)?;
     if ids.len() != offer.offered.artifacts.len() || ids.len() > 126 {
         return Err(refused());
@@ -287,7 +372,7 @@ async fn load_for_locked(
     let time = now(state)?;
     for id in ids {
         let a = artifacts::load_locked(tx, id).await?;
-        if a.project_id != view.project_id
+        if a.project_id != source.token().request().project_id
             || !offer
                 .offered
                 .artifacts
@@ -352,7 +437,15 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let policy = super::super::continuation_policy::load_locked(tx, &q.original.binding).await?;
+    Ok((context, ceiling))
+}
+
+fn require_supported_budget(
+    offer: &aq_admission::startup::NativeOffer,
+    policy: &aq_profiles::SelectionPolicy,
+    decision: &crate::intelligence::resolver::Decision,
+    h: &AcceptedHistory,
+) -> Result<(), AppError> {
     // The protocol's lineage time window is the attempt's own: its execution
     // profile's wall time, which the offer's manifest carries.
     if offer.offered.offer.manifest.resources.wall_time_ms
@@ -381,27 +474,38 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let input = observations::Input {
-        full_context_digest: h.proposal.full_context_digest.clone(),
-        spec,
-        context: context.ok_or_else(|| refused())?,
-        decision,
-        selection,
-        offer,
-        source,
-        material,
-    };
-    let registry_at_load = super::registry_at_load(state, tx, &h).await?;
-    Ok(Pinned {
-        registry_at_load,
-        history: h,
-        input,
-        policy,
-        capabilities: current_registration.request.capabilities.clone(),
-        hot,
-        versions,
-        registration_id: registration.id,
-        qualification,
-        issuance_ceiling: ceiling,
-    })
+    Ok(())
+}
+
+fn require_hot_state(
+    mode: LoadMode<'_>,
+    hot: &HotState,
+    q: &PrepareRequest,
+    h: &AcceptedHistory,
+) -> Result<(), AppError> {
+    if let Some(issued) = mode.issued() {
+        let live = hot.grant.as_ref().ok_or_else(|| refused())?;
+        let grant_matches = if matches!(mode, LoadMode::Continuing(_)) {
+            live.binding == issued.receipt.grant.binding
+                && live.grant_id == issued.receipt.grant.grant_id
+                && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
+                && live.expires_at_ms <= issued.receipt.execution_deadline_ms
+        } else {
+            same(live, &issued.receipt.grant)?
+        };
+        if !grant_matches
+            || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
+            || hot.preparation_operation_id != Some(h.request.original.operation_id)
+            || hot.owner.as_ref().is_none_or(|o| {
+                o.guardian_id != q.original.guardian_id
+                    || o.launch_id != q.original.launch_id
+                    || o.reservation_id != q.original.reservation.reservation_id
+            })
+        {
+            return Err(refused());
+        }
+    } else if hot.grant.is_some() || hot.execution_deadline_ms.is_some() {
+        return Err(refused());
+    }
+    Ok(())
 }
