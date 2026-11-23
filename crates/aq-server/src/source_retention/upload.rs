@@ -77,7 +77,9 @@ pub(super) async fn chunk(
         return Ok(Json(old));
     }
     let offset = t.chunk_offset(name, q.offset, bytes.len() as u64)?;
-    append_chunk(&rt.path(id), name, offset, &bytes).await?;
+    aq_delivery::artifact_files::append(&rt.path(id).join(name), offset, &bytes)
+        .await
+        .map_err(internal)?;
     let next = offset + bytes.len() as u64;
     if name == "manifest.json" {
         t.manifest_offset = next;
@@ -225,24 +227,4 @@ impl Transfer {
         }
         Ok(offset)
     }
-}
-async fn append_chunk(directory: &Path, name: &str, offset: u64, bytes: &[u8]) -> Result<()> {
-    tokio::fs::create_dir_all(directory)
-        .await
-        .map_err(internal)?;
-    let mut f = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(directory.join(name))
-        .await
-        .map_err(internal)?;
-    // Discard any unacknowledged bytes from a crash before the SQL commit.
-    f.set_len(offset).await.map_err(internal)?;
-    f.seek(std::io::SeekFrom::Start(offset))
-        .await
-        .map_err(internal)?;
-    f.write_all(bytes).await.map_err(internal)?;
-    f.sync_all().await.map_err(internal)?;
-    Ok(())
 }

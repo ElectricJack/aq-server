@@ -1,17 +1,10 @@
 use super::*;
 
 async fn hash_file(path: &Path) -> Result<String> {
-    let mut f = tokio::fs::File::open(path).await.map_err(internal)?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf).await.map_err(internal)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(hex::encode(h.finalize()))
+    aq_delivery::artifact_files::digest(path)
+        .await
+        .map(|(hash, _)| hash)
+        .map_err(internal)
 }
 async fn socket_import(rt: &Runtime, t: &Transfer) -> Result<Value> {
     let request_id = format!("source-import-{}", t.op);

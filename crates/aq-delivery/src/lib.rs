@@ -2,6 +2,7 @@
 //! only `git_grant` (spec 0016 §5.2) serves the server's `/v1/git` route.
 //! Policy callers supply retained receipt IDs; this module resolves all source
 //! OIDs and retention handles itself. Remote credentials remain inside aq-git.
+pub mod artifact_files;
 #[cfg(feature = "delivery_playbook")]
 pub mod commands;
 pub mod diff_patch;

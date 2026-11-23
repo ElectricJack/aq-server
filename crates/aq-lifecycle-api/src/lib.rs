@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
+pub mod artifact_upload;
 mod inspection;
 mod peer;
 mod waits;
