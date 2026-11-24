@@ -610,6 +610,35 @@ mod tests {
     }
 
     #[test]
+    fn a_platform_interruption_spends_neither_repair_nor_handoff_allowance() {
+        let mut interrupted = released(failed_prior(1_000));
+        interrupted.platform_interrupted = true;
+        interrupted.exempt = true;
+        let mut owner_stop = released(failed_prior(2_000));
+        owner_stop.exempt = true;
+        let limits = Limits {
+            max_attempts: 3,
+            max_uncharged_continuations: 1,
+        };
+        let mut history = vec![
+            interrupted,
+            owner_stop,
+            released(failed_prior(3_000)),
+            failed_prior(4_000),
+        ];
+        assert_eq!(charged(&history, &limits).0, 2);
+        assert!(assess(&history, &limits, 4_001).replacement().is_some());
+
+        history[3] = released(failed_prior(4_000));
+        history.push(failed_prior(5_000));
+        assert_eq!(charged(&history, &limits).0, 3);
+        assert_eq!(
+            assess(&history, &limits, 5_001),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
+        );
+    }
+
+    #[test]
     fn retry_budget_exhaustion_blocks_task() {
         let now = 1_000_000;
         let limits = Limits {
