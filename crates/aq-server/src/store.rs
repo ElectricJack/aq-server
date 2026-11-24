@@ -302,11 +302,7 @@ async fn validate_storage(tx: &mut Transaction<'_, Postgres>, supported: u32) ->
         retained_source53::validate(tx, supported).await?;
     }
     if supported >= 59 {
-<<<<<<< HEAD
-        auto56::validate(tx).await?;
-=======
-        auto56::validate(&mut tx, supported).await?;
->>>>>>> refs/remotes/central/main
+        auto56::validate(tx, supported).await?;
     }
     if supported >= 66 {
         stopped66::validate(tx, supported).await?;
