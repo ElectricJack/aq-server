@@ -22,4 +22,4 @@ CREATE TABLE delivery_branch_refreshes (
     CHECK((requested_at_ms IS NULL) = (base_head IS NULL))
 );
 CREATE INDEX delivery_branch_refreshes_queue ON delivery_branch_refreshes(repository_id,queued_at_ms);
-UPDATE meta SET value='174' WHERE key='state_format_version';
+UPDATE meta SET value='176' WHERE key='state_format_version';
