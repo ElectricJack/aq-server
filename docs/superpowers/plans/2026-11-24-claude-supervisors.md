@@ -26,3 +26,11 @@ Each row has a dedicated feature branch and worktree under the platform workspac
 3. Integrate backend branches together. Run formatter and diff checks, focused Rust tests against disposable PostgreSQL, fleet tests and dashboard contract/interaction tests. Include builds with the repository access features enabled.
 4. Verify selection in both scope directions, unavailable installation behavior, credential redaction, action receipts and interruption handling. Record the distinction between fixture coverage and a live authenticated provider turn.
 5. Roll out compatible UI and backend revisions together after review. On a designated test deployment, exercise one actual action per harness, switch an existing conversation and inspect its next reply and history before upgrading the fleet.
+
+## Branch qualification
+
+- The feature-enabled supervisor host suite passed 90 tests against local PostgreSQL, with two tests skipped. The recovery test installs a Codex turn, changes the project to a Claude-only configuration, recovers the retained turn and verifies the successor's provider and conversation identity.
+- The supervisor control API test saved Claude for the global conversation and Codex for a project. The dashboard passed 38 focused tests, type checking and its production build.
+- Four local fleet-manager tests covered provisioning and recovery. A disposable overlay built with the pinned Claude executable and reported version 2.1.318 as UID 10001 with a read-only root and networking disabled.
+- The real Claude CLI and compiled Rust broker completed discovery and a synthetic task creation against loopback AQ and provider fixtures. The check verified the exact operation ID in the receipt and read Claude's final JSON result.
+- The deployment check in step 5 still needs a designated test scope and an operator-provisioned subscription. No running fleet was upgraded during branch qualification.
