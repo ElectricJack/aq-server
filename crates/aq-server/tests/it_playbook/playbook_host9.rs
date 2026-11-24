@@ -2581,9 +2581,7 @@ mod delivery {
             (h, fake)
         }
 
-        #[tokio::test]
-        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
-            let (h, forge) = harness().await;
+        async fn seed_recoverable_hold(h: &D, reason: &str) -> (Uuid, Uuid, Uuid, String) {
             h.activated().await;
             let pool = h.pool().await;
             let attempt = h.f.profiled.offer.binding.attempt_id;
@@ -2607,7 +2605,7 @@ mod delivery {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let hot = json!({"schema_version":1,"status":"finished","stop":{"kind":"stopped"}});
+            let hot = json!({"schema_version":1,"status":"finished","revoked":false,"stop":{"kind":"stopped"}});
             sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
                 .bind(attempt).bind(hot).execute(&mut *tx).await.unwrap();
             sqlx::query("INSERT INTO profiled_result_heads(attempt_id,report_id) VALUES($1,$2)")
@@ -2621,9 +2619,18 @@ mod delivery {
                 .bind(attempt).bind(Uuid::from_u128(1)).bind(oid('c')).bind(&branch).execute(&mut *tx).await.unwrap();
             sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
                 .bind(result).bind(attempt).bind(&branch).bind(oid('a')).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','publish_conflict',$3)")
-                .bind(result).bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held',$3,$4)")
+                .bind(result).bind(task).bind(reason).bind(h.clock()).execute(&mut *tx).await.unwrap();
             tx.commit().await.unwrap();
+            (attempt, task, result, branch)
+        }
+
+        #[tokio::test]
+        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+            let (h, forge) = harness().await;
+            let (attempt, task, result, branch) =
+                seed_recoverable_hold(&h, "publish_conflict").await;
+            let pool = h.pool().await;
 
             h.later(120_000);
             assert_eq!(h.asked().await, 0, "a divergent forge branch remains held");
@@ -2659,6 +2666,80 @@ mod delivery {
             assert_eq!(
                 hold, "held",
                 "the playbook still owns the delivery decision"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_repair_limit_rejoins_delivery_only_for_the_current_clean_green_result() {
+            let (h, forge) = harness().await;
+            let (attempt, task, result, _) = seed_recoverable_hold(&h, "returns_exhausted").await;
+            let pool = h.pool().await;
+            let head = oid('a');
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id)
+                         SELECT $1,$2,node_id,$3,$4,encode(sha256($4),'hex'),$4,$3 FROM execution_attempts WHERE attempt_id=$2")
+                .bind(result).bind(attempt).bind(Uuid::new_v4()).bind(br#"{"outcome":"success"}"#.as_slice())
+                .execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,updated_at_ms) VALUES($1,7,'https://example.test/pr/7','open','unknown','failed','[]',$2)")
+                .bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            let request = json!({
+                "result_ready":{"task_id":task,"project_id":h.scope.project_id,"attempt_id":attempt,"result_id":result},
+                "result_head":head,
+                "check_target":{
+                    "git":{"repository_id":Uuid::from_u128(1),"binding_generation":1},
+                    "github":{"owner":"Acme","name":"widgets"},
+                    "default_branch":"main"
+                },
+                "pull_request":7,"required":["lint"]
+            });
+            for (command, status, request, output) in [
+                (
+                    "branch.publish",
+                    "published",
+                    json!({}),
+                    json!({"head":head}),
+                ),
+                (
+                    "pull_request.await_checks",
+                    "failed",
+                    request,
+                    json!({"names":["lint"]}),
+                ),
+            ] {
+                let op = Uuid::new_v4();
+                sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms)
+                             VALUES($1,$2,1,$3,$4,$5,3,$6,$7,$8,$9,$9)")
+                    .bind(op).bind(h.service.namespace.namespace_id).bind(op.to_string())
+                    .bind(command).bind(task.to_string()).bind(request).bind(status).bind(output)
+                    .bind(h.clock()).execute(&mut *tx).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "pending checks leave the ticket held");
+            *forge.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *forge.mergeability.lock().unwrap() = Mergeability::Behind;
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "a behind PR still requires repair");
+            *forge.mergeability.lock().unwrap() = Mergeability::Clean;
+            h.later(120_000);
+            assert_eq!(h.asked().await, 1);
+            assert_eq!(
+                h.events().await,
+                [json!({
+                    "task_id":task,"attempt_id":attempt,"project_id":h.scope.project_id,
+                    "result_id":result,"version":3
+                })]
+            );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "the existing event owns the delivery check"
             );
         }
         /// A disposable Host10 producer with its real operation/evidence store.

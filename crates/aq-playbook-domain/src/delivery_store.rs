@@ -375,8 +375,8 @@ pub async fn observed(
 }
 
 /// The results to announce now: none unless an artifact is active on the
-/// delivery binding of the namespace. A held publication can rejoin delivery
-/// once its exact result or usable lease is verified on the forge.
+/// delivery binding of the namespace. A held result can rejoin delivery after
+/// the forge verifies that the original publication or check barrier cleared.
 pub async fn plan(
     db: &mut PgConnection,
     namespace: (Uuid, i64),
@@ -389,7 +389,7 @@ pub async fn plan(
     if !active(db, namespace).await? {
         return Ok(vec![]);
     }
-    let resumed = publish_conflict(db, operations, project, now_ms, repeat_ms).await?;
+    let resumed = recover_held_delivery(db, operations, project, now_ms, repeat_ms).await?;
     let mut ready = due(
         db,
         namespace,
@@ -417,7 +417,7 @@ pub async fn plan(
 }
 
 /// Recheck one held result per pass. Failed probes move behind other holds.
-async fn publish_conflict(
+async fn recover_held_delivery(
     db: &mut PgConnection,
     operations: &dyn DeliveryOps,
     project: Option<Uuid>,
@@ -425,7 +425,7 @@ async fn publish_conflict(
     repeat_ms: i64,
 ) -> Result<Option<Pending>> {
     let row = sqlx::query(
-        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,
+        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,d.reason,check_run.request,
          (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,
          (l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,
          l.execution_spec#>>'{source,repository_binding_generation}' AS repository_generation
@@ -436,7 +436,25 @@ async fn publish_conflict(
          JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id
          JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
          LEFT JOIN delivery_tasks t ON t.task_id=a.task_id
-         WHERE d.decision='held' AND d.reason='publish_conflict' AND a.holds_task
+         LEFT JOIN LATERAL (
+             SELECT o.request FROM playbook_host_operations o
+             JOIN profiled_result_reports r ON r.report_id=h.report_id AND r.attempt_id=a.attempt_id
+             JOIN delivery_pull_requests pr ON pr.task_id=a.task_id AND pr.state='open'
+             WHERE o.subject_id=a.task_id::text AND o.command_name='pull_request.await_checks'
+             AND o.status IN ('conflict','failed','passed') AND o.completed_at_ms<=d.decided_at_ms
+             AND ah.state->>'status'='finished' AND ah.state->'revoked'='false'::jsonb
+             AND o.request#>>'{result_ready,task_id}'=a.task_id::text
+             AND o.request#>>'{result_ready,project_id}'=l.execution_spec#>>'{lifecycle,project_id}'
+             AND o.request#>>'{result_ready,result_id}'=h.report_id::text
+             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+             AND o.request->>'result_head'=p.head
+             AND o.request->>'pull_request'=pr.number::text
+             AND jsonb_typeof(o.request->'check_target')='object' AND o.request?'required'
+             AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='success'
+             ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1
+         ) check_run ON d.reason='returns_exhausted'
+         WHERE d.decision='held' AND a.holds_task
+         AND (d.reason='publish_conflict' OR (d.reason='returns_exhausted' AND check_run.request IS NOT NULL))
          AND ah.state#>>'{stop,kind}'='stopped' AND p.head IS NOT NULL
          AND ($1::uuid IS NULL OR l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text)
          AND GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0))<=$2
@@ -452,6 +470,8 @@ async fn publish_conflict(
     let project = row.get("project_id");
     let repository: Uuid = row.get("repository_id");
     let generation: Option<&str> = row.get("repository_generation");
+    let reason: &str = row.get("reason");
+    let check_request: Option<Value> = row.get("request");
     sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
         .bind(task).bind(now_ms).execute(&mut *db).await?;
     let old = aq_delivery::commands::published_head(&mut *db, task).await?;
@@ -467,9 +487,30 @@ async fn publish_conflict(
         let Some(commands) = operations.commands().await else {
             return Ok(false);
         };
+        let head: &str = row.get("head");
+        if reason == "publish_conflict" {
+            return Ok(commands
+                .publish_lease_usable(&target, task, head, old.as_deref())
+                .await);
+        }
+        let Some(request) = check_request.filter(|request| {
+            old.as_deref() == Some(head)
+                && serde_json::to_value(&target)
+                    .is_ok_and(|target| request["check_target"] == target)
+        }) else {
+            return Ok(false);
+        };
+        let Some(pr) = request["pull_request"].as_u64() else {
+            return Ok(false);
+        };
+        let Ok(required) =
+            serde_json::from_value::<Option<Vec<String>>>(request["required"].clone())
+        else {
+            return Ok(false);
+        };
         Ok::<_, crate::Error>(
             commands
-                .publish_lease_usable(&target, task, row.get("head"), old.as_deref())
+                .held_checks_passed(&target, pr, head, required.as_deref())
                 .await,
         )
     })
@@ -841,16 +882,16 @@ async fn due(
     pending: Vec<Pending>,
     now_ms: i64,
     (repeat_ms, run_bound_ms): (i64, i64),
-    recovering_publish: bool,
+    recovering_hold: bool,
 ) -> Result<Vec<Due>> {
     if pending.is_empty() {
         return Ok(vec![]);
     }
     let results: Vec<Uuid> = pending.iter().map(|p| p.result_id).collect();
     let decided: Vec<Uuid> =
-        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND NOT ($2 AND decision='held' AND reason IS NOT DISTINCT FROM 'publish_conflict')")
+        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND ($2 IS FALSE OR decision<>'held' OR reason IS NULL OR reason NOT IN ('publish_conflict','returns_exhausted'))")
             .bind(&results)
-            .bind(recovering_publish)
+            .bind(recovering_hold)
             .fetch_all(&mut *db)
             .await?;
     let mut out = vec![];
