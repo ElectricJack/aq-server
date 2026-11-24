@@ -526,14 +526,6 @@ pub struct ResultReport {
     pub pending_effect_ids: Vec<Uuid>,
     pub conclusion: Label,
 }
-impl ResultReport {
-    /// A typed interruption on the authenticated, exact stopped receipt.
-    /// Claims and tool text do not establish this fact.
-    pub fn platform_interrupted(&self) -> bool {
-        matches!(self.outcome, ProcessOutcome::Failed)
-            && matches!(self.stop.reason, StopReason::GuardianFailure)
-    }
-}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Reconcile {
