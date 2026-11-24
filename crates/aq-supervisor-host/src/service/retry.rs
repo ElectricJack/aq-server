@@ -109,7 +109,10 @@ async fn dispatch_attempts(conn: &mut PgConnection, dispatch_id: Uuid) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aq_central_authority::{CancelReason, Clock, Document, Event, Run, decode};
+    use aq_central_authority::{
+        CancelReason, Clock, Decision, Document, Event, HandoffEvidence, HostObservationRef, Run,
+        StopEvidenceRef, decode,
+    };
     use sqlx::postgres::PgPoolOptions;
 
     #[test]
@@ -149,7 +152,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_start_retry_counts_exact_mail_and_defers_to_the_committed_reply() {
+    async fn recovery_uses_exact_mail_history_and_does_not_replay_a_handoff() {
         let db = aq_server::test_support::TestDb::create().await;
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -245,14 +248,78 @@ mod tests {
             recovery(&pool, &stopped, false, 1).await.unwrap(),
             Recovery::RetryUnstarted,
         );
+        let handed_off = stopped_after_handoff(&examples);
+        assert_eq!(handed_off.run.plan().dispatch_id, first_dispatch);
+        for owner_restarted in [false, true] {
+            assert_eq!(
+                recovery(&pool, &handed_off, owner_restarted, 1)
+                    .await
+                    .unwrap(),
+                Recovery::OutcomeUnconfirmed,
+            );
+        }
         sqlx::query("INSERT INTO central_supervisor_replies VALUES ($1)")
             .bind(first_dispatch)
             .execute(&pool)
             .await
             .unwrap();
         assert_eq!(
-            recovery(&pool, &stopped, false, 1).await.unwrap(),
+            recovery(&pool, &handed_off, false, 1).await.unwrap(),
             Recovery::ReplyRecorded,
         );
+    }
+
+    fn stopped_after_handoff(examples: &Value) -> Snapshot {
+        let Document::Transition(started) =
+            decode(&serde_json::to_vec(&examples["start_transition"]).unwrap()).unwrap()
+        else {
+            panic!("expected start transition fixture")
+        };
+        let Document::Event(Event::CommitStart { launch, .. }) =
+            decode(&serde_json::to_vec(&examples["commit_start_event"]).unwrap()).unwrap()
+        else {
+            panic!("expected commit start event fixture")
+        };
+        let permit = started.state.permit().unwrap();
+        let clock = Clock {
+            machine_boot_id: permit.machine_boot_id,
+            boot_ms: permit.issued_boot_ms + 1,
+        };
+        let handed_off = started
+            .state
+            .transition(
+                &Event::Handoff {
+                    evidence: HandoffEvidence {
+                        association: started.state.association().unwrap().clone(),
+                        disposition: HandoffDisposition::HandedOff,
+                        receipt: launch.intent.clone(),
+                    },
+                },
+                clock.clone(),
+            )
+            .unwrap();
+        assert_eq!(handed_off.decision, Decision::Applied);
+        let stopped = handed_off
+            .state
+            .transition(
+                &Event::Stopped {
+                    evidence: StopEvidenceRef {
+                        host: HostObservationRef {
+                            binding: launch.binding,
+                            launch_id: launch.launch_id,
+                            guardian: launch.intent.clone(),
+                            observation: launch.intent.clone(),
+                        },
+                        stopped_writers: launch.intent,
+                    },
+                },
+                clock,
+            )
+            .unwrap();
+        assert_eq!(stopped.decision, Decision::Applied);
+        Snapshot {
+            revision: 4,
+            run: stopped.state,
+        }
     }
 }
