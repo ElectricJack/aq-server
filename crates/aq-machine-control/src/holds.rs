@@ -47,7 +47,7 @@ pub fn phrase(code: &str) -> String {
         }
         "never_granted_retry_bound_exhausted" => "too many of its offers were never granted",
         "replacement_project_revision_changed" => {
-            "the project binding changed since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
+            "the project binding changed beyond which nodes may run it since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
         }
         "replacement_after_unpublished_delivery_needs_new_source" => {
             "its delivery was not published, so a retry needs a new source"

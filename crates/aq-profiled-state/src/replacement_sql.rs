@@ -240,6 +240,64 @@ pub async fn inspect(
     })))
 }
 
+/// Binding fields that only decide where a task may run, not the source, repository, policy,
+/// environments, graph or limits it runs with.
+pub const PLACEMENT_FIELDS: [&str; 3] = [
+    "allowed_node_ids",
+    "allow_enrolled_nodes",
+    "allowed_worker_groups",
+];
+
+/// Whether the binding `attempt`'s source export pinned is the project's binding at
+/// `project_revision` apart from [`PLACEMENT_FIELDS`], however many revisions lie between.
+/// False without an export, or without the pinned revision's binding history record.
+pub async fn pinned_binding_current<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    attempt: uuid::Uuid,
+    project_revision: u64,
+) -> Result<bool, aq_machine_control::Error> {
+    let revision = i64::try_from(project_revision)
+        .map_err(|_| aq_machine_control::Error::Invalid("project revision"))?;
+    let current: Option<Option<bool>> = sqlx::query_scalar(
+        "SELECT p.revision=$2 OR (SELECT (h.record->'binding') - $3::text[] = b.binding - $3::text[] FROM project_execution_binding_history h JOIN project_execution_bindings b USING(project_id) WHERE h.project_id=e.project_id AND h.revision=p.revision AND b.revision=$2) FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id), LATERAL (SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT AS revision) p WHERE x.attempt_id=$1",
+    )
+    .bind(attempt)
+    .bind(revision)
+    .bind(&PLACEMENT_FIELDS[..])
+    .fetch_optional(executor)
+    .await?;
+    Ok(current.flatten().unwrap_or(false))
+}
+
+/// Whether `export` re-pins `predecessor`'s retained source to a later binding revision that
+/// differs only in placement: the same commit, repository and generation, held by the
+/// predecessor's export ([`pinned_binding_current`]).
+pub async fn repins_retained(
+    conn: &mut sqlx::PgConnection,
+    predecessor: uuid::Uuid,
+    export: &crate::source_export::Request,
+) -> Result<bool, aq_machine_control::Error> {
+    let bytes: Option<Vec<u8>> = sqlx::query_scalar("SELECT e.request_bytes FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1")
+        .bind(predecessor).fetch_optional(&mut *conn).await?;
+    let Some(bytes) = bytes else {
+        return Ok(false);
+    };
+    let retained: crate::source_export::Request = serde_json::from_slice(&bytes)
+        .map_err(|_| aq_machine_control::Error::Invalid("source export request"))?;
+    let scope = |r: &crate::source_export::Request| {
+        (
+            r.project_id,
+            r.repository_id,
+            r.binding_generation,
+            r.logical_identity.clone(),
+            r.base.clone(),
+        )
+    };
+    let same = export.source_retention_handle == retained.operation_id
+        && scope(export) == scope(&retained);
+    Ok(same && pinned_binding_current(conn, predecessor, export.project_revision).await?)
+}
+
 use crate::replacement::Assessment;
 pub async fn fence_revision<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -249,9 +307,7 @@ pub async fn fence_revision<'e>(
     let Some(replacement) = assessment.replacement() else {
         return Ok(assessment);
     };
-    let pinned = predecessor_project_revision(executor, replacement.predecessor);
-    let pinned = pinned.await?;
-    if pinned != Some(project_revision) {
+    if !pinned_binding_current(executor, replacement.predecessor, project_revision).await? {
         return Ok(Assessment::Blocked("replacement_project_revision_changed"));
     }
     Ok(assessment)

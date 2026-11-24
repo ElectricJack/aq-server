@@ -128,9 +128,8 @@ pub async fn output_poll(
     // Read-only, so the node's agents poll in parallel: no per-channel slot.
     poll_once(&state.terminal_view(), node, r, PollMode::Output).await
 }
-/// A node-signed output poll only reads, so it runs in a `begin_read` snapshot
-/// without row locks; the node's agents never queue on its row or each other.
-/// Delegated polls keep the locked permit recheck.
+/// A node-signed output poll only reads: a `begin_read` snapshot without row locks, so the
+/// node's agents never queue on its row. Delegated polls keep the locked permit recheck.
 async fn begin_peer(
     state: &AppState,
     node: &AuthenticatedNode,

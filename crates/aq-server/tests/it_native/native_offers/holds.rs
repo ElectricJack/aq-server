@@ -1023,7 +1023,7 @@ async fn binding_changed() -> (Case, Uuid, i64) {
     native_offer::fail(&c, predecessor).await;
     // The fixture's binding is not at revision 1, so the change is relative.
     let revision: i64 = sqlx::query_scalar(
-        "UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1 RETURNING revision",
+        "UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1 RETURNING revision",
     )
     .bind(c.env.lineage.project_id)
     .fetch_one(&c.env.env.pool)
@@ -1213,7 +1213,7 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_
     let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
     assert_eq!(status, 422, "{same}");
     assert_eq!(same["code"], "lineage_retry_budget_exhausted");
-    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1")
         .bind(c.env.lineage.project_id)
         .execute(&c.env.env.pool)
         .await

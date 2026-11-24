@@ -754,34 +754,44 @@ async fn offers(
             }
             None => None,
         };
-        let (token, fact) = if let Some(replacement) =
-            replacement.as_ref().filter(|_| handoff.is_none())
-        {
+        let retained = match replacement.as_ref().filter(|_| handoff.is_none()) {
+            Some(r) => {
+                Some(on_heap(|| replacement::retained_source(state, task.task_id, r)).await?)
+            }
+            None => None,
+        };
+        // Past the fence, a newer revision differs only in placement: export it again.
+        let repin = (retained.as_ref().map(|r| r.token().request().clone()))
+            .filter(|r| r.project_revision != compiled.frozen.project.revision);
+        let (token, fact) = if let Some(retained) = retained.filter(|_| repin.is_none()) {
             // Reuse the exact verified export and its operation identity.
-            on_heap(|| replacement::retained_source(state, task.task_id, replacement))
-                .await?
-                .into_parts()
+            retained.into_parts()
         } else {
-            // Freeze the configured source, or a fresh export of a handoff's saved commit.
+            // Freeze the configured source, or a fresh export of a fixed commit.
             let fresh = async {
-                let observed = match &handoff {
-                    Some(base) => {
-                        on_heap(|| {
-                            source::observe_handoff(state, &compiled.frozen, &policy_record, base)
-                        })
-                        .await?
+                let predecessor = replacement.as_ref().map(|r| r.predecessor);
+                let frozen = &compiled.frozen;
+                let observed = match (&handoff, &repin) {
+                    (Some(base), _) => {
+                        on_heap(|| source::observe_handoff(state, frozen, &policy_record, base))
+                            .await?
                     }
-                    None => {
+                    (None, Some(r)) => {
+                        let observe = source::observe_retained;
+                        on_heap(|| observe(state, frozen, &policy_record, r, predecessor)).await?
+                    }
+                    (None, None) => {
                         on_heap(|| {
-                            source::Observer::new(state, &compiled.frozen, &policy_record)
+                            source::Observer::new(state, frozen, &policy_record)
                                 .for_offer(&context, enrolled)
                         })
                         .await?
                     }
                 };
-                let frozen = match &handoff {
-                    Some(base) => Some(base.oid.as_str()),
-                    None => frozen_commit(&policy.source, &observed),
+                let frozen = match (&handoff, &repin) {
+                    (Some(base), _) => Some(base.oid.as_str()),
+                    (None, Some(r)) => Some(r.base.hex.as_str()),
+                    (None, None) => frozen_commit(&policy.source, &observed),
                 };
                 let operation = aq_delivery::offer_source::export_operation(
                     aq_delivery::offer_source::ExportScope {
@@ -825,8 +835,8 @@ async fn offers(
                 }
                 // Q1 (live acceptance D5): a refused handoff export skips the task.
                 // #116 I1, M1: a counted skip; held as `handoff_successor_stuck` once stuck.
-                Err(error @ AppError::Conflict(_)) if handoff.is_some() => {
-                    let why = format!("handoff successor export refused: {error:?}");
+                Err(error @ AppError::Conflict(_)) if handoff.is_some() || repin.is_some() => {
+                    let why = format!("successor export refused: {error:?}");
                     if let Some(s) = successor {
                         holds::skipped(&state.store.pool, s, &why, (state.clock)()).await;
                     }
@@ -893,6 +903,7 @@ async fn offers(
                         &compiled.frozen,
                         &policy_record,
                         token.request(),
+                        None,
                     )
                 })
                 .await?
