@@ -278,17 +278,21 @@ impl Wait {
 /// Re-check only the current exact hold. The caller reads live Graph before
 /// sending when the predecessor has a known workspace. Delivery and the
 /// follow-up receipt commit together, and a retry of the sweep reads that receipt.
-pub async fn notify_with_graph<E: Debug, G: Debug>(
+pub async fn notify_with_graph<E, G, GraphCheck>(
     pool: &PgPool,
     now: i64,
-    closed: impl AsyncFn(Uuid, Uuid) -> std::result::Result<bool, G>,
+    closed: impl Fn(Uuid, Uuid) -> GraphCheck + Send,
     send: impl AsyncFn(
         &mut Transaction<'_, Postgres>,
         Option<Uuid>,
         &str,
         u64,
     ) -> std::result::Result<Uuid, E>,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: Debug,
+    GraphCheck: Future<Output = std::result::Result<bool, G>> + Send,
+{
     let supported: bool =
         sqlx::query_scalar("SELECT to_regclass('supervisor_hold_followups') IS NOT NULL")
             .fetch_one(pool)
@@ -398,7 +402,7 @@ pub async fn notify<E: Debug>(
         u64,
     ) -> std::result::Result<Uuid, E>,
 ) -> Result<()> {
-    notify_with_graph(pool, now, async |_, _| Ok::<_, ()>(false), send).await
+    notify_with_graph(pool, now, |_, _| async { Ok::<_, ()>(false) }, send).await
 }
 
 /// Current supervisor follow-up, including the evidence and scheduled time.

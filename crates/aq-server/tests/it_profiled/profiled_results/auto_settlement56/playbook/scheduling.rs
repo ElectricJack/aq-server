@@ -425,11 +425,12 @@ async fn the_current_hold_followup_survives_concurrent_sweeps_and_respects_graph
             && reason["next_check_at_ms"] == now + 5 * interval
     }));
     // A current Graph closure ends the follow-up without a retry or a fourth mail.
+    let expected_workspace = env.f.selection.lineage.workspace_id;
     scheduling_notices::notify_with_graph(
         &pool,
         now + 5 * interval,
-        async |workspace, seen| {
-            assert_eq!(workspace, env.f.selection.lineage.workspace_id);
+        |workspace, seen| async move {
+            assert_eq!(workspace, expected_workspace);
             assert_eq!(seen, task);
             Ok::<_, ()>(true)
         },
