@@ -1,4 +1,4 @@
-//! Shared Codex mapper; the guardian-owned wrapper retains the provider transport.
+//! Native settings and guardian-owned launch for the installed harness.
 use crate::config::Config;
 use anyhow::{Context, Result, ensure};
 use aq_codex_mapper::{LoopbackResponsesEndpoint, Paths, Recipe, Settings};
@@ -15,6 +15,45 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+pub(crate) const CLAUDE_CLI_VERSION: &str = "2.1.318";
+
+fn validate_native_settings(c: &Config) -> Result<()> {
+    let harness = &c.host.harness;
+    if harness.harness.as_str() != "claude" {
+        return aq_codex_mapper::validate_settings(Settings {
+            harness,
+            model: &c.model,
+            terminal_input_enabled: c.host.terminal.input_enabled,
+        });
+    }
+
+    ensure!(
+        c.subscription.is_some()
+            && harness.cli_version.as_str() == CLAUDE_CLI_VERSION
+            && !c.host.terminal.input_enabled
+            && c.model.spending_budget.is_none()
+            && aq_supervisor_control::supports_settings(
+                c.model.provider.as_str(),
+                harness.harness.as_str(),
+                c.model.reasoning.as_str(),
+            ),
+        "Claude subscription unsupported settings"
+    );
+    for capability in &harness.required_capabilities {
+        ensure!(
+            matches!(
+                capability.id.as_str(),
+                "aq.harness.startup-context"
+                    | "aq.harness.confined-worktree"
+                    | "aq.harness.stop"
+                    | "aq.terminal"
+            ) && capability.version == 1,
+            "Claude subscription unsupported mandatory capability"
+        );
+    }
+    Ok(())
+}
 
 pub fn native_recipe(settings: Settings<'_>, paths: Paths<'_>, port: u16) -> Result<Recipe> {
     let reply_credential = paths.private_home.join("supervisor.credential");
@@ -68,11 +107,7 @@ impl HostAdapter for NativeAdapter {
             digest == self.digest && c.host.digest()? == plan.digest()? && workspace == c.workspace,
             "installed adapter admission changed"
         );
-        aq_codex_mapper::validate_settings(Settings {
-            harness: &plan.harness,
-            model: &c.model,
-            terminal_input_enabled: plan.terminal.input_enabled,
-        })?;
+        validate_native_settings(&c)?;
         Ok(AdapterLaunch {
             manifest_digest: plan.digest()?,
             adapter: plan.harness.adapter.clone(),
@@ -108,6 +143,7 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
     );
     let (c, digest) = Config::load(path)?;
     ensure!(digest.as_str() == expected, "native admission changed");
+    validate_native_settings(&c)?;
     let directory =
         PathBuf::from(std::env::var_os("AQ_SESSION_DIRECTORY").context("host directory missing")?);
     ensure!(

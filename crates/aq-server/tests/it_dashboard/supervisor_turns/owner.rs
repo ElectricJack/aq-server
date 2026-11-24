@@ -842,6 +842,77 @@ mod git {
     }
 
     #[tokio::test]
+    async fn supervisor_git_refreshes_shallow_tips_over_smart_http() {
+        let g = serve(project_owner().await).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let machine = g.o.machine.clone();
+        let server = tokio::spawn(async move { axum::serve(listener, machine).await });
+        let remote = format!("http://{address}/v1/supervisor/git/{}", g.mine);
+        let auth = format!("http.extraHeader=Authorization: Bearer {}", g.o.token);
+        let repository = g.fake.repository.clone();
+        let base = g.fake.base.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let checkout = tempfile::tempdir().unwrap();
+            let checkout = checkout.path();
+            git(checkout, &["init", "--bare", "--template="]);
+            let tree = git(&repository, &["mktree"]);
+            let advance = |parent| {
+                let head = git(
+                    &repository,
+                    &["commit-tree", &tree, "-p", parent, "-m", "new tip"],
+                );
+                git(&repository, &["update-ref", "refs/heads/main", &head]);
+                head
+            };
+            let task_ref = format!("refs/heads/aq/{}", Uuid::new_v4());
+            let local_task_ref = task_ref.replacen("refs/heads/", "refs/remotes/origin/", 1);
+            let main_ref = "refs/remotes/origin/main";
+            let fetch = || {
+                git(
+                    checkout,
+                    &[
+                        "-c",
+                        &auth,
+                        "fetch",
+                        "--quiet",
+                        "--prune",
+                        "--depth=1",
+                        "--no-tags",
+                        "--no-auto-maintenance",
+                        "--",
+                        &remote,
+                        "+refs/heads/main:refs/remotes/origin/main",
+                        "+refs/heads/aq/*:refs/remotes/origin/aq/*",
+                    ],
+                );
+            };
+
+            let first = advance(&base);
+            git(&repository, &["update-ref", &task_ref, &first]);
+            fetch();
+            assert_eq!(
+                git(checkout, &["rev-parse", "--is-shallow-repository"]),
+                "true"
+            );
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), first);
+            assert_eq!(git(checkout, &["rev-parse", &local_task_ref]), first);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+
+            let next = advance(&first);
+            git(&repository, &["update-ref", "-d", &task_ref]);
+            fetch();
+            assert_eq!(git(checkout, &["rev-parse", main_ref]), next);
+            assert_eq!(git(checkout, &["rev-list", "--count", main_ref]), "1");
+            assert!(git(checkout, &["for-each-ref", "refs/remotes/origin/aq"]).is_empty());
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn supervisor_git_passes_gzip_fetch_bodies() {
         use std::io::Write as _;
         let g = serve(owner().await).await;
