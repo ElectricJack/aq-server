@@ -12,10 +12,10 @@ fn service_config(root: PathBuf) -> ServiceConfig {
         helper: PathBuf::from("/usr/local/bin/aq-session-host"),
         tmux: PathBuf::from("/usr/bin/tmux"),
         tmux_version: "tmux 3.3a".into(),
-        native: PathBuf::from("/opt/aq/bin/codex"),
-        native_digest: Digest::of(b"codex fixture binary"),
+        native: Some(PathBuf::from("/opt/aq/bin/codex")),
+        native_digest: Some(Digest::of(b"codex fixture binary")),
         image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
-        secret_file: root.join("openai.json"),
+        secret_file: Some(root.join("openai.json")),
         claude: Some(NativeInstallation {
             native: PathBuf::from("/opt/aq/bin/claude"),
             native_digest: Digest::of(b"claude fixture binary"),
@@ -127,8 +127,11 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
     );
     assert_eq!(recovered.swarm_profile, prior.swarm_profile);
     assert_eq!(recovered.model.provider.as_str(), "openai");
-    assert_eq!(recovered.native_digest, project.native_digest);
-    assert_eq!(recovered.secret_file, project.secret_file);
+    assert_eq!(
+        Some(&recovered.native_digest),
+        project.native_digest.as_ref()
+    );
+    assert_eq!(Some(&recovered.secret_file), project.secret_file.as_ref());
     assert_eq!(
         protected_read(&recovered.startup_file, 1024).unwrap(),
         b"retained project input"
