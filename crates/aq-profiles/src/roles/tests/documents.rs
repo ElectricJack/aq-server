@@ -181,7 +181,6 @@ fn intelligence_document_parses() {
         "max_wake_attempts",
         "max_wake_lineage_elapsed_ms",
         "max_never_granted_offers",
-        "launch_retry_backoff",
     ] {
         stored.as_object_mut().unwrap().remove(key).unwrap();
     }
@@ -239,16 +238,15 @@ fn stored_settings_snapshots_and_policies_with_the_removed_keys_still_read() {
 #[test]
 fn launch_retry_backoff_defaults_in_older_snapshots_and_requires_positive_ordered_delays() {
     let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
-    let mut content: serde_json::Value =
-        serde_json::from_slice(snapshot.canonical_bytes()).unwrap();
-    content["selection_defaults"]
-        .as_object_mut()
-        .unwrap()
-        .remove("launch_retry_backoff")
-        .unwrap();
-    let bytes = serde_json::to_vec(&content).unwrap();
-    let stored = Snapshot::from_stored_bytes(&bytes).unwrap();
-    assert_eq!(stored.canonical_bytes(), bytes.as_slice());
+    let content: serde_json::Value = serde_json::from_slice(snapshot.canonical_bytes()).unwrap();
+    assert!(
+        content["selection_defaults"]
+            .get("launch_retry_backoff")
+            .is_none()
+    );
+    let bytes = snapshot.canonical_bytes();
+    let stored = Snapshot::from_stored_bytes(bytes).unwrap();
+    assert_eq!(stored.digest(), snapshot.digest());
     let mut selection = stored.selection_defaults().clone();
     assert_eq!(
         selection.launch_retry_backoff,

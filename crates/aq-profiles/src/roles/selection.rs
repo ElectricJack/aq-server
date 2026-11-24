@@ -16,6 +16,12 @@ pub struct LaunchRetryBackoff {
     pub max_delay_ms: u64,
 }
 
+impl LaunchRetryBackoff {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 impl Default for LaunchRetryBackoff {
     fn default() -> Self {
         Self {
@@ -59,7 +65,8 @@ pub struct SelectionDefaults {
     pub max_never_granted_offers: u32,
     /// Current Settings control the wait after a verified launch failure;
     /// the time budget and attempt limit remain pinned to the launch.
-    #[serde(default)]
+    /// Omitting the default preserves existing snapshot and request digests.
+    #[serde(default, skip_serializing_if = "LaunchRetryBackoff::is_default")]
     pub launch_retry_backoff: LaunchRetryBackoff,
 }
 fn initial_never_granted() -> u32 {

@@ -134,6 +134,10 @@ async fn change_selection_defaults(f: &Fixture, saved: &Value) {
     let (_, defaults) = f.owner().get("/api/settings/selection-defaults").await;
     assert_eq!(defaults["revision"], "0");
     assert_eq!(defaults["selection_defaults"]["max_attempts"], 2);
+    assert_eq!(
+        defaults["selection_defaults"]["launch_retry_backoff"],
+        json!({"initial_delay_ms": 30_000, "max_delay_ms": 300_000})
+    );
     let mut changed = defaults["selection_defaults"].clone();
     changed["max_attempts"] = json!(3);
     let body = json!({"selection_defaults": changed, "expected_revision": "0", "operation_id": Uuid::new_v4()});
