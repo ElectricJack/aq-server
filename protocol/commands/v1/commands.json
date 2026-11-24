@@ -141,6 +141,62 @@
     {
       "cli": [
         "attempt",
+        "settle-closed-launch"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "attempt.settle_closed_launch",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:8251505f0109dd13f4cafad90cd4e69a23d9dd1ece99b72390b4c4798251a42c",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The attempt's project",
+                "format": "uuid",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why the launch is over, recorded with your identity",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "attempt_id",
+              "operation_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement"
+          }
+        }
+      },
+      "summary": "Settle a launch closed before the agent started whose host evidence shows it is over but not that the harness never ran; refused unless its grant expired, its node restarted, it has no history or effects and its task ref is still at the lease. Recorded with your reason; the task gets an ordinary replacement attempt",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
         "show"
       ],
       "grant": "dashboard.read",
