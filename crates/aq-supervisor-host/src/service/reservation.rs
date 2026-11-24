@@ -241,6 +241,12 @@ impl Service<'_> {
                 "Dispatch {dispatch} reached the automatic retry limit ({}). Inspect the launch failure before restarting the supervisor.",
                 self.config.automatic_turn_retries,
             ),
+            Recovery::EvidenceUnavailable => {
+                let stage = format!(
+                    "Waiting to verify whether dispatch {dispatch} started. Its original messages are still held."
+                );
+                return self.report("waiting", &stage, Some(previous)).await;
+            }
             Recovery::OutcomeUnconfirmed => format!(
                 "Dispatch {dispatch} may have changed tasks before ending without a reply. Inspect its actions. Its original messages are still held."
             ),

@@ -9,6 +9,7 @@ pub(super) enum Recovery {
     RetryUnstarted,
     OwnerRestart,
     RetryLimit,
+    EvidenceUnavailable,
     OutcomeUnconfirmed,
 }
 
@@ -61,6 +62,7 @@ pub(super) async fn recovery(
             match crate::verifier::not_started(&mut tx, &state.run).await {
                 Ok(evidence) => evidence.is_some(),
                 Err(OwnerError::Evidence) => false,
+                Err(OwnerError::Storage) => return Ok(Recovery::EvidenceUnavailable),
                 Err(error) => return Err(error.into()),
             }
         }
@@ -248,7 +250,20 @@ mod tests {
             recovery(&pool, &stopped, false, 1).await.unwrap(),
             Recovery::RetryUnstarted,
         );
-        let handed_off = stopped_after_handoff(&examples);
+        let ambiguous = stopped_turn(&examples, false);
+        assert_eq!(
+            recovery(&pool, &ambiguous, false, 1).await.unwrap(),
+            Recovery::EvidenceUnavailable,
+        );
+        sqlx::query("CREATE TEMP TABLE central_host_facts (launch_id uuid, kind text, digest text, body text)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            recovery(&pool, &ambiguous, false, 1).await.unwrap(),
+            Recovery::OutcomeUnconfirmed,
+        );
+        let handed_off = stopped_turn(&examples, true);
         assert_eq!(handed_off.run.plan().dispatch_id, first_dispatch);
         for owner_restarted in [false, true] {
             assert_eq!(
@@ -269,7 +284,7 @@ mod tests {
         );
     }
 
-    fn stopped_after_handoff(examples: &Value) -> Snapshot {
+    fn stopped_turn(examples: &Value, completed_handoff: bool) -> Snapshot {
         let Document::Transition(started) =
             decode(&serde_json::to_vec(&examples["start_transition"]).unwrap()).unwrap()
         else {
@@ -285,22 +300,24 @@ mod tests {
             machine_boot_id: permit.machine_boot_id,
             boot_ms: permit.issued_boot_ms + 1,
         };
-        let handed_off = started
-            .state
-            .transition(
-                &Event::Handoff {
-                    evidence: HandoffEvidence {
-                        association: started.state.association().unwrap().clone(),
-                        disposition: HandoffDisposition::HandedOff,
-                        receipt: launch.intent.clone(),
+        let mut state = started.state;
+        if completed_handoff {
+            let handed_off = state
+                .transition(
+                    &Event::Handoff {
+                        evidence: HandoffEvidence {
+                            association: state.association().unwrap().clone(),
+                            disposition: HandoffDisposition::HandedOff,
+                            receipt: launch.intent.clone(),
+                        },
                     },
-                },
-                clock.clone(),
-            )
-            .unwrap();
-        assert_eq!(handed_off.decision, Decision::Applied);
-        let stopped = handed_off
-            .state
+                    clock.clone(),
+                )
+                .unwrap();
+            assert_eq!(handed_off.decision, Decision::Applied);
+            state = handed_off.state;
+        }
+        let stopped = state
             .transition(
                 &Event::Stopped {
                     evidence: StopEvidenceRef {
