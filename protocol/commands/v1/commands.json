@@ -6590,7 +6590,7 @@
       "principals": {
         "agent": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6611,7 +6611,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6632,7 +6632,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6652,7 +6652,7 @@
           }
         }
       },
-      "summary": "Make one task block another",
+      "summary": "Make one task block another; with resume_held, a task held at a limit waits on it instead",
       "target": {
         "rule": "subject"
       }

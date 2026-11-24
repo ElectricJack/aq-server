@@ -430,3 +430,97 @@ async fn exhausted_success_retry_requires_a_final_pr_failure_for_this_exact_resu
     history.check_merge_conflict().await;
     history.check_returned_budget_hold().await;
 }
+
+/// Keep work moving (2026-11-24): the periodic sweep proves the stopped attempt of a result the
+/// delivery playbook held at its return limit, without a retry. The proof alone releases
+/// nothing: the held result is replaced only after an override recorded since the hold, and
+/// never while one of its delivery operations is still running. The override starts the return
+/// count again.
+#[tokio::test]
+async fn the_sweep_reconciles_a_held_result_and_only_an_override_lets_it_be_replaced() {
+    use aq_server::profiled_execution::{
+        expiry::ReworkSweep,
+        replacement::{self, Assessment},
+    };
+    let env = Box::pin(held_retry_env(
+        aq_admission::transport::ProcessOutcome::Failed,
+    ))
+    .await;
+    let (task, attempt, result) = (
+        env.f.selection.lineage.task_id,
+        env.report.binding.attempt_id,
+        env.report.report_id,
+    );
+    let pool = env.f.db.pool().await;
+    super::super::replacement::seed_native_offer_clock(&pool, attempt).await;
+    let facts = || async {
+        sqlx::query_as::<_,(String,String)>("SELECT state#>>'{retention,kind}',state#>>'{effects,kind}' FROM profiled_authority_hot WHERE attempt_id=$1")
+            .bind(attempt).fetch_one(&pool).await.unwrap()
+    };
+    let returns = || async {
+        sqlx::query_scalar::<_, i32>("SELECT returns FROM delivery_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let assess = || replacement::assess_task(&env.f.state, task, NOW + 1);
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',$3)")
+        .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO delivery_tasks(task_id,returns) VALUES($1,3)")
+        .bind(task)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(facts().await, ("pending".into(), "unknown".into()));
+    for _ in 0..2 {
+        ReworkSweep::default().tick(&env.f.state).await.unwrap();
+        assert_eq!(facts().await, ("retained".into(), "quiescent".into()));
+        assert_eq!(
+            assess().await.unwrap(),
+            Assessment::Blocked("returns_exhausted")
+        );
+    }
+    assert!(env.holds_task().await, "the sweep releases nothing");
+    // A delivery operation for the result that is still running blocks even an override.
+    let namespace = Uuid::new_v4();
+    let lineage = &env.f.selection.lineage;
+    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'gate',$2,$3,$4,repeat('a',64),repeat('b',64))")
+        .bind(namespace).bind(lineage.workspace_id).bind(lineage.project_id).bind(env.f.actor).execute(&pool).await.unwrap();
+    let merge = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,created_at_ms) VALUES($1,$2,1,$3,'pull_request.merge',$4,0,$5,'running',$6)")
+        .bind(merge).bind(namespace).bind(merge.to_string()).bind(task.to_string())
+        .bind(json!({"result_ready":{"result_id":result,"attempt_id":attempt}}))
+        .bind(NOW as i64).execute(&pool).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let o = aq_machine_control::holds::Override {
+        operation_id: Uuid::new_v4(),
+        attempt_id: attempt,
+        hold_code: "returns_exhausted".into(),
+        reason: "The shared test database is now provisioned".into(),
+        actor: "owner@localhost".into(),
+        recorded_at_ms: NOW as i64 + 1,
+        spent_microunits: None,
+    };
+    aq_machine_control::holds::record_override(&mut conn, task, &o, chrono::Utc::now())
+        .await
+        .unwrap();
+    drop(conn);
+    assert_eq!(
+        returns().await,
+        0,
+        "the override starts the return count again"
+    );
+    assert_eq!(
+        assess().await.unwrap(),
+        Assessment::Blocked("replacement_delivery_effects_pending")
+    );
+    sqlx::query("UPDATE playbook_host_operations SET status='conflict',output='{}',completed_at_ms=$2 WHERE operation_id=$1")
+        .bind(merge).bind(NOW as i64).execute(&pool).await.unwrap();
+    let Assessment::Replace(r) = assess().await.unwrap() else {
+        panic!("an overridden, quiescent held result is replaceable");
+    };
+    assert_eq!((r.predecessor, r.needs_release), (attempt, true));
+    assert!(env.holds_task().await);
+    assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+}

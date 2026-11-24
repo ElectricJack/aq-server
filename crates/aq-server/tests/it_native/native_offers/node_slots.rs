@@ -33,7 +33,7 @@ pub(super) async fn register(c: &Case, slots: u32, boot: Option<Uuid>) -> Regist
         .unwrap();
     request
 }
-async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
+pub(super) async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
     let response = aq_server::build_worker_router(c.env.env.state.clone())
         .oneshot(
             axum::http::Request::post("/v1/worker/profiled/poll")

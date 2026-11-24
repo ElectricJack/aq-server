@@ -116,6 +116,12 @@ impl Assessment {
             _ => None,
         }
     }
+    pub fn blocked(&self) -> Option<&'static str> {
+        match self {
+            Self::Blocked(code) => Some(code),
+            _ => None,
+        }
+    }
     /// The decision as an inspector shows it: its kind, and the hold code or predecessor.
     pub fn view(&self) -> serde_json::Value {
         match self {

@@ -210,6 +210,49 @@ pub async fn held_report<'e>(
     ).bind(task).fetch_optional(db).await
 }
 
+/// Why the delivery hold of `task`'s current result still keeps it from being replaced: a
+/// delivery operation for the result is running, or no override was recorded for the claiming
+/// attempt since the hold. Reconciling a held result never releases it by itself. An override
+/// (`aq_machine_control::holds::budget_code`) applies to a result [`held_report`] reconciles.
+pub async fn held_gate(
+    db: &mut sqlx::PgConnection,
+    task: Uuid,
+) -> sqlx::Result<Option<&'static str>> {
+    let row: Option<(Uuid, bool, bool, Option<String>)> = sqlx::query_as(
+        "SELECT h.report_id,
+           EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+             AND o.request#>>'{result_ready,result_id}'=h.report_id::text AND o.status='running'),
+           EXISTS(SELECT 1 FROM task_limit_overrides v WHERE v.task_id=a.task_id
+             AND v.attempt_id=a.attempt_id AND v.recorded_at_ms>=d.decided_at_ms),
+           d.reason
+         FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
+         JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held'",
+    )
+    .bind(task)
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some((report, running, overridden, reason)) = row else {
+        return Ok(None);
+    };
+    if running {
+        return Ok(Some("replacement_delivery_effects_pending"));
+    }
+    if overridden {
+        return Ok(None);
+    }
+    Ok(Some(
+        match (
+            held_report(&mut *db, task).await? == Some(report),
+            reason.as_deref(),
+        ) {
+            (true, Some("returns_exhausted")) => "returns_exhausted",
+            (true, _) => "delivery_policy_held",
+            (false, _) => "delivery_result_held",
+        },
+    ))
+}
+
 /// The current failed result an owner can reconcile after a proven cancellation.
 /// A stopped attempt with no result needs a separate source-custody proof.
 pub async fn cancelled_failed_report<'e>(

@@ -39,7 +39,15 @@ pub async fn assess_task_in(
     task: Uuid,
     now: u64,
 ) -> Result<Assessment, AppError> {
-    assess_on(conn, task, now, assess).await
+    let assessment = assess_on(conn, task, now, assess).await?;
+    #[cfg(feature = "delivery_playbook")]
+    if let Assessment::Replace(_) = assessment
+        && let Some(held) =
+            (aq_delivery::git_grant::held_gate(conn, task).await).map_err(internal)?
+    {
+        return Ok(Assessment::Blocked(held));
+    }
+    Ok(assessment)
 }
 
 async fn assess_on(
