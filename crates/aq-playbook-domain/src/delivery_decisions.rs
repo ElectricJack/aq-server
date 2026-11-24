@@ -417,8 +417,14 @@ pub async fn notification(
     let notice = delivery_notice(&origin, &latest, &reason, pr.as_deref(), body);
     // The facts every hold notice carries (spec 0021 section 5.2); the log
     // tail goes last and is cut to what the supervisor's mailbox accepts.
-    let notice =
-        crate::hold_notice::complete(db, notice, origin.task_id, Some(origin.result_id)).await?;
+    let notice = crate::hold_notice::complete(
+        db,
+        notice,
+        origin.project_id,
+        origin.task_id,
+        Some(origin.result_id),
+    )
+    .await?;
     Ok((key, notice))
 }
 

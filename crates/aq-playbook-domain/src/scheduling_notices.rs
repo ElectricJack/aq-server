@@ -198,7 +198,7 @@ async fn notice_body(
     }
     // The facts every hold notice carries; the log tail goes last, so
     // that the instructions above are never what is cut.
-    crate::hold_notice::complete(db, body, *task, *report).await
+    crate::hold_notice::complete(db, body, *project, *task, *report).await
 }
 
 impl Wait {

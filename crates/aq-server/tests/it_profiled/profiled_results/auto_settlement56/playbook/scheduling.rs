@@ -61,6 +61,7 @@ async fn a_physically_stopped_task_without_a_result_escalates_once_after_content
         assert_eq!(scope, Some(project));
         assert!(body.contains("stopped_without_result") && body.contains(&attempt.to_string()));
         assert!(!body.contains("submit task.retry"));
+        assert!(!body.contains("result.detail"));
         count.fetch_add(1, Ordering::SeqCst);
         Ok::<_, ()>(Uuid::new_v4())
     };
@@ -381,6 +382,8 @@ async fn the_current_hold_followup_survives_concurrent_sweeps_and_respects_graph
     .await
     .unwrap();
     let interval = 120_000;
+    let revision = aq_admission::result_record::report_digest(&env.report).unwrap();
+    let detail = json!({"params":{"result_id":result,"revision":revision.as_str()}}).to_string();
     let limits = aq_role_settings::delivery::DeliveryLimits {
         hold_followup_interval_ms: interval as u64,
         ..Default::default()
@@ -399,6 +402,8 @@ async fn the_current_hold_followup_survives_concurrent_sweeps_and_respects_graph
         assert!(body.contains(
             "Verify retry authorization against the current hold before submitting a retry."
         ));
+        assert!(body.contains("result.detail"), "{body}");
+        assert!(body.contains(&detail), "{body}");
         let number = count.fetch_add(1, Ordering::SeqCst) + 1;
         assert!(body.contains(&format!("reminder {number} of 3")));
         Ok::<_, ()>(Uuid::new_v4())
