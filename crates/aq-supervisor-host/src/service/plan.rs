@@ -5,7 +5,7 @@ use aq_central_authority::{
 use aq_session_host::{HostInput, HostPlan, HostStartup, HostSubject};
 use aq_session_protocol::{HarnessSettings, ModelSettings};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 fn pin(config: &ServiceConfig, name: &str, value: &Value) -> Result<ArtifactRef> {
     let bytes = serde_json::to_vec(value)?;
     let digest = Digest::of(&bytes);
@@ -195,6 +195,33 @@ pub(super) struct Selection<'a> {
     native: &'a Path,
     native_digest: &'a Digest,
     secret_file: &'a Path,
+}
+
+impl Selection<'_> {
+    /// Launch still verifies the pinned executable digest and reads the login.
+    pub(super) fn unavailable(&self) -> Option<&'static str> {
+        if self.harness != "claude" {
+            return None;
+        }
+        let native_gid = crate::subscription::Identity::NATIVE.run_as;
+        let executable_ready = std::fs::symlink_metadata(self.native).is_ok_and(|metadata| {
+            metadata.is_file()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.mode() & 0o022 == 0
+                && (metadata.mode() & 0o001 != 0
+                    || (metadata.gid() == native_gid && metadata.mode() & 0o010 != 0))
+                && (1..=512 * 1024 * 1024).contains(&metadata.len())
+        });
+        if !executable_ready {
+            return Some("Waiting for a usable Claude Code executable in the supervisor image");
+        }
+        let login_ready = crate::config::protected_open(self.secret_file, 65536)
+            .is_ok_and(|file| file.metadata().is_ok_and(|metadata| metadata.len() > 0));
+        if !login_ready {
+            return Some("Waiting for a nonempty Claude subscription token in its protected file");
+        }
+        None
+    }
 }
 
 pub(super) fn selection<'a>(
