@@ -72,8 +72,8 @@ pub struct Prior {
     /// An owner_stop or service_stop handoff (spec 0007 Q1): not charged to
     /// any lineage budget.
     pub exempt: bool,
-    /// Authenticated stopped owner attributed the failed result to the worker.
-    pub platform_interrupted: bool,
+    /// Server receipt time of the current, verified worker interruption report.
+    pub platform_interrupted_at_ms: Option<u64>,
     /// Offered before the owner's latest override of a budget hold: the budget started again
     /// after it, so the attempt is charged to nothing (and uses up no exemption).
     pub forgiven: bool,
@@ -149,7 +149,11 @@ fn uncharged(ordered: &[&Prior], limits: &Limits) -> Vec<bool> {
 
 impl Prior {
     fn uncharged_platform_failure(&self) -> bool {
-        self.proven_nonstart() || self.platform_interrupted
+        self.proven_nonstart() || self.platform_interrupted()
+    }
+
+    fn platform_interrupted(&self) -> bool {
+        self.platform_interrupted_at_ms.is_some()
     }
 
     /// The closure settlement owner writes this state only after verifying the
@@ -167,8 +171,9 @@ fn launch_stop_receipt(receipt: &ArtifactRef) -> bool {
 
 pub const LAUNCH_BACKOFF: &str = "launch_retry_backoff";
 
-/// A first verified nonstart can continue right away. Repeated launch failures
-/// wait according to current Settings, starting when AQ releases the claim.
+/// The first verified worker failure can continue right away. Repeated nonstarts
+/// wait from claim release. Repeated stopped interruptions wait from the receipt
+/// of the original result, including when the scheduler can release and offer in one poll.
 pub fn launch_retry_after(priors: &[Prior], backoff: LaunchRetryBackoff) -> Option<(Uuid, u64)> {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
@@ -180,13 +185,21 @@ fn launch_retry_after_ordered(
     backoff: LaunchRetryBackoff,
 ) -> Option<(Uuid, u64)> {
     let last = ordered.last()?;
-    if last.holds_task {
-        return None;
-    }
+    let (anchor, same_kind): (u64, fn(&Prior) -> bool) =
+        if let Some(at) = last.platform_interrupted_at_ms {
+            last.verify_settlement().ok()?;
+            last.receipts().ok()?;
+            (at, Prior::platform_interrupted)
+        } else {
+            if last.holds_task {
+                return None;
+            }
+            (last.released_at_ms?, Prior::proven_nonstart)
+        };
     let consecutive = ordered
         .iter()
         .rev()
-        .take_while(|p| p.proven_nonstart() && !p.forgiven)
+        .take_while(|p| same_kind(p) && !p.forgiven)
         // A positive initial delay has reached any u64 cap after 64 doublings.
         .take(u64::BITS as usize + 2)
         .count();
@@ -195,7 +208,7 @@ fn launch_retry_after_ordered(
         .initial_delay_ms
         .saturating_mul(2u64.saturating_pow(exponent))
         .min(backoff.max_delay_ms);
-    Some((last.attempt_id, last.released_at_ms?.saturating_add(delay)))
+    Some((last.attempt_id, anchor.saturating_add(delay)))
 }
 /// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
 /// and service stops may be exempt under spec 0007 Q1, and verified platform
@@ -472,7 +485,7 @@ mod tests {
             cancelled_settled: false,
             completion: None,
             exempt: false,
-            platform_interrupted: false,
+            platform_interrupted_at_ms: None,
             forgiven: false,
         }
     }
@@ -620,9 +633,34 @@ mod tests {
     }
 
     #[test]
+    fn repeated_platform_interruptions_wait_before_same_poll_release() {
+        let mut first = released(failed_prior(1_000));
+        first.platform_interrupted_at_ms = Some(1_500);
+        let mut second = failed_prior(3_000);
+        second.platform_interrupted_at_ms = Some(3_500);
+        let limits = budget();
+        let history = [first, second];
+        let next = 3_500 + limits.launch_retry_backoff.initial_delay_ms;
+        assert_eq!(
+            launch_retry_after(&history, limits.launch_retry_backoff),
+            Some((history[1].attempt_id, next))
+        );
+        assert_eq!(charged(&history, &limits).0, 0);
+        assert_eq!(
+            assess(&history, &limits, next - 1),
+            Assessment::Blocked(LAUNCH_BACKOFF)
+        );
+        let Assessment::Replace(retry) = assess(&history, &limits, next) else {
+            panic!("the next poll after the delay must admit continuation");
+        };
+        assert!(retry.needs_release);
+        assert_eq!(retry.predecessor, history[1].attempt_id);
+    }
+
+    #[test]
     fn a_platform_interruption_spends_neither_repair_nor_handoff_allowance() {
         let mut interrupted = released(failed_prior(1_000));
-        interrupted.platform_interrupted = true;
+        interrupted.platform_interrupted_at_ms = Some(1_500);
         interrupted.exempt = true;
         let mut owner_stop = released(failed_prior(2_000));
         owner_stop.exempt = true;

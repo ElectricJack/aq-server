@@ -12,8 +12,8 @@ macro_rules! priors {
     };
     ($exempt:literal, $forgiven:literal, $fresh:literal) => {
         concat!("SELECT a.attempt_id,a.holds_task,h.state AS hot,", $exempt, " AS exempt,", $forgiven, " AS forgiven,\
- EXISTS(SELECT 1 FROM profiled_result_heads rh JOIN profiled_result_reports rr ON (rr.attempt_id,rr.report_id)=(rh.attempt_id,rh.report_id) WHERE rh.attempt_id=a.attempt_id AND ",
- aq_machine_control::platform_interruption_sql!("rr.report_bytes"), ") AS platform_interrupted,\
+ (SELECT (convert_from(rr.receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::BIGINT FROM profiled_result_heads rh JOIN profiled_result_reports rr ON (rr.attempt_id,rr.report_id)=(rh.attempt_id,rh.report_id) WHERE rh.attempt_id=a.attempt_id AND ",
+ aq_machine_control::platform_interruption_sql!("rr.report_bytes"), ") AS platform_interrupted_at_ms,\
  (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT AS offered_at_ms,\
  (SELECT r.recorded_at_ms FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id) AS released_at_ms,\
  EXISTS(SELECT 1 FROM profiled_settlement_evaluations e WHERE e.attempt_id=a.attempt_id AND e.disposition='accepted') AS accepted,\
@@ -73,7 +73,9 @@ fn decode(
         cancelled_settled: row.get("cancelled"),
         completion: row.get("completion"),
         exempt: row.get("exempt"),
-        platform_interrupted: row.get("platform_interrupted"),
+        platform_interrupted_at_ms: row
+            .get::<Option<i64>, _>("platform_interrupted_at_ms")
+            .and_then(|ms| u64::try_from(ms).ok()),
         forgiven: row.get("forgiven"),
     })
 }
