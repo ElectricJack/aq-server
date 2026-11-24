@@ -437,7 +437,7 @@ async fn recover_held_delivery(
          JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
          LEFT JOIN delivery_tasks t ON t.task_id=a.task_id
          LEFT JOIN LATERAL (
-             SELECT o.request FROM playbook_host_operations o
+             SELECT o.request,o.status FROM playbook_host_operations o
              JOIN profiled_result_reports r ON r.report_id=h.report_id AND r.attempt_id=a.attempt_id
              JOIN delivery_pull_requests pr ON pr.task_id=a.task_id AND pr.state='open'
              WHERE o.subject_id=a.task_id::text AND o.command_name='pull_request.await_checks'
@@ -454,7 +454,11 @@ async fn recover_held_delivery(
              ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1
          ) check_run ON d.reason='returns_exhausted'
          WHERE d.decision='held' AND a.holds_task
-         AND (d.reason='publish_conflict' OR (d.reason='returns_exhausted' AND check_run.request IS NOT NULL))
+         AND (d.reason='publish_conflict' OR (d.reason='returns_exhausted' AND check_run.status='failed'
+              AND NOT EXISTS(SELECT 1 FROM delivery_merge_evidence m WHERE m.attempt_id=a.attempt_id)
+              AND NOT EXISTS(SELECT 1 FROM playbook_host_operations m WHERE m.subject_id=a.task_id::text
+                  AND m.command_name='pull_request.merge' AND m.status NOT IN ('conflict','refused','not_mergeable')
+                  AND m.request#>>'{result_ready,result_id}'=h.report_id::text)))
          AND ah.state#>>'{stop,kind}'='stopped' AND p.head IS NOT NULL
          AND ($1::uuid IS NULL OR l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text)
          AND GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0))<=$2

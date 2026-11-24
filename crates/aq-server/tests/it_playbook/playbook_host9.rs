@@ -2703,12 +2703,7 @@ mod delivery {
                     json!({}),
                     json!({"head":head}),
                 ),
-                (
-                    "pull_request.await_checks",
-                    "failed",
-                    request,
-                    json!({"names":["lint"]}),
-                ),
+                ("pull_request.await_checks", "passed", request, json!({})),
             ] {
                 let op = Uuid::new_v4();
                 sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms)
@@ -2719,6 +2714,17 @@ mod delivery {
             }
             tx.commit().await.unwrap();
 
+            *forge.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *forge.mergeability.lock().unwrap() = Mergeability::Clean;
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "a prior pass does not identify a failed check barrier"
+            );
+            sqlx::query(r#"UPDATE playbook_host_operations SET status='failed',output='{"names":["lint"]}' WHERE command_name='pull_request.await_checks'"#)
+                .execute(&pool).await.unwrap();
+            *forge.checks.lock().unwrap() = (ChecksState::Pending, vec![]);
             h.later(120_000);
             assert_eq!(h.asked().await, 0, "pending checks leave the ticket held");
             *forge.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
