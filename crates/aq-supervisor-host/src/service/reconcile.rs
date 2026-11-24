@@ -126,3 +126,7 @@ impl Installed {
         Ok(Some(state))
     }
 }
+
+#[cfg(test)]
+#[path = "reconcile/qualification.rs"]
+mod qualification;
