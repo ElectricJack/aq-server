@@ -282,47 +282,200 @@ async fn project_listing_isolates_an_unreadable_report_and_keeps_projects_apart(
     );
 }
 
-/// One GET through the supervisor read nest as `project`'s supervisor (the
-/// global supervisor when `None`), approved by the fixture's owner.
-async fn supervised(
-    f: &Fixture,
-    project: Option<Uuid>,
-    path: &str,
-) -> (StatusCode, serde_json::Value) {
-    use aq_supervisor_control::read::{self, Permit, ReadOwner};
-    use sqlx::Row;
+/// Issue a real supervisor credential for a synthetic started turn.
+async fn supervisor_token(f: &Fixture, project: Option<Uuid>) -> String {
+    use aq_central_authority as ca;
+    use aq_central_authority::owner::{EvidenceVerifier, OwnerResult, PermitWindow, SessionOwner};
+    use aq_server::agent_access::supervisor_conversation::{
+        self as conversation, dispatch, reply,
+        reservations::{
+            Configure, LocalPolicy, PolicyKind, PreviewRequest, ReservationOwner, Reserve,
+        },
+    };
+
+    struct Evidence;
+
+    #[async_trait::async_trait]
+    impl EvidenceVerifier for Evidence {
+        async fn authorize_plan(
+            &self,
+            tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+            plan: &ca::CentralPlan,
+        ) -> OwnerResult<()> {
+            let digest: String = sqlx::query_scalar(
+                "SELECT input_digest FROM central_supervisor_dispatches WHERE dispatch_id=$1",
+            )
+            .bind(plan.dispatch_id)
+            .fetch_one(&mut **tx)
+            .await?;
+            let digest = serde_json::from_value(json!(digest)).unwrap();
+            dispatch::authorize_dispatch(tx, plan, &digest)
+                .await
+                .map_err(|_| ca::owner::OwnerError::Conflict)
+        }
+
+        async fn verify_event(
+            &self,
+            _: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+            _: &ca::Run,
+            _: &ca::Event,
+        ) -> OwnerResult<()> {
+            Ok(())
+        }
+    }
+
     let pool = f.db.pool().await;
-    let user = sqlx::query("SELECT email,issuer,subject FROM users WHERE id=$1")
-        .bind(f.actor)
+    let user = f.state.store.find_user(f.actor).await.unwrap().unwrap();
+    let (conversation_id, actor_id): (Uuid, Uuid) = if let Some(project) = project {
+        sqlx::query_as("UPDATE supervisor_controls c SET enabled=TRUE,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE c.conversation_id=i.conversation_id AND i.project_id=$1 RETURNING c.conversation_id,c.actor_id")
+            .bind(project).bind(f.actor).fetch_one(&pool).await.unwrap()
+    } else {
+        let conversation = sqlx::query_scalar(
+            "SELECT conversation_id FROM global_supervisor_conversation WHERE singleton",
+        )
         .fetch_one(&pool)
         .await
         .unwrap();
-    let owner = ReadOwner {
-        id: f.actor,
-        email: user.get("email"),
-        issuer: user.get("issuer"),
-        subject: user.get("subject"),
+        (conversation, Uuid::new_v4())
     };
-    let auth: read::Auth = std::sync::Arc::new(move |_| {
-        let (pool, owner) = (pool.clone(), owner.clone());
-        Box::pin(async move {
-            let guard = pool
-                .begin()
-                .await
-                .map_err(aq_manual_sessions::Error::from)?;
-            Ok(Permit {
-                owner,
-                project,
-                guard,
+    let owner = ReservationOwner::new(&f.state);
+    let configured = owner
+        .configure_actor(
+            &user,
+            &serde_json::to_vec(&Configure {
+                operation_id: Uuid::new_v4(),
+                actor_id,
+                expected_actor_revision: 0,
+                policy: LocalPolicy {
+                    schema_version: 1,
+                    kind: PolicyKind::GlobalSupervisorReservation,
+                    actor_id,
+                    conversation_id,
+                    enabled: true,
+                },
             })
-        })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let note = json!({
+        "operation_id": Uuid::new_v4(), "message_id": Uuid::new_v4(),
+        "expected_conversation_revision": "1", "body": "Inspect the retained hold",
+        "context": [], "attachments": []
     });
-    let response = read::nest(human_results::routes(), auth)
+    let response = conversation::routes(&f.state)
         .with_state(f.state.clone())
         .oneshot(
-            Request::builder()
-                .uri(format!("/v1/supervisor/read{path}"))
-                .body(Body::empty())
+            Request::post(format!(
+                "/api/human/conversations/{conversation_id}/messages"
+            ))
+            .header("x-aq-dev-email", "owner@localhost")
+            .header("x-aq-request", "1")
+            .header("content-type", "application/json")
+            .body(Body::from(note.to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = owner
+        .preview_batch(
+            &user,
+            PreviewRequest {
+                actor_id,
+                expected_actor_revision: configured.actor_revision,
+                scan_after: 0,
+                through_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    let reserved = owner
+        .reserve_batch(
+            &user,
+            &serde_json::to_vec(&Reserve {
+                operation_id: Uuid::new_v4(),
+                reservation_id: Uuid::new_v4(),
+                actor_id,
+                expected_actor_revision: preview.actor_revision,
+                expected_policy_revision: preview.policy_revision,
+                scan_after: preview.scan_after,
+                through_cursor: preview.through_cursor,
+                selection_digest: preview.selection_digest,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let reservation = reserved.reservation.unwrap().id;
+    let examples: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../aq-central-authority/artifacts/examples.json"
+    ))
+    .unwrap();
+    let ca::Document::Plan(mut plan) =
+        ca::decode(&serde_json::to_vec(&examples["plan"]).unwrap()).unwrap()
+    else {
+        panic!("central plan example changed");
+    };
+    let ca::CentralSubject::CentralConversation {
+        actor_id: actor,
+        conversation_id: conversation,
+        ..
+    } = &mut plan.subject;
+    (*actor, *conversation) = (actor_id, conversation_id);
+    let ca::SessionIdentity::Central {
+        session_id,
+        generation,
+        ..
+    } = &mut plan.session
+    else {
+        panic!("expected a central session");
+    };
+    (*session_id, *generation, plan.generation) = (Uuid::new_v4(), 1, 1);
+    let turn = dispatch::prepare_turn(&pool, actor_id, reservation, 1, *session_id, NOW)
+        .await
+        .unwrap();
+    (plan.batch, plan.dispatch_id, plan.host_operation_id) =
+        (turn.batch, turn.dispatch_id, turn.host_operation_id);
+    let sessions = SessionOwner::new(pool.clone(), Evidence);
+    let clock = ca::Clock {
+        machine_boot_id: Uuid::new_v4(),
+        boot_ms: 1000,
+    };
+    sessions.prepare(plan.clone(), clock).await.unwrap();
+    let binding = plan.binding().unwrap();
+    let launch = ca::HostLaunchRef {
+        binding: binding.clone(),
+        launch_id: Uuid::new_v4(),
+        intent: ca::ArtifactRef {
+            id: ca::Text::new("synthetic-holder").unwrap(),
+            version: ca::Text::new("1").unwrap(),
+            digest: ca::Digest::of(b"synthetic-holder"),
+        },
+    };
+    let started = sessions
+        .start(&binding, launch, PermitWindow::new(100_000, clock))
+        .await
+        .unwrap();
+    assert_eq!(started.decision, ca::Decision::Applied);
+    reply::issue_credential(&pool, actor_id, 60_000, NOW - 1)
+        .await
+        .unwrap()
+}
+
+async fn supervised(
+    machine: &axum::Router,
+    token: &str,
+    command: &str,
+    params: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = machine
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/commands/{command}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"params":params}).to_string()))
                 .unwrap(),
         )
         .await
@@ -338,40 +491,48 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
     let auth = context(&f).await;
     let receipt = results::record(&f.state, &auth, &report).await.unwrap();
     let (own, other) = (f.selection.lineage.project_id, Uuid::new_v4());
-    let one = format!(
-        "/api/human/results/{}/revisions/{}",
-        report.report_id,
-        receipt.report_digest.as_str()
+    sqlx::query(
+        "INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')",
+    )
+    .bind(other)
+    .bind(json!({"name":"Other","enabled":true}))
+    .execute(&f.db.pool().await)
+    .await
+    .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
+    let machine = aq_server::build_worker_router(f.state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let machine = aq_server::build_worker_router_with_owner_app(
+        f.state.clone(),
+        aq_server::build_admin_router(f.state.clone()),
     );
+    let supervisor = supervisor_token(&f, Some(own)).await;
+    let foreign = supervisor_token(&f, Some(other)).await;
+    let global = supervisor_token(&f, None).await;
+    let result = json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let attempt = json!({"attempt_id":report.binding.attempt_id});
     let refused = |(status, body): (StatusCode, serde_json::Value)| {
         assert_eq!(body["error"], "supervisor_refused", "{body}");
-        status
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     };
-    // The project's supervisor reads its own result; the global one any.
-    for scope in [Some(own), None] {
-        let (status, detail) = supervised(&f, scope, &one).await;
-        assert_eq!(status, StatusCode::OK, "{detail}");
-        assert_eq!(detail["items"][0]["report_id"], json!(report.report_id));
-        let (status, page) = supervised(&f, scope, "/api/human/results").await;
+    for token in [&supervisor, &global] {
+        for name in ["result.show", "result.detail"] {
+            let (status, detail) = supervised(&machine, token, name, result.clone()).await;
+            assert_eq!(status, StatusCode::OK, "{name}: {detail}");
+        }
+        let (status, page) = supervised(&machine, token, "result.list", json!({})).await;
         assert_eq!(status, StatusCode::OK, "{page}");
-        assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
+        assert_eq!(page["items"][0]["report_id"], json!(report.report_id));
+        let (status, view) = supervised(&machine, token, "attempt.show", attempt.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["attempt_id"], json!(report.binding.attempt_id));
     }
-    // Another project's supervisor is refused the result and sees none listed.
-    for path in [one.clone(), one.replacen("/api/human/", "/api/v1/", 1)] {
-        let status = refused(supervised(&f, Some(other), &path).await);
-        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    for name in ["result.show", "result.detail"] {
+        refused(supervised(&machine, &foreign, name, result.clone()).await);
     }
-    let (status, page) = supervised(&f, Some(other), "/api/human/results").await;
+    refused(supervised(&machine, &foreign, "attempt.show", attempt).await);
+    refused(supervised(&machine, &foreign, "result.list", json!({"project_id":own})).await);
+    let (status, page) = supervised(&machine, &foreign, "result.list", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(page["items"].as_array().unwrap().is_empty(), "{page}");
-    // It cannot widen the page to the project it does not supervise.
-    let widened = format!("/api/human/results?project_id={own}");
-    let status = refused(supervised(&f, Some(other), &widened).await);
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    // A path no supervisor route serves is a supervisor refusal, never a
-    // manual-session one.
-    for scope in [Some(own), None] {
-        let status = refused(supervised(&f, scope, "/api/human/nope").await);
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
 }

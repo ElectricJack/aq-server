@@ -123,10 +123,12 @@ pub fn worker_routes(state: AppState) -> Router<AppState> {
         )
         .layer(DefaultBodyLimit::max(1024 * 1024))
 }
+pub(crate) fn inspection() -> Router<AppState> {
+    Router::new().route("/api/execution/attempts/{id}", get(inspect))
+}
 pub fn admin_routes(state: AppState) -> Router<AppState> {
-    let routes = Router::new()
+    let routes = inspection()
         .route("/api/execution/fixtures", post(fixture))
-        .route("/api/execution/attempts/{id}", get(inspect))
         .with_state(state.clone())
         .merge(
             Router::new()
@@ -294,25 +296,22 @@ async fn inspect(
     State(state): State<AppState>,
     CurrentUser(_): CurrentUser,
     Path(id): Path<Uuid>,
-) -> Response {
-    // A profiled attempt (every real task attempt) shows its B4 owner facts; before this only
-    // legacy fixtures were found, so `attempt.show` answered "attempt not found" for them.
+) -> Result<Response, AppError> {
     let (now, pool) = (now(&state), &state.store.pool);
-    let Ok(mut conn) = pool.acquire().await else {
-        return AppError::Internal.into_response();
-    };
+    let mut conn = pool.acquire().await.map_err(|_| AppError::Internal)?;
     match aq_profiled_state::replacement_sql::inspect(&mut conn, id, now).await {
         Ok(Some(mut view)) => {
             let task = view["task_id"].as_str().and_then(|t| t.parse().ok());
             let assess = crate::profiled_execution::replacement::assess_task_in;
-            match assess(&mut conn, task.unwrap_or_default(), now).await {
-                Ok(a) => view["task_assessment"] = a.view(),
-                Err(e) => return e.into_response(),
-            }
-            Json(view).into_response()
+            let assessment = assess(&mut conn, task.unwrap_or_default(), now).await?;
+            view["task_assessment"] = assessment.view();
+            Ok(Json(view).into_response())
         }
-        Ok(None) => (state.store.execution_get(id).await.map(Json)).into_response(),
-        Err(_) => AppError::Internal.into_response(),
+        Ok(None) => {
+            let legacy = state.store.execution_get(id).await;
+            Ok(legacy.map(Json).into_response())
+        }
+        Err(_) => Err(AppError::Internal),
     }
 }
 #[derive(Deserialize)]

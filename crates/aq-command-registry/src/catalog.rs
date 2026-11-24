@@ -134,31 +134,39 @@ pub fn catalog() -> Vec<CommandSpec> {
     }
     #[cfg(feature = "project_environments")]
     commands.extend(environments());
-    // With full access the registry routes these through the owner bridge.
-    #[cfg(not(feature = "supervisor_full_access"))]
     for command in &mut commands {
         let path = match command.name {
-            "task.list" => "/v1/supervisor/read/api/human/projects/{project}/tasks",
-            "task.show" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}",
-            "task.graph.show" => {
-                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/graph"
-            }
-            "task.work" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/work",
-            "task.history" => {
-                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/history"
-            }
-            "task.summary" => {
-                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/summary"
-            }
-            "comment.list" => {
-                "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/comments"
-            }
             "result.list" => "/v1/supervisor/read/api/human/results",
             "result.show" => "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}",
             "result.detail" => "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}",
-            "knowledge.list" => "/v1/supervisor/read/api/human/projects/{project}/knowledge",
-            "knowledge.show" => "/v1/supervisor/read/api/human/projects/{project}/knowledge/{node}",
+            "attempt.show" => "/v1/supervisor/read/api/execution/attempts/{id}",
+            // Evidence routes use ownership in storage. Other full-access
+            // reads retain their existing paths through the owner bridge.
+            #[cfg(feature = "supervisor_full_access")]
             _ => continue,
+            #[cfg(not(feature = "supervisor_full_access"))]
+            name => match name {
+                "task.list" => "/v1/supervisor/read/api/human/projects/{project}/tasks",
+                "task.show" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}",
+                "task.graph.show" => {
+                    "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/graph"
+                }
+                "task.work" => "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/work",
+                "task.history" => {
+                    "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/history"
+                }
+                "task.summary" => {
+                    "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/summary"
+                }
+                "comment.list" => {
+                    "/v1/supervisor/read/api/human/projects/{project}/tasks/{node}/comments"
+                }
+                "knowledge.list" => "/v1/supervisor/read/api/human/projects/{project}/knowledge",
+                "knowledge.show" => {
+                    "/v1/supervisor/read/api/human/projects/{project}/knowledge/{node}"
+                }
+                _ => continue,
+            },
         };
         if let Some(owner) = command.owner {
             command.supervisor = Some(Route { path, ..owner });

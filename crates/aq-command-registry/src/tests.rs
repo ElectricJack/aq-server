@@ -449,11 +449,8 @@ fn supervisor_reads_declare_the_owner_query() {
     }
 }
 
-/// A supervisor reads the results of a hold through the read nest (without
-/// full access; with it the owner bridge carries them).
-#[cfg(not(feature = "supervisor_full_access"))]
 #[test]
-fn a_supervisor_reads_results_through_the_read_nest() {
+fn a_supervisor_reads_hold_evidence_through_the_read_nest() {
     let r = Registry::new(&actions()).unwrap();
     for (name, path) in [
         ("result.list", "/v1/supervisor/read/api/human/results"),
@@ -464,6 +461,10 @@ fn a_supervisor_reads_results_through_the_read_nest() {
         (
             "result.detail",
             "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}",
+        ),
+        (
+            "attempt.show",
+            "/v1/supervisor/read/api/execution/attempts/{id}",
         ),
     ] {
         let c = r.get(name).unwrap();
@@ -759,6 +760,10 @@ fn every_owner_command_has_a_supervisor_route() {
         "task.dependency.add",
         "task.dependency.remove",
         "project.list",
+        "result.list",
+        "result.show",
+        "result.detail",
+        "attempt.show",
     ];
     let r = Registry::new(&actions()).unwrap();
     for c in r.commands() {

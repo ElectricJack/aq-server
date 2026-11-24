@@ -85,6 +85,8 @@ enum Reads {
     Results,
     /// One result revision, by the result's or report's ID.
     Result(Uuid),
+    /// One profiled attempt, by its immutable launch's ID.
+    Attempt(Uuid),
     /// Nothing a project supervisor can read.
     Unserved,
 }
@@ -95,6 +97,9 @@ fn reads(path: &str) -> Reads {
         ["api", "human", "results"] => return Reads::Results,
         ["api", "human" | "v1", "results", id, "revisions", _] => {
             return id.parse().map_or(Reads::Unserved, Reads::Result);
+        }
+        ["api", "execution", "attempts", id] => {
+            return id.parse().map_or(Reads::Unserved, Reads::Attempt);
         }
         _ => {}
     }
@@ -145,11 +150,12 @@ fn narrow_uri(uri: &axum::http::Uri, project: Uuid) -> Option<axum::http::Uri> {
 }
 
 async fn scoped_read(
+    target: Reads,
     request: &mut Request,
     tx: &mut Transaction<'static, Postgres>,
     project: Uuid,
 ) -> Result<(), Refused> {
-    match reads(request.uri().path()) {
+    match target {
         Reads::Project(Some(id)) if id == project => Ok(()),
         Reads::Project(_) => Err(OTHER_PROJECT),
         Reads::Unserved => Err(unserved().await),
@@ -158,6 +164,18 @@ async fn scoped_read(
             Ok(false) => Err(OTHER_PROJECT),
             Err(e) => Err(Refused::from(Error::from(e))),
         },
+        Reads::Attempt(id) => {
+            // The execution spec is immutable after the server seals the launch.
+            let own: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM profiled_launches WHERE attempt_id=$1 AND execution_spec#>>'{lifecycle,project_id}'=$2::text)",
+            )
+            .bind(id)
+            .bind(project)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|err| Refused::from(Error::from(err)))?;
+            own.then_some(()).ok_or(OTHER_PROJECT)
+        }
         Reads::Results => {
             *request.uri_mut() = narrow_uri(request.uri(), project).ok_or(OTHER_PROJECT)?;
             Ok(())
@@ -177,8 +195,17 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
         Ok(p) => p,
         Err(e) => return Refused::from(e).into_response(),
     };
+    let target = reads(request.uri().path());
+    if cfg!(feature = "supervisor_full_access")
+        && !matches!(
+            target,
+            Reads::Results | Reads::Result(_) | Reads::Attempt(_)
+        )
+    {
+        return unserved().await.into_response();
+    }
     if let Some(project) = permit.project
-        && let Err(refusal) = scoped_read(&mut request, &mut permit.guard, project).await
+        && let Err(refusal) = scoped_read(target, &mut request, &mut permit.guard, project).await
     {
         return refusal.into_response();
     }

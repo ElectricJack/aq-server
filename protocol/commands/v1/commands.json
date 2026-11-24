@@ -170,6 +170,29 @@
             "method": "GET",
             "path": "/api/execution/attempts/{id}"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:432ef672133f082728574353773c15bdde95b05ca57012b9853827a1bf59eb58",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "attempt_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "attempt_id"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/execution/attempts/{id}"
+          }
         }
       },
       "summary": "One execution attempt's state",

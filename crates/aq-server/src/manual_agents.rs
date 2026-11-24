@@ -61,7 +61,8 @@ pub(super) fn supervisor_nests(state: &AppState, owner: Option<Router>) -> Route
         .merge(crate::role_settings::admin_routes())
         .merge(internal_work::admin_routes())
         .merge(crate::playbook_authoring::admin_routes());
-    let human = crate::agent_access::human::routes(state);
+    let human =
+        crate::agent_access::human::routes(state).merge(crate::execution::api::inspection());
     let (clock, pool) = (state.clock.clone(), state.store.pool.clone());
     aq_supervisor_control::machine_routes(human, settings, owner, pool, clock)
 }
