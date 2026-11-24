@@ -68,6 +68,20 @@ The image and executable digests are in the immutable turn plan. Install the com
 subscription adapter does not claim a new native mapper/resource qualification
 or hostile-network containment. The development stack network is trusted.
 
+### Claude repository access
+
+With both `supervisor_full_access` and `delivery_playbook` enabled, Claude can
+use `repo_sync` to fetch the latest trees of `main` and AQ task branches for an
+authorized project. Run it again to refresh the trees. In the same turn,
+`repo_read` lists a directory or reads one tracked UTF-8 file. Use an empty path
+to list the root, and choose `main` (the default) or `aq/<task-id>` as the ref.
+
+A Git subprocess has up to 60 seconds. The broker limits file reads and raw
+directory listings to 128 KiB, individual Git pack files to 128 MiB, and a
+turn's repository storage to 256 MiB. Each broker can sync up to 32 projects.
+The host removes these shallow repositories from the turn's private home once
+the turn is confirmed stopped.
+
 Tools expose current scoped reads, task creation, task editing, priority and
 dependencies. Project supervisors can only discover, read and mutate their own
 project. Tools check current owner identity, enabled control, generation, scopes

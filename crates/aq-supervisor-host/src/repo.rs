@@ -310,6 +310,7 @@ async fn fetch_project(dir: &Path, token: &str, remote: &str) -> Result<String> 
         "fetch",
         "--quiet",
         "--prune",
+        "--depth=1",
         "--no-tags",
         "--no-auto-maintenance",
         "--",
