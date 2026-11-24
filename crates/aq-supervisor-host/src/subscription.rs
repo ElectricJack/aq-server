@@ -578,7 +578,7 @@ async fn publish(c: &Config, credential: &Path, body: &str, actions: &Path) -> R
     }
     let refs = action_receipts(actions)?;
     let request = json!({"operation_id":uuid::Uuid::new_v4(),"message_id":uuid::Uuid::new_v4(),"dispatch_id":c.central.dispatch_id,"body":body,"attachments":refs.into_iter().map(|id|json!({"type":"action_receipt","operation_id":id})).collect::<Vec<_>>()});
-    let token = Zeroizing::new(protected_read_native(credential, Identity::NATIVE.run_as)?);
+    let token = protected_read_native(credential, Identity::NATIVE.run_as)?;
     let mut bearer = reqwest::header::HeaderValue::from_str(&format!(
         "Bearer {}",
         std::str::from_utf8(&token)?
