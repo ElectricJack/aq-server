@@ -46,7 +46,7 @@ pub(crate) const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// Runs `run`'s task once on the Claude login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
-pub(crate) async fn claude(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
+pub(super) async fn claude(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
     in_run_dirs(h, run, async |executable, place| {
         attempt(h, executable, place, run).await
     })
