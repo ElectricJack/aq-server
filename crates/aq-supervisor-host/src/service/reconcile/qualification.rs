@@ -1,5 +1,5 @@
 use super::*;
-use aq_central_authority::{Digest, Document, MailBatch, decode};
+use aq_central_authority::{Digest, MailBatch, MailRef};
 
 fn service_config(root: PathBuf) -> ServiceConfig {
     std::fs::create_dir(&root).unwrap();
@@ -47,25 +47,7 @@ fn initial_control(project: Option<Uuid>) -> Control {
     }
 }
 
-fn mail_batch() -> MailBatch {
-    let examples: Value = serde_json::from_str(include_str!(
-        "../../../../aq-central-authority/artifacts/examples.json"
-    ))
-    .unwrap();
-    let Document::Plan(example) = decode(&serde_json::to_vec(&examples["plan"]).unwrap()).unwrap()
-    else {
-        panic!("expected central plan fixture");
-    };
-    example.batch
-}
-
-fn assemble(
-    config: &ServiceConfig,
-    control: &Control,
-    generation: u64,
-    batch: MailBatch,
-    input: &[u8],
-) -> Config {
+fn assemble(config: &ServiceConfig, control: &Control, generation: u64, input: &[u8]) -> Config {
     let selection = plan::selection(config, &control.profile).unwrap().unwrap();
     plan::assemble(
         config,
@@ -76,7 +58,15 @@ fn assemble(
             session: Uuid::new_v4(),
         },
         dispatch::Turn {
-            batch,
+            batch: MailBatch {
+                conversation_id: config.conversation_id,
+                through_cursor: generation,
+                messages: vec![MailRef {
+                    message_id: Uuid::new_v4(),
+                    cursor: generation,
+                    payload_digest: Digest::of(input),
+                }],
+            },
             input: input.to_vec(),
             dispatch_id: Uuid::new_v4(),
             host_operation_id: Uuid::new_v4(),
@@ -94,15 +84,8 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
     let global_control = initial_control(None);
     let mut project_control = initial_control(Some(Uuid::new_v4()));
     let pool = PgPool::connect_lazy(&global.database_url).unwrap();
-    let batch = mail_batch();
-    let global_turn = assemble(&global, &global_control, 1, batch.clone(), b"global input");
-    let prior = assemble(
-        &project,
-        &project_control,
-        1,
-        batch.clone(),
-        b"retained project input",
-    );
+    let global_turn = assemble(&global, &global_control, 1, b"global input");
+    let prior = assemble(&project, &project_control, 1, b"retained project input");
     plan::install(&global, &global_turn).unwrap();
     plan::install(&project, &prior).unwrap();
 
@@ -123,7 +106,7 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
         secret_file: None,
         ..project
     };
-    let successor = assemble(&project, &project_control, 2, batch, b"new project input");
+    let successor = assemble(&project, &project_control, 2, b"new project input");
     assert!(plan::install(&project, &successor).is_err());
     let (recovered, _) = installed(&project, &pool).unwrap().unwrap();
     assert_eq!(recovered.central, prior.central);
