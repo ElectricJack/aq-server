@@ -146,7 +146,7 @@ async fn replacement_facts_after_rework(state: &AppState, report_id: Uuid) {
 }
 
 /// Prove retained source and quiescent effects before replacement can release
-/// the claim, including after a verified platform interruption.
+/// the claim, including after a verified platform interruption or a delivery hold.
 pub async fn record_replacement_facts(
     state: &AppState,
     report_id: Uuid,
@@ -235,7 +235,7 @@ async fn replacement_facts(
     let reworked = match settlement {
         Some(s) => s.disposition == AutoDisposition::ReworkRequired,
         #[cfg(feature = "delivery_playbook")]
-        None if owner_retry => {
+        None if owner_retry || (!view.revoked && view.cancellation_id.is_none()) => {
             cancelled_retry
                 || aq_delivery::git_grant::held_report(&mut *tx, r.spec.task.task_id)
                     .await

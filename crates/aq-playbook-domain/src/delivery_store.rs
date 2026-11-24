@@ -600,6 +600,16 @@ pub async fn result_wait(
     .await?)
 }
 
+/// Whether an override recorded since the hold lets the task of `attempt` resume its held result
+/// (`aq_delivery::git_grant::held_gate`): the task then waits only for what Graph shows.
+pub async fn hold_overridden(db: &mut PgConnection, attempt: Uuid) -> Result<bool> {
+    let task = sqlx::query_scalar("SELECT task_id FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&mut *db)
+        .await?;
+    Ok(aq_delivery::git_grant::held_gate(db, task).await?.is_none())
+}
+
 /// The still-pending delivery decision on the claim's exact result.
 pub async fn settlement_wait(
     db: &mut PgConnection,

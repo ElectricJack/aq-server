@@ -103,6 +103,9 @@ pub async fn waiting(
         return Some(rework(h.attempt_id, result, retained, quiescent));
     }
     let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
+    if hold.is_some() && store::hold_overridden(&mut db, h.attempt_id).await.ok()? {
+        return None;
+    }
     if let Some(reason) = hold {
         let mut evidence = store::held_pr_evidence(&mut db, result)
             .await
