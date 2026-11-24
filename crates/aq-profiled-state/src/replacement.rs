@@ -1,6 +1,7 @@
 //! The pure B4 replacement decision over a task's started-attempt history (moved out of the
 //! aq-server lib). The server loads the facts (`Prior`) and acts on the `Assessment`.
 use crate::{Effects, Retention, Status, Stop};
+use aq_profiles::roles::LaunchRetryBackoff;
 use aq_session_protocol::ArtifactRef;
 use uuid::Uuid;
 
@@ -24,18 +25,17 @@ pub fn evidence(
     })
 }
 
-/// A task's retry budget. Every value is a Settings › Selection defaults key of the same name
-/// (an intelligence profile may override it), read from the policy the task's last attempt
-/// pinned; the server has no limits of its own.
+/// A task's retry budget and launch wait. The budget comes from the latest
+/// pinned policy where available. The wait follows current Selection defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_attempts: u32,
     pub max_uncharged_continuations: u32,
+    pub launch_retry_backoff: LaunchRetryBackoff,
 }
 impl Limits {
-    /// The limits of the policy the task's latest attempt pinned. A limit that policy does not
-    /// carry (it was pinned before the limit was a Setting, or cannot be read: `None`) is the
-    /// current Settings value.
+    /// The retry budgets come from the latest attempt's pinned policy when available.
+    /// The launch backoff and any absent budget values come from current Settings.
     pub fn of(
         pinned: Option<&aq_profiles::SelectionPolicy>,
         settings: &aq_profiles::roles::SelectionDefaults,
@@ -45,6 +45,7 @@ impl Limits {
             max_uncharged_continuations: pinned
                 .and_then(|p| p.max_uncharged_continuations)
                 .unwrap_or(settings.max_uncharged_continuations),
+            launch_retry_backoff: settings.launch_retry_backoff,
         }
     }
 }
@@ -166,16 +167,18 @@ fn launch_stop_receipt(receipt: &ArtifactRef) -> bool {
 
 pub const LAUNCH_BACKOFF: &str = "launch_retry_backoff";
 
-/// A first verified platform failure can continue right away. Repeated failures
-/// wait 30s, doubling up to 5m. The clock starts when AQ releases the claim,
-/// so the backoff never delays freeing the worker slot.
-pub fn launch_retry_after(priors: &[Prior]) -> Option<(Uuid, u64)> {
+/// A first verified nonstart can continue right away. Repeated launch failures
+/// wait according to current Settings, starting when AQ releases the claim.
+pub fn launch_retry_after(priors: &[Prior], backoff: LaunchRetryBackoff) -> Option<(Uuid, u64)> {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
-    launch_retry_after_ordered(&ordered)
+    launch_retry_after_ordered(&ordered, backoff)
 }
 
-fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
+fn launch_retry_after_ordered(
+    ordered: &[&Prior],
+    backoff: LaunchRetryBackoff,
+) -> Option<(Uuid, u64)> {
     let last = ordered.last()?;
     if last.holds_task {
         return None;
@@ -183,13 +186,15 @@ fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
     let consecutive = ordered
         .iter()
         .rev()
-        .take_while(|p| p.uncharged_platform_failure() && !p.forgiven)
-        .take(6)
+        .take_while(|p| p.proven_nonstart() && !p.forgiven)
+        // A positive initial delay has reached any u64 cap after 64 doublings.
+        .take(u64::BITS as usize + 2)
         .count();
-    if consecutive < 2 {
-        return None;
-    }
-    let delay = (30_000u64 << (consecutive - 2)).min(300_000);
+    let exponent = consecutive.checked_sub(2)? as u32;
+    let delay = backoff
+        .initial_delay_ms
+        .saturating_mul(2u64.saturating_pow(exponent))
+        .min(backoff.max_delay_ms);
     Some((last.attempt_id, last.released_at_ms?.saturating_add(delay)))
 }
 /// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
@@ -377,7 +382,10 @@ fn lineage_budget(
     if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
         return Err("lineage_retry_budget_exhausted");
     }
-    if charge_budget && launch_retry_after_ordered(ordered).is_some_and(|(_, next)| now < next) {
+    if charge_budget
+        && launch_retry_after_ordered(ordered, limits.launch_retry_backoff)
+            .is_some_and(|(_, next)| now < next)
+    {
         return Err(LAUNCH_BACKOFF);
     }
     // Lineage time is recorded, never charged: each attempt has its own window (its execution
@@ -473,6 +481,7 @@ mod tests {
         Limits {
             max_attempts: 3,
             max_uncharged_continuations: 5,
+            launch_retry_backoff: LaunchRetryBackoff::default(),
         }
     }
     fn released(mut prior: Prior) -> Prior {
@@ -573,6 +582,7 @@ mod tests {
         let limits = Limits {
             max_attempts: 1,
             max_uncharged_continuations: 0,
+            ..budget()
         };
         let first = released(failed_prior(1_000));
         let second = released(failed_prior(2_000));
@@ -589,7 +599,7 @@ mod tests {
         }
         assert_eq!(charged(&failures, &limits).0, 0);
         assert_eq!(
-            launch_retry_after(&failures),
+            launch_retry_after(&failures, limits.launch_retry_backoff),
             Some((failures[1].attempt_id, 33_000))
         );
         assert_eq!(
@@ -619,6 +629,7 @@ mod tests {
         let limits = Limits {
             max_attempts: 3,
             max_uncharged_continuations: 1,
+            launch_retry_backoff: LaunchRetryBackoff::default(),
         };
         let mut history = vec![
             interrupted,
@@ -636,6 +647,52 @@ mod tests {
             assess(&history, &limits, 5_001),
             Assessment::Blocked("lineage_retry_budget_exhausted")
         );
+    }
+
+    #[test]
+    fn launch_backoff_uses_current_settings_and_the_latest_release_time() {
+        let settings = aq_profiles::roles::SelectionDefaults {
+            launch_retry_backoff: LaunchRetryBackoff {
+                initial_delay_ms: 10_000,
+                max_delay_ms: 15_000,
+            },
+            ..Default::default()
+        };
+        let pinned = aq_profiles::roles::SelectionDefaults::default().policy(1, Vec::new());
+        let limits = Limits::of(Some(&pinned), &settings);
+        let mut failures = Vec::new();
+        for index in 1..=3 {
+            let mut attempt = released(failed_prior(index * 1_000));
+            attempt.stop = Stop::NotStarted {
+                receipt: receipt("aq.launch-closure/verified"),
+            };
+            attempt.released_at_ms = Some(index * 1_000 + 500);
+            failures.push(attempt);
+        }
+        assert_eq!(
+            launch_retry_after(&failures[..1], settings.launch_retry_backoff),
+            None
+        );
+        assert!(matches!(
+            assess(&failures[..1], &limits, 1_500),
+            Assessment::Replace(_)
+        ));
+        for (index, wake_at) in [(2, 12_500), (3, 18_500)] {
+            let history = &failures[..index];
+            assert_eq!(
+                launch_retry_after(history, settings.launch_retry_backoff),
+                Some((history[index - 1].attempt_id, wake_at))
+            );
+            assert_eq!(charged(history, &limits).0, 0);
+            assert_eq!(
+                assess(history, &limits, wake_at - 1),
+                Assessment::Blocked(LAUNCH_BACKOFF)
+            );
+            assert!(matches!(
+                assess(history, &limits, wake_at),
+                Assessment::Replace(_)
+            ));
+        }
     }
 
     #[test]
@@ -871,6 +928,7 @@ mod tests {
         let one = Limits {
             max_uncharged_continuations: 1,
             max_attempts: 1,
+            ..budget()
         };
         let mut stopped = forgiven.clone().map(released).map(exempt).to_vec();
         stopped.push(exempt(long(now)));
@@ -935,6 +993,7 @@ mod tests {
         let wide = Limits {
             max_attempts: 32,
             max_uncharged_continuations: 0,
+            ..budget()
         };
         assert!(matches!(
             assess(&history, &wide, now),
@@ -977,6 +1036,7 @@ mod tests {
         let all = |n: u64| Limits {
             max_attempts: n as u32,
             max_uncharged_continuations: n as u32 + 5,
+            ..budget()
         };
         assert_eq!(Limits::of(None, &settings), all(4));
         let mut pinned = aq_profiles::roles::SelectionDefaults {

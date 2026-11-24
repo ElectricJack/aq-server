@@ -409,7 +409,11 @@ pub async fn launch_retry_wait(pool: &PgPool, task: Uuid, now_ms: i64) -> Option
     let now = u64::try_from(now_ms).ok()?;
     let mut conn = pool.acquire().await.ok()?;
     let priors = replacement_sql::load(&mut conn, task).await.ok()?;
-    let (attempt, next) = replacement::launch_retry_after(&priors)?;
+    if priors.len() < 2 {
+        return None;
+    }
+    let settings = aq_role_settings::selection_defaults(&mut conn).await.ok()?;
+    let (attempt, next) = replacement::launch_retry_after(&priors, settings.launch_retry_backoff)?;
     (now < next).then(|| {
         json!({
             "code": replacement::LAUNCH_BACKOFF,
