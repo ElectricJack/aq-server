@@ -3,6 +3,7 @@
 //! only keep a typing mistake from storing a value no sync or transfer could
 //! meaningfully use.
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const SECOND_MS: u64 = 1000;
 const DAY_MS: u64 = 24 * 60 * 60 * SECOND_MS;
@@ -129,6 +130,53 @@ impl DeliveryLimits {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryLimitsChange {
+    limits: DeliveryLimits,
+    keep_followup_interval: bool,
+}
+
+impl DeliveryLimitsChange {
+    pub(crate) fn replace(limits: DeliveryLimits) -> Self {
+        Self {
+            limits,
+            keep_followup_interval: false,
+        }
+    }
+
+    pub(crate) fn from_request(value: Value) -> serde_json::Result<Self> {
+        let keep_followup_interval = value.get("hold_followup_interval_ms").is_none();
+        Ok(Self {
+            limits: serde_json::from_value(value)?,
+            keep_followup_interval,
+        })
+    }
+
+    pub(crate) fn resolve(&self, stored: DeliveryLimits) -> DeliveryLimits {
+        let mut limits = self.limits;
+        if self.keep_followup_interval {
+            limits.hold_followup_interval_ms = stored.hold_followup_interval_ms;
+        }
+        limits
+    }
+}
+
+impl Serialize for DeliveryLimitsChange {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !self.keep_followup_interval {
+            return self.limits.serialize(serializer);
+        }
+        // Keep the earlier request shape for operation-id replay. A later
+        // cadence edit must not alter the identity of a previous request.
+        let mut value = serde_json::to_value(self.limits).map_err(serde::ser::Error::custom)?;
+        value
+            .as_object_mut()
+            .ok_or_else(|| serde::ser::Error::custom("delivery limits must be an object"))?
+            .remove("hold_followup_interval_ms");
+        value.serialize(serializer)
     }
 }
 

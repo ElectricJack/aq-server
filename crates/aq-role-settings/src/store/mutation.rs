@@ -43,7 +43,7 @@ pub async fn apply_referenced(
         .check_references(&mutation.change, references, &mut tx)
         .await?;
     let snapshot = change.snapshot(&mutation.change)?;
-    persist(&mut tx, &mutation.change, change.version).await?;
+    persist(&mut tx, &mutation.change, &change).await?;
     let receipt = change.activate(&mut tx, snapshot).await?;
     operation
         .record(&mut tx, &receipt, change.state.limits.operations_kept)
@@ -144,7 +144,10 @@ impl Candidate {
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(_) => self.state.delivery_revision,
             #[cfg(feature = "delivery_playbook")]
-            Change::DeliveryLimits(_) => self.state.delivery_limits_revision,
+            Change::DeliveryLimits(limits) => {
+                self.state.delivery_limits = limits.resolve(self.state.delivery_limits);
+                self.state.delivery_limits_revision
+            }
             #[cfg(feature = "project_environments")]
             Change::EnvironmentLimits(_) => environment_limits_on(conn).await?.1,
         })
@@ -211,9 +214,11 @@ impl Candidate {
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(markdown) => self.validate_markdown("delivery", markdown)?,
             #[cfg(feature = "delivery_playbook")]
-            Change::DeliveryLimits(limits) => {
-                limits.validate().map_err(|message| invalid(&message))?
-            }
+            Change::DeliveryLimits(_) => self
+                .state
+                .delivery_limits
+                .validate()
+                .map_err(|message| invalid(&message))?,
             // The environment limits, too, compile and activate nothing.
             #[cfg(feature = "project_environments")]
             Change::EnvironmentLimits(limits) => {
@@ -263,8 +268,8 @@ impl Candidate {
         })
     }
 }
-async fn persist(conn: &mut PgConnection, change: &Change, version: Version) -> Result<()> {
-    let Version { revision, now_ms } = version;
+async fn persist(conn: &mut PgConnection, change: &Change, candidate: &Candidate) -> Result<()> {
+    let Version { revision, now_ms } = candidate.version;
     match change {
         Change::Save { kind, id, markdown } => {
             sqlx::query(
@@ -293,7 +298,7 @@ async fn persist(conn: &mut PgConnection, change: &Change, version: Version) -> 
         #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton", revision,markdown).await?,
         #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,limits).await?,
+        Change::DeliveryLimits(_) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,&candidate.state.delivery_limits).await?,
         #[cfg(feature = "project_environments")]
         Change::EnvironmentLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",revision,limits).await?,
     }

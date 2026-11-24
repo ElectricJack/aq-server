@@ -201,6 +201,32 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     let (status, _) = f.owner_write().put(PATH, wrong).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(DeliveryLimits::default().validate(), Ok(()));
+
+    let mut old_client = changed.clone();
+    old_client
+        .as_object_mut()
+        .unwrap()
+        .remove("hold_followup_interval_ms");
+    old_client["main_sync_interval_ms"] = json!(16000);
+    let old_put = json!({"limits": old_client, "expected_revision": expected,
+        "operation_id": Uuid::new_v4()});
+    let (status, old_saved) = f.owner_write().put(PATH, old_put.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{old_saved}");
+    let (_, old_read) = f.owner().get(PATH).await;
+    assert_eq!(old_read["limits"]["main_sync_interval_ms"], 16000);
+    assert_eq!(old_read["limits"]["hold_followup_interval_ms"], 120000);
+
+    changed["hold_followup_interval_ms"] = json!(180000);
+    let new_put = json!({"limits": changed, "expected_revision": old_saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, new_saved) = f.owner_write().put(PATH, new_put).await;
+    assert_eq!(status, StatusCode::OK, "{new_saved}");
+    assert_eq!(
+        f.owner_write().put(PATH, old_put).await,
+        (StatusCode::OK, old_saved)
+    );
+    let (_, now) = f.owner().get(PATH).await;
+    assert_eq!(now["limits"]["hold_followup_interval_ms"], 180000);
 }
 
 #[cfg(feature = "delivery_playbook")]
