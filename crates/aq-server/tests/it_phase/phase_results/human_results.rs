@@ -170,6 +170,48 @@ async fn opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait() {
     );
     assert_eq!(before, invariant(&f).await);
 }
+async fn assert_exact_report_head(f: &terminal::Prepared, path: &str, head_report_id: Uuid) {
+    let (status, exact) = get(f, path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(exact["items"].as_array().unwrap().len(), 1);
+    assert!(exact["next_after"].is_null());
+    assert_eq!(exact["items"][0]["origin"], ORIGIN);
+    assert_eq!(exact["items"][0]["current_report_head"], false);
+    assert_eq!(exact["items"][0]["head_report_id"], json!(head_report_id));
+}
+
+async fn assert_result_query_filters(f: &terminal::Prepared, report: &ResultReport, path: &str) {
+    assert_eq!(
+        get(f, &detail(report, &"f".repeat(64), true)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(f, &format!("{path}&project_id={}", Uuid::new_v4()))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(f, "/api/human/results?profile=unknown").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get(f, "/api/human/results?profile=recorded_native_v2&unknown=1")
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, scoped) = get(
+        f,
+        &format!(
+            "/api/human/results?profile=recorded_native_v2&project_id={}",
+            Uuid::new_v4()
+        ),
+    )
+    .await;
+    assert!(scoped["items"].as_array().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only() {
     let (f, report) = Box::pin(ready()).await;
@@ -206,48 +248,8 @@ async fn opt_in_phase_metadata_lists_exact_sources_heads_and_current_owner_only(
     );
     assert_paginated_sources(&f, &retained, &report).await;
     let path = detail(&report, receipt.report_digest.as_str(), true);
-    let (status, exact) = get(&f, &path).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(exact["items"].as_array().unwrap().len(), 1);
-    assert!(exact["next_after"].is_null());
-    assert_eq!(exact["items"][0]["origin"], ORIGIN);
-    assert_eq!(exact["items"][0]["current_report_head"], false);
-    assert_eq!(
-        exact["items"][0]["head_report_id"],
-        json!(correction.report_id)
-    );
-    assert_eq!(
-        get(&f, &detail(&report, &"f".repeat(64), true)).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&f, &format!("{path}&project_id={}", Uuid::new_v4()))
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&f, "/api/human/results?profile=unknown").await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        get(
-            &f,
-            "/api/human/results?profile=recorded_native_v2&unknown=1"
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    let (_, scoped) = get(
-        &f,
-        &format!(
-            "/api/human/results?profile=recorded_native_v2&project_id={}",
-            Uuid::new_v4()
-        ),
-    )
-    .await;
-    assert!(scoped["items"].as_array().unwrap().is_empty());
+    assert_exact_report_head(&f, &path, correction.report_id).await;
+    assert_result_query_filters(&f, &report, &path).await;
     assert_eq!(
         invariants,
         invariant(&f).await,
