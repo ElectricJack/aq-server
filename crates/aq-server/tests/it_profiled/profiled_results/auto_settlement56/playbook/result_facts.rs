@@ -84,14 +84,19 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
         results::record(&e.f.state, &auth, &correction).await,
         Err(aq_server::error::AppError::Conflict(_))
     ));
-    let (returns, action): (i32, String) = sqlx::query_as(
-        "SELECT t.returns,d.decision FROM delivery_tasks t JOIN delivery_decisions d USING(task_id) WHERE d.result_id=$1",
-    )
-    .bind(result)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!((returns, action.as_str()), (1, "returned"));
+    let (returns, action, update, task_ref, head): (i32, String, bool, String, String) =
+        sqlx::query_as(
+            "SELECT t.returns,d.decision,d.update_from_main,p.task_ref,p.head \
+         FROM delivery_tasks t JOIN delivery_decisions d USING(task_id) \
+         JOIN delivery_pushed_results p ON p.report_id=d.result_id WHERE d.result_id=$1",
+        )
+        .bind(result)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((returns, action.as_str(), update), (1, "returned", false));
+    assert_eq!(task_ref, e._task_ref.unwrap().task_ref);
+    assert_eq!(head, "4".repeat(40));
     assert_eq!(e.writes.load(Ordering::SeqCst), 0);
     let mut db = pool.acquire().await.unwrap();
     let priors = aq_profiled_state::replacement_sql::load(&mut db, task)
@@ -108,10 +113,11 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
     );
     assert_eq!(priors[0].attempt_id, attempt);
     assert!(priors[0].holds_task);
-    assert!(
-        aq_profiled_state::replacement::assess(&priors, &limits, NOW + 1)
-            .replacement()
-            .is_some()
+    let assessment = aq_profiled_state::replacement::assess(&priors, &limits, NOW + 1);
+    let scheduled = assessment.replacement().expect("verified continuation");
+    assert_eq!(
+        scheduled.retained_source_receipt.id.as_str(),
+        format!("aq.git-task-ref/{result}")
     );
     assert!(
         aq_profiled_state::result_reads::reworked_without_facts(&pool, None, 10)
