@@ -58,25 +58,30 @@ fn present_points<'de, D: serde::Deserializer<'de>>(
 
 impl TaskEdit {
     pub fn valid(&self) -> bool {
-        (self.title.is_some()
-            || self.body.is_some()
-            || self.acceptance_criteria.is_some()
-            || self.labels.is_some()
-            || self.story_points.is_some())
+        self.has_changes()
+            && self.valid_text()
+            && labels(&self.labels)
             && self
                 .story_points
                 .flatten()
                 .is_none_or(|n| (1..=super::MAX_STORY_POINTS).contains(&n))
-            && self
-                .title
-                .as_deref()
-                .is_none_or(|t| text(t, 1, 512) && !t.trim().is_empty())
+    }
+    fn has_changes(&self) -> bool {
+        self.title.is_some()
+            || self.body.is_some()
+            || self.acceptance_criteria.is_some()
+            || self.labels.is_some()
+            || self.story_points.is_some()
+    }
+    fn valid_text(&self) -> bool {
+        self.title
+            .as_deref()
+            .is_none_or(|t| text(t, 1, 512) && !t.trim().is_empty())
             && self.body.as_deref().is_none_or(|t| text(t, 0, 32768))
             && self
                 .acceptance_criteria
                 .as_deref()
                 .is_none_or(|t| text(t, 0, 8192))
-            && labels(&self.labels)
     }
     pub fn patch(&self, node: &Value) -> Option<Map<String, Value>> {
         let mut patch = serde_json::Map::new();

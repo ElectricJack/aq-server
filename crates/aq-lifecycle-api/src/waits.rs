@@ -316,26 +316,8 @@ pub enum WaitExecutionState {
     ParkedReported { receipt: ArtifactRef },
 }
 record!(RegisteredWait {scope:Scope,binding:Binding,wait:WaitRef,predicate:Predicate,continuation:ContinuationRef,original_created_at_ms:u64,central_hold_receipt:ArtifactRef,boundaries:Vec<SourceBoundary>,cycle_assessment:CycleAssessment,execution:WaitExecutionState});
-impl Validate for RegisteredWait {
-    fn validate(&self) -> Result<(), ContractError> {
-        self.scope.validate()?;
-        self.binding.validate()?;
-        self.wait.validate()?;
-        self.predicate.validate()?;
-        ensure(
-            canonical_digest(&self.predicate)? == self.wait.predicate_digest,
-            "registered predicate digest",
-        )?;
-        self.continuation.validate()?;
-        ensure(
-            self.continuation.wait == self.wait,
-            "registration continuation binding",
-        )?;
-        ensure(
-            self.scope.project_id == self.binding.project_id,
-            "registered project",
-        )?;
-        artifact(&self.central_hold_receipt)?;
+impl RegisteredWait {
+    fn validate_boundaries(&self) -> Result<(), ContractError> {
         ensure(
             !self.boundaries.is_empty() && self.boundaries.len() <= MAX_MEMBERS,
             "source boundary bound",
@@ -358,6 +340,30 @@ impl Validate for RegisteredWait {
                 "source boundary condition",
             )?;
         }
+        Ok(())
+    }
+}
+impl Validate for RegisteredWait {
+    fn validate(&self) -> Result<(), ContractError> {
+        self.scope.validate()?;
+        self.binding.validate()?;
+        self.wait.validate()?;
+        self.predicate.validate()?;
+        ensure(
+            canonical_digest(&self.predicate)? == self.wait.predicate_digest,
+            "registered predicate digest",
+        )?;
+        self.continuation.validate()?;
+        ensure(
+            self.continuation.wait == self.wait,
+            "registration continuation binding",
+        )?;
+        ensure(
+            self.scope.project_id == self.binding.project_id,
+            "registered project",
+        )?;
+        artifact(&self.central_hold_receipt)?;
+        self.validate_boundaries()?;
         match &self.cycle_assessment {
             CycleAssessment::NoKnownCycle { revision } => artifact(revision)?,
             CycleAssessment::ExternalUnknown { reason } => reason.validate()?,
@@ -452,13 +458,7 @@ impl Validate for WaitOutcome {
 }
 
 impl WaitOutcome {
-    pub fn validate_for(&self, predicate: &Predicate) -> Result<(), ContractError> {
-        self.validate()?;
-        predicate.validate()?;
-        ensure(
-            canonical_digest(predicate)? == self.outcome.wait.predicate_digest,
-            "outcome predicate",
-        )?;
+    fn validate_members(&self, predicate: &Predicate) -> Result<(), ContractError> {
         let members = predicate.members();
         ensure(
             members.len() == self.members.len(),
@@ -474,63 +474,72 @@ impl WaitOutcome {
                 )?;
             }
         }
-        let any = matches!(predicate, Predicate::Any { .. });
+        Ok(())
+    }
+    fn validate_source_failure(
+        &self,
+        any: bool,
+        state: MemberState,
+        message: &'static str,
+    ) -> Result<(), ContractError> {
+        ensure(self.members.iter().any(|v| v.state == state), message)?;
+        if any {
+            ensure(
+                !self
+                    .members
+                    .iter()
+                    .any(|v| matches!(v.state, MemberState::Pending | MemberState::Satisfied)),
+                "any predicate still pending",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_satisfaction(&self, any: bool) -> Result<(), ContractError> {
         let satisfied: Vec<Uuid> = self
             .members
             .iter()
             .filter(|v| v.state == MemberState::Satisfied)
             .map(|v| v.member_id)
             .collect();
+        ensure(
+            if any {
+                !satisfied.is_empty()
+            } else {
+                satisfied.len() == self.members.len()
+            },
+            "satisfaction semantics",
+        )?;
+        ensure(
+            self.selected_member_id
+                == if any {
+                    satisfied.first().copied()
+                } else {
+                    None
+                },
+            "deterministic selection",
+        )?;
+        Ok(())
+    }
+    pub fn validate_for(&self, predicate: &Predicate) -> Result<(), ContractError> {
+        self.validate()?;
+        predicate.validate()?;
+        ensure(
+            canonical_digest(predicate)? == self.outcome.wait.predicate_digest,
+            "outcome predicate",
+        )?;
+        self.validate_members(predicate)?;
+        let any = matches!(predicate, Predicate::Any { .. });
         match self.kind {
-            WaitOutcomeKind::Satisfied => {
-                ensure(
-                    if any {
-                        !satisfied.is_empty()
-                    } else {
-                        satisfied.len() == members.len()
-                    },
-                    "satisfaction semantics",
-                )?;
-                ensure(
-                    self.selected_member_id
-                        == if any {
-                            satisfied.first().copied()
-                        } else {
-                            None
-                        },
-                    "deterministic selection",
-                )?;
-            }
+            WaitOutcomeKind::Satisfied => self.validate_satisfaction(any)?,
             WaitOutcomeKind::SourceFailed => {
-                ensure(
-                    self.members
-                        .iter()
-                        .any(|v| v.state == MemberState::SourceFailed),
-                    "failure evidence",
-                )?;
-                if any {
-                    ensure(
-                        satisfied.is_empty()
-                            && !self.members.iter().any(|v| v.state == MemberState::Pending),
-                        "any predicate still pending",
-                    )?;
-                }
+                self.validate_source_failure(any, MemberState::SourceFailed, "failure evidence")?
             }
-            WaitOutcomeKind::SourceUnavailable => {
-                ensure(
-                    self.members
-                        .iter()
-                        .any(|v| v.state == MemberState::SourceUnavailable),
-                    "unavailable source",
-                )?;
-                if any {
-                    ensure(
-                        satisfied.is_empty()
-                            && !self.members.iter().any(|v| v.state == MemberState::Pending),
-                        "any predicate still pending",
-                    )?;
-                }
-            }
+            WaitOutcomeKind::SourceUnavailable => self.validate_source_failure(
+                any,
+                MemberState::SourceUnavailable,
+                "unavailable source",
+            )?,
             _ => {}
         }
         Ok(())

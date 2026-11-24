@@ -8,7 +8,7 @@ mod log_tail;
 mod pulls;
 
 pub use auth::{AppCredentials, AppJwtClaims, InstallationToken};
-pub use client::{Auth, GitHubClient};
+pub use client::{ApiRequest, Auth, GitHubClient};
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +36,26 @@ pub struct DeliveryConfig {
     pub git_http_socket: Option<PathBuf>,
 }
 impl DeliveryConfig {
+    fn validate_enrollment(&self) -> Result<(), &'static str> {
+        if self.git_http_socket.as_ref().is_some_and(|p| {
+            !p.is_absolute()
+                || p.components()
+                    .any(|part| part == std::path::Component::ParentDir)
+        }) {
+            return Err("delivery.git_http_socket: must be an absolute path without `..`");
+        }
+        if self.project_allowlist.iter().any(Uuid::is_nil) {
+            return Err("delivery.project_allowlist: project IDs must be non-nil");
+        }
+        if self.task_allowlist.iter().flatten().any(Uuid::is_nil) {
+            return Err("delivery.task_allowlist: Graph task IDs must be non-nil");
+        }
+        if self.has_enrollment() && self.git_http_socket.is_none() {
+            return Err("delivery.project_allowlist requires delivery.git_http_socket");
+        }
+        Ok(())
+    }
+
     pub fn enrolls(&self, project: Uuid, task: Uuid) -> bool {
         self.project_allowlist.contains(&project)
             && self
@@ -64,35 +84,10 @@ pub fn deserialize<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<DeliveryConfig>, D::Error> {
     let config = Option::<DeliveryConfig>::deserialize(d)?;
-    let socket = config.as_ref().and_then(|c| c.git_http_socket.as_ref());
-    if socket.is_some_and(|p| {
-        !p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir)
-    }) {
-        return Err(serde::de::Error::custom(
-            "delivery.git_http_socket: must be an absolute path without `..`",
-        ));
-    }
     if let Some(c) = &config {
-        if c.project_allowlist.iter().any(Uuid::is_nil) {
-            return Err(serde::de::Error::custom(
-                "delivery.project_allowlist: project IDs must be non-nil",
-            ));
-        }
-        if c.task_allowlist.iter().flatten().any(Uuid::is_nil) {
-            return Err(serde::de::Error::custom(
-                "delivery.task_allowlist: Graph task IDs must be non-nil",
-            ));
-        }
-        if c.has_enrollment() && c.git_http_socket.is_none() {
-            return Err(serde::de::Error::custom(
-                "delivery.project_allowlist requires delivery.git_http_socket",
-            ));
-        }
-    }
-    if let Some(Err(reason)) = config.as_ref().map(DeliveryConfig::validate) {
-        return Err(serde::de::Error::custom(format!(
-            "delivery.github: {reason}"
-        )));
+        c.validate_enrollment().map_err(serde::de::Error::custom)?;
+        c.validate()
+            .map_err(|reason| serde::de::Error::custom(format!("delivery.github: {reason}")))?;
     }
     Ok(config)
 }

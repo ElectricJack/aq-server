@@ -80,6 +80,10 @@ fn read(path: &std::path::Path) -> Result<(Zeroizing<Vec<u8>>, u64, u64)> {
             && metadata.len() <= 4096,
         "credential file rejected"
     );
+    let bytes = read_token(file)?;
+    Ok((bytes, metadata.dev(), metadata.ino()))
+}
+fn read_token(file: std::fs::File) -> Result<Zeroizing<Vec<u8>>> {
     let mut bytes = Zeroizing::new(Vec::new());
     file.take(4097).read_to_end(&mut bytes)?;
     ensure!(
@@ -93,7 +97,7 @@ fn read(path: &std::path::Path) -> Result<(Zeroizing<Vec<u8>>, u64, u64)> {
         !bytes.is_empty() && bytes.iter().all(u8::is_ascii_graphic),
         "credential encoding rejected"
     );
-    Ok((bytes, metadata.dev(), metadata.ino()))
+    Ok(bytes)
 }
 impl SecretFile {
     pub fn open(path: PathBuf) -> Result<Self> {

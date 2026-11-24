@@ -26,6 +26,12 @@ pub struct FreshStart {
     pub project_revision: u64,
 }
 
+impl FreshStart {
+    fn valid(&self) -> bool {
+        holds::valid_owner_reason(&self.reason) && !self.actor.is_empty() && self.recorded_at_ms > 0
+    }
+}
+
 /// Why a retry is refused for the owner's choice of `fresh` and the task's hold `held` (the
 /// code the offer path records, if any): the code and the message of the refusal. A plain
 /// retry is refused for a hold that is not a budget ([`holds::retry_refusal`]); a fresh retry
@@ -54,18 +60,22 @@ pub async fn has_fresh_starts(conn: &mut PgConnection) -> Result<bool, Error> {
     Ok(v.parse::<u32>().map_err(|_| Error::Invalid("format"))? >= FORMAT)
 }
 
+pub struct ReleasedAttempt {
+    pub task: Uuid,
+    pub released: Uuid,
+}
+
 /// Records the fresh start once per `operation_id` (a replay records nothing): every attempt
 /// the task has now stops counting as its history, and its current hold is cleared. The
 /// caller released `released` (the held attempt) in the same transaction.
 pub async fn record(
     conn: &mut PgConnection,
-    task: Uuid,
-    released: Uuid,
+    attempt: ReleasedAttempt,
     f: &FreshStart,
     now: DateTime<Utc>,
 ) -> Result<(), Error> {
-    let reason_ok = !f.reason.is_empty() && f.reason.chars().count() <= holds::REASON_MAX;
-    if !reason_ok || f.actor.is_empty() || f.recorded_at_ms <= 0 {
+    let ReleasedAttempt { task, released } = attempt;
+    if !f.valid() {
         return Err(Error::Invalid("fresh start"));
     }
     if !has_fresh_starts(conn).await? {
@@ -107,11 +117,13 @@ pub fn comment(actor: &str, reason: &str) -> String {
 /// Names a recorded fresh start in the task's history: one system comment whose id is derived
 /// from the operation's, so a replay posts nothing new. The record stands if the post fails
 /// (logged).
-pub async fn post(pool: &PgPool, project: Uuid, task: Uuid, f: &FreshStart, now: DateTime<Utc>) {
-    let thread = aq_task_comments::Thread {
-        project_id: project,
-        task_id: task,
-    };
+pub async fn post(
+    pool: &PgPool,
+    thread: aq_task_comments::Thread,
+    f: &FreshStart,
+    now: DateTime<Utc>,
+) {
+    let task = thread.task_id;
     let author = aq_task_comments::Author::System {
         component: "aq.swarm".into(),
     };

@@ -16,7 +16,12 @@
 use crate::{Error, Host, Result, facts_digest, now_ms, record_digest, source_digest, store};
 use aq_internal_work::Purpose;
 use serde_json::Value;
-use sqlx::{PgExecutor, PgPool, postgres::PgRow, types::Json};
+use sqlx::{
+    PgExecutor, PgPool, Postgres,
+    postgres::{PgArguments, PgRow},
+    query::Query,
+    types::Json,
+};
 use uuid::Uuid;
 
 /// How long a run may be recorded without its internal task before
@@ -100,6 +105,20 @@ pub struct Finished {
     pub markdown: Option<String>,
     /// The cases a saved run was saved with, as the agent wrote them.
     pub case_files: Option<Value>,
+}
+
+impl Finished {
+    fn validate(&self) -> Result<()> {
+        let saved = self.status == Ended::Saved;
+        if self.activate && !saved {
+            return Err(Error::Invalid("Only a saved run can become active".into()));
+        }
+        let missing_artifact = self.artifact_digest.is_none() || self.artifact.is_none();
+        if saved && missing_artifact {
+            return Err(Error::Invalid("A saved run needs its artifact".into()));
+        }
+        Ok(())
+    }
 }
 
 fn revision(value: i64) -> Result<u64> {
@@ -218,21 +237,28 @@ async fn record_read(
         tx.commit().await?;
         return Ok(Some(Some(id)));
     }
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO playbook_authoring_runs(source_id,source_revision,source_digest,
-            facts_digest,record_digest,created_at_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
-    )
-    .bind(source)
-    .bind(read.revision)
-    .bind(&read.source)
-    .bind(&read.facts)
-    .bind(&read.record)
-    .bind(now)
-    .fetch_one(&mut *tx)
-    .await?;
-    supersede(&mut *tx, source, id, now).await?;
+    let id = read.insert(&mut tx, source, now).await?;
     tx.commit().await?;
     Ok(Some(Some(id)))
+}
+
+impl Read {
+    async fn insert(&self, db: &mut sqlx::PgConnection, source: &str, now: i64) -> Result<i64> {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO playbook_authoring_runs(source_id,source_revision,source_digest,
+            facts_digest,record_digest,created_at_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
+        )
+        .bind(source)
+        .bind(self.revision)
+        .bind(&self.source)
+        .bind(&self.facts)
+        .bind(&self.record)
+        .bind(now)
+        .fetch_one(&mut *db)
+        .await?;
+        supersede(&mut *db, source, id, now).await?;
+        Ok(id)
+    }
 }
 
 /// Supersedes every run of `source` older than `run` that is still running.
@@ -273,13 +299,7 @@ pub async fn task_for(pool: &PgPool, run: i64) -> Result<Option<Uuid>> {
 /// A run that finished already, or was superseded, is left as it is, so a
 /// result is recorded once and a superseded run never becomes active.
 pub async fn finish(pool: &PgPool, run: i64, finished: &Finished) -> Result<bool> {
-    let saved = finished.status == Ended::Saved;
-    if finished.activate && !saved {
-        return Err(Error::Invalid("Only a saved run can become active".into()));
-    }
-    if saved && (finished.artifact_digest.is_none() || finished.artifact.is_none()) {
-        return Err(Error::Invalid("A saved run needs its artifact".into()));
-    }
+    finished.validate()?;
     let mut tx = pool.begin().await?;
     // Source before run, the order `requested` locks in.
     let source: Option<String> = sqlx::query_scalar(
@@ -458,54 +478,47 @@ fn decode(row: &PgRow) -> Result<Run> {
     })
 }
 
-/// Every run still running with no internal task that was recorded more than
-/// [`GRACE_MS`] before `now_ms`: the server stopped between recording it and
-/// [`task_for`]. Oldest first.
-pub async fn stranded(pool: &PgPool, now_ms: i64) -> Result<Vec<Run>> {
-    let rows = sqlx::query(&format!(
-        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs
-         WHERE status='running' AND internal_task_id IS NULL AND created_at_ms<$1 ORDER BY id"
-    ))
-    .bind(now_ms - GRACE_MS)
-    .fetch_all(pool)
-    .await?;
-    rows.iter().map(decode).collect()
+fn running_query(predicates: &str) -> String {
+    format!(
+        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs WHERE status='running' AND {predicates}"
+    )
 }
 
-/// Every run still running that has its internal task id: its task may be
-/// unsubmitted (the server stopped after [`task_for`]), running, or finished
-/// with its result not yet recorded. Oldest first.
+async fn run_list(pool: &PgPool, query: Query<'_, Postgres, PgArguments>) -> Result<Vec<Run>> {
+    query.fetch_all(pool).await?.iter().map(decode).collect()
+}
+
+async fn find_run(pool: &PgPool, query: Query<'_, Postgres, PgArguments>) -> Result<Option<Run>> {
+    query
+        .fetch_optional(pool)
+        .await?
+        .as_ref()
+        .map(decode)
+        .transpose()
+}
+
+/// Runs without a task for longer than [`GRACE_MS`], oldest first.
+pub async fn stranded(pool: &PgPool, now_ms: i64) -> Result<Vec<Run>> {
+    let sql = running_query("internal_task_id IS NULL AND created_at_ms<$1 ORDER BY id");
+    run_list(pool, sqlx::query(&sql).bind(now_ms - GRACE_MS)).await
+}
+
+/// Runs whose internal task may be unsubmitted, running, or finished without a recorded result.
 pub async fn in_flight(pool: &PgPool) -> Result<Vec<Run>> {
-    let rows = sqlx::query(&format!(
-        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs
-         WHERE status='running' AND internal_task_id IS NOT NULL ORDER BY id"
-    ))
-    .fetch_all(pool)
-    .await?;
-    rows.iter().map(decode).collect()
+    let sql = running_query("internal_task_id IS NOT NULL ORDER BY id");
+    run_list(pool, sqlx::query(&sql)).await
 }
 
 /// The run still running whose internal task is `task`.
 pub async fn running_for_task(pool: &PgPool, task: Uuid) -> Result<Option<Run>> {
-    let row = sqlx::query(&format!(
-        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs
-         WHERE internal_task_id=$1 AND status='running'"
-    ))
-    .bind(task)
-    .fetch_optional(pool)
-    .await?;
-    row.as_ref().map(decode).transpose()
+    let sql = running_query("internal_task_id=$1");
+    find_run(pool, sqlx::query(&sql).bind(task)).await
 }
 
 /// The run `id`, while it is still running.
 pub async fn running(pool: &PgPool, id: i64) -> Result<Option<Run>> {
-    let row = sqlx::query(&format!(
-        "SELECT {RUN_COLUMNS} FROM playbook_authoring_runs WHERE id=$1 AND status='running'"
-    ))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    row.as_ref().map(decode).transpose()
+    let sql = running_query("id=$1");
+    find_run(pool, sqlx::query(&sql).bind(id)).await
 }
 
 /// Rolling deletion: deletes the finished runs of `source` beyond its newest

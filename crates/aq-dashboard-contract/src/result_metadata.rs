@@ -65,15 +65,14 @@ impl ResultMetadata {
     /// The metadata of one validated recorded result. `origin` is exposed only
     /// to opt-in v2 pages; the default v1 page retains its old field set.
     pub fn record(
-        origin: Option<ResultOrigin>,
-        report: aq_admission::transport::ResultReport,
-        receipt: &aq_admission::result_record::Receipt,
-        spec: aq_admission::execution_spec::ProfiledExecutionSpec,
+        profile: Option<ReadProfile>,
+        recorded: Recorded<'_>,
         (head_report_id, current_report_head): (Uuid, bool),
     ) -> Self {
         use aq_admission::transport::ProcessOutcome as Outcome;
+        let (origin, report, receipt, spec) = recorded;
         Self {
-            origin,
+            origin: profile.map(|_| origin),
             report_id: report.report_id,
             revision: receipt.report_digest.as_str().into(),
             project_id: spec.lifecycle.project_id,
@@ -165,9 +164,7 @@ impl Collector {
     /// added) when it is not in the page's project or at its exact revision.
     pub fn record(&mut self, id: Uuid, recorded: Recorded<'_>, head: (Uuid, bool)) -> bool {
         self.last = Some(id);
-        let (origin, report, receipt, spec) = recorded;
-        let origin = self.profile.map(|_| origin);
-        let value = ResultMetadata::record(origin, report, receipt, spec, head);
+        let value = ResultMetadata::record(self.profile, recorded, head);
         let exact = self.revision.as_deref().map(|revision| (id, revision));
         let outside = value.is_outside(self.project, exact);
         if !outside {

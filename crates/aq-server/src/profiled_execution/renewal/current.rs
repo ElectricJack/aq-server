@@ -66,9 +66,54 @@ pub async fn fence_locked(
     {
         return Err(invalid());
     }
+<<<<<<< HEAD
     let (snapshot, revision, time) =
         load_inventory_locked(state, tx, request, p, &loaded.config.qualified_harnesses).await?;
     let c = &p.selection.choice;
+=======
+    let row=sqlx::query("SELECT boot_id,revision,snapshot FROM intelligence_node_snapshots WHERE node_id=$1 FOR SHARE").bind(request.identity.node_id).fetch_optional(&mut **tx).await.map_err(|_|AppError::Internal)?.ok_or_else(invalid)?;
+    let snapshot: CapabilitySnapshot =
+        serde_json::from_value(row.get("snapshot")).map_err(|_| invalid())?;
+    let qualified = &loaded.config.qualified_harnesses;
+    let qualified = super::super::definitions::qualified(state, tx, qualified).await?;
+    let time = now(state)?;
+    let revision = row.get::<i64, _>("revision") as u64;
+    if row.get::<uuid::Uuid, _>("boot_id") != request.identity.boot_id
+        || snapshot.target
+            != (ExecutionTarget::Worker {
+                node_id: request.identity.node_id,
+                boot_id: request.identity.boot_id,
+            })
+        || snapshot.revision != revision
+        || revision < p.selection.node_revision
+        || snapshot.revision == 0
+        || snapshot.harnesses.len() > 16
+        || snapshot.credential_bindings.len() > 32
+        || snapshot.observed_at_ms == 0
+        || snapshot
+            .expires_at_ms
+            .checked_sub(snapshot.observed_at_ms)
+            .is_none_or(|ttl| ttl == 0 || ttl > 120_000)
+        || snapshot.observed_at_ms > time
+        || time >= snapshot.expires_at_ms
+        || !snapshot.harnesses.iter().any(|h| harness_supports(h, p))
+        || !qualified.iter().any(|h| harness_supports(h, p))
+    {
+        return Err(invalid());
+    }
+    if snapshot
+        .credential_bindings
+        .iter()
+        .filter(|binding| {
+            binding.credential_profile == c.credential_profile
+                && binding.credential_revision == p.selection.credential_revision
+        })
+        .count()
+        > 1
+    {
+        return Err(invalid());
+    }
+>>>>>>> refs/remotes/central/main
     let binding = snapshot.credential_bindings.iter().find(|binding| {
         binding.credential_profile == c.credential_profile
             && binding.credential_revision == p.selection.credential_revision

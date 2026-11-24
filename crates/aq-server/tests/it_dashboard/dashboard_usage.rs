@@ -67,192 +67,265 @@ async fn legacy(
 }
 #[tokio::test]
 async fn mounted_owner_and_exact_viewer_usage_preserve_unknowns_and_revocation() {
-    let f = fixture().await;
-    insert(&f).await;
-    let pool = f.db.pool().await;
-    let expected = aq_admission::transport::lifecycle_binding(&f.profiled.offer).unwrap();
-    let attempt = expected.attempt_id;
-    let aq_session_protocol::SessionIdentity::Remote { session_id, .. } = expected.session else {
-        panic!("remote fixture")
-    };
-    let detail_path = format!("/api/v1/sessions/{session_id}");
-    let usage_path = format!("/api/observations/sessions/{attempt}/usage");
-    let app = aq_server::build_admin_router(f.state.clone());
-    assert!(bootstrap(&app, "owner@localhost").await);
-    let standalone = aq_server::dashboard_api::routes(f.state.clone()).with_state(f.state.clone());
-    assert!(
-        !bootstrap(&standalone, "owner@localhost").await,
-        "configuration cannot imply an observation route"
-    );
-    let (code, detail) = read(&app, &detail_path, "owner@localhost").await;
-    assert_eq!(code, StatusCode::OK, "{detail}");
-    let typed: SessionDetail = serde_json::from_value(detail["data"].clone()).unwrap();
-    assert_eq!(typed.observation_binding.as_ref(), Some(&expected));
-    assert_eq!(
-        detail["data"]["session_identity"]["assignment_generation"],
-        "1"
-    );
-    assert_eq!(
-        detail["data"]["observation_binding"]["session"]["assignment_generation"],
-        1
-    );
-    let (code, empty) = read(&app, &usage_path, "owner@localhost").await;
-    assert_eq!(code, StatusCode::OK, "{empty}");
-    let empty = usage(&empty);
-    assert_eq!(empty.binding, expected);
-    assert_eq!(empty.revision, 0);
-    assert_eq!(empty.last_recorded_at_ms, None);
-    assert_eq!(empty.usage.ledger_revision.version.as_str(), "0");
-    assert_eq!(empty.known_category_subtotals, [0; 5]);
-    assert_eq!(empty.canonical_calls, 0);
-    let not_reported = aq_lifecycle_api::Counter::Unknown {
-        reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::NotReported,
-    };
-    assert_eq!(empty.usage.counters.input, not_reported);
-    assert_eq!(empty.usage.counters.output, not_reported);
-    assert_eq!(empty.usage.counters.cache_read, not_reported);
-    assert_eq!(empty.usage.counters.cache_write, not_reported);
-    assert_eq!(empty.usage.counters.reasoning, not_reported);
-    assert_eq!(
-        empty.usage.costs,
-        vec![aq_lifecycle_api::Cost::Unknown {
-            reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::NotReported
-        }]
-    );
-    assert!(matches!(
-        empty.usage.completeness,
-        aq_lifecycle_api::AccountingCompleteness::Unknown
-    ));
-    // Persist a bounded incomplete projection, keeping categories separate.
-    let projection = Projection {
-        canonical_calls: 2,
-        known_subtotals: [120, 9, 80, 0, 3],
-        unknown_contributions: [0; 5],
-        incomplete_calls: 1,
-        unresolved_events: 1,
-    };
-    projection.validate().unwrap();
-    sqlx::query("INSERT INTO observation_attempt_projections(attempt_id,revision,last_recorded_at_ms,projection) VALUES($1,3,$2,$3)").bind(attempt).bind(NOW as i64).bind(json!(projection)).execute(&pool).await.unwrap();
-    let (code, persisted) = read(&app, &usage_path, "owner@localhost").await;
-    assert_eq!(code, StatusCode::OK, "{persisted}");
-    let persisted = usage(&persisted);
-    assert_eq!(persisted.binding, expected);
-    assert_eq!(persisted.revision, 3);
-    assert_eq!(persisted.canonical_calls, 2);
-    assert_eq!(persisted.known_category_subtotals, [120, 9, 80, 0, 3]);
-    assert_eq!(persisted.incomplete_calls, 1);
-    assert_eq!(persisted.unresolved_events, 1);
-    assert_eq!(persisted.last_recorded_at_ms, Some(NOW));
-    assert!(matches!(
-        persisted.usage.counters.input,
-        aq_lifecycle_api::Counter::Unknown {
-            reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::Incomplete
-        }
-    ));
-    assert_eq!(persisted.usage.costs, empty.usage.costs);
-    optional_browser(&f, &expected, session_id).await;
-    let retained: Value = sqlx::query_scalar(
-        "SELECT projection FROM observation_attempt_projections WHERE attempt_id=$1",
-    )
-    .bind(attempt)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        retained,
-        json!(projection),
-        "inspection cannot change accounting facts"
-    );
-    let viewer = Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'usage-viewer@localhost','viewer','dev','usage-viewer@localhost',now())").bind(viewer).execute(&pool).await.unwrap();
-    // A capability advertises the interface, never blanket session permission.
-    assert!(bootstrap(&app, "usage-viewer@localhost").await);
-    assert_eq!(
-        read(&app, &usage_path, "usage-viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        read(&app, &detail_path, "usage-viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    let key = aq_server::session_access::session_key(&expected.session).unwrap();
-    sqlx::query("INSERT INTO session_inspection_acl(session_key,session_identity,principal_id,revision,can_inspect,expires_at_ms) VALUES($1,$2,$3,1,true,$4)").bind(&key).bind(json!(expected.session)).bind(viewer).bind((NOW+100)as i64).execute(&pool).await.unwrap();
-    let (code, v) = read(&app, &usage_path, "usage-viewer@localhost").await;
-    assert_eq!(code, StatusCode::OK, "{v}");
-    assert_eq!(usage(&v), persisted);
-    let (code, v) = read(&app, &detail_path, "usage-viewer@localhost").await;
-    assert_eq!(code, StatusCode::OK, "{v}");
-    assert_eq!(v["data"]["observation_binding"], json!(expected));
-    assert_eq!(
-        read(
-            &app,
-            &format!("/api/observations/sessions/{session_id}/usage"),
-            "usage-viewer@localhost"
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND,
-        "session UUID must not alias attempt UUID"
-    );
-    let (old_attempt, old_session) = legacy(&pool, &f.node, expected.project_id).await;
-    let (code, old) = read(
-        &app,
-        &format!("/api/v1/sessions/{old_session}"),
-        "owner@localhost",
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK, "{old}");
-    assert_eq!(old["data"]["source_kind"], "legacy_fixture");
-    assert!(old["data"].get("observation_binding").is_none());
-    assert_eq!(
-        read(
-            &app,
-            &format!("/api/observations/sessions/{old_attempt}/usage"),
-            "owner@localhost"
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    // Worker revocation does not erase authorized historical observation facts.
-    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
-        .bind(f.node.node_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        read(&app, &usage_path, "owner@localhost").await.0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        read(&app, &usage_path, "usage-viewer@localhost").await.0,
-        StatusCode::OK
-    );
-    f.time.store((NOW + 101) as i64, Ordering::SeqCst);
-    assert_eq!(
-        read(&app, &usage_path, "usage-viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        read(&app, &detail_path, "usage-viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    f.time.store(NOW as i64, Ordering::SeqCst);
-    sqlx::query("UPDATE session_inspection_acl SET revision=2,can_inspect=false WHERE session_key=$1 AND principal_id=$2").bind(key).bind(viewer).execute(&pool).await.unwrap();
-    assert_eq!(
-        read(&app, &usage_path, "usage-viewer@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
-    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
-        .bind(f.actor)
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        read(&app, &usage_path, "owner@localhost").await.0,
-        StatusCode::FORBIDDEN
-    );
+    let scenario = UsageScenario::new().await;
+    scenario.assert_mounted_detail().await;
+    let empty = scenario.assert_unreported_usage().await;
+    let persisted = scenario.assert_incomplete_usage(&empty).await;
+    let (viewer, key) = scenario.assert_exact_viewer_access(&persisted).await;
+    scenario.assert_legacy_usage_unavailable().await;
+    scenario.assert_revocation(viewer, &key).await;
 }
+
+struct UsageScenario {
+    fixture: common::profiled::Fixture,
+    app: Router,
+    pool: sqlx::PgPool,
+    binding: aq_lifecycle_api::Binding,
+    session_id: Uuid,
+    detail_path: String,
+    usage_path: String,
+}
+
+impl UsageScenario {
+    async fn new() -> Self {
+        let f = fixture().await;
+        insert(&f).await;
+        let pool = f.db.pool().await;
+        let expected = aq_admission::transport::lifecycle_binding(&f.profiled.offer).unwrap();
+        let attempt = expected.attempt_id;
+        let aq_session_protocol::SessionIdentity::Remote { session_id, .. } = expected.session
+        else {
+            panic!("remote fixture")
+        };
+        let detail_path = format!("/api/v1/sessions/{session_id}");
+        let usage_path = format!("/api/observations/sessions/{attempt}/usage");
+        let app = aq_server::build_admin_router(f.state.clone());
+        Self {
+            fixture: f,
+            app,
+            pool,
+            binding: expected,
+            session_id,
+            detail_path,
+            usage_path,
+        }
+    }
+    async fn usage_as(&self, email: &str) -> (StatusCode, Value) {
+        read(&self.app, &self.usage_path, email).await
+    }
+
+    async fn detail_as(&self, email: &str) -> (StatusCode, Value) {
+        read(&self.app, &self.detail_path, email).await
+    }
+
+    async fn assert_mounted_detail(&self) {
+        assert!(bootstrap(&self.app, "owner@localhost").await);
+        let standalone = aq_server::dashboard_api::routes(self.fixture.state.clone())
+            .with_state(self.fixture.state.clone());
+        assert!(
+            !bootstrap(&standalone, "owner@localhost").await,
+            "configuration cannot imply an observation route"
+        );
+        let (code, detail) = self.detail_as("owner@localhost").await;
+        assert_eq!(code, StatusCode::OK, "{detail}");
+        let typed: SessionDetail = serde_json::from_value(detail["data"].clone()).unwrap();
+        assert_eq!(typed.observation_binding.as_ref(), Some(&self.binding));
+        assert_eq!(
+            detail["data"]["session_identity"]["assignment_generation"],
+            "1"
+        );
+        assert_eq!(
+            detail["data"]["observation_binding"]["session"]["assignment_generation"],
+            1
+        );
+    }
+    async fn assert_unreported_usage(&self) -> aq_observation_api::SessionUsage {
+        let (code, empty) = self.usage_as("owner@localhost").await;
+        assert_eq!(code, StatusCode::OK, "{empty}");
+        let empty = usage(&empty);
+        assert_eq!(empty.binding, self.binding);
+        assert_eq!((empty.revision, empty.last_recorded_at_ms), (0, None));
+        let ledger_version = empty.usage.ledger_revision.version.as_str();
+        assert_eq!(ledger_version, "0");
+        assert_eq!(empty.known_category_subtotals, [0; 5]);
+        assert_eq!(empty.canonical_calls, 0);
+        let not_reported = aq_lifecycle_api::Counter::Unknown {
+            reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::NotReported,
+        };
+        let counters = &empty.usage.counters;
+        for category in [
+            &counters.input,
+            &counters.output,
+            &counters.cache_read,
+            &counters.cache_write,
+            &counters.reasoning,
+        ] {
+            assert_eq!(category, &not_reported);
+        }
+        assert_eq!(
+            empty.usage.costs,
+            vec![aq_lifecycle_api::Cost::Unknown {
+                reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::NotReported
+            }]
+        );
+        assert!(matches!(
+            empty.usage.completeness,
+            aq_lifecycle_api::AccountingCompleteness::Unknown
+        ));
+        empty
+    }
+    async fn assert_incomplete_usage(
+        &self,
+        empty: &aq_observation_api::SessionUsage,
+    ) -> aq_observation_api::SessionUsage {
+        // Persist a bounded incomplete projection, keeping categories separate.
+        let projection = Projection {
+            canonical_calls: 2,
+            known_subtotals: [120, 9, 80, 0, 3],
+            unknown_contributions: [0; 5],
+            incomplete_calls: 1,
+            unresolved_events: 1,
+        };
+        projection.validate().unwrap();
+        sqlx::query("INSERT INTO observation_attempt_projections(attempt_id,revision,last_recorded_at_ms,projection) VALUES($1,3,$2,$3)").bind(self.binding.attempt_id).bind(NOW as i64).bind(json!(projection)).execute(&self.pool).await.unwrap();
+        let (code, persisted) = self.usage_as("owner@localhost").await;
+        assert_eq!(code, StatusCode::OK, "{persisted}");
+        let persisted = usage(&persisted);
+        assert_eq!(persisted.binding, self.binding);
+        assert_eq!(persisted.revision, 3);
+        assert_projection_totals(&persisted, &projection);
+        assert_eq!(persisted.last_recorded_at_ms, Some(NOW));
+        assert!(matches!(
+            persisted.usage.counters.input,
+            aq_lifecycle_api::Counter::Unknown {
+                reason: aq_lifecycle_api::worker_lifecycle::UnknownReason::Incomplete
+            }
+        ));
+        assert_eq!(persisted.usage.costs, empty.usage.costs);
+        optional_browser(&self.fixture, &self.binding, self.session_id).await;
+        let retained: Value = sqlx::query_scalar(
+            "SELECT projection FROM observation_attempt_projections WHERE attempt_id=$1",
+        )
+        .bind(self.binding.attempt_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            retained,
+            json!(projection),
+            "inspection cannot change accounting facts"
+        );
+        persisted
+    }
+    async fn assert_exact_viewer_access(
+        &self,
+        persisted: &aq_observation_api::SessionUsage,
+    ) -> (Uuid, String) {
+        let viewer = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'usage-viewer@localhost','viewer','dev','usage-viewer@localhost',now())").bind(viewer).execute(&self.pool).await.unwrap();
+        // A capability advertises the interface, never blanket session permission.
+        assert!(bootstrap(&self.app, "usage-viewer@localhost").await);
+        assert_eq!(
+            self.usage_as("usage-viewer@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            self.detail_as("usage-viewer@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+        let key = aq_server::session_access::session_key(&self.binding.session).unwrap();
+        sqlx::query("INSERT INTO session_inspection_acl(session_key,session_identity,principal_id,revision,can_inspect,expires_at_ms) VALUES($1,$2,$3,1,true,$4)").bind(&key).bind(json!(self.binding.session)).bind(viewer).bind((NOW+100)as i64).execute(&self.pool).await.unwrap();
+        let (code, v) = self.usage_as("usage-viewer@localhost").await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(&usage(&v), persisted);
+        let (code, v) = self.detail_as("usage-viewer@localhost").await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert_eq!(v["data"]["observation_binding"], json!(self.binding));
+        assert_eq!(
+            read(
+                &self.app,
+                &format!("/api/observations/sessions/{}/usage", self.session_id),
+                "usage-viewer@localhost"
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND,
+            "session UUID must not alias attempt UUID"
+        );
+        (viewer, key)
+    }
+    async fn assert_legacy_usage_unavailable(&self) {
+        let (old_attempt, old_session) =
+            legacy(&self.pool, &self.fixture.node, self.binding.project_id).await;
+        let (code, old) = read(
+            &self.app,
+            &format!("/api/v1/sessions/{old_session}"),
+            "owner@localhost",
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{old}");
+        let legacy_session = &old["data"];
+        assert_eq!(legacy_session["source_kind"], "legacy_fixture");
+        assert!(legacy_session.get("observation_binding").is_none());
+        let usage_path = format!("/api/observations/sessions/{old_attempt}/usage");
+        assert_eq!(
+            read(&self.app, &usage_path, "owner@localhost").await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    async fn assert_revocation(&self, viewer: Uuid, key: &str) {
+        // Worker revocation does not erase authorized historical observation facts.
+        sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+            .bind(self.fixture.node.node_id)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        assert_eq!(self.usage_as("owner@localhost").await.0, StatusCode::OK);
+        assert_eq!(
+            self.usage_as("usage-viewer@localhost").await.0,
+            StatusCode::OK
+        );
+        self.fixture
+            .time
+            .store((NOW + 101) as i64, Ordering::SeqCst);
+        assert_eq!(
+            self.usage_as("usage-viewer@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            self.detail_as("usage-viewer@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+        self.fixture.time.store(NOW as i64, Ordering::SeqCst);
+        sqlx::query("UPDATE session_inspection_acl SET revision=2,can_inspect=false WHERE session_key=$1 AND principal_id=$2").bind(key).bind(viewer).execute(&self.pool).await.unwrap();
+        assert_eq!(
+            self.usage_as("usage-viewer@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+        sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+            .bind(self.fixture.actor)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            self.usage_as("owner@localhost").await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+fn assert_projection_totals(reported: &aq_observation_api::SessionUsage, projection: &Projection) {
+    assert_eq!(
+        reported.known_category_subtotals,
+        projection.known_subtotals
+    );
+    let calls = (reported.canonical_calls, reported.incomplete_calls);
+    assert_eq!(
+        calls,
+        (projection.canonical_calls, projection.incomplete_calls)
+    );
+    assert_eq!(reported.unresolved_events, projection.unresolved_events);
+}
+
 #[tokio::test]
 async fn excessive_visibility_disables_the_usage_dashboard_capability() {
     let f = fixture().await;

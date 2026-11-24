@@ -461,6 +461,49 @@ fn entry_line(e: &HistoryEntry) -> String {
     )
 }
 
+fn status_state_line(state: &UpdateState) -> String {
+    match state {
+        UpdateState::InProgress {
+            request_id,
+            target,
+            step,
+            started_at,
+        } => format!(
+            "in_progress: {} at step {} (request {request_id}, started {})",
+            target
+                .as_ref()
+                .map_or("the channel release".to_string(), |v| v.to_string()),
+            serde_json::to_value(step)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            started_at.format("%Y-%m-%d %H:%M:%SZ")
+        ),
+        other => state_name(other).to_string(),
+    }
+}
+
+fn append_operator_instructions(out: &mut String, state: &UpdateState) {
+    if let UpdateState::FailedNeedsOperator { detail } = state {
+        let detail = printable(detail);
+        let cmd = if detail.contains("--restore-backup") {
+            "aq-updater restore-previous --restore-backup"
+        } else {
+            "aq-updater restore-previous"
+        };
+        out.push_str(&format!(
+            "\nThe update failed and so did the rollback. Maintenance stays on and nothing further is tried automatically.\n\
+             detail: {detail}\n\n\
+             Next steps:\n\
+             \x20 1. Inspect the server and database: docker compose logs server\n\
+             \x20 2. Stop the update service so the command below can take the lock: systemctl stop aq-updater\n\
+             \x20 3. Retry bringing back the active release:\n\
+             \x20      {cmd}\n\
+             \x20 4. Start the update service again: systemctl start aq-updater\n"
+        ));
+    }
+}
+
 /// Lock-free and read-only: the journal, history and the last status.json.
 fn status(cfg: &UpdaterConfig) -> CmdResult {
     let state_dir = &cfg.state_dir;
@@ -491,28 +534,7 @@ fn status(cfg: &UpdaterConfig) -> CmdResult {
 
     let mut out = String::new();
     let mut line = |label: &str, value: String| out.push_str(&format!("{label:<11}{value}\n"));
-    match &state {
-        UpdateState::InProgress {
-            request_id,
-            target,
-            step,
-            started_at,
-        } => line(
-            "state:",
-            format!(
-                "in_progress: {} at step {} (request {request_id}, started {})",
-                target
-                    .as_ref()
-                    .map_or("the channel release".to_string(), |v| v.to_string()),
-                serde_json::to_value(step)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string))
-                    .unwrap_or_default(),
-                started_at.format("%Y-%m-%d %H:%M:%SZ")
-            ),
-        ),
-        other => line("state:", state_name(other).to_string()),
-    }
+    line("state:", status_state_line(&state));
     line(
         "active:",
         release_line(journal.active.as_ref().map(summary).as_ref()),
@@ -522,24 +544,7 @@ fn status(cfg: &UpdaterConfig) -> CmdResult {
         release_line(journal.previous.as_ref().map(summary).as_ref()),
     );
     line("available:", release_line(available.as_ref()));
-    if let UpdateState::FailedNeedsOperator { detail } = &state {
-        let detail = printable(detail);
-        let cmd = if detail.contains("--restore-backup") {
-            "aq-updater restore-previous --restore-backup"
-        } else {
-            "aq-updater restore-previous"
-        };
-        out.push_str(&format!(
-            "\nThe update failed and so did the rollback. Maintenance stays on and nothing further is tried automatically.\n\
-             detail: {detail}\n\n\
-             Next steps:\n\
-             \x20 1. Inspect the server and database: docker compose logs server\n\
-             \x20 2. Stop the update service so the command below can take the lock: systemctl stop aq-updater\n\
-             \x20 3. Retry bringing back the active release:\n\
-             \x20      {cmd}\n\
-             \x20 4. Start the update service again: systemctl start aq-updater\n"
-        ));
-    }
+    append_operator_instructions(&mut out, &state);
     out.push_str("\nhistory (newest first):\n");
     if history.is_empty() {
         out.push_str("  (none)\n");

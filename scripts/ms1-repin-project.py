@@ -32,6 +32,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from typing import NamedTuple
 import uuid
 
 STACK = "aq-ms1"
@@ -54,10 +55,10 @@ def server_identity():
     done = subprocess.run(
         ["docker", "inspect", f"{STACK}-server-1", "--format", "{{.Id}} {{.State.StartedAt}} {{.State.Running}}"],
         capture_output=True, text=True, timeout=60)
-    fields = done.stdout.split()
-    if done.returncode != 0 or len(fields) != 3 or fields[2] != "true":
-        return None
-    return fields[0], fields[1]
+    match done.stdout.split():
+        case [container, started, "true"] if done.returncode == 0:
+            return container, started
+    return None
 
 
 def server_healthy():
@@ -72,18 +73,14 @@ def wait_for_recreated(before, wait_seconds, poll_seconds):
     deadline = time.monotonic() + wait_seconds
     while True:
         now = server_identity()
-        if now is not None and now != before and server_healthy():
+        if now not in (None, before) and server_healthy():
             return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll_seconds)
 
 
-def git_request(repository, operation, params=None, mutation=None):
-    request = dict(protocol_version=1, request_id=str(uuid.uuid4()), operation=operation, params=params or {},
-                   deadline_ms=120000, repository_id=repository, expected_binding_generation=1)
-    if mutation:
-        request["operation_id"] = mutation
+def send_git_request(request):
     args = ["exec", "-i", f"{STACK}-aq-git-1", "aq-git", "--socket", "/run/aq-git/central.sock",
             "--input", "-", "--json", "request"]
     raw = ""
@@ -92,10 +89,23 @@ def git_request(repository, operation, params=None, mutation=None):
         if raw.strip():
             break
         time.sleep(2)
+    return raw
+
+
+def git_request(repository, operation, params=None, mutation=None):
+    request = dict(protocol_version=1, request_id=str(uuid.uuid4()), operation=operation, params=params or {},
+                   deadline_ms=120000, repository_id=repository, expected_binding_generation=1)
+    if mutation:
+        request["operation_id"] = mutation
+    raw = send_git_request(request)
     response = json.loads(raw)
     if response.get("ok") is not True:
         raise SystemExit(f"aq-git refused {operation}: {json.dumps(response.get('error'))[:500]}")
     return response["result"]
+
+
+def holds_commit(retained, head):
+    return retained["state"] == "active" and any(ref["oid"] == head for ref in retained["refs"])
 
 
 def retain_main(repository, tag):
@@ -114,12 +124,21 @@ def retain_main(repository, tag):
         workspace_id=created["workspace_id"], expected_generation=checkpoint["workspace_generation"],
         expected_head=base, quiescent=True), mutation=op("retire"))
     retained = git_request(repository, "retention.inspect", dict(handle_id=checkpoint["retention_handle"]))
-    if retained["state"] != "active" or not any(r["oid"] == head for r in retained["refs"]):
+    if not holds_commit(retained, head):
         raise SystemExit("the retention handle does not hold the synced commit")
     return head, checkpoint["retention_handle"]
 
 
-def main():
+class Pin(NamedTuple):
+    commit: str
+    handle: str
+
+    def matches(self, project):
+        return (project["source"].get("object", {}).get("hex") == self.commit
+                and project["retention_handle"] == self.handle)
+
+
+def arguments():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("project")
     parser.add_argument("--apply", action="store_true")
@@ -133,52 +152,55 @@ def main():
                         help="how long after --compose to wait for a new, healthy server container (default 180)")
     parser.add_argument("--poll-seconds", type=float, default=2.0,
                         help="seconds between checks while waiting (default 2)")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def configuration(project):
     text = docker(["exec", f"{STACK}-server-1", "cat", CONFIG]).stdout
     if not text.strip():
         raise SystemExit("could not read the server's config")
     config = tomllib.loads(text)
     section = config["profiled_execution"]
-    entry = next((p for p in section["projects"] if p["project_id"] == args.project), None)
+    entry = next((p for p in section["projects"] if p["project_id"] == project), None)
     if entry is None or entry["source"].get("kind") != "immutable":
         raise SystemExit("the project is not listed with an immutable source; nothing to re-pin")
-    old_hex, old_handle = entry["source"]["object"]["hex"], entry["retention_handle"]
+    pin = Pin(entry["source"]["object"]["hex"], entry["retention_handle"])
+    return text, section["revision"], pin
 
+
+def repository_for(project):
     repository = docker(["exec", f"{STACK}-postgres-1", "sh", "-ec",
                          'PGPASSWORD="$(cat /run/secrets/postgres_password)" psql -h 127.0.0.1 -U agent_q -d agent_q -tAc "$0"',
                          "SELECT binding->>'repository_id' FROM project_execution_bindings WHERE project_id='%s'"
-                         % str(uuid.UUID(args.project))]).stdout.strip()
+                         % str(uuid.UUID(project))]).stdout.strip()
     if not repository:
         raise SystemExit("the project has no repository binding")
+    return repository
 
-    tag = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    head, handle = retain_main(repository, tag)
-    print(f"project {args.project}: pinned {old_hex[:12]}, main is {head[:12]}")
-    if head == old_hex:
-        print("already at main; nothing to do")
-        return 0
-    if text.count(old_hex) != 1 or text.count(old_handle) != 1:
-        raise SystemExit("the pinned commit or its handle is not unique in the config; edit it by hand")
+
+def bump_profiled_revision(text, revision):
     start = text.index("[profiled_execution]")
     end = text.find("\n[", start + 1)
     end = len(text) if end < 0 else end
-    block, revision = text[start:end], section["revision"]
+    block = text[start:end]
     bumped, count = re.subn(rf"(?m)^revision = {revision}$", f"revision = {revision + 1}", block)
     if count != 1:
         raise SystemExit("could not find the section's revision line")
-    updated = (text[:start] + bumped + text[end:]).replace(old_hex, head).replace(old_handle, handle)
+    return text[:start] + bumped + text[end:]
+
+
+def update_config(text, revision, old, new):
+    if text.count(old.commit) != 1 or text.count(old.handle) != 1:
+        raise SystemExit("the pinned commit or its handle is not unique in the config; edit it by hand")
+    bumped = bump_profiled_revision(text, revision)
+    updated = bumped.replace(old.commit, new.commit).replace(old.handle, new.handle)
     check = tomllib.loads(updated)["profiled_execution"]
-    assert check["revision"] == revision + 1 and any(
-        p["source"].get("object", {}).get("hex") == head and p["retention_handle"] == handle for p in check["projects"])
-    if not args.apply:
-        print(f"would set revision {revision + 1} and retention handle {handle}; pass --apply to do it")
-        return 0
-    if not args.compose:
-        raise SystemExit("--apply needs --compose, the command that recreates the server container")
-    before = server_identity()
-    if before is None:
-        raise SystemExit("the server container is not running; nothing was changed")
+    assert check["revision"] == revision + 1
+    assert any(new.matches(project) for project in check["projects"])
+    return updated
+
+
+def write_config(updated, tag):
     image = docker(["inspect", f"{STACK}-server-1", "--format", "{{.Config.Image}}"]).stdout.strip()
     write = subprocess.run(
         ["docker", "run", "--rm", "-i", "--user", "10001", "--entrypoint", "sh", "-v", f"{STACK}_dev_vault:/vault", image,
@@ -187,6 +209,15 @@ def main():
     if write.returncode != 0:
         raise SystemExit(f"config not written: {write.stderr[:300]}")
     print(f"config written (previous kept as config.toml.bak-repin-{tag}); recreating the server")
+
+
+def recreate(args, updated, tag):
+    if not args.compose:
+        raise SystemExit("--apply needs --compose, the command that recreates the server container")
+    before = server_identity()
+    if before is None:
+        raise SystemExit("the server container is not running; nothing was changed")
+    write_config(updated, tag)
     code = subprocess.run(args.compose, shell=True).returncode
     if code != 0:
         print(f"--compose command failed with exit code {code}; the new pin is written but may not be loaded",
@@ -199,6 +230,23 @@ def main():
     print("the server was recreated and is healthy (its effective source commit is not readable, so the pin "
           "itself is not confirmed)")
     return 0
+
+
+def main():
+    args = arguments()
+    text, revision, old = configuration(args.project)
+    repository = repository_for(args.project)
+    tag = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    new = Pin(*retain_main(repository, tag))
+    print(f"project {args.project}: pinned {old.commit[:12]}, main is {new.commit[:12]}")
+    if new.commit == old.commit:
+        print("already at main; nothing to do")
+        return 0
+    updated = update_config(text, revision, old, new)
+    if not args.apply:
+        print(f"would set revision {revision + 1} and retention handle {new.handle}; pass --apply to do it")
+        return 0
+    return recreate(args, updated, tag)
 
 
 if __name__ == "__main__":

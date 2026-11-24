@@ -1,6 +1,6 @@
 //! One central render; the worker verifies and consumes these exact bytes.
 use super::{
-    artifacts::{RetainedSet, canonical, reference},
+    artifacts::{ArtifactBody, RetainedSet, canonical, reference},
     compose::Prepared,
     refused,
 };
@@ -97,8 +97,8 @@ pub async fn retain(
                 (artifact, OwnerKind::Startup)
             }
         };
-        set.retain(state, owner, ArtifactKind::Context, artifact.clone(), bytes)
-            .await?;
+        let artifact_body = ArtifactBody::new(ArtifactKind::Context, artifact.clone(), bytes);
+        set.retain(state, owner, artifact_body).await?;
         let bound = counted
             .proof
             .instructions
@@ -126,33 +126,19 @@ pub async fn retain(
         return Err(refused());
     }
     let payload = reference("aq.rendered-startup", &counted.bytes)?;
-    set.retain(
-        state,
-        OwnerKind::Startup,
-        ArtifactKind::Context,
-        payload.clone(),
-        &counted.bytes,
-    )
-    .await?;
+    let artifact_body = ArtifactBody::new(ArtifactKind::Context, payload.clone(), &counted.bytes);
+    set.retain(state, OwnerKind::Startup, artifact_body).await?;
     let qualification = renderer.definition.clone();
-    set.retain(
-        state,
-        OwnerKind::Startup,
+    let artifact_body = ArtifactBody::new(
         ArtifactKind::Definition,
         qualification.clone(),
         &renderer.body,
-    )
-    .await?;
+    );
+    set.retain(state, OwnerKind::Startup, artifact_body).await?;
     let proof_bytes = canonical(&counted.proof)?;
     let proof = reference("aq.startup-budget-proof", &proof_bytes)?;
-    set.retain(
-        state,
-        OwnerKind::Startup,
-        ArtifactKind::Definition,
-        proof.clone(),
-        &proof_bytes,
-    )
-    .await?;
+    let artifact_body = ArtifactBody::new(ArtifactKind::Definition, proof.clone(), &proof_bytes);
+    set.retain(state, OwnerKind::Startup, artifact_body).await?;
     // The wire still carries token fields (spec 0014 §8 removes them with the
     // protocol): each is the byte count, and the renderer adds none.
     let descriptor = Descriptor {
@@ -168,14 +154,13 @@ pub async fn retain(
         .verify_payload(&counted.bytes)
         .map_err(|_| refused())?;
     let descriptor_ref = descriptor.artifact().map_err(|_| refused())?;
-    set.retain(
-        state,
-        OwnerKind::Startup,
+    let descriptor_bytes = canonical(&descriptor)?;
+    let artifact_body = ArtifactBody::new(
         ArtifactKind::Definition,
         descriptor_ref.clone(),
-        &canonical(&descriptor)?,
-    )
-    .await?;
+        &descriptor_bytes,
+    );
+    set.retain(state, OwnerKind::Startup, artifact_body).await?;
     let mut modules = vec![descriptor_ref, qualification, proof];
     if let Some(reporting) = &prepared.reporting {
         modules.push(reporting.artifact.clone());

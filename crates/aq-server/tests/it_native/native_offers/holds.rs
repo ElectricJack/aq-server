@@ -787,12 +787,17 @@ async fn a_confirmed_budget_retry_fences_the_previous_selection_decision() {
     let at = (c.env.env.state.clock)();
     let code = "lineage_retry_budget_exhausted";
     let before = holds::history(&pool, task).await.unwrap();
-    holds::selection_hold(&pool, Some(before), project, task, code, at).await;
+    let refusal = |reason| holds::SelectionRefusal {
+        project,
+        task,
+        reason,
+    };
+    holds::selection_hold(&pool, Some(before), refusal(code), at).await;
     owner_actions(&mut c).await;
     let (status, body) = retry(&c, Uuid::new_v4(), Some("verified replacement")).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
-    holds::selection_hold(&pool, Some(before), project, task, code, at).await;
+    holds::selection_hold(&pool, Some(before), refusal(code), at).await;
     let successor = holds::Successor {
         project,
         task,
@@ -809,7 +814,7 @@ async fn a_confirmed_budget_retry_fences_the_previous_selection_decision() {
     let after = holds::history(&pool, task).await.unwrap();
     assert_eq!(before.attempts, after.attempts);
     let cost = "lineage_cost_budget_exhausted";
-    holds::selection_hold(&pool, Some(after), project, task, cost, at).await;
+    holds::selection_hold(&pool, Some(after), refusal(cost), at).await;
     assert_eq!(
         holds::current(&pool, project, task)
             .await

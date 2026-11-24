@@ -218,13 +218,7 @@ async fn feed(
     let next = if end < snapshot.pins.len() {
         let token = runtime
             .codec
-            .encode(
-                &bind,
-                &id.to_string(),
-                &end.to_string(),
-                now,
-                snapshot.expires,
-            )
+            .encode(bind.position(&id.to_string(), &end.to_string(), now..snapshot.expires))
             .map_err(cursor_error)?;
         let mut snapshots = runtime
             .snapshots
@@ -337,7 +331,7 @@ async fn comments(
         Some(
             runtime
                 .codec
-                .encode(&bind, &snapshot.to_string(), position, issued, expires)
+                .encode(bind.position(&snapshot.to_string(), position, issued..expires))
                 .map_err(cursor_error)?,
         )
     } else {
