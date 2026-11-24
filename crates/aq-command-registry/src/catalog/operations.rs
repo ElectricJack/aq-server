@@ -53,6 +53,16 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         ),
     ),
     owner_write(
+        "attempt.settle_closed_launch",
+        "attempt.control",
+        "Settle a launch closed before the agent started whose host evidence shows it is over but not that the harness never ran; refused unless its grant expired, its node restarted, it has no history or effects and its task ref is still at the lease. Recorded with your reason; the task gets an ordinary replacement attempt",
+        post_route(
+            "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement",
+            &[("project", "project_id"), ("id", "attempt_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","attempt_id","operation_id","reason"],"properties":{"project_id":{"type":"string","format":"uuid","description":"The attempt's project"},"attempt_id":{"type":"string","format":"uuid"},"operation_id":{"type":"string","format":"uuid","description":"Your ID for this change; repeat it to retry safely"},"reason":{"type":"string","minLength":1,"maxLength":4096,"description":"Why the launch is over, recorded with your identity"}}}"#,
+        ),
+    ),
+    owner_write(
         "supervisor.set",
         "supervisor.control",
         "Turn a supervisor on or off and choose the profile it runs on",

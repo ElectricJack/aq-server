@@ -371,7 +371,52 @@ pub async fn observed(
             .await?
             .to_owned();
     }
+    if let Some(result) = latest.filter(|result| result.outcome == "failed")
+        && reported_agent_blocker(db, task, version, result).await?
+    {
+        facts.outcome = "agent_blocked".into();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
+}
+
+/// The native worker writes the explicit Outcome field first, before any prose.
+/// This is an agent's declaration, with no authority to prove a grant or a wake.
+async fn reported_agent_blocker(
+    db: &mut PgConnection,
+    task: Uuid,
+    version: i64,
+    latest: &Latest,
+) -> Result<bool> {
+    let conclusion: Option<String> = sqlx::query_scalar(
+        "SELECT doc.report->>'conclusion'
+         FROM execution_attempts a
+         JOIN profiled_authority_hot ah USING(attempt_id)
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id)
+         CROSS JOIN LATERAL (SELECT convert_from(r.report_bytes,'UTF8')::jsonb AS report) doc
+         WHERE a.task_id=$1 AND a.attempt_id=$2 AND h.report_id=$3 AND a.holds_task
+           AND l.execution_spec#>>'{lifecycle,project_id}'=$4
+           AND (l.execution_spec#>>'{task,version}')::bigint=$5
+           AND r.result_origin_kind IN ('phase_execution_v2','phase_refresh_execution_v1')
+           AND ah.state#>>'{stop,kind}'='stopped' AND ah.state->'revoked'='false'::jsonb
+           AND ah.state->>'cancellation_id' IS NULL
+           AND doc.report->>'outcome'='failed' AND doc.report#>>'{stop,disposition,kind}'='stopped'
+           AND doc.report#>>'{stop,reason}' IN ('reconciliation','completed','failed')",
+    )
+    .bind(task)
+    .bind(latest.attempt_id)
+    .bind(latest.result_id)
+    .bind(latest.project_id.to_string())
+    .bind(version)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(conclusion.as_deref().is_some_and(explicit_blocker_field))
+}
+
+fn explicit_blocker_field(conclusion: &str) -> bool {
+    conclusion.split(';').next() == Some("Outcome: blocked")
 }
 
 /// The results to announce now: none unless an artifact is active on the
@@ -479,6 +524,10 @@ async fn recover_held_delivery(
     sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
         .bind(task).bind(now_ms).execute(&mut *db).await?;
     let old = aq_delivery::commands::published_head(&mut *db, task).await?;
+    let head: &str = row.get("head");
+    // A recorded refresh moved the pull request to a merge of this head and main.
+    let accepted = aq_delivery::commands::accepted_head(&mut *db, Some(task), head).await?;
+    let accepted = accepted.as_deref().unwrap_or(head);
     let verified = tokio::time::timeout(Duration::from_secs(2), async {
         let Some(target) = operations.target(project).await? else {
             return Ok(false);
@@ -491,14 +540,13 @@ async fn recover_held_delivery(
         let Some(commands) = operations.commands().await else {
             return Ok(false);
         };
-        let head: &str = row.get("head");
         if reason == "publish_conflict" {
             return Ok(commands
                 .publish_lease_usable(&target, task, head, old.as_deref())
                 .await);
         }
         let Some(request) = check_request.filter(|request| {
-            old.as_deref() == Some(head)
+            old.as_deref() == Some(accepted)
                 && serde_json::to_value(&target)
                     .is_ok_and(|target| request["check_target"] == target)
         }) else {
@@ -514,7 +562,7 @@ async fn recover_held_delivery(
         };
         Ok::<_, crate::Error>(
             commands
-                .held_checks_passed(&target, pr, head, required.as_deref())
+                .held_checks_passed(&target, pr, accepted, required.as_deref())
                 .await,
         )
     })
@@ -553,6 +601,16 @@ pub async fn result_wait(
     .bind(attempt)
     .fetch_optional(db)
     .await?)
+}
+
+/// Whether an override recorded since the hold lets the task of `attempt` resume its held result
+/// (`aq_delivery::git_grant::held_gate`): the task then waits only for what Graph shows.
+pub async fn hold_overridden(db: &mut PgConnection, attempt: Uuid) -> Result<bool> {
+    let task = sqlx::query_scalar("SELECT task_id FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&mut *db)
+        .await?;
+    Ok(aq_delivery::git_grant::held_gate(db, task).await?.is_none())
 }
 
 /// The still-pending delivery decision on the claim's exact result.
@@ -744,8 +802,10 @@ pub(crate) async fn failed_check(
         "SELECT p.head,l.checks_log_tail FROM delivery_pushed_results p
          JOIN profiled_result_heads h ON h.report_id=p.report_id AND h.attempt_id=p.attempt_id
          JOIN execution_attempts a ON a.attempt_id=h.attempt_id
-         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed' AND l.checks_log_head=p.head
-         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL AND EXISTS(
+         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed'
+         LEFT JOIN delivery_branch_refreshes r ON r.task_id=a.task_id AND r.result_head=p.head
+         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
+           AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
              AND o.command_name='pull_request.await_checks' AND o.status='failed'
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text

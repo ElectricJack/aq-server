@@ -301,6 +301,23 @@ pub async fn routing_document(pool: &PgPool) -> Result<(String, i64)> {
     let settings = settings(pool).await?;
     Ok((settings.routing_markdown, settings.routing_revision))
 }
+/// Replace the project supervisor document (its role text). `expected_revision`
+/// is its revision as last read, 0 before the first save.
+pub async fn save_supervisor_document(edit: Edit<'_>, markdown: &str) -> Result<Receipt> {
+    edit.apply(Change::SupervisorDocument(markdown.into()))
+        .await
+}
+/// The project supervisor document and its revision; empty at revision 0
+/// until saved, which means the supervisor's compiled role text. Read apart
+/// from the other Settings values, as the observation limits are.
+pub async fn supervisor_document(conn: &mut PgConnection) -> sqlx::Result<(String, i64)> {
+    let (markdown, revision): (Option<String>, i64) = sqlx::query_as(
+        "SELECT supervisor_markdown,supervisor_revision FROM role_settings WHERE singleton",
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok((markdown.unwrap_or_default(), revision))
+}
 /// The Settings document a built-in playbook source is authored from, with its
 /// revision; `None` for a source that has none.
 pub async fn document_of(pool: &PgPool, source: &str) -> Result<Option<(String, i64)>> {

@@ -19,6 +19,12 @@ async fn ready() -> (terminal::Prepared, ResultReport) {
     Box::pin(ready_with_stop(true)).await
 }
 async fn ready_with_stop(stopped: bool) -> (terminal::Prepared, ResultReport) {
+    Box::pin(ready_with_stop_reason(stopped, None)).await
+}
+async fn ready_with_stop_reason(
+    stopped: bool,
+    reason: Option<aq_admission::transport::StopReason>,
+) -> (terminal::Prepared, ResultReport) {
     let f = Box::pin(terminal::prepared_terminal()).await;
     let issued = on_heap(|| terminal::issue(&f)).await;
     let auth = terminal::auth(&f).await;
@@ -26,7 +32,10 @@ async fn ready_with_stop(stopped: bool) -> (terminal::Prepared, ResultReport) {
     on_heap(|| terminal_owner::started::record(&f.c.env.env.state, &auth, &start))
         .await
         .unwrap();
-    let stop = terminal::stop_request(&start);
+    let mut stop = terminal::stop_request(&start);
+    if let Some(reason) = reason {
+        stop.original.evidence.reason = reason;
+    }
     if stopped {
         on_heap(|| terminal_owner::stopped::record(&f.c.env.env.state, &auth, &stop))
             .await
@@ -53,6 +62,85 @@ async fn ready_with_stop(stopped: bool) -> (terminal::Prepared, ResultReport) {
     };
     (f, report)
 }
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn native_outcome_blocked_is_bound_to_the_current_assignment() {
+    use aq_admission::transport::StopReason;
+    use aq_playbook_domain::delivery_store::{DeliveryPort, PgDelivery, observed};
+
+    let (f, mut report) = Box::pin(ready_with_stop_reason(
+        true,
+        Some(StopReason::Reconciliation),
+    ))
+    .await;
+    let auth = terminal::auth(&f).await;
+    let pool = &f.c.env.env.pool;
+    let attempt = report.binding.attempt_id;
+    let (task, version): (Uuid, i64) = sqlx::query_as(
+        "SELECT a.task_id,(l.execution_spec#>>'{task,version}')::bigint
+         FROM execution_attempts a JOIN profiled_launches l USING(attempt_id) WHERE a.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,$3,$4)")
+        .bind(attempt)
+        .bind(Uuid::new_v4())
+        .bind("1".repeat(40))
+        .bind(format!("refs/heads/aq/{task}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    report.outcome = ProcessOutcome::Failed;
+    report.conclusion =
+        Label::new("Outcome: blocked; Result: verification service unavailable").unwrap();
+    on_heap(|| results::record(&f.c.env.env.state, &auth, &report))
+        .await
+        .unwrap();
+    let port = PgDelivery(pool.clone());
+    let latest = port.latest(task).await.unwrap().unwrap();
+    assert_eq!(latest.outcome, "failed");
+    let scope = (latest.workspace_id, latest.project_id);
+    let mut conn = pool.acquire().await.unwrap();
+    for (at, labels, expected) in [
+        (version, Vec::<&str>::new(), "agent_blocked"),
+        (version, vec!["review-only"], "agent_blocked"),
+        (version + 1, vec![], "failed"),
+    ] {
+        let node = json!({"version":at,"labels":labels});
+        let output = observed(&mut conn, task, scope, Some(&latest), &node, (false, 0, 1))
+            .await
+            .unwrap();
+        assert_eq!(output["facts"]["outcome"], expected);
+    }
+
+    let mut correction = report.clone();
+    correction.report_id = Uuid::new_v4();
+    correction.operation_id = Uuid::new_v4();
+    correction.supersedes = Some(report.report_id);
+    correction.conclusion = Label::new("Outcome: incomplete; Result: Outcome: blocked").unwrap();
+    on_heap(|| results::record(&f.c.env.env.state, &auth, &correction))
+        .await
+        .unwrap();
+    let corrected = port.latest(task).await.unwrap().unwrap();
+    assert_eq!(corrected.result_id, correction.report_id);
+    for candidate in [&latest, &corrected] {
+        let output = observed(
+            &mut conn,
+            task,
+            scope,
+            Some(candidate),
+            &json!({"version":version}),
+            (false, 0, 1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output["facts"]["outcome"], "failed");
+    }
+}
+
 async fn invariant(f: &terminal::Prepared) -> Value {
     let pool = &f.c.env.env.pool;
     let attempt = f.prepared.original.binding.attempt_id;

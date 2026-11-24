@@ -2,6 +2,18 @@
 use super::*;
 
 pub(super) const COMMANDS: &[CommandSpec] = &[
+    // A project supervisor reaches it for its own project only: the path
+    // names the project (aq-supervisor-control `owner::names_only`).
+    owner_write(
+        "supervisor.escalate",
+        op::MESSAGE_SEND,
+        "Escalate a decision that is not yours to the global supervisor, naming the project, the task if any, and the decision needed (each call posts a message)",
+        post_route(
+            "/api/projects/{id}/escalations",
+            &[("id", "project_id")],
+            r#"{"type":"object","additionalProperties":false,"required":["project_id","decision_needed"],"properties":{"project_id":{"type":"string","format":"uuid","description":"Your project's ID"},"task_id":{"type":"string","format":"uuid","description":"The task the decision is about, if any"},"decision_needed":{"type":"string","minLength":1,"maxLength":4096,"description":"The decision needed, and why it is not yours to make"}}}"#,
+        ),
+    ),
     agent(
         mutation(
             "question.ask",

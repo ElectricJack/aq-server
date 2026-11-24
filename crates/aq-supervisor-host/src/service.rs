@@ -66,6 +66,8 @@ struct Control {
     owner: Option<Uuid>,
     project: Option<Uuid>,
     label: String,
+    /// The owner's saved role text for a project supervisor, read at the start of its turn.
+    role: Option<String>,
 }
 type Host = Supervisor<InstalledAuthority, NativeAdapter>;
 impl ServiceConfig {
@@ -110,6 +112,7 @@ async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
         owner: r.get("approved_by"),
         project: r.get("project_id"),
         label: r.get("label"),
+        role: None,
     })
 }
 async fn user(pool: &PgPool, control: &Control) -> Result<User> {

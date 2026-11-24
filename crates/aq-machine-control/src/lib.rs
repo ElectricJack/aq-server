@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub use aq_intelligence_config::AttestationTime;
 pub use aq_protocol::{DesiredState, HandoffReason, MAX_MACHINE_SLOTS, valid_machine_key};
 pub mod attempts;
+pub mod closed_launch;
 pub mod fresh;
 mod handoffs;
 pub mod holds;

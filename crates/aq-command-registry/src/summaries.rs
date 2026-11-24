@@ -65,7 +65,9 @@ fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
         "task.cancel" => "Cancel a task and stop any attempt holding it",
         "task.complete" => "Close an active task by hand, with a reason, when no attempt holds it",
         "task.delete" => "Delete a task and its relationships; its history is kept",
-        "task.dependency.add" => "Make one task block another",
+        "task.dependency.add" => {
+            "Make one task block another; with resume_held, a task held at a limit waits on it instead"
+        }
         "task.dependency.remove" => "Remove a blocking dependency between two tasks",
         "task.edit" => "Edit a task's title, body, acceptance criteria, labels or story points",
         "task.reopen" => {

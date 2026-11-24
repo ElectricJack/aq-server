@@ -151,6 +151,37 @@ pub async fn delivery_unpublished(
         .await?)
 }
 
+/// The limit hold an owner request overrides (`task.retry`, `task.dependency.add` with
+/// `resume_held`): the assessment's refusal, else the task's recorded hold.
+pub async fn limit_hold(
+    pool: &sqlx::PgPool,
+    (project, task): (uuid::Uuid, uuid::Uuid),
+    assessment: &crate::replacement::Assessment,
+) -> Result<Option<&'static str>, aq_machine_control::Error> {
+    use aq_machine_control::holds::{budget_code, current};
+    Ok(match assessment {
+        crate::replacement::Assessment::Blocked(code) => budget_code(code),
+        _ => current(pool, project, task)
+            .await?
+            .and_then(|h| budget_code(&h.reason)),
+    })
+}
+/// The limit hold `task.dependency.add` with `resume_held` overrides once its edge is added, or
+/// why it is refused: a hold no retry overrides (`assessment`'s), or none.
+pub async fn resumable(
+    pool: &sqlx::PgPool,
+    at: (uuid::Uuid, uuid::Uuid),
+    assessment: &crate::replacement::Assessment,
+) -> Result<Result<&'static str, &'static str>, aq_machine_control::Error> {
+    Ok(
+        match (limit_hold(pool, at, assessment).await?, assessment) {
+            (Some(code), _) => Ok(code),
+            (None, crate::replacement::Assessment::Blocked(code)) => Err(code),
+            (None, _) => Err("task_not_held"),
+        },
+    )
+}
+
 /// The project revision pinned by an attempt's linked source export request.
 pub async fn predecessor_project_revision<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,

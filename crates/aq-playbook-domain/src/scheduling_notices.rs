@@ -1,14 +1,19 @@
 //! Project supervisor escalation for durable scheduling holds. A hold comment
 //! and a delivery decision are separate records and have different lifetimes.
-use crate::{Result, delivery_decisions};
+//! A new hold is told to its project's supervisor once, on its own; after
+//! that every open hold of the project appears in one grouped project review
+//! per interval, for as long as it lasts.
+use crate::{Result, delivery_decisions, delivery_store};
 use sqlx::{Acquire, PgConnection, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use std::{fmt::Debug, time::Duration};
 use uuid::Uuid;
 
 const PAGE_SIZE: i64 = 16;
 const FIRST_NOTICE_MS: i64 = 600_000;
-const MAX_REMINDERS: i32 = 3;
 const RETRY_CHECK_MS: i64 = 300_000;
+
+/// What a supervisor's turn about held work ends with.
+pub(crate) const DECISION: &str = "Decide, and end the turn with one of these: retry with task.retry; deliver the retained result where task.work shows that path; file a task that fixes the cause with task.create and make the held tasks wait on it with task.dependency.add and \"resume_held\": true; or escalate with supervisor.escalate.";
 
 const SEED: &str = "
 INSERT INTO supervisor_hold_followups
@@ -31,7 +36,7 @@ DELETE FROM supervisor_hold_followups f WHERE
   ORDER BY f.next_check_at_ms LIMIT $1 FOR UPDATE OF f SKIP LOCKED)";
 
 const DUE: &str = "
-SELECT a.attempt_id FROM supervisor_hold_followups f
+SELECT a.attempt_id,w.project_id FROM supervisor_hold_followups f
 JOIN supervisor_hold_waits w ON w.project_id=f.project_id AND w.key=f.identity_digest AND w.since_ms=f.since_ms
 JOIN execution_attempts a ON a.attempt_id=w.attempt_id
 JOIN supervisor_conversation_ids i ON i.project_id=w.project_id
@@ -40,7 +45,7 @@ WHERE f.closed_at_ms IS NULL AND f.next_check_at_ms<=$1 AND NOT (a.attempt_id=AN
 ORDER BY f.next_check_at_ms,w.identity LIMIT 1 FOR UPDATE OF a SKIP LOCKED";
 
 const CURRENT: &str = "
-SELECT w.*,f.next_check_at_ms,f.last_message_id,f.last_reply_id,f.reminders_sent,
+SELECT w.*,f.next_check_at_ms,f.last_message_id,
        COALESCE(f.initial_message_id,n.message_id) AS initial_message_id,n.notified_at_ms
 FROM supervisor_hold_followups f
 JOIN supervisor_hold_waits w ON w.project_id=f.project_id AND w.key=f.identity_digest AND w.since_ms=f.since_ms
@@ -49,6 +54,22 @@ JOIN supervisor_controls c ON c.conversation_id=i.conversation_id AND c.enabled
 LEFT JOIN delivery_notifications n ON n.project_id=w.project_id AND n.identity_digest=w.key
 WHERE f.closed_at_ms IS NULL AND f.next_check_at_ms<=$1 AND w.attempt_id=$2
 ORDER BY w.identity LIMIT 1 FOR UPDATE OF f";
+
+/// Every open hold of the project that its supervisor was already told about,
+/// with the cause evidence its notice carries.
+const OPEN: &str = "
+SELECT f.identity_digest,f.since_ms,w.task_id,w.reason,w.workspace_id,
+       CASE WHEN pr.checks_state='failed' THEN
+         (SELECT string_agg(c,', ') FROM jsonb_array_elements_text(pr.checks_failed) c) END AS checks,
+       CASE WHEN pr.checks_state='failed' THEN left(pr.checks_log_tail,4096) END AS log,
+       convert_from(r.report_bytes,'UTF8')::jsonb->>'conclusion' AS conclusion
+FROM supervisor_hold_followups f
+JOIN supervisor_hold_waits w ON w.project_id=f.project_id AND w.key=f.identity_digest AND w.since_ms=f.since_ms
+LEFT JOIN delivery_notifications n ON n.project_id=w.project_id AND n.identity_digest=w.key
+LEFT JOIN delivery_pull_requests pr ON pr.task_id=w.task_id
+LEFT JOIN profiled_result_reports r ON r.attempt_id=w.attempt_id AND r.report_id=w.report_id
+WHERE f.project_id=$1 AND f.closed_at_ms IS NULL AND COALESCE(f.initial_message_id,n.message_id) IS NOT NULL
+ORDER BY f.since_ms,f.identity_digest FOR UPDATE OF f";
 
 struct Wait {
     project: Uuid,
@@ -66,8 +87,6 @@ struct Wait {
     initial_message: Option<Uuid>,
     initial_notified_at: Option<i64>,
     last_message: Option<Uuid>,
-    last_reply: Option<Uuid>,
-    reminders_sent: i32,
 }
 
 impl sqlx::FromRow<'_, PgRow> for Wait {
@@ -88,8 +107,6 @@ impl sqlx::FromRow<'_, PgRow> for Wait {
             initial_message: row.try_get("initial_message_id")?,
             initial_notified_at: row.try_get("notified_at_ms")?,
             last_message: row.try_get("last_message_id")?,
-            last_reply: row.try_get("last_reply_id")?,
-            reminders_sent: row.try_get("reminders_sent")?,
         })
     }
 }
@@ -128,22 +145,19 @@ impl Wait {
         if can_retry && let Some(url) = &self.pr {
             body.push_str(&format!(" Pull request: {url}."));
         }
-        body.push_str(" Use task.work, task.history and the current result or check evidence to verify this hold. When the cause is resolved, choose delivery of the retained result or one justified continuation. Otherwise name the blocker and what would clear it, or escalate with these identifiers. AQ schedules another check while the hold remains. Verify retry authorization against the current hold before submitting a retry.");
+        body.push_str(" Use task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. ");
+        body.push_str(DECISION);
         if can_retry {
             let request = serde_json::json!({
                 "operation_id":"<fresh UUID>", "reason":"<why another attempt is justified>",
                 "params":{"project_id":self.project,"task_id":self.task,"expected_version":"<current version from task.work>"}
             });
-            body.push_str(&format!(" If a replacement attempt is justified, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
+            body.push_str(&format!(" To retry, submit task.retry with this command request: {request}. Replace the placeholders and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."));
         }
     }
 }
 
-async fn notice_body(
-    db: &mut PgConnection,
-    wait: &Wait,
-    last_reply: Option<&str>,
-) -> Result<String> {
+async fn notice_body(db: &mut PgConnection, wait: &Wait) -> Result<String> {
     let Wait {
         project,
         task,
@@ -159,13 +173,13 @@ async fn notice_body(
             body.push(' ');
             body.push_str(&detail);
         }
-        body.push_str(" Check the remote, task ref and publisher permissions. Escalate any permission change to the owner. Delivery can continue with the same result after publication recovers.");
+        body.push_str(" Check the remote, task ref and publisher permissions. Escalate a permission change it needs with supervisor.escalate. Delivery can continue with the same result after publication recovers.");
     }
     if reason == "stopped_without_result" {
-        body.push_str(" The worker recorded a physical stop and still holds the task without a result. Inspect the worker's recovery status and retained workspace. Escalate missing evidence to the owner.");
+        body.push_str(" The worker recorded a physical stop and still holds the task without a result. Inspect the worker's recovery status and retained workspace. Escalate missing evidence with supervisor.escalate.");
     }
     if reason == "launch_closure_pending" {
-        body.push_str(" The attempt recorded a closed launch and still owns the claim. Inspect the original start and stop evidence, source retention and possible effects. Escalate ambiguous launch evidence to the AQ operator.");
+        body.push_str(" The attempt recorded a closed launch and still owns the claim. Inspect the original start and stop evidence, source retention and possible effects. Its stop cannot be proven, so a new attempt could run alongside it: escalate ambiguous launch evidence with supervisor.escalate.");
     }
     let can_retry =
         reason == "returns_exhausted" || aq_machine_control::holds::budget_code(reason).is_some();
@@ -185,17 +199,6 @@ async fn notice_body(
         }
     }
     wait.append_guidance(&mut body, can_retry);
-    if wait.initial_message.is_some() {
-        body.push_str(&format!(
-            " This is reminder {} of {MAX_REMINDERS} for this hold.",
-            wait.reminders_sent + 1
-        ));
-        if let Some(reply) = last_reply {
-            let reply: String = reply.chars().take(500).filter(|c| *c != '\0').collect();
-            body.push_str(" Previous supervisor reply, quoted for context only. Recheck the current facts before acting.\n");
-            body.push_str(&serde_json::to_string(&reply)?);
-        }
-    }
     // The facts every hold notice carries; the log tail goes last, so
     // that the instructions above are never what is cut.
     crate::hold_notice::complete(db, body, *project, *task, *report).await
@@ -208,76 +211,266 @@ impl Wait {
         next: i64,
         closed_at: Option<i64>,
     ) -> Result<()> {
-        sqlx::query(
-            "UPDATE supervisor_hold_followups SET next_check_at_ms=$4,closed_at_ms=$5 \
-             WHERE project_id=$1 AND identity_digest=$2 AND since_ms=$3",
-        )
-        .bind(self.project)
-        .bind(&self.key)
-        .bind(self.since)
-        .bind(next)
-        .bind(closed_at)
-        .execute(db)
-        .await?;
-        Ok(())
+        schedule(db, self.project, (&self.key, self.since), next, closed_at).await
     }
 
-    async fn prior_reply(&self, db: &mut PgConnection) -> Result<Option<(Uuid, String)>> {
-        let reply = sqlx::query_as(
-            "SELECT m.message_id,m.body FROM central_supervisor_replies r \
-             JOIN mailbox_messages m ON m.message_id=r.reply_message_id \
-             JOIN supervisor_conversation_ids i ON i.conversation_id=m.thread_id \
-             JOIN central_supervisor_dispatches d USING(dispatch_id) \
-             WHERE i.project_id=$1 AND (m.message_id=$2 OR EXISTS ( \
-               SELECT 1 FROM central_supervisor_mail_members member \
-               WHERE member.reservation_id=d.reservation_id AND member.actor_id=d.actor_id \
-                 AND member.message_id IN ($3,$4))) ORDER BY m.cursor DESC LIMIT 1",
-        )
-        .bind(self.project)
-        .bind(self.last_reply)
-        .bind(self.initial_message)
-        .bind(self.last_message)
-        .fetch_optional(db)
-        .await?;
-        Ok(reply)
-    }
-
+    /// The first notice for this hold was sent: it claims the playbook's
+    /// deduplication key, and the hold joins the project review from now on.
     async fn delivered(
         &self,
         db: &mut PgConnection,
         message: Uuid,
-        reply: Option<Uuid>,
         now: i64,
         next: i64,
     ) -> Result<()> {
-        // Keep the original playbook deduplication key. Reminders do not claim it.
-        if self.initial_message.is_none() {
-            delivery_decisions::record_told(db, self.project, &self.key, message, now).await?;
-        }
-        let reminders = self.reminders_sent + i32::from(self.initial_message.is_some());
+        delivery_decisions::record_told(db, self.project, &self.key, message, now).await?;
         sqlx::query(
-            "UPDATE supervisor_hold_followups SET initial_message_id=$4,last_message_id=$5, \
-                next_check_at_ms=$6,last_reply_id=$7,reminders_sent=$8,owner_attention=$9 \
+            "UPDATE supervisor_hold_followups SET initial_message_id=$4,last_message_id=$4,next_check_at_ms=$5 \
              WHERE project_id=$1 AND identity_digest=$2 AND since_ms=$3",
         )
         .bind(self.project)
         .bind(&self.key)
         .bind(self.since)
-        .bind(self.initial_message.unwrap_or(message))
         .bind(message)
         .bind(next)
-        .bind(reply)
-        .bind(reminders)
-        .bind(reminders >= MAX_REMINDERS)
         .execute(db)
         .await?;
         Ok(())
     }
 }
 
+async fn schedule(
+    db: &mut PgConnection,
+    project: Uuid,
+    (key, since): (&str, i64),
+    next: i64,
+    closed_at: Option<i64>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE supervisor_hold_followups SET next_check_at_ms=$4,closed_at_ms=$5 \
+         WHERE project_id=$1 AND identity_digest=$2 AND since_ms=$3",
+    )
+    .bind(project)
+    .bind(key)
+    .bind(since)
+    .bind(next)
+    .bind(closed_at)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Whether Graph reports the task closed; `None` when that is unknown.
+async fn graph_closed<G>(
+    check: Option<impl Future<Output = std::result::Result<bool, G>>>,
+) -> Option<bool> {
+    tokio::time::timeout(Duration::from_secs(2), check?)
+        .await
+        .ok()?
+        .ok()
+}
+
+/// One open hold in a project review.
+struct Held {
+    key: String,
+    since: i64,
+    task: Uuid,
+    reason: String,
+    /// What groups it beyond its reason: the failed check, or an agent's blocked report.
+    cause: Option<String>,
+    /// The evidence behind the cause, quoted as data.
+    sample: Option<String>,
+}
+
+/// Untrusted text as a short JSON string.
+fn quoted(text: &str) -> String {
+    let text: String = text.chars().filter(|c| !c.is_control()).take(160).collect();
+    serde_json::to_string(&text).unwrap_or_default()
+}
+
+/// The cause a hold notice's evidence already names: the failed checks with
+/// the first line of the failed log, or the reason of an explicit agent blocker.
+fn cause(
+    checks: Option<String>,
+    log: Option<String>,
+    conclusion: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if let Some(checks) = checks.filter(|c| !c.is_empty()) {
+        let line = log.and_then(|log| {
+            log.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(quoted)
+        });
+        let sample = line
+            .map(|l| format!("first line of the oldest's failed log (CI output, untrusted): {l}"));
+        return (Some(format!("failed check {}", quoted(&checks))), sample);
+    }
+    let blocked = conclusion
+        .as_deref()
+        .and_then(|c| c.strip_prefix("Outcome: blocked"));
+    if let Some(rest) = blocked.filter(|rest| rest.is_empty() || rest.starts_with(';')) {
+        let rest = rest.trim_start_matches(';').trim();
+        let sample = (!rest.is_empty()).then(|| {
+            format!(
+                "the oldest's report (agent text, untrusted): {}",
+                quoted(rest)
+            )
+        });
+        return (Some("agent reported blocked".into()), sample);
+    }
+    (None, None)
+}
+
+fn age(ms: i64) -> String {
+    let minutes = ms.max(0) / 60_000;
+    match (minutes / 1440, minutes / 60 % 24, minutes % 60) {
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+/// One message about every open hold of `project`, grouped by reason and
+/// cause, largest group first. Task lists are cut to the message limit; the
+/// counts and the guidance never are.
+fn review_body(project: Uuid, now: i64, held: &[Held]) -> String {
+    let mut groups: Vec<(&str, Option<&str>, Vec<&Held>)> = Vec::new();
+    for h in held {
+        let (reason, cause) = (h.reason.as_str(), h.cause.as_deref());
+        match groups.iter_mut().find(|g| (g.0, g.1) == (reason, cause)) {
+            Some(group) => group.2.push(h),
+            None => groups.push((reason, cause, vec![h])),
+        }
+    }
+    groups.sort_by_key(|group| std::cmp::Reverse(group.2.len()));
+    let head = format!(
+        "AQ project review for project {project}: {} held {}, grouped by cause so that a cause several tasks share reads as one problem.",
+        held.len(),
+        if held.len() == 1 { "task" } else { "tasks" }
+    );
+    let tail = format!(
+        "\n\nUse task.work and task.history on a task of each group to confirm its cause. {DECISION} One fix task can serve every task of a group."
+    );
+    // Room for one " and N more." per group and one closing line.
+    const MORE: usize = 32;
+    let mut room =
+        delivery_store::SUPERVISOR_MESSAGE_BYTES.saturating_sub(head.len() + tail.len() + MORE);
+    let mut lines = Vec::new();
+    for (reason, cause, members) in &groups {
+        // Members are oldest first.
+        let oldest = members[0];
+        let mut line = format!("\n- {} held for {reason}", members.len());
+        if let Some(cause) = cause {
+            line.push_str(&format!(", {cause}"));
+        }
+        line.push_str(&format!(", oldest held {}", age(now - oldest.since)));
+        if let Some(sample) = &oldest.sample {
+            line.push_str(&format!("; {sample}"));
+        }
+        line.push_str(". Tasks:");
+        if line.len() + MORE > room {
+            break;
+        }
+        room -= line.len() + MORE;
+        lines.push(line);
+    }
+    let mut body = head;
+    for (line, (_, _, members)) in lines.iter().zip(&groups) {
+        body.push_str(line);
+        let mut listed = 0;
+        for h in members {
+            let item = format!("{} {}", if listed == 0 { "" } else { "," }, h.task);
+            if item.len() > room {
+                break;
+            }
+            room -= item.len();
+            body.push_str(&item);
+            listed += 1;
+        }
+        if listed < members.len() {
+            body.push_str(&format!(" and {} more", members.len() - listed));
+        }
+        body.push('.');
+    }
+    if lines.len() < groups.len() {
+        body.push_str(&format!("\n- {} more groups.", groups.len() - lines.len()));
+    }
+    body + &tail
+}
+
+/// The project's open holds for a review, locked. A hold Graph reports closed
+/// is closed instead of listed; `wait` was checked already.
+async fn open_holds<G, GraphCheck>(
+    db: &mut PgConnection,
+    wait: &Wait,
+    now: i64,
+    closed: &impl Fn(Uuid, Uuid) -> GraphCheck,
+) -> Result<Vec<Held>>
+where
+    GraphCheck: Future<Output = std::result::Result<bool, G>>,
+{
+    let rows = sqlx::query(OPEN)
+        .bind(wait.project)
+        .fetch_all(&mut *db)
+        .await?;
+    let mut held = Vec::new();
+    for row in rows {
+        let (key, since): (String, i64) =
+            (row.try_get("identity_digest")?, row.try_get("since_ms")?);
+        let task: Uuid = row.try_get("task_id")?;
+        let workspace: Option<Uuid> = row.try_get("workspace_id")?;
+        let current = (key.as_str(), since) == (wait.key.as_str(), wait.since);
+        if !current && graph_closed(workspace.map(|w| closed(w, task))).await == Some(true) {
+            schedule(db, wait.project, (&key, since), now, Some(now)).await?;
+            continue;
+        }
+        let (cause, sample) = cause(
+            row.try_get("checks")?,
+            row.try_get("log")?,
+            row.try_get("conclusion")?,
+        );
+        held.push(Held {
+            key,
+            since,
+            task,
+            reason: row.try_get("reason")?,
+            cause,
+            sample,
+        });
+    }
+    Ok(held)
+}
+
+/// The review was sent: every hold in it waits one interval for the next.
+async fn reviewed(
+    db: &mut PgConnection,
+    project: Uuid,
+    held: &[Held],
+    message: Uuid,
+    next: i64,
+) -> Result<()> {
+    let keys: Vec<&str> = held.iter().map(|h| h.key.as_str()).collect();
+    let since: Vec<i64> = held.iter().map(|h| h.since).collect();
+    sqlx::query(
+        "UPDATE supervisor_hold_followups SET last_message_id=$2,next_check_at_ms=$3 \
+         WHERE project_id=$1 AND (identity_digest,since_ms) IN (SELECT * FROM unnest($4::text[],$5::bigint[]))",
+    )
+    .bind(project)
+    .bind(message)
+    .bind(next)
+    .bind(&keys)
+    .bind(&since)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// Re-check only the current exact hold. The caller reads live Graph before
 /// sending when the predecessor has a known workspace. Delivery and the
 /// follow-up receipt commit together, and a retry of the sweep reads that receipt.
+/// A hold's first notice is its own; a due hold already told about sends
+/// the project review instead.
 pub async fn notify_with_graph<E, G, GraphCheck>(
     pool: &PgPool,
     now: i64,
@@ -314,15 +507,25 @@ where
     let mut seen = Vec::<Uuid>::new();
     for _ in 0..PAGE_SIZE {
         let mut tx = crate::bridge_tx(pool).await?;
-        let attempt: Option<Uuid> = sqlx::query_scalar(DUE)
+        let due: Option<(Uuid, Uuid)> = sqlx::query_as(DUE)
             .bind(now)
             .bind(&seen)
             .fetch_optional(&mut *tx)
             .await?;
-        let Some(attempt) = attempt else {
+        let Some((attempt, project)) = due else {
             break;
         };
         seen.push(attempt);
+        // One sweep at a time tells a project, since a review covers all of it.
+        let free: bool = sqlx::query_scalar(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('aq.hold-review/'||$1::text,0))",
+        )
+        .bind(project)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !free {
+            continue;
+        }
         // A simultaneous delivery or scheduler transaction may have committed
         // while DUE took the attempt lock. Refresh the candidate in a new statement.
         let wait: Option<Wait> = sqlx::query_as(CURRENT)
@@ -334,16 +537,7 @@ where
             continue;
         };
         let next = now.saturating_add(interval);
-        let graph_closed = match wait.workspace {
-            Some(workspace) => {
-                tokio::time::timeout(Duration::from_secs(2), closed(workspace, wait.task))
-                    .await
-                    .ok()
-                    .and_then(|result| result.ok())
-            }
-            None => None,
-        };
-        match graph_closed {
+        match graph_closed(wait.workspace.map(|w| closed(w, wait.task))).await {
             Some(false) => {}
             Some(true) => {
                 wait.postpone(&mut tx, next, Some(now)).await?;
@@ -357,26 +551,30 @@ where
                 continue;
             }
         }
-        // A newer first notice from the playbook resets the cadence. The
-        // owner-attention state remains scheduled for observation after the last reminder.
+        // A newer first notice from the playbook resets the cadence.
         let first_next = wait
             .initial_notified_at
             .map(|time| time.saturating_add(interval))
             .filter(|due| wait.last_message.is_none() && *due > now);
-        if first_next.is_some() || wait.reminders_sent >= MAX_REMINDERS {
-            wait.postpone(&mut tx, first_next.unwrap_or(next), None)
-                .await?;
+        if let Some(first_next) = first_next {
+            wait.postpone(&mut tx, first_next, None).await?;
             tx.commit().await?;
             continue;
         }
-        let reply = wait.prior_reply(&mut tx).await?;
-        let body = notice_body(&mut tx, &wait, reply.as_ref().map(|(_, s)| s.as_str())).await?;
+        let (body, review) = if wait.initial_message.is_none() {
+            (notice_body(&mut tx, &wait).await?, None)
+        } else {
+            let held = open_holds(&mut tx, &wait, now, &closed).await?;
+            (review_body(project, now, &held), Some(held))
+        };
         let mut mail = tx.begin().await?;
         match send(&mut mail, Some(wait.project), &body, now as u64).await {
             Ok(message) => {
                 mail.commit().await?;
-                wait.delivered(&mut tx, message, reply.map(|(id, _)| id), now, next)
-                    .await?;
+                match &review {
+                    None => wait.delivered(&mut tx, message, now, next).await?,
+                    Some(held) => reviewed(&mut tx, project, held, message, next).await?,
+                }
             }
             Err(error) => {
                 mail.rollback().await?;
@@ -411,8 +609,7 @@ pub async fn notify<E: Debug>(
 pub async fn followup(pool: &PgPool, project: Uuid, task: Uuid) -> Option<serde_json::Value> {
     sqlx::query_scalar(
         "SELECT jsonb_build_object('attempt_id',w.attempt_id,'result_id',w.report_id, \
-          'status',CASE WHEN f.owner_attention THEN 'owner_attention' \
-                        WHEN NOT COALESCE(c.enabled,FALSE) THEN 'awaiting_supervisor' \
+          'status',CASE WHEN NOT COALESCE(c.enabled,FALSE) THEN 'awaiting_supervisor' \
                         WHEN w.workspace_id IS NULL THEN 'awaiting_scope' ELSE 'scheduled' END, \
           'hold_reason',w.reason,'next_check_at_ms',f.next_check_at_ms,'reminders_sent',f.reminders_sent) \
          FROM supervisor_hold_followups f JOIN supervisor_hold_waits w \
@@ -449,8 +646,6 @@ mod tests {
             initial_message: None,
             initial_notified_at: None,
             last_message: None,
-            last_reply: None,
-            reminders_sent: 0,
         }
     }
 
@@ -489,7 +684,7 @@ mod tests {
     #[test]
     fn retry_guidance_preserves_evidence_and_the_command_request() {
         let mut wait = wait();
-        let guidance = " Use task.work, task.history and the current result or check evidence to verify this hold. When the cause is resolved, choose delivery of the retained result or one justified continuation. Otherwise name the blocker and what would clear it, or escalate with these identifiers. AQ schedules another check while the hold remains. Verify retry authorization against the current hold before submitting a retry.";
+        let guidance = " Use task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. Decide, and end the turn with one of these: retry with task.retry; deliver the retained result where task.work shows that path; file a task that fixes the cause with task.create and make the held tasks wait on it with task.dependency.add and \"resume_held\": true; or escalate with supervisor.escalate.";
         let mut body = "Recorded evidence.".to_owned();
         wait.append_guidance(&mut body, false);
         assert_eq!(body, format!("Recorded evidence.{guidance}"));
@@ -497,7 +692,9 @@ mod tests {
             wait.pr = pr.map(str::to_owned);
             let mut body = "Recorded evidence.".to_owned();
             wait.append_guidance(&mut body, true);
-            let (prefix, request) = body.split_once(" If a replacement attempt is justified, submit task.retry with this command request: ").unwrap();
+            let (prefix, request) = body
+                .split_once(" To retry, submit task.retry with this command request: ")
+                .unwrap();
             let pr = pr.map_or(String::new(), |url| format!(" Pull request: {url}."));
             assert_eq!(prefix, format!("Recorded evidence.{pr}{guidance}"));
             let (request, suffix) = request.split_once(". Replace the placeholders").unwrap();
@@ -519,5 +716,88 @@ mod tests {
                 " and keep the revision as a decimal string. The command registry supplies the task subject, expected versions, and payload operation ID."
             );
         }
+    }
+
+    fn held(task: u128, reason: &str, since: i64, cause: Option<&str>) -> Held {
+        Held {
+            key: format!("k{task}"),
+            since,
+            task: Uuid::from_u128(task),
+            reason: reason.into(),
+            cause: cause.map(str::to_owned),
+            sample: cause.map(|_| "a sample".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_review_groups_holds_by_reason_and_cause_with_count_and_oldest_age() {
+        let now = 3 * 86_400_000;
+        let check = Some("failed check \"tests\"");
+        let holds = [
+            held(1, "returns_exhausted", 0, check),
+            held(2, "lineage_retry_budget_exhausted", 86_400_000, None),
+            held(3, "returns_exhausted", 2 * 86_400_000, check),
+        ];
+        let body = review_body(Uuid::from_u128(9), now, &holds);
+        assert!(body.starts_with(&format!(
+            "AQ project review for project {}: 3 held tasks",
+            Uuid::from_u128(9)
+        )));
+        let (one, three) = (Uuid::from_u128(1), Uuid::from_u128(3));
+        assert!(body.contains(&format!(
+            "\n- 2 held for returns_exhausted, failed check \"tests\", oldest held 3d 0h; a sample. Tasks: {one}, {three}."
+        )), "{body}");
+        assert!(
+            body.contains(&format!(
+                "\n- 1 held for lineage_retry_budget_exhausted, oldest held 2d 0h. Tasks: {}.",
+                Uuid::from_u128(2)
+            )),
+            "{body}"
+        );
+        assert!(body.ends_with(&format!(
+            "{DECISION} One fix task can serve every task of a group."
+        )));
+    }
+
+    #[test]
+    fn a_long_review_cuts_task_lists_and_keeps_the_guidance() {
+        let holds: Vec<Held> = (0..2000)
+            .map(|n| held(n, "returns_exhausted", 0, None))
+            .collect();
+        let body = review_body(Uuid::nil(), 60_000, &holds);
+        assert!(body.len() <= delivery_store::SUPERVISOR_MESSAGE_BYTES);
+        assert!(body.contains("\n- 2000 held for returns_exhausted, oldest held 1m. Tasks:"));
+        assert!(body.contains(" more."), "{body}");
+        assert!(body.ends_with("One fix task can serve every task of a group."));
+    }
+
+    #[test]
+    fn the_cause_is_the_failed_check_or_an_explicit_agent_blocker() {
+        let (cause_text, sample) = cause(
+            Some("tests (shard 3/6)".into()),
+            Some("\n  error: no database\nmore".into()),
+            None,
+        );
+        assert_eq!(cause_text.unwrap(), "failed check \"tests (shard 3/6)\"");
+        assert!(
+            sample
+                .unwrap()
+                .ends_with("(CI output, untrusted): \"error: no database\"")
+        );
+        let (cause_text, sample) = cause(
+            None,
+            None,
+            Some("Outcome: blocked; needs PostgreSQL".into()),
+        );
+        assert_eq!(cause_text.unwrap(), "agent reported blocked");
+        assert!(sample.unwrap().ends_with("\"needs PostgreSQL\""));
+        assert_eq!(
+            cause(
+                Some(String::new()),
+                None,
+                Some("Outcome: blockedish".into())
+            ),
+            (None, None)
+        );
     }
 }

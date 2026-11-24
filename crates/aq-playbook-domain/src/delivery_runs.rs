@@ -314,6 +314,7 @@ impl DeliveryRuns<'_> {
 
         delivery::run_step(
             self.pool,
+            db,
             delivery::DeliveryRuntime {
                 service: commands.as_ref(),
                 target: target.as_ref(),

@@ -141,6 +141,62 @@
     {
       "cli": [
         "attempt",
+        "settle-closed-launch"
+      ],
+      "grant": "attempt.control",
+      "kind": "mutation",
+      "name": "attempt.settle_closed_launch",
+      "owner_only": true,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:8251505f0109dd13f4cafad90cd4e69a23d9dd1ece99b72390b4c4798251a42c",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "attempt_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "operation_id": {
+                "description": "Your ID for this change; repeat it to retry safely",
+                "format": "uuid",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The attempt's project",
+                "format": "uuid",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why the launch is over, recorded with your identity",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "attempt_id",
+              "operation_id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement"
+          }
+        }
+      },
+      "summary": "Settle a launch closed before the agent started whose host evidence shows it is over but not that the harness never ran; refused unless its grant expired, its node restarted, it has no history or effects and its task ref is still at the lease. Recorded with your reason; the task gets an ordinary replacement attempt",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "attempt",
         "show"
       ],
       "grant": "dashboard.read",
@@ -5687,6 +5743,56 @@
     {
       "cli": [
         "supervisor",
+        "escalate"
+      ],
+      "grant": "message.send",
+      "kind": "mutation",
+      "name": "supervisor.escalate",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:f4fb05aee78f432f54da7c7fb12b1c7367c64267ba9cb77087a155fe14081576",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "decision_needed": {
+                "description": "The decision needed, and why it is not yours to make",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project_id": {
+                "description": "Your project's ID",
+                "format": "uuid",
+                "type": "string"
+              },
+              "task_id": {
+                "description": "The task the decision is about, if any",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "decision_needed"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{id}/escalations"
+          }
+        }
+      },
+      "summary": "Escalate a decision that is not yours to the global supervisor, naming the project, the task if any, and the decision needed (each call posts a message)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
         "list"
       ],
       "grant": "dashboard.read",
@@ -6540,7 +6646,7 @@
       "principals": {
         "agent": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6561,7 +6667,7 @@
         },
         "owner": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6582,7 +6688,7 @@
         },
         "supervisor": {
           "body": "action_request",
-          "params_digest": "sha256:2b5d2cf95e1d62ec29d7546baa13b610d1e1f9e62a4ddd1c9f49e97e513e2fa3",
+          "params_digest": "sha256:9e81027b5267e663025a4ca8f6ad960cf3a29b855b9598ecf1e3eb110c0ba6dc",
           "params_schema": {
             "$ref": "protocol/dashboard-actions/v1/schema.json#kind=task.dependency.add"
           },
@@ -6602,7 +6708,7 @@
           }
         }
       },
-      "summary": "Make one task block another",
+      "summary": "Make one task block another; with resume_held, a task held at a limit waits on it instead",
       "target": {
         "rule": "subject"
       }

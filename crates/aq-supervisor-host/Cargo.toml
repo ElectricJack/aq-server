@@ -11,6 +11,7 @@ aq-swarm-settings = { path = "../aq-swarm-settings" }
 aq-internal-work = { path = "../aq-internal-work" }
 aq-intelligence-config = { path = "../aq-intelligence-config" }
 aq-command-registry = { path = "../aq-command-registry" }
+aq-role-settings = { path = "../aq-role-settings" }
 aq-central-authority = { path = "../aq-central-authority" }
 aq-server = { path = "../aq-server" }
 aq-session-host.workspace = true

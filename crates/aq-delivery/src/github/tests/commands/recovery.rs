@@ -37,6 +37,7 @@ pub(super) async fn reconcile(delivery: &Delivery, target: &DeliveryTarget) -> C
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await,

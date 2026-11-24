@@ -1238,3 +1238,233 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_
     .unwrap();
     assert_eq!(recorded, predecessor);
 }
+
+/// An owner action on the case's task, as the dashboard posts it.
+async fn owner_action(c: &Case, action: Value) -> (axum::http::StatusCode, Value) {
+    let res = aq_server::build_admin_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/api/v1/actions")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(action.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+/// `task.dependency.add` with `resume_held`: the case's second task blocks its task.
+async fn wait_on(c: &Case, operation: Uuid) -> (axum::http::StatusCode, Value) {
+    let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
+    owner_action(
+        c,
+        serde_json::json!({"operation_id":operation,"kind":"task.dependency.add",
+        "subject":{"type":"task","id":task,"revision":"1"},"expected_versions":{"task":"1"},
+        "payload":{"operation_id":operation,"project_id":project,"expected_version":"1",
+            "blocker_id":c.second_task,"resume_held":true}}),
+    )
+    .await
+}
+async fn attempts(c: &Case) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE task_id=$1")
+        .bind(c.env.lineage.task_id)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+async fn holds_claim(c: &Case, attempt: Uuid) -> bool {
+    sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+/// The node gets a second slot, which polls while the held attempt keeps the first.
+async fn second_slot(c: &Case) {
+    super::node_slots::register(c, 2, None).await;
+}
+/// The second slot's poll is offered nothing.
+async fn nothing_offered(c: &Case) {
+    assert!(super::node_slots::poll_slot(c, 2).await.is_empty());
+    native_offer::assembled(c).await;
+    assert!(super::node_slots::poll_slot(c, 2).await.is_empty());
+}
+
+/// Keep work moving (2026-11-24): `task.dependency.add` with `resume_held` turns a limit hold
+/// into a wait. The edge is added first, then the hold's override is recorded under the same
+/// operation id; the stopped attempt keeps the claim, so while the blocker is open (Graph does
+/// not list the task as ready) nothing is replaced. When the blocker completes, the ordinary
+/// poll replaces the attempt exactly once. A replay records nothing new.
+#[tokio::test]
+async fn resume_held_waits_on_the_blocker_and_the_poll_replaces_the_task_once_it_completes() {
+    let code = "lineage_retry_budget_exhausted";
+    let (mut c, predecessor) = budget_held(code).await;
+    let task = c.env.lineage.task_id;
+    owner_actions(&mut c).await;
+    second_slot(&c).await;
+    let operation = Uuid::new_v4();
+    for _ in 0..2 {
+        let (status, body) = wait_on(&c, operation).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    }
+    let edges = c.edges.lock().unwrap().clone();
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(
+        [
+            &edges[0]["source"],
+            &edges[0]["target"],
+            &edges[0]["edge_type"]
+        ],
+        [
+            &serde_json::json!(c.second_task),
+            &serde_json::json!(task),
+            &serde_json::json!("blocks")
+        ]
+    );
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    drop(conn);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (
+            recorded[0].operation_id,
+            recorded[0].attempt_id,
+            recorded[0].hold_code.as_str()
+        ),
+        (operation, predecessor, code)
+    );
+    assert_eq!(
+        recorded[0].reason,
+        format!("waits on task {}", c.second_task)
+    );
+    assert_eq!(held_reason(&work(&c, task).await), None, "no longer held");
+    assert!(holds_claim(&c, predecessor).await, "the claim stays");
+    // The blocker is open: Graph does not list the task as ready.
+    c.mode.store(3, Ordering::SeqCst);
+    nothing_offered(&c).await;
+    assert_eq!(attempts(&c).await, 1);
+    assert!(holds_claim(&c, predecessor).await);
+    // The blocker completed.
+    c.mode.store(0, Ordering::SeqCst);
+    let successor = super::node_slots::offered(&c, 2).await;
+    assert_eq!(successor.offered.offer.manifest.bindings.task_id, task);
+    assert!(!holds_claim(&c, predecessor).await);
+    assert!(super::node_slots::poll_slot(&c, 1).await.is_empty());
+    native_offer::assembled(&c).await;
+    assert_eq!(attempts(&c).await, 2, "exactly one successor");
+}
+
+/// A hold no retry overrides is not turned into a wait, and a task that is not held has nothing
+/// to resume: each is refused with its reason, and neither the edge nor an override is written.
+#[tokio::test]
+async fn resume_held_refuses_a_safety_hold_or_no_hold_and_adds_no_edge() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
+    let task = c.env.lineage.task_id;
+    owner_actions(&mut c).await;
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'test quarantine','owner','{}',$3,1)")
+        .bind(predecessor)
+        .bind(task)
+        .bind(Uuid::new_v4())
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    let (status, body) = wait_on(&c, Uuid::new_v4()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(body["data"]["reason"], "stall_quarantined", "{body}");
+    assert!(c.edges.lock().unwrap().is_empty());
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    assert!(holds::overrides(&mut conn, task).await.unwrap().is_empty());
+    drop(conn);
+    assert!(holds_claim(&c, predecessor).await);
+
+    drop(c);
+    // An attempt that has not stopped holds the task without a hold.
+    let mut c = setup().await;
+    owner_actions(&mut c).await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = wait_on(&c, Uuid::new_v4()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(
+        body["data"]["reason"], "replacement_prior_execution_uncertain",
+        "{body}"
+    );
+    assert!(c.edges.lock().unwrap().is_empty());
+}
+
+/// A result the delivery playbook held at its return limit, with its stopped attempt proven,
+/// is not replaced by the poll. An owner retry still releases it as before: it overrides the
+/// return limit, starts the return count again, and the poll offers the task.
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_held_delivery_result_waits_for_an_owner_retry_which_resets_its_returns() {
+    let mut c = setup().await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let predecessor = page.offers.remove(0).offered.offer.binding.attempt_id;
+    native_offer::fail(&c, predecessor).await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let report = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Like `fail`, synthetic rows of the result and delivery owners.
+    sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id) VALUES($1,$2,$3,$4,$5,encode(sha256($5),'hex'),'{}'::bytea,$4)")
+        .bind(report).bind(predecessor).bind(c.env.env.node).bind(Uuid::new_v4())
+        .bind(br#"{"outcome":"failed"}"#.as_slice()).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO profiled_result_heads VALUES($1,$2)")
+        .bind(predecessor)
+        .bind(report)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,repeat('c',40),$3)")
+        .bind(predecessor).bind(c.env.frozen.project.binding.repository_id)
+        .bind(aq_delivery::commands::task_branch(task)).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',1000)")
+        .bind(report).bind(task).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_tasks(task_id,returns) VALUES($1,3)")
+        .bind(task)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    second_slot(&c).await;
+    nothing_offered(&c).await;
+    assert!(
+        holds_claim(&c, predecessor).await,
+        "the held result keeps its claim"
+    );
+    owner_actions(&mut c).await;
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("The sandbox has a database now")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let returns: i32 = sqlx::query_scalar("SELECT returns FROM delivery_tasks WHERE task_id=$1")
+        .bind(task)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(returns, 0);
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    drop(conn);
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].hold_code, "returns_exhausted");
+    assert!(!holds_claim(&c, predecessor).await);
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
+    assert_eq!(attempts(&c).await, 2);
+}
