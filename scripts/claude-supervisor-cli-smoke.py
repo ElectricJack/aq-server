@@ -2,7 +2,7 @@
 """Qualify the pinned Claude supervisor invocation with loopback HTTP doubles.
 
 Pass --host-binary to exercise the Rust MCP bridge and its authenticated AQ
-discovery request. Otherwise a Python fixture speaks stdio MCP.
+discovery and task creation requests. Otherwise a Python fixture speaks stdio MCP.
 """
 
 import argparse
@@ -16,10 +16,17 @@ import threading
 from pathlib import Path
 
 VERSION = "2.1.318"
-CLAUDE_KEY = "dummy-anthropic-key"
+CLAUDE_TOKEN = "dummy-claude-oauth-token"
 AQ_TOKEN = "dummy-aq-supervisor-token"
 AQ_RESULT = "qualification-discovery-marker"
-TOOL = "mcp__aq__aq_discover"
+OPERATION_ID = "70ae8248-4b12-41a4-9b65-abc4335e06e3"
+CREATE_REQUEST = {
+    "operation_id": OPERATION_ID,
+    "params": {"title": "qualification task"},
+}
+CREATE_REPLY = {
+    "data": {"disposition": "confirmed", "title": "qualification-created-marker"}
+}
 PROMPT = "qualification-user-marker"
 SYSTEM = "qualification-system-marker"
 RESULT = "qualification-result-marker"
@@ -28,7 +35,7 @@ TOOLS = ["aq_discover", "aq_describe", "aq_command", "aq_attachment"]
 
 def mcp():
     assert os.environ["AQ_SUPERVISOR_ORIGIN"].startswith("http://127.0.0.1:")
-    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ
     for line in sys.stdin:
         request = json.loads(line)
         method = request["method"]
@@ -74,38 +81,62 @@ class MockAPI(http.server.BaseHTTPRequestHandler):
             self.send_error(401)
             return
         self.server.discovery_calls.append(self.path)
-        body = {
-            "api_version": 1,
-            "principal": AQ_RESULT,
-            "commands": [],
-            "unavailable": [],
-        }
+        self.send_json(
+            {
+                "api_version": 1,
+                "principal": AQ_RESULT,
+                "commands": [],
+                "unavailable": [],
+            }
+        )
+
+    def send_json(self, body):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(body).encode())
 
     def do_POST(self):
+        if self.path == "/api/v1/commands/task.create":
+            if self.headers.get("Authorization") != f"Bearer {AQ_TOKEN}":
+                self.send_error(401)
+                return
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.server.create_calls.append(body)
+            if any(body.get(key) != value for key, value in CREATE_REQUEST.items()):
+                self.send_error(400)
+                return
+            self.send_json(CREATE_REPLY)
+            return
         if not self.path.startswith("/v1/messages?") and self.path != "/v1/messages":
             self.send_error(404)
             return
 
-        if self.headers.get("x-api-key") != CLAUDE_KEY:
+        if self.headers.get("Authorization") != f"Bearer {CLAUDE_TOKEN}":
             self.send_error(401)
             return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.calls.append(body)
-        if len(self.server.calls) > 1:
-            block = {"type": "text", "text": RESULT}
-            stop_reason = "end_turn"
+        turn = len(self.server.calls)
+        if turn == 1:
+            tool_name, tool_input = "aq_discover", {}
+        elif turn == 2 and self.server.exercise_mutation:
+            tool_name = "aq_command"
+            tool_input = {"name": "task.create", "request": CREATE_REQUEST}
         else:
+            tool_name = None
+
+        if tool_name:
             block = {
                 "type": "tool_use",
-                "id": "toolu_qualification",
-                "name": TOOL,
-                "input": {},
+                "id": f"toolu_qualification_{turn}",
+                "name": f"mcp__aq__{tool_name}",
+                "input": tool_input,
             }
             stop_reason = "tool_use"
+        else:
+            block = {"type": "text", "text": RESULT}
+            stop_reason = "end_turn"
         usage = {"input_tokens": 10, "output_tokens": 1}
         message = {
             "id": f"msg_qualification_{len(self.server.calls)}",
@@ -117,21 +148,23 @@ class MockAPI(http.server.BaseHTTPRequestHandler):
             "stop_sequence": None,
             "usage": usage,
         }
-        self.send_response(200)
         if not body.get("stream"):
             message.update(content=[block], stop_reason=stop_reason)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(message).encode())
+            self.send_json(message)
             return
 
+        self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         if block["type"] == "text":
             delta = {"type": "text_delta", "text": block["text"]}
             block["text"] = ""
         else:
-            delta = {"type": "input_json_delta", "partial_json": "{}"}
+            delta = {
+                "type": "input_json_delta",
+                "partial_json": json.dumps(block["input"]),
+            }
+            block["input"] = {}
         events = [
             {"type": "message_start", "message": message},
             {"type": "content_block_start", "index": 0, "content_block": block},
@@ -164,6 +197,8 @@ def qualify(cli, host_binary):
         with http.server.HTTPServer(("127.0.0.1", 0), MockAPI) as server:
             server.calls = []
             server.discovery_calls = []
+            server.create_calls = []
+            server.exercise_mutation = bool(host_binary)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -171,7 +206,7 @@ def qualify(cli, host_binary):
                 env = {
                     "HOME": str(home),
                     "PATH": "/usr/local/bin:/usr/bin:/bin",
-                    "ANTHROPIC_API_KEY": CLAUDE_KEY,
+                    "CLAUDE_CODE_OAUTH_TOKEN": CLAUDE_TOKEN,
                     "ANTHROPIC_BASE_URL": endpoint,
                     "CLAUDE_CONFIG_DIR": str(home),
                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -226,6 +261,7 @@ def qualify(cli, host_binary):
                     "--settings",
                     '{"disableAllHooks":true,"enableAllProjectMcpServers":false}',
                     "--strict-mcp-config",
+                    "--restricted",
                     "--no-session-persistence",
                     "--disable-slash-commands",
                     "--tools",
@@ -255,8 +291,8 @@ def qualify(cli, host_binary):
                 result = json.loads(reply.stdout)
                 assert result["type"] == "result" and result["subtype"] == "success"
                 assert not result["is_error"] and result["result"] == RESULT
-                assert len(server.calls) == 2
-                first, second = server.calls
+                assert len(server.calls) == 2 + bool(host_binary)
+                first, second, *final = server.calls
                 assert SYSTEM in json.dumps(first["system"])
                 assert PROMPT in json.dumps(first["messages"])
                 advertised = {tool["name"] for tool in first["tools"]}
@@ -266,8 +302,17 @@ def qualify(cli, host_binary):
                     f"Unexpected tools: {sorted(advertised)}"
                 )
                 assert AQ_RESULT in json.dumps(second["messages"])
-                assert len(server.discovery_calls) == int(bool(host_binary))
-                print(f"{version}: MCP discovery and JSON result passed")
+                if host_binary:
+                    assert len(server.discovery_calls) == len(server.create_calls) == 1
+                    assert CREATE_REPLY["data"]["title"] in json.dumps(
+                        final[0]["messages"]
+                    )
+                    assert actions.read_text() == f"{OPERATION_ID}\n"
+                    print(
+                        f"{version}: MCP discovery, task receipt, and JSON result passed"
+                    )
+                else:
+                    print(f"{version}: MCP discovery and JSON result passed")
             finally:
                 server.shutdown()
                 thread.join()
