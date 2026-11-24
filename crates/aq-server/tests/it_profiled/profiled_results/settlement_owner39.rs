@@ -109,6 +109,30 @@ struct Case {
     loss: Arc<AtomicBool>,
     gate: Arc<ResponseGate>,
 }
+fn record_graph_mutation(
+    graph: &Value,
+    body: &Value,
+    key: &std::sync::Mutex<Option<String>>,
+    writes: &AtomicUsize,
+) {
+    assert_eq!(body["operations"][0]["op"], "update_node");
+    assert_eq!(body["operations"][0]["id"], graph["node"]["id"]);
+    assert_eq!(
+        body["operations"][0]["expected_version"],
+        graph["node"]["version"]
+    );
+    {
+        let id = body["idempotency_key"].as_str().unwrap().to_owned();
+        let mut guard = key.lock().unwrap();
+        if let Some(old) = guard.as_ref() {
+            assert_eq!(old, &id);
+        } else {
+            *guard = Some(id);
+            writes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 fn graph_router(
     graph: Value,
     writes: Arc<AtomicUsize>,
@@ -134,19 +158,7 @@ fn graph_router(
                 let key = expected_key.clone();
                 let gate = gate.clone();
                 async move {
-                    assert_eq!(body["operations"][0]["op"], "update_node");
-                    assert_eq!(body["operations"][0]["id"], graph["node"]["id"]);
-                    assert_eq!(body["operations"][0]["expected_version"], graph["node"]["version"]);
-                    {
-                        let id = body["idempotency_key"].as_str().unwrap().to_owned();
-                        let mut guard = key.lock().unwrap();
-                        if let Some(old) = guard.as_ref() {
-                            assert_eq!(old, &id);
-                        } else {
-                            *guard = Some(id);
-                            writes.fetch_add(1, Ordering::SeqCst);
-                        }
-                    }
+                    record_graph_mutation(&graph, &body, &key, &writes);
                     if gate.enabled.swap(false, Ordering::SeqCst) {
                         gate.entered.notify_one();
                         gate.release.notified().await;

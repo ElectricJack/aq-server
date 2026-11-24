@@ -99,15 +99,11 @@ fn pure_artifact() -> aq_playbook_host::model::Artifact {
     .unwrap()
 }
 
-#[tokio::test]
-async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
-    let c = Box::pin(setup()).await;
-    let f = &c.env.f;
-    let pool = f.db.pool().await;
-    let path = c.env._directory.path().join("completion-outbox-key");
+fn completion_keys(directory: &std::path::Path) -> Arc<Keyring> {
+    let path = directory.join("completion-outbox-key");
     std::fs::write(&path, [9_u8; 32]).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Arc::new(
+    Arc::new(
         Keyring::load(&ProtectionConfig {
             active_key_id: "fixture".into(),
             keys: vec![KeyFile {
@@ -116,7 +112,15 @@ async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
             }],
         })
         .unwrap(),
-    );
+    )
+}
+
+#[tokio::test]
+async fn settlement_completion_outbox_replays_engine_acceptance_before_ack() {
+    let c = Box::pin(setup()).await;
+    let f = &c.env.f;
+    let pool = f.db.pool().await;
+    let keys = completion_keys(c.env._directory.path());
     let namespace = Namespace {
         namespace_id: Uuid::new_v4(),
         generation: 1,

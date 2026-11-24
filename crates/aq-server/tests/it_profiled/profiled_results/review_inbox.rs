@@ -620,30 +620,7 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
         item.requested_judgment
             .contains(&format!("task {}", item.task_id))
     );
-    // X18: defer is non-final, per-owner, bounded by expiry, idempotent.
-    let op = Uuid::new_v4();
-    let defer = format!("/api/reviews/decisions/{second}/defer");
-    let late = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+30001});
-    assert_eq!(dashboard_call(&app, &defer, Some(late)).await.0, 400);
-    let body = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+20000});
-    let (code, deferred) = dashboard_call(&app, &defer, Some(body.clone())).await;
-    assert_eq!(code, 200, "{deferred}");
-    assert_eq!(deferred["deferred_until_ms"], NOW + 20000);
-    assert_eq!(dashboard_call(&app, &defer, Some(body)).await.0, 200);
-    let changed = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+10000});
-    assert_eq!(dashboard_call(&app, &defer, Some(changed)).await.0, 409);
-    let closed =
-        json!({"operation_id":Uuid::new_v4(),"expected_decision_revision":1,"until_ms":NOW+10000});
-    assert_eq!(
-        dashboard_call(
-            &app,
-            &format!("/api/reviews/decisions/{first}/defer"),
-            Some(closed)
-        )
-        .await
-        .0,
-        409
-    );
+    assert_deferral_replay_and_expiry(&app, first, second).await;
     let impact = env
         .service
         .inbox(
@@ -686,6 +663,33 @@ async fn decision_view_contract_serves_kind_history_defer_and_evidence() {
 
     assert_decision_history_and_evidence(&env, &app, first, second).await;
     env.peer.abort();
+}
+
+async fn assert_deferral_replay_and_expiry(app: &axum::Router, first: Uuid, second: Uuid) {
+    // X18: defer is non-final, per-owner, bounded by expiry, idempotent.
+    let op = Uuid::new_v4();
+    let defer = format!("/api/reviews/decisions/{second}/defer");
+    let late = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+30001});
+    assert_eq!(dashboard_call(app, &defer, Some(late)).await.0, 400);
+    let body = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+20000});
+    let (code, deferred) = dashboard_call(app, &defer, Some(body.clone())).await;
+    assert_eq!(code, 200, "{deferred}");
+    assert_eq!(deferred["deferred_until_ms"], NOW + 20000);
+    assert_eq!(dashboard_call(app, &defer, Some(body)).await.0, 200);
+    let changed = json!({"operation_id":op,"expected_decision_revision":1,"until_ms":NOW+10000});
+    assert_eq!(dashboard_call(app, &defer, Some(changed)).await.0, 409);
+    let closed =
+        json!({"operation_id":Uuid::new_v4(),"expected_decision_revision":1,"until_ms":NOW+10000});
+    assert_eq!(
+        dashboard_call(
+            app,
+            &format!("/api/reviews/decisions/{first}/defer"),
+            Some(closed)
+        )
+        .await
+        .0,
+        409
+    );
 }
 
 async fn assert_decision_history_and_evidence(

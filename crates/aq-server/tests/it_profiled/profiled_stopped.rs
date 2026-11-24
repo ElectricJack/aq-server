@@ -33,6 +33,23 @@ async fn observe_blocked_transaction(pool: &sqlx::PgPool, xid: &str) {
     }
 }
 
+async fn hold_node(
+    pool: &sqlx::PgPool,
+    node: uuid::Uuid,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, String) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    (tx, blocker_xid)
+}
+
 async fn hot_revisions(pool: &sqlx::PgPool, attempt: uuid::Uuid) -> (i64, i64, i64) {
     sqlx::query_as("SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1")
         .bind(attempt).fetch_one(pool).await.unwrap()
@@ -233,16 +250,7 @@ async fn stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock()
     let auth = context(&f).await;
     started::record(&f.state, &auth, &start).await.unwrap();
     let pool = f.db.pool().await;
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(f.node.node_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+    let (tx, blocker_xid) = hold_node(&pool, f.node.node_id).await;
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });
@@ -329,16 +337,7 @@ async fn credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation
     let auth = context(&f).await;
     started::record(&f.state, &auth, &start).await.unwrap();
     let pool = f.db.pool().await;
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(f.node.node_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+    let (mut tx, blocker_xid) = hold_node(&pool, f.node.node_id).await;
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });

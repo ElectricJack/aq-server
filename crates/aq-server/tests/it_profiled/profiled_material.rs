@@ -93,8 +93,18 @@ async fn setup() -> Case {
     let path = dir.path().join("provider");
     std::fs::write(&path, SECRET).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    configure_material_delivery(&mut f, &path).await;
+    let request = prepare(&f).await;
+    Case {
+        f,
+        request,
+        path,
+        _dir: dir,
+    }
+}
+async fn configure_material_delivery(f: &mut Fixture, path: &std::path::Path) {
     let mut cfg = (*f.state.config).clone();
-    cfg.intelligence = Some(Arc::new(material_intelligence(&f, &path).load().unwrap()));
+    cfg.intelligence = Some(Arc::new(material_intelligence(f, path).load().unwrap()));
     let registration = Register {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -149,14 +159,8 @@ async fn setup() -> Case {
     )
     .await;
     assert_eq!(installed.status(), StatusCode::OK);
-    let request = prepare(&f).await;
-    Case {
-        f,
-        request,
-        path,
-        _dir: dir,
-    }
 }
+
 async fn prepare(f: &Fixture) -> MaterialFetch {
     let pool = f.db.pool().await;
     let attempt = insert(f).await;

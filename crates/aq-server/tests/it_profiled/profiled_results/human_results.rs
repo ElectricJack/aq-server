@@ -19,6 +19,20 @@ async fn get(f: &Fixture, path: &str) -> (StatusCode, serde_json::Value) {
     let bytes = to_bytes(response.into_body(), 262144).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
+async fn assert_native_profile_matches_legacy(f: &Fixture, path: &str, detail: &serde_json::Value) {
+    let (status, mut v2) = get(f, &format!("{path}?profile=recorded_native_v2")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v2["coverage"], human_results::NATIVE_V2_COVERAGE);
+    assert_eq!(v2["items"][0]["origin"], "legacy_prepare_v1");
+    v2["items"][0].as_object_mut().unwrap().remove("origin");
+    v2["coverage"] = json!(human_results::COVERAGE);
+    assert_eq!(
+        serde_json::to_vec(detail).unwrap(),
+        serde_json::to_vec(&v2).unwrap(),
+        "opt-in origin must not alter legacy metadata bytes/fields"
+    );
+}
+
 #[tokio::test]
 async fn human_metadata_projects_exact_revisions_corrections_and_bounded_pages() {
     let (f, _, report) = prepare(true, true).await;
@@ -52,17 +66,7 @@ async fn human_metadata_projects_exact_revisions_corrections_and_bounded_pages()
     assert_eq!(old["project_id"], json!(f.selection.lineage.project_id));
     assert_eq!(old["task_id"], json!(f.selection.lineage.task_id));
     assert!(old.get("origin").is_none(), "default v1 field set changed");
-    let (status, mut v2) = get(&f, &format!("{path}?profile=recorded_native_v2")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(v2["coverage"], human_results::NATIVE_V2_COVERAGE);
-    assert_eq!(v2["items"][0]["origin"], "legacy_prepare_v1");
-    v2["items"][0].as_object_mut().unwrap().remove("origin");
-    v2["coverage"] = json!(human_results::COVERAGE);
-    assert_eq!(
-        serde_json::to_vec(&detail).unwrap(),
-        serde_json::to_vec(&v2).unwrap(),
-        "opt-in origin must not alter legacy metadata bytes/fields"
-    );
+    assert_native_profile_matches_legacy(&f, &path, &detail).await;
     for forbidden in [
         "credential",
         "execution_spec",

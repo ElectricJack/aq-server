@@ -1,5 +1,5 @@
 //! Registered hot-migration qualification; no production grant producer.
-use crate::common;
+use crate::{common, profiled_authority::load_fixture_authority};
 use aq_server::execution::authority::{
     cache::{Facts, Key, VerifiedCache},
     hot::HotState,
@@ -244,7 +244,7 @@ async fn immutable_cache_hit_never_caches_renewal_revocation_or_expiry() {
 #[tokio::test]
 async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback() {
     use aq_server::execution::{
-        authority::{self, AuthorityError, Policy, hot::LaunchOwner},
+        authority::{AuthorityError, Policy, hot::LaunchOwner},
         profiled::{Status, Stop},
     };
     use aq_session_protocol::ProfiledGrant;
@@ -262,14 +262,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
     let attempt = insert(&f).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
-    let fallback = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::IdentityOnly,
-    )
-    .await
-    .unwrap();
+    let fallback = load_fixture_authority(&f, &mut tx, Policy::IdentityOnly)
+        .await
+        .unwrap();
     assert_eq!(fallback.status, Status::Offered);
     tx.rollback().await.unwrap();
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
@@ -301,14 +296,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let first = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let first = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(first.grant_expires_at_ms, NOW + 1000);
     assert_eq!(
@@ -324,14 +314,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let renewed = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let renewed = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(renewed.grant_expires_at_ms, NOW + 2000);
     assert_eq!(renewed.terminal_policy, first.terminal_policy);
@@ -369,13 +354,7 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
@@ -475,25 +454,14 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let historical = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalHistorical,
-    )
-    .await
-    .unwrap();
+    let historical = load_fixture_authority(&f, &mut tx, Policy::TerminalHistorical)
+        .await
+        .unwrap();
     assert!(!historical.holds_task);
     assert!(historical.active_at(NOW).is_err());
     tx.rollback().await.unwrap();
@@ -502,7 +470,7 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
 #[tokio::test]
 async fn production_typed_spec_checks_actual_sealed_selection_and_source() {
     use aq_admission::{execution_spec::ProfiledExecutionSpec, *};
-    use aq_server::execution::authority::{self, AuthorityError, Policy};
+    use aq_server::execution::authority::{AuthorityError, Policy};
     use aq_session_protocol::{ContextDelivery, ContextRef};
     use common::profiled::{NOW, artifact, insert_typed};
     for case in 0..3 {
@@ -587,13 +555,7 @@ async fn production_typed_spec_checks_actual_sealed_selection_and_source() {
         insert_typed(&f, &spec).await;
         let pool = f.db.pool().await;
         let mut tx = pool.begin().await.unwrap();
-        let result = authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::IdentityOnly,
-        )
-        .await;
+        let result = load_fixture_authority(&f, &mut tx, Policy::IdentityOnly).await;
         if case != 0 {
             assert!(matches!(result, Err(AuthorityError::InvalidState)));
         } else {

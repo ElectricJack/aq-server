@@ -27,6 +27,32 @@ impl WaitEnv {
         .await
         .unwrap();
     }
+    async fn inspect_outcome(&self, wait: &wire::RegisteredWait) -> wire::WaitOutcome {
+        let inspect = wire::Request::seal(
+            Uuid::new_v4(),
+            wire::Command::Inspect(wire::InspectRequest {
+                scope: self.scope.clone(),
+                target: wire::InspectTarget::Wait {
+                    wait: wait.wait.clone(),
+                },
+                page: wire::PageRequest {
+                    limit: 1,
+                    cursor: None,
+                },
+            }),
+        )
+        .unwrap();
+        let page = waits::inspect(&self.env.f.state, self.node(), self.attempt(), &inspect)
+            .await
+            .unwrap();
+        let wire::ResponseBody::Inspection(page) = page.body else {
+            panic!("expected inspection page");
+        };
+        let [wire::InspectionItem::Wait(view)] = page.items.as_slice() else {
+            panic!("expected one wait view");
+        };
+        view.outcome.clone().expect("recorded outcome")
+    }
     pub(super) fn node(&self) -> Uuid {
         self.env.f.node.node_id
     }
@@ -210,30 +236,7 @@ async fn wait_on_decision_wakes_once_after_resolution() {
             .unwrap();
     assert_eq!(intents, ["ready"]);
 
-    let inspect = wire::Request::seal(
-        Uuid::new_v4(),
-        wire::Command::Inspect(wire::InspectRequest {
-            scope: w.scope.clone(),
-            target: wire::InspectTarget::Wait {
-                wait: wait.wait.clone(),
-            },
-            page: wire::PageRequest {
-                limit: 1,
-                cursor: None,
-            },
-        }),
-    )
-    .unwrap();
-    let page = waits::inspect(&f.state, w.node(), w.attempt(), &inspect)
-        .await
-        .unwrap();
-    let wire::ResponseBody::Inspection(page) = page.body else {
-        panic!("expected inspection page");
-    };
-    let [wire::InspectionItem::Wait(view)] = page.items.as_slice() else {
-        panic!("expected one wait view");
-    };
-    let outcome = view.outcome.clone().expect("recorded outcome");
+    let outcome = w.inspect_outcome(&wait).await;
     assert_eq!(outcome.kind, wire::WaitOutcomeKind::Satisfied);
 
     let ack = |admission_id: Uuid, generation: u64| {

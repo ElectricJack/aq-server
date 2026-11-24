@@ -13,6 +13,15 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::sync::{Arc, atomic::Ordering};
 use uuid::Uuid;
+
+pub(super) async fn load_fixture_authority(
+    f: &common::profiled::Fixture,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    policy: Policy,
+) -> Result<authority::AuthorityView, AuthorityError> {
+    authority::load_locked(&f.state, tx, &f.profiled.offer.binding.session, policy).await
+}
+
 #[tokio::test]
 async fn common_task_claim_and_legacy_decoders_cannot_cross_profiled_kind() {
     let f = fixture().await;
@@ -118,14 +127,9 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
     let attempt = insert(&f).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
-    let first = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let first = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     assert_eq!(first.kind, Kind::ProfiledV1);
     assert_eq!(
         first.grant_id,
@@ -141,14 +145,9 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let renewed = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let renewed = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     assert_eq!(renewed.authority_revision, first.authority_revision);
     assert!(renewed.record_revision > first.record_revision);
     assert!(renewed.grant_revision > first.grant_revision);
@@ -163,13 +162,7 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Unsupported)
     ));
     tx.rollback().await.unwrap();
@@ -182,13 +175,7 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
     f.time.store((NOW + 10_000) as i64, Ordering::SeqCst);
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Expired)
     ));
     tx.rollback().await.unwrap();
@@ -213,25 +200,14 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let historical = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalHistorical,
-    )
-    .await
-    .unwrap();
+    let historical = load_fixture_authority(&f, &mut tx, Policy::TerminalHistorical)
+        .await
+        .unwrap();
     assert!(historical.authority_revision > renewed.authority_revision);
     tx.rollback().await.unwrap();
 }
