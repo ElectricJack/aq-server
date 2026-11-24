@@ -197,7 +197,10 @@ async fn a_refresh_github_refuses_or_the_host_does_not_allow_is_not_a_merge_atte
         green(),
     );
     let run = wait(&delivery, json!({"allow": false})).await;
-    assert_eq!((run.step, run.refreshed), (None, None));
+    assert_eq!(
+        (run.step, run.refreshed),
+        (None, Some(Refreshed::Queued(sha('b'))))
+    );
     // GitHub refuses the update (a real conflict): the agent repairs it.
     poll(
         &mock,

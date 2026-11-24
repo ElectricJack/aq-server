@@ -42,13 +42,20 @@ impl<'a> FrozenCommand<'a> {
             })
     }
     async fn branch(self, delivery: &Delivery, target: &DeliveryTarget, task: Uuid) -> Step {
+        let result = self.text("result_head").unwrap_or_default();
+        let refresh = self.request.get("refresh").map(Refresh::from_request);
         if let Some(number) = self.number() {
             match delivery.github.pull_request(&target.github, number).await {
-                Ok(pr)
-                    if pr.state == PullRequestState::Merged
-                        && self.text("result_head") == Some(pr.head_sha.as_str()) =>
-                {
+                Ok(pr) if pr.state == PullRequestState::Merged && result == pr.head_sha => {
                     return Step::Done(Completion::new("published", json!({"head":pr.head_sha})));
+                }
+                // A refresh AQ made of this result counts as its publication: never push over it.
+                Ok(pr)
+                    if pr.state != PullRequestState::Closed
+                        && result != pr.head_sha
+                        && delivery.accepts(target, (result, refresh), &pr).await =>
+                {
+                    return Step::Done(Completion::new("published", json!({"head":result})));
                 }
                 Ok(pr) if pr.state == PullRequestState::Open => {}
                 Ok(_) => return Step::Done(Completion::refused("no_branch")),

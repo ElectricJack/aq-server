@@ -276,26 +276,26 @@ pub async fn accepted_head<'c>(
         .await
 }
 
-/// The wait's request with the refresh recorded for its result head and
-/// whether it may ask for one now. A refresh holds its repository's slot while
-/// its pull request is open, its checks have not failed and it is younger than
-/// `longest_check_wait_ms`; a pending one of this task holds it too. After
-/// [`REFRESHES`] a behind head goes back to the playbook as a conflict.
+/// The request with the refresh recorded for its result head and, for a
+/// wait, whether it may ask for one now. A repository refreshes one pull
+/// request at a time, oldest queued first: another task's row holds the slot
+/// while its pull request is open, its checks have not failed and either its
+/// refresh or (queued earlier than this one) its last look is younger than
+/// `longest_check_wait_ms`. A pending refresh of this task waits for GitHub.
+/// After [`REFRESHES`] a behind head goes back to the playbook as a conflict.
 async fn with_refresh(
-    pool: &PgPool,
+    db: &mut PgConnection,
     request: &Value,
     target: &DeliveryTarget,
     task: Uuid,
     now_ms: i64,
 ) -> Result<Value, DeliveryError> {
     let mut request = request.clone();
-    let (Some(longest), Some(result)) = (
-        request["longest_check_wait_ms"].as_i64(),
-        request["result_head"].as_str(),
-    ) else {
+    let Some(result) = request["result_head"].as_str() else {
         return Ok(request);
     };
-    let since = now_ms.saturating_sub(longest);
+    let longest = request["longest_check_wait_ms"].as_i64();
+    let since = now_ms.saturating_sub(longest.unwrap_or(0));
     type Row = (
         Option<String>,
         Option<String>,
@@ -308,8 +308,9 @@ async fn with_refresh(
         "SELECT r.from_head,r.base_head,r.merged_head,COALESCE(r.refreshes,0),
          COALESCE(r.merged_head IS NULL AND r.requested_at_ms>$3,false),
          EXISTS(SELECT 1 FROM delivery_branch_refreshes o JOIN delivery_pull_requests p ON p.task_id=o.task_id
-           WHERE o.repository_id=$4 AND o.task_id<>$1 AND o.requested_at_ms>$3
-           AND p.state='open' AND p.checks_state<>'failed')
+           WHERE o.repository_id=$4 AND o.task_id<>$1 AND p.state='open' AND p.checks_state<>'failed'
+           AND (o.requested_at_ms>$3 OR (o.seen_at_ms>$3
+             AND (o.queued_at_ms,o.task_id)<(COALESCE(r.queued_at_ms,$5),$1))))
          FROM (SELECT $1::uuid AS task_id) t
          LEFT JOIN delivery_branch_refreshes r ON r.task_id=t.task_id AND r.result_head=$2",
     )
@@ -317,34 +318,41 @@ async fn with_refresh(
     .bind(result)
     .bind(since)
     .bind(target.git.repository_id)
-    .fetch_one(pool)
+    .bind(now_ms)
+    .fetch_one(db)
     .await?;
+    let allow = (refreshes < REFRESHES).then_some(!pending && !taken);
     request["refresh"] = json!({
-        "from": from, "base": base, "merged": merged,
-        "allow": (refreshes < REFRESHES).then_some(!pending && !taken),
+        "from": from, "base": base, "merged": merged, "allow": longest.and(allow),
     });
     Ok(request)
 }
 
-/// Keeps what a wait did to its refresh: a new request (this task's slot)
-/// or GitHub's merge commit of it, checked against its parents.
+/// Keeps what a wait did to its refresh: its place in the queue, a new
+/// request (this task's slot) or GitHub's merge commit of it, checked
+/// against its parents.
 async fn record_refresh(
-    pool: &PgPool,
+    db: &mut PgConnection,
     frozen: FrozenCommand<'_>,
     (project, task, target): (Uuid, Uuid, &DeliveryTarget),
     refreshed: &Refreshed,
     now_ms: i64,
 ) -> Result<(), DeliveryError> {
     let result = frozen.request["result_head"].as_str();
+    let repository = target.git.repository_id;
     match refreshed {
-        Refreshed::Requested { from, base } => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,base_head,refreshes,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,1,$7) \
-             ON CONFLICT(task_id) DO UPDATE SET project_id=$2,repository_id=$3,result_head=$4,from_head=$5,base_head=$6,merged_head=NULL,requested_at_ms=$7, \
+        Refreshed::Queued(head) => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,refreshes,queued_at_ms,seen_at_ms) VALUES($1,$2,$3,$4,$5,0,$6,$6) \
+             ON CONFLICT(task_id) DO UPDATE SET seen_at_ms=$6")
+            .bind(task).bind(project).bind(repository).bind(result).bind(head).bind(now_ms),
+        Refreshed::Requested { from, base } => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,base_head,refreshes,queued_at_ms,seen_at_ms,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,1,$7,$7,$7) \
+             ON CONFLICT(task_id) DO UPDATE SET project_id=$2,repository_id=$3,result_head=$4,from_head=$5,base_head=$6,merged_head=NULL,seen_at_ms=$7,requested_at_ms=$7, \
+             queued_at_ms=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.queued_at_ms ELSE $7 END, \
              refreshes=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.refreshes+1 ELSE 1 END")
-            .bind(task).bind(project).bind(target.git.repository_id).bind(result).bind(from).bind(base).bind(now_ms),
+            .bind(task).bind(project).bind(repository).bind(result).bind(from).bind(base).bind(now_ms),
         Refreshed::Merged(head) => sqlx::query("UPDATE delivery_branch_refreshes SET merged_head=$3 WHERE task_id=$1 AND result_head=$2 AND merged_head IS NULL")
             .bind(task).bind(result).bind(head),
     }
-    .execute(pool)
+    .execute(db)
     .await?;
     Ok(())
 }
@@ -378,9 +386,12 @@ pub async fn due_operations(
 /// one completion, or `None` while it runs. `target` is where the project's
 /// work is delivered (`None`: no longer bound), `delivery` the commands
 /// (`None`: no forge or no central git configured). The pull request each
-/// step sees and the head a sync finds are recorded for `work.read`.
+/// step sees and the head a sync finds are recorded for `work.read`. `db` is
+/// the caller's transaction for this step: branch refreshes are decided and
+/// recorded in it under a per-repository lock.
 pub async fn run_step(
     pool: &PgPool,
+    db: &mut PgConnection,
     runtime: DeliveryRuntime<'_>,
     frozen: FrozenCommand<'_>,
     now_ms: i64,
@@ -411,23 +422,31 @@ pub async fn run_step(
         (_, None, _) => Some(without_target(command)),
         (_, Some(_), None) => without_delivery(command),
         (_, Some(target), Some(delivery)) => {
-            let request = match task.filter(|_| command == "pull_request.await_checks") {
-                Some(task) => &with_refresh(pool, request, target, task, now_ms).await?,
-                None => request,
+            let refreshing = matches!(command, "pull_request.await_checks" | "branch.publish");
+            let with = match task.filter(|_| refreshing) {
+                Some(task) => {
+                    // Waits of one repository decide and record their refreshes one at a time.
+                    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+                        .bind(format!("aq.delivery.refresh/{}", target.git.repository_id))
+                        .execute(&mut *db)
+                        .await?;
+                    Some(with_refresh(db, request, target, task, now_ms).await?)
+                }
+                None => None,
             };
             let run = delivery
                 .step(
-                    FrozenCommand::new(operation, command, request),
+                    FrozenCommand::new(operation, command, with.as_ref().unwrap_or(request)),
                     target,
                     now_ms,
                 )
                 .await
                 .ok_or(DeliveryError::InvalidInput("request"))?;
+            if let (Some(task), Some(refreshed)) = (task, &run.refreshed) {
+                record_refresh(db, frozen, (project, task, target), refreshed, now_ms).await?;
+            }
             if let (Some(task), Some(seen)) = (task, &run.observed) {
                 record_pull_request(pool, task, seen, now_ms).await?;
-            }
-            if let (Some(task), Some(refreshed)) = (task, &run.refreshed) {
-                record_refresh(pool, frozen, (project, task, target), refreshed, now_ms).await?;
             }
             run.step
         }
@@ -441,13 +460,15 @@ pub async fn run_step(
     if let (Some(task), Some(seen)) = (task, &completion.pull_request) {
         record_pull_request(pool, task, seen, now_ms).await?;
     }
-    // A merge, a close or a new publication ends the branch's refresh.
-    if let ("pull_request.merge", "merged")
-    | ("pull_request.close", "closed")
-    | ("branch.publish", "published") = (command, completion.outcome)
+    // A close or the publication of another head ends the branch's refresh.
+    // A merge keeps it, so that a replay still accepts the merged head;
+    // `work.complete` deletes it.
+    if let ("pull_request.close", "closed") | ("branch.publish", "published") =
+        (command, completion.outcome)
     {
-        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1")
+        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1 AND result_head IS DISTINCT FROM $2")
             .bind(task)
+            .bind(completion.output["head"].as_str().filter(|_| command == "branch.publish"))
             .execute(pool)
             .await?;
     }

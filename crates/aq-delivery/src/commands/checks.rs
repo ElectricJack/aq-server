@@ -31,6 +31,9 @@ impl<'a> Refresh<'a> {
 /// What a wait did to the refresh of its pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refreshed {
+    /// Behind with green checks at this head, it waits for the repository's
+    /// refresh slot (it queues, oldest first).
+    Queued(String),
     /// It asked GitHub to merge `base` into `from`.
     Requested { from: String, base: String },
     /// GitHub's merge commit of the requested refresh is the head now.
@@ -285,6 +288,20 @@ impl Delivery {
             request.refreshed = Some(Refreshed::Merged(head.to_owned()));
         }
     }
+    /// Whether `pr`'s head is the result head `result` or one a refresh AQ
+    /// recorded for it made ([`Delivery::accept_head`]).
+    pub(super) async fn accepts(
+        &self,
+        target: &DeliveryTarget,
+        (result, refresh): (&str, Option<Refresh<'_>>),
+        pr: &PullRequest,
+    ) -> bool {
+        let mut request = CheckRequest::new(pr.number, None, 0)
+            .for_head(Some(result), true)
+            .with_refresh(refresh);
+        self.accept_head(target, &mut request, pr).await;
+        request.pin.as_deref() == Some(pr.head_sha.as_str())
+    }
     /// A behind head with green checks: asks GitHub to refresh it when the
     /// host allows (keeps waiting otherwise); a conflict when there is no
     /// refresh to ask for or GitHub refuses it.
@@ -296,7 +313,10 @@ impl Delivery {
     ) -> Option<Completion> {
         match request.refresh.and_then(|refresh| refresh.allow) {
             None => return Some(Completion::behind_base()),
-            Some(false) => return None,
+            Some(false) => {
+                request.refreshed = Some(Refreshed::Queued(pr.head_sha.clone()));
+                return None;
+            }
             Some(true) => {}
         }
         match self
