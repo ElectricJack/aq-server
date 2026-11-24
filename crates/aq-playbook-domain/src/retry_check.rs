@@ -8,9 +8,11 @@ use uuid::Uuid;
 pub async fn read(
     pool: &PgPool,
     (project, workspace, task): (Uuid, Uuid, Uuid),
+    (repository, generation): (Uuid, u64),
     predecessor: Option<Uuid>,
 ) -> Option<RetryCheck> {
     let predecessor = predecessor?;
+    let generation = i64::try_from(generation).ok()?;
     let mut tx = crate::bridge_tx(pool).await.ok()?;
     let (report, published_head) = sqlx::query_as::<_, (Uuid, String)>(
         "SELECT h.report_id,p.head FROM execution_attempts a
@@ -23,12 +25,16 @@ pub async fn read(
          WHERE a.task_id=$3 AND a.attempt_id=$4 AND NOT a.holds_task
            AND d.decision IN ('held','returned') AND p.task_ref=g.task_ref AND p.head IS NOT NULL
            AND l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text
-           AND l.execution_spec#>>'{task,workspace_id}'=$2::uuid::text",
+           AND l.execution_spec#>>'{task,workspace_id}'=$2::uuid::text
+           AND g.repository_id=$5 AND l.execution_spec#>>'{source,repository_id}'=$5::uuid::text
+           AND l.execution_spec#>>'{source,repository_binding_generation}'=$6::bigint::text",
     )
     .bind(project)
     .bind(workspace)
     .bind(task)
     .bind(predecessor)
+    .bind(repository)
+    .bind(generation)
     .fetch_optional(&mut *tx)
     .await
     .ok()??;

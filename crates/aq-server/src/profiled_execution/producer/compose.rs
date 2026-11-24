@@ -137,12 +137,10 @@ pub async fn compile(
     let (project, repository) = (binding.project_id, binding.repository_id);
     #[cfg(feature = "delivery_playbook")]
     let retry_check = {
-        let scope = (
-            project,
-            binding.graph_workspace_id,
-            context.revision.task_id,
-        );
-        aq_playbook_domain::retry_check::read(&state.store.pool, scope, predecessor).await
+        let workspace = binding.graph_workspace_id;
+        let scope = (project, workspace, context.revision.task_id);
+        let repo = (repository, binding.repository_binding_generation);
+        aq_playbook_domain::retry_check::read(&state.store.pool, scope, repo, predecessor).await
     };
     let requested = roles::requested_permissions(launch.role, project, repository);
     let effective = requested.effective(&ceilings, &ceilings);

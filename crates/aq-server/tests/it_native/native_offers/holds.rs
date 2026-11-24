@@ -534,7 +534,9 @@ async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_
     let pool = c.env.env.pool.clone();
     let lineage = &c.env.lineage;
     let scope = (lineage.project_id, lineage.workspace_id, lineage.task_id);
-    let evidence = |attempt| retry_check::read(&pool, scope, Some(attempt));
+    let generation = c.env.frozen.project.binding.repository_binding_generation;
+    let evidence =
+        |attempt| retry_check::read(&pool, scope, (repository, generation), Some(attempt));
     assert!(
         evidence(predecessor).await.is_none(),
         "the prior claim still holds"
@@ -547,6 +549,13 @@ async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_
     assert_eq!(status, 200, "{response}");
     assert_eq!(response["data"]["disposition"], "confirmed", "{response}");
     assert!(evidence(Uuid::new_v4()).await.is_none());
+    for repo in [(Uuid::new_v4(), generation), (repository, generation + 1)] {
+        assert!(
+            retry_check::read(&pool, scope, repo, Some(predecessor))
+                .await
+                .is_none()
+        );
+    }
     for (head, matches) in [("2".repeat(40), false), (grant.base.clone(), true)] {
         sqlx::query("UPDATE delivery_pull_requests SET checks_log_head=$2 WHERE task_id=$1")
             .bind(scope.2)
