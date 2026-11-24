@@ -1,8 +1,4 @@
-//! One description of a launch (spec 0014): the task's effective role, the
-//! level it was routed to or the project's default, and the role's execution
-//! profile, all read from the active role snapshot. The startup text and the
-//! permissions follow from those and the project binding; nothing here reads
-//! the old profile catalog.
+//! Compose startup instructions and permissions from the active role snapshot and project binding.
 use super::{now, refused, result_startup::ReportingInstruction};
 use crate::{
     AppState,
@@ -127,14 +123,11 @@ pub async fn compile(
         },
     )
     .await?;
-    // Not this node's task now: the poll goes on with the next one.
     let ineligible = || AppError::Conflict(format!("{INELIGIBLE}{:?}", eligibility.reasons));
     let frozen = (eligibility.frozen_binding.clone())
         .filter(|_| eligibility.eligible)
         .ok_or_else(ineligible)?;
-    // Spec 0014 §6.2: the role's operations, scoped to this project and its
-    // repository, within the project's ceilings. The scheduler is the caller
-    // and holds exactly the project's ceilings.
+    // The scheduler holds the project's own ceilings (spec 0014 §6.2).
     let ceilings: Vec<Permission> = (binding.ceilings.permissions.iter())
         .map(|p| Permission {
             operation: p.operation.clone(),
@@ -142,6 +135,15 @@ pub async fn compile(
         })
         .collect();
     let (project, repository) = (binding.project_id, binding.repository_id);
+    #[cfg(feature = "delivery_playbook")]
+    let retry_check = {
+        let scope = (
+            project,
+            binding.graph_workspace_id,
+            context.revision.task_id,
+        );
+        aq_playbook_domain::retry_check::read(&state.store.pool, scope, predecessor).await
+    };
     let requested = roles::requested_permissions(launch.role, project, repository);
     let effective = requested.effective(&ceilings, &ceilings);
     let requested = requested.into_permissions();
@@ -224,8 +226,7 @@ pub async fn compile(
                 platform,
                 role: launch.role,
                 project_notes: binding.role_notes.get(&role).map(String::as_str),
-                // Spec 0014 §11 q3 (a): the platform text tells the agent to
-                // read the repository's own notes in its workspace.
+                // The platform text directs agents to the repository's notes.
                 repository_notes: None,
                 task: &task,
                 task_thread: thread.as_deref(),
@@ -235,7 +236,6 @@ pub async fn compile(
         );
         let startup = match assembled {
             Ok(startup) => startup,
-            // Spec 0014 §6.1: refused with a reason the task's work read shows.
             Err(error) => {
                 let ceiling = binding.ceilings.context_bytes;
                 let Some(refusal) = refusals::of_startup(&error, execution, ceiling, &environment)
@@ -248,6 +248,9 @@ pub async fn compile(
                 );
             }
         };
+        #[cfg(feature = "delivery_playbook")]
+        let startup =
+            startup.with_retry_evidence(|used| retry_check.as_ref()?.startup(limit, used));
         let policy = GraphAccessPolicy {
             schema_version: 1,
             kind: GraphAccessPolicyKind::PreselectionGraphAccessPolicyV1,

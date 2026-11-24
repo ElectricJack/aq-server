@@ -506,6 +506,117 @@ async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
     }
 }
 
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_startup() {
+    use aq_playbook_domain::retry_check;
+    let mut c = setup().await;
+    pin_policy(&mut c, |p| p.max_attempts = 1).await;
+    let repository = c.env.frozen.project.binding.repository_id;
+    let git_root = c
+        .env
+        .env
+        .state
+        .source_retention
+        .as_ref()
+        .unwrap()
+        .config
+        .git_root
+        .clone();
+    let git =
+        aq_delivery::git_grant::fake::FakeGitHttp::start(&git_root, repository, "refs/heads/main")
+            .await;
+    let (previous, grant) = super::git_grant::granted_offer(&mut c, &git).await;
+    let predecessor = previous.offered.lifecycle_binding.attempt_id;
+    native_offer::fail(&c, predecessor).await;
+    let result = seed_failed_check(&c, predecessor, &grant).await;
+
+    let pool = c.env.env.pool.clone();
+    let lineage = &c.env.lineage;
+    let scope = (lineage.project_id, lineage.workspace_id, lineage.task_id);
+    let evidence = |attempt| retry_check::read(&pool, scope, Some(attempt));
+    assert!(
+        evidence(predecessor).await.is_none(),
+        "the prior claim still holds"
+    );
+    let code = "lineage_retry_budget_exhausted";
+    holds::hold(&pool, decision(&c, code, 1), (c.env.env.state.clock)()).await;
+    owner_actions(&mut c).await;
+    let (status, response) =
+        retry(&c, Uuid::new_v4(), Some("Repair the recorded failed check")).await;
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["data"]["disposition"], "confirmed", "{response}");
+    assert!(evidence(Uuid::new_v4()).await.is_none());
+    for (head, matches) in [("2".repeat(40), false), (grant.base.clone(), true)] {
+        sqlx::query("UPDATE delivery_pull_requests SET checks_log_head=$2 WHERE task_id=$1")
+            .bind(scope.2)
+            .bind(head)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(evidence(predecessor).await.is_some(), matches);
+    }
+
+    let (successor, _) = super::git_grant::granted_offer(&mut c, &git).await;
+    assert_ne!(successor.offered.lifecycle_binding.attempt_id, predecessor);
+    let payload = super::launches::startup_text(&c, &successor).await;
+    successor
+        .startup
+        .verify_payload(payload.as_bytes())
+        .unwrap();
+    assert!(payload.contains(&result.to_string()) && payload.contains(&grant.base));
+    assert!(payload.contains("untrusted CI output") && payload.contains("FAILED exact check"));
+    assert!(
+        successor
+            .offered
+            .offer
+            .manifest
+            .context
+            .references
+            .iter()
+            .any(|r| { r.provenance.as_str() == "aq.previous-delivery-check" && r.bytes <= 8192 })
+    );
+}
+
+#[cfg(feature = "delivery_playbook")]
+async fn seed_failed_check(
+    c: &Case,
+    attempt: Uuid,
+    grant: &aq_delivery::git_grant::GitGrant,
+) -> Uuid {
+    let lineage = &c.env.lineage;
+    let (report, namespace, operation) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = c.env.env.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Like `fail`, this supplies synthetic stop-owner data in the fixture DB.
+    let bytes = br#"{"outcome":"success"}"#.as_slice();
+    sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id) VALUES($1,$2,$3,$4,$5,encode(sha256($5),'hex'),'{}'::bytea,$4)")
+        .bind(report).bind(attempt).bind(c.env.env.node).bind(Uuid::new_v4()).bind(bytes).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO profiled_result_heads VALUES($1,$2)")
+        .bind(attempt)
+        .bind(report)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
+        .bind(report).bind(attempt).bind(&grant.task_ref).bind(&grant.base).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms,update_from_main) VALUES($1,$2,'returned','checks_failed',1000,false)")
+        .bind(report).bind(lineage.task_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,checks_log_head,checks_log_tail,updated_at_ms) VALUES($1,228,'https://example.test/pr/228','open','mergeable','failed','[\"unit\"]',$2,$3,1000)")
+        .bind(lineage.task_id).bind(&grant.base).bind("running unit\nFAILED exact check").execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retry',$2,$3,$4,repeat('a',64),repeat('b',64))")
+        .bind(namespace).bind(lineage.workspace_id).bind(lineage.project_id).bind(c.env.actor).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'pull_request.await_checks',$4,0,$5,'failed','{}',1000,1000)")
+        .bind(operation).bind(namespace).bind(operation.to_string()).bind(lineage.task_id.to_string())
+        .bind(serde_json::json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":grant.base}))
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    report
+}
+
 /// A retry that states no reason still releases the task (the owner is never stuck), and the
 /// record says that none was given.
 #[tokio::test]

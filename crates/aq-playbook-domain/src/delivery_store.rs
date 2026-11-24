@@ -733,12 +733,19 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
 /// GitHub App when the check failed (`check_log_bytes`). Only the failure AQ
 /// recorded for this exact head counts; `None` without a log.
 pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT l.checks_log_tail FROM delivery_pushed_results p
-         JOIN profiled_result_heads h ON h.report_id=p.report_id
+    Ok(failed_check(db, result).await?.map(|(_, log)| log))
+}
+
+pub(crate) async fn failed_check(
+    db: &mut PgConnection,
+    result: Uuid,
+) -> Result<Option<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT p.head,l.checks_log_tail FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id AND h.attempt_id=p.attempt_id
          JOIN execution_attempts a ON a.attempt_id=h.attempt_id
          JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed' AND l.checks_log_head=p.head
-         WHERE p.report_id=$1 AND EXISTS(
+         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
              AND o.command_name='pull_request.await_checks' AND o.status='failed'
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text
@@ -747,8 +754,7 @@ pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Optio
     )
     .bind(result)
     .fetch_optional(db)
-    .await?
-    .flatten())
+    .await?)
 }
 
 /// The most bytes one message to a supervisor may carry.
