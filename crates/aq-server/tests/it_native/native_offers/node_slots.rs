@@ -33,6 +33,23 @@ pub(super) async fn register(c: &Case, slots: u32, boot: Option<Uuid>) -> Regist
         .unwrap();
     request
 }
+async fn set_max_agents(c: &Case, count: i32) {
+    sqlx::query("UPDATE worker_settings SET max_agents=$2 WHERE kind='node' AND id=$1")
+        .bind(c.env.env.node.to_string())
+        .bind(count)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+}
+
+async fn authority_state(c: &Case, attempt: Uuid) -> Value {
+    sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+
 async fn poll_slot(c: &Case, slot: u32) -> Vec<NativeOffer> {
     poll_status(c, slot).await.1
 }
@@ -91,11 +108,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
         .unwrap();
     assert_eq!((slots.total, slots.occupied, slots.idle), (2, 2, 0));
     drop(conn);
-    sqlx::query("UPDATE worker_settings SET max_agents=1 WHERE kind='node' AND id=$1")
-        .bind(node.to_string())
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
+    set_max_agents(&c, 1).await;
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let lowered = aq_machine_control::slots::view(&mut conn, node)
         .await
@@ -103,11 +116,7 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
     assert_eq!((lowered.total, lowered.occupied, lowered.idle), (1, 2, 0));
     drop(conn);
     assert!(poll_slot(&c, 3).await.is_empty());
-    sqlx::query("UPDATE worker_settings SET max_agents=2 WHERE kind='node' AND id=$1")
-        .bind(node.to_string())
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
+    set_max_agents(&c, 2).await;
     // A same-boot count refresh is accepted under load; Settings still caps at two.
     register(&c, 3, None).await;
     assert!(poll_slot(&c, 3).await.is_empty());
@@ -121,22 +130,12 @@ async fn running_siblings_redeliver_to_their_slot_restart_and_release_independen
             .is_err()
     );
     tx.rollback().await.unwrap();
-    let before: Value =
-        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(b)
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
+    let before = authority_state(&c, b).await;
     let auth = auth(&c).await;
     let req = super::lost::crash_request(a);
     lost::release(&c.env.env.state, &auth, &req).await.unwrap();
     lost::release(&c.env.env.state, &auth, &req).await.unwrap();
-    let after: Value =
-        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(b)
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
+    let after = authority_state(&c, b).await;
     assert_eq!(before, after, "late/duplicate A evidence must not change B");
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let slots = aq_machine_control::slots::view(&mut conn, node)
@@ -203,21 +202,11 @@ async fn new_boot_accepts_old_boot_stop_evidence_while_lost_sibling_resolves_sep
         serde_json::to_value(receipt).unwrap(),
         serde_json::to_value(again).unwrap()
     );
-    let before: Value =
-        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(start.binding.attempt_id)
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
+    let before = authority_state(&c, start.binding.attempt_id).await;
     lost::release(&c.env.env.state, &auth, &super::lost::crash_request(b))
         .await
         .unwrap();
-    let after: Value =
-        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(start.binding.attempt_id)
-            .fetch_one(&c.env.env.pool)
-            .await
-            .unwrap();
+    let after = authority_state(&c, start.binding.attempt_id).await;
     assert_eq!(before, after);
 }
 
@@ -268,11 +257,7 @@ async fn never_started_lapse_frees_only_that_slots_attempt() {
 async fn count_one_redelivers_its_full_reservation_and_admits_no_second_attempt() {
     let c = setup().await;
     register(&c, 2, None).await;
-    sqlx::query("UPDATE worker_settings SET max_agents=1 WHERE kind='node' AND id=$1")
-        .bind(c.env.env.node.to_string())
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
+    set_max_agents(&c, 1).await;
     c.mode.store(7, Ordering::SeqCst);
     let first = offered(&c, 1).await;
     assert_eq!(
@@ -319,11 +304,7 @@ async fn poll_status(c: &Case, slot: u32) -> (u16, Vec<NativeOffer>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn eight_slots_of_one_node_poll_at_once_without_a_refused_or_contended_poll() {
     let c = std::sync::Arc::new(setup().await);
-    sqlx::query("UPDATE worker_settings SET max_agents=8 WHERE kind='node' AND id=$1")
-        .bind(c.env.env.node.to_string())
-        .execute(&c.env.env.pool)
-        .await
-        .unwrap();
+    set_max_agents(&c, 8).await;
     register(&c, 8, None).await;
     c.mode.store(7, Ordering::SeqCst);
     let mut held = std::collections::BTreeMap::new();
