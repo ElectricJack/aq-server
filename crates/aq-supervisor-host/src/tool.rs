@@ -16,6 +16,15 @@ pub fn origin(value: &str) -> Result<reqwest::Url> {
     );
     Ok(url)
 }
+/// The machine origin and the turn's bearer, from the turn environment.
+pub(crate) fn machine() -> Result<(reqwest::Url, Zeroizing<Vec<u8>>)> {
+    let url = origin(&std::env::var("AQ_SUPERVISOR_ORIGIN")?)?;
+    let path = std::path::PathBuf::from(std::env::var("AQ_SUPERVISOR_CREDENTIAL_FILE")?);
+    Ok((
+        url,
+        Zeroizing::new(crate::config::protected_read(&path, 70)?),
+    ))
+}
 pub async fn run(args: &[String]) -> Result<()> {
     let name = args.first().context(
         "usage: aq-supervisor-host tool commands [NAME] | attachment-text ID | NAME < request.json",
@@ -27,9 +36,7 @@ pub async fn run(args: &[String]) -> Result<()> {
                 .all(|b| b.is_ascii_lowercase() || b"._-".contains(&b)),
         "invalid command name"
     );
-    let url = origin(&std::env::var("AQ_SUPERVISOR_ORIGIN")?)?;
-    let path = std::path::PathBuf::from(std::env::var("AQ_SUPERVISOR_CREDENTIAL_FILE")?);
-    let token = Zeroizing::new(crate::config::protected_read(&path, 70)?);
+    let (url, token) = machine()?;
     let mut bearer = reqwest::header::HeaderValue::from_str(&format!(
         "Bearer {}",
         std::str::from_utf8(&token)?
@@ -39,6 +46,49 @@ pub async fn run(args: &[String]) -> Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
+    let ToolRequest {
+        request,
+        bound,
+        operation,
+    } = prepare(&client, &url, name, args)?;
+    let response = request
+        .header(reqwest::header::AUTHORIZATION, bearer)
+        .send()
+        .await
+        .context("supervisor tool transport failed")?;
+    let status = response.status();
+    ensure!(
+        response.content_length().is_none_or(|n| n <= bound),
+        "tool response byte bound"
+    );
+    let bytes = response.bytes().await?;
+    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
+    let value: Value = serde_json::from_slice(&bytes)?;
+    if status.is_success() && matches!(name.as_str(), "task.create" | "task.graph.create") {
+        record_action(&value, operation)?;
+    }
+    let output = if name == "commands" && args.len() == 2 {
+        describe(find_command(&value, &args[1]).context("command is not available")?)?
+    } else {
+        value
+    };
+    serde_json::to_writer(std::io::stdout(), &output)?;
+    println!();
+    ensure!(status.is_success(), "AQ refused the supervisor command");
+    Ok(())
+}
+struct ToolRequest {
+    request: reqwest::RequestBuilder,
+    bound: u64,
+    operation: Option<uuid::Uuid>,
+}
+
+fn prepare(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    name: &str,
+    args: &[String],
+) -> Result<ToolRequest> {
     let mut operation = None;
     // Owner attachment contents are larger than command responses.
     let mut bound = 2097152;
@@ -66,43 +116,32 @@ pub async fn run(args: &[String]) -> Result<()> {
             .post(url.join(&format!("api/v1/commands/{name}"))?)
             .json(&body)
     };
-    let response = request
-        .header(reqwest::header::AUTHORIZATION, bearer)
-        .send()
-        .await
-        .context("supervisor tool transport failed")?;
-    let status = response.status();
-    ensure!(
-        response.content_length().is_none_or(|n| n <= bound),
-        "tool response byte bound"
-    );
-    let bytes = response.bytes().await?;
-    ensure!(bytes.len() as u64 <= bound, "tool response byte bound");
-    let value: Value = serde_json::from_slice(&bytes)?;
-    if status.is_success()
-        && matches!(name.as_str(), "task.create" | "task.graph.create")
-        && value["data"]["disposition"] == "confirmed"
-        && let Some(id) = operation
-        && let Ok(path) = std::env::var("AQ_SUPERVISOR_ACTIONS_FILE")
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut out = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
-            .open(path)?;
-        ensure!(out.metadata()?.len() < 4096, "action receipt bound");
-        writeln!(out, "{id}")?;
+    Ok(ToolRequest {
+        request,
+        bound,
+        operation,
+    })
+}
+
+fn record_action(value: &Value, operation: Option<uuid::Uuid>) -> Result<()> {
+    if value["data"]["disposition"] != "confirmed" {
+        return Ok(());
     }
-    let output = if name == "commands" && args.len() == 2 {
-        describe(find_command(&value, &args[1]).context("command is not available")?)?
-    } else {
-        value
+    let Some(id) = operation else {
+        return Ok(());
     };
-    serde_json::to_writer(std::io::stdout(), &output)?;
-    println!();
-    ensure!(status.is_success(), "AQ refused the supervisor command");
+    let Ok(path) = std::env::var("AQ_SUPERVISOR_ACTIONS_FILE") else {
+        return Ok(());
+    };
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut out = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(0o600)
+        .open(path)?;
+    ensure!(out.metadata()?.len() < 4096, "action receipt bound");
+    writeln!(out, "{id}")?;
     Ok(())
 }
 fn find_command<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
@@ -169,15 +208,14 @@ mod tests {
         let command:aq_command_registry::CommandRequest=serde_json::from_value(serde_json::json!({"operation_id":action["operation_id"],"subject":action["subject"],"expected_versions":action["expected_versions"],"params":action["payload"]})).unwrap();
         let registry = aq_server::commands::registry();
         let spec = registry.get("task.create").unwrap();
-        let forward = aq_command_registry::forward(
-            spec,
-            spec.route(aq_command_registry::Principal::Supervisor)
-                .unwrap(),
-            &command,
-            None,
-            uuid::Uuid::new_v4(),
-        )
-        .unwrap();
+        let forward = spec
+            .forward(
+                spec.route(aq_command_registry::Principal::Supervisor)
+                    .unwrap(),
+                &command,
+                None,
+            )
+            .unwrap();
         assert_eq!(forward.body, Some(action));
     }
 }

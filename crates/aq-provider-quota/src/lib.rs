@@ -1,10 +1,13 @@
 //! Router-owned quota collection. Credentials and upstream errors never leave this module.
+mod auth;
 pub mod inventory;
 mod snapshot;
+mod usage;
 use aq_dashboard_contract::{
     Completeness, Observation, ProviderScope, ProviderUsage, Quality, QuotaState, QuotaWindow,
     ResetCreditState, ResetCredits, ResetGrant, Timestamp,
 };
+use auth::auth;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde::Serialize;
@@ -18,6 +21,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex as AsyncMutex;
+use usage::parse;
 use zeroize::Zeroizing;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -152,115 +156,6 @@ fn window(id: String, label: String, value: &Value, now: u64) -> Option<QuotaWin
         observation: observation(now, true)?,
     })
 }
-fn parse(body: &[u8], expected_account: &str, now: u64) -> Option<Vec<QuotaWindow>> {
-    let root: Value = serde_json::from_slice(body).ok()?;
-    let o = root.as_object()?;
-    if let Some(account) = o.get("account_id").filter(|v| !v.is_null())
-        && account.as_str()? != expected_account
-    {
-        return None;
-    }
-    let mut windows = Vec::new();
-    let main = o.get("rate_limit").unwrap_or(&Value::Null);
-    if !main.is_null() && !main.is_object() {
-        return None;
-    }
-    for (key, label) in [
-        ("primary_window", "Primary"),
-        ("secondary_window", "Secondary"),
-    ] {
-        windows.push(window(
-            key.into(),
-            label.into(),
-            main.get(key).unwrap_or(&Value::Null),
-            now,
-        )?);
-    }
-    if let Some(extra) = o.get("additional_rate_limits").filter(|v| !v.is_null()) {
-        let extra = extra.as_array()?;
-        if extra.len() > 8 {
-            return None;
-        }
-        let mut seen = BTreeSet::new();
-        for entry in extra {
-            let feature = entry.get("metered_feature")?.as_str()?;
-            let name = entry.get("limit_name")?.as_str()?;
-            if !valid_text(feature, 128) || !valid_text(name, 128) || !seen.insert((feature, name))
-            {
-                return None;
-            }
-            use sha2::Digest as _;
-            let id = hex::encode(sha2::Sha256::digest(
-                format!("{}:{}:{}", feature.len(), feature, name).as_bytes(),
-            ));
-            let rate = entry.get("rate_limit").unwrap_or(&Value::Null);
-            if !rate.is_null() && !rate.is_object() {
-                return None;
-            }
-            for (key, suffix) in [
-                ("primary_window", "Primary"),
-                ("secondary_window", "Secondary"),
-            ] {
-                windows.push(window(
-                    format!("additional:{id}:{key}"),
-                    format!("Additional quota {} — {suffix}", &id[..8]),
-                    rate.get(key).unwrap_or(&Value::Null),
-                    now,
-                )?);
-            }
-        }
-    }
-    Some(windows)
-}
-fn auth(source: &CodexSource, now: u64) -> Option<Zeroizing<String>> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
-        .open(&source.auth_file)
-        .ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file()
-        || metadata.mode() & 0o077 != 0
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
-    {
-        return None;
-    }
-    let mut bytes = Zeroizing::new(Vec::new());
-    file.take((MAX_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.is_empty() || bytes.len() > MAX_BYTES {
-        return None;
-    }
-    let mut v: Value = serde_json::from_slice(&bytes).ok()?;
-    let tokens = v.get_mut("tokens")?;
-    if tokens.get("account_id")?.as_str()? != source.chatgpt_account_id {
-        return None;
-    }
-    let Value::String(token) = tokens.get_mut("access_token")?.take() else {
-        return None;
-    };
-    let token = Zeroizing::new(token);
-    if !valid_text(&token, 16_384) || !token.is_ascii() {
-        return None;
-    }
-    let parts: Vec<_> = token.split('.').collect();
-    if parts.len() == 3 {
-        use base64::Engine as _;
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(parts[1])
-            .ok()?;
-        let claims: Value = serde_json::from_slice(&payload).ok()?;
-        if claims
-            .get("exp")
-            .and_then(Value::as_u64)
-            .is_none_or(|exp| exp <= now / 1000)
-        {
-            return None;
-        }
-    }
-    Some(token)
-}
 #[derive(Clone)]
 struct Collected {
     windows: Vec<QuotaWindow>,
@@ -337,6 +232,56 @@ impl Collector {
             reset_credits: None,
         })
     }
+    fn cell(&self, account: &Account) -> Option<Cell> {
+        self.cells.lock().ok().and_then(|mut cells| {
+            let key = (account.provider.clone(), account.account_reference.clone());
+            if cells.len() >= 32 && !cells.contains_key(&key) {
+                return None;
+            }
+            Some(cells.entry(key).or_default().clone())
+        })
+    }
+    async fn cached_value(
+        &self,
+        cell: Option<Cell>,
+        source: Option<CodexSource>,
+        now: u64,
+    ) -> (Option<Collected>, bool) {
+        let (Some(cell), Some(source)) = (cell, source) else {
+            return (None, true);
+        };
+        let Ok(mut cache) = tokio::time::timeout(Duration::from_millis(1450), cell.lock()).await
+        else {
+            return (None, true);
+        };
+        let cached = cache.as_ref().filter(|c| {
+            now >= c.attempted_at && now - c.attempted_at < if c.failed { 5_000 } else { CACHE_MS }
+        });
+        if let Some(c) = cached {
+            (c.value.clone(), c.failed)
+        } else if let Some(collected) = self.request(source, now).await {
+            *cache = Some(Cache {
+                value: Some(collected.clone()),
+                observed_at: now,
+                attempted_at: now,
+                failed: false,
+            });
+            (Some(collected), false)
+        } else {
+            let previous = cache
+                .as_ref()
+                .filter(|c| now >= c.observed_at)
+                .and_then(|c| c.value.clone());
+            let observed_at = cache.as_ref().map_or(now, |c| c.observed_at);
+            *cache = Some(Cache {
+                value: previous.clone(),
+                observed_at,
+                attempted_at: now,
+                failed: true,
+            });
+            (previous, true)
+        }
+    }
     async fn account(
         &self,
         account: Account,
@@ -347,57 +292,7 @@ impl Collector {
             .as_ref()
             .and_then(|s| s.account_label.clone())
             .unwrap_or_else(|| account.account_reference.clone());
-        let mut partial = false;
-        let cell = self.cells.lock().ok().and_then(|mut cells| {
-            if cells.len() >= 32
-                && !cells
-                    .contains_key(&(account.provider.clone(), account.account_reference.clone()))
-            {
-                return None;
-            }
-            Some(
-                cells
-                    .entry((account.provider.clone(), account.account_reference.clone()))
-                    .or_default()
-                    .clone(),
-            )
-        });
-        let mut value = None;
-        if let (Some(cell), Some(source)) = (cell, source)
-            && let Ok(mut cache) =
-                tokio::time::timeout(Duration::from_millis(1450), cell.lock()).await
-        {
-            let cached = cache.as_ref().filter(|c| {
-                now >= c.attempted_at
-                    && now - c.attempted_at < if c.failed { 5_000 } else { CACHE_MS }
-            });
-            if let Some(c) = cached {
-                value = c.value.clone();
-                partial |= c.failed;
-            } else if let Some(collected) = self.request(source, now).await {
-                *cache = Some(Cache {
-                    value: Some(collected.clone()),
-                    observed_at: now,
-                    attempted_at: now,
-                    failed: false,
-                });
-                value = Some(collected);
-            } else {
-                let previous = cache
-                    .as_ref()
-                    .filter(|c| now >= c.observed_at)
-                    .and_then(|c| c.value.clone());
-                let observed_at = cache.as_ref().map_or(now, |c| c.observed_at);
-                *cache = Some(Cache {
-                    value: previous.clone(),
-                    observed_at,
-                    attempted_at: now,
-                    failed: true,
-                });
-                value = previous;
-                partial = true;
-            }
-        }
+        let (value, mut partial) = self.cached_value(self.cell(&account), source, now).await;
         let reset_credits = value.as_ref().and_then(|v| v.reset_credits.clone());
         let windows = value.map(|v| v.windows).unwrap_or_else(|| {
             partial = true;
@@ -438,38 +333,10 @@ impl Collector {
         sources: &[CodexSource],
         now: u64,
     ) -> (Vec<ProviderUsage>, bool) {
-        for source in sources
-            .iter()
-            .filter(|s| s.snapshot_file.is_some() && s.validate())
-            .take(32)
-        {
-            if !accounts.iter().any(|a| {
-                a.provider == source.provider_id && a.account_reference == source.account_ref
-            }) {
-                accounts.push(Account {
-                    provider: source.provider_id.clone(),
-                    account_reference: source.account_ref.clone(),
-                    enabled: true,
-                    provisionable: false,
-                    credential_profiles: 0,
-                });
-            }
-        }
+        add_snapshot_accounts(&mut accounts, sources);
         let mut pending = tokio::task::JoinSet::new();
         for (index, account) in accounts.into_iter().enumerate() {
-            let matches = sources
-                .iter()
-                .filter(|s| {
-                    s.provider_id == account.provider
-                        && s.account_ref == account.account_reference
-                        && s.validate()
-                })
-                .collect::<Vec<_>>();
-            let source = if let [source] = matches.as_slice() {
-                Some((*source).clone())
-            } else {
-                None
-            };
+            let source = unique_source(&account, sources);
             let collector = self.clone();
             pending.spawn(async move { (index, collector.account(account, source, now).await) });
         }
@@ -490,6 +357,41 @@ impl Collector {
     }
 }
 
+fn add_snapshot_accounts(accounts: &mut Vec<Account>, sources: &[CodexSource]) {
+    for source in sources
+        .iter()
+        .filter(|s| s.snapshot_file.is_some() && s.validate())
+        .take(32)
+    {
+        if !accounts
+            .iter()
+            .any(|a| a.provider == source.provider_id && a.account_reference == source.account_ref)
+        {
+            accounts.push(Account {
+                provider: source.provider_id.clone(),
+                account_reference: source.account_ref.clone(),
+                enabled: true,
+                provisionable: false,
+                credential_profiles: 0,
+            });
+        }
+    }
+}
+fn unique_source(account: &Account, sources: &[CodexSource]) -> Option<CodexSource> {
+    let matches = sources
+        .iter()
+        .filter(|s| {
+            s.provider_id == account.provider
+                && s.account_ref == account.account_reference
+                && s.validate()
+        })
+        .collect::<Vec<_>>();
+    if let [source] = matches.as_slice() {
+        Some((*source).clone())
+    } else {
+        None
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +441,22 @@ mod tests {
             credential_profiles: 2,
         }
     }
+    async fn mock_collector() -> (Mock, Collector, tokio::task::JoinHandle<()>) {
+        let mock = Mock {
+            mode: Arc::new(AtomicUsize::new(0)),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/usage", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/usage", get(upstream))
+            .route("/redirect-target", get(upstream))
+            .with_state(mock.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut collector = Collector::new();
+        collector.endpoint = endpoint;
+        (mock, collector, server)
+    }
     #[tokio::test]
     async fn quota_collector_qualifies_mock_protocol_and_preserves_stale_values() {
         let dir = tempfile::tempdir().unwrap();
@@ -553,19 +471,7 @@ mod tests {
             snapshot_file: None,
             account_label: None,
         };
-        let mock = Mock {
-            mode: Arc::new(AtomicUsize::new(0)),
-            calls: Arc::new(AtomicUsize::new(0)),
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/usage", listener.local_addr().unwrap());
-        let app = Router::new()
-            .route("/usage", get(upstream))
-            .route("/redirect-target", get(upstream))
-            .with_state(mock.clone());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let mut collector = Collector::new();
-        collector.endpoint = endpoint;
+        let (mock, collector, server) = mock_collector().await;
         let now = 1_750_000_000_000;
         let (first, second) = tokio::join!(
             collector.collect(vec![account()], std::slice::from_ref(&source), now),

@@ -1,6 +1,7 @@
 //! Bounded discovery over the existing encrypted review owner. Cursors reveal no
 //! foreign decision IDs and bind the actor, filter, project and original expiry.
 use super::*;
+use aq_dashboard_contract::review_view::{OpenReview as Open, ReviewDetail, order_by_impact};
 use serde::{Deserialize, Serialize};
 const SCAN: i64 = 64;
 /// Bound on the pending-row scan behind `open_total` and impact ordering.
@@ -8,31 +9,6 @@ const OPEN_SCAN: i64 = 256;
 /// Bound on distinct graph reads per impact-ordered page.
 const BRIEFS: usize = 64;
 const CURSOR_TTL: u64 = 30_000;
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct InboxQuery {
-    pub project_id: Option<Uuid>,
-    #[serde(default)]
-    pub state: InboxState,
-    /// `impact` requires `state=open`.
-    #[serde(default)]
-    pub order: InboxOrder,
-    #[serde(default = "page_size")]
-    pub limit: u32,
-    pub cursor: Option<String>,
-}
-fn page_size() -> u32 {
-    25
-}
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum InboxState {
-    #[default]
-    Open,
-    Closed,
-}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Cursor {
@@ -54,62 +30,6 @@ struct ProtectedCursor {
     key_id: String,
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
-}
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct InboxItem {
-    pub decision_id: Uuid,
-    pub decision_revision: u64,
-    #[schemars(regex(pattern = "^(pending|answered|expired|cancelled)$"))]
-    pub state: String,
-    pub expires_at_ms: u64,
-    pub project_id: Uuid,
-    pub task_id: Uuid,
-    pub report_id: Uuid,
-    pub current_report_head: bool,
-    pub eligible_owner: bool,
-    pub kind: DecisionKind,
-    /// Graph task title; null when the graph is unavailable to this read.
-    #[schemars(length(max = 4096))]
-    pub title: Option<String>,
-    #[schemars(length(max = 1024))]
-    pub requested_judgment: String,
-    pub kind_payload: ReviewPayload,
-    pub requested_by: RequestedBy,
-    /// Null for decisions admitted before submission times were recorded.
-    pub submitted_at_ms: Option<u64>,
-    /// Null when the graph is unavailable to this read.
-    pub impact: Option<Impact>,
-    /// This owner's active deferral, if any.
-    pub deferred_until_ms: Option<u64>,
-}
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct InboxPage {
-    #[schemars(regex(pattern = "^review-inbox-1$"))]
-    pub api_version: String,
-    pub server_time_ms: u64,
-    #[schemars(length(max = 50))]
-    pub items: Vec<InboxItem>,
-    #[schemars(length(max = 4096))]
-    pub next_cursor: Option<String>,
-    /// Pages sample current authorized rows; they are not a transactional snapshot.
-    pub sampled: bool,
-    /// Pending decisions requested by or awaiting this owner (in the project
-    /// filter), or null when more than the bounded scan exists.
-    pub open_total: Option<u64>,
-    pub order: InboxOrder,
-    /// False when impact ordering ran on partial data (scan bound reached or
-    /// some impacts unavailable); such items keep submitted-time order.
-    pub order_complete: bool,
-}
-/// One authorized pending row from the bounded open scan.
-struct Open {
-    id: Uuid,
-    project: Uuid,
-    task: Uuid,
-    submitted: Option<u64>,
-    deferred: bool,
 }
 impl Service {
     fn cursor(&self, cursor: &Cursor) -> Result<String> {
@@ -146,16 +66,7 @@ impl Service {
             )
             .map_err(|_| invalid())?;
         let c: Cursor = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        if c.actor != actor
-            || c.project != query.project_id
-            || c.state != query.state
-            || c.limit != query.limit
-            || c.order != query.order
-            || c.expires <= at
-            || c.expires > at.saturating_add(CURSOR_TTL)
-        {
-            return Err(invalid());
-        }
+        c.validate(actor, query, at)?;
         Ok(Some(c))
     }
     pub async fn inbox(&self, actor: Uuid, query: &InboxQuery) -> Result<InboxPage> {
@@ -217,84 +128,34 @@ impl Service {
     }
     async fn item(
         &self,
-        actor: Uuid,
         id: Uuid,
         view: &serde_json::Value,
         briefs: &mut view::Briefs,
-        at: u64,
     ) -> Result<InboxItem> {
-        let request: DecisionRequest =
-            serde_json::from_value(view["request"].clone()).map_err(|_| AppError::Internal)?;
-        let subject: ReviewSubject =
-            serde_json::from_value(view["subject"].clone()).map_err(|_| AppError::Internal)?;
-        let e = self.enrich(actor, view, briefs, at).await?;
-        Ok(InboxItem {
-            decision_id: id,
-            decision_revision: view["decision_revision"]
-                .as_u64()
-                .ok_or(AppError::Internal)?,
-            state: view["state"].as_str().ok_or(AppError::Internal)?.into(),
-            expires_at_ms: request.expires_at_ms,
-            project_id: subject.project_id,
-            task_id: subject.task.task_id,
-            report_id: subject.result.report_id,
-            current_report_head: view["current_report_head"]
-                .as_bool()
-                .ok_or(AppError::Internal)?,
-            eligible_owner: request.eligible_owners.contains(&actor),
-            kind: e.kind,
-            title: e.title,
-            requested_judgment: e.requested_judgment,
-            kind_payload: e.kind_payload,
-            requested_by: e.requested_by,
-            submitted_at_ms: e.submitted_at_ms,
-            impact: e.impact,
-            deferred_until_ms: e.deferred_until_ms,
-        })
+        let decision = ReviewDetail::read(view).map_err(|_| AppError::Internal)?;
+        let e = self.enrich(view, briefs).await?;
+        decision
+            .inbox_item(id, briefs.reader, e)
+            .ok_or(AppError::Internal)
     }
     /// Impact order over the bounded open scan, paged by offset.
     async fn impact_page(
         &self,
-        actor: Uuid,
         query: &InboxQuery,
-        cursor: Option<&Cursor>,
-        at: u64,
-        expires: u64,
+        continuation: Continuation<'_>,
         briefs: &mut view::Briefs,
     ) -> Result<InboxPage> {
+        let (actor, at) = (briefs.reader, briefs.at);
+        let Continuation { cursor, expires } = continuation;
         let (open, complete) = self.open_rows(actor, query.project_id, at).await?;
-        let mut ranked = Vec::with_capacity(open.len());
-        let mut capped = false;
-        for o in open {
-            let known = briefs.lookups() < BRIEFS;
-            capped |= !known;
-            let reach = if known {
-                briefs.get(o.project, o.task).await.map(|b| b.blocked_tasks)
-            } else {
-                None
-            };
-            ranked.push((o, reach));
-        }
-        ranked.sort_by(|(a, ra), (b, rb)| {
-            rb.cmp(ra)
-                .then(a.deferred.cmp(&b.deferred))
-                .then(a.submitted.is_none().cmp(&b.submitted.is_none()))
-                .then(a.submitted.cmp(&b.submitted))
-                .then(a.id.cmp(&b.id))
-        });
+        let (ranked, capped) = rank_open(open, briefs).await;
         let offset = cursor.map_or(0, |c| c.offset) as usize;
-        let mut items = Vec::new();
-        for (o, _) in ranked.iter().skip(offset).take(query.limit as usize) {
-            let view = match self.inspect(actor, o.id).await {
-                Ok(view) => view,
-                Err(AppError::Forbidden(_)) => continue,
-                Err(error) => return Err(error),
-            };
-            if view["state"] != "pending" {
-                continue;
-            }
-            items.push(self.item(actor, o.id, &view, briefs, at).await?);
-        }
+        let items = self
+            .impact_items(
+                ranked.iter().skip(offset).take(query.limit as usize),
+                briefs,
+            )
+            .await?;
         let end = offset + query.limit as usize;
         let clock = self.page_clock(actor, at, expires).await?;
         let next_cursor = if end < ranked.len() {
@@ -322,6 +183,25 @@ impl Service {
             order_complete: complete && !capped && !briefs.missed,
         })
     }
+    async fn impact_items<'a>(
+        &self,
+        ranked: impl Iterator<Item = &'a (Open, Option<u32>)>,
+        briefs: &mut view::Briefs,
+    ) -> Result<Vec<InboxItem>> {
+        let mut items = Vec::new();
+        for (o, _) in ranked {
+            let view = match self.inspect(briefs.reader, o.id).await {
+                Ok(view) => view,
+                Err(AppError::Forbidden(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            if view["state"] != "pending" {
+                continue;
+            }
+            items.push(self.item(o.id, &view, briefs).await?);
+        }
+        Ok(items)
+    }
     /// Re-fence ownership after the reads and bind the page to cursor time.
     async fn page_clock(&self, actor: Uuid, at: u64, expires: u64) -> Result<u64> {
         let mut tx = self.tx().await?;
@@ -334,28 +214,40 @@ impl Service {
         Ok(clock)
     }
     async fn inbox_inner(&self, actor: Uuid, query: &InboxQuery, graph: bool) -> Result<InboxPage> {
-        if !(1..=50).contains(&query.limit)
-            || query.project_id.is_some_and(|id| id.is_nil())
-            || (query.order == InboxOrder::Impact && query.state != InboxState::Open)
-        {
+        if !(1..=50).contains(&query.limit) || query.project_id.is_some_and(|id| id.is_nil()) {
+            return Err(invalid());
+        }
+        if query.order == InboxOrder::Impact && query.state != InboxState::Open {
             return Err(invalid());
         }
         let at = now(&self.state)?;
         let cursor = self.read_cursor(actor, query, at)?;
-        let mut briefs = view::Briefs::new(&self.state, actor, graph).await?;
+        let mut briefs = view::Briefs::new(&self.state, actor, graph, at).await?;
+        let expires = cursor.as_ref().map_or(at + CURSOR_TTL, |c| c.expires);
+        let continuation = Continuation {
+            cursor: cursor.as_ref(),
+            expires,
+        };
         if query.order == InboxOrder::Impact {
-            let expires = cursor.as_ref().map_or(at + CURSOR_TTL, |c| c.expires);
             {
                 let mut tx = self.tx().await?;
                 Self::owner(&mut tx, actor).await?;
                 tx.commit().await.map_err(db)?;
             }
-            return self
-                .impact_page(actor, query, cursor.as_ref(), at, expires, &mut briefs)
-                .await;
+            return self.impact_page(query, continuation, &mut briefs).await;
         }
-        let after = cursor.as_ref().map(|c| c.after);
-        let expires = cursor.as_ref().map_or(at + CURSOR_TTL, |c| c.expires);
+        self.decision_page(query, continuation, &mut briefs).await
+    }
+
+    async fn decision_page(
+        &self,
+        query: &InboxQuery,
+        continuation: Continuation<'_>,
+        briefs: &mut view::Briefs,
+    ) -> Result<InboxPage> {
+        let (actor, at) = (briefs.reader, briefs.at);
+        let Continuation { cursor, expires } = continuation;
+        let after = cursor.map(|c| c.after);
         let mut tx = self.tx().await?;
         Self::owner(&mut tx, actor).await?;
         let rows = sqlx::query("SELECT d.* FROM human_decision_requests d JOIN review_subjects s USING(subject_digest) WHERE s.subject_profile='code_review_v1' AND ($1::uuid IS NULL OR s.project_id=$1) AND ($2::uuid IS NULL OR d.decision_id>$2) AND ((d.state='pending')=$3) ORDER BY d.decision_id LIMIT $4")
@@ -366,35 +258,11 @@ impl Service {
         let mut consumed = 0;
         for row in rows.iter().take(SCAN as usize) {
             let id: Uuid = row.get("decision_id");
-            let candidate: DecisionRequest = self.decode("request", &id.to_string(), row)?;
-            candidate.validate().map_err(|_| AppError::Internal)?;
-            if hash(&candidate)? != row.get::<String, _>("request_digest") {
-                return Err(AppError::Internal);
-            }
-            if row.get::<Uuid, _>("requester_id") != actor
-                && !candidate.eligible_owners.contains(&actor)
-            {
-                through = Some(id);
-                consumed += 1;
-                continue;
-            }
-            let view = match self.inspect(actor, id).await {
-                Ok(view) => view,
-                Err(AppError::Forbidden(_)) => {
-                    through = Some(id);
-                    consumed += 1;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            let state = view["state"].as_str().ok_or(AppError::Internal)?;
             through = Some(id);
             consumed += 1;
-            // Current observations can move between filters while a page is read.
-            if (state == "pending") != (query.state == InboxState::Open) {
-                continue;
+            if let Some(item) = self.decision_item(row, query.state, briefs).await? {
+                items.push(item);
             }
-            items.push(self.item(actor, id, &view, &mut briefs, at).await?);
             if items.len() >= query.limit as usize {
                 break;
             }
@@ -431,6 +299,36 @@ impl Service {
             order_complete: true,
         })
     }
+    async fn decision_item(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        state: InboxState,
+        briefs: &mut view::Briefs,
+    ) -> Result<Option<InboxItem>> {
+        let actor = briefs.reader;
+        let id: Uuid = row.get("decision_id");
+        let candidate: DecisionRequest = self.decode("request", &id.to_string(), row)?;
+        candidate.validate().map_err(|_| AppError::Internal)?;
+        if hash(&candidate)? != row.get::<String, _>("request_digest") {
+            return Err(AppError::Internal);
+        }
+        if row.get::<Uuid, _>("requester_id") != actor
+            && !candidate.eligible_owners.contains(&actor)
+        {
+            return Ok(None);
+        }
+        let view = match self.inspect(actor, id).await {
+            Ok(view) => view,
+            Err(AppError::Forbidden(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // Current observations can move between filters while a page is read.
+        let observed = view["state"].as_str().ok_or(AppError::Internal)?;
+        if (observed == "pending") != (state == InboxState::Open) {
+            return Ok(None);
+        }
+        self.item(id, &view, briefs).await.map(Some)
+    }
 }
 pub(super) async fn inbox_http(
     crate::authz::RequireOwner(actor): crate::authz::RequireOwner,
@@ -446,4 +344,40 @@ pub(super) async fn inbox_http(
 /// Schema generated from the exact human inbox response DTO.
 pub fn schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(InboxPage)).expect("review inbox schema encoding")
+}
+
+struct Continuation<'a> {
+    cursor: Option<&'a Cursor>,
+    expires: u64,
+}
+async fn rank_open(open: Vec<Open>, briefs: &mut view::Briefs) -> (Vec<(Open, Option<u32>)>, bool) {
+    let mut ranked = Vec::with_capacity(open.len());
+    let mut capped = false;
+    for o in open {
+        let known = briefs.lookups() < BRIEFS;
+        capped |= !known;
+        let reach = if known {
+            briefs.get(o.project, o.task).await.map(|b| b.blocked_tasks)
+        } else {
+            None
+        };
+        ranked.push((o, reach));
+    }
+    order_by_impact(&mut ranked);
+    (ranked, capped)
+}
+
+impl Cursor {
+    fn validate(&self, actor: Uuid, query: &InboxQuery, at: u64) -> Result<()> {
+        let same_reader = self.actor == actor && self.project == query.project_id;
+        let same_filter =
+            self.state == query.state && self.limit == query.limit && self.order == query.order;
+        if !same_reader || !same_filter {
+            return Err(invalid());
+        }
+        if self.expires <= at || self.expires > at.saturating_add(CURSOR_TTL) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }

@@ -214,7 +214,10 @@ async fn create(
         crate::agent_access::scheduling::parse::parse(&bytes).map_err(|_| ApiError::invalid())?,
     )
     .map_err(|_| ApiError::invalid())?;
-    let op = actions::submit_scoped(&state, &registry(&state, p)?, &user, request, None).await?;
+    let op = registry(&state, p)?
+        .for_user(&state, &user)
+        .submit_scoped(request, None)
+        .await?;
     let response = actions::response(&state, op);
     tx.commit().await?;
     Ok((actions::operation_status(&response.data), Json(response)))
@@ -228,7 +231,10 @@ async fn lookup(
     let p = principal(&state, &mut tx, &headers).await?;
     let user = journal_user(&p);
     let Path(id) = path.map_err(|_| ApiError::invalid())?;
-    let op = actions::lookup_scoped(&state, &registry(&state, p.clone())?, &user, id).await;
+    let op = registry(&state, p.clone())?
+        .for_user(&state, &user)
+        .lookup_scoped(id)
+        .await;
     #[cfg(feature = "supervisor_full_access")]
     let op = match (
         op,
@@ -253,17 +259,9 @@ fn agent_registry(
     workspace: Option<Uuid>,
 ) -> ApiResult<Registry> {
     let mut registry = Registry::default();
-    let (attempt, task, project) = (ids.attempt_id, ids.task_id, ids.project_id);
     macro_rules! adapter {
         ($payload:ty) => {
-            GraphAction::<$payload>::for_agent(
-                state,
-                attempt,
-                task,
-                project,
-                guards.clone(),
-                workspace,
-            )
+            GraphAction::<$payload>::for_agent(state, ids, guards.clone(), workspace)
         };
     }
     registry.register(Single(adapter!(SingleGraph)))?;
@@ -312,8 +310,10 @@ pub(crate) async fn agent_lookup(
     operation: Uuid,
 ) -> ApiResult<axum::response::Response> {
     let registry = agent_registry(state, ids, Default::default(), None)?;
-    let op =
-        actions::lookup_scoped(state, &registry, &agent_user(state, ids).await?, operation).await?;
+    let op = registry
+        .for_user(state, &agent_user(state, ids).await?)
+        .lookup_scoped(operation)
+        .await?;
     Ok(agent_response(state, op))
 }
 
@@ -326,15 +326,11 @@ pub(crate) async fn agent_replay(
     let scope = Scope::Project {
         project_id: ids.project_id,
     };
-    actions::replay_scoped(
-        state,
-        &registry,
-        &agent_user(state, ids).await?,
-        request,
-        &scope,
-    )
-    .await
-    .map(|op| op.map(|op| agent_response(state, op)))
+    registry
+        .for_user(state, &agent_user(state, ids).await?)
+        .replay_scoped(request, &scope)
+        .await
+        .map(|op| op.map(|op| agent_response(state, op)))
 }
 
 pub(crate) async fn agent_action(
@@ -346,13 +342,9 @@ pub(crate) async fn agent_action(
     admission: actions::AgentAdmission<'_>,
 ) -> ApiResult<axum::response::Response> {
     let registry = agent_registry(state, ids, guards, workspace)?;
-    let op = actions::submit_scoped(
-        state,
-        &registry,
-        &agent_user(state, ids).await?,
-        request,
-        Some(admission),
-    )
-    .await?;
+    let op = registry
+        .for_user(state, &agent_user(state, ids).await?)
+        .submit_scoped(request, Some(admission))
+        .await?;
     Ok(agent_response(state, op))
 }

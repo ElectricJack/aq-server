@@ -17,6 +17,10 @@ struct Peer {
 }
 async fn handler(State(peer): State<Arc<Peer>>, request: Request<Body>) -> Response {
     peer.calls.fetch_add(1, Ordering::SeqCst);
+    check_request(request).await;
+    response(peer.mode)
+}
+async fn check_request(request: Request<Body>) {
     assert_eq!(
         request.uri().path(),
         "/api/v10/webhooks/42/fixture_token_1234567890"
@@ -30,7 +34,9 @@ async fn handler(State(peer): State<Arc<Peer>>, request: Request<Body>) -> Respo
     assert_eq!(value["allowed_mentions"]["parse"], json!([]));
     assert_eq!(value["flags"], 4);
     assert!(value.get("attachments").is_none());
-    match peer.mode {
+}
+fn response(mode: u8) -> Response {
+    match mode {
         0 => (
             StatusCode::OK,
             axum::Json(

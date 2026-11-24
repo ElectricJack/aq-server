@@ -1,13 +1,7 @@
 //! Startup-owned configuration. Secret bytes never enter selector snapshots.
 use aq_selection::{AuthorizedCredential, InstalledHarness, Validate};
 use serde::Deserialize;
-use std::{
-    collections::BTreeSet,
-    fs::OpenOptions,
-    io::Read,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::PathBuf,
-};
+use std::{collections::BTreeSet, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +43,12 @@ pub fn credential_scope(c: &AuthorizedCredential) -> aq_selection::ObservationSc
 }
 /// Lifetime of a synthesized owner attestation (the validator's maximum).
 pub const OWNER_ATTESTATION_TTL_MS: u64 = 3_600_000;
+/// The registry revision and decision time used to synthesize availability evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttestationTime {
+    pub revision: u64,
+    pub now_ms: u64,
+}
 /// Spec 0007 Q2: while the owner's switch is on (`switch` = its principal and
 /// generation), selection treats every authorized credential as attested
 /// available at `now_ms`, with no observation row. A credential with unexpired
@@ -62,8 +62,7 @@ pub fn owner_attestations(
     credentials: &[AuthorizedCredential],
     observed: &[aq_selection::AvailabilityObservation],
     (principal, generation): (uuid::Uuid, u64),
-    revision: u64,
-    now_ms: u64,
+    AttestationTime { revision, now_ms }: AttestationTime,
 ) -> Vec<aq_selection::AvailabilityObservation> {
     use sha2::Digest;
     let negative = |c: &AuthorizedCredential| {
@@ -172,20 +171,7 @@ impl AccountingCatalog {
         }
         let mut keys = BTreeSet::new();
         for s in &self.sources {
-            let policy = aq_accounting::reconcile::Policy {
-                reference: s.reference.clone(),
-                account_scope: aq_accounting::wire::Digest::of(b"validate"),
-                call_namespace: aq_accounting::wire::Digest::of(b"validate"),
-                provider: aq_accounting::wire::Text::new(&s.provider)
-                    .map_err(|_| "invalid accounting source provider")?,
-                layout: s.layout.clone(),
-                parsers: s.parsers.clone(),
-            };
-            if policy.validate().is_err()
-                || s.harness.is_empty()
-                || s.harness.len() > 512
-                || !keys.insert((s.provider.clone(), s.harness.clone()))
-            {
+            if !s.valid_policy()? || !keys.insert((s.provider.clone(), s.harness.clone())) {
                 return Err("invalid or duplicate accounting source policy".into());
             }
         }
@@ -201,54 +187,133 @@ impl AccountingCatalog {
             .find(|s| s.provider == provider && s.harness == harness)
     }
 }
+fn valid_revision(revision: u64) -> bool {
+    (1..=i64::MAX as u64).contains(&revision)
+}
+fn valid_reference(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 512 && !text.chars().any(char::is_control)
+}
+impl SourcePolicy {
+    fn valid_policy(&self) -> Result<bool, String> {
+        let policy = aq_accounting::reconcile::Policy {
+            reference: self.reference.clone(),
+            account_scope: aq_accounting::wire::Digest::of(b"validate"),
+            call_namespace: aq_accounting::wire::Digest::of(b"validate"),
+            provider: aq_accounting::wire::Text::new(&self.provider)
+                .map_err(|_| "invalid accounting source provider")?,
+            layout: self.layout.clone(),
+            parsers: self.parsers.clone(),
+        };
+        Ok(policy.validate().is_ok() && (1..=512).contains(&self.harness.len()))
+    }
+}
+impl CredentialConfig {
+    fn valid_placement(&self) -> bool {
+        let file_present = self.delivery_mode.is_none() || self.secret_file.is_some();
+        let valid_nodes = self.allowed_node_ids.len() <= 256
+            && !self.allowed_node_ids.iter().any(uuid::Uuid::is_nil);
+        file_present
+            && valid_nodes
+            && self.allowed_node_ids.iter().collect::<BTreeSet<_>>().len()
+                == self.allowed_node_ids.len()
+    }
+    fn valid_policy(&self) -> bool {
+        let c = &self.credential;
+        let revision_valid = valid_revision(c.revision);
+        let derived_fields_clear = !c.provisionable && c.material_owner.is_none();
+        let backends_valid = aq_selection::valid_allowed_backends(&self.allowed_backends)
+            && aq_selection::unrestricted_backends(&c.allowed_backends);
+        let placement_valid = self.valid_placement() && derived_fields_clear;
+        revision_valid && backends_valid && placement_valid
+    }
+    fn validate(
+        &self,
+        keys: &mut BTreeSet<(aq_selection::Text, aq_selection::Text)>,
+    ) -> Result<(), String> {
+        let c = &self.credential;
+        c.profile
+            .id
+            .validate()
+            .map_err(|_| "invalid credential profile artifact")?;
+        c.profile
+            .version
+            .validate()
+            .map_err(|_| "invalid credential profile artifact")?;
+        let valid =
+            self.valid_policy() && keys.insert((c.profile.id.clone(), c.profile.version.clone()));
+        if !valid {
+            return Err("invalid credential identity/placement; provisionable is derived".into());
+        }
+        for text in [&c.provider, &c.account_reference, &c.endpoint_reference] {
+            if !valid_reference(text) {
+                return Err("invalid logical credential reference".into());
+            }
+        }
+        if let Some(path) = &self.secret_file
+            && !path.is_absolute()
+        {
+            return Err("credential file must be absolute".into());
+        }
+        Ok(())
+    }
+    fn load(&self) -> Result<(AuthorizedCredential, Option<String>), String> {
+        let mut credential = self.credential.clone();
+        // Canonical order keeps policy-identical spellings digest-identical.
+        credential.allowed_backends =
+            aq_selection::canonical_allowed_backends(&self.allowed_backends);
+        if credential.allowed_backends.is_empty() {
+            // Explicit `allowed_backends = []` is a deliberate deny-all;
+            // omitting the key is unrestricted. Surface the difference.
+            tracing::warn!(
+                profile = %credential.profile.id.as_str(),
+                "credential allowed_backends is empty; it is never eligible"
+            );
+        }
+        let fingerprint = match &self.secret_file {
+            Some(path) => {
+                material::read_protected_file(path)?.map(|bytes| material::fingerprint(&bytes))
+            }
+            None => None,
+        };
+        credential.provisionable = credential.enabled && fingerprint.is_some();
+        if self.delivery_mode.is_some() && credential.provisionable {
+            credential.material_owner = Some(material_owner(&credential)?);
+        }
+
+        Ok((credential, fingerprint))
+    }
+}
+fn material_owner(credential: &AuthorizedCredential) -> Result<aq_selection::ArtifactRef, String> {
+    // Deliberately excludes local path, secret values and private
+    // fingerprints. The explicit profile revision owns rotation.
+    let descriptor = serde_json::json!({
+        "schema_version":1,"adapter":"aq.server-material","adapter_version":1,
+        "profile":credential.profile,"credential_revision":credential.revision,
+        "provider":credential.provider,"account_reference":credential.account_reference,
+        "endpoint_reference":credential.endpoint_reference,
+    });
+    let owner_digest =
+        aq_selection::digest(&descriptor).map_err(|_| "material owner descriptor")?;
+    Ok(aq_selection::ArtifactRef {
+        id: aq_selection::Text::new(format!(
+            "aq.configured-provider-material/{}",
+            owner_digest.as_str()
+        ))
+        .map_err(|_| "material owner identity")?,
+        version: aq_selection::Text::new("1").map_err(|_| "material owner version")?,
+        digest: owner_digest,
+    })
+}
 impl IntelligenceConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.revision == 0
-            || self.revision > i64::MAX as u64
-            || self.credentials.len() > 32
-            || self.qualified_harnesses.len() > 16
-        {
+        let within_capacity = self.credentials.len() <= 32 && self.qualified_harnesses.len() <= 16;
+        if !valid_revision(self.revision) || !within_capacity {
             return Err("invalid intelligence registry bounds/revision".into());
         }
         self.accounting.validate()?;
         let mut keys = BTreeSet::new();
         for item in &self.credentials {
-            let c = &item.credential;
-            c.profile
-                .id
-                .validate()
-                .map_err(|_| "invalid credential profile artifact")?;
-            c.profile
-                .version
-                .validate()
-                .map_err(|_| "invalid credential profile artifact")?;
-            if c.revision == 0
-                || c.revision > i64::MAX as u64
-                || !aq_selection::valid_allowed_backends(&item.allowed_backends)
-                || !aq_selection::unrestricted_backends(&c.allowed_backends)
-                || c.provisionable
-                || c.material_owner.is_some()
-                || (item.delivery_mode.is_some() && item.secret_file.is_none())
-                || item.allowed_node_ids.len() > 256
-                || item.allowed_node_ids.iter().any(uuid::Uuid::is_nil)
-                || item.allowed_node_ids.iter().collect::<BTreeSet<_>>().len()
-                    != item.allowed_node_ids.len()
-                || !keys.insert((c.profile.id.clone(), c.profile.version.clone()))
-            {
-                return Err(
-                    "invalid credential identity/placement; provisionable is derived".into(),
-                );
-            }
-            for text in [&c.provider, &c.account_reference, &c.endpoint_reference] {
-                if text.is_empty() || text.len() > 512 || text.chars().any(char::is_control) {
-                    return Err("invalid logical credential reference".into());
-                }
-            }
-            if let Some(path) = &item.secret_file
-                && !path.is_absolute()
-            {
-                return Err("credential file must be absolute".into());
-            }
+            item.validate(&mut keys)?;
         }
         if let Some(path) = &self.material_store
             && !path.is_absolute()
@@ -290,74 +355,7 @@ impl IntelligenceConfig {
         let mut credentials = Vec::new();
         let mut fingerprints = Vec::new();
         for item in &self.credentials {
-            let mut credential = item.credential.clone();
-            // Canonical order keeps policy-identical spellings digest-identical.
-            credential.allowed_backends =
-                aq_selection::canonical_allowed_backends(&item.allowed_backends);
-            if credential.allowed_backends.is_empty() {
-                // Explicit `allowed_backends = []` is a deliberate deny-all;
-                // omitting the key is unrestricted. Surface the difference.
-                tracing::warn!(
-                    profile = %credential.profile.id.as_str(),
-                    "credential allowed_backends is empty; it is never eligible"
-                );
-            }
-            let fingerprint = match &item.secret_file {
-                None => None,
-                Some(path) => match OpenOptions::new()
-                    .read(true)
-                    .custom_flags(
-                        nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC,
-                    )
-                    .open(path)
-                {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(_) => return Err("cannot open protected credential file".into()),
-                    Ok(file) => {
-                        let metadata = file
-                            .metadata()
-                            .map_err(|_| "credential metadata unavailable")?;
-                        if !metadata.is_file()
-                            || metadata.mode() & 0o077 != 0
-                            || metadata.uid() != nix::unistd::geteuid().as_raw()
-                        {
-                            return Err("credential must be an owner-only regular file".into());
-                        }
-                        let mut bytes = zeroize::Zeroizing::new(Vec::new());
-                        file.take(65_537)
-                            .read_to_end(&mut bytes)
-                            .map_err(|_| "cannot read protected credential")?;
-                        if bytes.is_empty() || bytes.len() > 65_536 {
-                            return Err("credential byte bound".into());
-                        }
-                        use sha2::Digest;
-                        Some(hex::encode(sha2::Sha256::digest(&bytes)))
-                    }
-                },
-            };
-            credential.provisionable = credential.enabled && fingerprint.is_some();
-            if item.delivery_mode.is_some() && credential.provisionable {
-                // Deliberately excludes local path, secret values and private
-                // fingerprints. The explicit profile revision owns rotation.
-                let descriptor = serde_json::json!({
-                    "schema_version":1,"adapter":"aq.server-material","adapter_version":1,
-                    "profile":credential.profile,"credential_revision":credential.revision,
-                    "provider":credential.provider,"account_reference":credential.account_reference,
-                    "endpoint_reference":credential.endpoint_reference,
-                });
-                let owner_digest =
-                    aq_selection::digest(&descriptor).map_err(|_| "material owner descriptor")?;
-                credential.material_owner = Some(aq_selection::ArtifactRef {
-                    id: aq_selection::Text::new(format!(
-                        "aq.configured-provider-material/{}",
-                        owner_digest.as_str()
-                    ))
-                    .map_err(|_| "material owner identity")?,
-                    version: aq_selection::Text::new("1").map_err(|_| "material owner version")?,
-                    digest: owner_digest,
-                });
-            }
-
+            let (credential, fingerprint) = item.load()?;
             credentials.push(credential);
             fingerprints.push(fingerprint);
         }
@@ -431,7 +429,15 @@ mod tests {
         let c = credential(serde_json::json!({})).credential;
         let who = uuid::Uuid::from_u128(9);
         let on = |g, observed: &[aq_selection::AvailabilityObservation], now| {
-            owner_attestations(std::slice::from_ref(&c), observed, (who, g), 4, now)
+            owner_attestations(
+                std::slice::from_ref(&c),
+                observed,
+                (who, g),
+                AttestationTime {
+                    revision: 4,
+                    now_ms: now,
+                },
+            )
         };
         let a = on(2, &[], 1_000);
         assert_eq!(a.len(), 1);
@@ -600,3 +606,7 @@ pub fn node_credentials(registry: &LoadedRegistry, node: uuid::Uuid) -> Vec<Auth
         .map(|(_, credential)| credential.clone())
         .collect()
 }
+
+mod registry;
+pub use registry::CredentialDefinition;
+pub mod inventory;

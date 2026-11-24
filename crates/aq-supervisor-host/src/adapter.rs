@@ -5,7 +5,7 @@ use aq_codex_mapper::{LoopbackResponsesEndpoint, Paths, Recipe, Settings};
 use aq_session_host::{
     AdapterLaunch, HarnessReadiness, HostAdapter, HostObservation, HostPlan, LocalCommand,
 };
-use aq_session_protocol::{Digest, HarnessSettings, ModelSettings};
+use aq_session_protocol::Digest;
 use std::{
     io::Write,
     os::unix::{
@@ -16,22 +16,9 @@ use std::{
     sync::Arc,
 };
 
-pub fn native_recipe(
-    harness: &HarnessSettings,
-    model: &ModelSettings,
-    input: bool,
-    paths: Paths<'_>,
-    port: u16,
-) -> Result<Recipe> {
+pub fn native_recipe(settings: Settings<'_>, paths: Paths<'_>, port: u16) -> Result<Recipe> {
     let reply_credential = paths.private_home.join("supervisor.credential");
-    let mut recipe = aq_codex_mapper::map(
-        Settings {
-            harness,
-            model,
-            terminal_input_enabled: input,
-        },
-        paths,
-    )?;
+    let mut recipe = aq_codex_mapper::map(settings, paths)?;
     let stdin = recipe.arguments.pop().context("missing stdin recipe")?;
     for value in aq_codex_mapper::responses_overrides(LoopbackResponsesEndpoint::new(port)?)
         .into_iter()
@@ -134,6 +121,101 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
         boot.machine_boot_id == c.host.machine_boot_id && boot.boot_ms < c.host.deadline_boot_ms,
         "native deadline or boot changed"
     );
+    let home = private_home(&c)?;
+    let reply_credential = crate::credentials::stage_supervisor_credential(
+        &directory.join("supervisor.credential"),
+        &home,
+        c.host.deadline_boot_ms,
+    )
+    .await?;
+    std::os::unix::fs::chown(&reply_credential, Some(10001), Some(10001))?;
+    if c.subscription.is_some() {
+        return crate::subscription::native(&c, &home, &reply_credential, &startup).await;
+    }
+    let (transport, port) = start_transport(&c).await?;
+    install_capability(&home, &transport.local_capability())?;
+    // Retain the verified executable descriptor across exec; path replacement
+    // cannot substitute a different binary between verification and launch.
+    let executable = verified_executable(&c)?;
+    let launch = Launch {
+        executable: &executable,
+        home: &home,
+        port,
+    };
+    let mut child = launch.spawn(&c, &startup)?;
+    let result = tokio::task::spawn_blocking(move || child.wait()).await?;
+    transport.stop().await?;
+    ensure!(result?.success(), "native process failed");
+    Ok(())
+}
+fn install_capability(home: &Path, capability: &[u8]) -> Result<()> {
+    let auth = zeroize::Zeroizing::new(serde_json::to_vec(
+        &serde_json::json!({"OPENAI_API_KEY":std::str::from_utf8(capability)?}),
+    )?);
+    let auth_path = home.join("auth.json");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&auth_path)?
+        .write_all(&auth)?;
+    std::os::unix::fs::chown(&auth_path, Some(10001), Some(10001))?;
+    std::os::unix::fs::chown(home, Some(10001), Some(10001))?;
+    Ok(())
+}
+
+struct Launch<'a> {
+    executable: &'a std::fs::File,
+    home: &'a Path,
+    port: u16,
+}
+
+impl Launch<'_> {
+    fn spawn(&self, c: &Config, startup: &[u8]) -> Result<std::process::Child> {
+        use std::os::fd::AsRawFd;
+        let fd = self.executable.as_raw_fd();
+        let exec_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+        let mut recipe = native_recipe(
+            Settings {
+                harness: &c.host.harness,
+                model: &c.model,
+                terminal_input_enabled: c.host.terminal.input_enabled,
+            },
+            Paths {
+                executable: &exec_path,
+                workspace: &c.workspace,
+                private_home: self.home,
+            },
+            self.port,
+        )?;
+        supervisor_environment(
+            &mut recipe,
+            "AQ_SUPERVISOR_DISPATCH_ID",
+            &c.central.dispatch_id.to_string(),
+        )?;
+        let mut command = std::process::Command::new(recipe.executable);
+        command
+            .args(recipe.arguments)
+            .env_clear()
+            .envs(recipe.environment)
+            .env("HOME", self.home)
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(&c.workspace)
+            .stdin(std::process::Stdio::piped());
+        unsafe {
+            command.pre_exec(move || enter_native_identity(fd));
+        }
+        let mut child = command.spawn()?;
+        child
+            .stdin
+            .take()
+            .context("native stdin")?
+            .write_all(startup)?;
+        Ok(child)
+    }
+}
+
+fn private_home(c: &Config) -> Result<PathBuf> {
     let workspace = std::fs::symlink_metadata(&c.workspace)?;
     ensure!(
         workspace.is_dir()
@@ -152,17 +234,12 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
     let home = c.homes.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir(&home)?;
     std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))?;
-    let reply_credential = crate::credentials::stage_supervisor_credential(
-        &directory.join("supervisor.credential"),
-        &home,
-        c.host.deadline_boot_ms,
-    )
-    .await?;
-    std::os::unix::fs::chown(&reply_credential, Some(10001), Some(10001))?;
-    if c.subscription.is_some() {
-        return crate::subscription::native(&c, &directory, &home, &reply_credential, &startup)
-            .await;
-    }
+    Ok(home)
+}
+
+async fn start_transport(
+    c: &Config,
+) -> Result<(aq_responses_transport::ScopedResponsesTransport, u16)> {
     let key = Arc::new(crate::credentials::SecretFile::open(c.secret_file.clone())?);
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
@@ -183,21 +260,10 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
         key,
     )
     .await?;
-    let capability = transport.local_capability();
-    let auth = zeroize::Zeroizing::new(serde_json::to_vec(
-        &serde_json::json!({"OPENAI_API_KEY":std::str::from_utf8(&capability)?}),
-    )?);
-    let auth_path = home.join("auth.json");
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&auth_path)?
-        .write_all(&auth)?;
-    std::os::unix::fs::chown(&auth_path, Some(10001), Some(10001))?;
-    std::os::unix::fs::chown(&home, Some(10001), Some(10001))?;
-    // Retain the verified executable descriptor across exec; path replacement
-    // cannot substitute a different binary between verification and launch.
+    Ok((transport, port))
+}
+
+fn verified_executable(c: &Config) -> Result<std::fs::File> {
     let executable = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -212,7 +278,6 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
         "native executable rejected"
     );
     use std::io::Read;
-    use std::os::fd::AsRawFd;
     let mut bytes = Vec::new();
     (&executable)
         .take(512 * 1024 * 1024 + 1)
@@ -221,62 +286,26 @@ pub async fn native(path: &Path, expected: &str) -> Result<()> {
         bytes.len() <= 512 * 1024 * 1024 && Digest::of(&bytes) == c.native_digest,
         "native digest mismatch"
     );
-    drop(bytes);
-    let fd = executable.as_raw_fd();
-    let exec_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    let mut recipe = native_recipe(
-        &c.host.harness,
-        &c.model,
-        c.host.terminal.input_enabled,
-        Paths {
-            executable: &exec_path,
-            workspace: &c.workspace,
-            private_home: &home,
-        },
-        port,
-    )?;
-    supervisor_environment(
-        &mut recipe,
-        "AQ_SUPERVISOR_DISPATCH_ID",
-        &c.central.dispatch_id.to_string(),
-    )?;
-    let mut command = std::process::Command::new(recipe.executable);
-    command
-        .args(recipe.arguments)
-        .env_clear()
-        .envs(recipe.environment)
-        .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin")
-        .current_dir(&c.workspace)
-        .stdin(std::process::Stdio::piped());
-    unsafe {
-        command.pre_exec(move || {
-            // Leave the root wrapper's session and controlling tty first. The
-            // guardian's kill domain is subreaper/pidfd based, not session based.
-            new_session()?;
-            if libc::fcntl(fd, libc::F_SETFD, 0) < 0
-                || libc::setgroups(0, std::ptr::null()) != 0
-                || libc::setgid(10001) != 0
-                || libc::setuid(10001) != 0
-                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                || libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+    Ok(executable)
+}
+
+fn enter_native_identity(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    // Leave the root wrapper's session and controlling tty first. The
+    // guardian's kill domain is subreaper/pidfd based, not session based.
+    new_session()?;
+    if unsafe {
+        libc::fcntl(fd, libc::F_SETFD, 0) < 0
+            || libc::setgroups(0, std::ptr::null()) != 0
+            || libc::setgid(10001) != 0
+            || libc::setuid(10001) != 0
+            || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            || libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0
+    } {
+        return Err(std::io::Error::last_os_error());
     }
-    let mut child = command.spawn()?;
-    child
-        .stdin
-        .take()
-        .context("native stdin")?
-        .write_all(&startup)?;
-    let result = tokio::task::spawn_blocking(move || child.wait()).await?;
-    transport.stop().await?;
-    ensure!(result?.success(), "native process failed");
     Ok(())
 }
+
 /// Async-signal-safe `pre_exec` step: make the child a new session leader with
 /// no controlling terminal, detached from the root wrapper's session.
 pub(crate) fn new_session() -> std::io::Result<()> {

@@ -2,9 +2,7 @@
 //! pinned-versus-active comparison, the ordered public step graph and the
 //! pending human decision. Pure; the reads are in aq-server.
 use crate::{Error, Namespace, Result, step_inspection};
-use aq_playbook_host::model::{
-    Artifact, CallMode, Expr, IterationFailure, JoinMode, Operation, Playbook,
-};
+use aq_playbook_host::model::{Artifact, Operation, Playbook};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -145,144 +143,9 @@ impl DefinitionDetails {
     }
 }
 
-fn duration(ms: u64) -> String {
-    let (scale, unit) = [(3_600_000, "h"), (60_000, "min"), (1_000, "s")]
-        .into_iter()
-        .find(|(scale, _)| ms >= *scale && ms.is_multiple_of(*scale))
-        .unwrap_or((1, "ms"));
-    format!("{} {unit}", ms / scale)
-}
+mod facts;
+pub use facts::step_facts;
 
-/// Static facts for the inspector. Project names, modes and bounds only.
-/// Expressions, literal values, captured definitions and run data stay private.
-pub fn step_facts(playbook: &Playbook) -> BTreeMap<String, Vec<StepFact>> {
-    let facts = playbook
-        .steps
-        .iter()
-        .map(|(id, step)| {
-            let mut facts = Vec::new();
-            let mut add = |label, value: String| facts.push(StepFact { label, value });
-            match &step.op {
-                Operation::Invoke {
-                    input, bind, retry, ..
-                } => {
-                    if let Expr::Object { fields } = input {
-                        add(
-                            "Input fields",
-                            fields.keys().cloned().collect::<Vec<_>>().join(", "),
-                        );
-                    }
-                    add("Stores result as", bind.clone());
-                    if let Some(retry) = retry {
-                        add("Maximum attempts", retry.max_attempts.to_string());
-                    }
-                }
-                Operation::Decide { predicate } => {
-                    let operands = match predicate {
-                        Expr::Eq { left, right } | Expr::Lt { left, right } => {
-                            vec![&**left, &**right]
-                        }
-                        Expr::Exists { value } | Expr::Not { value } => vec![&**value],
-                        expr => vec![expr],
-                    };
-                    for operand in operands {
-                        if let Expr::Ref { root, path } = operand {
-                            add(
-                                "Checks",
-                                std::iter::once(root)
-                                    .chain(path)
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join("."),
-                            );
-                        }
-                    }
-                }
-                Operation::Wait {
-                    correlation,
-                    deadline_ms,
-                    bind,
-                    ..
-                } => {
-                    if !correlation.is_empty() {
-                        add(
-                            "Matches event fields",
-                            correlation.keys().cloned().collect::<Vec<_>>().join(", "),
-                        );
-                    }
-                    add("Deadline", duration(*deadline_ms));
-                    add("Stores result as", bind.clone());
-                }
-                Operation::ForEach {
-                    max_items,
-                    concurrency,
-                    on_failure,
-                    ..
-                } => {
-                    add("Maximum items", max_items.to_string());
-                    add("Parallel iterations", concurrency.to_string());
-                    add(
-                        "On iteration failure",
-                        match on_failure {
-                            IterationFailure::Stop => "Stop",
-                            IterationFailure::Continue => "Continue",
-                        }
-                        .into(),
-                    );
-                }
-                Operation::Call { mode, bind, .. } => {
-                    add(
-                        "Execution",
-                        match mode {
-                            CallMode::Wait => "Wait for the child playbook to finish",
-                            CallMode::OwnedAsync => "Start a child run owned by this run",
-                            CallMode::Independent => "Start a separate run",
-                        }
-                        .into(),
-                    );
-                    add("Stores result as", bind.clone());
-                }
-                Operation::Join {
-                    mode,
-                    deadline_ms,
-                    accepted_outcomes,
-                    bind,
-                    ..
-                } => {
-                    add(
-                        "Waits for",
-                        match mode {
-                            JoinMode::All => "All members to finish",
-                            JoinMode::AnyCompletion => "Any member to finish",
-                            JoinMode::AnyAccepted => "Any member with an accepted outcome",
-                        }
-                        .into(),
-                    );
-                    if !accepted_outcomes.is_empty() {
-                        add(
-                            "Accepted outcomes",
-                            accepted_outcomes
-                                .iter()
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        );
-                    }
-                    add("Deadline", duration(*deadline_ms));
-                    add("Stores result as", bind.clone());
-                }
-                Operation::Return { outcome, .. } => add("Outcome", outcome.clone()),
-            }
-            (id.clone(), facts)
-        })
-        .filter(|(_, facts)| !facts.is_empty())
-        .collect();
-    if serde_json::to_vec(&facts).is_ok_and(|encoded| encoded.len() <= 32768) {
-        facts
-    } else {
-        BTreeMap::new()
-    }
-}
 /// X32: steps reachable from the run's entry in breadth-first order from
 /// `start` (successors by edge label, then `on_error`).
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]

@@ -235,10 +235,8 @@ impl SelectionDefaults {
     /// The rules of [`SelectionPolicy::validate`] that do not depend on an
     /// execution profile.
     pub fn check(&self) -> Result<(), String> {
-        if self.max_wake_attempts == 0
-            || self.max_wake_lineage_elapsed_ms == 0
-            || self.max_never_granted_offers == 0
-        {
+        let wake_allowed = self.max_wake_attempts > 0 && self.max_wake_lineage_elapsed_ms > 0;
+        if !wake_allowed || self.max_never_granted_offers == 0 {
             return Err("wake and never-granted limits must be above zero".into());
         }
         (self.policy(1, Vec::new()).validate()).map_err(|crate::Error::Invalid(message)| message)

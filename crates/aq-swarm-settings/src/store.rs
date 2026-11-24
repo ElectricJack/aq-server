@@ -143,7 +143,11 @@ pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Res
         .await?;
     let mut settings = lock(&mut tx).await?;
     let payload = serde_json::json!({"kind":"matrix","request":request});
-    if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
+    let operation = OperationKey {
+        actor,
+        id: request.operation_id,
+    };
+    if let Some(receipt) = replay(&mut tx, operation, &payload).await? {
         return Ok(receipt);
     }
     let levels = levels(&mut tx).await?;
@@ -168,7 +172,7 @@ pub async fn save(pool: &PgPool, actor: uuid::Uuid, request: SaveRequest) -> Res
     settings.reduced = request.reduced;
     persist(&mut tx, &mut settings).await?;
     let snapshot = snapshot(&mut tx, settings, levels).await?;
-    record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
+    record(&mut tx, operation, payload, &snapshot).await?;
     tx.commit().await?;
     Ok(snapshot)
 }
@@ -184,7 +188,11 @@ pub async fn set_limits(
         .await?;
     let mut settings = lock(&mut tx).await?;
     let payload = serde_json::json!({"kind":"limits","request":request});
-    if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
+    let operation = OperationKey {
+        actor,
+        id: request.operation_id,
+    };
+    if let Some(receipt) = replay(&mut tx, operation, &payload).await? {
         return Ok(receipt);
     }
     let levels = levels(&mut tx).await?;
@@ -195,20 +203,30 @@ pub async fn set_limits(
         return Err(invalid("Select a provider or intelligence class limit"));
     }
     if let Some(provider) = request.provider {
+        settings.limits.set_provider(provider, &levels)?;
+    }
+    if let Some(cell) = request.cell {
+        settings.limits.set_cell(cell, &levels)?;
+    }
+    persist(&mut tx, &mut settings).await?;
+    let snapshot = snapshot(&mut tx, settings, levels).await?;
+    record(&mut tx, operation, payload, &snapshot).await?;
+    tx.commit().await?;
+    Ok(snapshot)
+}
+impl Limits {
+    fn set_provider(&mut self, provider: ProviderLimit, levels: &[LevelCell]) -> Result<()> {
         if !levels.iter().any(|c| c.provider == provider.provider) {
             return Err(invalid("Select a supported provider"));
         }
-        settings
-            .limits
-            .provider_limits
+        self.provider_limits
             .retain(|p| p.provider != provider.provider);
-        settings.limits.provider_limits.push(provider);
-        settings
-            .limits
-            .provider_limits
+        self.provider_limits.push(provider);
+        self.provider_limits
             .sort_by(|a, b| a.provider.cmp(&b.provider));
+        Ok(())
     }
-    if let Some(cell) = request.cell {
+    fn set_cell(&mut self, cell: IndividualCellLimit, levels: &[LevelCell]) -> Result<()> {
         if !levels
             .iter()
             .any(|c| c.provider == cell.provider && c.intelligence_class == cell.intelligence_class)
@@ -217,19 +235,15 @@ pub async fn set_limits(
                 "Select a supported provider and intelligence class",
             ));
         }
-        settings.limits.cell_limits.retain(|c| {
+        self.cell_limits.retain(|c| {
             c.provider != cell.provider || c.intelligence_class != cell.intelligence_class
         });
-        settings.limits.cell_limits.push(cell);
-        settings.limits.cell_limits.sort_by(|a, b| {
+        self.cell_limits.push(cell);
+        self.cell_limits.sort_by(|a, b| {
             (&a.provider, &a.intelligence_class).cmp(&(&b.provider, &b.intelligence_class))
         });
+        Ok(())
     }
-    persist(&mut tx, &mut settings).await?;
-    let snapshot = snapshot(&mut tx, settings, levels).await?;
-    record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
-    tx.commit().await?;
-    Ok(snapshot)
 }
 pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) -> Result<Snapshot> {
     let mut tx = pool.begin().await?;
@@ -238,7 +252,11 @@ pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) ->
         .await?;
     let mut settings = lock(&mut tx).await?;
     let payload = serde_json::json!({"kind":"mode","request":request});
-    if let Some(receipt) = replay(&mut tx, actor, request.operation_id, &payload).await? {
+    let operation = OperationKey {
+        actor,
+        id: request.operation_id,
+    };
+    if let Some(receipt) = replay(&mut tx, operation, &payload).await? {
         return Ok(receipt);
     }
     if settings.revision != request.expected_revision {
@@ -257,7 +275,7 @@ pub async fn set_mode(pool: &PgPool, actor: uuid::Uuid, request: ModeRequest) ->
     settings.active_mode = request.active_mode;
     persist(&mut tx, &mut settings).await?;
     let snapshot = snapshot(&mut tx, settings, levels).await?;
-    record(&mut tx, actor, request.operation_id, payload, &snapshot).await?;
+    record(&mut tx, operation, payload, &snapshot).await?;
     tx.commit().await?;
     Ok(snapshot)
 }
@@ -286,23 +304,22 @@ async fn persist(conn: &mut PgConnection, settings: &mut Settings) -> Result<()>
 
 async fn replay(
     conn: &mut PgConnection,
-    actor: uuid::Uuid,
-    id: uuid::Uuid,
+    operation: OperationKey,
     request: &serde_json::Value,
 ) -> Result<Option<Snapshot>> {
-    if id.is_nil() {
+    if operation.id.is_nil() {
         return Err(invalid("Enter a valid operation ID"));
     }
     let row = sqlx::query(
         "SELECT actor_id,request,receipt FROM swarm_setting_operations WHERE operation_id=$1",
     )
-    .bind(id)
+    .bind(operation.id)
     .fetch_optional(conn)
     .await?;
     let Some(row) = row else {
         return Ok(None);
     };
-    if row.get::<uuid::Uuid, _>("actor_id") != actor
+    if row.get::<uuid::Uuid, _>("actor_id") != operation.actor
         || row.get::<serde_json::Value, _>("request") != *request
     {
         return Err(conflict("Operation ID already used for another request"));
@@ -311,16 +328,20 @@ async fn replay(
         .map(Some)
         .map_err(|_| Error::Internal)
 }
-async fn record(
-    conn: &mut PgConnection,
+#[derive(Clone, Copy)]
+struct OperationKey {
     actor: uuid::Uuid,
     id: uuid::Uuid,
+}
+async fn record(
+    conn: &mut PgConnection,
+    operation: OperationKey,
     request: serde_json::Value,
     receipt: &Snapshot,
 ) -> Result<()> {
     let receipt = serde_json::to_value(receipt).map_err(|_| Error::Internal)?;
     sqlx::query("INSERT INTO swarm_setting_operations (operation_id,actor_id,request,receipt) VALUES ($1,$2,$3,$4)")
-        .bind(id).bind(actor).bind(request).bind(receipt).execute(conn).await?;
+        .bind(operation.id).bind(operation.actor).bind(request).bind(receipt).execute(conn).await?;
     Ok(())
 }
 pub async fn operation(pool: &PgPool, actor: uuid::Uuid, id: uuid::Uuid) -> Result<Snapshot> {

@@ -115,18 +115,22 @@ fn decode<T: serde::de::DeserializeOwned + Validate>(bytes: &[u8], maximum: usiz
     Ok(value)
 }
 fn object_shapes(value: &serde_json::Value, root: bool) -> Result<()> {
-    if let serde_json::Value::Object(fields) = value {
-        for (name, value) in fields {
-            if root && name == "items" && value.is_array() {
-                for item in value.as_array().expect("checked array") {
-                    require(item.is_object(), "media item object")?;
-                    object_shapes(item, false)?;
-                }
-            } else {
-                require(!value.is_array(), "JSON object shape")?;
-                object_shapes(value, false)?;
-            }
+    let Some(fields) = value.as_object() else {
+        return Ok(());
+    };
+    for (name, value) in fields {
+        match value.as_array() {
+            Some(items) if root && name == "items" => validate_item_shapes(items)?,
+            Some(_) => return Err(Invalid::Field("JSON object shape")),
+            None => object_shapes(value, false)?,
         }
+    }
+    Ok(())
+}
+fn validate_item_shapes(items: &[serde_json::Value]) -> Result<()> {
+    for item in items {
+        require(item.is_object(), "media item object")?;
+        object_shapes(item, false)?;
     }
     Ok(())
 }
@@ -445,16 +449,20 @@ impl Receipt {
         Ok(Digest::of(&bytes))
     }
 }
-impl Validate for Receipt {
-    fn validate(&self) -> Result<()> {
-        require(self.schema_version == 1, "receipt schema")?;
-        self.binding.validate()?;
-        self.input.validate()?;
-        if let Some(capture) = &self.capture {
-            capture.validate()?;
-        }
-        self.variants.render.validate()?;
-        self.variants.preview.validate()?;
+impl Receipt {
+    fn validate_clip(&self, clip: &Clip) -> Result<()> {
+        let preview = &self.variants.preview;
+        let render = &self.variants.render;
+        let passthrough = (render.mime, &render.digest, render.bytes)
+            == (Mime::Mp4, &self.input.digest, self.input.bytes);
+        let duration = (1..=MAX_CLIP_DURATION_MS).contains(&clip.duration_ms);
+        let preview_fits = preview.width.max(preview.height) <= PREVIEW_EDGE;
+        require(
+            passthrough && preview_fits && duration && clip.poster_artifact_id != self.artifact_id,
+            "clip variants",
+        )
+    }
+    fn validate_variants(&self) -> Result<()> {
         let p = &self.variants.preview;
         let r = &self.variants.render;
         require(
@@ -467,19 +475,23 @@ impl Validate for Receipt {
                     && self.input.bytes <= MAX_INPUT_BYTES as u64
                     && (p.width, p.height) == preview_dimensions(r.width, r.height)?,
                 "image variants",
-            )?,
-            (RenderingPolicy::Mp4PassthroughV1, Some(clip)) => require(
-                r.mime == Mime::Mp4
-                    && r.digest == self.input.digest
-                    && r.bytes == self.input.bytes
-                    && p.width <= PREVIEW_EDGE
-                    && p.height <= PREVIEW_EDGE
-                    && (1..=MAX_CLIP_DURATION_MS).contains(&clip.duration_ms)
-                    && clip.poster_artifact_id != self.artifact_id,
-                "clip variants",
-            )?,
-            _ => return Err(Invalid::Field("rendering policy")),
+            ),
+            (RenderingPolicy::Mp4PassthroughV1, Some(clip)) => self.validate_clip(clip),
+            _ => Err(Invalid::Field("rendering policy")),
         }
+    }
+}
+impl Validate for Receipt {
+    fn validate(&self) -> Result<()> {
+        require(self.schema_version == 1, "receipt schema")?;
+        self.binding.validate()?;
+        self.input.validate()?;
+        if let Some(capture) = &self.capture {
+            capture.validate()?;
+        }
+        self.variants.render.validate()?;
+        self.variants.preview.validate()?;
+        self.validate_variants()?;
         timestamp(self.retained_at_ms)?;
         timestamp(self.retain_until_ms)?;
         require(
@@ -598,17 +610,25 @@ impl Default for Limits {
 }
 impl Validate for Limits {
     fn validate(&self) -> Result<()> {
+        let bounds = [
+            (self.max_input_bytes, MAX_INPUT_BYTES as u64),
+            (self.max_render_bytes, MAX_RENDER_BYTES as u64),
+            (self.max_preview_bytes, MAX_PREVIEW_BYTES as u64),
+            (self.max_pixels, MAX_PIXELS),
+            (u64::from(self.max_dimension), u64::from(MAX_DIMENSION)),
+            (
+                u64::from(self.max_result_artifacts),
+                MAX_REPORT_ARTIFACTS as u64,
+            ),
+            (self.upload_ttl_ms, MAX_UPLOAD_TTL_MS),
+            (self.retention_ms, MAX_RETENTION_MS),
+            (self.max_clip_bytes, MAX_CLIP_BYTES as u64),
+            (self.max_clip_duration_ms, MAX_CLIP_DURATION_MS),
+        ];
         require(
-            (1..=MAX_INPUT_BYTES as u64).contains(&self.max_input_bytes)
-                && (1..=MAX_RENDER_BYTES as u64).contains(&self.max_render_bytes)
-                && (1..=MAX_PREVIEW_BYTES as u64).contains(&self.max_preview_bytes)
-                && (1..=MAX_PIXELS).contains(&self.max_pixels)
-                && (1..=MAX_DIMENSION).contains(&self.max_dimension)
-                && (1..=MAX_REPORT_ARTIFACTS as u32).contains(&self.max_result_artifacts)
-                && (1..=MAX_UPLOAD_TTL_MS).contains(&self.upload_ttl_ms)
-                && (1..=MAX_RETENTION_MS).contains(&self.retention_ms)
-                && (1..=MAX_CLIP_BYTES as u64).contains(&self.max_clip_bytes)
-                && (1..=MAX_CLIP_DURATION_MS).contains(&self.max_clip_duration_ms)
+            bounds
+                .into_iter()
+                .all(|(value, maximum)| (1..=maximum).contains(&value))
                 && self.upload_ttl_ms < self.retention_ms,
             "limits",
         )
@@ -707,6 +727,13 @@ impl Validate for UploadStatus {
         if let Some(c) = &self.capture {
             c.validate()?;
         }
+        self.validate_deadlines()?;
+        self.validate_artifact()?;
+        self.validate_recovery()
+    }
+}
+impl UploadStatus {
+    fn validate_deadlines(&self) -> Result<()> {
         timestamp(self.created_at_ms)?;
         timestamp(self.upload_expires_at_ms)?;
         timestamp(self.retain_until_ms)?;
@@ -716,7 +743,9 @@ impl Validate for UploadStatus {
                 && self.retain_until_ms > self.upload_expires_at_ms
                 && self.retain_until_ms - self.created_at_ms <= self.limits.retention_ms,
             "intent deadlines",
-        )?;
+        )
+    }
+    fn validate_artifact(&self) -> Result<()> {
         require(
             (self.state == UploadState::Retained) == self.artifact.is_some(),
             "retained artifact",
@@ -725,19 +754,19 @@ impl Validate for UploadStatus {
             a.validate()?;
             let r = &a.receipt;
             require(
-                r.artifact_id == self.operation_id
-                    && r.uploader_id == self.actor_id
-                    && r.binding == self.binding
-                    && r.input == self.input
-                    && r.capture == self.capture
-                    && r.media() == self.media
+                (r.artifact_id, r.uploader_id, &r.binding)
+                    == (self.operation_id, self.actor_id, &self.binding)
+                    && (&r.input, &r.capture, r.media())
+                        == (&self.input, &self.capture, self.media)
                     && r.clip.as_ref().map(|c| c.poster_artifact_id) == self.poster_artifact_id
-                    && r.retained_at_ms >= self.created_at_ms
-                    && r.retained_at_ms < self.upload_expires_at_ms
+                    && (self.created_at_ms..self.upload_expires_at_ms).contains(&r.retained_at_ms)
                     && r.retain_until_ms == self.retain_until_ms,
                 "intent receipt",
             )?;
         }
+        Ok(())
+    }
+    fn validate_recovery(&self) -> Result<()> {
         require(
             (self.state == UploadState::Rejected) == self.rejection.is_some(),
             "rejection",
@@ -768,6 +797,25 @@ impl MediaPage {
         decode(bytes, MAX_PAGE_BYTES)
     }
 }
+impl MediaPage {
+    fn validate_available(&self, receipt: &Receipt) -> Result<()> {
+        let r = &receipt.variants.render;
+        let p = &receipt.variants.preview;
+        require(
+            self.server_time_ms < receipt.retain_until_ms
+                && r.bytes <= self.limits.max_render_bytes
+                && p.bytes <= self.limits.max_preview_bytes
+                && receipt.input.bytes <= receipt.media().admitted_input_bytes(&self.limits)
+                && receipt
+                    .clip
+                    .as_ref()
+                    .is_none_or(|c| c.duration_ms <= self.limits.max_clip_duration_ms)
+                && u64::from(r.width) * u64::from(r.height) <= self.limits.max_pixels
+                && r.width.max(r.height) <= self.limits.max_dimension,
+            "current media limits",
+        )
+    }
+}
 impl Validate for MediaPage {
     fn validate(&self) -> Result<()> {
         timestamp(self.server_time_ms)?;
@@ -789,22 +837,7 @@ impl Validate for MediaPage {
                 "media observation time",
             )?;
             if a.availability.state == AvailabilityState::Available {
-                let r = &a.receipt.variants.render;
-                let p = &a.receipt.variants.preview;
-                require(
-                    self.server_time_ms < a.receipt.retain_until_ms
-                        && r.bytes <= self.limits.max_render_bytes
-                        && p.bytes <= self.limits.max_preview_bytes
-                        && a.receipt.input.bytes
-                            <= a.receipt.media().admitted_input_bytes(&self.limits)
-                        && a.receipt
-                            .clip
-                            .as_ref()
-                            .is_none_or(|c| c.duration_ms <= self.limits.max_clip_duration_ms)
-                        && u64::from(r.width) * u64::from(r.height) <= self.limits.max_pixels
-                        && r.width.max(r.height) <= self.limits.max_dimension,
-                    "current media limits",
-                )?;
+                self.validate_available(&a.receipt)?;
             }
         }
         Ok(())

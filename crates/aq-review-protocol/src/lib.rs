@@ -32,6 +32,18 @@ fn artifact(value: &ArtifactRef) -> Result<()> {
         .validate()
         .map_err(|_| Invalid("artifact version"))
 }
+fn content_artifact(
+    content: &impl Serialize,
+    id: String,
+    identity_error: &'static str,
+    version_error: &'static str,
+) -> Result<ArtifactRef> {
+    Ok(ArtifactRef {
+        id: Text::new(id).map_err(|_| Invalid(identity_error))?,
+        version: Text::new("1").map_err(|_| Invalid(version_error))?,
+        digest: digest(content)?,
+    })
+}
 pub fn canonical_bytes(value: &impl Serialize) -> Result<Vec<u8>> {
     struct Count(usize);
     impl std::io::Write for Count {
@@ -209,12 +221,12 @@ impl ReviewSubject {
     }
     pub fn artifact(&self) -> Result<ArtifactRef> {
         self.validate()?;
-        Ok(ArtifactRef {
-            id: Text::new(format!("aq.review-subject/{}", self.result.report_id))
-                .map_err(|_| Invalid("subject identity"))?,
-            version: Text::new("1").map_err(|_| Invalid("subject version"))?,
-            digest: digest(self)?,
-        })
+        content_artifact(
+            self,
+            format!("aq.review-subject/{}", self.result.report_id),
+            "subject identity",
+            "subject version",
+        )
     }
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -351,15 +363,15 @@ impl DecisionReceipt {
     }
     pub fn artifact(&self) -> Result<ArtifactRef> {
         self.validate()?;
-        Ok(ArtifactRef {
-            id: Text::new(format!(
+        content_artifact(
+            self,
+            format!(
                 "aq.human-decision/{}/{}",
                 self.decision_id, self.decision_revision
-            ))
-            .map_err(|_| Invalid("receipt identity"))?,
-            version: Text::new("1").map_err(|_| Invalid("receipt version"))?,
-            digest: digest(self)?,
-        })
+            ),
+            "receipt identity",
+            "receipt version",
+        )
     }
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -406,6 +418,85 @@ record!(CheckReceipt {
     disposition: CheckDisposition,
     executor: ExecutorEvidence
 });
+fn validate_checked_inputs(checked_artifacts: &[ArtifactRef]) -> Result<()> {
+    require(
+        (1..=64).contains(&checked_artifacts.len()),
+        "checked input cardinality",
+    )?;
+    let mut ids = BTreeSet::new();
+    for a in checked_artifacts {
+        artifact(a)?;
+        require(
+            ids.insert((&a.id, &a.version)),
+            "duplicate checked artifact identity",
+        )?;
+    }
+    Ok(())
+}
+
+impl ExecutorEvidence {
+    fn validate(&self, validator: &ArtifactRef, disposition: CheckDisposition) -> Result<()> {
+        let definition = match self {
+            Self::InProcessReadOnly { definition, .. }
+            | Self::StoppedProcess { definition, .. }
+            | Self::Incomplete { definition, .. } => definition,
+        };
+        artifact(definition)?;
+        require(
+            definition == validator,
+            "executor definition differs from validator",
+        )?;
+        match self {
+            ExecutorEvidence::InProcessReadOnly {
+                checked_artifacts,
+                result_artifact,
+                ..
+            } => {
+                artifact(result_artifact)?;
+                validate_checked_inputs(checked_artifacts)?;
+            }
+            ExecutorEvidence::StoppedProcess {
+                binding,
+                started_receipt,
+                stopped_receipt,
+                result_artifacts,
+                exit_code,
+                ..
+            } => {
+                binding
+                    .validate()
+                    .map_err(|_| Invalid("check process binding"))?;
+                artifact(started_receipt)?;
+                artifact(stopped_receipt)?;
+                require(result_artifacts.len() <= 16, "check result refs bound")?;
+                for a in result_artifacts {
+                    artifact(a)?;
+                }
+                if disposition == CheckDisposition::Passed {
+                    require(*exit_code == 0, "passed process requires actual zero exit")?;
+                }
+            }
+            ExecutorEvidence::Incomplete { evidence, .. } => {
+                require(evidence.len() <= 16, "incomplete refs bound")?;
+                for a in evidence {
+                    artifact(a)?;
+                }
+                require(
+                    matches!(
+                        disposition,
+                        CheckDisposition::Unknown
+                            | CheckDisposition::TimedOut
+                            | CheckDisposition::Cancelled
+                            | CheckDisposition::Stale
+                    ),
+                    "incomplete evidence cannot pass or fail as executed",
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CheckReceipt {
     pub fn validate(&self) -> Result<()> {
         require(self.schema_version == SCHEMA_VERSION, "check schema")?;
@@ -416,82 +507,7 @@ impl CheckReceipt {
         artifact(&self.subject)?;
         artifact(&self.validator)?;
         revision(self.recorded_at_ms)?;
-        match &self.executor {
-            ExecutorEvidence::InProcessReadOnly {
-                definition,
-                checked_artifacts,
-                result_artifact,
-            } => {
-                artifact(definition)?;
-                require(
-                    definition == &self.validator,
-                    "executor definition differs from validator",
-                )?;
-                artifact(result_artifact)?;
-                require(
-                    (1..=64).contains(&checked_artifacts.len()),
-                    "checked input cardinality",
-                )?;
-                let mut ids = BTreeSet::new();
-                for a in checked_artifacts {
-                    artifact(a)?;
-                    require(
-                        ids.insert((&a.id, &a.version)),
-                        "duplicate checked artifact identity",
-                    )?;
-                }
-            }
-            ExecutorEvidence::StoppedProcess {
-                definition,
-                binding,
-                started_receipt,
-                stopped_receipt,
-                result_artifacts,
-                exit_code,
-            } => {
-                artifact(definition)?;
-                require(
-                    definition == &self.validator,
-                    "executor definition differs from validator",
-                )?;
-                binding
-                    .validate()
-                    .map_err(|_| Invalid("check process binding"))?;
-                artifact(started_receipt)?;
-                artifact(stopped_receipt)?;
-                require(result_artifacts.len() <= 16, "check result refs bound")?;
-                for a in result_artifacts {
-                    artifact(a)?;
-                }
-                if self.disposition == CheckDisposition::Passed {
-                    require(*exit_code == 0, "passed process requires actual zero exit")?;
-                }
-            }
-            ExecutorEvidence::Incomplete {
-                definition,
-                evidence,
-            } => {
-                artifact(definition)?;
-                require(
-                    definition == &self.validator,
-                    "executor definition differs from validator",
-                )?;
-                require(evidence.len() <= 16, "incomplete refs bound")?;
-                for a in evidence {
-                    artifact(a)?;
-                }
-                require(
-                    matches!(
-                        self.disposition,
-                        CheckDisposition::Unknown
-                            | CheckDisposition::TimedOut
-                            | CheckDisposition::Cancelled
-                            | CheckDisposition::Stale
-                    ),
-                    "incomplete evidence cannot pass or fail as executed",
-                )?;
-            }
-        }
+        self.executor.validate(&self.validator, self.disposition)?;
         canonical_bytes(self)?;
         Ok(())
     }
@@ -505,16 +521,12 @@ impl CheckReceipt {
     }
     pub fn artifact(&self) -> Result<ArtifactRef> {
         self.validate()?;
-        Ok(ArtifactRef {
-            id: Text::new(format!(
-                "aq.check/{}/{}",
-                self.check_id.as_str(),
-                self.operation_id
-            ))
-            .map_err(|_| Invalid("check receipt identity"))?,
-            version: Text::new("1").map_err(|_| Invalid("check receipt version"))?,
-            digest: digest(self)?,
-        })
+        content_artifact(
+            self,
+            format!("aq.check/{}/{}", self.check_id.as_str(), self.operation_id),
+            "check receipt identity",
+            "check receipt version",
+        )
     }
 }
 pub fn subject_schema() -> serde_json::Value {

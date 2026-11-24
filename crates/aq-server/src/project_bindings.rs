@@ -155,6 +155,8 @@ async fn put(
 ) -> Result<Json<Value>> {
     put_request(&state, actor.id, id, request).await.map(Json)
 }
+/// The conflict of a binding that names an absent or revoked worker: it never validates.
+pub(crate) const ABSENT_WORKER: &str = "project refers to absent or revoked worker identity";
 /// Owner project-binding mutation core, shared by the route and D2 onboarding.
 pub(crate) async fn put_binding(
     state: &AppState,
@@ -209,9 +211,7 @@ async fn put_request(
             .await
             .map_err(db)?;
     if count != nodes.len() as i64 {
-        return Err(conflict(
-            "project refers to absent or revoked worker identity",
-        ));
+        return Err(conflict(ABSENT_WORKER));
     }
     let observation = external::observe(&state, &request.binding).await;
     if observation.repository != ExternalStatus::Verified
@@ -516,9 +516,11 @@ async fn check_eligibility_current(
         &latest,
         request,
         &state.config.projects,
-        &observation,
-        node_live,
-        (state.clock)().timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &observation,
+            node_live,
+            (state.clock)().timestamp_millis().max(1) as u64,
+        ),
     );
     if latest.revision != record.revision {
         result
@@ -593,9 +595,11 @@ pub(crate) async fn fence_for_offer(
         &record,
         &request,
         &state.config.projects,
-        &frozen.binding_observation,
-        live,
-        now.timestamp_millis().max(1) as u64,
+        EligibilityEvidence::new(
+            &frozen.binding_observation,
+            live,
+            now.timestamp_millis().max(1) as u64,
+        ),
     );
     if aq_profiles::digest(&state.config.projects).map_err(|_| AppError::Internal)?
         != frozen.worker_membership_digest
