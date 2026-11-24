@@ -177,7 +177,7 @@ impl Bridge {
             }
             _ => return Err(CallError::Arguments),
         };
-        response.map_err(|_| CallError::Failed("AQ tool did not return a result. For an uncertain mutation, use operation.show before retrying."))
+        response.map_err(|_| CallError::Failed("AQ tool did not return a result. If the mutation outcome is uncertain, replay the exact request with the same operation_id."))
     }
 }
 
