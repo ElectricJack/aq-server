@@ -45,9 +45,9 @@ send completion and blocker messages to their supervisor conversation.
 service with Docker access. It creates only scope-labelled
 `aq-ms1-supervisor-*` containers from a digest-pinned host image. Each has a
 read-only root filesystem, private writable workspace/home/tmp, private PID namespace, 0.5 CPU, 2 GiB memory, 512 processes, a distinct durable
-state volume, and no Docker socket. The manager never removes, replaces or
-blindly restarts retained containers. Upgrades and uncertain generations need
-operator inspection. Stopping the manager leaves controllers alive; dashboard
+state volume, and no Docker socket. Routine reconciliation retains existing
+containers. The explicit upgrade command replaces a controller after a confirmed
+stop. An uncertain generation requires operator inspection. Stopping the manager leaves controllers alive; dashboard
 Stop requests a confirmed native stop.
 
 The mode-0600 manager JSON supplies `image` (Docker sha256 image ID), `prefix`,
@@ -112,6 +112,14 @@ ownership and mode. Upcoming turns read the new token. The shared mutable Codex
 login remains at `/login/auth.json` and its existing refresh path still applies.
 A Codex-only installation can omit both Claude fields. A Claude-only installation
 omits the three Codex fields and `subscription_file`.
+
+To verify the CLI and tool broker before rollout, run the pinned native binary
+against the loopback qualification fixture. This uses synthetic credentials and
+checks discovery, a task creation receipt and the final reply.
+
+```sh
+python3 scripts/claude-supervisor-cli-smoke.py "$CLAUDE_BINARY" --host-binary "$SUPERVISOR_BINARY"
+```
 
 ### Upgrade an existing conversation
 
