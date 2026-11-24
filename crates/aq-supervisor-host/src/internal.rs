@@ -7,7 +7,7 @@
 //! Internal work takes no worker slot and is outside swarm admission: nothing
 //! here reads swarm settings or admits a supervisor generation.
 mod agent;
-mod claude;
+pub(crate) mod claude;
 mod codex;
 
 use crate::{
@@ -30,7 +30,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod config;
 mod directories;
-mod process;
+pub(crate) mod process;
 mod queue;
 
 pub use config::{Harness, InternalConfig};

@@ -13,6 +13,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod claude;
+
 /// The uid and gid agent work runs as; ordinary runs use [`Identity::NATIVE`]'s.
 pub(crate) const AGENT_UID: u32 = 10002;
 
@@ -82,11 +84,34 @@ pub async fn native(c: &Config, home: &Path, credential: &Path, startup: &[u8]) 
         settings.instructions.len() <= 131072,
         "supervisor instruction bound"
     );
+    let executable = verify_native(&c.native, &c.native_digest, identity)?;
+    let actions = home.join("action-receipts");
+    let text = match c.host.harness.harness.as_str() {
+        "codex" => codex_turn(c, home, credential, startup, &executable, &actions).await?,
+        "claude" => claude::turn(c, home, credential, startup, &executable, &actions).await?,
+        _ => anyhow::bail!("unsupported subscription harness"),
+    };
+    let token = protected_read_native(credential, identity.run_as)?;
+    let text = text.replace(std::str::from_utf8(&token)?, "[credential redacted]");
+    publish(c, credential, &shorten_message(text), &actions).await
+}
+
+async fn codex_turn(
+    c: &Config,
+    home: &Path,
+    credential: &Path,
+    startup: &[u8],
+    executable: &std::fs::File,
+    actions: &Path,
+) -> Result<String> {
+    let identity = Identity::NATIVE;
+    let settings = c
+        .subscription
+        .as_ref()
+        .context("subscription mode missing")?;
     let auth = stage_login(&c.secret_file, home, identity)?;
     let auth_path = home.join("auth.json");
-    let executable = verify_native(&c.native, &c.native_digest, identity)?;
     let output = home.join("last-message.txt");
-    let actions = home.join("action-receipts");
     let args = exec_arguments(
         "danger-full-access",
         c.model.model.as_str(),
@@ -94,9 +119,9 @@ pub async fn native(c: &Config, home: &Path, credential: &Path, startup: &[u8]) 
         &output,
     )?;
     let overrides =
-        supervisor_overrides(settings, c.model.reasoning.as_str(), credential, &actions)?;
+        supervisor_overrides(settings, c.model.reasoning.as_str(), credential, actions)?;
     let mut command = native_command(
-        &executable,
+        executable,
         exec_finish(args, overrides),
         CommandHome {
             home,
@@ -117,18 +142,13 @@ pub async fn native(c: &Config, home: &Path, credential: &Path, startup: &[u8]) 
     let _ = std::fs::remove_file(&auth_path);
     copied?;
     ensure!(status.success(), "native supervisor turn failed");
-    let mut text = read_message(&output)?;
-    let aq_token = Zeroizing::new(protected_read_native(credential, identity.run_as)?);
-    text = text.replace(std::str::from_utf8(&aq_token)?, "[credential redacted]");
-    let text = redact_login(
-        text,
+    redact_login(
+        read_reply(&output, identity.run_as)?,
         &[
             &auth,
             &Zeroizing::new(protected_read(&c.secret_file, 65536)?),
         ],
-    )?;
-
-    publish(c, credential, &text, &actions).await
+    )
 }
 
 fn supervisor_overrides(
@@ -533,8 +553,7 @@ pub(crate) fn read_reply(path: &Path, owner: u32) -> Result<String> {
     Ok(body)
 }
 
-fn read_message(path: &Path) -> Result<String> {
-    let mut body = read_reply(path, Identity::NATIVE.run_as)?;
+fn shorten_message(mut body: String) -> String {
     if body.len() > 16000 {
         let mut end = 15900;
         while !body.is_char_boundary(end) {
@@ -543,8 +562,9 @@ fn read_message(path: &Path) -> Result<String> {
         body.truncate(end);
         body.push_str("\n[Reply shortened to fit the conversation.]");
     }
-    Ok(body)
+    body
 }
+
 async fn publish(c: &Config, credential: &Path, body: &str, actions: &Path) -> Result<()> {
     let pool = sqlx::PgPool::connect(&c.database_url).await?;
     let existing: bool = sqlx::query_scalar(
