@@ -317,6 +317,16 @@ impl Service<'_> {
         let mut ctl = ctl.clone();
         ctl.profile["snapshot_digest"] = serde_json::json!(digest);
         let ctl = &ctl;
+        let Some(selection) = plan::selection(config, &ctl.profile)? else {
+            let harness = if ctl.profile["harness"] == "claude" {
+                "Claude"
+            } else {
+                "Codex"
+            };
+            let stage = format!("Waiting for {harness} to be installed for this supervisor");
+            self.report("waiting", &stage, None).await?;
+            return Ok(());
+        };
         if let Some(reason) = crate::config::swarm_wait(pool, Some(&ctl.profile)).await? {
             self.report("waiting", swarm_stage(reason), None).await?;
             return Ok(());
@@ -331,7 +341,7 @@ impl Service<'_> {
         )
         .await
         .map_err(api_error)?;
-        let candidate = plan::assemble(config, ctl, generation, turn)?;
+        let candidate = plan::assemble(config, ctl, generation, turn, &selection)?;
         plan::install(config, &candidate)?;
         let (_, host) = installed(config, pool)?.context("installed supervisor turn missing")?;
         let state = host

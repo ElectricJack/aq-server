@@ -1,4 +1,5 @@
 use super::*;
+use aq_session_host::HostAdapter;
 #[cfg(feature = "supervisor_full_access")]
 #[test]
 fn full_access_instructions_describe_the_toolchain_setup_task() {
@@ -13,10 +14,11 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         helper: PathBuf::from("/usr/local/bin/aq-session-host"),
         tmux: PathBuf::from("/usr/bin/tmux"),
         tmux_version: "tmux 3.3a".into(),
-        native: PathBuf::from("/opt/aq/bin/codex"),
-        native_digest: Digest::of(b"native"),
+        native: Some(PathBuf::from("/opt/aq/bin/codex")),
+        native_digest: Some(Digest::of(b"native")),
         image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
-        secret_file: root.join("subscription.json"),
+        secret_file: Some(root.join("subscription.json")),
+        claude: None,
         server_origin: "http://server:8081".into(),
         automatic_turn_retries: default_turn_retries(),
     };
@@ -29,7 +31,7 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         project: None,
         label: "Global supervisor".into(),
     };
-    let text = instructions(&config, &control);
+    let text = instructions(&config, &control, "codex");
     #[cfg(feature = "project_environments")]
     for want in [
         "Set up the sandbox toolchain",
@@ -51,15 +53,25 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
             project: Some(Uuid::new_v4()),
             ..control
         };
-        assert!(!instructions(&config, &scoped).contains(".aq/environments"));
+        assert!(!instructions(&config, &scoped, "codex").contains(".aq/environments"));
     }
 }
 #[test]
-fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
+fn assembled_subscription_plans_satisfy_the_frozen_host_contract() {
+    check_assembled_plan("codex", "openai", "medium", "codex-subscription-adapter");
+    check_assembled_plan(
+        "claude",
+        "anthropic",
+        "xhigh",
+        "claude-subscription-adapter",
+    );
+}
+
+fn check_assembled_plan(harness: &str, provider: &str, reasoning: &str, adapter: &str) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_path_buf();
     let prior = example_plan();
-    let config = ServiceConfig {
+    let mut config = ServiceConfig {
         database_url: "postgres://localhost/test".into(),
         conversation_id: prior.subject.conversation_id(),
         authority_id: Uuid::new_v4(),
@@ -69,10 +81,11 @@ fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
         helper: PathBuf::from("/usr/local/bin/aq-session-host"),
         tmux: PathBuf::from("/usr/bin/tmux"),
         tmux_version: "tmux 3.3a".into(),
-        native: PathBuf::from("/opt/aq/bin/codex"),
-        native_digest: Digest::of(b"native"),
+        native: Some(PathBuf::from("/opt/aq/bin/codex")),
+        native_digest: Some(Digest::of(b"native")),
         image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
-        secret_file: root.join("subscription.json"),
+        secret_file: Some(root.join("subscription.json")),
+        claude: None,
         server_origin: "http://server:8081".into(),
         automatic_turn_retries: default_turn_retries(),
     };
@@ -80,11 +93,41 @@ fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
         actor: prior.subject.actor_id(),
         enabled: true,
         revision: 1,
-        profile: json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium","snapshot_digest":Digest::of(b"snapshot"),"profile_id":"engineering","candidate_id":"openai:fixture-model:medium"}),
+        profile: json!({"provider":provider,"harness":harness,"model":"fixture-model","reasoning":reasoning,"snapshot_digest":Digest::of(b"snapshot"),"profile_id":"engineering","candidate_id":format!("{provider}:fixture-model:{reasoning}")}),
         owner: Some(Uuid::new_v4()),
         project: None,
         label: "Global supervisor".into(),
     };
+    let (native, secret, digest) = if harness == "claude" {
+        assert!(selection(&config, &control.profile).unwrap().is_none());
+        let installation = NativeInstallation {
+            native: PathBuf::from("/opt/claude/claude"),
+            native_digest: Digest::of(b"Claude native"),
+            secret_file: root.join("claude-token"),
+        };
+        let paths = (
+            installation.native.clone(),
+            installation.secret_file.clone(),
+            installation.native_digest.clone(),
+        );
+        config.claude = Some(installation);
+        config.native = None;
+        config.native_digest = None;
+        config.secret_file = None;
+        let codex = json!({"provider":"openai","harness":"codex","model":"fixture-model","reasoning":"medium"});
+        assert!(selection(&config, &codex).unwrap().is_none());
+        paths
+    } else {
+        (
+            config.native.clone().unwrap(),
+            config.secret_file.clone().unwrap(),
+            config.native_digest.clone().unwrap(),
+        )
+    };
+    let config_path = root.join("service.json");
+    write_service_config(&config_path, &config);
+    let config = ServiceConfig::load(&config_path).unwrap();
+    let selected = selection(&config, &control.profile).unwrap().unwrap();
     let turn = dispatch::Turn {
         batch: prior.batch,
         dispatch_id: Uuid::new_v4(),
@@ -100,15 +143,60 @@ fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
             session: Uuid::new_v4(),
         },
         turn,
+        &selected,
     )
     .unwrap();
-    candidate.host.digest().unwrap();
-    assert_scope_instructions(&config, &control);
+    assert_eq!(candidate.host.harness.harness.as_str(), harness);
+    assert_eq!(
+        candidate.host.harness.cli_version.as_str(),
+        selected.cli_version
+    );
+    assert_eq!(
+        candidate.host.harness.adapter.id.as_str(),
+        format!("aq.central/{adapter}")
+    );
+    assert_eq!(candidate.model.provider.as_str(), provider);
+    assert_eq!(candidate.model.model.as_str(), "fixture-model");
+    assert_eq!(candidate.model.reasoning.as_str(), reasoning);
+    assert_eq!(candidate.native, native);
+    assert_eq!(candidate.native_digest, digest);
+    assert_eq!(candidate.secret_file, secret);
+    assert_eq!(
+        candidate.central.profiles.catalog.digest,
+        Digest::of(b"snapshot")
+    );
+    let prompt = &candidate.subscription.as_ref().unwrap().instructions;
+    assert!(prompt.contains(ATTACHMENTS));
+    assert_eq!(prompt.contains("mcp__aq__aq_command"), harness == "claude");
+    assert_eq!(
+        prompt.contains("mcp__aq__aq_attachment"),
+        harness == "claude"
+    );
+    assert_eq!(
+        prompt.contains("mcp__aq__repo_read"),
+        harness == "claude"
+            && cfg!(all(
+                feature = "supervisor_full_access",
+                feature = "delivery_playbook"
+            ))
+    );
+    assert_scope_instructions(&config, &control, harness);
     assert_eq!(
         candidate.swarm_profile.as_ref().unwrap()["profile_id"],
         "engineering"
     );
     crate::validate_join(&candidate.central, &candidate.host).unwrap();
+    install(&config, &candidate).unwrap();
+    let (_, installed_digest) = Config::load(&config.turn_file()).unwrap();
+    let adapter = NativeAdapter {
+        config: config.turn_file(),
+        digest: installed_digest,
+        wrapper: std::env::current_exe().unwrap(),
+    };
+    let launch = adapter
+        .prepare(&candidate.host, &candidate.workspace)
+        .unwrap();
+    assert_eq!(launch.adapter, candidate.host.harness.adapter);
     assert!(
         candidate
             .host
@@ -117,6 +205,18 @@ fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
             .iter()
             .any(|c| c.id.as_str() == "aq.harness.confined-worktree")
     );
+}
+
+fn write_service_config(path: &Path, config: &ServiceConfig) {
+    let bytes = serde_json::to_vec(config).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
 }
 
 fn example_plan() -> CentralPlan {
@@ -132,17 +232,17 @@ fn example_plan() -> CentralPlan {
     prior
 }
 
-fn assert_scope_instructions(config: &ServiceConfig, control: &Control) {
+fn assert_scope_instructions(config: &ServiceConfig, control: &Control, harness: &str) {
     for scope in [None, Some(Uuid::new_v4())] {
         let scoped = Control {
             project: scope,
             ..control.clone()
         };
-        assert!(instructions(config, &scoped).contains(ATTACHMENTS));
+        assert!(instructions(config, &scoped, harness).contains(ATTACHMENTS));
     }
     #[cfg(feature = "supervisor_full_access")]
     {
-        let text = instructions(config, control);
+        let text = instructions(config, control, harness);
         for want in [
             "Create tasks active unless the owner asks for a draft",
             "dashboard.swarm, session.list and attempt.show",
@@ -153,14 +253,14 @@ fn assert_scope_instructions(config: &ServiceConfig, control: &Control) {
         }
         let mut scoped = control.clone();
         scoped.project = Some(Uuid::new_v4());
-        let scoped = instructions(config, &scoped);
+        let scoped = instructions(config, &scoped, harness);
         assert!(scoped.contains("task.work and task.history"));
         assert!(!scoped.contains("dashboard.swarm"));
         assert_eq!(
             text.contains(
                 "repo sync PROJECT_ID`, then read `/workspace/repos/<name>` with git and rg"
             ),
-            cfg!(feature = "delivery_playbook")
+            cfg!(feature = "delivery_playbook") && harness == "codex"
         );
         for gone in [
             "Create draft tasks for proposals",
@@ -172,7 +272,7 @@ fn assert_scope_instructions(config: &ServiceConfig, control: &Control) {
             project: Some(Uuid::new_v4()),
             ..control.clone()
         };
-        let text = instructions(config, &scoped);
+        let text = instructions(config, &scoped, harness);
         assert!(text.contains("you hold the owner's powers inside it"));
         assert!(!text.contains("you may read and change any project"));
     }
