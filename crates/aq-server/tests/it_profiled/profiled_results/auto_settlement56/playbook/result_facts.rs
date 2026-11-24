@@ -100,6 +100,7 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
     let limits = aq_profiled_state::replacement::Limits {
         max_attempts: 1,
         max_uncharged_continuations: 0,
+        launch_retry_backoff: Default::default(),
     };
     assert_eq!(
         aq_profiled_state::replacement::charged(&priors, &limits).0,
