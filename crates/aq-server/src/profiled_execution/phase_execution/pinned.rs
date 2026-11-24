@@ -424,6 +424,18 @@ async fn load_artifacts_locked(
             digest: a.descriptor.artifact.digest,
         });
     }
+    expected.extend(source_artifact_receipts(source)?);
+    require_artifact_receipts(&expected, &q.original.artifacts)?;
+    if time >= ceiling {
+        return Err(refused());
+    }
+    Ok((context, ceiling))
+}
+
+fn source_artifact_receipts(
+    source: &source_exports::LinkedExport,
+) -> Result<Vec<ArtifactReceipt>, AppError> {
+    let mut receipts = Vec::with_capacity(2);
     for (name, hash, size) in [
         (
             "manifest",
@@ -441,7 +453,7 @@ async fn load_artifacts_locked(
         ),
     ] {
         let d: Digest = serde_json::from_value(serde_json::json!(hash)).map_err(|_| refused())?;
-        expected.push(ArtifactReceipt {
+        receipts.push(ArtifactReceipt {
             artifact: ArtifactRef {
                 id: Text::new(format!(
                     "aq.source-{name}/{}",
@@ -455,18 +467,21 @@ async fn load_artifacts_locked(
             digest: d,
         });
     }
-    if expected.len() != q.original.artifacts.len()
-        || expected.iter().any(|e| {
-            !q.original
-                .artifacts
-                .iter()
-                .any(|a| same(e, a).unwrap_or(false))
-        })
-        || time >= ceiling
+    Ok(receipts)
+}
+
+fn require_artifact_receipts(
+    expected: &[ArtifactReceipt],
+    actual: &[ArtifactReceipt],
+) -> Result<(), AppError> {
+    if expected.len() != actual.len()
+        || expected
+            .iter()
+            .any(|e| !actual.iter().any(|a| same(e, a).unwrap_or(false)))
     {
         return Err(refused());
     }
-    Ok((context, ceiling))
+    Ok(())
 }
 
 fn require_supported_budget(
