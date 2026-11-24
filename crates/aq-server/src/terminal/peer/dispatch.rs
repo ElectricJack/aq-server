@@ -29,7 +29,7 @@ async fn dispatch_candidate(
     current_peer(state, &mut tx, node, &r.peer).await?;
     let view =
         authority::load_locked(state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
-    let active = active_locked(state, &mut tx, &t).await?;
+    let active = active(state, &mut tx, &t, Rows::Lock).await?;
     let access = match AccessSubject::new(&view, &t, principal)
         .authorize(state, &mut tx, Right::Control)
         .await

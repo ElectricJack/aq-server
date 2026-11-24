@@ -16,7 +16,7 @@ pub use crate::worker_api::AuthenticatedNode;
 use crate::{
     AppState,
     error::AppError,
-    execution::authority::{self, Policy},
+    execution::authority::{self, Policy, Rows},
 };
 use aq_session_protocol::TerminalIdentity;
 use aq_terminal_relay::{
@@ -45,6 +45,15 @@ pub(super) async fn current_peer(
     peer: &Peer,
 ) -> Result<()> {
     require_owner(state, tx).await?;
+    peer_rows(tx, node, peer, Rows::Lock).await
+}
+/// `current_peer` without its owner check; `Rows::Snapshot` is for a `begin_read` snapshot.
+async fn peer_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    node: &AuthenticatedNode,
+    peer: &Peer,
+    rows: Rows,
+) -> Result<()> {
     let Peer::Remote { node_id, boot_id } = peer else {
         return Err(AppError::Conflict(
             "central terminal authority unavailable".into(),
@@ -53,7 +62,10 @@ pub(super) async fn current_peer(
     if node.id() != *node_id {
         return Err(AppError::Forbidden("terminal peer mismatch".into()));
     }
-    crate::worker_api::lock_current_node(tx, node).await?;
+    match rows {
+        Rows::Lock => crate::worker_api::lock_current_node(tx, node).await?,
+        Rows::Snapshot => crate::worker_api::snapshot_current_node(tx, node).await?,
+    };
     let current: Option<Uuid> = sqlx::query_scalar(
         "SELECT (state->'identity'->>'boot_id')::uuid FROM execution_nodes WHERE node_id=$1",
     )
@@ -113,20 +125,34 @@ pub async fn output_poll(
             "terminal output poll requires zero hold and controllers".into(),
         ));
     }
-    let state = state.terminal_view();
-    let config = configured(&state)?;
-    let _slot = config
-        .runtime
-        .output_poll_channel(node.id(), node.permitted_attempt())?;
-    poll_once(&state, node, r, PollMode::Output).await
+    // Read-only, so the node's agents poll in parallel: no per-channel slot.
+    poll_once(&state.terminal_view(), node, r, PollMode::Output).await
+}
+/// A node-signed output poll only reads, so it runs in a `begin_read` snapshot
+/// without row locks; the node's agents never queue on its row or each other.
+/// Delegated polls keep the locked permit recheck.
+async fn begin_peer(
+    state: &AppState,
+    node: &AuthenticatedNode,
+    r: &draft::RelayPoll,
+    mode: PollMode,
+) -> Result<(Tx, Rows)> {
+    if mode == PollMode::Output && node.delegated().is_none() {
+        let mut tx = begin_read(state).await?;
+        peer_rows(&mut tx, node, &r.peer, Rows::Snapshot).await?;
+        return Ok((tx, Rows::Snapshot));
+    }
+    let mut tx = super::persistence::begin(state).await?;
+    current_peer(state, &mut tx, node, &r.peer).await?;
+    Ok((tx, Rows::Lock))
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PollMode {
     Full,
     Output,
 }
-async fn active_locked(state: &AppState, tx: &mut Tx, t: &TerminalIdentity) -> Result<bool> {
-    match authority::load_locked(state, tx, &t.session, Policy::TerminalActive).await {
+async fn active(state: &AppState, tx: &mut Tx, t: &TerminalIdentity, rows: Rows) -> Result<bool> {
+    match authority::load(state, tx, &t.session, Policy::TerminalActive, rows).await {
         Ok(_) => Ok(true),
         Err(authority::AuthorityError::Database(_) | authority::AuthorityError::InvalidState) => {
             Err(AppError::Internal)
