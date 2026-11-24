@@ -92,7 +92,8 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     let mut second = node.clone();
     second["id"] = json!(second_task);
     second["title"] = json!("Second synthetic native task");
-    second["metadata"] = json!({"aq:priority": -1});
+    // A task AQ created carries its project, which a supervisor's task scope check reads.
+    second["metadata"] = json!({"aq:priority": -1, "aq:project_id": env.lineage.project_id});
     let other = additional.as_ref().map(|lineage| {
         let mut node = node.clone();
         node["id"] = json!(lineage.task_id);

@@ -1,5 +1,6 @@
 //! An owner's fresh start of a task the offer path holds because the project binding changed
-//! since its last attempt (`replacement_project_revision_changed`). A retry reuses the replaced
+//! since its last attempt in more than which nodes may run it
+//! (`replacement_project_revision_changed`). A retry reuses the replaced
 //! attempt's retained source, which was exported under the old binding revision, so the hold
 //! has no release of its own. A fresh start releases the attempt as a replacement does and
 //! records that the task's attempts so far are no longer its lineage's history: the next
