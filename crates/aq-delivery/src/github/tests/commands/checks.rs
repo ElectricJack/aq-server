@@ -126,10 +126,29 @@ async fn a_check_poll_requires_a_frozen_head_and_tracked_base_for_a_behind_repai
     );
     assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
 
-    poll(&mock, current, behind(), runs(&[]));
+    // Behind its base, the checks decide: pending waits, a failure is
+    // `failed`, and green without a recorded refresh is the update conflict.
+    poll(&mock, current.clone(), behind(), runs(&[]));
+    assert!(poll_result(&delivery, 7, &sha('a')).await.is_none());
+    let checks = |check| runs(&[check, ("deployment", "completed", Some("success"))]);
+    poll(
+        &mock,
+        current.clone(),
+        behind(),
+        checks(("check", "completed", Some("failure"))),
+    );
+    let failed = poll_result(&delivery, 7, &sha('a')).await.unwrap();
+    assert_eq!((failed.outcome, failed.diagnostic), ("failed", None));
+    poll(
+        &mock,
+        current,
+        behind(),
+        checks(("check", "completed", Some("success"))),
+    );
+    let behind = poll_result(&delivery, 7, &sha('a')).await.unwrap();
     assert_eq!(
-        poll_result(&delivery, 7, &sha('a')).await.unwrap().outcome,
-        "conflict"
+        (behind.outcome, behind.diagnostic),
+        ("conflict", Some("behind_base"))
     );
     assert!(git.operations().is_empty());
 }

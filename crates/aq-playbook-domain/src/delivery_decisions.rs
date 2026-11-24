@@ -299,6 +299,13 @@ pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Res
     .fetch_optional(&mut *db)
     .await?
     .is_some();
+    if recorded && d.decision == "completed" {
+        // The merged branch needs no refresh, and a replay no longer reads it.
+        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1")
+            .bind(d.task)
+            .execute(&mut *db)
+            .await?;
+    }
     if recorded
         && d.decision == "returned"
         && !aq_machine_control::platform_retry::report_interrupted(db, d.task, d.result).await?

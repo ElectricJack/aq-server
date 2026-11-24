@@ -524,6 +524,10 @@ async fn recover_held_delivery(
     sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
         .bind(task).bind(now_ms).execute(&mut *db).await?;
     let old = aq_delivery::commands::published_head(&mut *db, task).await?;
+    let head: &str = row.get("head");
+    // A recorded refresh moved the pull request to a merge of this head and main.
+    let accepted = aq_delivery::commands::accepted_head(&mut *db, Some(task), head).await?;
+    let accepted = accepted.as_deref().unwrap_or(head);
     let verified = tokio::time::timeout(Duration::from_secs(2), async {
         let Some(target) = operations.target(project).await? else {
             return Ok(false);
@@ -536,14 +540,13 @@ async fn recover_held_delivery(
         let Some(commands) = operations.commands().await else {
             return Ok(false);
         };
-        let head: &str = row.get("head");
         if reason == "publish_conflict" {
             return Ok(commands
                 .publish_lease_usable(&target, task, head, old.as_deref())
                 .await);
         }
         let Some(request) = check_request.filter(|request| {
-            old.as_deref() == Some(head)
+            old.as_deref() == Some(accepted)
                 && serde_json::to_value(&target)
                     .is_ok_and(|target| request["check_target"] == target)
         }) else {
@@ -559,7 +562,7 @@ async fn recover_held_delivery(
         };
         Ok::<_, crate::Error>(
             commands
-                .held_checks_passed(&target, pr, head, required.as_deref())
+                .held_checks_passed(&target, pr, accepted, required.as_deref())
                 .await,
         )
     })
@@ -799,8 +802,10 @@ pub(crate) async fn failed_check(
         "SELECT p.head,l.checks_log_tail FROM delivery_pushed_results p
          JOIN profiled_result_heads h ON h.report_id=p.report_id AND h.attempt_id=p.attempt_id
          JOIN execution_attempts a ON a.attempt_id=h.attempt_id
-         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed' AND l.checks_log_head=p.head
-         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL AND EXISTS(
+         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed'
+         LEFT JOIN delivery_branch_refreshes r ON r.task_id=a.task_id AND r.result_head=p.head
+         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
+           AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
              AND o.command_name='pull_request.await_checks' AND o.status='failed'
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text

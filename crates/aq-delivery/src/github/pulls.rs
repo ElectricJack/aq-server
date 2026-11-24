@@ -392,4 +392,44 @@ impl GitHubAdapter for GitHubApp {
             Err(e) => Err(e),
         }
     }
+
+    async fn update_branch(
+        &self,
+        repo: &GitHubRepository,
+        pr: u64,
+        expected_head_sha: &str,
+    ) -> GitHubResult<()> {
+        let body = json!({"expected_head_sha": commit_sha(expected_head_sha)?});
+        let path = format!("/pulls/{}/update-branch", pr_number(pr)?);
+        let s = Session::new(self, repo).await?;
+        // 202: GitHub merges the base in later; the body only says so.
+        s.call::<serde::de::IgnoredAny>(ApiRequest::new(Method::PUT, &path).json(&body))
+            .await
+            .map(drop)
+    }
+
+    async fn commit_parents(
+        &self,
+        repo: &GitHubRepository,
+        sha: &str,
+    ) -> GitHubResult<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Commit {
+            sha: String,
+            parents: Vec<WireSha>,
+        }
+        #[derive(Deserialize)]
+        struct WireSha {
+            sha: String,
+        }
+        let path = format!("/git/commits/{}", commit_sha(sha)?);
+        let s = Session::new(self, repo).await?;
+        let commit: Commit = s.call(ApiRequest::new(Method::GET, &path)).await?;
+        if commit.sha != sha {
+            return Err(GitHubApiError::Protocol(
+                "commit differs from the requested sha".into(),
+            ));
+        }
+        Ok(commit.parents.into_iter().map(|p| p.sha).collect())
+    }
 }
