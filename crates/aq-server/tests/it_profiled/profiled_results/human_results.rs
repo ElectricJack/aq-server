@@ -522,6 +522,13 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
         for (name, params) in &results {
             let (status, detail) = supervised(&machine, token, name, params.clone()).await;
             assert_eq!(status, StatusCode::OK, "{name}: {detail}");
+            let evidence = if *name == "result.show" {
+                assert_eq!(detail["items"][0]["current_report_head"], true, "{detail}");
+                &detail["items"][0]
+            } else {
+                &detail["data"]["revision"]
+            };
+            assert_eq!(evidence["report_id"], json!(report.report_id), "{detail}");
         }
         let (status, page) = supervised(&machine, token, "result.list", json!({})).await;
         assert_eq!(status, StatusCode::OK, "{page}");
