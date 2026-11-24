@@ -365,6 +365,7 @@ async fn never_started_lapse_frees_only_that_slots_attempt() {
     aq_server::profiled_execution::closure::settlement::settle_and_release(
         &c.env.env.state,
         first.offered.offer.binding.attempt_id,
+        None,
     )
     .await
     .unwrap();

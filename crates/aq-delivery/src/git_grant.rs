@@ -164,6 +164,32 @@ pub async fn offer(
     })
 }
 
+/// The head central aq-git shows now for `attempt`'s granted task ref (`Some(None)`: no such
+/// branch); `None` when the attempt has no grant, or aq-git is not configured or did not answer.
+pub async fn granted_ref_head(
+    pool: &PgPool,
+    socket: Option<&Path>,
+    attempt: Uuid,
+) -> Option<Option<String>> {
+    let row = sqlx::query(
+        "SELECT g.repository_id,g.task_ref,\
+         (l.execution_spec#>>'{source,repository_binding_generation}')::bigint AS generation \
+         FROM delivery_git_grants g JOIN profiled_launches l USING(attempt_id) WHERE g.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let target = GitTarget {
+        repository_id: row.get("repository_id"),
+        binding_generation: u64::try_from(row.get::<Option<i64>, _>("generation")?).ok()?,
+    };
+    let git = SocketGit::new(socket?);
+    git.show_ref(&target, &row.get::<String, _>("task_ref"))
+        .await
+        .ok()
+}
+
 /// Records `grant` for `attempt` in the offer's publication.
 pub async fn record_locked(
     tx: &mut Transaction<'_, Postgres>,
