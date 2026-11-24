@@ -62,6 +62,74 @@ async fn the_routing_document_is_saved_replayed_and_fenced_over_http() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
+#[tokio::test]
+async fn the_supervisor_document_is_saved_replayed_and_fenced_over_http() {
+    const PATH: &str = "/api/settings/supervisor-document";
+    let f = started().await;
+    // Empty by default: project supervisors use the compiled role text.
+    let (status, body) = f.owner().get(PATH).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"markdown": "", "revision": "0"}));
+    let (status, _) = f.viewer_read().get(PATH).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer does not read it");
+
+    let put = json!({"markdown": "Keep {label} moving.",
+        "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    let (status, body) = f.viewer().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = f.owner().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "csrf_rejected");
+    let before = f.active().await;
+    let (status, saved) = f.owner_write().put(PATH, put.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(f.active().await.1, before.1, "it compiles nothing");
+    let (_, read) = f.owner().get(PATH).await;
+    assert_eq!(
+        read,
+        json!({"markdown": "Keep {label} moving.", "revision": saved["revision"]})
+    );
+    let (_, routing) = f.owner().get("/api/settings/routing-document").await;
+    assert_eq!(routing, json!({"markdown": "", "revision": "0"}));
+    // The same operation again answers as the first time; its id with another
+    // text, or a save from a stale read, is a conflict and changes nothing.
+    let (status, again) = f.owner_write().put(PATH, put.clone()).await;
+    assert_eq!((status, &again), (StatusCode::OK, &saved));
+    let mut other = put.clone();
+    other["markdown"] = json!("Something else.");
+    assert_eq!(
+        f.owner_write().put(PATH, other).await.0,
+        StatusCode::CONFLICT
+    );
+    let stale =
+        json!({"markdown": "Late.", "expected_revision": "0", "operation_id": Uuid::new_v4()});
+    assert_eq!(
+        f.owner_write().put(PATH, stale).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(f.owner().get(PATH).await.1, read);
+    // What a supervisor turn reads is what the route saved.
+    let mut conn = f.pool.acquire().await.unwrap();
+    let (markdown, revision) = settings::supervisor_document(&mut conn).await.unwrap();
+    assert_eq!(
+        (markdown.as_str(), revision.to_string()),
+        (
+            "Keep {label} moving.",
+            saved["revision"].as_str().unwrap().to_owned()
+        )
+    );
+    // It goes into every installed turn, so it is bounded below the store's limit.
+    let big = json!({"markdown": "x".repeat(16_385), "expected_revision": saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.owner_write().put(PATH, big).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let next = json!({"markdown": "", "expected_revision": saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, body) = f.owner_write().put(PATH, next).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(f.owner().get(PATH).await.1["markdown"], "");
+}
+
 #[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn the_delivery_document_is_saved_replayed_and_fenced_over_http() {
