@@ -277,3 +277,48 @@ fn assert_scope_instructions(config: &ServiceConfig, control: &Control, harness:
         assert!(!text.contains("you may read and change any project"));
     }
 }
+
+#[test]
+fn configured_claude_waits_for_a_usable_executable_and_protected_login() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("claude");
+    let login = directory.path().join("login");
+    let selection = Selection {
+        harness: "claude",
+        cli_version: crate::adapter::CLAUDE_CLI_VERSION,
+        adapter: "claude-subscription-adapter",
+        provider: "anthropic",
+        model: "fixture-model",
+        reasoning: "high",
+        native: &executable,
+        // Readiness does not hash the executable.
+        native_digest: &Digest::of(b"different executable"),
+        secret_file: &login,
+    };
+    let executable_wait =
+        Some("Waiting for a usable Claude Code executable in the supervisor image");
+    let login_wait = Some("Waiting for a nonempty Claude subscription token in its protected file");
+    assert_eq!(selection.unavailable(), executable_wait);
+    std::fs::write(&executable, b"executable").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(selection.unavailable(), executable_wait);
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(selection.unavailable(), login_wait);
+    std::fs::write(&login, b"").unwrap();
+    std::fs::set_permissions(&login, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(selection.unavailable(), login_wait);
+    std::fs::write(&login, b"fixture token").unwrap();
+    std::fs::set_permissions(&login, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(selection.unavailable(), login_wait);
+    std::fs::set_permissions(&login, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(selection.unavailable(), None);
+    let linked = directory.path().join("linked-login");
+    symlink(&login, &linked).unwrap();
+    let selection = Selection {
+        secret_file: &linked,
+        ..selection
+    };
+    assert_eq!(selection.unavailable(), login_wait);
+}

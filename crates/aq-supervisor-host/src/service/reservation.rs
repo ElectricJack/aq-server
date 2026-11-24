@@ -327,6 +327,10 @@ impl Service<'_> {
             self.report("waiting", &stage, None).await?;
             return Ok(());
         };
+        if let Some(stage) = selection.unavailable() {
+            self.report("waiting", stage, None).await?;
+            return Ok(());
+        }
         if let Some(reason) = crate::config::swarm_wait(pool, Some(&ctl.profile)).await? {
             self.report("waiting", swarm_stage(reason), None).await?;
             return Ok(());
