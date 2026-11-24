@@ -23,4 +23,4 @@ CREATE TRIGGER closed_launch_attestations_no_change BEFORE UPDATE OR DELETE ON c
  FOR EACH ROW EXECUTE FUNCTION closed_launch_attestations_immutable();
 CREATE TRIGGER closed_launch_attestations_no_truncate BEFORE TRUNCATE ON closed_launch_attestations
  FOR EACH STATEMENT EXECUTE FUNCTION closed_launch_attestations_immutable();
-UPDATE meta SET value='174' WHERE key='state_format_version';
+UPDATE meta SET value='175' WHERE key='state_format_version';
