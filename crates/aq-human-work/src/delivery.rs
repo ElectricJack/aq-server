@@ -17,11 +17,6 @@ pub async fn show_followup(pool: &PgPool, project: Uuid, task: Uuid, readiness: 
         return;
     };
     let (owner, wake, detail) = match followup["status"].as_str() {
-        Some("owner_attention") => (
-            "project_owner",
-            "current_hold_evidence_or_authority_changed",
-            "Supervisor reminders reached their limit. The project owner must review the original hold.",
-        ),
         Some("awaiting_supervisor") => (
             "project_owner",
             "project_supervisor_enabled",

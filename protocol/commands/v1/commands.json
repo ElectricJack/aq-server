@@ -5687,6 +5687,56 @@
     {
       "cli": [
         "supervisor",
+        "escalate"
+      ],
+      "grant": "message.send",
+      "kind": "mutation",
+      "name": "supervisor.escalate",
+      "owner_only": false,
+      "principals": {
+        "owner": {
+          "body": "params",
+          "params_digest": "sha256:f4fb05aee78f432f54da7c7fb12b1c7367c64267ba9cb77087a155fe14081576",
+          "params_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "decision_needed": {
+                "description": "The decision needed, and why it is not yours to make",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project_id": {
+                "description": "Your project's ID",
+                "format": "uuid",
+                "type": "string"
+              },
+              "task_id": {
+                "description": "The task the decision is about, if any",
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "project_id",
+              "decision_needed"
+            ],
+            "type": "object"
+          },
+          "route": {
+            "method": "POST",
+            "path": "/api/projects/{id}/escalations"
+          }
+        }
+      },
+      "summary": "Escalate a decision that is not yours to the global supervisor, naming the project, the task if any, and the decision needed (each call posts a message)",
+      "target": {
+        "rule": "own"
+      }
+    },
+    {
+      "cli": [
+        "supervisor",
         "list"
       ],
       "grant": "dashboard.read",

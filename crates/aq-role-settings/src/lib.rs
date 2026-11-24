@@ -24,8 +24,8 @@ pub mod tasks;
 pub use store::{
     activate_stored, active_snapshot, apply, apply_referenced, check_binding, delete, document_of,
     get, install_defaults, list, observation_limits, pin, release_finished_pins, routing_document,
-    save, save_limits, save_routing_document, save_selection_defaults, selection_defaults,
-    settings, snapshot, startup, unpin,
+    save, save_limits, save_routing_document, save_selection_defaults, save_supervisor_document,
+    selection_defaults, settings, snapshot, startup, supervisor_document, unpin,
 };
 #[cfg(feature = "delivery_playbook")]
 pub use store::{delivery_document, delivery_limits, save_delivery_document, save_delivery_limits};
@@ -163,6 +163,8 @@ pub enum Change {
     RoutingDocument(String),
     /// The node observation limits. They are not part of a snapshot.
     ObservationLimits(observation::ObservationLimits),
+    /// The project supervisor's role text. It is not part of a snapshot.
+    SupervisorDocument(String),
     /// The delivery document. It is not part of a snapshot.
     #[cfg(feature = "delivery_playbook")]
     DeliveryDocument(String),
