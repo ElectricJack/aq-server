@@ -316,6 +316,12 @@ impl Service<'_> {
         };
         let mut ctl = ctl.clone();
         ctl.profile["snapshot_digest"] = serde_json::json!(digest);
+        if ctl.project.is_some() {
+            // An unreadable document leaves the compiled role text in place.
+            let role =
+                async { aq_role_settings::supervisor_document(&mut *pool.acquire().await?).await };
+            ctl.role = role.await.ok().map(|(text, _)| text);
+        }
         let ctl = &ctl;
         let Some(selection) = plan::selection(config, &ctl.profile)? else {
             let harness = if ctl.profile["harness"] == "claude" {

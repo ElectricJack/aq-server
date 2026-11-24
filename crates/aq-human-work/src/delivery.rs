@@ -17,11 +17,6 @@ pub async fn show_followup(pool: &PgPool, project: Uuid, task: Uuid, readiness: 
         return;
     };
     let (owner, wake, detail) = match followup["status"].as_str() {
-        Some("owner_attention") => (
-            "project_owner",
-            "current_hold_evidence_or_authority_changed",
-            "Supervisor reminders reached their limit. The project owner must review the original hold.",
-        ),
         Some("awaiting_supervisor") => (
             "project_owner",
             "project_supervisor_enabled",
@@ -103,24 +98,24 @@ pub async fn waiting(
         return Some(rework(h.attempt_id, result, retained, quiescent));
     }
     let (result, hold) = store::result_wait(&mut db, h.attempt_id).await.ok()??;
+    if hold.is_some() && store::hold_overridden(&mut db, h.attempt_id).await.ok()? {
+        return None;
+    }
     if let Some(reason) = hold {
-        let mut evidence = store::held_pr_evidence(&mut db, result)
+        let evidence = store::held_pr_evidence(&mut db, result)
             .await
             .ok()
             .flatten();
-        // The log tail is read for the supervisor; a read that fails shows none.
-        if let (Some(text), Ok(Some(log))) = (
-            evidence.as_mut(),
+        let mut shown = crate::delivery_hold(h, result, &reason, evidence.as_deref());
+        // The log tail is read for the supervisor, cut to the message limit; a read that fails shows none.
+        if let (true, Some(Value::String(message)), Ok(Some(log))) = (
+            evidence.is_some(),
+            shown.get_mut("message"),
             store::held_check_log(&mut db, result).await,
         ) {
-            text.push_str(&store::log_section(&log));
+            *message = store::with_log(std::mem::take(message), &log);
         }
-        return Some(crate::delivery_hold(
-            h,
-            result,
-            &reason,
-            evidence.as_deref(),
-        ));
+        return Some(shown);
     }
     let active = match namespace {
         Some(namespace) => store::active(&mut db, namespace).await.ok()?,

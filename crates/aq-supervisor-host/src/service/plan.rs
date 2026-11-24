@@ -67,36 +67,45 @@ const TOOLCHAIN_SETUP: &str = "New projects: after you create a project and its 
     not(feature = "project_environments")
 ))]
 const TOOLCHAIN_SETUP: &str = "";
+/// A project supervisor's role text when the owner has saved none (Settings,
+/// the supervisor document): `{label}`, `{project}` and `{conversation}` are
+/// substituted.
+#[cfg(feature = "supervisor_full_access")]
+const PROJECT_ROLE: &str = include_str!("plan/project_role.txt");
 #[cfg(feature = "supervisor_full_access")]
 fn instructions(config: &ServiceConfig, control: &Control, harness: &str) -> String {
     let (tools, attachment_tool) = tools(harness);
-    let scope = if let Some(project) = control.project {
-        format!(
-            "You supervise only project {} ({project}); you hold the owner's powers inside it. Inspect waits with task.work and task.history using this project ID and the task ID, and read the project's results with result.list and result.show. A delivery hold notice gives the recorded outcome and retained source. Use these project-scoped reads to verify the current task version, claim and readiness. The server refuses other projects and global administration.",
-            control.label
-        )
+    let conversation = config.conversation_id;
+    // The role is the owner's to edit; the tool manual below is always this build's.
+    let role = if let Some(project) = control.project {
+        let text = control
+            .role
+            .as_deref()
+            .filter(|text| !text.trim().is_empty());
+        text.unwrap_or(PROJECT_ROLE)
+            .replace("{project}", &project.to_string())
+            .replace("{conversation}", &conversation.to_string())
+            .replace("{label}", &control.label)
     } else {
-        "You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers. Inspect execution across projects using dashboard.swarm, session.list and attempt.show.".into()
+        format!(
+            r#"You are the global supervisor and may coordinate registered projects. Use project.list to discover project identifiers. Inspect execution across projects using dashboard.swarm, session.list and attempt.show.
+Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify the task's current execution and history before reporting that a worker started.
+{TOOLCHAIN_SETUP}Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
+Respect human review gates unless the owner has delegated that review to you.
+Project supervisors escalate decisions to this conversation with supervisor.escalate, naming the project, the task if there is one, and the decision needed. Decide what you can and act on it. The owner reads this conversation: when a decision is the owner's, say so in your reply with the project, the task and the decision needed.
+"#
+        )
     };
     format!(
-        r#"{scope}
+        r#"{role}
 Use authenticated AQ tools within the scope above.
 {tools} Use task.list and task.show with the project ID for current task versions. {MUTATION_REQUEST} Retain the same operation_id and exact body when checking an uncertain request — resend it to recheck an owner command; operation.show may show a stale state for those; never invent success or replay a replacement.
 {ATTACHMENTS} {attachment_tool} {ATTACHMENT_STATES}
-Create tasks active unless the owner asks for a draft; use task.activate to start a draft the owner wants run. Include requirements, acceptance criteria and dependencies. Distinguish queued work, active attempts, retained results and actual completion; verify the task's current execution and history before reporting that a worker started.
-{setup}This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
+This private central workspace is not a project checkout: delegate implementation to worker tasks instead of editing files here.
 {code}Playbooks: write the Markdown with playbook.source.register or playbook.source.edit, review what it compiled to with playbook.source.show and playbook.catalog.definitions, and only then activate it.
-Workers should report completion/blockers to supervisor conversation {conversation} through their AQ message tool. Respond when these messages arrive and inspect actual state. Do not claim you will monitor work without an admitted wait or future event.
-Respect human review gates unless the owner has delegated that review to you.
 Your final answer is published automatically to this conversation with any confirmed task creation receipts. You may return ordinary concise text; do not print credentials or read authentication files. AQ credential paths are for the tool implementation only. Do not merge, deploy or alter host services or credentials.
 "#,
-        conversation = config.conversation_id,
         code = code_access(harness),
-        setup = if control.project.is_none() {
-            TOOLCHAIN_SETUP
-        } else {
-            ""
-        },
     )
 }
 /// Code access needs the supervisor git route, which also needs delivery_playbook.

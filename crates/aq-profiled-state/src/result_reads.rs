@@ -313,7 +313,8 @@ pub async fn owner_settled(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Resu
         .bind(attempt).fetch_one(conn).await
 }
 
-/// Reworked attempts or verified platform interruptions awaiting settlement,
+/// Reworked attempts, results the delivery playbook held (their facts never release them, see
+/// `aq_delivery::git_grant::held_gate`) or verified platform interruptions awaiting settlement,
 /// in report order after `after`. The cursor carries no authority.
 pub async fn reworked_without_facts(
     pool: &sqlx::PgPool,
@@ -330,6 +331,10 @@ pub async fn reworked_without_facts(
          AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
          AND ((s.disposition='rework_required' AND
                (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent')) \
+              OR (s.disposition IS NULL AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL \
+                  AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
+                  AND EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=r.report_id AND d.task_id=a.task_id \
+                             AND d.decision='held' AND d.reason IN ('policy','returns_exhausted'))) \
               OR ((s.disposition IS NULL OR (s.disposition='held' AND s.operation_id IS NULL)) AND ",
          aq_machine_control::platform_interruption_sql!("r.report_bytes"),
         " AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL)) \

@@ -260,6 +260,9 @@ impl GraphPayload for DependencyAdd {
     fn tasks(&self) -> Vec<Uuid> {
         vec![self.blocker_id]
     }
+    fn resume_held(&self) -> Option<Uuid> {
+        self.resume_held.then_some(self.blocker_id)
+    }
     fn operations(&self, c: &Current<'_>) -> ApiResult<Vec<Value>> {
         if self.blocker_id == c.subject {
             return Err(ApiError::invalid());

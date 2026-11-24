@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 /// The commands a supervisor can answer a hold with. Names only: each
 /// command's own contract is in the command registry.
-pub const COMMANDS: &str = "Commands that apply to a held task: task.work (the hold and its reasons), task.history (its attempts), task.retry (a new attempt once the cause is resolved), attempt.abandon (release a claim whose attempt will not finish), task.edit (change the task) and task.cancel (end it).";
+pub const COMMANDS: &str = "Commands that apply to a held task: task.work (the hold and its reasons), task.history (its attempts), task.retry (a new attempt), task.create (a task that fixes the cause, for every task it holds back), task.dependency.add with \"resume_held\": true (make this task wait on that fix; it resumes when the fix completes), supervisor.escalate (a decision that is not yours to make), attempt.abandon (release a claim whose attempt will not finish), task.edit (change the task) and task.cancel (end it).";
 
 /// One attempt of the task, newest first, as a line of the notice.
 fn attempt_line((attempt, outcome, stopped, holds): (Uuid, Option<String>, bool, bool)) -> String {
@@ -125,6 +125,9 @@ mod tests {
             "task.work",
             "task.history",
             "task.retry",
+            "task.create",
+            "task.dependency.add with \"resume_held\": true",
+            "supervisor.escalate",
             "attempt.abandon",
             "task.edit",
             "task.cancel",

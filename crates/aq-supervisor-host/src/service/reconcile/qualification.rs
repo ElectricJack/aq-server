@@ -44,6 +44,7 @@ fn initial_control(project: Option<Uuid>) -> Control {
         owner: Some(Uuid::new_v4()),
         project,
         label: "Supervisor fixture".into(),
+        role: None,
     }
 }
 

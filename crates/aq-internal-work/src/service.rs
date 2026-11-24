@@ -17,12 +17,12 @@ pub type Now = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// Tells a supervisor: the project's when `project` is set (the global one
 /// when that project has none), else the global supervisor. The server sends
-/// it as a message in that supervisor's conversation.
+/// it as a message in that supervisor's conversation and answers its id.
 pub type NotifySupervisor = Arc<
     dyn Fn(
             Option<Uuid>,
             String,
-        ) -> Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<Uuid, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -195,11 +195,37 @@ impl Service {
                 .project_id
                 .filter(|_| !cfg!(feature = "supervisor_full_access"));
             match notify(project, notice::supervisor(&row)).await {
-                Ok(()) => told += 1,
+                Ok(_) => told += 1,
                 Err(error) => tracing::warn!(run = %row.id, %error, "telling a supervisor failed"),
             }
         }
         Ok(told)
+    }
+
+    /// A project supervisor's escalation (`supervisor.escalate`), told to the
+    /// global supervisor; answers the message id.
+    pub async fn escalate_decision(
+        &self,
+        project: Uuid,
+        task: Option<Uuid>,
+        decision: &str,
+    ) -> Result<Uuid> {
+        let known: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM project_execution_bindings WHERE project_id=$1)",
+        )
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await?;
+        if !known {
+            return Err(Error::NotFound("No such project".into()));
+        }
+        let unavailable = || Error::Conflict("The global supervisor cannot be told now".into());
+        let notify = self.notify.as_ref().ok_or_else(unavailable)?;
+        let task = task.map_or(String::new(), |task| format!(", task {task}"));
+        let body = format!(
+            "Escalation from the project supervisor of project {project}{task}. The decision it needs, in its words:\n{decision}\n\nDecide what you can and act on it. When the decision is the owner's, say so in your reply with the project, the task and the decision needed."
+        );
+        notify(None, body).await.map_err(|_| unavailable())
     }
 
     /// The candidates of `profile`, or why there are none.

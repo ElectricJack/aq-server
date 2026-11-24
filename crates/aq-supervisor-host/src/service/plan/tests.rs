@@ -30,6 +30,7 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         owner: Some(Uuid::new_v4()),
         project: None,
         label: "Global supervisor".into(),
+        role: None,
     };
     let text = instructions(&config, &control, "codex");
     #[cfg(feature = "project_environments")]
@@ -55,6 +56,98 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         };
         assert!(!instructions(&config, &scoped, "codex").contains(".aq/environments"));
     }
+}
+/// The owner's supervisor document replaces the project role text, with its
+/// placeholders filled; without one the compiled text applies. The tool
+/// manual is this build's either way.
+#[cfg(feature = "supervisor_full_access")]
+#[test]
+fn a_project_supervisor_uses_the_saved_role_text_and_keeps_the_tool_manual() {
+    let root = PathBuf::from("/tmp/aq-plan-test");
+    let config = ServiceConfig {
+        database_url: "postgres://localhost/test".into(),
+        conversation_id: Uuid::new_v4(),
+        authority_id: Uuid::new_v4(),
+        root: root.clone(),
+        workspace: root.join("workspace"),
+        homes: root.join("homes"),
+        helper: PathBuf::from("/usr/local/bin/aq-session-host"),
+        tmux: PathBuf::from("/usr/bin/tmux"),
+        tmux_version: "tmux 3.3a".into(),
+        native: Some(PathBuf::from("/opt/aq/bin/codex")),
+        native_digest: Some(Digest::of(b"native")),
+        image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
+        secret_file: Some(root.join("subscription.json")),
+        claude: None,
+        server_origin: "http://server:8081".into(),
+        automatic_turn_retries: default_turn_retries(),
+    };
+    let project = Uuid::new_v4();
+    let mut control = Control {
+        actor: Uuid::new_v4(),
+        enabled: true,
+        revision: 1,
+        profile: json!({}),
+        owner: Some(Uuid::new_v4()),
+        project: Some(project),
+        label: "Example".into(),
+        role: Some("Keep {label} ({project}) moving; mail {conversation}.".into()),
+    };
+    let manual = [
+        ATTACHMENTS,
+        MUTATION_REQUEST,
+        "tool NAME with one JSON CommandRequest on stdin",
+        "do not print credentials or read authentication files",
+        "Your final answer is published automatically",
+    ];
+    let saved = instructions(&config, &control, "codex");
+    let claude = instructions(&config, &control, "claude");
+    assert_eq!(saved.lines().next(), claude.lines().next());
+    assert!(claude.contains("mcp__aq__aq_command"));
+    let conversation = config.conversation_id;
+    assert!(saved.starts_with(&format!(
+        "Keep Example ({project}) moving; mail {conversation}.\n"
+    )));
+    assert!(!saved.contains("keeping work moving"));
+    for compiled in [None, Some(" \n".to_owned())] {
+        control.role = compiled;
+        let text = instructions(&config, &control, "codex");
+        assert!(text.starts_with(&format!(
+            "You are the engineer responsible for keeping work moving in project Example ({project})."
+        )));
+        for want in [
+            "task.retry",
+            "task.create",
+            "task.dependency.add and \"resume_held\": true",
+            "supervisor.escalate",
+            "task.complete when its work is already on main",
+            "task.work and task.history",
+            "result.list and result.show",
+            &format!("this conversation ({conversation})"),
+        ] {
+            assert!(text.contains(want), "{want}");
+        }
+        for placeholder in ["{label}", "{project}", "{conversation}"] {
+            assert!(!text.contains(placeholder), "{placeholder}");
+        }
+        for want in manual {
+            assert!(text.contains(want), "{want}");
+        }
+    }
+    for want in manual {
+        assert!(saved.contains(want), "{want}");
+    }
+    let global = instructions(
+        &config,
+        &Control {
+            project: None,
+            ..control
+        },
+        "codex",
+    );
+    assert!(global.contains(
+        "Project supervisors escalate decisions to this conversation with supervisor.escalate"
+    ));
 }
 #[test]
 fn assembled_subscription_plans_satisfy_the_frozen_host_contract() {
@@ -97,6 +190,7 @@ fn check_assembled_plan(harness: &str, provider: &str, reasoning: &str, adapter:
         owner: Some(Uuid::new_v4()),
         project: None,
         label: "Global supervisor".into(),
+        role: None,
     };
     let (native, secret, digest) = if harness == "claude" {
         assert!(selection(&config, &control.profile).unwrap().is_none());
@@ -273,7 +367,7 @@ fn assert_scope_instructions(config: &ServiceConfig, control: &Control, harness:
             ..control.clone()
         };
         let text = instructions(config, &scoped, harness);
-        assert!(text.contains("you hold the owner's powers inside it"));
+        assert!(text.contains("You hold the owner's powers inside this project"));
         assert!(!text.contains("you may read and change any project"));
     }
 }
