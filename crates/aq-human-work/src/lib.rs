@@ -141,7 +141,10 @@ pub use readiness::{TaskDependencies, readiness};
 mod changes;
 pub use changes::{changes, predecessor};
 mod task_edit;
-pub use task_edit::{TaskEdit, TaskReprioritize};
+pub use task_edit::{
+    DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRoleSet, TaskRouteClear,
+    TaskRouteSet,
+};
 
 pub const STORY_POINTS_KEY: &str = "aq:story_points";
 pub const MAX_STORY_POINTS: u16 = 1000;
