@@ -322,8 +322,16 @@ async fn a_delivery_hold_of_any_reason_notifies_once_and_never_after_the_playboo
     .unwrap();
     notify(&pool, due, &send).await.unwrap();
     assert!(bodies.lock().unwrap().is_empty(), "no duplicate notice");
-    // Without it, the hold still reaches the supervisor, once.
+    // The durable schedule remembers that notice even if the old receipt is removed.
     sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    notify(&pool, due, &send).await.unwrap();
+    assert!(bodies.lock().unwrap().is_empty());
+    // An unseeded hold with neither record still reaches the supervisor once.
+    sqlx::query("DELETE FROM supervisor_hold_followups WHERE project_id=$1")
         .bind(project)
         .execute(&pool)
         .await
