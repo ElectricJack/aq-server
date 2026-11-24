@@ -141,6 +141,11 @@ pub struct DependencyAdd {
     pub expected_version: String,
     /// The task that must finish first: `blocker blocks subject`.
     pub blocker_id: Uuid,
+    /// Make the subject, held at a limit an owner retry overrides, wait for the blocker instead:
+    /// after the edge is added, the hold's override is recorded, and the task is replaced once
+    /// the blocker completes. A task without such a hold is refused and no edge is added.
+    #[serde(default)]
+    pub resume_held: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]

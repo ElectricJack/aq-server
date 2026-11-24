@@ -85,6 +85,10 @@ pub(crate) trait GraphPayload:
     fn route_change(&self) -> Option<RouteChange> {
         None
     }
+    /// The blocker a held subject waits on instead (`task.dependency.add` with `resume_held`).
+    fn resume_held(&self) -> Option<Uuid> {
+        None
+    }
 }
 
 pub(crate) enum RouteChange {
