@@ -18,6 +18,7 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
         secret_file: root.join("subscription.json"),
         server_origin: "http://server:8081".into(),
+        automatic_turn_retries: default_turn_retries(),
     };
     let control = Control {
         actor: Uuid::new_v4(),
@@ -73,6 +74,7 @@ fn assembled_subscription_plan_satisfies_the_frozen_host_contract() {
         image_digest: format!("sha256:{}", Digest::of(b"image").as_str()),
         secret_file: root.join("subscription.json"),
         server_origin: "http://server:8081".into(),
+        automatic_turn_retries: default_turn_retries(),
     };
     let control = Control {
         actor: prior.subject.actor_id(),

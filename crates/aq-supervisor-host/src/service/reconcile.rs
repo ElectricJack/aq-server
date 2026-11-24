@@ -54,11 +54,11 @@ impl Service<'_> {
                 return Ok(false);
             }
             Phase::StoppedReported | Phase::CancelledBeforeStart => {
-                if !installed.can_continue(self, ctl, &state).await? {
-                    cursor.failed_revision = Some(ctl.revision);
-                    self.report("failed", "Turn ended without a confirmed reply; inspect task changes before continuing",Some(&state)).await?;
-                    return Ok(false);
-                }
+                clean_homes(self.config)?;
+                archive_turn(self.config, turn)?;
+                // A stopped generation with outstanding mail is checked by
+                // the reservation owner below, including after a restart.
+                cursor.failed_revision = None;
             }
             Phase::Prepared => {
                 self.report(
@@ -124,24 +124,5 @@ impl Installed {
             }
         };
         Ok(Some(state))
-    }
-    async fn can_continue(
-        &self,
-        service: &Service<'_>,
-        ctl: &Control,
-        state: &Snapshot,
-    ) -> Result<bool> {
-        clean_homes(service.config)?;
-        let replied: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM central_supervisor_replies WHERE dispatch_id=$1)",
-        )
-        .bind(self.turn.central.dispatch_id)
-        .fetch_one(service.pool)
-        .await?;
-        archive_turn(service.config, &self.turn)?;
-        if !ctl.enabled || replied {
-            return Ok(true);
-        }
-        retry_unstarted(service.pool, state).await
     }
 }

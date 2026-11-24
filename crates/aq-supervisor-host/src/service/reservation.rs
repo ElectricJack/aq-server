@@ -1,6 +1,10 @@
 use super::*;
 use aq_central_authority::Digest;
-use aq_server::agent_access::supervisor_conversation::reservations::{ActorView, Preview};
+use aq_server::agent_access::supervisor_conversation::reservations::{
+    ActorView, Disposition, Preview, Reason,
+};
+use aq_server::error::AppError;
+use retry::Recovery;
 struct Ready<'a> {
     preview: Preview,
     policy: &'a Digest,
@@ -148,14 +152,32 @@ impl Service<'_> {
             )
         });
         let next = prior.as_ref().map_or(1, |s| s.run.plan().generation + 1);
-        let row=sqlx::query("SELECT a.current_reservation,d.generation,d.session_id,d.created_at_ms,(SELECT c.updated_at_ms FROM supervisor_controls c WHERE c.actor_id=a.actor_id) AS control_ms FROM central_supervisor_actors a LEFT JOIN central_supervisor_dispatches d ON d.actor_id=a.actor_id AND d.reservation_id=a.current_reservation WHERE a.actor_id=$1").bind(ctl.actor).fetch_one(pool).await?;
+        let row = sqlx::query(
+            "SELECT a.current_reservation,d.dispatch_id,d.generation,d.session_id,
+              EXISTS(
+                SELECT 1 FROM supervisor_controls c JOIN supervisor_control_operations op
+                ON op.request->>'conversation_id'=c.conversation_id::text
+                WHERE c.actor_id=a.actor_id AND c.enabled AND c.revision=$2
+                  AND op.request->'enabled'='false'::jsonb
+                  AND op.created_at_ms>d.created_at_ms
+                  AND (op.receipt->>'revision')::bigint<c.revision
+              ) AS owner_restarted
+             FROM central_supervisor_actors a LEFT JOIN central_supervisor_dispatches d
+             ON d.actor_id=a.actor_id AND d.reservation_id=a.current_reservation
+             WHERE a.actor_id=$1",
+        )
+        .bind(ctl.actor)
+        .bind(ctl.revision as i64)
+        .fetch_one(pool)
+        .await?;
+        let Some(reservation) = row.get::<Option<Uuid>, _>("current_reservation") else {
+            // A reply or a cancel can consume the reservation after preview.
+            return Ok(());
+        };
         let generation = row
             .get::<Option<i64>, _>("generation")
             .map_or(next, |g| g as u64);
         if closed && generation == next {
-            let reservation: Uuid = row
-                .get::<Option<Uuid>, _>("current_reservation")
-                .context("retained reservation missing")?;
             let session = row
                 .get::<Option<Uuid>, _>("session_id")
                 .unwrap_or_else(Uuid::new_v4);
@@ -169,56 +191,102 @@ impl Service<'_> {
                 },
             )
             .await?;
-        } else if let Some(release) = (DispatchTime {
-            created: row.get("created_at_ms"),
-            control_updated: row.get::<Option<i64>, _>("control_ms").unwrap_or(0),
-        })
-        .stopped_turn(closed, generation, next)
+        } else if closed
+            && let Some(previous) = &prior
+            && row.get::<Option<Uuid>, _>("dispatch_id") == Some(previous.run.plan().dispatch_id)
+            && generation + 1 == next
         {
-            let mut retry = release;
-            if !retry && let Some(previous) = &prior {
-                retry = retry_unstarted(pool, previous).await?;
-            }
-            if retry {
-                self.release(user, ctl, actor).await?;
-            } else {
-                self.report(
-                        "failed",
-                        "The last turn ended without a reply; stop and start the supervisor to retry its messages",
-                        None,
-                    )
-                    .await?;
-            }
+            let decision = retry::recovery(
+                pool,
+                previous,
+                row.get("owner_restarted"),
+                self.config.automatic_turn_retries,
+            )
+            .await?;
+            self.finish_failed_turn(user, ctl, actor, reservation, previous, decision)
+                .await?;
         } else {
             self.report("uncertain", "An earlier reservation needs inspection", None)
                 .await?;
         }
         Ok(())
     }
-    async fn release(&self, user: &User, ctl: &Control, actor: &ActorView) -> Result<()> {
-        let reservation = actor
+    async fn finish_failed_turn(
+        &self,
+        user: &User,
+        ctl: &Control,
+        actor: &ActorView,
+        reservation_id: Uuid,
+        previous: &Snapshot,
+        decision: Recovery,
+    ) -> Result<()> {
+        let dispatch = previous.run.plan().dispatch_id;
+        let stage = match decision {
+            Recovery::ReplyRecorded => return Ok(()),
+            Recovery::RetryUnstarted | Recovery::OwnerRestart => {
+                let confirmed = self.release(user, ctl, actor, reservation_id).await?;
+                let stage = if !confirmed {
+                    format!(
+                        "Verifying release of reservation {reservation_id} for dispatch {dispatch}"
+                    )
+                } else if decision == Recovery::RetryUnstarted {
+                    "Retrying retained messages after verifying the previous turn did not start"
+                        .into()
+                } else {
+                    "Retrying retained messages after the supervisor was stopped and started".into()
+                };
+                return self.report("waiting", &stage, Some(previous)).await;
+            }
+            Recovery::RetryLimit => format!(
+                "Dispatch {dispatch} reached the automatic retry limit ({}). Inspect the launch failure before restarting the supervisor.",
+                self.config.automatic_turn_retries,
+            ),
+            Recovery::OutcomeUnconfirmed => format!(
+                "Dispatch {dispatch} may have changed tasks before ending without a reply. Inspect its actions. Its original messages are still held."
+            ),
+        };
+        self.report("failed", &stage, Some(previous)).await
+    }
+    async fn release(
+        &self,
+        user: &User,
+        ctl: &Control,
+        actor: &ActorView,
+        reservation_id: Uuid,
+    ) -> Result<bool> {
+        let Some(reservation) = actor
             .current_reservation
             .as_ref()
-            .context("retained reservation missing")?;
-        self.owner
+            .filter(|r| r.id == reservation_id)
+        else {
+            return Ok(false);
+        };
+        let result = self
+            .owner
             .cancel_reservation(
                 user,
                 &serde_json::to_vec(&Cancel {
-                    operation_id: Uuid::new_v4(),
+                    operation_id: Uuid::new_v5(&reservation.id, b"aq-supervisor-turn-retry"),
                     actor_id: ctl.actor,
                     reservation_id: reservation.id,
                     expected_reservation_revision: reservation.revision,
                 })?,
             )
-            .await
-            .map_err(api_error)?;
-        self.report(
-            "waiting",
-            "Retrying the messages of a turn that ended without a reply",
-            None,
-        )
-        .await?;
-        Ok(())
+            .await;
+        let receipt = match result {
+            Ok(receipt) => receipt,
+            // A lost response does not establish success or failure. Reread
+            // the reservation and reuse its exact cancellation on the next poll.
+            Err(AppError::IdentityUnavailable(_)) => return Ok(false),
+            Err(error) => return Err(api_error(error)),
+        };
+        ensure!(
+            receipt.disposition == Disposition::CancelledBeforePlan
+                || receipt.reason == Some(Reason::ReservationNotCurrent),
+            "reservation {reservation_id} release refused: {:?}",
+            receipt.reason
+        );
+        Ok(receipt.disposition == Disposition::CancelledBeforePlan)
     }
     async fn start_turn(
         &self,
