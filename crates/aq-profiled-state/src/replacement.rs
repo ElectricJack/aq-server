@@ -71,6 +71,8 @@ pub struct Prior {
     /// An owner_stop or service_stop handoff (spec 0007 Q1): not charged to
     /// any lineage budget.
     pub exempt: bool,
+    /// Authenticated stopped owner attributed the failed result to the worker.
+    pub platform_interrupted: bool,
     /// Offered before the owner's latest override of a budget hold: the budget started again
     /// after it, so the attempt is charged to nothing (and uses up no exemption).
     pub forgiven: bool,
@@ -137,14 +139,18 @@ fn failed(prior: &Prior, now: u64) -> bool {
 fn uncharged(ordered: &[&Prior], limits: &Limits) -> Vec<bool> {
     let exempt = ordered
         .iter()
-        .map(|p| p.exempt && !p.forgiven && !p.proven_nonstart());
+        .map(|p| p.exempt && !p.forgiven && !p.uncharged_platform_failure());
     let capped = aq_machine_control::cap_exempt(exempt, limits.max_uncharged_continuations);
     (ordered.iter().zip(capped))
-        .map(|(p, exempt)| p.forgiven || p.proven_nonstart() || exempt)
+        .map(|(p, exempt)| p.forgiven || p.uncharged_platform_failure() || exempt)
         .collect()
 }
 
 impl Prior {
+    fn uncharged_platform_failure(&self) -> bool {
+        self.proven_nonstart() || self.platform_interrupted
+    }
+
     /// The closure settlement owner writes this state only after verifying the
     /// launch never ran. A failed or absent result does not establish nonstart.
     pub fn proven_nonstart(&self) -> bool {
@@ -160,7 +166,7 @@ fn launch_stop_receipt(receipt: &ArtifactRef) -> bool {
 
 pub const LAUNCH_BACKOFF: &str = "launch_retry_backoff";
 
-/// A first verified nonstart can continue right away. Repeated launch failures
+/// A first verified platform failure can continue right away. Repeated failures
 /// wait 30s, doubling up to 5m. The clock starts when AQ releases the claim,
 /// so the backoff never delays freeing the worker slot.
 pub fn launch_retry_after(priors: &[Prior]) -> Option<(Uuid, u64)> {
@@ -177,7 +183,7 @@ fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
     let consecutive = ordered
         .iter()
         .rev()
-        .take_while(|p| p.proven_nonstart() && !p.forgiven)
+        .take_while(|p| p.uncharged_platform_failure() && !p.forgiven)
         .take(6)
         .count();
     if consecutive < 2 {
@@ -187,8 +193,8 @@ fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
     Some((last.attempt_id, last.released_at_ms?.saturating_add(delay)))
 }
 /// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
-/// and service stops may be exempt under spec 0007 Q1, and proven nonstarts
-/// are always uncharged), and the latest attempt.
+/// and service stops may be exempt under spec 0007 Q1, and verified platform
+/// failures are always uncharged), and the latest attempt.
 pub fn charged(priors: &[Prior], limits: &Limits) -> (u32, Option<Uuid>) {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
@@ -458,6 +464,7 @@ mod tests {
             cancelled_settled: false,
             completion: None,
             exempt: false,
+            platform_interrupted: false,
             forgiven: false,
         }
     }

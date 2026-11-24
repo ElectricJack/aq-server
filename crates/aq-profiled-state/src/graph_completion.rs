@@ -66,6 +66,50 @@ pub fn status(row: &PgRow) -> Result<AutoSettlement, sqlx::Error> {
         evidence: row.get("evidence"),
     })
 }
+pub async fn fence_transaction(db: &mut PgConnection, owner: &str) -> sqlx::Result<()> {
+    sqlx::query("SELECT set_config('lock_timeout','500ms',true),set_config('statement_timeout','2000ms',true),set_config('aq.settlement_owner',$1,true)")
+        .bind(owner)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// The locked automatic settlement, if any, of the current report.
+pub async fn lock_row(db: &mut PgConnection, report: Uuid) -> sqlx::Result<Option<PgRow>> {
+    sqlx::query("SELECT * FROM profiled_auto_settlements WHERE report_id=$1 FOR UPDATE")
+        .bind(report)
+        .fetch_optional(db)
+        .await
+}
+
+/// Update a settlement that has not prepared an external completion.
+pub async fn record_noncompletion(
+    db: &mut PgConnection,
+    report: Uuid,
+    attempt: Uuid,
+    (actor, disposition, reason): (&str, &str, &str),
+    evidence: &serde_json::Value,
+    at: i64,
+) -> sqlx::Result<Option<AutoSettlement>> {
+    sqlx::query(
+        "INSERT INTO profiled_auto_settlements(report_id,attempt_id,policy_actor,disposition,reason,evidence,created_at_ms,updated_at_ms) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$7)
+         ON CONFLICT(report_id) DO UPDATE SET disposition=EXCLUDED.disposition,reason=EXCLUDED.reason,evidence=EXCLUDED.evidence,updated_at_ms=EXCLUDED.updated_at_ms
+         WHERE profiled_auto_settlements.disposition='held' RETURNING *",
+    )
+    .bind(report)
+    .bind(attempt)
+    .bind(actor).bind(disposition)
+    .bind(reason)
+    .bind(evidence)
+    .bind(at)
+    .fetch_optional(db)
+    .await?
+    .as_ref()
+    .map(status)
+    .transpose()
+}
+
 /// Find a due default-policy completion without scanning finished history.
 pub async fn next_due(
     pool: &sqlx::PgPool,

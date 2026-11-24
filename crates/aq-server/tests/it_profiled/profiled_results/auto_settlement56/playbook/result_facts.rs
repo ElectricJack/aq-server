@@ -1,5 +1,108 @@
 use super::*;
 
+#[tokio::test]
+async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget() {
+    use aq_admission::transport::{ProcessOutcome, StopReason};
+    use aq_playbook_domain::{
+        delivery_decisions::{Decision, record},
+        delivery_store::{DeliveryPort, PgDelivery},
+    };
+
+    let (f, start, mut report) = Box::pin(prepare_with_policy_checks(
+        true,
+        false,
+        None,
+        false,
+        Some(default_policy("required")),
+        true,
+    ))
+    .await;
+    let mut stopped = super::super::super::native_started::stop_request(&start);
+    stopped.evidence.reason = StopReason::GuardianFailure;
+    let auth = context(&f).await;
+    aq_server::profiled_execution::stopped::record(&f.state, &auth, &stopped)
+        .await
+        .unwrap();
+    report.stop = stopped.evidence;
+    report.outcome = ProcessOutcome::Failed;
+    let e = Box::pin(finish_auto_env(
+        f,
+        report,
+        axum::http::StatusCode::OK,
+        ReportSource::Pushed { changed: true },
+    ))
+    .await;
+    let pool = e.f.db.pool().await;
+    let task = e.f.selection.lineage.task_id;
+    let result = e.report.report_id;
+    let attempt = e.report.binding.attempt_id;
+    let port = PgDelivery(pool.clone());
+    assert!(port.pending(None, 10).await.unwrap().is_empty());
+    assert_eq!(complete(&e).await, Settled::Stale);
+    assert_eq!(
+        aq_profiled_state::result_reads::reworked_without_facts(&pool, None, 10)
+            .await
+            .unwrap(),
+        [result]
+    );
+    let mut db = pool.acquire().await.unwrap();
+    assert!(
+        aq_machine_control::platform_retry::report_interrupted(&mut db, task, result)
+            .await
+            .unwrap()
+    );
+    // An unverified decision ID is still charged, even if its reason string matches.
+    let decision = Decision {
+        task,
+        result: Uuid::new_v4(),
+        decision: "returned",
+        reason: Some(aq_machine_control::platform_retry::REASON),
+        detail: None,
+        update_from_main: None,
+    };
+    record(&mut db, &decision, NOW as i64).await.unwrap();
+    drop(db);
+    for _ in 0..2 {
+        aq_server::profiled_execution::settlement::record_replacement_facts(&e.f.state, result)
+            .await
+            .unwrap();
+    }
+    let (returns, action): (i32, String) = sqlx::query_as(
+        "SELECT t.returns,d.decision FROM delivery_tasks t JOIN delivery_decisions d USING(task_id) WHERE d.result_id=$1",
+    )
+    .bind(result)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((returns, action.as_str()), (1, "returned"));
+    assert_eq!(e.writes.load(Ordering::SeqCst), 0);
+    let mut db = pool.acquire().await.unwrap();
+    let priors = aq_profiled_state::replacement_sql::load(&mut db, task)
+        .await
+        .unwrap();
+    let limits = aq_profiled_state::replacement::Limits {
+        max_attempts: 1,
+        max_uncharged_continuations: 0,
+    };
+    assert_eq!(
+        aq_profiled_state::replacement::charged(&priors, &limits).0,
+        0
+    );
+    assert_eq!(priors[0].attempt_id, attempt);
+    assert!(priors[0].holds_task);
+    assert!(
+        aq_profiled_state::replacement::assess(&priors, &limits, NOW)
+            .replacement()
+            .is_some()
+    );
+    assert!(
+        aq_profiled_state::result_reads::reworked_without_facts(&pool, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// Spec 0016 section 7: recording a result stores its facts and decides
 /// nothing. With its source retained and nothing else to wait for, the
 /// result is neither completed, published nor sent back, and the claim

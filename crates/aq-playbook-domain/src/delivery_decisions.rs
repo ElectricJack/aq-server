@@ -8,7 +8,7 @@
 //!
 //! Decisions are per result. `completed` and `returned` are final. A `held`
 //! result can rejoin delivery when the host verifies its publication lease.
-//! `returns` counts each result sent back once.
+//! `returns` counts each charged result sent back once.
 use crate::{
     Error, Result,
     delivery_store::{DeliveryPort, Latest, locate},
@@ -278,7 +278,8 @@ pub struct Decision<'a> {
 
 /// Records `d`: a first decision on the result, or one that ends a hold. A
 /// final decision is never replaced, and a hold never replaces a decision. A
-/// result sent back for the first time adds one to the task's `returns`.
+/// result sent back for the first time adds one to the task's `returns`
+/// unless the exact report proves an interruption by the platform.
 /// Returns whether it recorded anything.
 pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Result<bool> {
     let recorded = sqlx::query_scalar::<_, Uuid>(
@@ -298,13 +299,39 @@ pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Res
     .fetch_optional(&mut *db)
     .await?
     .is_some();
-    if recorded && d.decision == "returned" {
+    if recorded
+        && d.decision == "returned"
+        && !aq_machine_control::platform_retry::report_interrupted(db, d.task, d.result).await?
+    {
         sqlx::query("INSERT INTO delivery_tasks(task_id,returns) VALUES($1,1) ON CONFLICT(task_id) DO UPDATE SET returns=LEAST(delivery_tasks.returns+1,1000)")
             .bind(d.task)
             .execute(&mut *db)
             .await?;
     }
     Ok(recorded)
+}
+
+/// Project the settlement owner's verified platform return into delivery.
+/// The accounting path checks the typed report rather than the reason string.
+pub async fn record_platform_return(
+    db: &mut PgConnection,
+    task: Uuid,
+    result: Uuid,
+    now_ms: i64,
+) -> Result<bool> {
+    record(
+        db,
+        &Decision {
+            task,
+            result,
+            decision: "returned",
+            reason: Some(aq_machine_control::platform_retry::REASON),
+            detail: None,
+            update_from_main: None,
+        },
+        now_ms,
+    )
+    .await
 }
 
 /// Fence a hold before looking up its named result or writing its receipt.

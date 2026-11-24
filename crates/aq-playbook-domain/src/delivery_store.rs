@@ -97,21 +97,25 @@ pub struct PgDelivery(pub PgPool);
 #[async_trait::async_trait]
 impl DeliveryPort for PgDelivery {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(concat!(
             "SELECT a.task_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,a.attempt_id,h.report_id \
              FROM execution_attempts a \
              JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id \
              JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id \
              JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
+             JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) \
              JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
              LEFT JOIN delivery_tasks t ON t.task_id=a.task_id \
              WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
              AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
              AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             AND NOT ",
+             aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+             " \
              ORDER BY GREATEST(COALESCE(t.emitted_at_ms,0),COALESCE(t.checked_at_ms,0)),h.report_id \
              LIMIT $2",
-        )
+        ))
         .bind(project)
         .bind(i64::from(limit))
         .fetch_all(&self.0)
@@ -187,9 +191,13 @@ impl DeliveryPort for PgDelivery {
         if held != Some(true) {
             return Ok(false);
         }
-        let current: Option<Uuid> = sqlx::query_scalar(
-            "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
-        )
+        let current: Option<Uuid> = sqlx::query_scalar(concat!(
+            "SELECT h.report_id FROM profiled_result_heads h ",
+            "JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) ",
+            "WHERE h.attempt_id=$1 AND NOT ",
+            aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+            " FOR UPDATE OF h",
+        ))
         .bind(event.attempt_id)
         .fetch_optional(db)
         .await?;
