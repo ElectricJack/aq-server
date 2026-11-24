@@ -1,6 +1,6 @@
 //! The SQL and query validation behind the owner and project result reads
 //! (`human_results`): bounded keyset discovery of recorded result reports.
-//! Reads only; each function runs inside the caller's read transaction.
+//! Authority and settlement helpers run inside the caller's transaction.
 use aq_admission::{
     LaunchBinding, SessionIdentity,
     execution_spec::ProfiledExecutionSpec,
@@ -240,6 +240,25 @@ pub async fn head_report(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result
         .bind(attempt)
         .fetch_optional(conn)
         .await
+}
+
+/// Lock the current report. After a platform continuation is settled, a
+/// different report can no longer own delivery for that attempt.
+pub async fn correction_head(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<(Option<Uuid>, bool)> {
+    sqlx::query_as(concat!(
+        "SELECT h.report_id, EXISTS(SELECT 1 FROM profiled_auto_settlements s \
+         JOIN profiled_result_reports r USING(report_id) WHERE s.report_id=h.report_id \
+         AND s.attempt_id=h.attempt_id AND s.disposition='rework_required' AND ",
+        aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+        ") FROM profiled_result_heads h WHERE h.attempt_id=$1 FOR UPDATE OF h",
+    ))
+    .bind(attempt)
+    .fetch_optional(db)
+    .await
+    .map(Option::unwrap_or_default)
 }
 
 /// What the policy actor could record for B4 after a final rework.

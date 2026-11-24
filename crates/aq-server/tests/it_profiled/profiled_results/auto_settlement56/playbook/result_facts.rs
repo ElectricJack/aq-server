@@ -74,6 +74,16 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
             .await
             .unwrap();
     }
+    let mut correction = e.report.clone();
+    correction.report_id = Uuid::new_v4();
+    correction.operation_id = Uuid::new_v4();
+    correction.supersedes = Some(result);
+    correction.outcome = ProcessOutcome::Success;
+    let auth = context(&e.f).await;
+    assert!(matches!(
+        results::record(&e.f.state, &auth, &correction).await,
+        Err(aq_server::error::AppError::Conflict(_))
+    ));
     let (returns, action): (i32, String) = sqlx::query_as(
         "SELECT t.returns,d.decision FROM delivery_tasks t JOIN delivery_decisions d USING(task_id) WHERE d.result_id=$1",
     )
