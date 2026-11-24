@@ -221,6 +221,8 @@ impl RetryHistory {
                     m.contains("recorded failed from pull_request.await_checks")
                         && m.contains("untrusted")
                         && m.contains("FAILED test_flaky")
+                        // Cut to the message limit, so the Work view stays in its contract.
+                        && m.len() <= aq_playbook_domain::delivery_store::SUPERVISOR_MESSAGE_BYTES
                 })
             })
         };
@@ -249,7 +251,10 @@ impl RetryHistory {
             "a long tail is cut to fit the notice, not the notice dropped: {}",
             body.len()
         );
-        assert!(body.contains("Use task.retry"), "the instructions stay");
+        assert!(
+            body.contains("retry with task.retry") && body.contains("supervisor.escalate"),
+            "the instructions stay"
+        );
         // A tail read for another head is not this result's.
         self.failed_log("5".repeat(40), log).await;
         assert!(!shown(&work_reasons(&self.env).await));

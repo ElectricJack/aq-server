@@ -1659,7 +1659,7 @@
           },
           "message": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 16384
           }
         },
         "required": [
