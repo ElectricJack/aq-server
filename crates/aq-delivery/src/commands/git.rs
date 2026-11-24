@@ -101,6 +101,15 @@ pub trait GitPort: Send + Sync {
         reference: &str,
         expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure>;
+    /// Deletes `reference` in the central pool only, under the lease
+    /// `expected_head`, for when the remote branch moved past it by a refresh.
+    async fn delete_central_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure>;
 }
 
 /// A hex object id as aq-git writes it: 40 or 64 lowercase hex digits.
@@ -351,6 +360,28 @@ impl GitPort for SocketGit {
         reference: &str,
         expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, true)
+            .await
+    }
+    async fn delete_central_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, false)
+            .await
+    }
+}
+impl SocketGit {
+    async fn delete(
+        &self,
+        (operation, repo): (Uuid, &GitTarget),
+        reference: &str,
+        expected_head: Option<&str>,
+        remote: bool,
+    ) -> Result<RefDeletion, GitFailure> {
         let reference = task_ref(reference)?;
         let lease = expected_head
             .map(|hex| {
@@ -364,7 +395,7 @@ impl GitPort for SocketGit {
             .call(
                 (operation, "ref.delete"),
                 repo,
-                json!({"ref": reference, "remote": true, "expected_old": lease}),
+                json!({"ref": reference, "remote": remote, "expected_old": lease}),
             )
             .await?;
         match result["outcome"].as_str() {

@@ -68,9 +68,11 @@ impl<'a> FrozenCommand<'a> {
         let Some(pr) = self.number() else {
             return Some(Step::Done(Completion::refused("no_pull_request")));
         };
+        let result = self.text("expected_head_sha")?;
         let guard = MergeGuard {
             method,
-            expected_head: self.text("expected_head_sha")?,
+            expected_head: self.text("pull_request_head").unwrap_or(result),
+            result_head: Some(result),
         };
         Some(
             delivery
@@ -85,7 +87,10 @@ impl<'a> FrozenCommand<'a> {
                     .close_result(
                         TaskOperation::new(self.operation, target, task),
                         pr,
-                        self.text("result_head"),
+                        (
+                            self.text("result_head"),
+                            self.text("pull_request_head").or(self.text("result_head")),
+                        ),
                     )
                     .await
             }
@@ -112,6 +117,7 @@ impl<'a> FrozenCommand<'a> {
                 step: (now_ms >= deadline)
                     .then(|| Step::Done(Completion::new("timeout", json!({})))),
                 observed: None,
+                refreshed: None,
             });
         }
         let request = CheckRequest::new(
@@ -119,13 +125,15 @@ impl<'a> FrozenCommand<'a> {
             required.as_deref(),
             self.request["check_log_bytes"].as_u64().unwrap_or(0),
         )
-        .for_head(self.text("result_head"), frozen.is_some());
+        .for_head(self.text("result_head"), frozen.is_some())
+        .with_refresh(self.request.get("refresh").map(Refresh::from_request));
         let poll = delivery
             .await_checks_step(target, request, (now_ms, deadline))
             .await;
         Some(Run {
             step: poll.completion.map(Step::Done),
             observed: poll.observed,
+            refreshed: poll.refreshed,
         })
     }
 }
@@ -134,6 +142,7 @@ impl Run {
         Self {
             step: Some(step),
             observed: None,
+            refreshed: None,
         }
     }
 }

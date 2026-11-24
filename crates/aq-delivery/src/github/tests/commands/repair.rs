@@ -25,6 +25,7 @@ async fn merge(delivery: &Delivery, task: Uuid, pr: u64, head: char) -> Completi
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha(head),
+                    result_head: None,
                 },
             )
             .await,
@@ -52,7 +53,7 @@ pub(super) async fn confirm_behind(delivery: &Delivery, mock: &Mock, git: &FakeG
     // The next poll and merge both request the existing update-from-main
     // repair, even though this head's checks passed before the first merge.
     let behind = second('b', 'd', "behind");
-    mock.reply(200, vec![], behind.clone());
+    poll(mock, behind.clone(), behind.clone(), green());
     let check = poll_result(delivery, 8, &sha('b')).await.unwrap();
     assert_eq!(
         (check.outcome, check.diagnostic),

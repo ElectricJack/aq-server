@@ -2401,6 +2401,7 @@ mod delivery {
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
             branch_head: Mutex<String>,
+            refresh_refused: Mutex<bool>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2447,6 +2448,19 @@ mod delivery {
                         transient: true,
                     });
                 }
+                Ok(RefDeletion::Deleted)
+            }
+            async fn delete_central_ref(
+                &self,
+                _: Uuid,
+                _: &GitTarget,
+                reference: &str,
+                _: Option<&str>,
+            ) -> std::result::Result<RefDeletion, GitFailure> {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("delete central {reference}"));
                 Ok(RefDeletion::Deleted)
             }
         }
@@ -2533,6 +2547,23 @@ mod delivery {
             ) -> GitHubResult<aq_delivery::BranchDeletion> {
                 Ok(aq_delivery::BranchDeletion::Deleted)
             }
+            async fn update_branch(
+                &self,
+                _: &GitHubRepository,
+                pr: u64,
+                head: &str,
+            ) -> GitHubResult<()> {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("update-branch {pr} {head}"));
+                match *self.refresh_refused.lock().unwrap() {
+                    true => Err(aq_delivery::github::GitHubApiError::Invalid {
+                        message: "merge conflict between base and head".into(),
+                    }),
+                    false => Ok(()),
+                }
+            }
         }
         struct Ops(Arc<Fake>, DeliveryTarget);
         #[async_trait::async_trait]
@@ -2573,6 +2604,7 @@ mod delivery {
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
                 branch_head: Mutex::new(oid('b')),
+                refresh_refused: Mutex::new(false),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
@@ -2957,7 +2989,10 @@ mod delivery {
             let (h, fake) = harness().await;
             let (task, pending) = h.stopped(h.scope.project_id, "success");
             h.pull_request(task, "passed", json!([])).await;
+            // Behind with green checks, and GitHub cannot merge main in.
             *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *fake.refresh_refused.lock().unwrap() = true;
             let wait = h
                 .accepted(
                     "pull_request.await_checks",
@@ -2994,7 +3029,89 @@ mod delivery {
             let facts = h.read(task).await.output["facts"].clone();
             assert_eq!(facts["pull_request"]["number"], 7);
             assert_eq!(facts["pull_request"]["state"], "open");
-            assert!(fake.log.lock().unwrap().is_empty());
+            assert_eq!(
+                *fake.log.lock().unwrap(),
+                [format!("update-branch 7 {}", oid('a'))]
+            );
+        }
+
+        #[tokio::test]
+        async fn one_behind_green_pr_per_repository_is_refreshed_at_a_time() {
+            let (h, fake) = harness().await;
+            let pool = h.pool().await;
+            let target = DeliveryTarget {
+                git: GitTarget {
+                    repository_id: Uuid::from_u128(1),
+                    binding_generation: 1,
+                },
+                github: GitHubRepository {
+                    owner: "Acme".into(),
+                    name: "widgets".into(),
+                },
+                default_branch: "main".into(),
+            };
+            let delivery = Delivery::new(fake.clone(), fake.clone());
+            let runtime = aq_delivery::commands::DeliveryRuntime {
+                service: Some(&delivery),
+                target: Some(&target),
+            };
+            *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
+            let request = |task: Uuid, command: &str| {
+                json!({
+                    "command": command, "project": h.scope.project_id, "task": task,
+                    "pull_request": 7, "result_head": oid('a'), "check_target": target,
+                    "merge_target": target, "method": "merge", "expected_head_sha": oid('a'),
+                    "deadline_at_ms": h.clock() + 3_600_000, "longest_check_wait_ms": 3_600_000,
+                })
+            };
+            let step = async |task: Uuid, command: &str| {
+                let request = request(task, command);
+                let frozen =
+                    aq_delivery::commands::FrozenCommand::new(Uuid::new_v4(), command, &request);
+                aq_delivery::commands::run_step(&pool, runtime, frozen, h.clock())
+                    .await
+                    .unwrap()
+            };
+            let updates = || {
+                fake.log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|line| line.starts_with("update-branch"))
+                    .count()
+            };
+            const WAIT: &str = "pull_request.await_checks";
+
+            // The first behind, green PR takes the repository's refresh slot.
+            assert_eq!(step(first, WAIT).await, None);
+            assert_eq!(updates(), 1);
+            // The second waits while it is held, and so does the first: its
+            // refresh is pending. Neither goes back to an agent.
+            assert_eq!(step(second, WAIT).await, None);
+            assert_eq!(step(first, WAIT).await, None);
+            assert_eq!(updates(), 1);
+            // The first merges; its refresh ends and the second's starts.
+            let merged = step(first, "pull_request.merge").await.unwrap();
+            assert_eq!(merged.outcome, "merged");
+            assert_eq!(step(second, WAIT).await, None);
+            assert_eq!(updates(), 2);
+            let rows: Vec<(Uuid, i32)> =
+                sqlx::query_as("SELECT task_id,refreshes FROM delivery_branch_refreshes")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(rows, [(second, 1)]);
+            let returns: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM delivery_tasks WHERE returns>0 AND task_id IN ($1,$2)",
+            )
+            .bind(first)
+            .bind(second)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(returns, 0, "a refresh is not a return");
         }
 
         #[tokio::test]

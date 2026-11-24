@@ -179,6 +179,24 @@ pub trait GitHubAdapter: Send + Sync {
         repo: &GitHubRepository,
         branch: &str,
     ) -> GitHubResult<BranchDeletion>;
+    /// Asks GitHub to merge the base branch into the PR branch if its head is
+    /// still `expected_head_sha`. GitHub makes the merge commit later.
+    async fn update_branch(
+        &self,
+        _repo: &GitHubRepository,
+        _pr: u64,
+        _expected_head_sha: &str,
+    ) -> GitHubResult<()> {
+        Err(GitHubApiError::Unconfigured)
+    }
+    /// The parents of commit `sha`, in order.
+    async fn commit_parents(
+        &self,
+        _repo: &GitHubRepository,
+        _sha: &str,
+    ) -> GitHubResult<Vec<String>> {
+        Err(GitHubApiError::Unconfigured)
+    }
 }
 
 /// Every operation refuses with `github_unconfigured`.
