@@ -126,21 +126,24 @@ impl Fixture {
         )
     }
     async fn get(&self, path: &str) -> (StatusCode, Value) {
+        self.get_as(path, "owner@localhost").await
+    }
+    async fn get_as(&self, path: &str, email: &str) -> (StatusCode, Value) {
         self.call(
             Request::get(path)
-                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-dev-email", email)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
     }
-    async fn read(&self, query: &str) -> Value {
+    /// The owner read of the fixture task's comment thread.
+    fn comments(&self) -> String {
         let (p, t) = (self.project(), self.thread().task_id);
-        let (status, body) = self
-            .get(&format!(
-                "/api/human/projects/{p}/tasks/{t}/comments{query}"
-            ))
-            .await;
+        format!("/api/human/projects/{p}/tasks/{t}/comments")
+    }
+    async fn read(&self, query: &str) -> Value {
+        let (status, body) = self.get(&format!("{}{query}", self.comments())).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let schema: Value = serde_json::from_str(include_str!(
             "../../../../protocol/human-graph/v1/schema.json"
@@ -161,13 +164,34 @@ impl Fixture {
         )
         .await
     }
+    /// An agent's comment in the fixture thread.
+    async fn add_agent_comment(&self) -> Uuid {
+        let agent = Author::Agent {
+            session_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+        };
+        let now = (self.f.state.clock)();
+        let pool = self.f.db.pool().await;
+        let added = comments::add(
+            &pool,
+            Uuid::new_v4(),
+            self.thread(),
+            &agent,
+            "Agent note",
+            now,
+        );
+        added.await.unwrap().comment.comment_id
+    }
 }
 fn add(op: Uuid, project: Uuid, task: Uuid, body: &str) -> Value {
     json!({"operation_id":op,"kind":"task.comment.add","subject":{"type":"task","id":task},
         "expected_versions":{},"payload":{"operation_id":op,"project_id":project,"body":body}})
 }
-fn edit(op: Uuid, project: Uuid, comment: Uuid, revision: &str, body: Option<&str>) -> Value {
-    let (kind, mut payload) = match body {
+/// An edit of the comment at `revision`, or its delete when `body` is `None`,
+/// under a new operation.
+fn edit(project: Uuid, comment: Uuid, revision: &str, body: Option<&str>) -> Value {
+    let op = Uuid::new_v4();
+    let (kind, payload) = match body {
         Some(b) => (
             "task.comment.edit",
             json!({"operation_id":op,"project_id":project,"expected_revision":revision,"body":b}),
@@ -177,7 +201,6 @@ fn edit(op: Uuid, project: Uuid, comment: Uuid, revision: &str, body: Option<&st
             json!({"operation_id":op,"project_id":project,"expected_revision":revision}),
         ),
     };
-    payload["operation_id"] = json!(op);
     json!({"operation_id":op,"kind":kind,
         "subject":{"type":"task_comment","id":comment,"revision":revision},
         "expected_versions":{"task_comment":revision},"payload":payload})
@@ -190,118 +213,42 @@ fn receipt(body: &Value) -> (String, String) {
         r["revision"].as_str().unwrap().into(),
     )
 }
+fn find_comment(page: &Value, comment: Uuid) -> &Value {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["comment_id"] == json!(comment))
+        .unwrap()
+}
 
 #[tokio::test]
 async fn owner_adds_edits_and_deletes_with_revisions_ownership_and_replay() {
     let x = setup().await;
     let (p, t) = (x.project(), x.task());
     let op = Uuid::new_v4();
-    let request = add(op, p, t, "First **finding**.");
-    let (status, body) = x.act(&request).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
-    assert_eq!(receipt(&body), (op.to_string(), "1".into()));
-    assert!(
-        body["data"]["affected_entities"]
-            .as_array()
-            .unwrap()
-            .contains(&json!({"type":"task","id":t}))
-    );
-    // Replaying the operation returns its receipt; a changed request conflicts.
-    let (_, replay) = x.act(&request).await;
-    assert_eq!(replay["data"], body["data"]);
-    let (status, _) = x.act(&add(op, p, t, "Changed body")).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    let added = add_replays_its_receipt_and_conflicts_when_changed(&x, op).await;
     let comment = op;
-
-    // Edit at the exact revision; a stale revision conflicts with the live one.
-    let (_, edited) = x
-        .act(&edit(Uuid::new_v4(), p, comment, "1", Some("Edited.")))
-        .await;
-    assert_eq!(edited["data"]["disposition"], "confirmed", "{edited}");
-    assert_eq!(receipt(&edited).1, "2");
-    let stale_op = Uuid::new_v4();
-    let (_, stale) = x
-        .act(&edit(stale_op, p, comment, "1", Some("Stale.")))
-        .await;
-    assert_eq!(stale["data"]["disposition"], "conflict", "{stale}");
-    assert_eq!(
-        stale["data"]["current_versions"],
-        json!({"task_comment":"2"})
-    );
-    let page = x.read("").await;
-    assert_eq!(page["items"][0]["body"], "Edited.");
-    assert_eq!(page["items"][0]["revision"], "2");
-    assert!(page["items"][0]["edited_at"].is_string());
-    assert_eq!(page["items"][0]["author"]["kind"], "owner");
-    assert_eq!(
-        page["items"][0]["author"]["display_name"],
-        "owner@localhost"
-    );
-    assert_eq!(page["items"][0]["can_edit"], true);
-
+    edit_applies_at_the_exact_revision_only(&x, comment).await;
+    let theirs = x.add_agent_comment().await;
     // Owners may not edit or delete an agent's comment.
-    let agent = Author::Agent {
-        session_id: Uuid::new_v4(),
-        attempt_id: Uuid::new_v4(),
-    };
-    let now = (x.f.state.clock)();
-    let theirs = comments::add(
-        &x.f.db.pool().await,
-        Uuid::new_v4(),
-        x.thread(),
-        &agent,
-        "Agent note",
-        now,
-    )
-    .await
-    .unwrap()
-    .comment
-    .comment_id;
     for body in [Some("Hijack"), None] {
-        let (status, refused) = x.act(&edit(Uuid::new_v4(), p, theirs, "1", body)).await;
+        let (status, refused) = x.act(&edit(p, theirs, "1", body)).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
         assert_eq!(refused["code"], "comment_not_author");
     }
-
-    // Delete leaves a tombstone; the deleted comment cannot change again, but
-    // replaying the delete still returns its receipt.
-    let delete = edit(Uuid::new_v4(), p, comment, "2", None);
-    let (_, deleted) = x.act(&delete).await;
-    assert_eq!(deleted["data"]["disposition"], "confirmed", "{deleted}");
-    assert_eq!(receipt(&deleted).1, "3");
-    let (status, again) = x.act(&delete).await;
-    assert_eq!(status, StatusCode::OK, "{again}");
-    assert_eq!(
-        again["data"]["receipt_refs"],
-        deleted["data"]["receipt_refs"]
-    );
-    let (status, refused) = x
-        .act(&edit(Uuid::new_v4(), p, comment, "3", Some("Undelete")))
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
-    assert_eq!(refused["code"], "comment_deleted");
-    let page = x.read("").await;
-    let mine = page["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["comment_id"] == json!(comment))
-        .unwrap();
-    assert_eq!(mine["body"], Value::Null);
-    assert!(mine["deleted_at"].is_string());
-    assert_eq!(mine["revision"], "3");
-    assert_eq!(mine["can_edit"], false);
-    assert_eq!(page["items"][0]["author"]["kind"], "agent");
-    assert_eq!(page["items"][0]["can_edit"], false);
+    delete_leaves_a_tombstone_and_replays(&x, comment).await;
 
     // The journal lookup reconciles to the same receipt from a fresh router.
     let (status, looked) = x.get(&format!("/api/v1/operations/{op}")).await;
     assert_eq!(status, StatusCode::OK, "{looked}");
-    assert_eq!(looked["data"]["receipt_refs"], body["data"]["receipt_refs"]);
+    assert_eq!(
+        looked["data"]["receipt_refs"],
+        added["data"]["receipt_refs"]
+    );
 
     // A comment outside the project and a task Graph does not know are refused.
-    let other = edit(Uuid::new_v4(), Uuid::new_v4(), theirs, "1", Some("x"));
+    let other = edit(Uuid::new_v4(), theirs, "1", Some("x"));
     let (status, _) = x.act(&other).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = x
@@ -320,25 +267,97 @@ async fn owner_adds_edits_and_deletes_with_revisions_ownership_and_replay() {
     assert_eq!(stored, 2);
 }
 
+/// Adds the owner's comment under `op`. Replaying the operation returns its
+/// receipt; a changed request conflicts. Returns the first reply.
+async fn add_replays_its_receipt_and_conflicts_when_changed(x: &Fixture, op: Uuid) -> Value {
+    let (p, t) = (x.project(), x.task());
+    let request = add(op, p, t, "First **finding**.");
+    let (status, body) = x.act(&request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    assert_eq!(receipt(&body), (op.to_string(), "1".into()));
+    let affected = body["data"]["affected_entities"].as_array().unwrap();
+    assert!(affected.contains(&json!({"type":"task","id":t})));
+    let (_, replay) = x.act(&request).await;
+    assert_eq!(replay["data"], body["data"]);
+    let (status, _) = x.act(&add(op, p, t, "Changed body")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    body
+}
+
+/// Edit at the exact revision; a stale revision conflicts with the live one.
+async fn edit_applies_at_the_exact_revision_only(x: &Fixture, comment: Uuid) {
+    let p = x.project();
+    let (_, edited) = x.act(&edit(p, comment, "1", Some("Edited."))).await;
+    assert_eq!(edited["data"]["disposition"], "confirmed", "{edited}");
+    assert_eq!(receipt(&edited).1, "2");
+    let (_, stale) = x.act(&edit(p, comment, "1", Some("Stale."))).await;
+    assert_eq!(stale["data"]["disposition"], "conflict", "{stale}");
+    assert_eq!(
+        stale["data"]["current_versions"],
+        json!({"task_comment":"2"})
+    );
+    let page = x.read("").await;
+    let latest = &page["items"][0];
+    assert_eq!(latest["body"], "Edited.");
+    assert_eq!(latest["revision"], "2");
+    assert!(latest["edited_at"].is_string());
+    assert_eq!(latest["author"]["kind"], "owner");
+    assert_eq!(latest["author"]["display_name"], "owner@localhost");
+    assert_eq!(latest["can_edit"], true);
+}
+
+/// Delete leaves a tombstone; the deleted comment cannot change again, but
+/// replaying the delete still returns its receipt. The agent's newer comment
+/// heads the thread, and the owner cannot edit it.
+async fn delete_leaves_a_tombstone_and_replays(x: &Fixture, comment: Uuid) {
+    let p = x.project();
+    let delete = edit(p, comment, "2", None);
+    let (_, deleted) = x.act(&delete).await;
+    assert_eq!(deleted["data"]["disposition"], "confirmed", "{deleted}");
+    assert_eq!(receipt(&deleted).1, "3");
+    let (status, again) = x.act(&delete).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["data"]["receipt_refs"],
+        deleted["data"]["receipt_refs"]
+    );
+    let (status, refused) = x.act(&edit(p, comment, "3", Some("Undelete"))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "comment_deleted");
+    let page = x.read("").await;
+    let mine = find_comment(&page, comment);
+    assert_eq!(mine["body"], Value::Null);
+    assert!(mine["deleted_at"].is_string());
+    assert_eq!(mine["revision"], "3");
+    assert_eq!(mine["can_edit"], false);
+    assert_eq!(page["items"][0]["author"]["kind"], "agent");
+    assert_eq!(page["items"][0]["can_edit"], false);
+}
+
+/// Adds `count` owner comments `c0`, `c1`, ... to the fixture thread.
+async fn add_owner_comments(
+    x: &Fixture,
+    pool: &sqlx::PgPool,
+    now: chrono::DateTime<chrono::Utc>,
+    count: usize,
+) -> Vec<Uuid> {
+    let owner = x.owner();
+    let mut ids = Vec::new();
+    for n in 0..count {
+        let body = format!("c{n}");
+        let added = comments::add(pool, Uuid::new_v4(), x.thread(), &owner, &body, now);
+        ids.push(added.await.unwrap().comment.comment_id);
+    }
+    ids
+}
+
 #[tokio::test]
 async fn thread_pages_newest_first_with_tombstones_and_bounds() {
     let x = setup().await;
     let pool = &x.f.db.pool().await;
     let now = (x.f.state.clock)();
-    let mut ids = Vec::new();
-    for n in 0..55 {
-        let c = comments::add(
-            pool,
-            Uuid::new_v4(),
-            x.thread(),
-            &x.owner(),
-            &format!("c{n}"),
-            now,
-        )
-        .await
-        .unwrap();
-        ids.push(c.comment.comment_id);
-    }
+    let ids = add_owner_comments(&x, pool, now, 55).await;
     let delete = comments::DeleteComment {
         operation_id: Uuid::new_v4(),
         project_id: x.project(),
@@ -377,26 +396,29 @@ async fn thread_pages_newest_first_with_tombstones_and_bounds() {
 
     let small = x.read("?limit=100").await;
     assert_eq!(small["items"].as_array().unwrap().len(), 55);
-    let (p, t) = (x.project(), x.thread().task_id);
-    let base = format!("/api/human/projects/{p}/tasks/{t}/comments");
+    let base = x.comments();
     for query in ["?limit=0", "?limit=101", "?other=1"] {
         let (status, _) = x.get(&format!("{base}{query}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
     }
     // A cursor for another page size, or a forged one, must restart.
-    let (status, _) = x.get(&format!("{base}?cursor={cursor}&limit=10")).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    let (status, _) = x.get(&format!("{base}?cursor=forged")).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    let (status, _) = x
-        .call(
-            Request::get(&base)
-                .header("x-aq-dev-email", "other@localhost")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
+    for query in [
+        format!("?cursor={cursor}&limit=10"),
+        "?cursor=forged".into(),
+    ] {
+        let (status, _) = x.get(&format!("{base}{query}")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{query}");
+    }
+    let (status, _) = x.get_as(&base, "other@localhost").await;
     assert!(status.is_client_error(), "{status}");
+}
+
+fn capability<'a>(bootstrap: &'a Value, name: &str) -> Option<&'a Value> {
+    bootstrap["data"]["capabilities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["name"] == name)
 }
 
 #[tokio::test]
@@ -405,23 +427,11 @@ async fn bootstrap_advertises_comment_capabilities() {
     let (status, body) = x.get("/api/v1/bootstrap").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     for name in ["tasks.comments.read", "tasks.comments.write"] {
-        let capability = body["data"]["capabilities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["name"] == name)
-            .unwrap_or_else(|| panic!("missing {name}"));
+        let capability = capability(&body, name).unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(capability["enabled"], true, "{capability}");
         assert_eq!(capability["version"], "1");
     }
-    let (_, other) = x
-        .call(
-            Request::get("/api/v1/bootstrap")
-                .header("x-aq-dev-email", "other@localhost")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
+    let (_, other) = x.get_as("/api/v1/bootstrap", "other@localhost").await;
     let enabled = |name: &str| {
         other["data"]["capabilities"]
             .as_array()

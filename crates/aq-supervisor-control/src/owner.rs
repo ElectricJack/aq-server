@@ -20,6 +20,63 @@ tokio::task_local! {
 
 pub const PREFIX: &str = "/v1/supervisor/owner";
 
+fn owner_uri(uri: &Uri) -> Option<Uri> {
+    uri.path_and_query()
+        .map_or("", |p| p.as_str())
+        .strip_prefix(PREFIX)
+        .unwrap_or_default()
+        .parse()
+        .ok()
+}
+
+async fn action_payload(
+    method: &Method,
+    uri: &Uri,
+    body: Body,
+) -> Result<(Option<Value>, Body), StatusCode> {
+    if method != Method::POST || uri.path() != "/api/v1/actions" {
+        return Ok((None, body));
+    }
+    // Any body read failure, including the size bound, receives the same response.
+    let bytes = axum::body::to_bytes(body, 65536)
+        .await
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+    let value = serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok((Some(value), Body::from(bytes)))
+}
+
+async fn project_body(
+    pool: &sqlx::PgPool,
+    project: uuid::Uuid,
+    target: (&Method, &Uri),
+    body: Body,
+) -> Result<Body, Response> {
+    let (method, uri) = target;
+    let (json, body) = action_payload(method, uri, body)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let refusal = || {
+        aq_manual_sessions::Error(
+            StatusCode::FORBIDDEN,
+            "Project supervisor can act only on its own project",
+        )
+        .into_response()
+    };
+    if !names_only(project, method, uri.path(), json.as_ref()) {
+        return Err(refusal());
+    }
+    // An owner handler binds tasks to its project's Graph workspace. Shared workspaces are refused.
+    let owned = sqlx::query_scalar::<_, bool>(OWN_WORKSPACE)
+        .bind(project)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| aq_manual_sessions::Error::from(e).into_response())?;
+    if !owned {
+        return Err(refusal());
+    }
+    Ok(body)
+}
+
 /// The owner who approved `p`, when `p` may act as that owner.
 pub async fn approving_owner(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -89,47 +146,20 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
             };
             // Release the credential locks: the owner handler may write the same rows.
             drop(permit.guard);
-            let (parts, mut body) = request.into_parts();
-            let tail = parts
-                .uri
-                .path_and_query()
-                .map_or("", |p| p.as_str())
-                .strip_prefix(PREFIX)
-                .unwrap_or_default();
-            let Ok(uri) = tail.parse::<Uri>() else {
-                return StatusCode::BAD_REQUEST.into_response();
+            let (parts, body) = request.into_parts();
+            let uri = match owner_uri(&parts.uri) {
+                Some(uri) => uri,
+                None => return StatusCode::BAD_REQUEST.into_response(),
             };
-            if let Some(project) = permit.project {
-                let mut json = None;
-                if parts.method == Method::POST && uri.path() == "/api/v1/actions" {
-                    // Any read failure, the limit included, refuses as too large.
-                    let Ok(bytes) = axum::body::to_bytes(body, 65536).await else {
-                        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-                    };
-                    let Ok(value) = serde_json::from_slice(&bytes) else {
-                        return StatusCode::BAD_REQUEST.into_response();
-                    };
-                    (json, body) = (Some(value), Body::from(bytes));
+            let body = match permit.project {
+                Some(project) => {
+                    match project_body(&pool, project, (&parts.method, &uri), body).await {
+                        Ok(body) => body,
+                        Err(response) => return response,
+                    }
                 }
-                let refusal = aq_manual_sessions::Error(
-                    StatusCode::FORBIDDEN,
-                    "Project supervisor can act only on its own project",
-                );
-                if !names_only(project, &parts.method, uri.path(), json.as_ref()) {
-                    return refusal.into_response();
-                }
-                // Owner handlers bind a task only to its project's Graph workspace,
-                // so a workspace shared with another project would let one in.
-                match sqlx::query_scalar::<_, bool>(OWN_WORKSPACE)
-                    .bind(project)
-                    .fetch_one(&pool)
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => return refusal.into_response(),
-                    Err(e) => return aq_manual_sessions::Error::from(e).into_response(),
-                }
-            }
+                None => body,
+            };
             // A fresh request: the outer router's path params and matched
             // path would otherwise leak into the owner app's routing.
             let mut forwarded = Request::new(body);

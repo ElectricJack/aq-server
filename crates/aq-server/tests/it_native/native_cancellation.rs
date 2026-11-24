@@ -77,8 +77,23 @@ async fn ordinary_slow_offer_survives_poll_return_and_blocks_duplicate_assembly(
     })
     .await
     .expect("detached assembler must publish the retained offer");
-    let (status, replayed) = native_offer::poll(&c).await;
-    assert_eq!(status, 200, "{replayed}");
+    // The attempt row can exist before its offer is published (staged offers),
+    // so poll until the replayed page carries the offer.
+    let replayed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (status, page) = native_offer::poll(&c).await;
+            assert_eq!(status, 200, "{page}");
+            if page["body"]["offers"]
+                .as_array()
+                .is_some_and(|offers| !offers.is_empty())
+            {
+                break page;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the retained offer must be replayed once published");
     assert_eq!(
         replayed["body"]["offers"][0]["offered"]["offer"]["binding"]["attempt_id"],
         json!(attempt)

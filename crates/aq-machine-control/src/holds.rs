@@ -115,6 +115,10 @@ pub const OVERRIDES_FORMAT: u32 = 151;
 /// The longest owner reason an override records.
 pub const REASON_MAX: usize = 1024;
 
+pub(crate) fn valid_owner_reason(reason: &str) -> bool {
+    !reason.is_empty() && reason.chars().count() <= REASON_MAX
+}
+
 /// An owner's override of a budget hold, as recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Override {
@@ -143,12 +147,22 @@ pub async fn record_override(
     o: &Override,
     now: DateTime<Utc>,
 ) -> Result<(), Error> {
-    if !is_budget_hold(&o.hold_code) || o.reason.is_empty() || o.reason.chars().count() > REASON_MAX
-    {
+    if !is_budget_hold(&o.hold_code) || !valid_owner_reason(&o.reason) {
         return Err(Error::Invalid("limit override"));
     }
     let mut tx = conn.begin().await?;
     lock_budget(&mut tx, task).await?;
+    if super::owner_retry::available(&mut tx).await?
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM owner_task_retry_intents WHERE operation_id=$1)",
+        )
+        .bind(o.operation_id)
+        .fetch_one(&mut *tx)
+        .await?
+        && !super::owner_retry::authorized(&mut tx, o.operation_id, task, o.attempt_id).await?
+    {
+        return Err(Error::Invalid("owner retry anchor changed"));
+    }
     let inserted = sqlx::query(
         "INSERT INTO task_limit_overrides(operation_id,task_id,attempt_id,hold_code,reason,actor,recorded_at_ms,spent_microunits) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
@@ -181,15 +195,11 @@ pub async fn record_override(
 /// (logged).
 pub async fn post_override(
     pool: &PgPool,
-    project: Uuid,
-    task: Uuid,
+    thread: aq_task_comments::Thread,
     o: &Override,
     now: DateTime<Utc>,
 ) {
-    let thread = aq_task_comments::Thread {
-        project_id: project,
-        task_id: task,
-    };
+    let task = thread.task_id;
     let author = aq_task_comments::Author::System {
         component: "aq.swarm".into(),
     };
@@ -425,19 +435,8 @@ pub async fn note(
         return Err(Error::Invalid("a hold needs an attempt of its task"));
     };
     let (comment, body) = match comment {
-        Some(c) => c,
-        None => {
-            let earlier: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM task_holds WHERE task_id=$1")
-                    .bind(d.task)
-                    .fetch_one(&mut *conn)
-                    .await?;
-            let name = format!("aq.task-hold/{}/{earlier}", d.seen);
-            (
-                Uuid::new_v5(&d.task, name.as_bytes()),
-                comment_body(d.reason),
-            )
-        }
+        Some(custom) => custom,
+        None => default_comment(conn, d).await?,
     };
     // Only while the count the decision saw is current, in this one statement.
     let inserted = sqlx::query(
@@ -456,6 +455,21 @@ pub async fn note(
     .fetch_optional(&mut *conn)
     .await?;
     Ok(inserted.map(|r| noted(&r, true)))
+}
+
+async fn default_comment(
+    conn: &mut PgConnection,
+    d: &Decision<'_>,
+) -> Result<(Uuid, String), Error> {
+    let earlier: i64 = sqlx::query_scalar("SELECT count(*) FROM task_holds WHERE task_id=$1")
+        .bind(d.task)
+        .fetch_one(&mut *conn)
+        .await?;
+    let name = format!("aq.task-hold/{}/{earlier}", d.seen);
+    Ok((
+        Uuid::new_v5(&d.task, name.as_bytes()),
+        comment_body(d.reason),
+    ))
 }
 
 /// Posts a hold's stored comment (idempotent by its id) and marks it on record. A comment
@@ -495,15 +509,23 @@ pub async fn hold(pool: &PgPool, d: Option<Decision<'_>>, now: DateTime<Utc>) {
     record_hold(pool, d, None, now).await;
 }
 
+pub struct SelectionRefusal<'a> {
+    pub project: Uuid,
+    pub task: Uuid,
+    pub reason: &'a str,
+}
 /// Record selection's refusal only if its budget history is still current.
 pub async fn selection_hold(
     pool: &PgPool,
     history: Option<History>,
-    project: Uuid,
-    task: Uuid,
-    reason: &str,
+    refusal: SelectionRefusal<'_>,
     now: DateTime<Utc>,
 ) {
+    let SelectionRefusal {
+        project,
+        task,
+        reason,
+    } = refusal;
     if let Some(h) = history {
         let d = Decision {
             project,

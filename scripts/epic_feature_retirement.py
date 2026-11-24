@@ -2,290 +2,50 @@
 """Owner workflow for spec 0020 using the existing AQ Graph v1 API."""
 
 import argparse
-import hashlib
 import json
 import os
-import re
-import time
 from pathlib import Path
 from stat import S_ISREG
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-from uuid import UUID, uuid5
 
-
-META = "aq:epic_feature_retirement"
-
-
-class RetirementError(Exception):
-    pass
-
-
-class GraphError(RetirementError):
-    def __init__(self, status, payload):
-        self.status = status
-        super().__init__(f"Graph HTTP {status}: {payload}")
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-
-
-def digest(value):
-    return hashlib.sha256(canonical(value)).hexdigest()
-
-
-def identity(namespace, key):
-    return str(uuid5(UUID(namespace), key))
-
-
-def require(yes, message):
-    if not yes:
-        raise RetirementError(message)
-
-
-def fields(value, required, optional=()):
-    require(
-        isinstance(value, dict)
-        and set(required) <= value.keys() <= set(required) | set(optional),
-        f"Expected fields {', '.join(required)}"
-        + (f" with optional {', '.join(optional)}" if optional else ""),
-    )
-
-
-def uuid(value):
-    try:
-        parsed = UUID(value)
-        require(parsed.int != 0, "A nil UUID is not a valid identity")
-        return str(parsed)
-    except (TypeError, ValueError, AttributeError):
-        raise RetirementError("Expected a UUID") from None
-
-
-def nonempty(value, limit):
-    require(
-        isinstance(value, str) and value.strip() and len(value.encode()) <= limit,
-        f"Expected nonempty text of at most {limit} bytes",
-    )
-    return value
-
-
-def revision(value):
-    require(
-        type(value) is int and 0 < value < 2**63, "Expected a positive integer revision"
-    )
-    return value
-
-
-def sha(value):
-    require(
-        isinstance(value, str)
-        and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value)
-        and any(c != "0" for c in value),
-        "Expected a full nonzero commit SHA",
-    )
-    return value
-
-
-def artifact(value):
-    fields(value, ("artifact_id", "sha256"))
-    require(
-        isinstance(value["sha256"], str)
-        and re.fullmatch(r"[0-9a-f]{64}", value["sha256"]),
-        "Expected a 64-digit SHA-256",
-    )
-    return {"artifact_id": uuid(value["artifact_id"]), "sha256": value["sha256"]}
-
-
-def revisions(value, repositories):
-    require(
-        isinstance(value, dict) and value.keys() == repositories.keys(),
-        "Evidence must name the exact registered repositories",
-    )
-    return {repo: sha(commit) for repo, commit in value.items()}
-
-
-def repository_flags(value):
-    require(
-        isinstance(value, dict) and 1 <= len(value) <= 32,
-        "Register between one and 32 repository flag names",
-    )
-    for repo, flag in value.items():
-        nonempty(repo, 96)
-        require(
-            isinstance(flag, str)
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}", flag),
-            f"Invalid flag name for {repo}",
-        )
-    return value
-
-
-def graph_origin(value):
-    parts = urlsplit(value)
-    loopback = parts.hostname in ("127.0.0.1", "::1", "localhost")
-    require(
-        parts.hostname
-        and not any((parts.username, parts.password, parts.query, parts.fragment))
-        and (parts.scheme == "https" or (parts.scheme == "http" and loopback))
-        and parts.path in ("", "/"),
-        "Use an HTTPS or loopback Graph origin",
-    )
-    return value.rstrip("/")
-
-
-class Graph:
-    def __init__(self, origin, workspace, token):
-        self.workspace = uuid(workspace)
-        self.base = graph_origin(origin) + f"/v1/workspaces/{self.workspace}"
-        self.token = token
-        self.http = build_opener(ProxyHandler({}), NoRedirect())
-
-    def request(self, path, body=None, *, missing=False):
-        request = Request(
-            self.base + path,
-            data=None if body is None else canonical(body),
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-                "X-AQ-Graph-API-Version": "1",
-            },
-        )
-        for attempt in range(3):
-            try:
-                with self.http.open(request, timeout=10) as reply:
-                    return json.load(reply)
-            except HTTPError as reply:
-                if reply.code == 404 and missing:
-                    return None
-                if reply.code != 503 or attempt == 2:
-                    raise GraphError(reply.code, json.load(reply)) from None
-            except (URLError, TimeoutError, ConnectionResetError) as error:
-                if attempt == 2:
-                    raise RetirementError(
-                        "Graph response unavailable. Retry the same command to recover."
-                    ) from error
-            time.sleep(0.25 * (attempt + 1))
-
-    def node(self, node_id, *, missing=False, kind=None):
-        node = self.request(f"/nodes/{node_id}", missing=missing)
-        if node is not None:
-            require(
-                not node["deleted"]
-                and not node["retired"]
-                and (kind is None or node["kind"] == kind),
-                f"Unavailable {kind or 'record'} {node_id}",
-            )
-        return node
-
-    def edges(self, node_id):
-        context = self.request(f"/nodes/{node_id}/context")
-        require(not context["truncated"], f"Dependency context truncated for {node_id}")
-        return [(e["edge_type"], e["source"], e["target"]) for e in context["edges"]]
-
-    def applied(self, anchor, owner):
-        history = self.request(f"/nodes/{anchor}/history?limit=1")["items"]
-        require(
-            history and history[0]["operation"] == "created",
-            f"No creation receipt for {anchor}",
-        )
-        change = self.request(f"/changesets/{history[0]['change_set_id']}")
-        require(
-            change["status"] == "applied"
-            and change["actor_id"] == owner
-            and change["result"],
-            f"No owner-applied receipt for {anchor}",
-        )
-        return change["result"]
-
-
-def create(node_id, kind, title, **data):
-    return {"op": "create_node", "id": node_id, "kind": kind, "title": title, **data}
-
-
-def patch(node, **data):
-    return {
-        "op": "update_node",
-        "id": node["id"],
-        "expected_version": node["version"],
-        "patch": data,
-    }
-
-
-def link(registration, kind, source, target):
-    return {
-        "op": "add_edge",
-        "id": identity(registration, f"{kind}/{source}/{target}"),
-        "edge_type": kind,
-        "source": source,
-        "target": target,
-    }
-
-
-def verify(node_id, version, evidence):
-    return {
-        "op": "verify_node",
-        "id": node_id,
-        "expected_version": version,
-        "verification": "verified",
-        "evidence": evidence,
-    }
-
-
-def task_evidence(task, label):
-    return {"kind": "task", "source_id": label, "task_id": task}
-
-
-def proof_evidence(proof, label):
-    return {"kind": "artifact", "source_id": label, **proof}
-
-
-def git_evidence(repos):
-    return [
-        {
-            "kind": "git",
-            "source_id": f"revision/{repo}",
-            "repository": repo,
-            "commit": commit,
-            "path": ".",
-        }
-        for repo, commit in sorted(repos.items())
-    ]
-
-
-def record(node_id, title, data, evidence, *, content_type="decision"):
-    return [
-        create(
-            node_id,
-            "knowledge",
-            title,
-            content_type=content_type,
-            metadata={META: data},
-        ),
-        verify(node_id, 1, evidence),
-    ]
-
-
-def trusted(node, owner, *, created=True):
-    require(
-        (not created or node["created_by"] == owner)
-        and node["verification"] == "verified"
-        and node["last_verified_by"] == owner,
-        f"Record {node['id']} lacks current verification from the registered owner",
-    )
-
-
-def require_graph_owner(registration):
-    spec = registration["metadata"].get(META, {}).get("spec", {})
-    require(
-        "owner_authority" not in spec,
-        "This registration belongs to the AQ owner action journal. Use AQ owner operations.",
-    )
+from epic_retirement_records import (
+    decision_event,
+    incoming_blocks,
+    registration_spec,
+    META,
+    RetirementError,
+    artifact,
+    create as create,
+    digest,
+    fields,
+    git_evidence,
+    identity,
+    link as link,
+    nonempty,
+    patch,
+    proof_evidence,
+    KnowledgeRecord,
+    repository_flags,
+    require,
+    require_graph_owner,
+    revision,
+    revisions,
+    sha as sha,
+    task_evidence,
+    trusted,
+    uuid,
+    verify,
+)
+from epic_retirement_setup import RetirementSetup
+from epic_retirement_graph import (
+    Graph,
+    GraphError,
+)
+from epic_retirement_evidence import (
+    missing_builds,
+    missing_acceptance,
+    apply_evidence,
+    evidence_data,
+)
 
 
 class Retirement:
@@ -335,47 +95,8 @@ class Retirement:
             return receipt
 
     def register_record(self, value):
-        fields(
-            value,
-            (
-                "epic_id",
-                "project_id",
-                "generation",
-                "repositories",
-                "ordinary_default",
-                "permanent_behavior",
-            ),
-            ("adopt",),
-        )
-        epic, project = uuid(value["epic_id"]), uuid(value["project_id"])
-        generation = revision(value["generation"])
-        require(value["ordinary_default"] is False, "Incomplete flags must default off")
-        registration = identity(
-            self.graph.workspace, f"aq/epic-retirement/1/{project}/{epic}/{generation}"
-        )
-        adopt = value.get("adopt")
-        if adopt is not None:
-            fields(adopt, ("approval", "cleanup"))
-            adopt = {key: uuid(item) for key, item in adopt.items()}
-        ids = adopt or {
-            name: identity(registration, name) for name in ("approval", "cleanup")
-        }
-        ids = {**ids, "closure_gate": identity(registration, "closure-gate")}
-        require(
-            len({epic, registration, *ids.values()}) == 5,
-            "Retirement nodes must have distinct IDs",
-        )
-        spec = {
-            "epic_id": epic,
-            "project_id": project,
-            "generation": generation,
-            **ids,
-            "adopt": adopt is not None,
-            "owner": self.owner,
-            "ordinary_default": False,
-            "permanent_behavior": nonempty(value["permanent_behavior"], 4096),
-            "repositories": repository_flags(value["repositories"]),
-        }
+        registration, spec = registration_spec(value, self.graph.workspace, self.owner)
+        epic = spec["epic_id"]
         state = {
             "spec": spec,
             "repositories": spec["repositories"],
@@ -384,11 +105,8 @@ class Retirement:
         }
         current = self.graph.node(registration, missing=True, kind="knowledge")
         if current is not None:
-            require_graph_owner(current)
-            trusted(current, self.owner)
-            require(
-                current["metadata"][META]["spec"] == spec,
-                "Registration identity has a different specification",
+            self.check_existing_registration(
+                current, spec, "Registration identity has a different specification"
             )
             return registration, self.graph.applied(registration, self.owner)
         parent = self.graph.node(epic, kind="task")
@@ -396,10 +114,9 @@ class Retirement:
             parent["task_state"] in ("active", "draft"),
             "Register against an open epic task",
         )
-        operations = record(
-            registration,
-            "Register epic feature flags",
-            state,
+        operations = KnowledgeRecord(
+            registration, "Register epic feature flags", state
+        ).operations(
             [task_evidence(epic, "epic")],
             content_type="policy",
         )
@@ -415,14 +132,16 @@ class Retirement:
             current = self.graph.node(registration, missing=True, kind="knowledge")
             if current is None:
                 raise
-            require_graph_owner(current)
-            trusted(current, self.owner)
-            require(
-                current["metadata"][META]["spec"] == spec,
-                "A different registration won the race",
+            self.check_existing_registration(
+                current, spec, "A different registration won the race"
             )
             receipt = self.graph.applied(registration, self.owner)
         return registration, receipt
+
+    def check_existing_registration(self, current, spec, mismatch):
+        require_graph_owner(current)
+        trusted(current, self.owner)
+        require(current["metadata"][META]["spec"] == spec, mismatch)
 
     def load(self, registration):
         node = self.graph.node(uuid(registration), kind="knowledge")
@@ -460,96 +179,11 @@ class Retirement:
         if receipt is not None:
             return receipt
 
-        epic = self.graph.node(spec["epic_id"], kind="task")
-        require(epic["task_state"] in ("draft", "active"), "Epic is closed")
-        approval, cleanup, closure = (
-            spec[key] for key in ("approval", "cleanup", "closure_gate")
-        )
-        operations = [patch(epic)]
-        versions = {}
-        for key, title in [
-            ("approval", "Approve integrated epic feature"),
-            ("cleanup", "Remove the epic feature flags"),
-            ("closure_gate", "Verify epic retirement evidence"),
-        ]:
-            task_id = spec[key]
-            existing = self.graph.node(task_id, missing=True, kind="task")
-            marker = {"registration": registration, "role": key}
-            if spec["adopt"] and key != "closure_gate":
-                require(
-                    existing
-                    and existing["task_state"] == "draft"
-                    and existing["created_by"] == self.owner,
-                    f"Adopt only an owner-created draft {key}",
-                )
-                metadata = existing["metadata"]
-                require(
-                    META not in metadata or metadata[META] == marker,
-                    f"{task_id} is marked for a different retirement",
-                )
-                operations.append(patch(existing, metadata={**metadata, META: marker}))
-                versions[task_id] = existing["version"] + int(META not in metadata)
-            else:
-                require(
-                    existing is None,
-                    f"Retirement task {task_id} exists without a setup receipt",
-                )
-                body = {
-                    "approval": "Owner gate. Record the vetted revisions and integrated test evidence through the retirement workflow.",
-                    "cleanup": f"{spec['permanent_behavior']} Record cleanup merges, ordinary builds and the integrated acceptance check.",
-                    "closure_gate": "Owner gate. The retirement workflow closes this task after validating all cleanup evidence.",
-                }[key]
-                operations.append(
-                    create(
-                        task_id,
-                        "task",
-                        title,
-                        task_state="draft",
-                        body=body,
-                        metadata={META: marker},
-                    )
-                )
-                versions[task_id] = 1
-
-        def ensure_edge(kind, source, target):
-            current = (
-                self.graph.edges(target)
-                if spec["adopt"] and target in (approval, cleanup)
-                else []
-            )
-            same_kind = [
-                edge for edge in current if edge[0] == kind and edge[2] == target
-            ]
-            require(
-                not same_kind or same_kind == [(kind, source, target)],
-                f"Unexpected {kind} dependencies for {target}",
-            )
-            if not same_kind:
-                operations.append(link(registration, kind, source, target))
-                versions[target] += 1
-                if source in versions:
-                    versions[source] += 1
-
-        if spec["adopt"]:
-            attached = self.graph.edges(approval)
-            require(
-                all(
-                    kind != "blocks" or (source == approval and target == cleanup)
-                    for kind, source, target in attached
-                ),
-                "Adopted approval has dependencies beyond this cleanup",
-            )
-        ensure_edge("blocks", approval, cleanup)
-        ensure_edge("parent-child", epic["id"], cleanup)
-        ensure_edge("parent-child", epic["id"], closure)
-        operations += [
-            verify(task, versions[task], [task_evidence(epic["id"], "epic")])
-            for task in (approval, cleanup, closure)
-        ]
-        operations += record(
-            setup,
-            "Bind the epic retirement tasks",
-            payload,
+        operations = RetirementSetup(self.graph, self.owner, registration, spec).plan()
+        cleanup = spec["cleanup"]
+        operations += KnowledgeRecord(
+            setup, "Bind the epic retirement tasks", payload
+        ).operations(
             [task_evidence(cleanup, "cleanup")],
             content_type="reference",
         )
@@ -590,10 +224,9 @@ class Retirement:
             "Adding repositories cannot rename a registered flag",
         )
         updated = repository_flags({**repos, **additions})
-        operations = record(
-            anchor,
-            "Record more affected repositories",
-            event,
+        operations = KnowledgeRecord(
+            anchor, "Record more affected repositories", event
+        ).operations(
             [task_evidence(state["spec"]["epic_id"], "epic")],
             content_type="reference",
         )
@@ -613,6 +246,11 @@ class Retirement:
         )
         for gate in (approval, closure):
             trusted(gate, self.owner)
+        self.check_gate_dependencies(spec, (approval, cleanup, closure))
+        return approval, cleanup, closure
+
+    def check_gate_dependencies(self, spec, gates):
+        approval, cleanup, closure = gates
         expected = {("blocks", approval["id"], cleanup["id"])}
         approval_edges = {
             e for e in self.graph.edges(approval["id"]) if e[0] == "blocks"
@@ -620,36 +258,19 @@ class Retirement:
         cleanup_edges = set(self.graph.edges(cleanup["id"]))
         require(
             approval_edges == expected
-            and {e for e in cleanup_edges if e[0] == "blocks" and e[2] == cleanup["id"]}
-            == expected
+            and incoming_blocks(cleanup_edges, cleanup["id"]) == expected
             and ("parent-child", spec["epic_id"], cleanup["id"]) in cleanup_edges
             and ("parent-child", spec["epic_id"], closure["id"])
             in self.graph.edges(closure["id"]),
             "The retirement dependencies no longer match the registration",
         )
-        return approval, cleanup, closure
 
     def decide(self, registration, value):
         fields(value, ("revision", "choice", "vetted", "evidence"))
         node, state = self.load(registration)
-        number, choice = revision(value["revision"]), value["choice"]
-        require(
-            choice in ("approve", "request_changes"),
-            "Expected approve or request_changes",
-        )
-        # Replays may refer to the pre-amendment repository set.
-        require(isinstance(value["vetted"], dict), "Expected vetted revisions")
-        vetted = {repo: sha(commit) for repo, commit in value["vetted"].items()}
-        evidence = artifact(value["evidence"])
-        anchor = identity(registration, f"decision/{number}")
-        event = {
-            "registration": registration,
-            "kind": "decision",
-            "revision": number,
-            "choice": choice,
-            "vetted": vetted,
-            "evidence": evidence,
-        }
+        anchor, event = decision_event(registration, value)
+        number, choice = event["revision"], event["choice"]
+        vetted, evidence = event["vetted"], event["evidence"]
         receipt = self.replay(anchor, event)
         if receipt is not None:
             return receipt
@@ -668,10 +289,9 @@ class Retirement:
             approval["task_state"] == "draft" and cleanup["task_state"] == "draft",
             "Approval and cleanup must both still be draft",
         )
-        operations = record(
-            anchor,
-            "Record owner retirement decision",
-            event,
+        operations = KnowledgeRecord(
+            anchor, "Record owner retirement decision", event
+        ).operations(
             [*git_evidence(vetted), proof_evidence(evidence, "integrated-vetting")],
         )
         updated = {**state, "decision": anchor, "decision_revision": number}
@@ -721,58 +341,7 @@ class Retirement:
         return node, decision
 
     def evidence(self, registration, value):
-        require(isinstance(value, dict), "Expected an evidence object")
-        kind = value.get("kind")
-        common = ("kind", "approval_revision", "evidence")
-        if kind == "merge":
-            fields(
-                value,
-                (*common, "repository", "pull_request", "sha"),
-                ("supersedes_merge",),
-            )
-            url = urlsplit(nonempty(value["pull_request"], 2048))
-            require(
-                url.scheme == "https"
-                and url.hostname
-                and not (url.username or url.password),
-                "Supply an HTTPS pull request URL",
-            )
-            data = {
-                "repository": nonempty(value["repository"], 96),
-                "pull_request": value["pull_request"],
-                "sha": sha(value["sha"]),
-            }
-            if "supersedes_merge" in value:
-                data["supersedes_merge"] = uuid(value["supersedes_merge"])
-        elif kind == "ordinary":
-            fields(value, (*common, "repository", "sha", "passed", "flag_absent"))
-            require(type(value["flag_absent"]) is bool, "flag_absent must be boolean")
-            data = {
-                "repository": nonempty(value["repository"], 96),
-                "sha": sha(value["sha"]),
-                "flag_absent": value["flag_absent"],
-            }
-        elif kind == "integrated":
-            fields(value, (*common, "revisions", "builds", "passed"))
-            require(
-                isinstance(value["revisions"], dict)
-                and isinstance(value["builds"], dict),
-                "Supply a revision and ordinary build artifact for each repository",
-            )
-            data = {
-                "revisions": {
-                    repo: sha(commit) for repo, commit in value["revisions"].items()
-                },
-                "builds": {
-                    repo: artifact(build) for repo, build in value["builds"].items()
-                },
-            }
-        else:
-            raise RetirementError("Expected merge, ordinary or integrated evidence")
-        if kind != "merge":
-            require(type(value["passed"]) is bool, "passed must be boolean")
-            data["passed"] = value["passed"]
-
+        kind, data = evidence_data(value)
         proof, number = (
             artifact(value["evidence"]),
             revision(value["approval_revision"]),
@@ -802,58 +371,10 @@ class Retirement:
             "Approval gate has not released cleanup",
         )
         current = self.evidence_nodes(state)
-        merges, ordinary = current["merges"], current["ordinary"]
-        if kind in ("merge", "ordinary"):
-            repo = data["repository"]
-            require(repo in state["repositories"], f"{repo} is not registered")
-        if kind == "merge":
-            require(
-                state["merges"].get(repo) == data.get("supersedes_merge"),
-                f"Merge for {repo} must supersede its current receipt from status",
-            )
-            require(
-                repo not in merges or merges[repo]["sha"] != data["sha"],
-                f"A repair merge for {repo} must have a different SHA",
-            )
-            state = {
-                **state,
-                "merges": {**state["merges"], repo: anchor},
-                "ordinary": {
-                    key: value
-                    for key, value in state["ordinary"].items()
-                    if key != repo
-                },
-                "integrated": None,
-            }
-            commits = {repo: data["sha"]}
-        elif kind == "ordinary":
-            require(
-                repo in merges and merges[repo]["sha"] == data["sha"],
-                f"Ordinary build for {repo} must match its recorded merge SHA",
-            )
-            state = {**state, "ordinary": {**state["ordinary"], repo: anchor}}
-            commits = {repo: data["sha"]}
-        else:
-            commits = {repo: item["sha"] for repo, item in merges.items()}
-            require(
-                data["revisions"] == commits
-                and commits.keys() == state["repositories"].keys(),
-                "Integrated check must name all recorded cleanup merge SHAs",
-            )
-            builds = {
-                repo: item["evidence"]
-                for repo, item in ordinary.items()
-                if item["passed"] and item["flag_absent"]
-            }
-            require(
-                data["builds"] == builds and builds.keys() == commits.keys(),
-                "Integrated check must name the passing flag-free ordinary builds",
-            )
-            state = {**state, "integrated": anchor}
-        operations = record(
-            anchor,
-            "Record epic retirement evidence",
-            event,
+        state, commits = apply_evidence(state, current, event, anchor)
+        operations = KnowledgeRecord(
+            anchor, "Record epic retirement evidence", event
+        ).operations(
             [*git_evidence(commits), proof_evidence(proof, kind)],
             content_type="reference",
         )
@@ -890,28 +411,8 @@ class Retirement:
         }
 
     def outstanding(self, state, evidence, cleanup):
-        merges, ordinary, integrated = (
-            evidence[key] for key in ("merges", "ordinary", "integrated")
-        )
-        for repo in sorted(state["repositories"]):
-            if repo not in merges:
-                yield f"{repo}: cleanup merge pending"
-                continue
-            build = ordinary.get(repo)
-            if not build or build["sha"] != merges[repo]["sha"]:
-                yield f"{repo}: ordinary build evidence pending"
-            elif not build["passed"] or not build["flag_absent"]:
-                yield f"{repo}: ordinary build or flag removal check failed"
-        if not integrated:
-            yield "Integrated acceptance pending"
-        elif not integrated["passed"]:
-            yield "Integrated acceptance failed"
-        elif integrated["revisions"] != {
-            repo: item["sha"] for repo, item in merges.items()
-        } or integrated["builds"] != {
-            repo: item["evidence"] for repo, item in ordinary.items()
-        }:
-            yield "Integrated acceptance evidence no longer matches the ordinary builds"
+        yield from missing_builds(state, evidence)
+        yield from missing_acceptance(evidence)
         if cleanup["task_state"] != "completed":
             yield f"Cleanup task {cleanup['id']} has not completed through normal delivery"
         spec = state["spec"]
@@ -995,10 +496,9 @@ class Retirement:
         operations = [
             patch(item) for item in (approval, cleanup, decision, *evidence["nodes"])
         ]
-        operations += record(
-            anchor,
-            "Close epic feature retirement",
-            event,
+        operations += KnowledgeRecord(
+            anchor, "Close epic feature retirement", event
+        ).operations(
             [proof, task_evidence(cleanup["id"], "cleanup")],
         )
         operations += [

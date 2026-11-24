@@ -39,6 +39,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -115,37 +116,50 @@ def requested_permissions(operations, project, repository):
     return out
 
 
-def plan_binding(current, role, level, role_fields, execution_fields, raise_ceilings=False):
-    """The binding to save and notes on what differs. Pure."""
-    binding = dict(current)
-    notes = []
-    project, repository = binding["project_id"], binding["repository_id"]
-    binding["enabled"] = True
-    # The server leaves a default out of the binding it returns, so only a
-    # non-default is written: otherwise every run would look like a change.
-    for key, value, default in (("default_role", role, DEFAULT_ROLE),
-                                ("default_intelligence", level, DEFAULT_INTELLIGENCE)):
-        if value == default:
-            binding.pop(key, None)
-        else:
-            binding[key] = value
-    ceilings = dict(binding["ceilings"])
+def set_default(binding, key, value, default):
+    # The server omits default values from the binding it returns.
+    if value == default:
+        binding.pop(key, None)
+    else:
+        binding[key] = value
+
+
+def add_permissions(ceilings, requested, notes):
     permissions = list(ceilings.get("permissions", []))
-    for entry in requested_permissions(role_fields.get("operations", []), project, repository):
+    for entry in requested:
         if entry not in permissions:
             permissions.append(entry)
             notes.append(f"ceilings: permit {entry['operation']} on {entry['scope_reference']}")
     ceilings["permissions"] = permissions
-    limits = execution_fields.get("limits", {})
+
+
+def shortfall(held, wanted):
+    return isinstance(held, int) and isinstance(wanted, int) and held < wanted
+
+
+def check_limits(ceilings, limits, raise_ceilings, notes):
     for limit, ceiling in LIMIT_CEILINGS:
         wanted, held = limits.get(limit), ceilings.get(ceiling)
-        if isinstance(wanted, int) and isinstance(held, int) and held < wanted:
-            if raise_ceilings:
-                ceilings[ceiling] = wanted
-                notes.append(f"ceilings: {ceiling} raised from {held} to {wanted}")
-            else:
-                notes.append(f"WARNING: ceiling {ceiling}={held} is below the execution profile's "
-                             f"{limit}={wanted}; pass --raise-ceilings to raise it")
+        if not shortfall(held, wanted):
+            continue
+        if raise_ceilings:
+            ceilings[ceiling] = wanted
+            notes.append(f"ceilings: {ceiling} raised from {held} to {wanted}")
+        else:
+            notes.append(f"WARNING: ceiling {ceiling}={held} is below the execution profile's "
+                         f"{limit}={wanted}; pass --raise-ceilings to raise it")
+
+
+def plan_binding(current, role, level, role_fields, execution_fields, raise_ceilings=False):
+    """The binding to save and notes on what differs. Pure."""
+    binding = dict(current, enabled=True)
+    notes = []
+    set_default(binding, "default_role", role, DEFAULT_ROLE)
+    set_default(binding, "default_intelligence", level, DEFAULT_INTELLIGENCE)
+    ceilings = dict(binding["ceilings"])
+    requested = requested_permissions(role_fields.get("operations", []), binding["project_id"], binding["repository_id"])
+    add_permissions(ceilings, requested, notes)
+    check_limits(ceilings, execution_fields.get("limits", {}), raise_ceilings, notes)
     binding["ceilings"] = ceilings
     environment = execution_fields.get("environment")
     environments = list(binding.get("allowed_environments", []))
@@ -187,6 +201,10 @@ def source_selection(pin, branch, head):
     return dict(kind="immutable", object=dict(format="sha1", hex=pin or head))
 
 
+def holds_commit(retained, commit):
+    return retained["state"] == "active" and any(ref["oid"] == commit for ref in retained["refs"])
+
+
 def retain(stack, repository, generation, branch, commit, tag):
     """Sync `branch`, then hold `commit` (default: the branch head) under a new retention handle."""
     def op(step):
@@ -206,7 +224,7 @@ def retain(stack, repository, generation, branch, commit, tag):
         expected_head=base, quiescent=True), mutation=op("retire"))
     retained = git_request(stack, repository, generation, "retention.inspect",
                            dict(handle_id=checkpoint["retention_handle"]))
-    if retained["state"] != "active" or not any(r["oid"] == base["hex"] for r in retained["refs"]):
+    if not holds_commit(retained, base["hex"]):
         raise Refused("the retention handle does not hold the starting commit")
     return base["hex"], checkpoint["retention_handle"]
 
@@ -248,7 +266,7 @@ def arguments(argv):
     parser.add_argument("--server", default=os.environ.get("AQ_DEV_SERVER_URL", "http://127.0.0.1:28080"))
     parser.add_argument("--stack", default=os.environ.get("COMPOSE_PROJECT_NAME", "aq-ms1"))
     args = parser.parse_args(argv)
-    if args.pin and not (len(args.pin) == 40 and all(c in "0123456789abcdef" for c in args.pin)):
+    if args.pin and not re.fullmatch(r"[0-9a-f]{40}", args.pin):
         parser.error("--pin takes a full lowercase 40-digit commit id")
     if args.branch and not args.branch.startswith("refs/heads/"):
         parser.error("--branch takes a full ref such as refs/heads/main")
@@ -256,7 +274,7 @@ def arguments(argv):
     return args
 
 
-def run(args, out=print):
+def prepare_binding(args, out):
     server, project = args.server, args.project
     record = http(f"{server}/api/projects/{project}")
     if record is None:
@@ -270,40 +288,56 @@ def run(args, out=print):
         out(f"WARNING: role `{args.default_role}` is disabled; its tasks are held until it is enabled")
     binding, notes = plan_binding(current, args.default_role, args.default_intelligence, role, execution,
                                   args.raise_ceilings)
-    changed = canonical(binding) != canonical(current)
     out(f"project {project} ({binding.get('name')}): binding revision {record['revision']}, "
         f"default role {args.default_role}, default intelligence {args.default_intelligence}, "
         f"execution profile {role['execution']}")
     for note in notes:
         out("  " + note)
-    if not changed:
+    return record, binding
+
+
+def save_binding(args, record, binding, out):
+    if canonical(binding) == canonical(record["binding"]):
         out("  binding: nothing to change")
     elif args.apply:
         digest = hashlib.sha256(canonical(binding).encode()).hexdigest()
-        saved = http(f"{server}/api/projects/{project}", dict(
-            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bind-project-{project}-{digest}")),
+        saved = http(f"{args.server}/api/projects/{args.project}", dict(
+            operation_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bind-project-{args.project}-{digest}")),
             expected_revision=record["revision"], binding=binding))
         out(f"  binding: saved as revision {(saved or {}).get('revision', record['revision'] + 1)}")
     else:
         out("  binding: would be saved (pass --apply)")
 
-    listed = configured(server, project)
-    if listed is not None and not (args.pin or args.branch):
-        out(f"  config: [profiled_execution] projects lists the project (enabled = {str(listed).lower()}); "
-            "source unchanged")
-        if listed is False:
-            out("  WARNING: the config entry has enabled = false; the project takes no work until it is true")
+
+
+def show_existing_source(listed, out):
+    out(f"  config: [profiled_execution] projects lists the project (enabled = {str(listed).lower()}); "
+        "source unchanged")
+    if listed is False:
+        out("  WARNING: the config entry has enabled = false; the project takes no work until it is true")
+
+
+def preview_source(args, branch, out):
+    what = f"follow {branch}" if args.branch else f"pin {args.pin or 'the head of ' + branch}"
+    out(f"  source: would sync {branch} in aq-git, retain the starting commit and print the config "
+        f"entry ({what}); pass --apply")
+
+
+def configure_source(args, binding, revision, out):
+    project = args.project
+    listed = configured(args.server, project)
+    source_requested = args.pin or args.branch
+    if listed is not None and not source_requested:
+        show_existing_source(listed, out)
         return 0
     repository, generation = binding["repository_id"], binding["repository_binding_generation"]
     target = (binding.get("publication") or {}).get("target")
     branch = args.branch or target or DEFAULT_BRANCH
     git_request(args.stack, repository, generation, "repo.show")
     if not args.apply:
-        what = f"follow {branch}" if args.branch else f"pin {args.pin or 'the head of ' + branch}"
-        out(f"  source: would sync {branch} in aq-git, retain the starting commit and print the config "
-            f"entry ({what}); pass --apply")
+        preview_source(args, branch, out)
         return 0
-    tag = hashlib.sha256(canonical([project, args.pin, args.branch, record["revision"]]).encode()).hexdigest()[:16]
+    tag = hashlib.sha256(canonical([project, args.pin, args.branch, revision]).encode()).hexdigest()[:16]
     commit, handle = retain(args.stack, repository, generation, branch, args.pin, tag)
     entry = project_entry(project, source_selection(args.pin, args.branch, commit), handle)
     out(f"  source: retained {commit[:12]} under handle {handle}")
@@ -313,6 +347,12 @@ def run(args, out=print):
         "and agent_grants of an existing entry.\n")
     out(render_entry(entry))
     return 0
+
+
+def run(args, out=print):
+    record, binding = prepare_binding(args, out)
+    save_binding(args, record, binding, out)
+    return configure_source(args, binding, record["revision"], out)
 
 
 def main(argv=None):

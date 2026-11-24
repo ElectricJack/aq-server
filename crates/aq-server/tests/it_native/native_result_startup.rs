@@ -189,7 +189,7 @@ async fn production_compile_seal_count_retain_uses_exact_public_reporting_instru
 async fn selected_result_profile_without_exact_owned_reporting_bytes_publishes_no_offer() {
     let mut case = common::native_offer::setup().await;
     enable(&mut case, false).await;
-    let (status, body) = common::native_offer::poll(&case).await;
+    let (status, body) = common::native_offer::poll_offered(&case).await;
     assert_eq!(status, 409, "{body}");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_launches")
@@ -267,6 +267,6 @@ async fn docker_local_codex_profile_under_another_adapter_publishes_no_offer() {
         recipe,
     );
     enable_as(&mut case, true, selected).await;
-    let (status, body) = common::native_offer::poll(&case).await;
+    let (status, body) = common::native_offer::poll_offered(&case).await;
     assert_eq!(status, 409, "{body}");
 }

@@ -1,7 +1,7 @@
 mod logins;
 mod session_login;
 use crate::{AppState, authz::RequireOwner, internal_work, worker_api::authenticate_context};
-use aq_manual_sessions::{Auth, Error, Service};
+use aq_manual_sessions::{Auth, Authentication, Error, Service};
 use axum::{
     Router,
     extract::FromRequestParts,
@@ -40,8 +40,7 @@ pub(super) fn service(state: &AppState) -> Service {
     let sources = aq_manual_sessions::configured_sources(config.profiled_execution.as_ref());
     Service::new(
         state.store.pool.clone(),
-        owner,
-        node,
+        Authentication { owner, node },
         sources,
         state.store.manual_runtime.clone(),
     )

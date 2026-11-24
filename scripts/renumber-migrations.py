@@ -84,22 +84,31 @@ def plan_migrations(root, base_ref):
 
 def added_lines(root, merge_base):
     """{path: set of 1-based line numbers the working tree adds to the merge-base}, None for all."""
-    result = {}
     diff = git(root, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", merge_base)
-    path = None
+    lines = changed_line_numbers(diff)
+    untracked = git(root, "ls-files", "--others", "--exclude-standard").split("\n")
+    lines.update(dict.fromkeys(filter(None, untracked)))
+    return lines
+
+
+def changed_line_numbers(diff):
+    lines = {}
+    current = None
     for line in diff.split("\n"):
-        if line.startswith("+++ "):
-            path = None if line == "+++ /dev/null" else line[6:].split("\t")[0]
-            if path is not None:
-                result.setdefault(path, set())
-        elif line.startswith("@@") and path is not None:
-            match = re.match(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@", line)
-            start, count = int(match[1]), int(match[2] if match[2] is not None else 1)
-            result[path].update(range(start, start + count))
-    for path in git(root, "ls-files", "--others", "--exclude-standard").split("\n"):
-        if path:
-            result[path] = None
-    return result
+        if line == "+++ /dev/null":
+            current = None
+        elif line.startswith("+++ "):
+            path = line[6:].split("\t")[0]
+            current = lines.setdefault(path, set())
+        elif current is not None and line.startswith("@@"):
+            current.update(hunk_lines(line))
+    return lines
+
+
+def hunk_lines(header):
+    match = re.match(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@", header)
+    start = int(match[1])
+    return range(start, start + int(match[2] or "1"))
 
 
 def number_text(match, new):
@@ -142,33 +151,45 @@ def rewriter(numbers, stems):
 
 def plan(root, base_ref):
     merge_base, pairs, top, on_main = plan_migrations(root, base_ref)
-    numbers = {int(old[:4]): int(new[:4]) for old, new in pairs if old != new}
-    stems = {old[:-4]: new[:-4] for old, new in pairs if old != new}
-    edits, renames = {}, [(old, new) for old, new in pairs if old != new]
-    if not renames:
-        return pairs, renames, edits, top, on_main
-    rewrite = rewriter(numbers, stems)
-    added = {f"{MIGRATIONS}/{old}" for old, _ in pairs}
-    lines = added_lines(root, merge_base)
-    for path in sorted(added | set(lines)):
-        if path.startswith(f"{MIGRATIONS}/") and path not in added:
+    renames = [(old, new) for old, new in pairs if old != new]
+    edits = {}
+    if renames:
+        numbers = {int(old[:4]): int(new[:4]) for old, new in renames}
+        stems = {old[:-4]: new[:-4] for old, new in renames}
+        added = {f"{MIGRATIONS}/{old}" for old, _ in pairs}
+        edits = plan_edits(root, added, added_lines(root, merge_base), rewriter(numbers, stems))
+    return pairs, renames, edits, top, on_main
+
+
+def plan_edits(root, added, changed, rewrite):
+    edits = {}
+    # Every line in a new migration belongs to the branch. Other migrations belong to main.
+    candidates = {path: which for path, which in changed.items() if not path.startswith(f"{MIGRATIONS}/")}
+    candidates.update(dict.fromkeys(added))
+    for path, which in sorted(candidates.items()):
+        text = read_candidate(root / path)
+        if text is None:
             continue
-        if not (root / path).is_file():
-            continue
-        try:
-            text = (root / path).read_bytes().decode()
-        except UnicodeDecodeError:
-            continue
-        which = None if path in added else lines.get(path)
-        if path not in added and path in lines and which is not None and not which:
-            continue
-        out = []
-        for number, line in enumerate(text.splitlines(keepends=True), 1):
-            out.append(rewrite(line) if which is None or number in which else line)
-        new_text = "".join(out)
+        new_text = rewrite_lines(text, which, rewrite)
         if new_text != text or path in added:
             edits[path] = new_text
-    return pairs, renames, edits, top, on_main
+    return edits
+
+
+def read_candidate(path):
+    if path.is_file():
+        try:
+            return path.read_bytes().decode()
+        except UnicodeDecodeError:
+            return None
+    return None
+
+
+def rewrite_lines(text, which, rewrite):
+    lines = text.splitlines(keepends=True)
+    if which is None:
+        return "".join(map(rewrite, lines))
+    return "".join(rewrite(line) if i in which else line for i, line in enumerate(lines, 1))
 
 
 def run(root, base_ref, check):
@@ -177,15 +198,25 @@ def run(root, base_ref, check):
         print(f"no renumbering needed: {len(pairs)} new migration(s) already follow "
               f"{base_ref}'s newest ({top:04})")
         return 0
-    verb = "would" if check else "did"
     print(f"renumbering needed: {base_ref}'s newest migration is {top:04}")
+    report_changes(renames, edits, "would" if check else "did")
+    if check:
+        return 1
+    apply_changes(root, renames, edits)
+    check_catalog(root, base_ref, on_main)
+    return 0
+
+
+def report_changes(renames, edits, verb):
+    moved = dict(renames)
     for old, new in renames:
         print(f"  {verb} rename {MIGRATIONS}/{old} -> {new}")
     for path in sorted(edits):
-        if Path(path).name not in dict(renames):
+        if Path(path).name not in moved:
             print(f"  {verb} update {path}")
-    if check:
-        return 1
+
+
+def apply_changes(root, renames, edits):
     directory = root / MIGRATIONS
     moved = dict(renames)
     for old, _ in renames:
@@ -195,7 +226,10 @@ def run(root, base_ref, check):
         if path == f"{MIGRATIONS}/{name}" and name in moved:
             path = f"{MIGRATIONS}/{moved[name]}"
         (root / path).write_text(text)
-    names = set(os.listdir(directory))
+
+
+def check_catalog(root, base_ref, on_main):
+    names = set(os.listdir(root / MIGRATIONS))
     missing = sorted(set(on_main) - names)
     try:
         print(f"migration catalog: state format {state_format(root)}")
@@ -206,7 +240,6 @@ def run(root, base_ref, check):
                   "python3 scripts/migration_catalog.py")
         else:
             raise Failure(f"migration catalog fails after renumbering: {error}")
-    return 0
 
 
 def main():

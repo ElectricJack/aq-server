@@ -187,6 +187,28 @@ fn set_aside(dir: &Path, name: &std::ffi::OsStr) -> bool {
     }
 }
 
+fn remove_request(path: &Path) -> bool {
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            first_time_stuck(path, "cannot delete update request", &e);
+            false
+        }
+    }
+}
+
+fn non_file_reason(path: &Path, name: &std::ffi::OsStr) -> std::io::Result<Option<&'static str>> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if name.to_str().is_none() {
+        Ok(Some("the file name is not UTF-8"))
+    } else if !meta.file_type().is_file() {
+        Ok(Some("not a regular file"))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Read and remove one request entry. `None`: nothing to report (it is gone,
 /// could not be removed, or was already reported).
 fn take_one(dir: &Path, name: &std::ffi::OsStr) -> Option<Result<UpdateRequest, SpoolReject>> {
@@ -197,21 +219,13 @@ fn take_one(dir: &Path, name: &std::ffi::OsStr) -> Option<Result<UpdateRequest, 
         request_id: id,
         reason: reason.to_string(),
     };
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(m) => m,
+    let odd = match non_file_reason(&path, name) {
+        Ok(reason) => reason,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                first_time_stuck(&path, "cannot inspect update request entry", &e);
-            }
+            first_time_stuck(&path, "cannot inspect update request entry", &e);
             return None;
         }
-    };
-    let odd = if name.to_str().is_none() {
-        Some("the file name is not UTF-8")
-    } else if !meta.file_type().is_file() {
-        Some("not a regular file")
-    } else {
-        None
     };
     // Re-checked on the opened file, in case the entry was swapped.
     let read = match odd {
@@ -221,10 +235,7 @@ fn take_one(dir: &Path, name: &std::ffi::OsStr) -> Option<Result<UpdateRequest, 
     if let Ok(Taken::NotAFile) = read {
         return set_aside(dir, name).then(|| Err(reject(odd.unwrap_or("not a regular file"))));
     }
-    if let Err(e) = std::fs::remove_file(&path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            first_time_stuck(&path, "cannot delete update request", &e);
-        }
+    if !remove_request(&path) {
         return None;
     }
     Some(match read {
@@ -344,6 +355,14 @@ struct Finished {
     outcome: Outcome,
 }
 
+struct RequestPass<'a> {
+    dir: &'a Path,
+    history: Vec<HistoryEntry>,
+    last: Option<Finished>,
+    // Entries that vanish or get stuck must not be retried in a tight loop.
+    attempted: std::collections::HashSet<std::ffi::OsString>,
+}
+
 /// Install pending requests one at a time until the spool is empty or
 /// `stop` is set. `stop` is checked before each request is taken, so once it
 /// is set no new install starts and untaken requests stay on disk.
@@ -360,73 +379,95 @@ pub async fn process_requests<R: Runtime, V: ReleaseVerifier>(
     dir: &Path,
     stop: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Vec<HistoryEntry>, Halted> {
-    let mut out = Vec::new();
-    let mut last: Option<Finished> = None;
-    // Each entry is tried at most once per call: one that cannot be taken
-    // (stuck, or vanished) must not be listed and retried in a tight loop.
-    let mut attempted = std::collections::HashSet::new();
+    let mut pass = RequestPass {
+        dir,
+        history: Vec::new(),
+        last: None,
+        attempted: std::collections::HashSet::new(),
+    };
     loop {
         let names: Vec<_> = pending(dir)
             .into_iter()
-            .filter(|n| !attempted.contains(n))
+            .filter(|n| !pass.attempted.contains(n))
             .collect();
         if names.is_empty() || *stop.borrow() {
-            return Ok(out);
+            return Ok(pass.history);
         }
-        let mut took = false;
+        if !pass.process_batch(engine, stop, names).await? {
+            return Ok(pass.history);
+        }
+    }
+}
+
+impl RequestPass<'_> {
+    async fn process_batch<R: Runtime, V: ReleaseVerifier>(
+        &mut self,
+        engine: &mut Engine<R, V>,
+        stop: &tokio::sync::watch::Receiver<bool>,
+        names: Vec<std::ffi::OsString>,
+    ) -> Result<bool, Halted> {
+        let previous_count = self.history.len();
         for name in names {
             if *stop.borrow() {
                 tracing::info!(
                     "shutdown requested; leaving queued update requests for the next start"
                 );
-                return Ok(out);
+                return Ok(false);
             }
-            attempted.insert(name.clone());
-            let Some(item) = take_one(dir, &name) else {
-                continue;
-            };
-            took = true;
-            sync_requests(dir, true);
-            let req = match item {
-                Ok(r) => r,
-                Err(rej) => {
-                    tracing::warn!(file = ?rej.file, reason = ?rej.reason, "rejected update request");
-                    out.push(engine.reject(rej.request_id, None, rej.to_string())?);
-                    continue;
-                }
-            };
-            if let Some(prev) = &last
-                && repeats(engine, &req, &prev.asked, prev.got.as_ref()).await
-            {
-                let detail = if prev.outcome == Outcome::Succeeded {
-                    UPDATE_IN_PROGRESS.to_string()
-                } else {
-                    format!(
-                        "duplicate of request {}, just processed ({})",
-                        prev.request_id,
-                        outcome_name(prev.outcome)
-                    )
-                };
-                tracing::info!(request_id = %req.id, %detail, "repeat of the update just finished; rejected");
-                let to = req.version.clone();
-                out.push(engine.reject(Some(req.id), to, detail)?);
-                continue;
+            self.attempted.insert(name.clone());
+            if let Some(item) = take_one(self.dir, &name) {
+                sync_requests(self.dir, true);
+                self.history
+                    .push(handle_request(engine, item, &mut self.last).await?);
             }
-            tracing::info!(request_id = %req.id, version = ?req.version, by = ?req.requested_by, "installing");
-            let asked = req.version.clone();
-            let request_id = req.id;
-            let entry = engine.install(req).await?;
-            tracing::info!(outcome = ?entry.outcome, detail = ?entry.detail, "update finished");
-            last = Some(Finished {
-                request_id,
-                asked,
-                got: entry.to.clone(),
-                outcome: entry.outcome,
-            });
-            out.push(entry);
         }
-        if !took {
-            return Ok(out);
+        Ok(self.history.len() > previous_count)
+    }
+}
+
+async fn handle_request<R: Runtime, V: ReleaseVerifier>(
+    engine: &mut Engine<R, V>,
+    item: Result<UpdateRequest, SpoolReject>,
+    last: &mut Option<Finished>,
+) -> Result<HistoryEntry, Halted> {
+    let req = match item {
+        Ok(r) => r,
+        Err(rej) => {
+            tracing::warn!(file = ?rej.file, reason = ?rej.reason, "rejected update request");
+            return engine.reject(rej.request_id, None, rej.to_string());
+        }
+    };
+    if let Some(prev) = last.as_ref()
+        && repeats(engine, &req, &prev.asked, prev.got.as_ref()).await
+    {
+        let detail = prev.duplicate_detail();
+        tracing::info!(request_id = %req.id, %detail, "repeat of the update just finished; rejected");
+        return engine.reject(Some(req.id), req.version, detail);
+    }
+    tracing::info!(request_id = %req.id, version = ?req.version, by = ?req.requested_by, "installing");
+    let asked = req.version.clone();
+    let request_id = req.id;
+    let entry = engine.install(req).await?;
+    tracing::info!(outcome = ?entry.outcome, detail = ?entry.detail, "update finished");
+    *last = Some(Finished {
+        request_id,
+        asked,
+        got: entry.to.clone(),
+        outcome: entry.outcome,
+    });
+    Ok(entry)
+}
+
+impl Finished {
+    fn duplicate_detail(&self) -> String {
+        if self.outcome == Outcome::Succeeded {
+            UPDATE_IN_PROGRESS.to_string()
+        } else {
+            format!(
+                "duplicate of request {}, just processed ({})",
+                self.request_id,
+                outcome_name(self.outcome)
+            )
         }
     }
 }

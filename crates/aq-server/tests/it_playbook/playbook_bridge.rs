@@ -3,10 +3,7 @@
 //! mount or provider qualification is claimed by these synthetic known bindings.
 use crate::common;
 use aq_playbook_host::runner::{CancellationResult, Intent, IntentStatus};
-use aq_server::{
-    playbooks::{domain::*, service::*},
-    protected_storage::{KeyFile, Keyring, ProtectionConfig},
-};
+use aq_server::playbooks::{domain::*, service::*};
 use common::profiled::{Fixture, NOW, fixture, insert};
 use serde_json::json;
 use sqlx::Row;
@@ -72,18 +69,7 @@ async fn setup_with(graph_events: bool) -> Env {
     };
     let binding = json!({"workspace_id":f.selection.lineage.workspace_id,"project_id":f.selection.lineage.project_id,"task_id":f.selection.lineage.task_id,"session_id":session_id,"attempt_id":attempt,"generation":generation});
     sqlx::query("INSERT INTO agent_launch_bindings(attempt_id,node_id,binding,profile,context) VALUES($1,$2,$3,'{}','{}')").bind(attempt).bind(f.node.node_id).bind(binding).execute(&pool).await.unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("key");
-    std::fs::write(&path, [9_u8; 32]).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let keys = Keyring::load(&ProtectionConfig {
-        active_key_id: "test".into(),
-        keys: vec![KeyFile {
-            id: "test".into(),
-            file: path,
-        }],
-    })
-    .unwrap();
+    let keys = super::playbook_fixtures::keyring();
     let namespace = Namespace {
         namespace_id: Uuid::new_v4(),
         generation: 1,
@@ -2699,3 +2685,5 @@ async fn a_repeat_of_a_deleted_operation_is_not_executed_twice() {
 
 #[path = "playbook_plugins.rs"]
 mod plugins;
+
+mod artifact_routes;

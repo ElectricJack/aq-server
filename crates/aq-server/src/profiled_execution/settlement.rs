@@ -12,6 +12,8 @@ use aq_profiled_state::default_policy;
 mod facts;
 mod owner;
 pub mod publication;
+#[cfg(feature = "delivery_playbook")]
+pub(crate) use automatic::recover_held_for_retry_exact;
 pub use automatic::settle_after_record;
 pub use automatic::{
     AutoDisposition, AutoSettlement, ReplacementFacts, record_replacement_facts,

@@ -79,9 +79,18 @@ async fn slots(
         worker_version: &node.worker_version,
         protocol_version: node.protocol_version,
     };
-    let minted = mc::mint_slots(&mut tx, &caller, req.slots, &new, &hashes, (state.clock)())
-        .await
-        .map_err(mapped)?;
+    let minted = mc::mint_slots(
+        &mut tx,
+        &caller,
+        mc::SlotRequest {
+            wanted: req.slots,
+            template: &new,
+            hashes: &hashes,
+        },
+        (state.clock)(),
+    )
+    .await
+    .map_err(mapped)?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
     let slots = minted
         .into_iter()
@@ -162,7 +171,7 @@ async fn handoffs(
         .await
         .map_err(|_| AppError::Internal)?;
     let now = (state.clock)();
-    req.reason = mc::record_handoff(&mut conn, auth.id(), req.attempt_id, req.reason, now)
+    req.reason = mc::record_handoff(&mut conn, auth.id(), &req, now)
         .await
         .map_err(mapped)?;
     Ok(Json(req))

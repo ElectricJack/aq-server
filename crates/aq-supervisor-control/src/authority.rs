@@ -233,6 +233,31 @@ pub async fn authenticate_in_transaction(
     {
         return Err(rejected());
     }
+    let project_id = supervisor_project(tx, actor).await?;
+    let principal = SupervisorPrincipal {
+        actor_id: row.get("actor_id"),
+        generation: u64::try_from(row.get::<i64, _>("generation")).map_err(|_| rejected())?,
+        session_id: row.get("session_id"),
+        scopes: row.get("scopes"),
+        project_id,
+    };
+    if active != (principal.generation, principal.session_id) {
+        return Err(rejected());
+    }
+    if !principal.scopes.iter().any(|s| s == scope) {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "supervisor credential lacks scope",
+        ));
+    }
+    crate::read::owner(tx, actor).await?;
+    Ok(principal)
+}
+
+async fn supervisor_project(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: Uuid,
+) -> Result<Option<Uuid>> {
     let conversation: Uuid = sqlx::query_scalar(
         "SELECT conversation_id FROM central_supervisor_actors WHERE actor_id=$1",
     )
@@ -261,24 +286,7 @@ pub async fn authenticate_in_transaction(
             return Err(rejected());
         }
     }
-    let principal = SupervisorPrincipal {
-        actor_id: row.get("actor_id"),
-        generation: u64::try_from(row.get::<i64, _>("generation")).map_err(|_| rejected())?,
-        session_id: row.get("session_id"),
-        scopes: row.get("scopes"),
-        project_id,
-    };
-    if active != (principal.generation, principal.session_id) {
-        return Err(rejected());
-    }
-    if !principal.scopes.iter().any(|s| s == scope) {
-        return Err(Error(
-            StatusCode::FORBIDDEN,
-            "supervisor credential lacks scope",
-        ));
-    }
-    crate::read::owner(tx, actor).await?;
-    Ok(principal)
+    Ok(project_id)
 }
 
 #[cfg(all(test, feature = "supervisor_full_access"))]
