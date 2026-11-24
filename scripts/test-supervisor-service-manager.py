@@ -8,9 +8,10 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-Fleet = run_path(str(Path(__file__).with_name('supervisor-service-manager.py')))['Fleet']
+manager = run_path(str(Path(__file__).with_name('supervisor-service-manager.py')))
+Fleet = manager['Fleet']
 SCOPE = '836bd70d-f570-4876-b3ca-5e94c16fc929'
 IMAGE = 'sha256:' + 'a' * 64
 PREFIX = 'aq-ms1-supervisor-fixture-'
@@ -62,6 +63,20 @@ class FleetTest(unittest.TestCase):
                 self.assertEqual(service.get('native'), CODEX['native'] if codex else None)
                 self.assertEqual(service['conversation_id'], SCOPE)
                 self.assertEqual(service['image_digest'], IMAGE)
+
+    def test_shared_codex_login_survives_existing_auth_or_failed_probe(self):
+        fleet = self.fleet(claude=False)
+        cached = manager['archive']({'login/auth.json': b'refreshed'})
+        probe = ['docker', 'cp', 'retained:/login/.', '-']
+        read = Mock(return_value=cached)
+        with patch.dict(Fleet.create.__globals__, run=read):
+            fleet.seed_login('retained')
+            read.assert_called_once_with(probe)
+            read.reset_mock()
+            read.side_effect = subprocess.CalledProcessError(1, probe)
+            with self.assertRaises(subprocess.CalledProcessError):
+                fleet.seed_login('retained')
+            read.assert_called_once_with(probe)
 
     def test_disabled_stale_stop_is_rejected_before_moving_controller(self):
         fleet = self.fleet()

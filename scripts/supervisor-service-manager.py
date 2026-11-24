@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Run the scoped central fleet. Private config, Docker access, no native agent.
 
-Creates only labelled, per-conversation containers. It neither prunes containers
-nor changes worker services. Every supervisor reads and refreshes one shared
-ChatGPT login (a volume at /login); existing containers keep their durable host
-state. A stopped supervisor retains its conversation.
+Manages labelled, per-conversation containers and their harness logins.
+Reconciliation preserves retained controllers. Explicit upgrades replace one
+disabled controller while retaining its conversation, state and workspace.
 """
 import argparse
 from datetime import datetime
@@ -293,11 +292,12 @@ class Fleet:
         run(['docker', 'start', target])
 
     def seed_login(self, name):
-        # Discard the read. The shared volume may hold a newer credential.
-        probe = subprocess.run(['docker', 'cp', name + ':/login/auth.json', '-'],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        if probe.returncode == 0:
-            return
+        # A successful directory read distinguishes an empty volume from
+        # Docker or mount failures, which must never trigger credential writes.
+        current = run(['docker', 'cp', name + ':/login/.', '-'])
+        with tarfile.open(fileobj=io.BytesIO(current)) as tar:
+            if any(Path(entry.name).name == 'auth.json' for entry in tar):
+                return
         auth = private(Path(self.cfg['subscription_file']))
         parsed = json.loads(auth)
         if parsed.get('auth_mode') != 'chatgpt' or parsed.get('OPENAI_API_KEY'):
