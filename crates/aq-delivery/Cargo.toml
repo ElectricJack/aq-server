@@ -21,6 +21,7 @@ http-body-util = { workspace = true, optional = true }
 hyper = { version = "1", features = ["client", "http1", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 jsonwebtoken = { workspace = true, optional = true }
+nix.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,6 +35,7 @@ unicode-normalization = "=0.1.26"
 uuid.workspace = true
 
 [features]
+source_observation = ["dep:aq-admission"]
 # Epic 0 (spec 0016): unfinished delivery-by-playbook code, off by default.
 delivery_playbook = [
     "dep:jsonwebtoken",
@@ -48,12 +50,17 @@ delivery_playbook = [
     "dep:hyper",
     "dep:hyper-util",
 ]
+# Spec 0017 §6.2 (aq-environments' `delivery_playbook`): an attempt may also
+# force-push its own `refs/heads/aq-try/<attempt>`, the `aq environment try`
+# checkpoint, which delivery never publishes.
+environment_try = ["delivery_playbook"]
 # With `delivery_playbook`: a fake aq-git git-HTTP socket backed by
 # `git http-backend`, for tests of the server that depends on this crate.
-test-support = []
+test-support = ["nix/signal"]
 
 [dev-dependencies]
 axum.workspace = true
+nix = { workspace = true, features = ["signal"] }
 rand.workspace = true
 rsa.workspace = true
 tempfile.workspace = true

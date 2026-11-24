@@ -57,6 +57,7 @@ pub struct Prior {
     pub offered_at_ms: Option<u64>,
     pub holds_task: bool,
     pub released: bool,
+    pub released_at_ms: Option<u64>,
     pub status: Status,
     pub execution_deadline_ms: Option<u64>,
     pub stop: Stop,
@@ -89,6 +90,13 @@ pub struct Replacement {
     pub effect_reconciliation_receipt: ArtifactRef,
     /// The predecessor still holds the task claim and must be released first.
     pub needs_release: bool,
+}
+impl Replacement {
+    /// The closure owner frees a verified nonstart before scheduling can
+    /// admit its successor. That release starts any launch backoff.
+    pub fn waiting_for_launch_release(&self) -> bool {
+        self.needs_release && launch_stop_receipt(&self.stop_receipt)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,15 +135,60 @@ fn failed(prior: &Prior, now: u64) -> bool {
 /// Which attempts (in order) are not charged: forgiven by an owner override, or exempt up to
 /// the cap, which counts only exemptions since that override.
 fn uncharged(ordered: &[&Prior], limits: &Limits) -> Vec<bool> {
-    let exempt = ordered.iter().map(|p| p.exempt && !p.forgiven);
+    let exempt = ordered
+        .iter()
+        .map(|p| p.exempt && !p.forgiven && !p.proven_nonstart());
     let capped = aq_machine_control::cap_exempt(exempt, limits.max_uncharged_continuations);
     (ordered.iter().zip(capped))
-        .map(|(p, exempt)| p.forgiven || exempt)
+        .map(|(p, exempt)| p.forgiven || p.proven_nonstart() || exempt)
         .collect()
 }
+
+impl Prior {
+    /// The closure settlement owner writes this state only after verifying the
+    /// launch never ran. A failed or absent result does not establish nonstart.
+    pub fn proven_nonstart(&self) -> bool {
+        self.status == Status::Finished
+            && matches!(&self.stop, Stop::NotStarted { receipt } if launch_stop_receipt(receipt))
+    }
+}
+
+fn launch_stop_receipt(receipt: &ArtifactRef) -> bool {
+    let id = receipt.id.as_str();
+    id.starts_with(aq_machine_control::lapse::RECEIPT) || id.starts_with("aq.launch-closure/")
+}
+
+pub const LAUNCH_BACKOFF: &str = "launch_retry_backoff";
+
+/// A first verified nonstart can continue right away. Repeated launch failures
+/// wait 30s, doubling up to 5m. The clock starts when AQ releases the claim,
+/// so the backoff never delays freeing the worker slot.
+pub fn launch_retry_after(priors: &[Prior]) -> Option<(Uuid, u64)> {
+    let mut ordered = priors.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
+    launch_retry_after_ordered(&ordered)
+}
+
+fn launch_retry_after_ordered(ordered: &[&Prior]) -> Option<(Uuid, u64)> {
+    let last = ordered.last()?;
+    if last.holds_task {
+        return None;
+    }
+    let consecutive = ordered
+        .iter()
+        .rev()
+        .take_while(|p| p.proven_nonstart() && !p.forgiven)
+        .take(6)
+        .count();
+    if consecutive < 2 {
+        return None;
+    }
+    let delay = (30_000u64 << (consecutive - 2)).min(300_000);
+    Some((last.attempt_id, last.released_at_ms?.saturating_add(delay)))
+}
 /// The started attempts charged to the retry budget, counted as [`assess`] counts them (owner
-/// and service stops are exempt: S8/Q1 in aq-server `docs/implementation/0007-P1-server.md`),
-/// and the latest attempt.
+/// and service stops may be exempt under spec 0007 Q1, and proven nonstarts
+/// are always uncharged), and the latest attempt.
 pub fn charged(priors: &[Prior], limits: &Limits) -> (u32, Option<Uuid>) {
     let mut ordered = priors.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
@@ -192,6 +245,16 @@ pub fn assess(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
     assess_lineage(priors, limits, now, true)
 }
 
+/// Scheduling assessment for one Graph-ready task.
+/// The decision attempt counts alone settle: an exhausted never-granted
+/// retry bound blocks, and no started attempt is an ordinary first attempt.
+pub fn precheck(counts: &aq_machine_control::attempts::AttemptCounts) -> Option<Assessment> {
+    if counts.never_granted_bound_exhausted() {
+        return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
+    }
+    (counts.started == 0).then_some(Assessment::Fresh)
+}
+
 /// A fresh start closes the old lineage, so its limits do not charge the new source.
 /// Stop, effect, retention, settlement and release proofs still apply in full.
 pub fn assess_for_fresh_start(priors: &[Prior], limits: &Limits, now: u64) -> Assessment {
@@ -208,22 +271,42 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
         return Blocked("replacement_lineage_history_unknown");
     }
     ordered.sort_by_key(|p| (p.offered_at_ms, p.attempt_id));
+    if let Err(code) = verify_history(&ordered) {
+        return Blocked(code);
+    }
+    let predecessor = ordered[ordered.len() - 1];
+    if !failed(predecessor, now) {
+        return Blocked("replacement_predecessor_not_failed");
+    }
+    let receipts = match predecessor.receipts() {
+        Ok(receipts) => receipts,
+        Err(code) => return Blocked(code),
+    };
+    let budget = match lineage_budget(&ordered, limits, now, charge_budget) {
+        Ok(budget) => budget,
+        Err(code) => return Blocked(code),
+    };
+    Assessment::Replace(Box::new(Replacement {
+        predecessor: predecessor.attempt_id,
+        attempts_started: budget.started,
+        exempt_attempts: budget.exempt,
+        elapsed_ms: budget.elapsed_ms,
+        stop_receipt: receipts.stop.clone(),
+        retained_source_receipt: receipts.retained.clone(),
+        effect_reconciliation_receipt: receipts.effects.clone(),
+        needs_release: predecessor.holds_task,
+    }))
+}
+
+fn verify_history(ordered: &[&Prior]) -> Result<(), &'static str> {
     if ordered.iter().any(|p| p.accepted) {
-        return Blocked("task_already_settled_accepted");
+        return Err("task_already_settled_accepted");
     }
     if ordered.iter().filter(|p| p.holds_task).count() > 1 {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
-    for prior in &ordered {
-        if !prior.stop.known_stopped() {
-            return Blocked("replacement_prior_execution_uncertain");
-        }
-        if !matches!(prior.effects, Effects::Quiescent { .. })
-            || prior.needs_reconciliation
-            || prior.completion.is_some()
-        {
-            return Blocked("replacement_effects_unreconciled");
-        }
+    for prior in ordered {
+        prior.verify_settlement()?;
     }
     let predecessor = ordered[ordered.len() - 1];
     // Every earlier attempt must have released its claim through this owner.
@@ -231,29 +314,65 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
         .iter()
         .any(|p| p.holds_task || !p.released)
     {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
     if !predecessor.holds_task && !predecessor.released {
-        return Blocked("replacement_prior_execution_uncertain");
+        return Err("replacement_prior_execution_uncertain");
     }
-    if !failed(predecessor, now) {
-        return Blocked("replacement_predecessor_not_failed");
+    Ok(())
+}
+struct ReplacementReceipts<'a> {
+    stop: &'a ArtifactRef,
+    retained: &'a ArtifactRef,
+    effects: &'a ArtifactRef,
+}
+impl Prior {
+    fn verify_settlement(&self) -> Result<(), &'static str> {
+        if !self.stop.known_stopped() {
+            return Err("replacement_prior_execution_uncertain");
+        }
+        let settled = !self.needs_reconciliation && self.completion.is_none();
+        if !settled || self.effects.receipt().is_none() {
+            return Err("replacement_effects_unreconciled");
+        }
+        Ok(())
     }
-    let (Stop::Stopped { receipt: stop } | Stop::NotStarted { receipt: stop }) = &predecessor.stop
-    else {
-        return Blocked("replacement_prior_execution_uncertain");
-    };
-    let Retention::Retained { receipt: retained } = &predecessor.retention else {
-        return Blocked("replacement_source_retention_unknown");
-    };
-    let Effects::Quiescent { receipt: effects } = &predecessor.effects else {
-        return Blocked("replacement_effects_unreconciled");
-    };
+    fn receipts(&self) -> Result<ReplacementReceipts<'_>, &'static str> {
+        Ok(ReplacementReceipts {
+            stop: self
+                .stop
+                .receipt()
+                .ok_or("replacement_prior_execution_uncertain")?,
+            retained: self
+                .retention
+                .receipt()
+                .ok_or("replacement_source_retention_unknown")?,
+            effects: self
+                .effects
+                .receipt()
+                .ok_or("replacement_effects_unreconciled")?,
+        })
+    }
+}
+struct LineageBudget {
+    started: u32,
+    exempt: u32,
+    elapsed_ms: u64,
+}
+fn lineage_budget(
+    ordered: &[&Prior],
+    limits: &Limits,
+    now: u64,
+    charge_budget: bool,
+) -> Result<LineageBudget, &'static str> {
     let attempts_started = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
-    let exempt = uncharged(&ordered, limits);
+    let exempt = uncharged(ordered, limits);
     let exempt_attempts = u32::try_from(exempt.iter().filter(|e| **e).count()).unwrap_or(0);
     if charge_budget && attempts_started - exempt_attempts >= limits.max_attempts {
-        return Blocked("lineage_retry_budget_exhausted");
+        return Err("lineage_retry_budget_exhausted");
+    }
+    if charge_budget && launch_retry_after_ordered(ordered).is_some_and(|(_, next)| now < next) {
+        return Err(LAUNCH_BACKOFF);
     }
     // Lineage time is recorded, never charged: each attempt has its own window (its execution
     // profile's wall time) and a retry is limited by `max_attempts` alone. It is the sum of the
@@ -266,16 +385,11 @@ fn assess_lineage(priors: &[Prior], limits: &Limits, now: u64, charge_budget: bo
                 .saturating_sub(ordered[i].offered_at_ms.unwrap_or(now))
         })
         .fold(0u64, u64::saturating_add);
-    Assessment::Replace(Box::new(Replacement {
-        predecessor: predecessor.attempt_id,
-        attempts_started,
-        exempt_attempts,
+    Ok(LineageBudget {
+        started: attempts_started,
+        exempt: exempt_attempts,
         elapsed_ms,
-        stop_receipt: stop.clone(),
-        retained_source_receipt: retained.clone(),
-        effect_reconciliation_receipt: effects.clone(),
-        needs_release: predecessor.holds_task,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -326,6 +440,7 @@ mod tests {
             offered_at_ms: Some(offered_at_ms),
             holds_task: true,
             released: false,
+            released_at_ms: None,
             status: Status::Finished,
             execution_deadline_ms: Some(offered_at_ms + 60_000),
             stop: Stop::Stopped {
@@ -429,19 +544,61 @@ mod tests {
         let mut closed = failed_prior(900_000);
         closed.rejected = false;
         closed.stop = Stop::NotStarted {
-            receipt: receipt("closure"),
+            receipt: receipt("aq.launch-closure/verified"),
         };
         let Assessment::Replace(r) = assess(std::slice::from_ref(&closed), &budget(), now) else {
             panic!("settled closure must be replaceable");
         };
-        assert_eq!(r.stop_receipt, receipt("closure"));
+        assert_eq!(r.stop_receipt, receipt("aq.launch-closure/verified"));
         assert!(r.needs_release);
+        assert!(r.waiting_for_launch_release());
         // An unsettled closure (stop still unknown) blocks.
         closed.stop = Stop::Unknown;
         closed.status = Status::Cancelling;
         assert_eq!(
             assess(&[closed], &budget(), now),
             Assessment::Blocked("replacement_prior_execution_uncertain")
+        );
+    }
+
+    #[test]
+    fn repeated_verified_nonstarts_wait_without_spending_the_execution_budget() {
+        let limits = Limits {
+            max_attempts: 1,
+            max_uncharged_continuations: 0,
+        };
+        let first = released(failed_prior(1_000));
+        let second = released(failed_prior(2_000));
+        let mut failures = [first, second];
+        for attempt in &mut failures {
+            attempt.stop = Stop::NotStarted {
+                receipt: receipt(&format!(
+                    "{}{}",
+                    aq_machine_control::lapse::RECEIPT,
+                    attempt.attempt_id
+                )),
+            };
+            attempt.released_at_ms = Some(3_000);
+        }
+        assert_eq!(charged(&failures, &limits).0, 0);
+        assert_eq!(
+            launch_retry_after(&failures),
+            Some((failures[1].attempt_id, 33_000))
+        );
+        assert_eq!(
+            assess(&failures, &limits, 32_999),
+            Assessment::Blocked(LAUNCH_BACKOFF)
+        );
+        let Assessment::Replace(retry) = assess(&failures, &limits, 33_000) else {
+            panic!("the same ticket can continue when the backoff elapses");
+        };
+        assert_eq!((retry.attempts_started, retry.exempt_attempts), (2, 2));
+        assert!(!retry.needs_release);
+        let mut actual_failure = failures.to_vec();
+        actual_failure.push(failed_prior(34_000));
+        assert_eq!(
+            assess(&actual_failure, &limits, 35_000),
+            Assessment::Blocked("lineage_retry_budget_exhausted")
         );
     }
 
@@ -642,14 +799,14 @@ mod tests {
 
     /// Owner decision 2026-11-18: an owner override of a budget hold starts the budget again.
     /// Attempts before it are charged to nothing: not attempts and not time.
+    fn long(offered: u64) -> Prior {
+        let mut prior = failed_prior(offered);
+        prior.execution_deadline_ms = Some(offered + 100 * MIN);
+        prior
+    }
     #[test]
-    fn an_owner_override_gives_a_fresh_budget_and_never_lifts_a_safety_hold() {
+    fn an_owner_override_gives_a_fresh_budget() {
         let now = 30 * HOUR;
-        let long = |offered: u64| {
-            let mut p = failed_prior(offered);
-            p.execution_deadline_ms = Some(offered + 100 * MIN);
-            p
-        };
         // Three attempts: the retry budget is used up.
         let history = [released(long(0)), released(long(HOUR)), long(29 * HOUR)];
         assert_eq!(
@@ -685,6 +842,15 @@ mod tests {
             assess(&stopped, &one, now + HOUR),
             Assessment::Replace(_)
         ));
+    }
+    #[test]
+    fn an_owner_override_never_lifts_a_safety_hold() {
+        let now = 30 * HOUR;
+        let forgiven =
+            [released(long(0)), released(long(HOUR)), long(29 * HOUR)].map(|mut prior| {
+                prior.forgiven = true;
+                prior
+            });
         // What happened to the task still refuses, override or not.
         let unsafe_last = |edit: fn(&mut Prior)| {
             let mut h = forgiven.clone();

@@ -1,7 +1,7 @@
 //! Durable ladder state. An episode advances only by compare-and-set on its
 //! revision; an intent is inserted in the same transaction, before its effect,
 //! and its receipt folds the outcome in exactly once.
-use super::engine::Target;
+use super::engine::{Action, Target};
 use super::ladder::{self, Episode, Intent, Outcome};
 use super::policy::ExecutionPolicy;
 use crate::error::AppError;
@@ -77,16 +77,15 @@ async fn write(
 /// `false` means another sweeper advanced the episode first.
 pub async fn commit(
     pool: &PgPool,
-    next: &Episode,
-    expected: u64,
-    action: Option<(Uuid, &Intent)>,
+    (next, expected): (&Episode, u64),
+    action: Option<Action<'_>>,
     now: u64,
 ) -> Result<bool, AppError> {
     let mut tx = pool.begin().await.map_err(db)?;
     if !write(&mut tx, next, expected, now).await? {
         return Ok(false);
     }
-    if let Some((id, intent)) = action {
+    if let Some(Action { id, intent }) = action {
         sqlx::query("INSERT INTO stall_actions(action_id,episode_id,kind,ordinal,expected_revision,intent,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7)")
             .bind(id)
             .bind(next.episode_id)
@@ -120,10 +119,8 @@ pub async fn pending(pool: &PgPool, episode: Uuid) -> Result<Option<(Uuid, Inten
 pub async fn receipt(
     pool: &PgPool,
     episode: Uuid,
-    action: Uuid,
-    intent: &Intent,
-    outcome: &Outcome,
-    now: u64,
+    Action { id: action, intent }: Action<'_>,
+    (outcome, now): (&Outcome, u64),
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await.map_err(db)?;
     let row = sqlx::query(

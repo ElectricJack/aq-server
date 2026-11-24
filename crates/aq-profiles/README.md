@@ -85,7 +85,7 @@ You implement the change your task describes, in the workspace you are given.
 | Part | Rule |
 |---|---|
 | `execution` | Required. The id of an execution profile in the same set. |
-| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::effective_permissions` gives each the task's project (`project:<id>`), for `source.*` the project's repository (`repository:<id>`), or for `wait.*` the attempt itself (`attempt:self`), and keeps it only when the project's ceilings and the caller both hold it. |
+| `operations` | Required list; may be empty. Each is an agent-grant operation (`aq_agent_grants::op::ALL`) or `source.write`. No scope: `roles::requested_permissions` gives each the task's project (`project:<id>`), for `source.*` the project's repository (`repository:<id>`), or for `wait.*` the attempt itself (`attempt:self`), and `roles::RequestedPermissions::effective` keeps it only when the project's ceilings and the caller both hold it. |
 | `enabled` | Optional, `true` when absent. At least one role in a set must be enabled. |
 | `## Role` | Required and not empty. |
 | `## Rules` | Optional. |

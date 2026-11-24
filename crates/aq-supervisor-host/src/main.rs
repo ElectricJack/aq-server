@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use aq_session_host::{LocalEnvironment, ResourcePolicy};
 use aq_supervisor_host::{
-    RETRY_ATTEMPTS, RETRY_BACKOFF, Supervisor,
+    Supervisor,
     adapter::NativeAdapter,
     config::{Config, InstalledAuthority},
     is_transient, retry_bounded,
@@ -44,6 +44,20 @@ async fn run() -> Result<()> {
     if args.get(1).is_some_and(|s| s == "tool") {
         return aq_supervisor_host::tool::run(&args[2..]).await;
     }
+    #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+    if args.len() == 4 && args[1] == "repo" && args[2] == "sync" {
+        let project = args[3]
+            .parse()
+            .context("usage: aq-supervisor-host repo sync PROJECT_ID")?;
+        // repo sync errors are built for the agent (token masked, no placement), so show them.
+        if let Err(error) =
+            aq_supervisor_host::repo::sync(project, std::path::Path::new("/workspace")).await
+        {
+            eprintln!("repo sync failed: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.len() == 3 && args[1] == "serve" {
         return aq_supervisor_host::service::run(std::path::Path::new(&args[2])).await;
     }
@@ -62,7 +76,41 @@ async fn run() -> Result<()> {
     if args[1] == "internal" {
         return aq_supervisor_host::internal::run(&path).await;
     }
+    control(path, &args[1]).await
+}
+
+async fn control(path: PathBuf, command: &str) -> Result<()> {
     let (c, digest) = Config::load(&path)?;
+    let host = controller(path, &c, digest).await?;
+    let actor = c.central.subject.actor_id();
+    match command {
+        "status" => {
+            let s = host.inspect(actor).await?;
+            println!(
+                "generation={} phase={:?} revision={}",
+                s.run.plan().generation,
+                s.run.phase(),
+                s.revision
+            );
+        }
+        "stop" => {
+            host.stop(actor).await?;
+        }
+        "run" => {
+            supervise(&host, c).await?;
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+type Controller = Supervisor<InstalledAuthority, NativeAdapter>;
+
+async fn controller(
+    path: PathBuf,
+    c: &Config,
+    digest: aq_session_protocol::Digest,
+) -> Result<Controller> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)
         .connect(&c.database_url)
@@ -78,73 +126,81 @@ async fn run() -> Result<()> {
     });
     let local = LocalEnvironment {
         workspace: c.workspace.clone(),
-        helper_executable: c.helper,
-        tmux_executable: c.tmux,
-        tmux_version: c.tmux_version,
-        resource_policy: ResourcePolicy::CallerAdmission(c.resource_admission),
+        helper_executable: c.helper.clone(),
+        tmux_executable: c.tmux.clone(),
+        tmux_version: c.tmux_version.clone(),
+        resource_policy: ResourcePolicy::CallerAdmission(c.resource_admission.clone()),
         credential_profiles: vec![],
         context_material: vec![],
     };
-    let host = Supervisor::new(pool, c.root, local, authority, adapter);
+    Ok(Supervisor::new(
+        pool,
+        aq_supervisor_host::Runtime {
+            root: c.root.clone(),
+            local,
+        },
+        authority,
+        adapter,
+    ))
+}
+
+async fn supervise(host: &Controller, c: Config) -> Result<()> {
     let actor = c.central.subject.actor_id();
-    match args[1].as_str() {
-        "status" => {
-            let s = host.inspect(actor).await?;
-            println!(
-                "generation={} phase={:?} revision={}",
-                s.run.plan().generation,
-                s.run.phase(),
-                s.revision
-            );
+    // Register before launch so a stop during startup remains pending.
+    let mut signals = ShutdownSignals::new()?;
+    let ttl = c.central.max_permit_ms.min(120_000);
+    let startup = aq_supervisor_host::config::protected_read(&c.startup_file, 1048576)?;
+    let mut s = Box::pin(host.start(
+        aq_supervisor_host::Startup {
+            central: c.central,
+            host: c.host,
+            input: startup,
+        },
+        ttl,
+    ))
+    .await?;
+    let at_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?;
+    host.enable_replies(actor, at_ms).await?;
+    let shutdown = signals.recv();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {result=&mut shutdown=>{result?;host.stop(actor).await?;break;},_ = tokio::time::sleep(Duration::from_millis(250))=>{}}
+        // A transient DB/network error must not exit the controller while
+        // the guardian keeps running; retry within the last known permit.
+        let expires = s.run.permit().map_or(0, |p| p.expires_boot_ms);
+        s = retry_bounded(
+            aq_supervisor_host::CONTROLLER_RETRY,
+            expires,
+            is_transient,
+            || host.reconcile(actor),
+        )
+        .await?;
+        if !matches!(
+            s.run.phase(),
+            aq_central_authority::Phase::StartCommitted
+                | aq_central_authority::Phase::RunningReported
+        ) {
+            break;
         }
-        "stop" => {
-            host.stop(actor).await?;
+        let p = s.run.permit().context("permit absent")?;
+        let now = aq_supervisor_host::clock()?.boot_ms;
+        if now >= p.issued_boot_ms + (p.expires_boot_ms - p.issued_boot_ms) / 2
+            && p.expires_boot_ms < s.run.original_deadline_boot_ms()
+        {
+            let expires = p.expires_boot_ms;
+            let sequence = p.sequence;
+            s = retry_bounded(
+                aq_supervisor_host::CONTROLLER_RETRY,
+                expires,
+                is_transient,
+                || host.renew(actor, sequence, ttl),
+            )
+            .await?;
         }
-        "run" => {
-            // Register before launch so a stop during startup remains pending.
-            let mut signals = ShutdownSignals::new()?;
-            let ttl = c.central.max_permit_ms.min(120_000);
-            let startup = aq_supervisor_host::config::protected_read(&c.startup_file, 1048576)?;
-            let mut s = Box::pin(host.start(c.central, c.host, startup, ttl)).await?;
-            let at_ms = u64::try_from(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_millis(),
-            )?;
-            host.enable_replies(actor, at_ms).await?;
-            let shutdown = signals.recv();
-            tokio::pin!(shutdown);
-            loop {
-                tokio::select! {result=&mut shutdown=>{result?;host.stop(actor).await?;break;},_ = tokio::time::sleep(Duration::from_millis(250))=>{}}
-                // A transient DB/network error must not exit the controller while
-                // the guardian keeps running; retry within the last known permit.
-                let expires = s.run.permit().map_or(0, |p| p.expires_boot_ms);
-                s = retry_bounded(RETRY_ATTEMPTS, RETRY_BACKOFF, expires, is_transient, || {
-                    host.reconcile(actor)
-                })
-                .await?;
-                if !matches!(
-                    s.run.phase(),
-                    aq_central_authority::Phase::StartCommitted
-                        | aq_central_authority::Phase::RunningReported
-                ) {
-                    break;
-                }
-                let p = s.run.permit().context("permit absent")?;
-                let now = aq_supervisor_host::clock()?.boot_ms;
-                if now >= p.issued_boot_ms + (p.expires_boot_ms - p.issued_boot_ms) / 2
-                    && p.expires_boot_ms < s.run.original_deadline_boot_ms()
-                {
-                    let expires = p.expires_boot_ms;
-                    let sequence = p.sequence;
-                    s = retry_bounded(RETRY_ATTEMPTS, RETRY_BACKOFF, expires, is_transient, || {
-                        host.renew(actor, sequence, ttl)
-                    })
-                    .await?;
-                }
-            }
-        }
-        _ => unreachable!(),
     }
     Ok(())
 }

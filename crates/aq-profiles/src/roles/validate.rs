@@ -198,42 +198,7 @@ pub fn compile(
     defaults: &SelectionDefaults,
     limits: &DocumentLimits,
 ) -> Result<Snapshot, Vec<Problem>> {
-    let mut problems = Vec::new();
-    let mut set = DocumentSet::default();
-    let mut total = 0usize;
-    for source in sources {
-        let document = format!("{} document `{}`", source.kind.label(), source.label);
-        total = total.saturating_add(source.text.len());
-        if source.text.len() > limits.max_document_bytes {
-            problems.push(Problem {
-                document,
-                field: String::new(),
-                message: format!(
-                    "is {} bytes, over the limit of {} bytes",
-                    source.text.len(),
-                    limits.max_document_bytes
-                ),
-            });
-            continue;
-        }
-        let parsed = match source.kind {
-            Kind::Role => parse_role(&source.text).map(|d| set.roles.push(d)),
-            Kind::Intelligence => {
-                parse_intelligence(&source.text).map(|d| set.intelligence.push(d))
-            }
-            Kind::Execution => parse_execution(&source.text).map(|d| set.execution.push(d)),
-        };
-        if let Err(error) = parsed {
-            problems.push(Problem {
-                document,
-                field: String::new(),
-                message: error.to_string(),
-            });
-        }
-    }
-    if total > limits.max_set_bytes {
-        problems.push(set_too_large(total, limits));
-    }
+    let (set, mut problems) = parse_sources(sources, limits);
     match check(set, defaults, limits, false) {
         Ok(snapshot) if problems.is_empty() => Ok(snapshot),
         Ok(_) => Err(problems),
@@ -242,6 +207,52 @@ pub fn compile(
             Err(problems)
         }
     }
+}
+fn parse_sources(
+    sources: &[SourceDocument],
+    limits: &DocumentLimits,
+) -> (DocumentSet, Vec<Problem>) {
+    let mut set = DocumentSet::default();
+    let mut problems = Vec::new();
+    let mut total = 0usize;
+    for source in sources {
+        total = total.saturating_add(source.text.len());
+        if let Err(error) = read_source(&mut set, source, limits) {
+            problems.push(error);
+        }
+    }
+    if total > limits.max_set_bytes {
+        problems.push(set_too_large(total, limits));
+    }
+    (set, problems)
+}
+fn read_source(
+    set: &mut DocumentSet,
+    source: &SourceDocument,
+    limits: &DocumentLimits,
+) -> Result<(), Problem> {
+    let document = format!("{} document `{}`", source.kind.label(), source.label);
+    if source.text.len() > limits.max_document_bytes {
+        return Err(Problem {
+            document,
+            field: String::new(),
+            message: format!(
+                "is {} bytes, over the limit of {} bytes",
+                source.text.len(),
+                limits.max_document_bytes
+            ),
+        });
+    }
+    let parsed = match source.kind {
+        Kind::Role => parse_role(&source.text).map(|d| set.roles.push(d)),
+        Kind::Intelligence => parse_intelligence(&source.text).map(|d| set.intelligence.push(d)),
+        Kind::Execution => parse_execution(&source.text).map(|d| set.execution.push(d)),
+    };
+    parsed.map_err(|error| Problem {
+        document,
+        field: String::new(),
+        message: error.to_string(),
+    })
 }
 /// Validate parsed documents together. Returns the snapshot, or every problem
 /// found.
@@ -263,262 +274,79 @@ fn set_too_large(total: usize, limits: &DocumentLimits) -> Problem {
         ),
     }
 }
-fn valid_id(id: &str) -> bool {
-    let mut bytes = id.bytes();
-    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
-        && id.len() <= 63
-        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-fn reference(value: &str) -> bool {
-    crate::text(value).is_ok()
-}
+mod document_checks;
+use document_checks::{Report, check_execution, check_intelligence, check_role};
 
-/// Collects problems for one document.
-struct Report<'a> {
-    problems: &'a mut Vec<Problem>,
-    document: String,
+impl DocumentSet {
+    fn normalize(&mut self, defaults: &SelectionDefaults) {
+        // A profile is stored with only the keys that differ from the defaults.
+        for profile in &mut self.intelligence {
+            profile.selection = std::mem::take(&mut profile.selection).differing(defaults);
+        }
+        // Prompt text is stored as the parser reads it: LF lines, no outer blank lines.
+        for role in &mut self.roles {
+            for text in [&mut role.role_md, &mut role.rules_md] {
+                *text = text.replace("\r\n", "\n").trim().to_string();
+            }
+        }
+    }
 }
-impl Report<'_> {
-    fn add(&mut self, field: &str, message: impl Into<String>) {
-        self.problems.push(Problem {
-            document: self.document.clone(),
-            field: field.into(),
-            message: message.into(),
+impl DocumentSet {
+    fn validate_documents(
+        &self,
+        defaults: &SelectionDefaults,
+        limits: &DocumentLimits,
+        sizes: bool,
+    ) -> (Content, usize, Vec<Problem>) {
+        let mut problems = Vec::new();
+        let execution_ids: BTreeSet<&str> = self.execution.iter().map(|e| e.id.as_str()).collect();
+        let mut total = 0usize;
+        let mut content = Content {
+            schema_version: 1,
+            selection_defaults: defaults.clone(),
+            roles: BTreeMap::new(),
+            intelligence: BTreeMap::new(),
+            execution: BTreeMap::new(),
+        };
+        macro_rules! each {
+            ($list:expr, $kind:expr, $map:ident, |$r:ident, $d:ident| $body:expr) => {
+                for $d in &$list {
+                    let mut $r = Report {
+                        limits,
+                        problems: &mut problems,
+                        document: format!("{} `{}`", $kind.label(), $d.id),
+                    };
+                    $r.identity(&$d.id, &$d.name, &$d.description);
+                    let bytes = $d.to_markdown().len();
+                    total = total.saturating_add(bytes);
+                    if sizes {
+                        $r.size(bytes);
+                    }
+                    $body;
+                    if content.$map.insert($d.id.clone(), $d.clone()).is_some() {
+                        $r.add("id", "is used by more than one document of this kind");
+                    }
+                }
+            };
+        }
+        each!(self.roles, Kind::Role, roles, |r, d| check_role(
+            &mut r,
+            d,
+            &execution_ids
+        ));
+        each!(
+            self.intelligence,
+            Kind::Intelligence,
+            intelligence,
+            |r, d| check_intelligence(&mut r, d, defaults)
+        );
+        each!(self.execution, Kind::Execution, execution, |r, d| {
+            check_execution(&mut r, d)
         });
-    }
-    fn identity(&mut self, id: &str, name: &str, description: &str, limits: &DocumentLimits) {
-        if !valid_id(id) {
-            self.add(
-                "id",
-                "must be a lowercase letter followed by up to 62 lowercase letters, digits or `-`",
-            );
-        }
-        if name.trim().is_empty() || name.chars().any(char::is_control) {
-            self.add("name", "must be one non-empty line");
-        } else if name.len() > limits.max_name_bytes {
-            self.add(
-                "name",
-                format!("is over the limit of {} bytes", limits.max_name_bytes),
-            );
-        }
-        if description.chars().any(char::is_control) {
-            self.add("description", "must be one line");
-        } else if description.len() > limits.max_description_bytes {
-            self.add(
-                "description",
-                format!(
-                    "is over the limit of {} bytes",
-                    limits.max_description_bytes
-                ),
-            );
-        }
-    }
-    fn size(&mut self, bytes: usize, limits: &DocumentLimits) {
-        if bytes > limits.max_document_bytes {
-            self.add(
-                "",
-                format!(
-                    "is {bytes} bytes, over the limit of {} bytes",
-                    limits.max_document_bytes
-                ),
-            );
-        }
-    }
-    /// A non-empty list of distinct known harnesses.
-    fn harnesses(&mut self, field: &str, harnesses: &[String]) {
-        if harnesses.is_empty() {
-            self.add(field, "names no harness");
-        }
-        let mut seen = BTreeSet::new();
-        for harness in harnesses {
-            if !HARNESSES.contains(&harness.as_str()) {
-                self.add(
-                    field,
-                    format!(
-                        "unknown harness `{harness}`; the harnesses are {}",
-                        HARNESSES.join(", ")
-                    ),
-                );
-            } else if !seen.insert(harness) {
-                self.add(field, format!("lists harness `{harness}` twice"));
-            }
-        }
+        (content, total, problems)
     }
 }
-
-/// The bound `SelectionPolicy::validate` puts on a policy's output tokens,
-/// which a launch takes from its execution profile.
-const MAX_OUTPUT_TOKENS: u64 = 1_048_576;
-
-fn check_role(r: &mut Report<'_>, role: &Role, execution: &BTreeSet<&str>) {
-    if !execution.contains(role.execution.as_str()) {
-        r.add(
-            "execution",
-            format!("no execution profile `{}` exists", role.execution),
-        );
-    }
-    let mut seen = BTreeSet::new();
-    for operation in &role.operations {
-        if !operation_known(operation) {
-            r.add(
-                "operations",
-                format!("`{operation}` is not an AQ operation a role can hold"),
-            );
-        } else if !seen.insert(operation) {
-            r.add("operations", format!("lists `{operation}` twice"));
-        }
-    }
-    if role.role_md.is_empty() {
-        r.add("## Role", "is empty");
-    }
-    for (heading, text) in [("## Role", &role.role_md), ("## Rules", &role.rules_md)] {
-        if has_heading(text) {
-            r.add(
-                heading,
-                "contains a `## ` heading line; use `###` inside a section",
-            );
-        }
-    }
-}
-fn check_intelligence(r: &mut Report<'_>, profile: &Intelligence, defaults: &SelectionDefaults) {
-    if profile.candidates.is_empty() {
-        r.add("## Candidates", "lists no candidate");
-    }
-    let mut seen = BTreeSet::new();
-    for (index, c) in profile.candidates.iter().enumerate() {
-        let field = format!("candidate {}", index + 1);
-        for (what, value) in [
-            ("provider", &c.provider),
-            ("model", &c.model),
-            ("reasoning", &c.reasoning),
-        ] {
-            if !is_token(value) || !reference(value) {
-                r.add(&field, format!("{what} `{value}` is malformed"));
-            }
-        }
-        r.harnesses(&field, &c.harnesses);
-        for harness in c
-            .harnesses
-            .iter()
-            .filter(|h| HARNESSES.contains(&h.as_str()))
-        {
-            if !harness_supports(harness, &c.reasoning) {
-                r.add(
-                    &field,
-                    format!(
-                        "harness `{harness}` does not accept reasoning `{}`",
-                        c.reasoning
-                    ),
-                );
-            }
-            if !provider_fits_harness(&c.provider, harness) {
-                r.add(
-                    &field,
-                    format!("harness `{harness}` does not run provider `{}`", c.provider),
-                );
-            }
-        }
-        if !seen.insert(c.derived_id()) {
-            r.add(
-                &field,
-                format!("repeats `{}` with the same reasoning", c.model),
-            );
-        }
-    }
-    // The defaults alone are reported once, for the whole set.
-    if !profile.selection.is_empty()
-        && let Err(message) = defaults.with(&profile.selection).check()
-    {
-        r.add("## Selection", message);
-    }
-}
-fn check_execution(r: &mut Report<'_>, profile: &Execution) {
-    r.harnesses("harnesses", &profile.harnesses);
-    #[cfg(not(feature = "project_environments"))]
-    let environment = Some(&profile.environment);
-    #[cfg(feature = "project_environments")]
-    let environment = profile.environment.as_ref();
-    if environment.is_some_and(|e| !reference(e)) {
-        r.add("environment", "must be one non-empty line");
-    }
-    for harness in &profile.harnesses {
-        if !profile.credentials.contains_key(harness) {
-            r.add(
-                "## Credentials",
-                format!("names no credential for harness `{harness}`"),
-            );
-        }
-    }
-    for (harness, credential) in &profile.credentials {
-        if !profile.harnesses.contains(harness) {
-            r.add(
-                "## Credentials",
-                format!("`{harness}` is not one of this profile's harnesses"),
-            );
-        }
-        if !reference(credential) {
-            r.add(
-                "## Credentials",
-                format!("the credential for `{harness}` must be one non-empty line"),
-            );
-        }
-    }
-    let l = &profile.limits;
-    for (name, value) in [
-        ("wall_time_ms", l.wall_time_ms),
-        ("memory_bytes", l.memory_bytes),
-        ("cpu_millis", l.cpu_millis),
-        ("process_limit", l.process_limit),
-        ("startup_context_bytes", l.startup_context_bytes),
-        ("max_output_tokens", l.max_output_tokens),
-    ] {
-        if value == 0 || value > i64::MAX as u64 {
-            r.add("## Limits", format!("`{name}` must be a positive number"));
-        }
-    }
-    if l.max_output_tokens > MAX_OUTPUT_TOKENS {
-        r.add(
-            "## Limits",
-            format!(
-                "`max_output_tokens` is over the selection policy's bound of {MAX_OUTPUT_TOKENS}"
-            ),
-        );
-    }
-    if l.startup_context_bytes > super::MAX_STARTUP_BYTES as u64 {
-        r.add(
-            "## Limits",
-            format!(
-                "`startup_context_bytes` is over the renderer's bound of {} bytes",
-                super::MAX_STARTUP_BYTES
-            ),
-        );
-    }
-}
-
-fn check(
-    mut set: DocumentSet,
-    defaults: &SelectionDefaults,
-    limits: &DocumentLimits,
-    sizes: bool,
-) -> Result<Snapshot, Vec<Problem>> {
-    let mut problems = Vec::new();
-    if let Err(message) = defaults.check() {
-        problems.push(Problem {
-            document: "selection defaults".into(),
-            field: String::new(),
-            message,
-        });
-    }
-    // A profile is stored with only the keys that differ from the defaults.
-    for profile in &mut set.intelligence {
-        profile.selection = std::mem::take(&mut profile.selection).differing(defaults);
-    }
-    // Prompt text is stored as the parser reads it: LF lines, no outer blank lines.
-    for role in &mut set.roles {
-        for text in [&mut role.role_md, &mut role.rules_md] {
-            *text = text.replace("\r\n", "\n").trim().to_string();
-        }
-    }
+fn check_counts(set: &DocumentSet, limits: &DocumentLimits, problems: &mut Vec<Problem>) {
     for (kind, count) in [
         (Kind::Role, set.roles.len()),
         (Kind::Intelligence, set.intelligence.len()),
@@ -536,49 +364,25 @@ fn check(
             });
         }
     }
-    let execution_ids: BTreeSet<&str> = set.execution.iter().map(|e| e.id.as_str()).collect();
-    let mut total = 0usize;
-    let mut content = Content {
-        schema_version: 1,
-        selection_defaults: defaults.clone(),
-        roles: BTreeMap::new(),
-        intelligence: BTreeMap::new(),
-        execution: BTreeMap::new(),
-    };
-    macro_rules! each {
-        ($list:expr, $kind:expr, $map:ident, |$r:ident, $d:ident| $body:expr) => {
-            for $d in &$list {
-                let mut $r = Report {
-                    problems: &mut problems,
-                    document: format!("{} `{}`", $kind.label(), $d.id),
-                };
-                $r.identity(&$d.id, &$d.name, &$d.description, limits);
-                let bytes = $d.to_markdown().len();
-                total = total.saturating_add(bytes);
-                if sizes {
-                    $r.size(bytes, limits);
-                }
-                $body;
-                if content.$map.insert($d.id.clone(), $d.clone()).is_some() {
-                    $r.add("id", "is used by more than one document of this kind");
-                }
-            }
-        };
+}
+fn check(
+    mut set: DocumentSet,
+    defaults: &SelectionDefaults,
+    limits: &DocumentLimits,
+    sizes: bool,
+) -> Result<Snapshot, Vec<Problem>> {
+    let mut problems = Vec::new();
+    if let Err(message) = defaults.check() {
+        problems.push(Problem {
+            document: "selection defaults".into(),
+            field: String::new(),
+            message,
+        });
     }
-    each!(set.roles, Kind::Role, roles, |r, d| check_role(
-        &mut r,
-        d,
-        &execution_ids
-    ));
-    each!(
-        set.intelligence,
-        Kind::Intelligence,
-        intelligence,
-        |r, d| check_intelligence(&mut r, d, defaults)
-    );
-    each!(set.execution, Kind::Execution, execution, |r, d| {
-        check_execution(&mut r, d)
-    });
+    set.normalize(defaults);
+    check_counts(&set, limits, &mut problems);
+    let (content, total, document_problems) = set.validate_documents(defaults, limits, sizes);
+    problems.extend(document_problems);
     if sizes && total > limits.max_set_bytes {
         problems.push(set_too_large(total, limits));
     }

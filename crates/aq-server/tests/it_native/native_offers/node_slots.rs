@@ -76,6 +76,108 @@ pub(super) async fn offered(c: &Case, slot: u32) -> NativeOffer {
 }
 
 #[tokio::test]
+async fn publication_retries_the_same_assembly_after_a_slot_lock_timeout() {
+    use std::time::Duration;
+
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(110110)")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    let release = async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted AND locktype='advisory' AND $1=ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(pid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // Publication's first transaction has a 2s lock timeout.
+        tokio::time::sleep(Duration::from_millis(2_050)).await;
+        lock.commit().await.unwrap();
+    };
+    let (first, ()) = tokio::join!(poll_slot(&c, 1), release);
+    assert!(first.is_empty());
+    common::native_offer::assembled(&c).await;
+    let claimed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM execution_attempts WHERE node_id=$1 AND holds_task",
+    )
+    .bind(c.env.env.node)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        claimed, 1,
+        "the first poll publishes without starting another assembly"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_publication_releases_staging_and_retains_the_artifacts() {
+    let c = setup().await;
+    let pool = &c.env.env.pool;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(110110)")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(poll_slot(&c, 1).await.is_empty());
+    // Keep the publication lock through every bounded retry of this assembly.
+    common::native_offer::assembled(&c).await;
+    let (stages, closed, pins, objects, attempts): (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM admission_offer_stages),
+                (SELECT count(*) FROM admission_offer_stages WHERE closed_at_ms IS NOT NULL),
+                (SELECT count(*) FROM admission_offer_stage_pins),
+                (SELECT count(*) FROM admission_artifacts WHERE offer_staged),
+                (SELECT count(*) FROM execution_attempts WHERE node_id=$1 AND holds_task)",
+    )
+    .bind(c.env.env.node)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((stages, closed, pins, attempts), (1, 1, 0, 0));
+    assert!(objects > 0, "finished assemblies retain their exact bytes");
+    let (charged, legacy): (i64, i64) = sqlx::query_as(
+        "SELECT usage.scope_rows,
+            (SELECT count(*) FROM admission_artifacts a WHERE a.owner_key=s.project_id::text
+             AND NOT a.offer_staged AND a.created_at_ms>=$1-600000
+             AND NOT EXISTS(SELECT 1 FROM profiled_launch_artifacts l WHERE l.artifact_id=a.artifact_id))
+         FROM admission_offer_stages s CROSS JOIN LATERAL sealed_history_usage('admission_artifacts',s.project_id,$1) usage",
+    )
+    .bind((c.env.env.state.clock)().timestamp_millis())
+    .fetch_one(pool).await.unwrap();
+    assert_eq!(
+        charged, legacy,
+        "the charged rows no longer include the refused assembly"
+    );
+    lock.commit().await.unwrap();
+    let next = offered(&c, 1).await;
+    let claim: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(next.offered.offer.binding.attempt_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        claim,
+        "the normal next poll can admit one replacement offer"
+    );
+}
+
+#[tokio::test]
 async fn running_siblings_redeliver_to_their_slot_restart_and_release_independently() {
     let mut c = setup().await;
     let node = c.env.env.node;

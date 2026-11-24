@@ -14,40 +14,51 @@ const BRANDS: [&[u8; 4]; 10] = [
     b"isom", b"iso2", b"iso3", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ",
 ];
 
-/// Splits one container level into (type, body) boxes.
-fn boxes<'a>(bytes: &'a [u8], top: bool, seen: &mut usize) -> Result<Vec<([u8; 4], &'a [u8])>> {
-    let mut out = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        *seen += 1;
-        if *seen > MAX_MP4_BOXES {
-            return Err(Invalid::Limit("mp4 boxes"));
-        }
-        let rest = &bytes[offset..];
-        if rest.len() < 8 {
-            return Err(Invalid::MalformedVideo);
-        }
-        let size = u64::from(u32::from_be_bytes(rest[..4].try_into().expect("4 bytes")));
-        let kind: [u8; 4] = rest[4..8].try_into().expect("4 bytes");
+struct Mp4Box<'a> {
+    kind: [u8; 4],
+    body: &'a [u8],
+}
+
+impl<'a> Mp4Box<'a> {
+    fn read(bytes: &'a [u8], top: bool) -> Result<(Self, &'a [u8])> {
+        let size = be32(bytes, 0)?;
+        let kind = bytes
+            .get(4..8)
+            .ok_or(Invalid::MalformedVideo)?
+            .try_into()
+            .expect("four bytes");
         let (header, total) = match size {
             // Only a top-level box may extend to end of file.
-            0 if top => (8, rest.len() as u64),
-            1 => {
-                if rest.len() < 16 {
-                    return Err(Invalid::MalformedVideo);
-                }
-                (16, u64::from_be_bytes(rest[8..16].try_into().expect("8")))
-            }
+            0 if top => (8, bytes.len() as u64),
+            1 => (16, be64(bytes, 8)?),
             0..=7 => return Err(Invalid::MalformedVideo),
-            n => (8, n),
+            n => (8, u64::from(n)),
         };
-        if total < header || total > rest.len() as u64 {
-            return Err(Invalid::MalformedVideo);
-        }
-        out.push((kind, &rest[header as usize..total as usize]));
-        offset += total as usize;
+        let total = usize::try_from(total).map_err(|_| Invalid::MalformedVideo)?;
+        let body = bytes.get(header..total).ok_or(Invalid::MalformedVideo)?;
+        Ok((Self { kind, body }, &bytes[total..]))
     }
-    Ok(out)
+}
+
+#[derive(Default)]
+struct BoxReader {
+    seen: usize,
+}
+impl BoxReader {
+    /// Split one container level while enforcing the shared budget across nested boxes.
+    fn boxes<'a>(&mut self, mut bytes: &'a [u8], top: bool) -> Result<Vec<Mp4Box<'a>>> {
+        let mut out = Vec::new();
+        while !bytes.is_empty() {
+            self.seen += 1;
+            if self.seen > MAX_MP4_BOXES {
+                return Err(Invalid::Limit("mp4 boxes"));
+            }
+            let (element, rest) = Mp4Box::read(bytes, top)?;
+            out.push(element);
+            bytes = rest;
+        }
+        Ok(out)
+    }
 }
 fn be32(b: &[u8], at: usize) -> Result<u32> {
     b.get(at..at + 4)
@@ -59,138 +70,162 @@ fn be64(b: &[u8], at: usize) -> Result<u64> {
         .map(|v| u64::from_be_bytes(v.try_into().expect("8")))
         .ok_or(Invalid::MalformedVideo)
 }
-fn full_box(b: &[u8]) -> Result<u8> {
-    let version = *b.first().ok_or(Invalid::MalformedVideo)?;
-    if version > 1 {
-        return Err(Invalid::UnsupportedVideo);
+impl Mp4Box<'_> {
+    fn version(&self) -> Result<u8> {
+        let version = *self.body.first().ok_or(Invalid::MalformedVideo)?;
+        if version > 1 {
+            return Err(Invalid::UnsupportedVideo);
+        }
+        Ok(version)
     }
-    Ok(version)
+    fn duration(&self) -> Result<u64> {
+        let mvhd = self.body;
+        let (scale, value) = if self.version()? == 0 {
+            (be32(mvhd, 12)?, u64::from(be32(mvhd, 16)?))
+        } else {
+            (be32(mvhd, 20)?, be64(mvhd, 24)?)
+        };
+        if scale == 0 || [0, u64::from(u32::MAX), u64::MAX].contains(&value) {
+            return Err(Invalid::MalformedVideo);
+        }
+        // Round up so cited ranges never exceed the declared presentation.
+        let ms = (u128::from(value) * 1000).div_ceil(u128::from(scale));
+        let ms = u64::try_from(ms).map_err(|_| Invalid::Limit("clip duration"))?;
+        if ms > MAX_CLIP_DURATION_MS {
+            return Err(Invalid::Limit("clip duration"));
+        }
+        Ok(ms)
+    }
+    fn dimensions(&self) -> Result<(u32, u32)> {
+        let tkhd = self.body;
+        // Fixed fields after version/flags: v0 20 bytes, v1 32 bytes; then
+        // reserved(8) layer(2) group(2) volume(2) reserved(2) matrix(36).
+        let at = if self.version()? == 0 { 4 + 20 } else { 4 + 32 } + 52;
+        let (w, h) = (be32(tkhd, at)?, be32(tkhd, at + 4)?);
+        if w & 0xffff != 0 || h & 0xffff != 0 {
+            return Err(Invalid::UnsupportedVideo);
+        }
+        let (w, h) = (w >> 16, h >> 16);
+        rgba_len(w, h)?;
+        Ok((w, h))
+    }
 }
-fn duration(mvhd: &[u8]) -> Result<u64> {
-    let (scale, value) = if full_box(mvhd)? == 0 {
-        (be32(mvhd, 12)?, u64::from(be32(mvhd, 16)?))
-    } else {
-        (be32(mvhd, 20)?, be64(mvhd, 24)?)
-    };
-    if scale == 0 || value == 0 || value == u64::from(u32::MAX) || value == u64::MAX {
-        return Err(Invalid::MalformedVideo);
-    }
-    // Round up so cited ranges never exceed the declared presentation.
-    let ms = (u128::from(value) * 1000).div_ceil(u128::from(scale));
-    let ms = u64::try_from(ms).map_err(|_| Invalid::Limit("clip duration"))?;
-    if ms > MAX_CLIP_DURATION_MS {
-        return Err(Invalid::Limit("clip duration"));
-    }
-    Ok(ms)
-}
-fn dimensions(tkhd: &[u8]) -> Result<(u32, u32)> {
-    // Fixed fields after version/flags: v0 20 bytes, v1 32 bytes; then
-    // reserved(8) layer(2) group(2) volume(2) reserved(2) matrix(36).
-    let at = if full_box(tkhd)? == 0 { 4 + 20 } else { 4 + 32 } + 52;
-    let (w, h) = (be32(tkhd, at)?, be32(tkhd, at + 4)?);
-    if w & 0xffff != 0 || h & 0xffff != 0 {
-        return Err(Invalid::UnsupportedVideo);
-    }
-    let (w, h) = (w >> 16, h >> 16);
-    rgba_len(w, h)?;
-    Ok((w, h))
-}
-fn track(trak: &[u8], seen: &mut usize) -> Result<Option<(u32, u32)>> {
-    let mut tkhd = None;
-    let mut handler = None;
-    for (kind, body) in boxes(trak, false, seen)? {
-        match &kind {
-            b"tkhd" if tkhd.is_none() => tkhd = Some(body),
-            b"tkhd" => return Err(Invalid::MalformedVideo),
-            b"mdia" => {
-                for (kind, body) in boxes(body, false, seen)? {
-                    if &kind == b"hdlr" {
-                        if handler.is_some() {
-                            return Err(Invalid::MalformedVideo);
-                        }
-                        full_box(body)?;
-                        handler = Some(
-                            <[u8; 4]>::try_from(body.get(8..12).ok_or(Invalid::MalformedVideo)?)
-                                .expect("4"),
-                        );
-                    }
-                }
+impl BoxReader {
+    fn read_handler(&mut self, mdia: &Mp4Box<'_>, handler: &mut Option<[u8; 4]>) -> Result<()> {
+        for element in self.boxes(mdia.body, false)? {
+            if &element.kind != b"hdlr" {
+                continue;
             }
-            _ => {}
+            if handler.is_some() {
+                return Err(Invalid::MalformedVideo);
+            }
+            element.version()?;
+            *handler = Some(
+                element
+                    .body
+                    .get(8..12)
+                    .ok_or(Invalid::MalformedVideo)?
+                    .try_into()
+                    .expect("four bytes"),
+            );
+        }
+        Ok(())
+    }
+
+    fn track(&mut self, trak: &Mp4Box<'_>) -> Result<Option<(u32, u32)>> {
+        let mut tkhd = None;
+        let mut handler = None;
+        for element in self.boxes(trak.body, false)? {
+            match &element.kind {
+                b"tkhd" if tkhd.is_none() => tkhd = Some(element),
+                b"tkhd" => return Err(Invalid::MalformedVideo),
+                b"mdia" => self.read_handler(&element, &mut handler)?,
+                _ => {}
+            }
+        }
+        let (Some(tkhd), Some(handler)) = (tkhd, handler) else {
+            return Err(Invalid::MalformedVideo);
+        };
+        if &handler == b"vide" {
+            tkhd.dimensions().map(Some)
+        } else {
+            Ok(None)
         }
     }
-    let (Some(tkhd), Some(handler)) = (tkhd, handler) else {
-        return Err(Invalid::MalformedVideo);
-    };
-    if &handler == b"vide" {
-        dimensions(tkhd).map(Some)
-    } else {
-        Ok(None)
+
+    fn movie_header(&mut self, moov: &Mp4Box<'_>) -> Result<ClipHeader> {
+        let mut duration_ms = None;
+        let mut visual = None;
+        for element in self.boxes(moov.body, false)? {
+            match &element.kind {
+                b"mvhd" if duration_ms.is_none() => duration_ms = Some(element.duration()?),
+                b"mvhd" => return Err(Invalid::MalformedVideo),
+                b"mvex" => return Err(Invalid::UnsupportedVideo),
+                b"trak" => add_visual_track(&mut visual, self.track(&element)?)?,
+                _ => {}
+            }
+        }
+        let (Some(duration_ms), Some((width, height))) = (duration_ms, visual) else {
+            return Err(Invalid::MalformedVideo);
+        };
+        Ok(ClipHeader {
+            width,
+            height,
+            duration_ms,
+        })
     }
 }
-/// Accepts only top-level `ftyp` (first), one `moov`, `mdat` and `free`/`skip`
-/// boxes; fragmented (`moof`/`mvex`) and other layouts are unsupported.
-pub fn preflight_mp4(input: &[u8]) -> Result<ClipHeader> {
-    if input.is_empty() || input.len() > MAX_CLIP_BYTES {
-        return Err(Invalid::Limit("clip bytes"));
+fn add_visual_track(visual: &mut Option<(u32, u32)>, track: Option<(u32, u32)>) -> Result<()> {
+    if track.is_some_and(|size| visual.replace(size).is_some()) {
+        return Err(Invalid::UnsupportedVideo);
     }
-    let mut seen = 0;
-    let top = boxes(input, true, &mut seen)?;
+    Ok(())
+}
+
+impl Mp4Box<'_> {
+    fn check_file_type(&self) -> Result<()> {
+        let body = self.body;
+        if body.len() < 8 || !body.len().is_multiple_of(4) {
+            return Err(Invalid::MalformedVideo);
+        }
+        let mut brands = std::iter::once(&body[..4]).chain(body[8..].chunks(4));
+        if !brands.any(|b| BRANDS.iter().any(|k| &k[..] == b)) {
+            return Err(Invalid::UnsupportedVideo);
+        }
+        Ok(())
+    }
+}
+fn movie_box<'a, 'b>(top: &'b [Mp4Box<'a>]) -> Result<&'b Mp4Box<'a>> {
+    let Some((first, rest)) = top.split_first() else {
+        return Err(Invalid::MalformedVideo);
+    };
+    if &first.kind != b"ftyp" {
+        return Err(Invalid::MalformedVideo);
+    }
+    first.check_file_type()?;
     let mut moov = None;
     let mut mdat = false;
-    for (index, (kind, body)) in top.iter().enumerate() {
-        match (index, kind) {
-            (0, b"ftyp") => {
-                if body.len() < 8 || body.len() % 4 != 0 {
-                    return Err(Invalid::MalformedVideo);
-                }
-                let brands = std::iter::once(&body[..4]).chain(body[8..].chunks(4));
-                if !brands
-                    .into_iter()
-                    .any(|b| BRANDS.iter().any(|k| &k[..] == b))
-                {
-                    return Err(Invalid::UnsupportedVideo);
-                }
-            }
-            (0, _) => return Err(Invalid::MalformedVideo),
-            (_, b"ftyp") => return Err(Invalid::MalformedVideo),
-            (_, b"moov") if moov.is_none() => moov = Some(*body),
-            (_, b"moov") => return Err(Invalid::MalformedVideo),
-            (_, b"mdat") => mdat = true,
-            (_, b"free" | b"skip") => {}
+    for element in rest {
+        match &element.kind {
+            b"moov" if moov.is_none() => moov = Some(element),
+            b"ftyp" | b"moov" => return Err(Invalid::MalformedVideo),
+            b"mdat" => mdat = true,
+            b"free" | b"skip" => {}
             _ => return Err(Invalid::UnsupportedVideo),
         }
     }
-    let (Some(moov), true) = (moov, mdat) else {
-        return Err(Invalid::MalformedVideo);
-    };
-    let children = boxes(moov, false, &mut seen)?;
-    let mut duration_ms = None;
-    let mut visual = None;
-    for (kind, body) in children {
-        match &kind {
-            b"mvhd" if duration_ms.is_none() => duration_ms = Some(duration(body)?),
-            b"mvhd" => return Err(Invalid::MalformedVideo),
-            b"mvex" => return Err(Invalid::UnsupportedVideo),
-            b"trak" => {
-                if let Some(size) = track(body, &mut seen)? {
-                    if visual.is_some() {
-                        return Err(Invalid::UnsupportedVideo);
-                    }
-                    visual = Some(size);
-                }
-            }
-            _ => {}
-        }
+    moov.filter(|_| mdat).ok_or(Invalid::MalformedVideo)
+}
+
+/// Accepts only top-level `ftyp` (first), one `moov`, `mdat` and `free`/`skip`
+/// boxes; fragmented (`moof`/`mvex`) and other layouts are unsupported.
+pub fn preflight_mp4(input: &[u8]) -> Result<ClipHeader> {
+    if !(1..=MAX_CLIP_BYTES).contains(&input.len()) {
+        return Err(Invalid::Limit("clip bytes"));
     }
-    let (Some(duration_ms), Some((width, height))) = (duration_ms, visual) else {
-        return Err(Invalid::MalformedVideo);
-    };
-    Ok(ClipHeader {
-        width,
-        height,
-        duration_ms,
-    })
+    let mut reader = BoxReader::default();
+    let top = reader.boxes(input, true)?;
+    reader.movie_header(movie_box(&top)?)
 }
 
 /// Minimal well-formed clip for tests: ftyp, moov(mvhd, one `vide` trak), mdat.

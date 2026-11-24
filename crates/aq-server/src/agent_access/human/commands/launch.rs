@@ -17,9 +17,7 @@ async fn worker(state: &AppState, node: Uuid) -> Result<()> {
     Ok(())
 }
 pub(in crate::agent_access::human) async fn projects(
-    State(state): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(actor): RequireOwner,
+    (State(state), Extension(r), RequireOwner(actor)): OwnerRoute,
     Path(node): Path<Uuid>,
 ) -> Result<Json<Value>> {
     owner(&r, &actor).await?;
@@ -45,14 +43,12 @@ pub(in crate::agent_access::human) async fn projects(
     Ok(Json(json!({"projects":projects})))
 }
 pub(in crate::agent_access::human) async fn create(
-    State(state): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(actor): RequireOwner,
+    (State(state), Extension(r), RequireOwner(actor)): OwnerRoute,
     Path((project, node)): Path<(Uuid, Uuid)>,
     bytes: Bytes,
 ) -> Result<Response> {
     owner(&r, &actor).await?;
-    let request = Create::parse(&bytes)?;
+    let request = parse(&bytes)?;
     if !matches!(request.task_state, TaskState::Active) {
         return Err(invalid());
     }
@@ -79,5 +75,13 @@ pub(in crate::agent_access::human) async fn create(
             ));
         }
     }
-    outcome(create_on_node(&state, &r, &actor, project, bytes, Some(node)).await?)
+    outcome(
+        Owner {
+            state: &state,
+            runtime: &r,
+            actor: &actor,
+        }
+        .create(project, bytes, Some(node))
+        .await?,
+    )
 }

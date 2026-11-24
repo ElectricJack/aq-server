@@ -98,40 +98,113 @@ pub(super) async fn connect(
     }
     let mut runtime = s.runtime.0.lock().await;
     let screen = screen(&mut runtime, id)?;
-    if let Some(expected) = c.expected_generation
-        && (screen.generation != expected
-            || !screen
-                .controller
-                .is_some_and(|(client, a, _)| client == c.client_id && a == actor))
-    {
-        return Err(conflict("Terminal control changed; reconnect"));
-    }
-    if screen.commands.values().any(|cmd| {
-        cmd.disposition == "unknown"
-            || (cmd.disposition == "dispatched" && now() - cmd.updated > 30000)
-    }) {
-        return Err(conflict(
-            "Input delivery remains uncertain; wait for the worker acknowledgement",
-        ));
-    }
-    if !screen
-        .controller
-        .is_some_and(|(client, a, until)| client == c.client_id && a == actor && until > now())
-    {
-        screen.generation = screen
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| conflict("Terminal controller generation exhausted"))?;
-        for cmd in screen.commands.values_mut() {
-            if cmd.disposition == "queued" {
-                cmd.disposition = "rejected".into();
-            }
-        }
-    }
+    screen.connect(&c, actor)?;
     screen.controller = Some((c.client_id, actor, now() + 15000));
     Ok(Json(
         json!({"generation":screen.generation,"expires_at_ms":now()+15000}),
     ))
+}
+impl Screen {
+    pub(super) fn controls(&self, client: Uuid, actor: Uuid) -> bool {
+        self.controller_expiry(client, actor)
+            .is_some_and(|t| t > now())
+    }
+    fn controller_expiry(&self, client: Uuid, actor: Uuid) -> Option<i64> {
+        self.controller
+            .filter(|(c, a, _)| *c == client && *a == actor)
+            .map(|(_, _, expiry)| expiry)
+    }
+    fn connect(&mut self, request: &Connect, actor: Uuid) -> Result<()> {
+        let expiry = self.controller_expiry(request.client_id, actor);
+        if request
+            .expected_generation
+            .is_some_and(|g| g != self.generation || expiry.is_none())
+        {
+            return Err(conflict("Terminal control changed; reconnect"));
+        }
+        if self.commands.values().any(Command::uncertain) {
+            return Err(conflict(
+                "Input delivery remains uncertain; wait for the worker acknowledgement",
+            ));
+        }
+        if expiry.is_none_or(|t| t <= now()) {
+            self.take_control()?;
+        }
+        Ok(())
+    }
+    fn take_control(&mut self) -> Result<()> {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| conflict("Terminal controller generation exhausted"))?;
+        for cmd in self.commands.values_mut() {
+            if cmd.disposition == "queued" {
+                cmd.disposition = "rejected".into();
+            }
+        }
+        Ok(())
+    }
+    fn enqueue(&mut self, v: Input, payload: Value) -> Result<Json<Value>> {
+        if let Some(old) = self.commands.get(&v.operation_id) {
+            if old.generation == v.generation && old.payload == payload {
+                return Ok(Json(json!({"disposition":old.disposition})));
+            }
+            return Err(conflict("Input operation identity is already used"));
+        }
+        self.commands.retain(|_, cmd| {
+            now() - cmd.updated < 30000
+                || cmd.disposition == "queued"
+                || cmd.disposition == "dispatched"
+        });
+        if self.commands.len() >= 128
+            || self
+                .commands
+                .values()
+                .filter(|c| c.disposition == "queued")
+                .count()
+                >= 16
+        {
+            return Err(conflict("Terminal input is busy"));
+        }
+        self.input_sequence = self
+            .input_sequence
+            .checked_add(1)
+            .ok_or_else(|| conflict("Input sequence exhausted"))?;
+        let sequence = self.input_sequence;
+        self.commands.insert(
+            v.operation_id,
+            Command {
+                sequence,
+                operation_id: v.operation_id,
+                generation: v.generation,
+                payload,
+                disposition: "queued".into(),
+                updated: now(),
+            },
+        );
+        Ok(Json(json!({"disposition":"queued"})))
+    }
+}
+impl Command {
+    fn uncertain(&self) -> bool {
+        self.disposition == "unknown"
+            || (self.disposition == "dispatched" && now() - self.updated > 30000)
+    }
+}
+impl Input {
+    fn payload(&self) -> Result<Value> {
+        Ok(match (&self.bytes, self.columns, self.rows) {
+            (Some(bytes), None, None) if !bytes.is_empty() && bytes.len() <= 4096 => {
+                json!({"bytes":bytes})
+            }
+            (None, Some(columns), Some(rows))
+                if (2..=500).contains(&columns) && (1..=300).contains(&rows) =>
+            {
+                json!({"columns":columns,"rows":rows})
+            }
+            _ => return Err(bad("Invalid terminal input or size")),
+        })
+    }
 }
 async fn read(
     State(s): State<Service>,
@@ -143,10 +216,7 @@ async fn read(
     let v = session(&s, id).await?;
     let mut runtime = s.runtime.0.lock().await;
     let screen = screen(&mut runtime, id)?;
-    let controlling = live(&v)
-        && screen
-            .controller
-            .is_some_and(|(client, a, until)| client == q.client_id && a == actor && until > now());
+    let controlling = live(&v) && screen.controls(q.client_id, actor);
     Ok(Json(
         json!({"session":v,"sequence":screen.sequence,"snapshot":if screen.sequence>q.after {Some(&screen.text)}else{None},"generation":screen.generation,"controlling":controlling,"observed_at_ms":screen.seen,"server_time_ms":now()}),
     ))
@@ -162,64 +232,13 @@ async fn input(
     if !live(&session(&s, id).await?) {
         return Err(conflict("The agent is not connected"));
     }
-    let payload = match (&v.bytes, v.columns, v.rows) {
-        (Some(bytes), None, None) if !bytes.is_empty() && bytes.len() <= 4096 => {
-            json!({"bytes":bytes})
-        }
-        (None, Some(columns), Some(rows))
-            if (2..=500).contains(&columns) && (1..=300).contains(&rows) =>
-        {
-            json!({"columns":columns,"rows":rows})
-        }
-        _ => return Err(bad("Invalid terminal input or size")),
-    };
+    let payload = v.payload()?;
     let mut runtime = s.runtime.0.lock().await;
     let screen = screen(&mut runtime, id)?;
-    if screen.generation != v.generation
-        || !screen
-            .controller
-            .is_some_and(|(c, a, t)| c == v.client_id && a == actor && t > now())
-    {
+    if screen.generation != v.generation || !screen.controls(v.client_id, actor) {
         return Err(conflict("Terminal control changed; reconnect"));
     }
-    if let Some(old) = screen.commands.get(&v.operation_id) {
-        if old.generation == v.generation && old.payload == payload {
-            return Ok(Json(json!({"disposition":old.disposition})));
-        }
-        return Err(conflict("Input operation identity is already used"));
-    }
-    screen.commands.retain(|_, cmd| {
-        now() - cmd.updated < 30000
-            || cmd.disposition == "queued"
-            || cmd.disposition == "dispatched"
-    });
-    if screen.commands.len() >= 128
-        || screen
-            .commands
-            .values()
-            .filter(|c| c.disposition == "queued")
-            .count()
-            >= 16
-    {
-        return Err(conflict("Terminal input is busy"));
-    }
-    screen.input_sequence = screen
-        .input_sequence
-        .checked_add(1)
-        .ok_or_else(|| conflict("Input sequence exhausted"))?;
-    let sequence = screen.input_sequence;
-    screen.commands.insert(
-        v.operation_id,
-        Command {
-            sequence,
-            operation_id: v.operation_id,
-            generation: v.generation,
-            payload,
-            disposition: "queued".into(),
-            updated: now(),
-        },
-    );
-    Ok(Json(json!({"disposition":"queued"})))
+    screen.enqueue(v, payload)
 }
 async fn receipt(
     State(s): State<Service>,

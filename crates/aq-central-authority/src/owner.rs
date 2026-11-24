@@ -166,20 +166,23 @@ fn snapshot(row: PgRow, h: &Head) -> OwnerResult<Snapshot> {
     let revision: i64 = row.try_get("revision")?;
     let generation: i64 = row.try_get("generation")?;
     let session_id: Uuid = row.try_get("session_id")?;
-    if revision < 1
-        || generation < 1
-        || run.plan().generation != generation as u64
-        || run.plan().subject.actor_id() != h.actor
-        || run.plan().subject.conversation_id() != h.conversation
-        || session(run.plan()) != (h.authority, session_id)
-        || generation as u64 > h.generation
-    {
+    if revision < 1 || !h.matches_snapshot(run.plan(), generation, session_id) {
         return Err(OwnerError::Storage);
     }
     Ok(Snapshot {
         revision: revision as u64,
         run,
     })
+}
+impl Head {
+    fn matches_snapshot(&self, plan: &CentralPlan, generation: i64, session_id: Uuid) -> bool {
+        generation > 0
+            && plan.generation == generation as u64
+            && plan.subject.actor_id() == self.actor
+            && plan.subject.conversation_id() == self.conversation
+            && session(plan) == (self.authority, session_id)
+            && generation as u64 <= self.generation
+    }
 }
 async fn load(
     tx: &mut Transaction<'_, Postgres>,
@@ -285,8 +288,7 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
         &self,
         binding: &CentralBinding,
         launch: HostLaunchRef,
-        ttl_ms: u64,
-        clock: Clock,
+        window: PermitWindow,
     ) -> OwnerResult<Receipt> {
         bounded(async {
             let mut tx = begin(&self.pool).await?;
@@ -297,16 +299,14 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
             let dispatch = if let Some(dispatch) = old.run.association() {
                 dispatch.clone()
             } else {
-                old.run
-                    .plan()
-                    .dispatch(issue(&old.run, 1, ttl_ms, &clock)?)?
+                old.run.plan().dispatch(window.issue(&old.run, 1)?)?
             };
             let event = Event::CommitStart { launch, dispatch };
             event.validate()?;
             self.verifier
                 .verify_event(&mut tx, &old.run, &event)
                 .await?;
-            let next = old.run.transition(&event, clock)?;
+            let next = old.run.transition(&event, window.clock)?;
             let receipt = save(&mut tx, old, next).await?;
             tx.commit().await?;
             Ok(receipt)
@@ -320,8 +320,7 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
         &self,
         binding: &CentralBinding,
         prior_sequence: u64,
-        ttl_ms: u64,
-        clock: Clock,
+        window: PermitWindow,
     ) -> OwnerResult<Receipt> {
         bounded(async {
             let mut tx = begin(&self.pool).await?;
@@ -329,7 +328,7 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
             self.verifier
                 .authorize_plan(&mut tx, old.run.plan())
                 .await?;
-            let tick = old.run.transition(&Event::Tick, clock.clone())?;
+            let tick = old.run.transition(&Event::Tick, window.clock.clone())?;
             let next = if !matches!(tick.decision, Decision::Applied)
                 || !matches!(
                     tick.state.phase(),
@@ -354,8 +353,9 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
                 }
             } else {
                 let sequence = prior_sequence.checked_add(1).ok_or(OwnerError::Capacity)?;
-                let permit = issue(&tick.state, sequence, ttl_ms, &clock)?;
-                tick.state.transition(&Event::Renew { permit }, clock)?
+                let permit = window.issue(&tick.state, sequence)?;
+                tick.state
+                    .transition(&Event::Renew { permit }, window.clock)?
             };
             let receipt = save(&mut tx, old, next).await?;
             tx.commit().await?;
@@ -440,24 +440,36 @@ impl<V: EvidenceVerifier> SessionOwner<V> {
 pub type Read<'a> =
     std::pin::Pin<Box<dyn Future<Output = OwnerResult<Option<Snapshot>>> + Send + 'a>>;
 
-fn issue(run: &Run, sequence: u64, ttl_ms: u64, clock: &Clock) -> OwnerResult<PermitData> {
-    clock.validate()?;
-    ensure(
-        ttl_ms > 0 && ttl_ms <= run.plan().max_permit_ms && ttl_ms <= MAX_PERMIT_MS,
-        "permit duration",
-    )?;
-    let expires = clock
-        .boot_ms
-        .checked_add(ttl_ms)
-        .ok_or(Error::Invalid("permit overflow"))?
-        .min(run.original_deadline_boot_ms());
-    let permit = PermitData {
-        binding: run.plan().binding()?,
-        machine_boot_id: clock.machine_boot_id,
-        sequence,
-        issued_boot_ms: clock.boot_ms,
-        expires_boot_ms: expires,
-    };
-    permit.validate()?;
-    Ok(permit)
+/// A permit's requested lifetime on the current machine boot.
+pub struct PermitWindow {
+    ttl_ms: u64,
+    clock: Clock,
+}
+impl PermitWindow {
+    pub fn new(ttl_ms: u64, clock: Clock) -> Self {
+        Self { ttl_ms, clock }
+    }
+    fn issue(&self, run: &Run, sequence: u64) -> OwnerResult<PermitData> {
+        let clock = &self.clock;
+        let ttl_ms = self.ttl_ms;
+        clock.validate()?;
+        ensure(
+            ttl_ms > 0 && ttl_ms <= run.plan().max_permit_ms && ttl_ms <= MAX_PERMIT_MS,
+            "permit duration",
+        )?;
+        let expires = clock
+            .boot_ms
+            .checked_add(ttl_ms)
+            .ok_or(Error::Invalid("permit overflow"))?
+            .min(run.original_deadline_boot_ms());
+        let permit = PermitData {
+            binding: run.plan().binding()?,
+            machine_boot_id: clock.machine_boot_id,
+            sequence,
+            issued_boot_ms: clock.boot_ms,
+            expires_boot_ms: expires,
+        };
+        permit.validate()?;
+        Ok(permit)
+    }
 }

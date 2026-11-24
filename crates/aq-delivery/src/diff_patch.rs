@@ -40,6 +40,22 @@ pub struct Repository {
     pub binding_generation: u64,
 }
 
+/// Commit endpoints for the patch, under one repository binding.
+#[derive(Clone, Copy)]
+pub struct CommitRange<'a> {
+    pub base: &'a str,
+    pub target: &'a str,
+}
+impl CommitRange<'_> {
+    fn matches(self, result: &Value) -> bool {
+        oid_hex(&result["base"]) == Some(self.base)
+            && oid_hex(&result["target"]) == Some(self.target)
+    }
+    fn is_valid(self) -> bool {
+        hex40(self.base) && hex40(self.target)
+    }
+}
+
 /// A verified patch: every field was checked against the request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Patch {
@@ -116,10 +132,14 @@ async fn call(
             crate::DeliveryError::Protocol => PatchError::Protocol,
             _ => PatchError::Unavailable,
         })?;
+    decode_reply(&raw, id)
+}
+
+fn decode_reply(raw: &[u8], id: Uuid) -> Result<Value, PatchError> {
     if raw.len() > MAX_RESPONSE {
         return Err(PatchError::Protocol);
     }
-    let v: Value = serde_json::from_slice(&raw).map_err(|_| PatchError::Protocol)?;
+    let v: Value = serde_json::from_slice(raw).map_err(|_| PatchError::Protocol)?;
     if v["protocol_version"] != 1 || v["request_id"] != id.to_string() {
         return Err(PatchError::Protocol);
     }
@@ -174,32 +194,35 @@ fn supported_limit(capabilities: &Value) -> Result<u64, PatchError> {
 pub async fn read(
     socket: &Path,
     repository: Repository,
-    base: &str,
-    target: &str,
+    range: CommitRange<'_>,
     max_bytes: u64,
 ) -> Result<Patch, PatchError> {
-    if !hex40(base) || !hex40(target) || max_bytes == 0 {
+    if !range.is_valid() || max_bytes == 0 {
         return Err(PatchError::Protocol);
     }
     let limit = capability(socket).await?.min(max_bytes);
-    let params = json!({"base": typed(base), "target": typed(target), "max_bytes": limit});
+    let params =
+        json!({"base": typed(range.base), "target": typed(range.target), "max_bytes": limit});
     let result = match call(socket, Some(repository), OPERATION, params).await {
         // The bound that applied is the one this side asked for.
         Err(PatchError::LimitExceeded { .. }) => return Err(PatchError::LimitExceeded { limit }),
         other => other?,
     };
-    verify(&result, base, target, limit)
+    verify(&result, range, limit)
 }
 
 /// Checks one success result against the request before any byte is exposed.
-fn verify(result: &Value, base: &str, target: &str, limit: u64) -> Result<Patch, PatchError> {
+fn verify(result: &Value, range: CommitRange<'_>, limit: u64) -> Result<Patch, PatchError> {
     let size = result["size"].as_u64().ok_or(PatchError::Protocol)?;
     let sha256 = result["sha256"].as_str().ok_or(PatchError::Protocol)?;
-    if result["format"] != FORMAT
-        || oid_hex(&result["base"]) != Some(base)
-        || oid_hex(&result["target"]) != Some(target)
-        || !lowercase_hex(sha256, 64)
-        || result["patch"]["encoding"] != "base64"
+    let format_matches = result["format"] == FORMAT && result["patch"]["encoding"] == "base64";
+    if ![
+        format_matches,
+        range.matches(result),
+        lowercase_hex(sha256, 64),
+    ]
+    .into_iter()
+    .all(|valid| valid)
     {
         return Err(PatchError::Protocol);
     }
@@ -207,9 +230,18 @@ fn verify(result: &Value, base: &str, target: &str, limit: u64) -> Result<Patch,
     if size > limit {
         return Err(PatchError::LimitExceeded { limit });
     }
-    let text = result["patch"]["value"]
-        .as_str()
-        .ok_or(PatchError::Protocol)?;
+    let bytes = decode_patch(&result["patch"], size, sha256)?;
+    Ok(Patch {
+        base: range.base.into(),
+        target: range.target.into(),
+        size,
+        sha256: sha256.into(),
+        bytes,
+    })
+}
+
+fn decode_patch(patch: &Value, size: u64, sha256: &str) -> Result<Vec<u8>, PatchError> {
+    let text = patch["value"].as_str().ok_or(PatchError::Protocol)?;
     // Padded base64 of `size` bytes has exactly this many characters.
     if text.len() as u64 != size.div_ceil(3) * 4 {
         return Err(PatchError::Protocol);
@@ -218,13 +250,7 @@ fn verify(result: &Value, base: &str, target: &str, limit: u64) -> Result<Patch,
     if bytes.len() as u64 != size || hex::encode(Sha256::digest(&bytes)) != sha256 {
         return Err(PatchError::Protocol);
     }
-    Ok(Patch {
-        base: base.into(),
-        target: target.into(),
-        size,
-        sha256: sha256.into(),
-        bytes,
-    })
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -233,6 +259,10 @@ mod tests {
     const BASE: &str = "957a001e392c4405b00ea1f11a1e621b19842447";
     const HEAD: &str = "105c94ad4a258ab7b943f14bbd31db935ec9af5e";
     const PATCH: &[u8] = b"diff --git a/f b/f\nindex 1111111..2222222 100644\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n";
+    const RANGE: CommitRange<'_> = CommitRange {
+        base: BASE,
+        target: HEAD,
+    };
     fn answer(bytes: &[u8]) -> Value {
         json!({
             "format": FORMAT, "base": typed(BASE), "target": typed(HEAD),
@@ -242,22 +272,14 @@ mod tests {
     }
     #[test]
     fn a_complete_answer_yields_the_exact_bytes() {
-        let patch = verify(&answer(PATCH), BASE, HEAD, 4096).unwrap();
+        let patch = verify(&answer(PATCH), RANGE, 4096).unwrap();
         assert_eq!(patch.bytes, PATCH);
         assert_eq!(patch.size, PATCH.len() as u64);
         assert_eq!(patch.sha256, hex::encode(Sha256::digest(PATCH)));
         // Binary content survives, including a zero length patch.
         let binary: Vec<u8> = (0..=255).collect();
-        assert_eq!(
-            verify(&answer(&binary), BASE, HEAD, 4096).unwrap().bytes,
-            binary
-        );
-        assert!(
-            verify(&answer(b""), BASE, HEAD, 4096)
-                .unwrap()
-                .bytes
-                .is_empty()
-        );
+        assert_eq!(verify(&answer(&binary), RANGE, 4096).unwrap().bytes, binary);
+        assert!(verify(&answer(b""), RANGE, 4096).unwrap().bytes.is_empty());
     }
     #[test]
     fn every_deviation_from_the_request_or_the_digest_refuses_the_bytes() {
@@ -265,7 +287,7 @@ mod tests {
         let with = |f: &dyn Fn(&mut Value)| {
             let mut v = ok.clone();
             f(&mut v);
-            verify(&v, BASE, HEAD, 4096)
+            verify(&v, RANGE, 4096)
         };
         assert_eq!(
             with(&|v| v["format"] = json!("other")),
@@ -317,12 +339,12 @@ mod tests {
     #[test]
     fn a_patch_over_the_bound_is_refused_before_it_is_decoded() {
         assert_eq!(
-            verify(&answer(PATCH), BASE, HEAD, PATCH.len() as u64 - 1),
+            verify(&answer(PATCH), RANGE, PATCH.len() as u64 - 1),
             Err(PatchError::LimitExceeded {
                 limit: PATCH.len() as u64 - 1
             })
         );
-        assert!(verify(&answer(PATCH), BASE, HEAD, PATCH.len() as u64).is_ok());
+        assert!(verify(&answer(PATCH), RANGE, PATCH.len() as u64).is_ok());
     }
     #[test]
     fn the_capability_needs_the_operation_and_a_limit() {

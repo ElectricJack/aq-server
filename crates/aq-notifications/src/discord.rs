@@ -45,20 +45,7 @@ impl Webhook {
             return Err(Error::Invalid);
         }
         let mut url = Url::parse(secret).map_err(|_| Error::Invalid)?;
-        let production = url.scheme() == "https"
-            && url.host_str() == Some("discord.com")
-            && url.port().is_none();
-        let local = fixture
-            && url.scheme() == "http"
-            && url
-                .host_str()
-                .is_some_and(|h| h.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback()));
-        if !(production || local)
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
+        if !allowed_endpoint(&url, fixture) {
             return Err(Error::Invalid);
         }
         // Discord hands out the unversioned `/api/webhooks/<id>/<token>` form;
@@ -67,21 +54,30 @@ impl Webhook {
             let pinned = format!("/api/v10/webhooks/{rest}");
             url.set_path(&pinned);
         }
-        let parts: Vec<_> = url.path().split('/').collect();
-        if parts.len() != 6
-            || parts[..4] != ["", "api", "v10", "webhooks"]
-            || !snowflake(parts[4])
-            || !(16..=256).contains(&parts[5].len())
-            || !parts[5]
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-        {
-            return Err(Error::Invalid);
-        }
-        let id = parts[4].to_owned();
+        let id = webhook_id(url.path()).ok_or(Error::Invalid)?.to_owned();
         url.set_query(Some("wait=true"));
         Ok(Self { url, id })
     }
+}
+fn allowed_endpoint(url: &Url, fixture: bool) -> bool {
+    let discord =
+        url.scheme() == "https" && url.host_str() == Some("discord.com") && url.port().is_none();
+    let loopback = fixture
+        && url.scheme() == "http"
+        && url.host_str().is_some_and(|host| {
+            host.parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        });
+    (discord || loopback) && crate::bare_endpoint(url)
+}
+fn webhook_id(path: &str) -> Option<&str> {
+    let path = path.strip_prefix("/api/v10/webhooks/")?;
+    let (id, token) = path.split_once('/')?;
+    let valid_token = (16..=256).contains(&token.len())
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b));
+    (snowflake(id) && valid_token).then_some(id)
 }
 pub struct Discord {
     client: Client,
@@ -106,12 +102,42 @@ impl Discord {
             .json(&body)
             .send()
             .await;
-        let Ok(mut response) = response else {
+        let Ok(response) = response else {
             return Ok(Exchange::unknown());
         };
         let status = response.status().as_u16();
-        let headers = response.headers().clone();
-        let delay_header = |name: &str| {
+        let limits = RateHeaders::read(response.headers());
+        let bytes = bounded_body(response).await;
+        Ok(limits.exchange(status, bytes.as_deref(), &endpoint.id))
+    }
+}
+
+async fn bounded_body(mut response: reqwest::Response) -> Option<Vec<u8>> {
+    const MAX_BYTES: usize = 65536;
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_BYTES as u64)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > MAX_BYTES - bytes.len() {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Some(bytes)
+}
+
+struct RateHeaders {
+    global: bool,
+    reset: Option<u64>,
+    retry: Option<u64>,
+}
+impl RateHeaders {
+    fn read(headers: &reqwest::header::HeaderMap) -> Self {
+        let delay = |name: &str| {
             headers
                 .get(name)
                 .and_then(|v| v.to_str().ok())
@@ -123,100 +149,87 @@ impl Discord {
             || headers
                 .get("x-ratelimit-scope")
                 .is_some_and(|v| v == "global");
-        let reset = if headers
+        let exhausted = headers
             .get("x-ratelimit-remaining")
-            .is_some_and(|v| v == "0")
-        {
-            delay_header("x-ratelimit-reset-after")
-        } else {
-            None
-        };
-        let throttle = reset.map(|after_ms| Throttle {
-            after_ms,
-            scope: if global {
-                ThrottleScope::Provider
-            } else {
-                ThrottleScope::Destination
-            },
-        });
-        if response.content_length().is_some_and(|n| n > 65536) {
-            return Ok(Exchange {
-                outcome: TransportOutcome::Unknown,
-                throttle,
-            });
+            .is_some_and(|v| v == "0");
+        let reset = exhausted
+            .then(|| delay("x-ratelimit-reset-after"))
+            .flatten();
+        Self {
+            global,
+            reset,
+            retry: delay("retry-after"),
         }
-        let mut bytes = Vec::new();
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) if bytes.len() + chunk.len() <= 65536 => {
-                    bytes.extend_from_slice(&chunk)
+    }
+    fn exchange(&self, status: u16, bytes: Option<&[u8]>, webhook_id: &str) -> Exchange {
+        let outcome = match (status, bytes) {
+            (_, None) => TransportOutcome::Unknown,
+            (200, Some(bytes)) => acceptance(bytes, webhook_id),
+            (429, Some(bytes)) => {
+                if let Some(exchange) = self.limited(bytes) {
+                    return exchange;
                 }
-                Ok(None) => break,
-                _ => {
-                    return Ok(Exchange {
-                        outcome: TransportOutcome::Unknown,
-                        throttle,
-                    });
-                }
+                TransportOutcome::Unknown
             }
-        }
-        let outcome = match status {
-            200 => {
-                #[derive(Deserialize)]
-                struct Receipt {
-                    id: String,
-                    webhook_id: String,
-                }
-                match serde_json::from_slice::<Receipt>(&bytes) {
-                    Ok(r) if snowflake(&r.id) && r.webhook_id == endpoint.id => {
-                        TransportOutcome::Accepted { message_id: r.id }
-                    }
-                    _ => TransportOutcome::Unknown,
-                }
-            }
-            429 => {
-                #[derive(Deserialize)]
-                struct RateLimit {
-                    retry_after: f64,
-                    global: bool,
-                }
-                let parsed = serde_json::from_slice::<RateLimit>(&bytes).ok();
-                let delay = parsed
-                    .as_ref()
-                    .and_then(|r| seconds_value_ms(r.retry_after))
-                    .into_iter()
-                    .chain(delay_header("retry-after"))
-                    .chain(reset)
-                    .max();
-                if let Some(retry_after_ms) = delay {
-                    let global = global || parsed.is_some_and(|r| r.global);
-                    return Ok(Exchange {
-                        outcome: TransportOutcome::RateLimited {
-                            retry_after_ms,
-                            global,
-                        },
-                        throttle: Some(Throttle {
-                            after_ms: retry_after_ms,
-                            scope: if global {
-                                ThrottleScope::Provider
-                            } else {
-                                ThrottleScope::Destination
-                            },
-                        }),
-                    });
-                } else {
-                    TransportOutcome::Unknown
-                }
-            }
-            400 | 413 | 422 => TransportOutcome::Permanent(FailureReason::InvalidPayload),
-            401 | 403 | 404 | 410 => {
+            (400 | 413 | 422, _) => TransportOutcome::Permanent(FailureReason::InvalidPayload),
+            (401 | 403 | 404 | 410, _) => {
                 TransportOutcome::Permanent(FailureReason::DestinationUnavailable)
             }
-            // Gateway/service failures may arrive after Discord accepted a send.
-            // A retryable HTTP class does not prove absence of an external effect.
+            // A service failure may arrive after Discord accepted the send.
             _ => TransportOutcome::Unknown,
         };
-        Ok(Exchange { outcome, throttle })
+        Exchange {
+            outcome,
+            throttle: self.reset.map(|ms| Throttle::new(ms, self.global)),
+        }
+    }
+    fn limited(&self, bytes: &[u8]) -> Option<Exchange> {
+        #[derive(Deserialize)]
+        struct RateLimit {
+            retry_after: f64,
+            global: bool,
+        }
+        let parsed = serde_json::from_slice::<RateLimit>(bytes).ok();
+        let retry_after_ms = parsed
+            .as_ref()
+            .and_then(|r| seconds_value_ms(r.retry_after))
+            .into_iter()
+            .chain(self.retry)
+            .chain(self.reset)
+            .max()?;
+        let global = self.global || parsed.is_some_and(|r| r.global);
+        Some(Exchange {
+            outcome: TransportOutcome::RateLimited {
+                retry_after_ms,
+                global,
+            },
+            throttle: Some(Throttle::new(retry_after_ms, global)),
+        })
+    }
+}
+impl Throttle {
+    fn new(after_ms: u64, global: bool) -> Self {
+        let scope = if global {
+            ThrottleScope::Provider
+        } else {
+            ThrottleScope::Destination
+        };
+        Self { after_ms, scope }
+    }
+}
+fn acceptance(bytes: &[u8], webhook_id: &str) -> TransportOutcome {
+    #[derive(Deserialize)]
+    struct Receipt {
+        id: String,
+        webhook_id: String,
+    }
+    match serde_json::from_slice::<Receipt>(bytes) {
+        Ok(receipt) if snowflake(&receipt.id) && receipt.webhook_id == webhook_id => {
+            TransportOutcome::Accepted {
+                message_id: receipt.id,
+            }
+        }
+        _ => TransportOutcome::Unknown,
     }
 }
 fn seconds_ms(v: &str) -> Option<u64> {

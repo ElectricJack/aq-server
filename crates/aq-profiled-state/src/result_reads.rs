@@ -54,16 +54,23 @@ pub async fn is_owner(conn: &mut PgConnection, actor: Uuid) -> sqlx::Result<bool
     Ok(role.as_deref() == Some("owner"))
 }
 
+pub struct ReportPage {
+    pub with_v2: bool,
+    pub project: Option<Uuid>,
+    pub after: Option<Uuid>,
+    pub limit: i64,
+}
+
 /// Report ids after `after` in UUID order (not chronological), at most
 /// `limit` of them, in `project` when given. Reports of a v2-accepted attempt
 /// are included only with `with_v2`.
-pub async fn page_ids(
-    conn: &mut PgConnection,
-    with_v2: bool,
-    project: Option<Uuid>,
-    after: Option<Uuid>,
-    limit: i64,
-) -> sqlx::Result<Vec<Uuid>> {
+pub async fn page_ids(conn: &mut PgConnection, page: ReportPage) -> sqlx::Result<Vec<Uuid>> {
+    let ReportPage {
+        with_v2,
+        project,
+        after,
+        limit,
+    } = page;
     sqlx::query_scalar("SELECT r.report_id FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE ($4 OR NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=r.attempt_id)) AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')=$1::text) AND ($2::uuid IS NULL OR r.report_id>$2) ORDER BY r.report_id LIMIT $3")
         .bind(project).bind(after).bind(limit).bind(with_v2)
         .fetch_all(conn).await
@@ -175,43 +182,94 @@ pub async fn read_report(conn: &mut PgConnection, report_id: Uuid) -> sqlx::Resu
     else {
         return Ok(None);
     };
-    let bytes: Vec<u8> = row.get("report_bytes");
-    let report = result_record::decode_report(&bytes).map_err(bad("report"))?;
-    let digest = result_record::report_digest(&report).map_err(bad("report"))?;
+    Stored::decode(row, report_id).map(Some)
+}
+impl Stored {
+    fn decode(row: PgRow, report_id: Uuid) -> sqlx::Result<Self> {
+        let bytes: Vec<u8> = row.get("report_bytes");
+        let report = result_record::decode_report(&bytes).map_err(bad("report"))?;
+        let node_id = validate_report_row(&row, &report, report_id, &bytes)?;
+        let receipt_bytes: Vec<u8> = row.get("receipt_bytes");
+        let receipt =
+            result_record::decode_receipt(&receipt_bytes, &report).map_err(bad("receipt"))?;
+        if canonical(&receipt).map_err(bad("receipt"))? != receipt_bytes {
+            return Err(invalid("receipt"));
+        }
+        Ok(Self {
+            row,
+            report,
+            receipt,
+            node_id,
+        })
+    }
+}
+fn validate_report_row(
+    row: &PgRow,
+    report: &ResultReport,
+    report_id: Uuid,
+    bytes: &[u8],
+) -> sqlx::Result<Uuid> {
+    let digest = result_record::report_digest(report).map_err(bad("report"))?;
     let SessionIdentity::Remote {
         node_id, boot_id, ..
     } = report.binding.session
     else {
         return Err(invalid("session"));
     };
-    if canonical(&report).map_err(bad("report"))? != bytes
-        || digest.as_str() != row.get::<String, _>("report_digest")
-        || report.report_id != report_id
-        || report.binding.attempt_id != row.get::<Uuid, _>("attempt_id")
-        || node_id != row.get::<Uuid, _>("node_id")
-        || report.operation_id != row.get::<Uuid, _>("operation_id")
-        || report.identity.node_id != node_id
-        || report.identity.boot_id != boot_id
-    {
+    let bytes_match = canonical(report).map_err(bad("report"))? == bytes
+        && digest.as_str() == row.get::<String, _>("report_digest");
+    if !bytes_match {
         return Err(invalid("report row"));
     }
-    let receipt_bytes: Vec<u8> = row.get("receipt_bytes");
-    let receipt = result_record::decode_receipt(&receipt_bytes, &report).map_err(bad("receipt"))?;
-    if canonical(&receipt).map_err(bad("receipt"))? != receipt_bytes {
-        return Err(invalid("receipt"));
+    let identity_matches = report.identity.node_id == node_id && report.identity.boot_id == boot_id;
+    if !(report_matches_row(report, row, report_id, node_id) && identity_matches) {
+        return Err(invalid("report row"));
     }
-    Ok(Some(Stored {
-        row,
-        report,
-        receipt,
-        node_id,
-    }))
+    Ok(node_id)
 }
 
+fn report_matches_row(report: &ResultReport, row: &PgRow, report_id: Uuid, node_id: Uuid) -> bool {
+    report.report_id == report_id
+        && report.binding.attempt_id == row.get::<Uuid, _>("attempt_id")
+        && node_id == row.get::<Uuid, _>("node_id")
+        && report.operation_id == row.get::<Uuid, _>("operation_id")
+}
 /// The attempt's current head report, holding its SHARE lock.
 pub async fn head_report(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result<Option<Uuid>> {
     sqlx::query_scalar("SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR SHARE")
         .bind(attempt)
         .fetch_optional(conn)
         .await
+}
+
+/// What the policy actor could record for B4 after a final rework.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplacementFacts {
+    /// The attempt's hot state now records `retention = retained`.
+    pub source_retained: bool,
+    /// The attempt's hot state now records `effects = quiescent`.
+    pub effects_quiescent: bool,
+    /// This call wrote at least one of the two facts.
+    pub changed: bool,
+}
+
+/// Reworked attempts that still hold their task without both replacement
+/// facts, in report order after `after`. Bounded; the cursor is disposable.
+pub async fn reworked_without_facts(
+    pool: &sqlx::PgPool,
+    after: Option<Uuid>,
+    limit: i64,
+) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT s.report_id FROM profiled_auto_settlements s \
+         JOIN execution_attempts a USING(attempt_id) JOIN profiled_authority_hot h USING(attempt_id) \
+         WHERE s.disposition='rework_required' AND a.kind='profiled_v1' AND a.holds_task \
+         AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
+         AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
+         AND ($1::UUID IS NULL OR s.report_id>$1) ORDER BY s.report_id LIMIT $2",
+    )
+    .bind(after)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }

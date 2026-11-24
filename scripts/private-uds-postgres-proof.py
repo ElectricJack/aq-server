@@ -49,19 +49,38 @@ def save(root, value):
 
 def load(value):
     root = Path(value)
+    metadata = check_root(root)
+    data = read_manifest(root / "manifest.json")
+    check_manifest_identity(data, root, metadata)
+    return root, data
+
+
+def check_root(root):
     require(root.is_absolute() and root == root.resolve() and root.name.startswith(PREFIX), "Unexpected private root")
     metadata = root.lstat()
     require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.geteuid() and stat.S_IMODE(metadata.st_mode) == 0o700, "Unsafe private root")
-    path = root / "manifest.json"
-    metadata_file = path.lstat()
-    require(stat.S_ISREG(metadata_file.st_mode) and metadata_file.st_nlink == 1 and metadata_file.st_uid == os.geteuid() and stat.S_IMODE(metadata_file.st_mode) == 0o600 and metadata_file.st_size < 8192, "Unsafe proof manifest")
+    return metadata
+
+
+def read_manifest(path):
+    metadata = path.lstat()
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and metadata.st_uid == os.geteuid()
+            and stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_size < 8192, "Unsafe proof manifest")
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW)) as stream:
-        data = json.load(stream)
+        return json.load(stream)
+
+
+def check_manifest_identity(data, root, metadata):
     require(data["schema_version"] == 1 and data["image"] == IMAGE and data["root"] == str(root), "Foreign proof manifest")
-    require(data["uid"] == os.geteuid() and data["gid"] == os.getegid() and data["root_device"] == metadata.st_dev and data["root_inode"] == metadata.st_ino, "Private root identity changed")
+    require(manifest_owns_root(data, metadata), "Private root identity changed")
     require(uuid.UUID(data["proof_id"]).hex == data["proof_id"].replace("-", ""), "Invalid proof identity")
-    require(data["name"] == PREFIX + data["proof_id"] and data["database"] == "aq_uds_" + uuid.UUID(data["proof_id"]).hex, "Foreign resource identity")
-    return root, data
+    require(data["name"] == PREFIX + data["proof_id"] and data["database"] == "aq_uds_" + uuid.UUID(data["proof_id"]).hex,
+            "Foreign resource identity")
+
+
+def manifest_owns_root(data, metadata):
+    return (data["uid"] == os.geteuid() and data["gid"] == os.getegid()
+            and data["root_device"] == metadata.st_dev and data["root_inode"] == metadata.st_ino)
 
 
 def container(root, data):
@@ -72,20 +91,37 @@ def container(root, data):
         require(not listing.stdout.strip(), "Cannot inspect existing proof container")
         return None
     info = json.loads(result.stdout)[0]
+    check_container_identity(info, data)
+    check_container_policy(info["HostConfig"])
+    check_container_mounts(root, info["Mounts"])
+    return info
+
+
+def check_container_identity(info, data):
     require((data["container_id"] is None or info["Id"] == data["container_id"]) and info["Image"] == IMAGE, "Proof container identity changed")
     require(info["Config"]["Labels"].get(LABEL) == data["proof_id"] and info["Config"]["User"] == f'{data["uid"]}:{data["gid"]}', "Foreign proof container")
-    host = info["HostConfig"]
-    require(host["NetworkMode"] == "none" and not host["Privileged"] and host["ReadonlyRootfs"] and not host.get("CapAdd") and "ALL" in host["CapDrop"], "Unsafe proof container policy")
+
+
+def check_container_policy(host):
+    require(host["NetworkMode"] == "none" and not host["Privileged"] and host["ReadonlyRootfs"]
+            and not host.get("CapAdd") and "ALL" in host["CapDrop"], "Unsafe proof container policy")
     require(not host.get("PortBindings") and "no-new-privileges" in host["SecurityOpt"], "Unsafe proof network/privilege settings")
-    expected = {PGDATA: (str(root / "data"), True), "/aq-uds": (str(root / "socket"), True), "/etc/passwd": (str(root / "passwd"), False), "/etc/group": (str(root / "group"), False)}
+
+
+def check_container_mounts(root, mounts):
+    expected = {
+        PGDATA: (str(root / "data"), True),
+        "/aq-uds": (str(root / "socket"), True),
+        "/etc/passwd": (str(root / "passwd"), False),
+        "/etc/group": (str(root / "group"), False),
+    }
     seen = set()
-    for mount in info["Mounts"]:
+    for mount in mounts:
         if mount["Type"] == "tmpfs" and mount["Destination"] == "/tmp":
             continue
         require(mount["Type"] == "bind" and expected.get(mount["Destination"]) == (mount["Source"], mount["RW"]), "Proof mount identity changed")
         seen.add(mount["Destination"])
     require(seen == set(expected), "Missing proof bind mount")
-    return info
 
 
 def common(root, data):
@@ -108,19 +144,9 @@ def inspect(root, data):
     require(stat.S_ISDIR(before.st_mode) and before.st_uid == data["uid"] and stat.S_IMODE(before.st_mode) == 0o700, "Unsafe UDS directory")
     held = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        endpoint = directory / ".s.PGSQL.5432"
-        point = endpoint.lstat()
-        require(stat.S_ISSOCK(point.st_mode) and point.st_uid == data["uid"] and stat.S_IMODE(point.st_mode) == 0o600, "Unsafe PostgreSQL socket")
-        with socket.socket(socket.AF_UNIX) as client:
-            client.settimeout(3)
-            client.connect(f"/proc/self/fd/{held}/.s.PGSQL.5432")
-            pid, uid, gid = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
-            require(uid == data["uid"] and gid == data["gid"], "Unexpected PostgreSQL peer credentials")
-        identity = json.loads(sql(data, "SELECT json_build_object('database',current_database(),'system_identifier',(pg_control_system()).system_identifier::text,'version',current_setting('server_version'),'port',current_setting('port'),'listen_addresses',current_setting('listen_addresses'),'unix_connection',inet_server_addr() IS NULL)::text"))
-        require(identity["database"] == data["database"] and identity["port"] == "5432" and identity["listen_addresses"] == "" and identity["unix_connection"], "Unexpected physical PostgreSQL endpoint")
-        if "system_identifier" in data:
-            require(identity["system_identifier"] == data["system_identifier"], "Physical cluster identity changed")
-        data["system_identifier"] = identity["system_identifier"]
+        point = check_socket(directory, data["uid"])
+        pid, uid, gid = check_peer(held, data)
+        identity = verify_cluster(data)
         methods = sql(data, "SELECT string_agg(DISTINCT auth_method,',' ORDER BY auth_method) FROM pg_hba_file_rules WHERE type='local'")
         require(methods == "peer", "Unexpected local authentication policy")
         after = directory.lstat()
@@ -133,6 +159,32 @@ def inspect(root, data):
         return result
     finally:
         os.close(held)
+
+
+def check_socket(directory, uid):
+    point = (directory / ".s.PGSQL.5432").lstat()
+    require(stat.S_ISSOCK(point.st_mode) and point.st_uid == uid and stat.S_IMODE(point.st_mode) == 0o600,
+            "Unsafe PostgreSQL socket")
+    return point
+
+
+def check_peer(held, data):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(3)
+        client.connect(f"/proc/self/fd/{held}/.s.PGSQL.5432")
+        pid, uid, gid = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+        require(uid == data["uid"] and gid == data["gid"], "Unexpected PostgreSQL peer credentials")
+        return pid, uid, gid
+
+
+def verify_cluster(data):
+    identity = json.loads(sql(data, "SELECT json_build_object('database',current_database(),'system_identifier',(pg_control_system()).system_identifier::text,'version',current_setting('server_version'),'port',current_setting('port'),'listen_addresses',current_setting('listen_addresses'),'unix_connection',inet_server_addr() IS NULL)::text"))
+    require(identity["database"] == data["database"] and identity["port"] == "5432"
+            and identity["listen_addresses"] == "" and identity["unix_connection"], "Unexpected physical PostgreSQL endpoint")
+    if "system_identifier" in data:
+        require(identity["system_identifier"] == data["system_identifier"], "Physical cluster identity changed")
+    data["system_identifier"] = identity["system_identifier"]
+    return identity
 
 
 def create():

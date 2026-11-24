@@ -6,19 +6,8 @@ use crate::{AppState, error::AppError};
 use aq_admission::ArtifactRef;
 pub use aq_profiled_state::replacement::*;
 use aq_profiled_state::replacement_sql as sql;
-pub use sql::predecessor_project_revision;
+pub use sql::{load_complete as load, predecessor_project_revision};
 use uuid::Uuid;
-
-/// Loads started-attempt owner facts. A history that does not match the
-/// central started count (for example legacy attempts) is returned as `None`.
-pub async fn load(
-    conn: &mut sqlx::PgConnection,
-    task: Uuid,
-    started: u32,
-) -> Result<Option<Vec<Prior>>, AppError> {
-    let priors = sql::load(conn, task).await.map_err(internal)?;
-    Ok((priors.len() == started as usize).then_some(priors))
-}
 
 fn internal<E>(_: E) -> AppError {
     AppError::Internal
@@ -34,15 +23,6 @@ pub async fn limits(conn: &mut sqlx::PgConnection, priors: &[Prior]) -> Result<L
     Ok(Limits::of(pinned.as_ref(), &settings))
 }
 
-/// Scheduling assessment for one Graph-ready task.
-/// The decision attempt counts alone settle: an exhausted never-granted
-/// retry bound blocks, and no started attempt is an ordinary first attempt.
-pub fn precheck(counts: &super::no_grant::AttemptCounts) -> Option<Assessment> {
-    if counts.never_granted_bound_exhausted() {
-        return Some(Assessment::Blocked("never_granted_retry_bound_exhausted"));
-    }
-    (counts.started == 0).then_some(Assessment::Fresh)
-}
 pub async fn assess_task(state: &AppState, task: Uuid, now: u64) -> Result<Assessment, AppError> {
     let mut conn = state
         .store
@@ -92,10 +72,12 @@ async fn assess_on(
     if let Some(decided) = precheck(&counts) {
         return Ok(decided);
     }
-    Ok(match load(conn, task, counts.started).await? {
-        Some(priors) => decide(&priors, &limits(conn, &priors).await?, now),
-        None => Assessment::Blocked("replacement_lineage_history_unknown"),
-    })
+    Ok(
+        match load(conn, task, counts.started).await.map_err(internal)? {
+            Some(priors) => decide(&priors, &limits(conn, &priors).await?, now),
+            None => Assessment::Blocked("replacement_lineage_history_unknown"),
+        },
+    )
 }
 
 /// Scheduling assessment against the current project binding revision. A
@@ -110,6 +92,12 @@ pub async fn assess_task_for_revision(
     project_revision: u64,
 ) -> Result<Assessment, AppError> {
     let assessment = assess_task(state, task, now).await?;
+    if assessment
+        .replacement()
+        .is_some_and(Replacement::waiting_for_launch_release)
+    {
+        return Ok(Assessment::Blocked("closed_launch_settlement_pending"));
+    }
     if let Assessment::Blocked(code) = assessment
         && aq_machine_control::holds::is_budget_hold(code)
     {
@@ -165,6 +153,9 @@ pub async fn override_budget(
     let Some(attempt) = latest.filter(|_| known) else {
         return Ok(Assessment::Blocked(code));
     };
+    if !o.attempt_id.is_nil() && o.attempt_id != attempt {
+        return Err(AppError::Conflict("retry predecessor changed".into()));
+    }
     (o.attempt_id, o.hold_code) = (attempt, code.into());
     (holds::record_override(&mut tx, task, &o, at).await).map_err(internal)?;
     let again = assess_task_in(&mut tx, task, now).await?;
@@ -174,7 +165,16 @@ pub async fn override_budget(
     if !matches!(again, Assessment::Blocked(_)) {
         tx.commit().await.map_err(internal)?;
         tracing::info!(%task, hold = code, actor = o.actor, "owner overrode a limit hold; the task's budgets start again");
-        holds::post_override(&state.store.pool, project, task, &o, at).await;
+        holds::post_override(
+            &state.store.pool,
+            aq_task_comments::Thread {
+                project_id: project,
+                task_id: task,
+            },
+            &o,
+            at,
+        )
+        .await;
     }
     Ok(again)
 }
@@ -182,7 +182,7 @@ pub async fn override_budget(
 /// Releases the failed predecessor's task claim under the common node →
 /// attempt/hot locks, after re-assessing the locked history. Idempotent.
 pub async fn release(state: &AppState, task: Uuid, r: &Replacement) -> Result<(), AppError> {
-    release_as(state, task, r, None).await
+    release_as(state, task, r, None, None).await
 }
 /// Verify the predecessor when a changed project binding requires a new lineage.
 pub async fn fresh_predecessor(
@@ -199,8 +199,9 @@ pub async fn release_as(
     task: Uuid,
     replacement: &Replacement,
     fresh: Option<&aq_machine_control::fresh::FreshStart>,
+    owner_operation: Option<Uuid>,
 ) -> Result<(), AppError> {
-    if !replacement.needs_release && fresh.is_none() {
+    if !replacement.needs_release && fresh.is_none() && owner_operation.is_none() {
         return Ok(());
     }
     let db = |_: sqlx::Error| AppError::Internal;
@@ -210,7 +211,8 @@ pub async fn release_as(
         .map_err(db)?;
     let counts = super::no_grant::attempt_counts_locked(&mut tx, task).await?;
     let priors = load(&mut tx, task, counts.started)
-        .await?
+        .await
+        .map_err(internal)?
         .ok_or_else(|| AppError::Conflict("replacement history changed".into()))?;
     let now = u64::try_from((state.clock)().timestamp_millis())
         .ok()
@@ -247,8 +249,27 @@ pub async fn release_as(
     }
     if let Some(f) = fresh {
         let at = (state.clock)();
-        let recorded = aq_machine_control::fresh::record(&mut tx, task, locked.predecessor, f, at);
+        let recorded = aq_machine_control::fresh::record(
+            &mut tx,
+            aq_machine_control::fresh::ReleasedAttempt {
+                task,
+                released: locked.predecessor,
+            },
+            f,
+            at,
+        );
         recorded.await.map_err(internal)?;
+    }
+    if let Some(operation) = owner_operation {
+        aq_machine_control::owner_retry::released(
+            &mut tx,
+            operation,
+            task,
+            locked.predecessor,
+            (state.clock)(),
+        )
+        .await
+        .map_err(db)?;
     }
     tx.commit().await.map_err(db)?;
     Ok(())

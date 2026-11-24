@@ -31,8 +31,6 @@ const REFRESHED: &[u8] = b"synthetic-refreshed-login-material";
 struct Case {
     f: Fixture,
     request: MaterialFetch,
-    #[allow(dead_code)]
-    path: std::path::PathBuf,
     _dir: tempfile::TempDir,
 }
 async fn post(
@@ -70,37 +68,67 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
     let path = dir.path().join("provider");
     std::fs::write(&path, secret).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let registry = login_registry(&f, kind, &provider, dir.path());
+    register_runtime(&mut f, registry).await;
+    let attempt = insert(&f).await;
+    let lease = material_lease(&f, secret);
+    seed_preparation(&f, attempt, &lease).await;
+    let request = MaterialFetch {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        binding: lease.binding,
+        lease_id: lease.lease_id,
+    };
+    Case {
+        f,
+        request,
+        _dir: dir,
+    }
+}
+
+fn login_registry(
+    f: &Fixture,
+    kind: CredentialKind,
+    provider: &str,
+    dir: &std::path::Path,
+) -> aq_intelligence_config::LoadedRegistry {
     let choice = &f.selection.choice;
-    let mut cfg = (*f.state.config).clone();
-    cfg.intelligence = Some(Arc::new(
-        IntelligenceConfig {
-            accounting: Default::default(),
-            material_store: Some(dir.path().join("store")),
-            revision: 1,
-            credentials: vec![CredentialConfig {
-                kind,
+    IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: Some(dir.join("store")),
+        revision: 1,
+        credentials: vec![CredentialConfig {
+            kind,
+            allowed_backends: aq_selection::default_allowed_backends(),
+            credential: AuthorizedCredential {
+                profile: choice.credential_profile.clone(),
+                provider: provider.to_owned(),
+                account_reference: choice.account_reference.clone(),
+                endpoint_reference: choice.endpoint_reference.clone(),
+                revision: f.selection.credential_revision,
+                enabled: true,
+                provisionable: false,
+                material_owner: None,
                 allowed_backends: aq_selection::default_allowed_backends(),
-                credential: AuthorizedCredential {
-                    profile: choice.credential_profile.clone(),
-                    provider: provider.clone(),
-                    account_reference: choice.account_reference.clone(),
-                    endpoint_reference: choice.endpoint_reference.clone(),
-                    revision: f.selection.credential_revision,
-                    enabled: true,
-                    provisionable: false,
-                    material_owner: None,
-                    allowed_backends: aq_selection::default_allowed_backends(),
-                },
-                allowed_node_ids: vec![f.node.node_id],
-                allow_enrolled_nodes: false,
-                secret_file: Some(path.clone()),
-                delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
-            }],
-            qualified_harnesses: vec![],
-        }
-        .load()
-        .unwrap(),
-    ));
+            },
+            allowed_node_ids: vec![f.node.node_id],
+            allow_enrolled_nodes: false,
+            secret_file: Some(dir.join("provider")),
+            delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
+        }],
+        qualified_harnesses: vec![],
+    }
+    .load()
+    .unwrap()
+}
+
+async fn register_runtime(f: &mut Fixture, registry: aq_intelligence_config::LoadedRegistry) {
+    let mut cfg = (*f.state.config).clone();
+    cfg.intelligence = Some(Arc::new(registry));
     let registration = Register {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -117,6 +145,7 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: registration.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],
@@ -155,8 +184,10 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
     )
     .await;
     assert_eq!(installed.status(), StatusCode::OK);
-    let attempt = insert(&f).await;
-    let lease = MaterialLease {
+}
+
+fn material_lease(f: &Fixture, secret: &[u8]) -> MaterialLease {
+    MaterialLease {
         schema_version: 1,
         lease_id: Uuid::new_v4(),
         binding: f.profiled.offer.binding.clone(),
@@ -170,7 +201,10 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
         material_bytes: secret.len() as u64,
         issued_at_ms: NOW,
         expires_at_ms: NOW + 1000,
-    };
+    }
+}
+
+async fn seed_preparation(f: &Fixture, attempt: Uuid, lease: &MaterialLease) {
     let owner = LaunchOwner {
         guardian_id: Uuid::new_v4(),
         launch_id: Uuid::new_v4(),
@@ -193,6 +227,7 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
     };
     let doc = TransportDocument::PreparationPlan(plan);
     doc.validate().unwrap();
+    let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
         .bind(f.node.node_id)
@@ -229,23 +264,8 @@ async fn setup_as(kind: CredentialKind, provider: Option<&str>, secret: &[u8]) -
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let request = MaterialFetch {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        binding: lease.binding,
-        lease_id: lease.lease_id,
-    };
-    Case {
-        f,
-        request,
-        path,
-        _dir: dir,
-    }
 }
+
 fn doc(c: &Case, bytes: &[u8]) -> MaterialRefresh {
     based(c, 0, bytes)
 }
@@ -489,16 +509,15 @@ async fn operator_replace_wins_over_agent_writeback() {
     let identity = aq_server::profiled_execution::login_refresh::identity(
         &c.f.selection.choice.credential_profile,
     );
-    let version = aq_server::intelligence::login_import::import(
-        &c.f.state.store,
-        &registry,
-        &identity,
-        c.f.selection.credential_revision,
-        &source,
-        NOW as i64,
-    )
-    .await
-    .unwrap();
+    use aq_server::intelligence::login_import::{self, LoginFile};
+    let file = |credential| LoginFile {
+        credential,
+        revision: c.f.selection.credential_revision,
+        source: &source,
+    };
+    let version = login_import::import(&c.f.state.store, &registry, file(&identity), NOW as i64)
+        .await
+        .unwrap();
     assert_eq!(version, 2);
     let written = rows(&c).await;
     assert_eq!((written[1].1.as_str(), written[1].2), ("operator", None));
@@ -516,29 +535,15 @@ async fn operator_replace_wins_over_agent_writeback() {
     }
     assert_eq!(rows(&c).await.len(), 2);
     // A second operator upload always wins too, even of identical bytes.
-    let again = aq_server::intelligence::login_import::import(
-        &c.f.state.store,
-        &registry,
-        &identity,
-        c.f.selection.credential_revision,
-        &source,
-        NOW as i64,
-    )
-    .await
-    .unwrap();
+    let again = login_import::import(&c.f.state.store, &registry, file(&identity), NOW as i64)
+        .await
+        .unwrap();
     assert_eq!(again, 3);
     // Unknown credential is refused without touching the store.
     assert!(
-        aq_server::intelligence::login_import::import(
-            &c.f.state.store,
-            &registry,
-            "missing@1",
-            c.f.selection.credential_revision,
-            &source,
-            NOW as i64,
-        )
-        .await
-        .is_err()
+        login_import::import(&c.f.state.store, &registry, file("missing@1"), NOW as i64)
+            .await
+            .is_err()
     );
 }
 
@@ -605,9 +610,21 @@ async fn session(c: &Case, node: Uuid, status: &str, desired: bool) -> Uuid {
         .bind(id).bind(c.f.actor).bind(node).bind(project).bind(status).bind(desired).execute(&pool).await.unwrap();
     id
 }
-async fn session_state(c: &Case, id: Uuid, status: &str, desired: bool, stopped: bool) {
-    sqlx::query("UPDATE manual_agent_sessions SET status=$2,desired_running=$3,stopped_at_ms=CASE WHEN $4 THEN 1 END WHERE id=$1")
+struct SessionState<'a> {
+    status: &'a str,
+    desired: bool,
+    stopped: bool,
+}
+impl SessionState<'_> {
+    async fn apply(self, c: &Case, id: Uuid) {
+        let Self {
+            status,
+            desired,
+            stopped,
+        } = self;
+        sqlx::query("UPDATE manual_agent_sessions SET status=$2,desired_running=$3,stopped_at_ms=CASE WHEN $4 THEN 1 END WHERE id=$1")
         .bind(id).bind(status).bind(desired).bind(stopped).execute(&c.f.db.pool().await).await.unwrap();
+    }
 }
 /// POSTs to a session login route; returns status, `aq-material-version`, body.
 async fn session_post(
@@ -746,7 +763,13 @@ async fn session_login_is_leased_to_the_owning_node_of_a_wanted_session_only() {
         (id, "running", false, false, StatusCode::OK),
     ] {
         if id != foreign {
-            session_state(&c, id, status, desired, stopped).await;
+            SessionState {
+                status,
+                desired,
+                stopped,
+            }
+            .apply(&c, id)
+            .await;
         }
         let (status, version, body) = lease(&c, id).await;
         assert_eq!(status, StatusCode::CONFLICT);
@@ -771,7 +794,13 @@ async fn session_writeback_is_compare_and_swap_on_the_shared_login_store() {
         StatusCode::CONFLICT
     );
     assert!(rows(&c).await.is_empty());
-    session_state(&c, id, "running", true, false).await;
+    SessionState {
+        status: "running",
+        desired: true,
+        stopped: false,
+    }
+    .apply(&c, id)
+    .await;
     let (status, body) = session_refresh(&c, id, 0, &first).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(accepted(&body), ok(1, false));
@@ -802,7 +831,13 @@ async fn session_writeback_is_compare_and_swap_on_the_shared_login_store() {
     }
     // While stopping (the owner no longer wants it running) the last refresh
     // is still accepted; the lease then serves it to the next session.
-    session_state(&c, id, "stopping", false, false).await;
+    SessionState {
+        status: "stopping",
+        desired: false,
+        stopped: false,
+    }
+    .apply(&c, id)
+    .await;
     let (status, body) = session_refresh(&c, id, 1, &second).await;
     assert_eq!((status, accepted(&body)), (StatusCode::OK, ok(2, false)));
     assert_eq!(rows(&c).await.len(), 2);
@@ -869,14 +904,17 @@ async fn owner_import_is_the_newest_codex_login_and_must_be_a_chatgpt_login() {
         &c.f.selection.choice.credential_profile,
     );
     let source = c._dir.path().join("owner-auth.json");
+    use aq_server::intelligence::login_import::{self, LoginFile};
     let import = |bytes: Vec<u8>| {
         std::fs::write(&source, bytes).unwrap();
-        aq_server::intelligence::login_import::import(
+        login_import::import(
             &c.f.state.store,
             &registry,
-            &identity,
-            c.f.selection.credential_revision,
-            &source,
+            LoginFile {
+                credential: &identity,
+                revision: c.f.selection.credential_revision,
+                source: &source,
+            },
             NOW as i64,
         )
     };
@@ -920,8 +958,7 @@ async fn masked(
         &mut conn,
         &loaded,
         &mut credentials,
-        frozen,
-        at,
+        aq_login_store::LoginSelection::at(at, frozen),
     );
     done.await.ok().unwrap();
     credentials

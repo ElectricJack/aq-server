@@ -12,8 +12,9 @@ pub(super) async fn post_human_creation(
     rt: &Runtime,
     workspace: Uuid,
     bytes: Vec<u8>,
+    lookup: bool,
 ) -> Result<(StatusCode, Value)> {
-    dispatch::post_mutation_bytes(rt, workspace, bytes).await
+    dispatch::post_mutation_bytes(rt, workspace, bytes, lookup).await
 }
 const MAX_RETAINED_OPERATIONS: i64 = 4096;
 const MAX_RETAINED_BYTES: i64 = 32 * 1024 * 1024;
