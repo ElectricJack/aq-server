@@ -371,7 +371,52 @@ pub async fn observed(
             .await?
             .to_owned();
     }
+    if let Some(result) = latest.filter(|result| result.outcome == "failed")
+        && reported_agent_blocker(db, task, version, result).await?
+    {
+        facts.outcome = "agent_blocked".into();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
+}
+
+/// The native worker writes the explicit Outcome field first, before any prose.
+/// This is an agent's declaration, with no authority to prove a grant or a wake.
+async fn reported_agent_blocker(
+    db: &mut PgConnection,
+    task: Uuid,
+    version: i64,
+    latest: &Latest,
+) -> Result<bool> {
+    let conclusion: Option<String> = sqlx::query_scalar(
+        "SELECT doc.report->>'conclusion'
+         FROM execution_attempts a
+         JOIN profiled_authority_hot ah USING(attempt_id)
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id)
+         CROSS JOIN LATERAL (SELECT convert_from(r.report_bytes,'UTF8')::jsonb AS report) doc
+         WHERE a.task_id=$1 AND a.attempt_id=$2 AND h.report_id=$3 AND a.holds_task
+           AND l.execution_spec#>>'{lifecycle,project_id}'=$4
+           AND (l.execution_spec#>>'{task,version}')::bigint=$5
+           AND r.result_origin_kind IN ('phase_execution_v2','phase_refresh_execution_v1')
+           AND ah.state#>>'{stop,kind}'='stopped' AND ah.state->'revoked'='false'::jsonb
+           AND ah.state->>'cancellation_id' IS NULL
+           AND doc.report->>'outcome'='failed' AND doc.report#>>'{stop,disposition,kind}'='stopped'
+           AND doc.report#>>'{stop,reason}' IN ('reconciliation','completed','failed')",
+    )
+    .bind(task)
+    .bind(latest.attempt_id)
+    .bind(latest.result_id)
+    .bind(latest.project_id.to_string())
+    .bind(version)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(conclusion.as_deref().is_some_and(explicit_blocker_field))
+}
+
+fn explicit_blocker_field(conclusion: &str) -> bool {
+    conclusion.split(';').next() == Some("Outcome: blocked")
 }
 
 /// The results to announce now: none unless an artifact is active on the
