@@ -3,7 +3,7 @@
 use crate::common;
 
 use aq_lifecycle_api::Scope;
-use aq_server::notifications::persistence::SendRequest;
+use aq_server::notifications::persistence::{SendRequest, Service as NotificationService};
 use axum::{
     Router,
     body::Body,
@@ -11,6 +11,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use sqlx::PgPool;
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -44,6 +45,79 @@ fn notification_capability(bootstrap: &Value) -> &Value {
         .unwrap()
 }
 
+const OWNER: &str = "owner@localhost";
+const VIEWER: &str = "notification-viewer@localhost";
+
+/// A project bound to a fresh Graph workspace.
+async fn bound_scope(pool: &PgPool) -> Scope {
+    let scope = Scope {
+        project_id: Uuid::new_v4(),
+        workspace_id: Uuid::new_v4(),
+    };
+    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')")
+        .bind(scope.project_id).bind(json!({"enabled":true,"graph_workspace_id":scope.workspace_id}))
+        .execute(pool).await.unwrap();
+    scope
+}
+
+/// Sends one notification as `sender` and checks that it has no external
+/// route. Returns its message id.
+async fn notify(
+    service: &NotificationService,
+    sender: Uuid,
+    scope: &Scope,
+    (recipient, summary): (Uuid, &str),
+) -> Uuid {
+    let request = SendRequest {
+        operation_id: Uuid::new_v4(),
+        message_id: Uuid::new_v4(),
+        revision: 1,
+        scope: scope.clone(),
+        recipient_user_id: recipient,
+        summary: summary.into(),
+        ttl_ms: 60_000,
+    };
+    let receipt = service.enqueue(sender, request.clone()).await.unwrap();
+    assert_eq!(receipt["external_state"], "no_external_route");
+    assert_eq!(receipt["delivery_ids"], json!([]));
+    request.message_id
+}
+
+/// `email`'s mounted inbox holds `expected` alone, its detail has no
+/// delivery, and only the mounted router advertises the read.
+async fn inbox_shows_only_own_message(
+    app: &Router,
+    standalone: &Router,
+    email: &str,
+    expected: Uuid,
+) {
+    let (status, bootstrap) = read(app, "/api/v1/bootstrap", email).await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let cap = notification_capability(&bootstrap);
+    assert_eq!(cap["enabled"], true);
+    assert_eq!(cap["version"], "1");
+    let (_, bootstrap) = read(standalone, "/api/v1/bootstrap", email).await;
+    assert_eq!(notification_capability(&bootstrap)["enabled"], false);
+    let (status, inbox) = read(app, "/api/notifications", email).await;
+    assert_eq!(status, StatusCode::OK, "{inbox}");
+    assert_eq!(inbox["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        inbox["items"][0]["message"]["message_id"],
+        expected.to_string()
+    );
+    let (status, detail) = read(app, &format!("/api/notifications/{expected}"), email).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["external_state"], "no_external_route");
+    assert_eq!(detail["deliveries"], json!([]));
+}
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn mounted_notifications_read_current_principal_self_without_external_delivery() {
     let f = common::profiled::fixture().await;
@@ -52,110 +126,46 @@ async fn mounted_notifications_read_current_principal_self_without_external_deli
     let pool = f.db.pool().await;
     sqlx::query("INSERT INTO users(id,email,role,issuer,subject,created_at) VALUES($1,'notification-viewer@localhost','viewer','dev','notification-viewer@localhost',now())")
         .bind(viewer).execute(&pool).await.unwrap();
-    let scope = Scope {
-        project_id: Uuid::new_v4(),
-        workspace_id: Uuid::new_v4(),
-    };
-    sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')")
-        .bind(scope.project_id).bind(json!({"enabled":true,"graph_workspace_id":scope.workspace_id}))
-        .execute(&pool).await.unwrap();
+    let scope = bound_scope(&pool).await;
     let service = aq_server::notifications::api::service(&f.state);
     service.install(Uuid::new_v4()).await.unwrap();
-    let mut owner_message = None;
-    let mut viewer_message = None;
-    for recipient in [f.actor, viewer] {
-        let request = SendRequest {
-            operation_id: Uuid::new_v4(),
-            message_id: Uuid::new_v4(),
-            revision: 1,
-            scope: scope.clone(),
-            recipient_user_id: recipient,
-            summary: if recipient == f.actor {
-                "Local fixture: review the deployment plan"
-            } else {
-                "Local fixture: viewer private notification"
-            }
-            .into(),
-            ttl_ms: 60_000,
-        };
-        let receipt = service.enqueue(f.actor, request.clone()).await.unwrap();
-        assert_eq!(receipt["external_state"], "no_external_route");
-        assert_eq!(receipt["delivery_ids"], json!([]));
-        if recipient == f.actor {
-            owner_message = Some(request.message_id);
-        } else {
-            viewer_message = Some(request.message_id);
-        }
-    }
-    let owner_message = owner_message.unwrap();
-    let viewer_message = viewer_message.unwrap();
+    let owner_message = (f.actor, "Local fixture: review the deployment plan");
+    let owner_message = notify(&service, f.actor, &scope, owner_message).await;
+    let viewer_message = (viewer, "Local fixture: viewer private notification");
+    let viewer_message = notify(&service, f.actor, &scope, viewer_message).await;
     let app = aq_server::build_admin_router(f.state.clone());
     let standalone = aq_server::dashboard_api::routes(f.state.clone()).with_state(f.state.clone());
     assert_eq!(
-        read(&standalone, "/api/notifications", "owner@localhost")
-            .await
-            .0,
+        read(&standalone, "/api/notifications", OWNER).await.0,
         StatusCode::NOT_FOUND
     );
-    for email in ["owner@localhost", "notification-viewer@localhost"] {
-        let (status, bootstrap) = read(&app, "/api/v1/bootstrap", email).await;
-        assert_eq!(status, StatusCode::OK, "{bootstrap}");
-        let cap = notification_capability(&bootstrap);
-        assert_eq!(cap["enabled"], true);
-        assert_eq!(cap["version"], "1");
-        let (_, bootstrap) = read(&standalone, "/api/v1/bootstrap", email).await;
-        assert_eq!(notification_capability(&bootstrap)["enabled"], false);
-        let (status, inbox) = read(&app, "/api/notifications", email).await;
-        assert_eq!(status, StatusCode::OK, "{inbox}");
-        assert_eq!(inbox["items"].as_array().unwrap().len(), 1);
-        let expected = if email == "owner@localhost" {
-            owner_message
-        } else {
-            viewer_message
-        };
-        assert_eq!(
-            inbox["items"][0]["message"]["message_id"],
-            expected.to_string()
-        );
-        let (status, detail) = read(&app, &format!("/api/notifications/{expected}"), email).await;
-        assert_eq!(status, StatusCode::OK, "{detail}");
-        assert_eq!(detail["external_state"], "no_external_route");
-        assert_eq!(detail["deliveries"], json!([]));
+    for (email, expected) in [(OWNER, owner_message), (VIEWER, viewer_message)] {
+        inbox_shows_only_own_message(&app, &standalone, email, expected).await;
     }
-    assert_eq!(
-        read(
-            &app,
-            &format!("/api/notifications?recipient={}", f.actor),
-            "notification-viewer@localhost"
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        read(
-            &app,
-            &format!("/api/notifications/{owner_message}"),
-            "notification-viewer@localhost"
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
+    // The viewer reads neither the owner's inbox nor the owner's message.
+    for (path, refused) in [
+        (
+            format!("/api/notifications?recipient={}", f.actor),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("/api/notifications/{owner_message}"),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, body) = read(&app, &path, VIEWER).await;
+        assert_eq!(status, refused, "{path}: {body}");
+    }
     optional_browser(&f, owner_message).await;
-    let destinations: i64 = sqlx::query_scalar("SELECT count(*) FROM notification_destinations")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM notification_deliveries")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let routes: i64 = sqlx::query_scalar("SELECT count(*) FROM notification_routes")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!((destinations, deliveries, routes), (0, 0, 0));
+    let mut counts = Vec::new();
+    for table in [
+        "notification_destinations",
+        "notification_deliveries",
+        "notification_routes",
+    ] {
+        counts.push(count(&pool, table).await);
+    }
+    assert_eq!(counts, [0, 0, 0]);
 }
 
 /// Opt-in only: serve this actual persisted notification owner and an explicitly

@@ -5,17 +5,13 @@ impl Service {
     pub(super) async fn work_activate(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let ports = self.ports()?;
         let workspace = self.namespace.workspace_id;
-        let refused = |reason| HostResult {
-            outcome: "refused".into(),
-            output: json!({"reason": reason}),
-        };
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let (body, fresh) = match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
                 tx.commit().await?;
@@ -40,7 +36,7 @@ impl Service {
                     Ok(operations) => operations,
                     Err(reason) => {
                         return self
-                            .settle_fresh(tx, id, revision, intent, &identity, refused(reason))
+                            .settle_fresh(tx, command.retained(&identity), refused(reason))
                             .await;
                     }
                 };
@@ -49,26 +45,37 @@ impl Service {
                     "reason": null,
                     "operations": operations,
                 });
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, &body)
-                    .await?;
+                self.record(
+                    &mut tx,
+                    command.retained(&identity),
+                    EffectReceipt::new(PENDING, &body),
+                )
+                .await?;
                 self.commit_fresh(tx, id, intent).await?;
                 (body, true)
             }
         };
         let (status, raw) = ports.graph.mutate(workspace, body.clone()).await?;
-        let result = match status {
-            200..=299 => {
-                let ops = body["operations"].as_array().ok_or(Error::Unknown)?;
-                let receipt = subtree_activation::receipt(ops, &raw).ok_or(Error::Unknown)?;
-                HostResult {
-                    outcome: "activated".into(),
-                    output: json!({"activated": receipt.activated.len(), "skipped": receipt.skipped}),
-                }
-            }
-            409 if raw["error"]["code"] == "conflict" => refused("subtree_conflict"),
-            400 | 401 | 403 | 404 | 422 if fresh => refused("activation_refused"),
-            _ => return Err(Error::Unknown),
-        };
+        let result = activation_receipt(status, &raw, &body, fresh)?;
         self.finish(intent, &identity, result).await
     }
+}
+
+fn refused(reason: &str) -> HostResult {
+    host_result("refused", json!({"reason":reason}))
+}
+fn activation_receipt(status: u16, raw: &Value, body: &Value, fresh: bool) -> Result<HostResult> {
+    Ok(match status {
+        200..=299 => {
+            let ops = body["operations"].as_array().ok_or(Error::Unknown)?;
+            let receipt = subtree_activation::receipt(ops, raw).ok_or(Error::Unknown)?;
+            HostResult {
+                outcome: "activated".into(),
+                output: json!({"activated": receipt.activated.len(), "skipped": receipt.skipped}),
+            }
+        }
+        409 if raw["error"]["code"] == "conflict" => refused("subtree_conflict"),
+        400 | 401 | 403 | 404 | 422 if fresh => refused("activation_refused"),
+        _ => return Err(Error::Unknown),
+    })
 }

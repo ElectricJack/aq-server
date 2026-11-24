@@ -62,17 +62,21 @@ class PlanProvenanceTests(unittest.TestCase):
         expected = [t for t in old["tasks"] if t["status"] in {"in_progress", "planned"}]
         self.assertEqual(len(rows), 66)
         self.assertEqual([r[0] for r in rows], [t["id"] for t in expected])
+        by_id = {task["id"]: task for task in expected}
         for old_id, status, successors in rows:
-            self.assertEqual(status.strip(), next(t["status"] for t in expected if t["id"] == old_id))
-            expected_keys = [t["key"] for t in tasks if old_id in t.get("continues", [])]
-            self.assertEqual(re.findall(r"`([^`]+)`", successors), expected_keys)
-            for task in tasks:
-                if task["key"] in expected_keys and task.get("deferred"):
-                    self.assertIn(f"`{task['key']}` (deferred)", successors)
-            if not expected_keys:
-                self.assertIn("No successor", successors)
+            self.assertEqual(status.strip(), by_id[old_id]["status"])
+            self.check_successors(old_id, successors, tasks)
         for old_id in ["API-04", "UI-07"]:
             self.assertIn("No successor", next(r[2] for r in rows if r[0] == old_id))
+
+    def check_successors(self, old_id, successors, tasks):
+        matches = [task for task in tasks if old_id in task.get("continues", [])]
+        self.assertEqual(re.findall(r"`([^`]+)`", successors), [task["key"] for task in matches])
+        for task in matches:
+            if task.get("deferred"):
+                self.assertIn(f"`{task['key']}` (deferred)", successors)
+        if not matches:
+            self.assertIn("No successor", successors)
 
     def test_unique_requirement_sources(self):
         text = INDEX.read_text()

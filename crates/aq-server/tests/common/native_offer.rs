@@ -37,6 +37,8 @@ pub struct Case {
     pub metadata: Arc<std::sync::Mutex<Value>>,
     /// The synthetic Graph peer's base URL.
     pub graph_url: String,
+    /// Each `add_edge` the synthetic Graph peer committed.
+    pub edges: Arc<std::sync::Mutex<Vec<Value>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Drop for Case {
@@ -108,9 +110,17 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     let peer_entered = observation_entered.clone();
     let peer_resume = observation_resume.clone();
     let updated = node.clone();
+    let edges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let added = edges.clone();
     let mutations = axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
         let mut node = updated.clone();
         let op = &body["operations"][0];
+        if op["op"] == "add_edge" {
+            let edge = json!({"id":op["id"],"workspace_id":workspace,"source":op["source"],"target":op["target"],"edge_type":op["edge_type"],"source_revision":null,"target_revision":null,"version":1,"deleted":false,"created_at":"2026-01-01T00:00:00Z","description":null});
+            added.lock().unwrap().push(edge.clone());
+            let result = json!({"change_set_id":Uuid::new_v4(),"results":[edge]});
+            return std::future::ready(([("X-AQ-Graph-API-Version", "1")], axum::Json(result)));
+        }
         assert_eq!(
             (&op["op"], &op["id"]),
             (&json!("update_node"), &json!(task))
@@ -118,7 +128,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         *written.lock().unwrap() = op["patch"]["metadata"].clone();
         node["metadata"] = op["patch"]["metadata"].clone();
         let result = json!({"change_set_id":Uuid::new_v4(),"results":[node]});
-        async move { ([("X-AQ-Graph-API-Version", "1")], axum::Json(result)) }
+        std::future::ready(([("X-AQ-Graph-API-Version", "1")], axum::Json(result)))
     });
     let app = axum::Router::new().fallback(axum::routing::get(move |uri: axum::http::Uri| {
         let mut node = node.clone();
@@ -133,12 +143,14 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 let path = uri.path().strip_prefix(&prefix).unwrap();
                 let value = match path {
                     "ready" | "nodes" => json!({"items":[node],"next_cursor":null}),
+                    path if path.starts_with("ready/") => json!({"items":[node],"next_cursor":null}),
                     path if path.ends_with("/context") => json!({"node":node,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false}),
                     _ => node,
                 };
                 return ([("X-AQ-Graph-API-Version", "1")], axum::Json(value));
             }
-            if (mode == 6 && uri.path().ends_with("/ready"))
+            let exact = uri.path().rsplit_once("/ready/").map(|(_, id)| id);
+            if (mode == 6 && (uri.path().ends_with("/ready") || exact.is_some()))
                 || (mode == 12 && uri.path().ends_with("/context"))
             {
                 // Exact external-observation boundary; normal fixtures never arm
@@ -175,12 +187,25 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
                 };
                 let next = (mode == 11 && !behind).then_some("page-2");
                 json!({"items":items,"next_cursor":next})
+            } else if let Some(id) = exact {
+                let item = if [3, 8, 10].contains(&mode) {
+                    None
+                } else if id == task.to_string() {
+                    Some(node)
+                } else if id == second_task.to_string() && [7, 11].contains(&mode) {
+                    Some(second)
+                } else {
+                    None
+                };
+                json!({"items":item.into_iter().collect::<Vec<_>>(),"next_cursor":null})
             } else if uri.path().ends_with("/context")
                 && uri.path().contains(&second_task.to_string())
             {
                 json!({"node":second,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":false})
             } else if uri.path().ends_with(&format!("/nodes/{task}")) {
                 node
+            } else if uri.path().ends_with(&format!("/nodes/{second_task}")) {
+                second
             } else if uri.path().ends_with("/context") {
                 if mode == 1 {
                     node["version"] = json!(2);
@@ -326,6 +351,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
     config.profiled_execution = Some(Arc::new(ProfiledConfig {
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: runtime.clone(),
             qualification: runtime_q,
             capabilities: capabilities.clone(),
@@ -405,9 +431,12 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
             // Spec 0016 §5.1: a branch of the fake git-HTTP repository
             // (`aq_delivery::git_grant::fake`) under this root, if it serves one.
             "ref.show"=>{let bare=root.join("git-http-repositories").join(repository.to_string());let out=std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse","--verify","-q"]).arg(format!("{}^{{commit}}",r["params"]["ref"].as_str().unwrap())).output().unwrap();let hex=String::from_utf8(out.stdout).unwrap();let oid=out.status.success().then(||json!({"algorithm":"sha1","hex":hex.trim()}));json!({"ref":r["params"]["ref"],"oid":oid})},
+            // Spec 0017 §6.2: the local-only deletion of an attempt's try ref.
+            "ref.delete" if r["expected_binding_generation"]!=1=>json!({"refused":{"code":"binding_generation_mismatch","message":"the binding changed","retry":"never"}}),
+            "ref.delete"=>{assert_eq!(r["params"]["remote"],false,"{r}");let bare=root.join("git-http-repositories").join(repository.to_string());let name=r["params"]["ref"].as_str().unwrap();let had=std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse","--verify","-q",name]).output().unwrap().status.success();if had{assert!(std::process::Command::new("git").arg("-C").arg(&bare).args(["update-ref","-d",name]).status().unwrap().success());}let outcome=if had{"deleted"}else{"already_absent"};json!({"outcome":outcome,"ref":name,"old":null,"remote":{"requested":false,"outcome":"not_requested"},"local":{"outcome":outcome},"acknowledged_at":"2026-01-01T00:00:00Z"})},
             other=>panic!("unexpected private Git operation {other}"),
         };
-        let mut response=json!({"protocol_version":1,"request_id":r["request_id"],"ok":true,"result":result});if let Some(op)=r.get("operation_id"){response["operation_id"]=op.clone();}let mut bytes=serde_json::to_vec(&response).unwrap();bytes.push(b'\n');if let Err(error)=reader.into_inner().write_all(&bytes).await {
+        let mut response=match result.get("refused") {Some(error)=>json!({"protocol_version":1,"request_id":r["request_id"],"ok":false,"error":error}),None=>json!({"protocol_version":1,"request_id":r["request_id"],"ok":true,"result":result})};if let Some(op)=r.get("operation_id"){response["operation_id"]=op.clone();}let mut bytes=serde_json::to_vec(&response).unwrap();bytes.push(b'\n');if let Err(error)=reader.into_inner().write_all(&bytes).await {
             // A real refusal cancels sibling observations and closes its UDS.
             // Expected cancellation is not a successful response or peer panic.
             assert!(matches!(error.kind(),std::io::ErrorKind::BrokenPipe|std::io::ErrorKind::ConnectionReset),"unexpected synthetic Git response failure");
@@ -453,6 +482,7 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         second_task,
         metadata,
         graph_url: format!("http://{addr}"),
+        edges,
         tasks,
     }
 }
@@ -466,9 +496,12 @@ pub async fn pin_policy(c: &mut Case, edit: impl Fn(&mut aq_profiles::roles::Sel
     edit(&mut defaults);
     let revision = settings.selection_defaults_revision;
     let (actor, op) = (c.env.actor, Uuid::new_v4());
-    aq_role_settings::save_selection_defaults(pool, actor, &defaults, revision, op, 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_selection_defaults(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, op),
+        &defaults,
+    )
+    .await
+    .unwrap();
     c.env.snapshot = super::roles::active(pool).await;
 }
 /// The published attempt fails: synthetic stopped, retained and quiescent

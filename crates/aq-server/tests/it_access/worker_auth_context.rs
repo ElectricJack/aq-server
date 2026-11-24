@@ -74,24 +74,7 @@ async fn credential_rotation_during_observed_node_lock_wait_refuses_old_context(
         result
     });
     let pid = started.await.unwrap();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')",
-        )
-        .bind(pid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        if waiting {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no observed node lock wait"
-        );
-        tokio::task::yield_now().await;
-    }
+    await_backend_lock(&pool, pid).await;
     let replacement = aq_server::tokens::new_node_credential();
     sqlx::query("UPDATE nodes SET credential_hash=$2 WHERE id=$1")
         .bind(context.id())
@@ -121,4 +104,24 @@ async fn credential_rotation_during_observed_node_lock_wait_refuses_old_context(
         context.id()
     );
     tx.commit().await.unwrap();
+}
+async fn await_backend_lock(pool: &sqlx::PgPool, pid: i32) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')",
+        )
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no observed node lock wait"
+        );
+        tokio::task::yield_now().await;
+    }
 }

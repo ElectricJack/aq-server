@@ -83,17 +83,20 @@ enum Command {
         source: PathBuf,
     },
     /// Print this binary's canonical release manifest (the bytes that get signed).
-    Manifest {
-        #[arg(long)]
-        server_image: String,
-        #[arg(long)]
-        worker_image: String,
-        /// Must equal this binary's version.
-        #[arg(long)]
-        version: String,
-        #[arg(long)]
-        source_revision: String,
-    },
+    Manifest(Manifest),
+}
+
+#[derive(clap::Args)]
+struct Manifest {
+    #[arg(long)]
+    server_image: String,
+    #[arg(long)]
+    worker_image: String,
+    /// Must equal this binary's version.
+    #[arg(long)]
+    version: String,
+    #[arg(long)]
+    source_revision: String,
 }
 
 #[tokio::main]
@@ -118,24 +121,33 @@ async fn main() {
             vault,
             owner_email,
             request,
-        } => onboard_repository(vault, &owner_email, &request).await,
+        } => {
+            repository_operation(
+                vault,
+                &owner_email,
+                read_request(&request).map(RepositoryRequest::Onboard),
+            )
+            .await
+        }
         Command::AdoptRepository {
             vault,
             owner_email,
             request,
-        } => adopt_repository(vault, &owner_email, &request).await,
+        } => {
+            repository_operation(
+                vault,
+                &owner_email,
+                read_request(&request).map(RepositoryRequest::Adopt),
+            )
+            .await
+        }
         Command::ImportLogin {
             vault,
             credential,
             revision,
             source,
         } => import_login(vault, &credential, revision, &source).await,
-        Command::Manifest {
-            server_image,
-            worker_image,
-            version,
-            source_revision,
-        } => manifest(&server_image, &worker_image, &version, &source_revision),
+        Command::Manifest(manifest) => manifest.write(),
     };
     if let Err(e) = result {
         eprintln!("aq-server: {e:#}");
@@ -167,35 +179,37 @@ fn read_request<T: serde::de::DeserializeOwned>(request: &std::path::Path) -> an
     serde_json::from_slice(&body).context("invalid request")
 }
 
-async fn onboard_repository(
-    vault: PathBuf,
-    owner_email: &str,
-    request: &std::path::Path,
-) -> anyhow::Result<()> {
-    let request: aq_server::repository_onboarding::OnboardRequest = read_request(request)?;
-    let (state, owner) = owner_state(vault, owner_email).await?;
-    let out = aq_server::repository_onboarding::onboard(&state, owner, request)
-        .await
-        .map_err(|e| anyhow::anyhow!("onboarding refused: {e:?}"))?;
-    println!("{}", serde_json::to_string_pretty(&out)?);
-    if out["disposition"] == "bound" {
-        Ok(())
-    } else {
-        std::process::exit(1)
-    }
+enum RepositoryRequest {
+    Onboard(aq_server::repository_onboarding::OnboardRequest),
+    Adopt(aq_server::repository_onboarding::AdoptRequest),
 }
-
-async fn adopt_repository(
+async fn repository_operation(
     vault: PathBuf,
     owner_email: &str,
-    request: &std::path::Path,
+    request: anyhow::Result<RepositoryRequest>,
 ) -> anyhow::Result<()> {
-    let request: aq_server::repository_onboarding::AdoptRequest = read_request(request)?;
+    use aq_server::repository_onboarding::{adopt, onboard};
+    let request = request?;
     let (state, owner) = owner_state(vault, owner_email).await?;
-    let out = aq_server::repository_onboarding::adopt(&state, owner, request)
-        .await
-        .map_err(|e| anyhow::anyhow!("adoption refused: {}", e.to_api_error().message))?;
+    let (out, success) = match request {
+        RepositoryRequest::Onboard(request) => {
+            let out = onboard(&state, owner, request)
+                .await
+                .map_err(|e| anyhow::anyhow!("onboarding refused: {e:?}"))?;
+            let bound = out["disposition"] == "bound";
+            (out, bound)
+        }
+        RepositoryRequest::Adopt(request) => {
+            let out = adopt(&state, owner, request)
+                .await
+                .map_err(|e| anyhow::anyhow!("adoption refused: {}", e.to_api_error().message))?;
+            (out, true)
+        }
+    };
     println!("{}", serde_json::to_string_pretty(&out)?);
+    if !success {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -227,15 +241,14 @@ async fn import_login(
     let Some(loaded) = config.intelligence.clone() else {
         bail!("[intelligence] is not configured");
     };
-    let version = aq_server::intelligence::login_import::import(
-        &store,
-        &loaded,
+    use aq_server::intelligence::login_import::{self, LoginFile};
+    let file = LoginFile {
         credential,
         revision,
         source,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await?;
+    };
+    let version =
+        login_import::import(&store, &loaded, file, chrono::Utc::now().timestamp_millis()).await?;
     println!("{version}");
     Ok(())
 }
@@ -264,20 +277,21 @@ async fn connect(vault: &std::path::Path) -> anyhow::Result<(aq_server::config::
     Ok((config, store))
 }
 
-fn manifest(
-    server_image: &str,
-    worker_image: &str,
-    version: &str,
-    source_revision: &str,
-) -> anyhow::Result<()> {
-    use std::io::Write;
-    let m =
-        aq_server::updates::build_manifest(server_image, worker_image, version, source_revision)?;
-    // No trailing newline: these are exactly the signed bytes.
-    let mut out = std::io::stdout().lock();
-    out.write_all(&m.to_canonical_json())?;
-    out.flush()?;
-    Ok(())
+impl Manifest {
+    fn write(&self) -> anyhow::Result<()> {
+        use std::io::Write;
+        let m = aq_server::updates::build_manifest(
+            &self.server_image,
+            &self.worker_image,
+            &self.version,
+            &self.source_revision,
+        )?;
+        // No trailing newline: these are exactly the signed bytes.
+        let mut out = std::io::stdout().lock();
+        out.write_all(&m.to_canonical_json())?;
+        out.flush()?;
+        Ok(())
+    }
 }
 
 /// Admin port from the vault, or 8080 when it cannot be read.

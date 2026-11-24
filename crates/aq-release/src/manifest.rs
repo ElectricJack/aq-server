@@ -115,41 +115,9 @@ impl ReleaseManifest {
 
     /// The exact bytes that get signed: object keys sorted, no whitespace.
     pub fn to_canonical_json(&self) -> Vec<u8> {
-        let value = serde_json::to_value(self).expect("manifest serializes");
-        let mut out = Vec::new();
-        write_canonical(&value, &mut out);
-        out
-    }
-}
-
-fn write_canonical(v: &serde_json::Value, out: &mut Vec<u8>) {
-    use serde_json::Value;
-    match v {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            out.push(b'{');
-            for (i, k) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
-                }
-                out.extend(serde_json::to_vec(k).expect("string serializes"));
-                out.push(b':');
-                write_canonical(&map[k], out);
-            }
-            out.push(b'}');
-        }
-        Value::Array(items) => {
-            out.push(b'[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
-                }
-                write_canonical(item, out);
-            }
-            out.push(b']');
-        }
-        other => out.extend(serde_json::to_vec(other).expect("scalar serializes")),
+        let mut value = serde_json::to_value(self).expect("manifest serializes");
+        value.sort_all_objects();
+        serde_json::to_vec(&value).expect("JSON value serializes")
     }
 }
 
@@ -195,30 +163,7 @@ pub fn check_upgrade(
     target: &ReleaseManifest,
 ) -> Result<UpgradePlan, Refusal> {
     if let Some(cur) = current {
-        if cur.version == target.version {
-            return Err(Refusal::SameVersion);
-        }
-        if target.version < cur.version {
-            return Err(Refusal::Downgrade {
-                current: cur.version.clone(),
-                target: target.version.clone(),
-            });
-        }
-        if !target.upgrade_from.matches(&cur.version) {
-            return Err(Refusal::NotInUpgradePath {
-                current: cur.version.clone(),
-                allowed: target.upgrade_from.clone(),
-            });
-        }
-        // Workers speak one protocol of the active release's range; a target
-        // whose range shares none would strand every enrolled worker.
-        let (c, t) = (cur.protocol, target.protocol);
-        if t.min > c.max || c.min > t.max {
-            return Err(Refusal::ProtocolGap {
-                current: c,
-                target: t,
-            });
-        }
+        check_release_compatibility(cur, target)?;
     }
     let found = current_state_format.or(current.map(|c| c.state_format));
     if let Some(found) = found
@@ -232,4 +177,35 @@ pub fn check_upgrade(
     Ok(UpgradePlan {
         needs_restore_on_rollback: found.is_some_and(|f| f != target.state_format),
     })
+}
+
+fn check_release_compatibility(
+    cur: &ReleaseManifest,
+    target: &ReleaseManifest,
+) -> Result<(), Refusal> {
+    if cur.version == target.version {
+        return Err(Refusal::SameVersion);
+    }
+    if target.version < cur.version {
+        return Err(Refusal::Downgrade {
+            current: cur.version.clone(),
+            target: target.version.clone(),
+        });
+    }
+    if !target.upgrade_from.matches(&cur.version) {
+        return Err(Refusal::NotInUpgradePath {
+            current: cur.version.clone(),
+            allowed: target.upgrade_from.clone(),
+        });
+    }
+    // Workers speak one protocol of the active release's range; a target
+    // whose range shares none would strand every enrolled worker.
+    let (c, t) = (cur.protocol, target.protocol);
+    if t.min > c.max || c.min > t.max {
+        return Err(Refusal::ProtocolGap {
+            current: c,
+            target: t,
+        });
+    }
+    Ok(())
 }

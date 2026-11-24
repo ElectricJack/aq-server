@@ -58,7 +58,8 @@ pub fn resolve<'a>(
             continue;
         };
         let n = cli.len();
-        if n == 0 || n > tokens.len() || best.as_ref().is_some_and(|(_, b)| *b >= n) {
+        let minimum = best.as_ref().map_or(1, |(_, previous)| previous + 1);
+        if !(minimum..=tokens.len()).contains(&n) {
             continue;
         }
         if cli.iter().zip(tokens).all(|(a, b)| a == b.as_str())

@@ -34,7 +34,7 @@ pub async fn read(
     page: &Page,
     exact: Option<(Uuid, &str)>,
 ) -> Result<ResultPage> {
-    if page.profile.is_some() {
+    if ReadProfile::includes_native_v2(page.profile) {
         return Err(AppError::Forbidden(
             "native v2 result reads require the authenticated full principal".into(),
         ));
@@ -67,7 +67,7 @@ pub async fn read_as(
     page: &Page,
     exact: Option<(Uuid, &str)>,
 ) -> Result<ResultPage> {
-    if page.profile.is_none() {
+    if !ReadProfile::includes_native_v2(page.profile) {
         return read(state, actor.id, page, exact).await;
     }
     let pin = ActorPin::observe(state, actor).await?;
@@ -95,10 +95,13 @@ async fn read_inner(
     let ids: Vec<Uuid> = if let Some((id, _)) = exact {
         vec![id]
     } else {
-        let (v2, after) = (page.profile.is_some(), page.after);
-        sql::page_ids(&mut tx, v2, page.project_id, after, i64::from(limit) + 1)
-            .await
-            .map_err(db)?
+        let query = sql::ReportPage {
+            with_v2: ReadProfile::includes_native_v2(page.profile),
+            project: page.project_id,
+            after: page.after,
+            limit: i64::from(limit) + 1,
+        };
+        sql::page_ids(&mut tx, query).await.map_err(db)?
     };
     let more = ids.len() > limit as usize;
     let mut found = Collector::new(page.profile, page.project_id, exact.map(|(_, r)| r));

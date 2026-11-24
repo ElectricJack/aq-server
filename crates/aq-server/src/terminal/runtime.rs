@@ -4,7 +4,9 @@ use crate::error::AppError;
 use aq_session_protocol::*;
 use aq_terminal_relay::{
     Access, Ledger,
-    output::{Replay, View},
+    api::ViewQuery,
+    cache::{CacheError, ReplayCache, Watch},
+    output::View,
 };
 use std::{
     collections::BTreeMap,
@@ -12,53 +14,6 @@ use std::{
 };
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
-#[derive(Clone)]
-struct Rate {
-    tokens: u64,
-    remainder: u64,
-    last: u64,
-    capacity: u64,
-}
-impl Rate {
-    fn new(capacity: u64, now: u64) -> Self {
-        Self {
-            tokens: capacity,
-            remainder: 0,
-            last: now,
-            capacity,
-        }
-    }
-    fn take(&mut self, bytes: usize, now: u64) -> bool {
-        if now < self.last {
-            return false;
-        }
-        let minted = (now - self.last) as u128 * self.capacity as u128 + self.remainder as u128;
-        self.tokens = self.capacity.min(
-            self.tokens
-                .saturating_add((minted / 1000).min(u64::MAX as u128) as u64),
-        );
-        self.remainder = (minted % 1000) as u64;
-        self.last = now;
-        if bytes as u64 > self.tokens {
-            return false;
-        }
-        self.tokens -= bytes as u64;
-        true
-    }
-}
-struct Buffer {
-    terminal: TerminalIdentity,
-    node: Uuid,
-    policy: TerminalPolicy,
-    until: u64,
-    ring: Replay,
-    rate: Rate,
-}
-#[derive(Default)]
-struct Buffers {
-    items: BTreeMap<Uuid, Buffer>,
-    node_rate: BTreeMap<Uuid, Rate>,
-}
 struct PollState {
     slot: Arc<Semaphore>,
     output_slot: Arc<Semaphore>,
@@ -107,74 +62,44 @@ type Polls = BTreeMap<(Uuid, Option<Uuid>), Weak<PollState>>;
 
 #[derive(Default)]
 pub struct Runtime {
-    buffers: Mutex<Buffers>,
+    replay: ReplayCache,
     polls: Mutex<Polls>,
 }
 fn fail() -> AppError {
     AppError::Internal
 }
-impl Runtime {
-    pub fn reserve(
-        &self,
-        t: &TerminalIdentity,
-        policy: &TerminalPolicy,
-        until: u64,
-        now: u64,
-    ) -> Result<(), AppError> {
-        let SessionIdentity::Remote { node_id, .. } = t.session else {
-            return Err(AppError::Conflict(
-                "central terminal authority unsupported".into(),
-            ));
-        };
-        let mut b = self.buffers.lock().map_err(|_| fail())?;
-        b.items.retain(|_, v| now < v.until);
-        let active: std::collections::BTreeSet<_> = b.items.values().map(|v| v.node).collect();
-        b.node_rate.retain(|id, _| active.contains(id));
-        if let Some(entry) = b.items.get_mut(&t.terminal_id) {
-            if entry.terminal != *t || entry.policy != *policy {
-                return Err(AppError::Conflict("terminal epoch changed".into()));
-            }
-            entry.until = entry.until.max(until);
-            return Ok(());
-        }
-        if b.items.len() >= 128 || b.items.values().filter(|v| v.node == node_id).count() >= 32 {
-            return Err(AppError::IdentityUnavailable(
-                "terminal replay capacity exhausted".into(),
-            ));
-        }
-        b.node_rate
-            .entry(node_id)
-            .or_insert_with(|| Rate::new(2097152, now));
-        b.items.insert(
-            t.terminal_id,
-            Buffer {
-                terminal: t.clone(),
-                node: node_id,
-                policy: policy.clone(),
-                until,
-                ring: Replay::new_profiled(t.clone(), policy).map_err(|_| fail())?,
-                rate: Rate::new(262144, now),
-            },
-        );
-        Ok(())
+impl super::persistence::LoadedLedger {
+    pub(super) fn watch<'a>(
+        &'a self,
+        mut access: Access,
+        query: &'a ViewQuery,
+        at: u64,
+    ) -> Result<Watch<'a>, AppError> {
+        access.session_revision = self.authority_revision;
+        Watch::new(&self.ledger, access, query, at).map_err(super::persistence::relay)
     }
-    pub fn view(
-        &self,
-        l: &Ledger,
-        a: &Access,
-        subscription: Uuid,
-        after: u64,
-        now: u64,
-    ) -> Result<Option<View>, AppError> {
-        let b = self.buffers.lock().map_err(|_| fail())?;
-        b.items
-            .get(&l.terminal().terminal_id)
-            .map(|v| {
-                v.ring
-                    .view(l, a, subscription, after, now)
-                    .map_err(super::persistence::relay)
-            })
-            .transpose()
+}
+impl From<CacheError> for AppError {
+    fn from(error: CacheError) -> Self {
+        match error {
+            CacheError::Relay(error) => super::persistence::relay(error),
+            CacheError::Internal => Self::Internal,
+            CacheError::Expired | CacheError::Central | CacheError::EpochChanged => {
+                Self::Conflict(error.to_string())
+            }
+            CacheError::Full | CacheError::SnapshotQuota => {
+                Self::IdentityUnavailable(error.to_string())
+            }
+            CacheError::Oversized => Self::BadRequest(error.to_string()),
+        }
+    }
+}
+impl Runtime {
+    pub fn reserve(&self, ledger: &Ledger, until: u64, now: u64) -> Result<(), AppError> {
+        Ok(self.replay.reserve(ledger, until, now)?)
+    }
+    pub(super) fn view(&self, watch: &Watch<'_>) -> Result<Option<View>, AppError> {
+        Ok(self.replay.view(watch)?)
     }
     pub fn frame(
         &self,
@@ -182,58 +107,7 @@ impl Runtime {
         frame: OutputFrame,
         now: u64,
     ) -> Result<Option<OutputGap>, AppError> {
-        let mut b = self.buffers.lock().map_err(|_| fail())?;
-        // Output is disposable. A worker may finish an upload after its watch
-        // expired (or before anyone watches). Authority is checked by upload_in;
-        // absence of a replay consumer must not cause an endless upload retry.
-        let Some(buffer) = b.items.get(&frame.terminal.terminal_id) else {
-            return Ok(None);
-        };
-        if now >= buffer.until {
-            b.items.remove(&frame.terminal.terminal_id);
-            return Ok(None);
-        }
-        let node = buffer.node;
-        let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
-        let entry = b
-            .items
-            .get_mut(&frame.terminal.terminal_id)
-            .ok_or_else(fail)?;
-        if entry.terminal != frame.terminal || now >= entry.until {
-            return Err(AppError::Conflict("terminal subscription expired".into()));
-        }
-        if frame.bytes.len() > entry.policy.max_frame_bytes as usize {
-            return Err(AppError::BadRequest(
-                "frame exceeds sealed terminal policy".into(),
-            ));
-        }
-        if !entry
-            .ring
-            .is_new_frame(peer, &frame)
-            .map_err(super::persistence::relay)?
-        {
-            return Ok(None);
-        }
-        let mut sr = entry.rate.clone();
-        if !sr.take(frame.bytes.len(), now) || !nr.take(frame.bytes.len(), now) {
-            let gap = OutputGap {
-                terminal: frame.terminal.clone(),
-                first_missing: frame.sequence,
-                last_missing: frame.sequence,
-            };
-            entry
-                .ring
-                .peer_gap(peer, &gap, now)
-                .map_err(super::persistence::relay)?;
-            return Ok(Some(gap));
-        }
-        entry
-            .ring
-            .frame(peer, frame, now)
-            .map_err(super::persistence::relay)?;
-        entry.rate = sr;
-        b.node_rate.insert(node, nr);
-        Ok(None)
+        Ok(self.replay.frame(peer, frame, now)?)
     }
     pub fn snapshot(
         &self,
@@ -241,43 +115,7 @@ impl Runtime {
         snapshot: Snapshot,
         now: u64,
     ) -> Result<(), AppError> {
-        let mut b = self.buffers.lock().map_err(|_| fail())?;
-        let Some(buffer) = b.items.get(&snapshot.terminal.terminal_id) else {
-            return Ok(());
-        };
-        if now >= buffer.until {
-            b.items.remove(&snapshot.terminal.terminal_id);
-            return Ok(());
-        }
-        let node = buffer.node;
-        let mut nr = b.node_rate.get(&node).cloned().ok_or_else(fail)?;
-        let entry = b
-            .items
-            .get_mut(&snapshot.terminal.terminal_id)
-            .ok_or_else(fail)?;
-        if entry.terminal != snapshot.terminal || now >= entry.until {
-            return Err(AppError::Conflict("terminal subscription expired".into()));
-        }
-        if !entry
-            .ring
-            .is_new_snapshot(peer, &snapshot)
-            .map_err(super::persistence::relay)?
-        {
-            return Ok(());
-        }
-        let mut sr = entry.rate.clone();
-        if !sr.take(snapshot.state.len(), now) || !nr.take(snapshot.state.len(), now) {
-            return Err(AppError::IdentityUnavailable(
-                "terminal snapshot output quota exhausted".into(),
-            ));
-        }
-        entry
-            .ring
-            .snapshot(peer, snapshot, now)
-            .map_err(super::persistence::relay)?;
-        entry.rate = sr;
-        b.node_rate.insert(node, nr);
-        Ok(())
+        Ok(self.replay.snapshot(peer, snapshot, now)?)
     }
     pub fn gap(
         &self,
@@ -285,21 +123,7 @@ impl Runtime {
         gap: &OutputGap,
         now: u64,
     ) -> Result<(), AppError> {
-        let mut b = self.buffers.lock().map_err(|_| fail())?;
-        if b.items
-            .get(&gap.terminal.terminal_id)
-            .is_some_and(|entry| now >= entry.until)
-        {
-            b.items.remove(&gap.terminal.terminal_id);
-            return Ok(());
-        }
-        if let Some(entry) = b.items.get_mut(&gap.terminal.terminal_id) {
-            entry
-                .ring
-                .peer_gap(peer, gap, now)
-                .map_err(super::persistence::relay)?;
-        }
-        Ok(())
+        Ok(self.replay.gap(peer, gap, now)?)
     }
     pub fn poll(&self, node: Uuid) -> Result<Poll, AppError> {
         self.poll_channel(node, None)

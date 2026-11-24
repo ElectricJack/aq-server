@@ -110,23 +110,22 @@ pub(crate) fn validate_receipt(value: &Value, id: Uuid) -> Result<()> {
     };
     let envelope: crate::wire::Envelope =
         serde_json::from_value(value.clone()).map_err(|_| invalid())?;
-    if envelope.api_version != "dashboard-actions-1"
-        || envelope.data.operation_id != id
-        || envelope.request_id.is_nil()
-        || envelope
-            .data
-            .request_digest
-            .strip_prefix("sha256:")
-            .is_none_or(|digest| {
-                digest.len() != 64
-                    || !digest
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            })
-    {
+    let matching_operation =
+        envelope.api_version == "dashboard-actions-1" && envelope.data.operation_id == id;
+    let verified_request =
+        !envelope.request_id.is_nil() && valid_digest(&envelope.data.request_digest);
+    if !matching_operation || !verified_request {
         return Err(invalid());
     }
     Ok(())
+}
+fn valid_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 pub async fn submit(http: &Client, request: &actions::ActionRequest) -> Result<Value> {
     let id = request.operation_id;
@@ -171,56 +170,11 @@ pub async fn execute(http: &Client, command: &Command) -> Result<Value> {
         return Err(unsupported(operation));
     }
     match command {
-        Command::Tasks(Tasks::List { project, page: p }) => {
-            let path = project
-                .map(|id| format!("/api/human/projects/{id}/tasks"))
-                .unwrap_or_else(|| "/api/human/overview/tasks".into());
-            let mut query = page(p);
-            if project.is_none() {
-                for (key, _) in &mut query {
-                    if key == "limit" {
-                        *key = "task_limit".into();
-                    } else if key == "cursor" {
-                        *key = "after".into();
-                    }
-                }
-            }
-            read(http, &path, &query).await
-        }
-        Command::Tasks(Tasks::Show { id, project }) => {
-            read(
-                http,
-                &format!("/api/human/projects/{project}/tasks/{id}"),
-                &[],
-            )
-            .await
-        }
-        Command::Tasks(Tasks::Create(args)) => submit(http, &actions::task(args)).await,
-        Command::Tasks(Tasks::Cancel(c)) => task_change(http, "task.cancel", c).await,
-        Command::Tasks(Tasks::Retry(c)) => task_change(http, "task.retry", c).await,
+        Command::Tasks(command) => tasks(http, command).await,
         Command::Workers(Workers::Revoke { machine }) => {
             submit(http, &actions::worker_revoke(machine)).await
         }
-        Command::Decisions(Decisions::List {
-            project,
-            state,
-            page: p,
-        }) => {
-            let mut query = page(p);
-            if let Some(id) = project {
-                query.push(("project_id".into(), id.to_string()));
-            }
-            if matches!(state, DecisionState::Closed) {
-                query.push(("state".into(), "closed".into()));
-            }
-            read(http, "/api/reviews/decisions", &query).await
-        }
-        Command::Decisions(Decisions::Show { id }) => {
-            read(http, &format!("/api/reviews/decisions/{id}"), &[]).await
-        }
-        Command::Decisions(Decisions::Respond { id, request }) => {
-            submit(http, &actions::decision(*id, request)?).await
-        }
+        Command::Decisions(command) => decisions(http, command).await,
         Command::Messages(Messages::Inbox(history)) => crate::chat::history(http, history).await,
         Command::Messages(Messages::Send { text }) => crate::chat::send(http, text).await,
         Command::Chat(args) => crate::chat::chat(http, args).await,
@@ -237,5 +191,56 @@ pub async fn execute(http: &Client, command: &Command) -> Result<Value> {
             Ok(value)
         }
         _ => Err(unsupported("requested action")),
+    }
+}
+async fn tasks(http: &Client, command: &Tasks) -> Result<Value> {
+    match command {
+        Tasks::List { project, page: p } => {
+            let path = project
+                .map(|id| format!("/api/human/projects/{id}/tasks"))
+                .unwrap_or_else(|| "/api/human/overview/tasks".into());
+            let mut query = page(p);
+            if project.is_none() {
+                for (key, _) in &mut query {
+                    if key == "limit" {
+                        *key = "task_limit".into();
+                    } else if key == "cursor" {
+                        *key = "after".into();
+                    }
+                }
+            }
+            read(http, &path, &query).await
+        }
+        Tasks::Show { id, project } => {
+            read(
+                http,
+                &format!("/api/human/projects/{project}/tasks/{id}"),
+                &[],
+            )
+            .await
+        }
+        Tasks::Create(args) => submit(http, &actions::task(args)).await,
+        Tasks::Cancel(c) => task_change(http, "task.cancel", c).await,
+        Tasks::Retry(c) => task_change(http, "task.retry", c).await,
+    }
+}
+async fn decisions(http: &Client, command: &Decisions) -> Result<Value> {
+    match command {
+        Decisions::List {
+            project,
+            state,
+            page: p,
+        } => {
+            let mut query = page(p);
+            if let Some(id) = project {
+                query.push(("project_id".into(), id.to_string()));
+            }
+            if matches!(state, DecisionState::Closed) {
+                query.push(("state".into(), "closed".into()));
+            }
+            read(http, "/api/reviews/decisions", &query).await
+        }
+        Decisions::Show { id } => read(http, &format!("/api/reviews/decisions/{id}"), &[]).await,
+        Decisions::Respond { id, request } => submit(http, &actions::decision(*id, request)?).await,
     }
 }

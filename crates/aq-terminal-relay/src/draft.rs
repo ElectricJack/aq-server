@@ -66,31 +66,59 @@ pub enum HumanLifecycle {
     Status(ControlStatus),
 }
 
+pub(crate) fn valid_control_fields(
+    operation_id: Uuid,
+    lease_id: Uuid,
+    session_revision: u64,
+    controller_generation: u64,
+) -> bool {
+    !operation_id.is_nil()
+        && !lease_id.is_nil()
+        && session_revision > 0
+        && controller_generation > 0
+}
+
+impl ControlStatus {
+    fn validate_lease(&self) -> std::result::Result<(), ContractError> {
+        if let Some(lease) = &self.lease {
+            lease.validate()?;
+            if lease.terminal != self.terminal || lease.generation != self.generation {
+                return Err(ContractError::Stale);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl HumanLifecycle {
     pub fn validate(&self) -> std::result::Result<(), ContractError> {
         let good = match self {
             Self::Renew(v) => {
                 v.terminal.validate()?;
-                !v.operation_id.is_nil()
-                    && !v.lease_id.is_nil()
-                    && v.expected_session_revision > 0
-                    && v.expected_controller_generation > 0
-                    && v.expires_at_ms > 0
+                valid_control_fields(
+                    v.operation_id,
+                    v.lease_id,
+                    v.expected_session_revision,
+                    v.expected_controller_generation,
+                ) && v.expires_at_ms > 0
             }
             Self::Release(v) => {
                 v.terminal.validate()?;
-                !v.operation_id.is_nil()
-                    && !v.lease_id.is_nil()
-                    && v.expected_session_revision > 0
-                    && v.expected_controller_generation > 0
+                valid_control_fields(
+                    v.operation_id,
+                    v.lease_id,
+                    v.expected_session_revision,
+                    v.expected_controller_generation,
+                )
             }
             Self::Capture(v) => {
                 v.terminal.validate()?;
-                !v.operation_id.is_nil()
-                    && !v.lease_id.is_nil()
-                    && !v.uncertain_operation_id.is_nil()
-                    && v.expected_session_revision > 0
-                    && v.expected_controller_generation > 0
+                valid_control_fields(
+                    v.operation_id,
+                    v.lease_id,
+                    v.expected_session_revision,
+                    v.expected_controller_generation,
+                ) && !v.uncertain_operation_id.is_nil()
                     && v.expires_at_ms > 0
             }
             Self::OpenEpoch(v) => {
@@ -100,12 +128,7 @@ impl HumanLifecycle {
             }
             Self::Status(v) => {
                 v.terminal.validate()?;
-                if let Some(lease) = &v.lease {
-                    lease.validate()?;
-                    if lease.terminal != v.terminal || lease.generation != v.generation {
-                        return Err(ContractError::Stale);
-                    }
-                }
+                v.validate_lease()?;
                 v.session_revision > 0
             }
         };
