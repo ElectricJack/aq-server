@@ -13,7 +13,7 @@ const FIRST_NOTICE_MS: i64 = 600_000;
 const RETRY_CHECK_MS: i64 = 300_000;
 
 /// What a supervisor's turn about held work ends with.
-const DECISION: &str = "Decide, and end the turn with one of these: retry with task.retry; deliver the retained result where task.work shows that path; file a task that fixes the cause with task.create and make the held tasks wait on it with task.dependency.add and \"resume_held\": true; or escalate with supervisor.escalate.";
+pub(crate) const DECISION: &str = "Decide, and end the turn with one of these: retry with task.retry; deliver the retained result where task.work shows that path; file a task that fixes the cause with task.create and make the held tasks wait on it with task.dependency.add and \"resume_held\": true; or escalate with supervisor.escalate.";
 
 const SEED: &str = "
 INSERT INTO supervisor_hold_followups

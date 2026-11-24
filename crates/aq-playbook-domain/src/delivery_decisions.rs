@@ -452,8 +452,9 @@ fn delivery_notice(
         evidence.push(' ');
         evidence.push_str(pr);
     }
+    let decision = crate::scheduling_notices::DECISION;
     format!(
-        "{context}\n{evidence}\n\n{body}\n\nUse task.work, task.history and the current result or check evidence to verify this hold. Use task.retry after its reported cause is resolved and the task is eligible for a retry. Otherwise name the blocker and what would clear it, or escalate with these identifiers. AQ schedules another check while the hold remains. Verify retry authorization against the current hold before submitting a retry."
+        "{context}\n{evidence}\n\n{body}\n\nUse task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. {decision}"
     )
 }
 
@@ -530,8 +531,12 @@ mod tests {
                 base: String::new(),
             };
             let expected = format!(
-                "Delivery hold checks_failed for project {}, task {} (revision 5), attempt {}, result {}.\n{expected_evidence}\n\nInspect the failed check.\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry.",
-                origin.project_id, origin.task_id, origin.attempt_id, origin.result_id
+                "Delivery hold checks_failed for project {}, task {} (revision 5), attempt {}, result {}.\n{expected_evidence}\n\nInspect the failed check.\n\nUse task.work, task.history and the current result or check evidence to find the cause, and check whether other tasks in this project are held for the same one. {}",
+                origin.project_id,
+                origin.task_id,
+                origin.attempt_id,
+                origin.result_id,
+                crate::scheduling_notices::DECISION
             );
             assert_eq!(
                 delivery_notice(
