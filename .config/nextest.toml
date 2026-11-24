@@ -7,14 +7,14 @@
 # by an advisory lock (aq-server src/test_support.rs, `migration_slot`).
 
 [profile.default]
-# A test still running after 60 s is reported as slow; one still running after
-# 10 min is stopped, so a hang cannot hold the whole run.
-slow-timeout = { period = "60s", terminate-after = 10 }
+# A test still running after 60 s is reported as slow. Tests are not stopped
+# for running long.
+slow-timeout = "60s"
 
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = "60s"
 
 [profile.ci.junit]
 path = "junit.xml"

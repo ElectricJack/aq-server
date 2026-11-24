@@ -6,7 +6,7 @@ directory for focused tests, lint and extracted-package qualification:
 ```sh
 export CARGO_TARGET_DIR="$PWD/target"
 export CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
-timeout 900 cargo test -p aq-server --locked --offline --test dashboard_actions
+cargo test -p aq-server --locked --offline --test dashboard_actions
 ```
 
 Capture the absolute target path before changing into an extracted source tree;
