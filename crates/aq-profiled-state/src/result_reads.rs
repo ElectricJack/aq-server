@@ -311,7 +311,7 @@ pub async fn reworked_without_facts(
          AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
          AND ((s.disposition='rework_required' AND
                (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent')) \
-              OR ((s.disposition IS NULL OR s.disposition='held') AND ",
+              OR ((s.disposition IS NULL OR (s.disposition='held' AND s.operation_id IS NULL)) AND ",
          aq_machine_control::platform_interruption_sql!("r.report_bytes"),
         " AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL)) \
           AND ($1::UUID IS NULL OR r.report_id>$1) ORDER BY r.report_id LIMIT $2",

@@ -8,10 +8,15 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
         delivery_store::{DeliveryPort, PgDelivery},
     };
 
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../../../protocol/agent-access/v1/fixtures/mutation-delivery.json"
+    ))
+    .unwrap();
+    let profile = fixture["proposal_profiles"][0]["profile"].clone();
     let (f, start, mut report) = Box::pin(prepare_with_policy_checks(
         true,
         false,
-        None,
+        Some(profile.clone()),
         false,
         Some(default_policy("required")),
         true,
@@ -32,10 +37,12 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
         ReportSource::Pushed { changed: true },
     ))
     .await;
+    super::super::replacement::seed_agent_binding(&e, &profile).await;
     let pool = e.f.db.pool().await;
     let task = e.f.selection.lineage.task_id;
     let result = e.report.report_id;
     let attempt = e.report.binding.attempt_id;
+    super::super::replacement::seed_native_offer_clock(&pool, attempt).await;
     let port = PgDelivery(pool.clone());
     assert!(port.pending(None, 10).await.unwrap().is_empty());
     assert_eq!(complete(&e).await, Settled::Stale);
@@ -91,7 +98,7 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
     assert_eq!(priors[0].attempt_id, attempt);
     assert!(priors[0].holds_task);
     assert!(
-        aq_profiled_state::replacement::assess(&priors, &limits, NOW)
+        aq_profiled_state::replacement::assess(&priors, &limits, NOW + 1)
             .replacement()
             .is_some()
     );

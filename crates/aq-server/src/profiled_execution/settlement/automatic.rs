@@ -228,7 +228,7 @@ async fn replacement_facts(
         && view.cancellation_id.is_none()
         && settlement
             .as_ref()
-            .is_none_or(|s| s.disposition == AutoDisposition::Held)
+            .is_none_or(|s| s.disposition == AutoDisposition::Held && s.operation_id.is_none())
         && crate::hibernation::suspended_hold(&mut tx, r.report.binding.attempt_id)
             .await?
             .is_none();
