@@ -117,6 +117,12 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
         "snapshot_digest": Digest::of(b"updated catalog"),
     });
 
+    let project = ServiceConfig {
+        native: None,
+        native_digest: None,
+        secret_file: None,
+        ..project
+    };
     let successor = assemble(&project, &project_control, 2, batch, b"new project input");
     assert!(plan::install(&project, &successor).is_err());
     let (recovered, _) = installed(&project, &pool).unwrap().unwrap();
@@ -127,11 +133,9 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
     );
     assert_eq!(recovered.swarm_profile, prior.swarm_profile);
     assert_eq!(recovered.model.provider.as_str(), "openai");
-    assert_eq!(
-        Some(&recovered.native_digest),
-        project.native_digest.as_ref()
-    );
-    assert_eq!(Some(&recovered.secret_file), project.secret_file.as_ref());
+    assert_eq!(recovered.native, prior.native);
+    assert_eq!(recovered.native_digest, prior.native_digest);
+    assert_eq!(recovered.secret_file, prior.secret_file);
     assert_eq!(
         protected_read(&recovered.startup_file, 1024).unwrap(),
         b"retained project input"
