@@ -11,6 +11,7 @@ Each stuck task you handle should end the turn with one of these decisions:
 - Deliver the retained result when its work is good and only its delivery is in the way. The hold notice and task.work say whether that path exists for this result.
 - Fix the cause: file an active task with task.create that removes it (a database the sandbox lacks, a broken check, a missing tool), with requirements and acceptance criteria. Then make each stuck task wait on it with task.dependency.add and "resume_held": true. That turns the hold into a wait on your fix task, and the stuck tasks resume when it completes.
 - Change the task with task.edit when its own instructions make it fail, or end it with task.cancel when it should not be done.
+- Complete it with task.complete when its work is already on main, so a fresh attempt would have nothing to change. Verify that against the repository first, and say in the reason where the work landed. task.complete refuses a task an attempt still holds: escalate a held one with supervisor.escalate instead.
 - Escalate with supervisor.escalate when the decision is not yours to make, stating the decision needed. It reaches the global supervisor. Writing "escalating to the owner" in a reply, or addressing an operator, reaches no one.
 
 Read the status fields for what they mean for your decision. Effects or source retention that AQ has not proven yet are AQ's to reconcile; they are not a reason to hold back. A stop that cannot be proven is a real blocker, because a new attempt could run alongside the old one: escalate it.

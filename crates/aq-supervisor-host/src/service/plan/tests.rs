@@ -114,6 +114,7 @@ fn a_project_supervisor_uses_the_saved_role_text_and_keeps_the_tool_manual() {
             "task.create",
             "task.dependency.add and \"resume_held\": true",
             "supervisor.escalate",
+            "task.complete when its work is already on main",
             "task.work and task.history",
             "result.list and result.show",
             &format!("this conversation ({conversation})"),
