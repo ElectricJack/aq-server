@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
-    os::unix::fs::DirBuilderExt,
+    os::unix::fs::{DirBuilderExt, MetadataExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -170,6 +170,10 @@ pub(crate) struct ReadArguments {
     reference: Option<String>,
 }
 
+pub(crate) const SESSION_REPOS_DIR: &str = ".aq-mcp-repos";
+const MAX_REPO_FILE_BYTES: libc::rlim_t = 128 * 1024 * 1024;
+const MAX_TURN_REPO_BYTES: u64 = 256 * 1024 * 1024;
+
 #[derive(Default)]
 pub(crate) struct SessionRepositories {
     root: Option<PathBuf>,
@@ -190,35 +194,54 @@ impl SessionRepositories {
         let (_, _, remote) = project_remote(&origin, &token, project_id).await?;
         let token = std::str::from_utf8(&token)?;
         if self.root.is_none() {
-            let root = Path::new("/workspace").join(format!(".aq-repo-{}", Uuid::new_v4()));
+            let home = PathBuf::from(std::env::var_os("HOME").context("repository session home")?);
+            let home_metadata = std::fs::symlink_metadata(&home)?;
+            ensure!(
+                home.is_absolute()
+                    && home.canonicalize()? == home
+                    && home_metadata.is_dir()
+                    && home_metadata.mode() & 0o077 == 0
+                    && home_metadata.uid() == unsafe { libc::geteuid() },
+                "repository session needs a private turn home"
+            );
+            let parent = home.join(SESSION_REPOS_DIR);
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .recursive(true)
+                .create(&parent)?;
+            ensure!(
+                parent.canonicalize()? == parent,
+                "invalid repository session parent"
+            );
+            let root = parent.join(Uuid::new_v4().to_string());
             std::fs::DirBuilder::new().mode(0o700).create(&root)?;
             self.root = Some(root);
         }
         let root = self.root.as_ref().context("repository session root")?;
+        let parent = root.parent().context("repository session parent")?;
+        ensure!(
+            repo_bytes(parent)? < MAX_TURN_REPO_BYTES,
+            "repository session byte bound"
+        );
         let dir = root.join(project_id.to_string());
         ensure!(
             dir.exists() || std::fs::read_dir(root)?.take(32).count() < 32,
             "repository session limit"
         );
         self.synced.remove(&project_id);
-        if !dir.exists() {
-            std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-            if let Err(error) = session_git(&dir, None, &["init", "--bare", "--template="]).await {
-                std::fs::remove_dir_all(&dir)?;
-                return Err(error);
-            }
+        let result = fetch_project(&dir, token, remote.as_str())
+            .await
+            .and_then(|head| {
+                ensure!(
+                    repo_bytes(parent)? <= MAX_TURN_REPO_BYTES,
+                    "repository session byte bound"
+                );
+                Ok(head)
+            });
+        if result.is_err() && dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
         }
-        let mut fetch = vec![
-            "fetch",
-            "--quiet",
-            "--prune",
-            "--no-tags",
-            "--",
-            remote.as_str(),
-        ];
-        fetch.extend(REFSPECS);
-        session_git(&dir, Some(token), &fetch).await?;
-        let head = session_git(&dir, None, &["rev-parse", "refs/remotes/origin/main"]).await?;
+        let head = result?;
         self.synced.insert(project_id);
         Ok(json!({"project_id":project_id,"head":head.trim()}))
     }
@@ -278,6 +301,56 @@ impl SessionRepositories {
     }
 }
 
+async fn fetch_project(dir: &Path, token: &str, remote: &str) -> Result<String> {
+    if !dir.exists() {
+        std::fs::DirBuilder::new().mode(0o700).create(dir)?;
+        session_git(dir, None, &["init", "--bare", "--template="]).await?;
+    }
+    let mut fetch = vec![
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--no-tags",
+        "--no-auto-maintenance",
+        "--",
+        remote,
+    ];
+    fetch.extend(REFSPECS);
+    session_git(dir, Some(token), &fetch).await?;
+    session_git(dir, None, &["rev-parse", "refs/remotes/origin/main"]).await
+}
+
+fn repo_bytes(dir: &Path) -> Result<u64> {
+    let mut bytes = 0u64;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        let len = if metadata.is_dir() {
+            repo_bytes(&entry.path())?
+        } else {
+            metadata.len()
+        };
+        bytes = bytes.saturating_add(len);
+    }
+    Ok(bytes)
+}
+
+// Cap the largest pack Git can receive before the aggregate size check.
+fn limit_git_file_size() -> std::io::Result<()> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    limit.rlim_cur = limit.rlim_cur.min(MAX_REPO_FILE_BYTES);
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 async fn session_git(dir: &Path, token: Option<&str>, args: &[&str]) -> Result<String> {
     use tokio::process::Command;
 
@@ -289,8 +362,12 @@ async fn session_git(dir: &Path, token: Option<&str>, args: &[&str]) -> Result<S
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .arg("-c")
-            .arg("http.followRedirects=false")
+            .args([
+                "-c",
+                "http.followRedirects=false",
+                "-c",
+                "fetch.unpackLimit=1",
+            ])
             .current_dir(dir)
             .args(args)
             .stdin(Stdio::null())
@@ -299,6 +376,7 @@ async fn session_git(dir: &Path, token: Option<&str>, args: &[&str]) -> Result<S
             .kill_on_drop(true);
         if let Some(token) = token {
             command.envs(git_env(token));
+            unsafe { command.pre_exec(limit_git_file_size) };
         }
         let mut child = command.spawn()?;
         let mut output = Vec::new();

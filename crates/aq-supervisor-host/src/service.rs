@@ -268,6 +268,17 @@ fn clean_homes(config: &ServiceConfig) -> Result<()> {
         for name in ["auth.json", "supervisor.credential"] {
             let _ = std::fs::remove_file(path.join(name));
         }
+        #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+        {
+            // The caller has stopped proof. Remove repositories even when
+            // Claude killed the broker before its own cleanup could run.
+            let repos = path.join(crate::repo::SESSION_REPOS_DIR);
+            match std::fs::remove_dir_all(&repos) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
     Ok(())
 }
