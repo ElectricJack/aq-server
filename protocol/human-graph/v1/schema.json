@@ -1230,6 +1230,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanAttemptRecoveryWait"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanSupervisorFollowup"
                     }
                   ]
                 }
@@ -1989,6 +1992,24 @@
           "message": { "type": "string", "maxLength": 512 }
         },
         "required": ["code", "attempt_id", "blocker_owner", "wake_condition", "message"],
+        "additionalProperties": false
+      },
+      "HumanSupervisorFollowup": {
+        "type": "object",
+        "description": "The next supervisor observation of the current hold. AQ evaluates retry authorization independently.",
+        "properties": {
+          "code": { "const": "supervisor_hold_followup" },
+          "attempt_id": { "type": "string", "format": "uuid" },
+          "result_id": { "type": ["string", "null"], "format": "uuid" },
+          "status": { "enum": ["scheduled", "awaiting_supervisor", "awaiting_scope", "owner_attention"] },
+          "hold_reason": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "reminders_sent": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "blocker_owner": { "enum": ["project_supervisor", "project_owner"] },
+          "wake_condition": { "enum": ["current_hold_evidence_or_authority_changed", "project_supervisor_enabled", "original_graph_workspace_verified"] },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "attempt_id", "result_id", "status", "hold_reason", "next_check_at_ms", "reminders_sent", "blocker_owner", "wake_condition", "message"],
         "additionalProperties": false
       },
       "HumanResultHoldReason": {

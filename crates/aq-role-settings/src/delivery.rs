@@ -40,12 +40,18 @@ pub struct DeliveryLimits {
     /// Settings stored before this field existed read as the default.
     #[serde(default = "check_log_bytes")]
     pub check_log_bytes: u64,
+    /// How long AQ waits between project supervisor reminders for a still-current hold.
+    #[serde(default = "hold_followup_interval_ms")]
+    pub hold_followup_interval_ms: u64,
 }
 fn require_landed_results() -> bool {
     true
 }
 fn check_log_bytes() -> u64 {
     16_384
+}
+fn hold_followup_interval_ms() -> u64 {
+    DAY_MS
 }
 impl Default for DeliveryLimits {
     fn default() -> Self {
@@ -58,13 +64,14 @@ impl Default for DeliveryLimits {
             max_push_bytes: 268_435_456,
             require_landed_results: true,
             check_log_bytes: check_log_bytes(),
+            hold_followup_interval_ms: hold_followup_interval_ms(),
         }
     }
 }
 impl DeliveryLimits {
     /// Every value in its range; the message names the first that is not.
     pub fn validate(&self) -> Result<(), String> {
-        let fields: [(&str, u64, u64, u64); 7] = [
+        let fields: [(&str, u64, u64, u64); 8] = [
             (
                 "main_sync_interval_ms",
                 self.main_sync_interval_ms,
@@ -107,6 +114,12 @@ impl DeliveryLimits {
                 1,
                 CHECK_LOG_BYTES_CEILING,
             ),
+            (
+                "hold_followup_interval_ms",
+                self.hold_followup_interval_ms,
+                60 * SECOND_MS,
+                WEEK_MS,
+            ),
         ];
         for (name, value, least, most) in fields {
             if !(least..=most).contains(&value) {
@@ -144,7 +157,7 @@ mod tests {
     #[test]
     fn each_field_is_refused_at_zero_and_over_its_maximum() {
         type Set = fn(&mut DeliveryLimits, u64);
-        let setters: [(&str, Set, u64); 7] = [
+        let setters: [(&str, Set, u64); 8] = [
             (
                 "main_sync_interval_ms",
                 |l, v| l.main_sync_interval_ms = v,
@@ -175,6 +188,11 @@ mod tests {
                 "check_log_bytes",
                 |l, v| l.check_log_bytes = v,
                 CHECK_LOG_BYTES_CEILING,
+            ),
+            (
+                "hold_followup_interval_ms",
+                |l, v| l.hold_followup_interval_ms = v,
+                WEEK_MS,
             ),
         ];
         for (name, set, most) in setters {
@@ -219,6 +237,27 @@ mod tests {
         stored.as_object_mut().unwrap().remove("check_log_bytes");
         let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
         assert_eq!(read.check_log_bytes, 16_384);
+    }
+    #[test]
+    fn hold_followup_interval_has_a_minute_floor_and_defaults_for_legacy_settings() {
+        let limits = DeliveryLimits {
+            hold_followup_interval_ms: 59_999,
+            ..Default::default()
+        };
+        assert!(
+            limits
+                .validate()
+                .unwrap_err()
+                .starts_with("hold_followup_interval_ms")
+        );
+        let mut stored = serde_json::to_value(limits).unwrap();
+        stored
+            .as_object_mut()
+            .unwrap()
+            .remove("hold_followup_interval_ms");
+        let read: DeliveryLimits = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.hold_followup_interval_ms, DAY_MS);
+        assert_eq!(read.validate(), Ok(()));
     }
     #[test]
     fn unknown_and_missing_fields_are_refused() {

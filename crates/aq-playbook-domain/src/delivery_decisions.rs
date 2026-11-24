@@ -420,7 +420,7 @@ fn delivery_notice(
         evidence.push_str(pr);
     }
     format!(
-        "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
+        "{context}\n{evidence}\n\n{body}\n\nUse task.work, task.history and the current result or check evidence to verify this hold. Use task.retry after its reported cause is resolved and the task is eligible for a retry. Otherwise name the blocker and what would clear it, or escalate with these identifiers. AQ schedules another check while the hold remains. Verify retry authorization against the current hold before submitting a retry."
     )
 }
 
