@@ -25,13 +25,12 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-/// Every run's environment besides `HOME`, `PATH`, `CLAUDE_CONFIG_DIR` and
-/// the token.
 /// How much of what an agent harness printed outside its event stream is
 /// kept for a failure's detail.
 const STRAY_BYTES: usize = 600;
 
-const ENVIRONMENT: [(&str, &str); 5] = [
+/// The quiet, non-updating Claude Code environment for headless runs.
+pub(crate) const ENVIRONMENT: [(&str, &str); 5] = [
     ("DISABLE_AUTOUPDATER", "1"),
     ("DISABLE_TELEMETRY", "1"),
     ("DISABLE_ERROR_REPORTING", "1"),
@@ -42,12 +41,12 @@ const ENVIRONMENT: [(&str, &str); 5] = [
 /// The efforts the worker's interactive Claude launch passes as `--effort`
 /// (it also accepts `default`, passing nothing, and `off`); the same values
 /// `claude --help` lists for `--effort`.
-const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub(crate) const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Runs `run`'s task once on the Claude login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
-pub(crate) async fn claude(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
+pub(super) async fn claude(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
     in_run_dirs(h, run, async |executable, place| {
         attempt(h, executable, place, run).await
     })
