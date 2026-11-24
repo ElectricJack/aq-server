@@ -340,6 +340,18 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
             "{view}"
         );
     }
+    let mut legacy = results[1].1.clone();
+    for profile in [None, Some(human_results::COVERAGE)] {
+        if let Some(profile) = profile {
+            legacy["profile"] = json!(profile);
+        }
+        let (status, detail) =
+            supervised(&machine, &supervisor, "result.show", legacy.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        assert_eq!(detail["coverage"], human_results::COVERAGE);
+        assert_eq!(detail["items"][0]["report_id"], json!(report.report_id));
+        assert!(detail["items"][0].get("origin").is_none(), "{detail}");
+    }
     for (name, params) in results {
         refused(supervised(&machine, &foreign, name, params).await);
     }
