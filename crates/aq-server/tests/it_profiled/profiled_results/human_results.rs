@@ -442,7 +442,7 @@ async fn supervisor_token(f: &Fixture, project: Option<Uuid>) -> String {
         machine_boot_id: Uuid::new_v4(),
         boot_ms: 1000,
     };
-    sessions.prepare(plan.clone(), clock).await.unwrap();
+    sessions.prepare(plan.clone(), clock.clone()).await.unwrap();
     let binding = plan.binding().unwrap();
     let launch = ca::HostLaunchRef {
         binding: binding.clone(),
