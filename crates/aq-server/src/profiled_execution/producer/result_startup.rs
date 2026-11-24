@@ -228,8 +228,11 @@ mod tests {
         value
     }
     fn definitions(body: Value) -> (ArtifactRef, Vec<Definition>) {
-        let bytes = serde_json::to_string(&body).unwrap();
-        let mut adapter = reference(ADAPTER_ID);
+        selected(reference(ADAPTER_ID), &body)
+    }
+    /// `adapter`, pinned to the bytes of `body`, beside the public startup.
+    fn selected(mut adapter: ArtifactRef, body: &Value) -> (ArtifactRef, Vec<Definition>) {
+        let bytes = serde_json::to_string(body).unwrap();
         adapter.digest = Digest::of(bytes.as_bytes());
         let definitions = vec![
             Definition::new(adapter.clone(), ArtifactKind::Definition, bytes).unwrap(),
@@ -265,38 +268,27 @@ mod tests {
     #[test]
     fn docker_local_profiles_run_the_long_phase_with_their_pinned_recipe_only() {
         for sandbox in &DOCKER_LOCAL_PROFILES {
-            let (_, startup) = definitions(body());
             let select = |adapter: &str, recipe: ArtifactRef| {
                 let mut value = body();
                 value["profile"] = json!(sandbox.profile);
                 value["recipe"] = json!(recipe);
-                let bytes = serde_json::to_string(&value).unwrap();
-                let mut adapter = reference(adapter);
-                adapter.digest = Digest::of(bytes.as_bytes());
-                let mut defs = startup.clone();
-                defs[0] =
-                    Definition::new(adapter.clone(), ArtifactKind::Definition, bytes).unwrap();
-                (adapter, defs)
+                selected(reference(adapter), &value)
             };
             let pin = public_reference(sandbox.recipe_id, sandbox.recipe_digest.unwrap()).unwrap();
             let (adapter, defs) = select(sandbox.adapter, pin.clone());
             let reporting = from_definitions(&adapter, &defs).unwrap().unwrap();
             assert!(!reporting.interactive && reporting.long_phase);
             assert!(interactive_runtime(&reference("runtime-code"), &defs).unwrap());
-            // Another recipe body under the same profile is refused.
-            let (adapter, defs) = select(sandbox.adapter, reference(sandbox.recipe_id));
-            assert!(
-                from_definitions(&adapter, &defs).is_err(),
-                "{}",
-                sandbox.harness
-            );
-            // A docker-local profile under the Codex result adapter identity is refused.
-            let (adapter, defs) = select(ADAPTER_ID, pin);
-            assert!(
-                from_definitions(&adapter, &defs).is_err(),
-                "{}",
-                sandbox.harness
-            );
+            for (adapter, recipe) in [
+                // Another recipe body under the same profile is refused.
+                (sandbox.adapter, reference(sandbox.recipe_id)),
+                // A docker-local profile under the Codex result adapter identity is refused.
+                (ADAPTER_ID, pin.clone()),
+            ] {
+                let (adapter, defs) = select(adapter, recipe);
+                let refused = from_definitions(&adapter, &defs).is_err();
+                assert!(refused, "{}", sandbox.harness);
+            }
         }
     }
     #[test]
@@ -318,15 +310,9 @@ mod tests {
     #[test]
     fn definition_revision_two_preserves_schema_recipe_and_contract_one() {
         fn revision_two(body: Value) -> (ArtifactRef, Vec<Definition>) {
-            let (mut adapter, mut defs) = definitions(body);
+            let mut adapter = reference(ADAPTER_ID);
             adapter.version = Text::new("2").unwrap();
-            defs[0] = Definition::new(
-                adapter.clone(),
-                ArtifactKind::Definition,
-                defs[0].body().to_owned(),
-            )
-            .unwrap();
-            (adapter, defs)
+            selected(adapter, &body)
         }
         let value = interactive_body();
         let (adapter, defs) = revision_two(value.clone());
