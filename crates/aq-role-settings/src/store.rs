@@ -331,7 +331,10 @@ pub async fn save_delivery_limits(
     edit: Edit<'_>,
     limits: &delivery::DeliveryLimits,
 ) -> Result<Receipt> {
-    edit.apply(Change::DeliveryLimits(*limits)).await
+    edit.apply(Change::DeliveryLimits(
+        delivery::DeliveryLimitsChange::replace(*limits),
+    ))
+    .await
 }
 /// The delivery limits and their revision; the defaults at revision 0 until
 /// saved.

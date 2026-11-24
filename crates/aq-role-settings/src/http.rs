@@ -156,9 +156,14 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
         },
         Target::SelectionDefaults => {
             let settings = store::settings(pool).await?;
+            let mut defaults =
+                serde_json::to_value(&settings.selection_defaults).map_err(|_| Error::Internal)?;
+            // A default-valued backoff can be absent in the stored document.
+            defaults["launch_retry_backoff"] =
+                json!(settings.selection_defaults.launch_retry_backoff);
             Ok(json!({
                 "revision": settings.selection_defaults_revision.to_string(),
-                "selection_defaults": settings.selection_defaults,
+                "selection_defaults": defaults,
             }))
         }
         Target::Limits => {
@@ -241,9 +246,9 @@ pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result
             Change::DeliveryDocument(markdown)
         }
         #[cfg(feature = "delivery_playbook")]
-        (Target::DeliveryLimits, None, None, Some(limits)) => {
-            Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
-        }
+        (Target::DeliveryLimits, None, None, Some(limits)) => Change::DeliveryLimits(
+            crate::delivery::DeliveryLimitsChange::from_request(limits).map_err(|_| bad())?,
+        ),
         // A key the request does not state keeps its stored value (a client that does not
         // know a key cannot reset it); the merged whole is validated by the save.
         (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {

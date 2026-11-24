@@ -234,6 +234,37 @@ fn stored_settings_snapshots_and_policies_with_the_removed_keys_still_read() {
         assert_eq!(profile.selection.max_attempts, Some(3));
     }
 }
+
+#[test]
+fn launch_retry_backoff_defaults_in_older_snapshots_and_requires_positive_ordered_delays() {
+    let snapshot = compile(&default_documents(), &defaults(), &limits()).unwrap();
+    let content: serde_json::Value = serde_json::from_slice(snapshot.canonical_bytes()).unwrap();
+    assert!(
+        content["selection_defaults"]
+            .get("launch_retry_backoff")
+            .is_none()
+    );
+    let bytes = snapshot.canonical_bytes();
+    let stored = Snapshot::from_stored_bytes(bytes).unwrap();
+    assert_eq!(stored.digest(), snapshot.digest());
+    let mut selection = stored.selection_defaults().clone();
+    assert_eq!(
+        selection.launch_retry_backoff,
+        LaunchRetryBackoff::default()
+    );
+    for (initial_delay_ms, max_delay_ms) in [(0, 30_000), (30_000, 29_999)] {
+        selection.launch_retry_backoff = LaunchRetryBackoff {
+            initial_delay_ms,
+            max_delay_ms,
+        };
+        assert!(
+            selection
+                .check()
+                .unwrap_err()
+                .contains("launch retry backoff")
+        );
+    }
+}
 #[test]
 fn a_profile_is_its_candidates_and_selection_is_optional() {
     let source = &INTELLIGENCE[..INTELLIGENCE.find("\n## Selection").unwrap()];

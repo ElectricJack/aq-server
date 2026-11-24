@@ -153,6 +153,29 @@ impl PullRequestObserved {
     }
 }
 impl Delivery {
+    /// A held result may rejoin delivery once the exact open PR is clean and
+    /// its required checks have passed. This probe authorizes an observation,
+    /// and the delivery run still fences every write against its input head.
+    pub async fn held_checks_passed(
+        &self,
+        target: &DeliveryTarget,
+        number: u64,
+        head: &str,
+        required: Option<&[String]>,
+    ) -> bool {
+        let request = CheckRequest::new(number, required, 0);
+        self.github
+            .checks(&target.github, number, required)
+            .await
+            .is_ok_and(|checked| {
+                let pr = &checked.pull_request;
+                checked.state == ChecksState::Passed
+                    && request.matches(pr, &target.default_branch, head)
+                    && pr.state == PullRequestState::Open
+                    && pr.mergeability == Mergeability::Clean
+            })
+    }
+
     /// One look at a pull request for `pull_request.await_checks`. The
     /// completion is one of `closed`, `conflict`, `failed`, `passed` or, once
     /// `now_ms` has reached `deadline_at_ms` with nothing decided, `timeout`;

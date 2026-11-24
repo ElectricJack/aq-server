@@ -161,32 +161,103 @@ fn describe(command: &Value) -> Result<Value> {
     let name = command["name"].as_str().context("command name")?;
     let protocol: Value =
         serde_json::from_str(include_str!("../../../protocol/commands/v1/schema.json"))?;
+    let mut request = protocol["$defs"]["CommandRequest"].clone();
+    let spec = aq_server::commands::registry()
+        .get(name)
+        .context("installed command schema")?;
+    let route = spec
+        .route(aq_command_registry::Principal::Supervisor)
+        .context("installed supervisor command route")?;
+    let instructions = if route.body == aq_command_registry::Body::Action {
+        describe_action(&mut request, name)?
+    } else {
+        let catalog = aq_server::commands::document();
+        let entry = find_command(&catalog, name).context("installed command schema")?;
+        request["properties"]["params"] =
+            entry["principals"]["supervisor"]["params_schema"].clone();
+        "Submit one CommandRequest JSON object on stdin. Use the params schema for this command."
+            .into()
+    };
+    Ok(serde_json::json!({"command":command,"request_schema":request,"instructions":instructions}))
+}
+
+fn describe_action(request: &mut Value, name: &str) -> Result<String> {
+    use serde_json::json;
+
     let actions: Value = serde_json::from_str(include_str!(
         "../../../protocol/dashboard-actions/v1/schema.json"
     ))?;
-    let mut request = protocol["$defs"]["CommandRequest"].clone();
-    let catalog = aq_server::commands::document();
-    let entry = find_command(&catalog, name).context("installed command schema")?;
-    let mut params = entry["principals"]["supervisor"]["params_schema"].clone();
-    let action = actions["$defs"]["ActionRequest"]["oneOf"]
+    let action = &actions["$defs"]["ActionRequest"];
+    let variant = action["oneOf"]
         .as_array()
         .and_then(|variants| {
             variants
                 .iter()
                 .find(|v| v["properties"]["kind"]["const"] == name)
-        });
-    if let Some(action) = action {
-        params = action["properties"]["payload"].clone();
-        request["properties"]["subject"] = actions["$defs"]["EntityRef"].clone();
-        request["properties"]["expected_versions"] =
-            actions["$defs"]["ActionRequest"]["properties"]["expected_versions"].clone();
-        request["required"] =
-            serde_json::json!(["operation_id", "subject", "expected_versions", "params"]);
+        })
+        .context("installed action payload schema")?;
+    let mut params = variant["properties"]["payload"].clone();
+    // Action forwarding accepts either operation ID location, then supplies
+    // the action payload's copy when the caller used only the command envelope.
+    params["required"]
+        .as_array_mut()
+        .context("action payload required fields")?
+        .retain(|field| field != "operation_id");
+    request["description"] = json!("CommandRequest accepted by the supervisor's action route.");
+    request["required"] = json!(["params"]);
+    request["anyOf"] = json!([
+        {"required":["operation_id"]},
+        {"properties":{"params":{"required":["operation_id"]}}}
+    ]);
+    request["properties"]["subject"] = actions["$defs"]["EntityRef"].clone();
+    request["properties"]["expected_versions"] = action["properties"]["expected_versions"].clone();
+
+    let mut instructions = String::from(concat!(
+        "Submit one CommandRequest JSON object on stdin. Put a fresh UUID in the outer operation_id. ",
+        "AQ copies it into params.operation_id when that field is omitted. If you supply both, use the same UUID. ",
+        "On uncertain transport, reuse the exact request and UUID and inspect operation.show."
+    ));
+    if let Some(rule) = aq_command_registry::subject_rule(name) {
+        describe_subject(request, &mut params, rule, &mut instructions);
+    } else {
+        request["required"] = json!(["params", "subject", "expected_versions"]);
     }
     request["properties"]["params"] = params;
-    Ok(
-        serde_json::json!({"command":command,"request_schema":request,"instructions":"Submit this CommandRequest JSON on stdin. params is the exact action payload (including operation_id when required), not an arbitrary option map. For mutations use the SAME fresh UUID for outer operation_id and params.operation_id. subject is {type,id,revision}; expected_versions is keyed by project or task, not project_revision. For task.create use subject.type=project, subject.id=the actual project UUID, subject.revision=current project revision, expected_versions.project=that revision, params.expected_project_revision=that revision. Do not add fields absent from the closed params schema. On uncertain transport reuse the exact body/UUID and inspect operation.show; never create a replacement."}),
-    )
+    Ok(instructions)
+}
+
+fn describe_subject(
+    request: &mut Value,
+    params: &mut Value,
+    rule: aq_command_registry::SubjectRule,
+    instructions: &mut String,
+) {
+    use aq_command_registry::SubjectId;
+    use serde_json::json;
+
+    let mut explicit = json!({"title":"Explicit subject","required":["subject"]});
+    let mut derived = json!({"title":"Derived subject","not":{"required":["subject"]}});
+    request["properties"]["subject"]["properties"]["type"]["const"] = json!(rule.entity);
+    if let SubjectId::Param(id) = rule.id {
+        params["properties"][id] = rule.describe()["id_param_schema"].clone();
+        explicit["properties"]["params"] = json!({"not":{"required":[id]}});
+        derived["properties"]["params"] = json!({"required":[id]});
+        instructions.push_str(&format!(
+            " For a derived subject, omit subject and include params.{id}. For an explicit subject, put the ID in subject.id and omit params.{id}."
+        ));
+    } else {
+        instructions.push_str(" Omit subject to let AQ derive it from the action params.");
+    }
+    if let Some((field, key)) = rule.revision {
+        explicit["required"] = json!(["subject", "expected_versions"]);
+        explicit["properties"]["subject"] = json!({"required":["revision"]});
+        explicit["properties"]["expected_versions"] = json!({"required":[key]});
+        instructions.push_str(&format!(
+            " Put the current revision as a decimal string in params.{field}. AQ derives expected_versions when omitted with a derived subject. For an explicit subject, use type {} and put the same revision in subject.revision and expected_versions.{key}.",
+            rule.entity
+        ));
+    }
+    request["oneOf"] = json!([derived, explicit]);
 }
 #[cfg(test)]
 mod tests {
@@ -194,12 +265,9 @@ mod tests {
     #[test]
     fn mutation_help_supplies_the_payload_and_a_valid_command_envelope() {
         let help = describe(&serde_json::json!({"name":"task.create","kind":"mutation"})).unwrap();
-        assert!(
-            help["request_schema"]["properties"]["params"]["required"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v == "operation_id")
+        assert_eq!(
+            help["request_schema"]["properties"]["params"]["properties"]["operation_id"]["format"],
+            "uuid"
         );
         let action: Value = serde_json::from_str(include_str!(
             "../../../protocol/dashboard-actions/v1/fixtures/request-task-create.json"
@@ -217,5 +285,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(forward.body, Some(action));
+    }
+
+    #[cfg(feature = "supervisor_full_access")]
+    #[test]
+    fn retry_help_describes_both_requests_accepted_by_the_scoped_owner_bridge() {
+        use aq_command_registry::{CommandRequest, Principal};
+        use serde_json::json;
+        use uuid::Uuid;
+
+        let help = describe(&json!({"name":"task.retry","kind":"mutation"})).unwrap();
+        let request = &help["request_schema"];
+        let params = &request["properties"]["params"];
+        assert_eq!(
+            params["required"],
+            json!(["project_id", "expected_version"])
+        );
+        assert_eq!(params["properties"]["task_id"]["format"], "uuid");
+        assert_eq!(request["required"], json!(["params"]));
+        assert_eq!(request["anyOf"][0]["required"], json!(["operation_id"]));
+        assert_eq!(request["oneOf"][0]["not"]["required"], json!(["subject"]));
+        assert_eq!(
+            request["oneOf"][0]["properties"]["params"]["required"],
+            json!(["task_id"])
+        );
+        assert_eq!(
+            request["oneOf"][1]["properties"]["params"]["not"]["required"],
+            json!(["task_id"])
+        );
+
+        let project = Uuid::from_u128(1);
+        let task = Uuid::from_u128(2);
+        let operation = Uuid::from_u128(3);
+        let reason = "The required check has recovered.";
+        // The first request follows the recipe published in a hold notice.
+        let derived = json!({"operation_id":operation,"reason":reason,
+            "params":{"project_id":project,"task_id":task,"expected_version":"17"}});
+        let explicit = json!({"operation_id":operation,"reason":reason,
+            "subject":{"type":"task","id":task,"revision":"17"},
+            "expected_versions":{"task":"17"},
+            "params":{"operation_id":operation,"project_id":project,"expected_version":"17"}});
+        let expected = json!({"kind":"task.retry","operation_id":operation,"reason":reason,
+            "subject":explicit["subject"],"expected_versions":explicit["expected_versions"],
+            "payload":explicit["params"]});
+        let spec = aq_server::commands::registry().get("task.retry").unwrap();
+        let route = spec.route(Principal::Supervisor).unwrap();
+        for packet in [derived, explicit] {
+            let request: CommandRequest = serde_json::from_value(packet).unwrap();
+            let forward = spec.forward(route, &request, None).unwrap();
+            assert_eq!(
+                forward.uri,
+                format!("{}/api/v1/actions", aq_command_registry::OWNER_PREFIX)
+            );
+            assert_eq!(forward.body.as_ref(), Some(&expected));
+        }
     }
 }

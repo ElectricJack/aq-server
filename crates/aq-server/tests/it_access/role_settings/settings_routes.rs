@@ -142,7 +142,8 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
         "main_sync_interval_ms": 60000, "main_freshness_ms": 30000,
         "decision_repeat_ms": 120000, "longest_check_wait_ms": 3600000,
         "git_transfer_timeout_ms": 600000, "max_push_bytes": 268435456,
-        "require_landed_results": true, "check_log_bytes": 16384});
+        "require_landed_results": true, "check_log_bytes": 16384,
+        "hold_followup_interval_ms": 86400000});
     let (status, body) = f.owner().get(PATH).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"limits": defaults, "revision": "0"}));
@@ -151,6 +152,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
 
     let mut changed = defaults.clone();
     changed["main_sync_interval_ms"] = json!(15000);
+    changed["hold_followup_interval_ms"] = json!(120000);
     let put = json!({"limits": changed, "expected_revision": "0",
         "operation_id": Uuid::new_v4()});
     let (status, body) = f.viewer().put(PATH, put.clone()).await;
@@ -168,6 +170,7 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     );
     let (limits, revision) = settings::delivery_limits(&f.pool).await.unwrap();
     assert_eq!(limits.main_sync_interval_ms, 15000);
+    assert_eq!(limits.hold_followup_interval_ms, 120000);
     assert_eq!(revision.to_string(), saved["revision"].as_str().unwrap());
     // The store's own limits keep their revision.
     let (_, own) = f.owner().get("/api/settings/profiles/limits").await;
@@ -198,6 +201,32 @@ async fn the_delivery_limits_are_defaulted_validated_and_fenced_over_http() {
     let (status, _) = f.owner_write().put(PATH, wrong).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(DeliveryLimits::default().validate(), Ok(()));
+
+    let mut old_client = changed.clone();
+    old_client
+        .as_object_mut()
+        .unwrap()
+        .remove("hold_followup_interval_ms");
+    old_client["main_sync_interval_ms"] = json!(16000);
+    let old_put = json!({"limits": old_client, "expected_revision": expected,
+        "operation_id": Uuid::new_v4()});
+    let (status, old_saved) = f.owner_write().put(PATH, old_put.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{old_saved}");
+    let (_, old_read) = f.owner().get(PATH).await;
+    assert_eq!(old_read["limits"]["main_sync_interval_ms"], 16000);
+    assert_eq!(old_read["limits"]["hold_followup_interval_ms"], 120000);
+
+    changed["hold_followup_interval_ms"] = json!(180000);
+    let new_put = json!({"limits": changed, "expected_revision": old_saved["revision"],
+        "operation_id": Uuid::new_v4()});
+    let (status, new_saved) = f.owner_write().put(PATH, new_put).await;
+    assert_eq!(status, StatusCode::OK, "{new_saved}");
+    assert_eq!(
+        f.owner_write().put(PATH, old_put).await,
+        (StatusCode::OK, old_saved)
+    );
+    let (_, now) = f.owner().get(PATH).await;
+    assert_eq!(now["limits"]["hold_followup_interval_ms"], 180000);
 }
 
 #[cfg(feature = "delivery_playbook")]
@@ -214,7 +243,13 @@ fn invalid_delivery_limits(defaults: &Value) -> Vec<Value> {
         negative[field] = json!(-1);
         cases.push(negative);
         // A field Settings stored before it existed reads as its default.
-        if !["require_landed_results", "check_log_bytes"].contains(&field.as_str()) {
+        if ![
+            "require_landed_results",
+            "check_log_bytes",
+            "hold_followup_interval_ms",
+        ]
+        .contains(&field.as_str())
+        {
             let mut missing = defaults.clone();
             missing.as_object_mut().unwrap().remove(field);
             cases.push(missing);

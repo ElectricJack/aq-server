@@ -3,6 +3,7 @@
 mod plan;
 mod reconcile;
 mod reservation;
+mod retry;
 use crate::{
     Supervisor,
     adapter::NativeAdapter,
@@ -48,6 +49,13 @@ pub struct ServiceConfig {
     pub image_digest: String,
     pub secret_file: PathBuf,
     pub server_origin: String,
+    /// Retries for each retained message after a provably unstarted turn.
+    #[serde(default = "default_turn_retries")]
+    pub automatic_turn_retries: u8,
+}
+
+fn default_turn_retries() -> u8 {
+    1
 }
 #[derive(Clone)]
 struct Control {
@@ -386,105 +394,10 @@ impl Service<'_> {
         self.scan(ctl, cursor).await
     }
 }
-/// Automatically retry a mail batch once if its previous guardian never
-/// started the harness. A repeated launch failure stays visible for inspection.
-async fn retry_unstarted(pool: &PgPool, previous: &Snapshot) -> Result<bool> {
-    let mut tx = pool.begin().await?;
-    if crate::verifier::not_started(&mut tx, &previous.run)
-        .await?
-        .is_none()
-    {
-        return Ok(false);
-    }
-    let first: bool = sqlx::query_scalar(
-        "SELECT NOT EXISTS(SELECT 1 FROM central_supervisor_dispatches p
-         WHERE p.actor_id=d.actor_id AND p.generation<d.generation AND p.batch_digest=d.batch_digest)
-         FROM central_supervisor_dispatches d WHERE d.dispatch_id=$1",
-    )
-    .bind(previous.run.plan().dispatch_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    Ok(first)
-}
-
-/// The current reservation's own turn ran (its generation is the latest) and
-/// stopped without a reply: `Some(true)` releases its mail for the next turn
-/// because the owner stopped and started the supervisor after the dispatch,
-/// `Some(false)` waits for that. `None` is any other outstanding reservation.
-struct DispatchTime {
-    created: Option<i64>,
-    control_updated: i64,
-}
-impl DispatchTime {
-    fn stopped_turn(&self, closed: bool, generation: u64, next: u64) -> Option<bool> {
-        let dispatched = self.created?;
-        (closed && generation + 1 == next).then_some(self.control_updated > dispatched)
-    }
-}
-
 fn swarm_stage(reason: &str) -> &'static str {
     if reason == aq_swarm_settings::admission::CEILING {
         "Waiting for this provider and intelligence class concurrency limit"
     } else {
         "Waiting for an authoritative intelligence class and configured capacity"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DispatchTime;
-
-    #[test]
-    fn a_stopped_turn_is_released_only_after_an_owner_restart() {
-        // Generation 5 ran for this reservation and stopped; the next would be 6.
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 900
-            }
-            .stopped_turn(true, 5, 6),
-            Some(false)
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 1_000
-            }
-            .stopped_turn(true, 5, 6),
-            Some(false)
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 1_001
-            }
-            .stopped_turn(true, 5, 6),
-            Some(true)
-        );
-        // Still running, an older generation, or no dispatch: not this case.
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 2_000
-            }
-            .stopped_turn(false, 5, 6),
-            None
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 2_000
-            }
-            .stopped_turn(true, 4, 6),
-            None
-        );
-        assert_eq!(
-            DispatchTime {
-                created: None,
-                control_updated: 2_000
-            }
-            .stopped_turn(true, 6, 6),
-            None
-        );
     }
 }

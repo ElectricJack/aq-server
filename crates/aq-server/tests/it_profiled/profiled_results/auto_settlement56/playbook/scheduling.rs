@@ -61,6 +61,7 @@ async fn a_physically_stopped_task_without_a_result_escalates_once_after_content
         assert_eq!(scope, Some(project));
         assert!(body.contains("stopped_without_result") && body.contains(&attempt.to_string()));
         assert!(!body.contains("submit task.retry"));
+        assert!(!body.contains("result.detail"));
         count.fetch_add(1, Ordering::SeqCst);
         Ok::<_, ()>(Uuid::new_v4())
     };
@@ -322,8 +323,16 @@ async fn a_delivery_hold_of_any_reason_notifies_once_and_never_after_the_playboo
     .unwrap();
     notify(&pool, due, &send).await.unwrap();
     assert!(bodies.lock().unwrap().is_empty(), "no duplicate notice");
-    // Without it, the hold still reaches the supervisor, once.
+    // The durable schedule remembers that notice even if the old receipt is removed.
     sqlx::query("DELETE FROM delivery_notifications WHERE project_id=$1")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    notify(&pool, due, &send).await.unwrap();
+    assert!(bodies.lock().unwrap().is_empty());
+    // An unseeded hold with neither record still reaches the supervisor once.
+    sqlx::query("DELETE FROM supervisor_hold_followups WHERE project_id=$1")
         .bind(project)
         .execute(&pool)
         .await
@@ -344,6 +353,117 @@ async fn a_delivery_hold_of_any_reason_notifies_once_and_never_after_the_playboo
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn the_current_hold_followup_survives_concurrent_sweeps_and_respects_graph_closure() {
+    use aq_playbook_domain::{delivery_decisions, scheduling_notices};
+    let env = Box::pin(auto_env("not_required", axum::http::StatusCode::OK)).await;
+    let pool = env.f.db.pool().await;
+    let task = env.f.selection.lineage.task_id;
+    let project = env.f.selection.lineage.project_id;
+    let attempt = env.report.binding.attempt_id;
+    let result = env.report.report_id;
+    sqlx::query("UPDATE supervisor_controls c SET enabled=true,profile='{}',approved_by=$2 FROM supervisor_conversation_ids i WHERE i.conversation_id=c.conversation_id AND i.project_id=$1")
+        .bind(project).bind(env.f.actor).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES ($1,$2,'held','returns_exhausted',$3)")
+        .bind(result).bind(task).bind(NOW as i64).execute(&pool).await.unwrap();
+    // Start from an existing playbook notice, as installations do at upgrade.
+    let key = delivery_decisions::notify_key(&format!("{result}:returns_exhausted")).unwrap();
+    let initial = Uuid::new_v4();
+    let now = NOW as i64;
+    delivery_decisions::record_told(
+        &mut pool.acquire().await.unwrap(),
+        project,
+        &key,
+        initial,
+        now,
+    )
+    .await
+    .unwrap();
+    let interval = 120_000;
+    let revision = aq_admission::result_record::report_digest(&env.report).unwrap();
+    let detail = json!({"params":{"result_id":result,"revision":revision.as_str()}}).to_string();
+    let limits = aq_role_settings::delivery::DeliveryLimits {
+        hold_followup_interval_ms: interval as u64,
+        ..Default::default()
+    };
+    sqlx::query("UPDATE role_settings SET delivery_limits=$1 WHERE singleton")
+        .bind(serde_json::to_value(limits).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let count = AtomicUsize::new(0);
+    let send = async |_: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+                      scope: Option<Uuid>,
+                      body: &str,
+                      _: u64| {
+        assert_eq!(scope, Some(project));
+        assert!(body.contains(
+            "Verify retry authorization against the current hold before submitting a retry."
+        ));
+        assert!(body.contains("result.detail"), "{body}");
+        assert!(body.contains(&detail), "{body}");
+        let number = count.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(body.contains(&format!("reminder {number} of 3")));
+        Ok::<_, ()>(Uuid::new_v4())
+    };
+    scheduling_notices::notify(&pool, now + interval - 1, &send)
+        .await
+        .unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    let reasons = work_reasons(&env).await;
+    assert!(reasons.iter().any(|reason| {
+        reason["code"] == "supervisor_hold_followup"
+            && reason["attempt_id"] == json!(attempt)
+            && reason["result_id"] == json!(result)
+            && reason["blocker_owner"] == "project_supervisor"
+            && reason["next_check_at_ms"] == now + interval
+    }));
+    for step in 1..=4 {
+        let at = now + step * interval;
+        let (one, two) = tokio::join!(
+            scheduling_notices::notify(&pool, at, &send),
+            scheduling_notices::notify(&pool, at, &send),
+        );
+        one.unwrap();
+        two.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), step.min(3) as usize);
+    }
+    let reasons = work_reasons(&env).await;
+    assert!(reasons.iter().any(|reason| {
+        reason["code"] == "supervisor_hold_followup"
+            && reason["status"] == "owner_attention"
+            && reason["blocker_owner"] == "project_owner"
+            && reason["next_check_at_ms"] == now + 5 * interval
+    }));
+    // A current Graph closure ends the follow-up without a retry or a fourth mail.
+    let expected_workspace = env.f.selection.lineage.workspace_id;
+    scheduling_notices::notify_with_graph(
+        &pool,
+        now + 5 * interval,
+        |workspace, seen| async move {
+            assert_eq!(workspace, expected_workspace);
+            assert_eq!(seen, task);
+            Ok::<_, ()>(true)
+        },
+        &send,
+    )
+    .await
+    .unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 3);
+    assert!(
+        scheduling_notices::followup(&pool, project, task)
+            .await
+            .is_none()
+    );
+    let still_held: bool =
+        sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(still_held, "the supervisor sweep does not release a claim");
 }
 
 struct PublicationHistory<'a> {

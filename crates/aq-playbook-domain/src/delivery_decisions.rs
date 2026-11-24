@@ -8,7 +8,7 @@
 //!
 //! Decisions are per result. `completed` and `returned` are final. A `held`
 //! result can rejoin delivery when the host verifies its publication lease.
-//! `returns` counts each result sent back once.
+//! `returns` counts each charged result sent back once.
 use crate::{
     Error, Result,
     delivery_store::{DeliveryPort, Latest, locate},
@@ -278,7 +278,8 @@ pub struct Decision<'a> {
 
 /// Records `d`: a first decision on the result, or one that ends a hold. A
 /// final decision is never replaced, and a hold never replaces a decision. A
-/// result sent back for the first time adds one to the task's `returns`.
+/// result sent back for the first time adds one to the task's `returns`
+/// unless the exact report proves an interruption by the platform.
 /// Returns whether it recorded anything.
 pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Result<bool> {
     let recorded = sqlx::query_scalar::<_, Uuid>(
@@ -298,13 +299,39 @@ pub async fn record(db: &mut PgConnection, d: &Decision<'_>, now_ms: i64) -> Res
     .fetch_optional(&mut *db)
     .await?
     .is_some();
-    if recorded && d.decision == "returned" {
+    if recorded
+        && d.decision == "returned"
+        && !aq_machine_control::platform_retry::report_interrupted(db, d.task, d.result).await?
+    {
         sqlx::query("INSERT INTO delivery_tasks(task_id,returns) VALUES($1,1) ON CONFLICT(task_id) DO UPDATE SET returns=LEAST(delivery_tasks.returns+1,1000)")
             .bind(d.task)
             .execute(&mut *db)
             .await?;
     }
     Ok(recorded)
+}
+
+/// Project the settlement owner's verified platform return into delivery.
+/// The accounting path checks the typed report rather than the reason string.
+pub async fn record_platform_return(
+    db: &mut PgConnection,
+    task: Uuid,
+    result: Uuid,
+    now_ms: i64,
+) -> Result<bool> {
+    record(
+        db,
+        &Decision {
+            task,
+            result,
+            decision: "returned",
+            reason: Some(aq_machine_control::platform_retry::REASON),
+            detail: None,
+            update_from_main: Some(false),
+        },
+        now_ms,
+    )
+    .await
 }
 
 /// Fence a hold before looking up its named result or writing its receipt.
@@ -390,8 +417,14 @@ pub async fn notification(
     let notice = delivery_notice(&origin, &latest, &reason, pr.as_deref(), body);
     // The facts every hold notice carries (spec 0021 section 5.2); the log
     // tail goes last and is cut to what the supervisor's mailbox accepts.
-    let notice =
-        crate::hold_notice::complete(db, notice, origin.task_id, Some(origin.result_id)).await?;
+    let notice = crate::hold_notice::complete(
+        db,
+        notice,
+        origin.project_id,
+        origin.task_id,
+        Some(origin.result_id),
+    )
+    .await?;
     Ok((key, notice))
 }
 
@@ -420,7 +453,7 @@ fn delivery_notice(
         evidence.push_str(pr);
     }
     format!(
-        "{context}\n{evidence}\n\n{body}\n\nUse task.work and task.history with the project and task IDs above to inspect the current hold and attempts. Use task.retry after its reported cause is resolved and the task is eligible for a retry."
+        "{context}\n{evidence}\n\n{body}\n\nUse task.work, task.history and the current result or check evidence to verify this hold. Use task.retry after its reported cause is resolved and the task is eligible for a retry. Otherwise name the blocker and what would clear it, or escalate with these identifiers. AQ schedules another check while the hold remains. Verify retry authorization against the current hold before submitting a retry."
     )
 }
 

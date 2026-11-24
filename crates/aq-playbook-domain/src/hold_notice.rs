@@ -63,11 +63,30 @@ pub async fn attempts(db: &mut PgConnection, task: Uuid, room: usize) -> Result<
 pub async fn complete(
     db: &mut PgConnection,
     mut body: String,
+    project: Uuid,
     task: Uuid,
     result: Option<Uuid>,
 ) -> Result<String> {
     let log = match result {
-        Some(result) => delivery_store::held_check_log(db, result).await?,
+        Some(result) => {
+            // result.detail reads the report revision pin, with no profile parameter.
+            let revision: Option<String> = sqlx::query_scalar(
+                "SELECT p.report_revision FROM result_revision_pins p
+                 JOIN profiled_result_reports r ON r.report_id=p.report_id AND r.report_digest=p.report_revision
+                 WHERE p.project_id=$1 AND p.task_id=$2 AND p.report_id=$3",
+            )
+            .bind(project)
+            .bind(task)
+            .bind(result)
+            .fetch_optional(&mut *db)
+            .await?;
+            if let Some(revision) = revision {
+                let request =
+                    serde_json::json!({"params":{"result_id":result,"revision":revision}});
+                body.push_str(&format!("\n\nRead the exact recorded result and its checks using result.detail with this command request: {request}."));
+            }
+            delivery_store::held_check_log(db, result).await?
+        }
         None => None,
     };
     let room = delivery_store::SUPERVISOR_MESSAGE_BYTES / 4;

@@ -134,6 +134,10 @@ async fn change_selection_defaults(f: &Fixture, saved: &Value) {
     let (_, defaults) = f.owner().get("/api/settings/selection-defaults").await;
     assert_eq!(defaults["revision"], "0");
     assert_eq!(defaults["selection_defaults"]["max_attempts"], 2);
+    assert_eq!(
+        defaults["selection_defaults"]["launch_retry_backoff"],
+        json!({"initial_delay_ms": 30_000, "max_delay_ms": 300_000})
+    );
     let mut changed = defaults["selection_defaults"].clone();
     changed["max_attempts"] = json!(3);
     let body = json!({"selection_defaults": changed, "expected_revision": "0", "operation_id": Uuid::new_v4()});
@@ -155,7 +159,8 @@ async fn change_selection_defaults(f: &Fixture, saved: &Value) {
         let path = "/api/settings/selection-defaults";
         f.owner_write().put(path, body)
     };
-    let stated = json!({"max_uncharged_continuations": 7, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD"});
+    let backoff = json!({"initial_delay_ms": 10_000, "max_delay_ms": 15_000});
+    let stated = json!({"max_uncharged_continuations": 7, "max_never_granted_offers": 3, "max_cost_microunits": 5, "currency": "USD", "launch_retry_backoff": backoff});
     let (status, body) = put(stated, revision().await).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let partial = json!({"max_attempts": 4, "max_cost_microunits": null, "currency": null});
@@ -166,6 +171,7 @@ async fn change_selection_defaults(f: &Fixture, saved: &Value) {
     assert_eq!(now["max_attempts"], 4);
     assert_eq!(now["max_uncharged_continuations"], 7, "kept: {now}");
     assert_eq!(now["max_never_granted_offers"], 3, "kept: {now}");
+    assert_eq!(now["launch_retry_backoff"], backoff, "kept: {now}");
     assert_eq!(now["max_wake_attempts"], 3, "never stated: {now}");
     assert_eq!(now["max_cost_microunits"], Value::Null, "cleared: {now}");
     let (status, _) = put(json!({"no_such_key": 1}), revision().await).await;

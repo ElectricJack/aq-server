@@ -168,7 +168,7 @@ pub enum Change {
     DeliveryDocument(String),
     /// The delivery limits. They are not part of a snapshot.
     #[cfg(feature = "delivery_playbook")]
-    DeliveryLimits(delivery::DeliveryLimits),
+    DeliveryLimits(delivery::DeliveryLimitsChange),
     /// The environment limits (spec 0017 §6.7). They are not part of a snapshot.
     #[cfg(feature = "project_environments")]
     EnvironmentLimits(environments::EnvironmentLimits),

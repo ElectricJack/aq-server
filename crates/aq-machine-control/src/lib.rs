@@ -28,6 +28,7 @@ pub mod lost;
 pub mod management;
 pub mod offer_assembly;
 pub mod owner_retry;
+pub mod platform_retry;
 pub mod recent;
 pub mod slots;
 

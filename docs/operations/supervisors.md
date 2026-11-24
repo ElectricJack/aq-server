@@ -18,9 +18,18 @@ revokes tools immediately and waits for physical stopped-writer evidence.
 A conversation keeps its most recent 4,096 messages, and older ones are deleted
 as new ones arrive; task operations keep their receipts for their replay window
 (architecture 0006; pending, today a full conversation refuses new messages).
-Profile changes affect subsequent
-turns. Failed or uncertain requests are never automatically replayed: inspect
-the retained dispatch and actual task state first.
+Profile changes affect subsequent turns. Inspect the retained dispatch and
+actual task state before retrying a command whose outcome is uncertain.
+
+When the guardian proves a turn never started, the controller retries its
+retained messages automatically. Set `automatic_turn_retries` in the manager's
+`service` JSON to change the one-retry default. Zero disables automatic turn
+retries. The allowance follows the individual messages across batches and
+controller restarts. A confirmed reply finishes the turn. If the turn may
+have made a task change, the controller reports its dispatch ID and keeps
+the messages pending for inspection, including across a stop and start.
+An operator can stop and start to retry a verified nonstart after its
+automatic allowance is exhausted.
 
 The installed central adapter supports Codex CLI 0.166.0 and OpenAI profiles with
 low, medium or high effort, using subscription login. Other providers remain

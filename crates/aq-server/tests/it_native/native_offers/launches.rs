@@ -53,7 +53,7 @@ async fn offered(c: &Case) -> NativeOffer {
     native
 }
 /// The startup text the offer delivers: the retained bytes of its payload.
-async fn startup_text(c: &Case, native: &NativeOffer) -> String {
+pub(super) async fn startup_text(c: &Case, native: &NativeOffer) -> String {
     let body: Vec<u8> = sqlx::query_scalar(
         "SELECT body FROM admission_artifacts WHERE descriptor#>>'{artifact,digest}'=$1 AND body IS NOT NULL LIMIT 1",
     )
