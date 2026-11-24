@@ -81,7 +81,7 @@ fn configure(
 }
 
 /// The offer of `c` with the server serving git through `fake`.
-async fn granted_offer(c: &mut Case, fake: &FakeGitHttp) -> (NativeOffer, GitGrant) {
+pub(super) async fn granted_offer(c: &mut Case, fake: &FakeGitHttp) -> (NativeOffer, GitGrant) {
     configure(c, fake, [c.env.lineage.project_id], None);
     let (status, body) = poll_offered(c).await;
     assert_eq!(status, 200, "{body}");
@@ -98,6 +98,7 @@ async fn granted_offer(c: &mut Case, fake: &FakeGitHttp) -> (NativeOffer, GitGra
     assert_eq!(status, 200, "{grant}");
     (offer, serde_json::from_value(grant).unwrap())
 }
+
 /// `GET /v1/git/grants/<attempt>` with `credential`.
 async fn get_grant(c: &Case, credential: &str, attempt: Uuid) -> (u16, serde_json::Value) {
     use http_body_util::BodyExt;

@@ -335,7 +335,7 @@ async fn retry(c: &Case, operation: Uuid, reason: Option<&str>) -> (axum::http::
     retry_with(c, operation, reason, false).await
 }
 /// [`retry`], with the payload's `fresh` option when asked for.
-async fn retry_with(
+pub(super) async fn retry_with(
     c: &Case,
     operation: Uuid,
     reason: Option<&str>,
@@ -367,7 +367,7 @@ async fn retry_with(
     (status, serde_json::from_slice(&body).unwrap())
 }
 /// Owner task actions need the configured Graph mutation identity.
-async fn owner_actions(c: &mut Case) {
+pub(super) async fn owner_actions(c: &mut Case) {
     let config = aq_server::agent_access::AgentAccessConfig {
         graph_url: c.graph_url.clone(),
         graph_token_file: c.env.env._dir.path().join("graph-token"),
