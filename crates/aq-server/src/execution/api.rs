@@ -296,23 +296,23 @@ async fn inspect(
     State(state): State<AppState>,
     CurrentUser(_): CurrentUser,
     Path(id): Path<Uuid>,
+    scope: Option<axum::Extension<aq_supervisor_control::read::ProjectScope>>,
 ) -> Result<Response, AppError> {
     let (now, pool) = (now(&state), &state.store.pool);
     let mut conn = pool.acquire().await.map_err(|_| AppError::Internal)?;
-    match aq_profiled_state::replacement_sql::inspect(&mut conn, id, now).await {
-        Ok(Some(mut view)) => {
-            let task = view["task_id"].as_str().and_then(|t| t.parse().ok());
-            let assess = crate::profiled_execution::replacement::assess_task_in;
-            let assessment = assess(&mut conn, task.unwrap_or_default(), now).await?;
-            view["task_assessment"] = assessment.view();
-            Ok(Json(view).into_response())
-        }
-        Ok(None) => {
-            let legacy = state.store.execution_get(id).await;
-            Ok(legacy.map(Json).into_response())
-        }
-        Err(_) => Err(AppError::Internal),
+    let Some(mut view) = aq_profiled_state::replacement_sql::inspect(&mut conn, id, now)
+        .await
+        .map_err(|_| AppError::Internal)?
+    else {
+        let legacy = state.store.execution_get(id).await;
+        return Ok(legacy.map(Json).into_response());
+    };
+    if scope.is_none() {
+        let task = serde_json::from_value(view["task_id"].clone()).unwrap_or_default();
+        let assess = crate::profiled_execution::replacement::assess_task_in;
+        view["task_assessment"] = assess(&mut conn, task, now).await?.view();
     }
+    Ok(Json(view).into_response())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

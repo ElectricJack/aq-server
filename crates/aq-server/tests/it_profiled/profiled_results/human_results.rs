@@ -509,15 +509,18 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
     let supervisor = supervisor_token(&f, Some(own)).await;
     let foreign = supervisor_token(&f, Some(other)).await;
     let global = supervisor_token(&f, None).await;
-    let result = json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let detail = json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let mut exact = detail.clone();
+    exact["profile"] = json!("recorded_native_v2");
+    let results = [("result.show", exact), ("result.detail", detail)];
     let attempt = json!({"attempt_id":report.binding.attempt_id});
     let refused = |(status, body): (StatusCode, serde_json::Value)| {
         assert_eq!(body["error"], "supervisor_refused", "{body}");
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     };
-    for token in [&supervisor, &global] {
-        for name in ["result.show", "result.detail"] {
-            let (status, detail) = supervised(&machine, token, name, result.clone()).await;
+    for (token, has_task_assessment) in [(&supervisor, false), (&global, true)] {
+        for (name, params) in &results {
+            let (status, detail) = supervised(&machine, token, name, params.clone()).await;
             assert_eq!(status, StatusCode::OK, "{name}: {detail}");
         }
         let (status, page) = supervised(&machine, token, "result.list", json!({})).await;
@@ -526,9 +529,14 @@ async fn a_supervisor_reads_only_the_results_its_scope_covers() {
         let (status, view) = supervised(&machine, token, "attempt.show", attempt.clone()).await;
         assert_eq!(status, StatusCode::OK, "{view}");
         assert_eq!(view["attempt_id"], json!(report.binding.attempt_id));
+        assert_eq!(
+            view.get("task_assessment").is_some(),
+            has_task_assessment,
+            "{view}"
+        );
     }
-    for name in ["result.show", "result.detail"] {
-        refused(supervised(&machine, &foreign, name, result.clone()).await);
+    for (name, params) in results {
+        refused(supervised(&machine, &foreign, name, params).await);
     }
     refused(supervised(&machine, &foreign, "attempt.show", attempt).await);
     refused(supervised(&machine, &foreign, "result.list", json!({"project_id":own})).await);

@@ -22,6 +22,9 @@ pub struct Permit {
     pub project: Option<Uuid>,
     pub guard: Transaction<'static, Postgres>,
 }
+/// Passed only to handlers that have cleared the project ownership gate.
+#[derive(Clone)]
+pub struct ProjectScope;
 pub type Auth = Arc<
     dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Permit, Error>> + Send>> + Send + Sync,
 >;
@@ -204,10 +207,11 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
     {
         return unserved().await.into_response();
     }
-    if let Some(project) = permit.project
-        && let Err(refusal) = scoped_read(target, &mut request, &mut permit.guard, project).await
-    {
-        return refusal.into_response();
+    if let Some(project) = permit.project {
+        if let Err(refusal) = scoped_read(target, &mut request, &mut permit.guard, project).await {
+            return refusal.into_response();
+        }
+        request.extensions_mut().insert(ProjectScope);
     }
     request.extensions_mut().insert(permit.owner);
     let response = next.run(request).await;
