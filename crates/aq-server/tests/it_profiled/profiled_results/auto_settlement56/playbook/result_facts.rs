@@ -65,7 +65,7 @@ async fn platform_retry_owns_only_verified_stopped_result_and_spends_no_budget()
         decision: "returned",
         reason: Some(aq_machine_control::platform_retry::REASON),
         detail: None,
-        update_from_main: None,
+        update_from_main: Some(false),
     };
     record(&mut db, &decision, NOW as i64).await.unwrap();
     drop(db);

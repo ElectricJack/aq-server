@@ -327,7 +327,7 @@ pub async fn record_platform_return(
             decision: "returned",
             reason: Some(aq_machine_control::platform_retry::REASON),
             detail: None,
-            update_from_main: None,
+            update_from_main: Some(false),
         },
         now_ms,
     )
