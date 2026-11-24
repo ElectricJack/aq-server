@@ -454,6 +454,7 @@ fn a_supervisor_reads_hold_evidence_through_the_read_nest() {
     let r = Registry::new(&actions()).unwrap();
     for (name, path) in [
         ("result.list", "/v1/supervisor/read/api/human/results"),
+        ("result.feed", "/v1/supervisor/read/api/v1/results"),
         (
             "result.show",
             "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}",
@@ -761,6 +762,7 @@ fn every_owner_command_has_a_supervisor_route() {
         "task.dependency.remove",
         "project.list",
         "result.list",
+        "result.feed",
         "result.show",
         "result.detail",
         "attempt.show",

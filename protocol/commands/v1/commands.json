@@ -4402,6 +4402,75 @@
             "method": "GET",
             "path": "/api/v1/results"
           }
+        },
+        "supervisor": {
+          "body": "query",
+          "params_digest": "sha256:a7a40152504de3d5ea69a325f2885514cccfb644e3543ffab6753d391a79842c",
+          "params_schema": {
+            "additionalProperties": false,
+            "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
+            "properties": {
+              "cursor": {
+                "description": "Opaque: the cursor a previous page returned",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "media": {
+                "default": "any",
+                "enum": [
+                  "any",
+                  "image",
+                  "video",
+                  "none"
+                ]
+              },
+              "mode": {
+                "default": "latest",
+                "enum": [
+                  "latest",
+                  "needs_review",
+                  "following"
+                ]
+              },
+              "project_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "scope": {
+                "description": "project needs project_id",
+                "enum": [
+                  "all_authorized",
+                  "project"
+                ]
+              },
+              "since_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "task_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "until_ms": {
+                "description": "Unix time in milliseconds",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "route": {
+            "method": "GET",
+            "path": "/v1/supervisor/read/api/v1/results"
+          }
         }
       },
       "summary": "The results feed",
@@ -4458,7 +4527,7 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_digest": "sha256:682e4d4e3c1872379cb4756dfa5be5ee2226e5021f7d92837183302ce7aba96d",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
@@ -4476,7 +4545,8 @@
               },
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4494,7 +4564,7 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:a318abde6648e9851e00f1c886c6718a4f69fc257e09886115335c7598f225b7",
+          "params_digest": "sha256:682e4d4e3c1872379cb4756dfa5be5ee2226e5021f7d92837183302ce7aba96d",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
@@ -4512,7 +4582,8 @@
               },
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4745,14 +4816,15 @@
       "principals": {
         "owner": {
           "body": "query",
-          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_digest": "sha256:c072894d23c5d6f1e54af32d0e11515fac46e7370302d6b6a9eda7c725a61774",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {
@@ -4783,14 +4855,15 @@
         },
         "supervisor": {
           "body": "query",
-          "params_digest": "sha256:edf8d872bc30804be49301fffde537f731681beecb44f912def3a16c53324a1e",
+          "params_digest": "sha256:c072894d23c5d6f1e54af32d0e11515fac46e7370302d6b6a9eda7c725a61774",
           "params_schema": {
             "additionalProperties": false,
             "description": "Path params as named; the other params are the route's query string. A param not listed is refused.",
             "properties": {
               "profile": {
                 "enum": [
-                  "recorded_native_v2"
+                  "recorded_native_v2",
+                  "recorded_legacy_native_only"
                 ]
               },
               "project_id": {

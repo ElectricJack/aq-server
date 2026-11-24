@@ -137,6 +137,7 @@ pub fn catalog() -> Vec<CommandSpec> {
     for command in &mut commands {
         let path = match command.name {
             "result.list" => "/v1/supervisor/read/api/human/results",
+            "result.feed" => "/v1/supervisor/read/api/v1/results",
             "result.show" => "/v1/supervisor/read/api/human/results/{id}/revisions/{revision}",
             "result.detail" => "/v1/supervisor/read/api/v1/results/{id}/revisions/{revision}",
             "attempt.show" => "/v1/supervisor/read/api/execution/attempts/{id}",

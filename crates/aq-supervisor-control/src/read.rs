@@ -84,10 +84,10 @@ const OTHER_PROJECT: Refused = Refused(
 enum Reads {
     /// `.../projects/{id}/...`; `None` when the id is not a UUID.
     Project(Option<Uuid>),
-    /// `/api/human/results`: a page the gate narrows to the project.
-    Results,
+    /// A metadata list or Dashboard feed the gate narrows to the project.
+    Results { metadata: bool },
     /// One result revision, by the result's or report's ID.
-    Result(Uuid),
+    Result { id: Uuid, metadata: bool },
     /// One profiled attempt, by its immutable launch's ID.
     Attempt(Uuid),
     /// Nothing a project supervisor can read.
@@ -97,9 +97,23 @@ fn reads(path: &str) -> Reads {
     let path = path.strip_prefix("/v1/supervisor/read").unwrap_or(path);
     let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
     match parts.as_slice() {
-        ["api", "human", "results"] => return Reads::Results,
-        ["api", "human" | "v1", "results", id, "revisions", _] => {
-            return id.parse().map_or(Reads::Unserved, Reads::Result);
+        ["api", family @ ("human" | "v1"), "results"] => {
+            return Reads::Results {
+                metadata: *family == "human",
+            };
+        }
+        [
+            "api",
+            family @ ("human" | "v1"),
+            "results",
+            id,
+            "revisions",
+            _,
+        ] => {
+            return id.parse().map_or(Reads::Unserved, |id| Reads::Result {
+                id,
+                metadata: *family == "human",
+            });
         }
         ["api", "execution", "attempts", id] => {
             return id.parse().map_or(Reads::Unserved, Reads::Attempt);
@@ -111,11 +125,12 @@ fn reads(path: &str) -> Reads {
         None => Reads::Unserved,
     }
 }
-/// `query` with `project_id` set to `project`; `None` when it names another
-/// project (or hides the key behind an escape).
-fn narrowed(query: Option<&str>, project: Uuid) -> Option<String> {
+/// Apply the project scope and the metadata profile default. Refuse escaped
+/// keys and any explicit project outside the caller's scope.
+fn narrowed(query: Option<&str>, project: Uuid, default_native: bool) -> Option<String> {
     let mut pairs = Vec::new();
     let mut named = false;
+    let mut profile = false;
     for pair in query.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         if key.contains(['%', '+']) {
@@ -125,28 +140,36 @@ fn narrowed(query: Option<&str>, project: Uuid) -> Option<String> {
             return None;
         }
         named |= key == "project_id";
+        profile |= key == "profile";
         pairs.push(pair.to_string());
     }
     if !named {
         pairs.push(format!("project_id={project}"));
     }
+    if default_native && !profile {
+        pairs.push("profile=recorded_native_v2".into());
+    }
     Some(pairs.join("&"))
 }
-/// Whether the result (or report) `id` belongs to `project`.
-async fn in_project(
+/// The result's project ownership and whether its report needs native v2.
+async fn result_scope(
     tx: &mut Transaction<'static, Postgres>,
     id: Uuid,
     project: Uuid,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE r.report_id=$1 AND (l.execution_spec#>>'{lifecycle,project_id}')=$2::text) OR EXISTS(SELECT 1 FROM result_revision_pins WHERE (report_id=$1 OR result_id=$1) AND project_id=$2)")
+) -> Result<(bool, bool), sqlx::Error> {
+    sqlx::query_as("SELECT EXISTS(SELECT 1 FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE r.report_id=$1 AND (l.execution_spec#>>'{lifecycle,project_id}')=$2::text) OR EXISTS(SELECT 1 FROM result_revision_pins WHERE (report_id=$1 OR result_id=$1) AND project_id=$2), EXISTS(SELECT 1 FROM profiled_result_reports WHERE report_id=$1 AND result_origin_kind<>'legacy_prepare_v1')")
         .bind(id).bind(project).fetch_one(&mut **tx).await
 }
 /// What no supervisor read route serves.
 pub async fn unserved() -> Refused {
     Refused(StatusCode::NOT_FOUND, "No such supervisor route")
 }
-fn narrow_uri(uri: &axum::http::Uri, project: Uuid) -> Option<axum::http::Uri> {
-    let query = narrowed(uri.query(), project)?;
+fn narrow_uri(
+    uri: &axum::http::Uri,
+    project: Uuid,
+    default_native: bool,
+) -> Option<axum::http::Uri> {
+    let query = narrowed(uri.query(), project, default_native)?;
     let mut parts = uri.clone().into_parts();
     parts.path_and_query = format!("{}?{query}", uri.path()).parse().ok();
     axum::http::Uri::from_parts(parts).ok()
@@ -162,11 +185,17 @@ async fn scoped_read(
         Reads::Project(Some(id)) if id == project => Ok(()),
         Reads::Project(_) => Err(OTHER_PROJECT),
         Reads::Unserved => Err(unserved().await),
-        Reads::Result(id) => match in_project(tx, id, project).await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(OTHER_PROJECT),
-            Err(e) => Err(Refused::from(Error::from(e))),
-        },
+        Reads::Result { id, metadata } => {
+            let (owned, native) = result_scope(tx, id, project).await.map_err(Error::from)?;
+            if !owned {
+                return Err(OTHER_PROJECT);
+            }
+            if metadata {
+                *request.uri_mut() =
+                    narrow_uri(request.uri(), project, native).ok_or(OTHER_PROJECT)?;
+            }
+            Ok(())
+        }
         Reads::Attempt(id) => {
             // The execution spec is immutable after the server seals the launch.
             let own: bool = sqlx::query_scalar(
@@ -179,8 +208,9 @@ async fn scoped_read(
             .map_err(|err| Refused::from(Error::from(err)))?;
             own.then_some(()).ok_or(OTHER_PROJECT)
         }
-        Reads::Results => {
-            *request.uri_mut() = narrow_uri(request.uri(), project).ok_or(OTHER_PROJECT)?;
+        Reads::Results { metadata } => {
+            *request.uri_mut() =
+                narrow_uri(request.uri(), project, metadata).ok_or(OTHER_PROJECT)?;
             Ok(())
         }
     }
@@ -202,7 +232,7 @@ pub async fn gate(State(auth): State<Auth>, mut request: Request, next: Next) ->
     if cfg!(feature = "supervisor_full_access")
         && !matches!(
             target,
-            Reads::Results | Reads::Result(_) | Reads::Attempt(_)
+            Reads::Results { .. } | Reads::Result { .. } | Reads::Attempt(_)
         )
     {
         return unserved().await.into_response();
@@ -314,16 +344,18 @@ mod tests {
             Reads::Project(Some(a))
         );
         assert_eq!(reads("/api/human/projects/x/tasks"), Reads::Project(None));
-        assert_eq!(reads("/api/human/results"), Reads::Results);
-        for family in ["human", "v1"] {
+        for (family, metadata) in [("human", true), ("v1", false)] {
+            assert_eq!(
+                reads(&format!("/api/{family}/results")),
+                Reads::Results { metadata }
+            );
             let path = format!("/api/{family}/results/{a}/revisions/{rev}");
-            assert_eq!(reads(&path), Reads::Result(a), "{path}");
+            assert_eq!(reads(&path), Reads::Result { id: a, metadata }, "{path}");
         }
         // Anything else is not a supervisor route, however it is spelled.
         for path in [
             "/api/human/conversations/global",
             "/api/human/results/not-a-uuid/revisions/r",
-            "/api/v1/results",
             "/nope",
             "/",
         ] {
@@ -336,14 +368,22 @@ mod tests {
     #[test]
     fn a_result_page_is_narrowed_to_the_project() {
         let (p, other) = (id(1), id(2));
-        assert_eq!(narrowed(None, p), Some(format!("project_id={p}")));
+        assert_eq!(narrowed(None, p, false), Some(format!("project_id={p}")));
         assert_eq!(
-            narrowed(Some("limit=5"), p),
-            Some(format!("limit=5&project_id={p}"))
+            narrowed(Some("limit=5"), p, true),
+            Some(format!("limit=5&project_id={p}&profile=recorded_native_v2"))
         );
         assert_eq!(
-            narrowed(Some(&format!("project_id={p}&limit=5")), p),
-            Some(format!("project_id={p}&limit=5"))
+            narrowed(
+                Some(&format!(
+                    "project_id={p}&profile=recorded_legacy_native_only"
+                )),
+                p,
+                true
+            ),
+            Some(format!(
+                "project_id={p}&profile=recorded_legacy_native_only"
+            ))
         );
         for query in [
             format!("project_id={other}"),
@@ -352,7 +392,7 @@ mod tests {
             format!("project%5Fid={other}"),
             format!("project+id={other}"),
         ] {
-            assert_eq!(narrowed(Some(&query), p), None, "{query}");
+            assert_eq!(narrowed(Some(&query), p, true), None, "{query}");
         }
     }
 }
