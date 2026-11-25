@@ -794,3 +794,97 @@ fn every_owner_command_has_a_supervisor_route() {
         );
     }
 }
+
+#[test]
+fn workspace_commands_resolve_the_owner_paths_and_bind_the_reviewed_pin() {
+    let registry = Registry::new(&actions()).unwrap();
+    let request = registry.get("task.workspace.request").unwrap();
+    assert!(request.supervisor.is_none());
+    assert_eq!(request.agent.unwrap().path, "/v1/agent/workspace/request");
+    let params = CommandRequest {
+        params: json!({"home_project_id":"home","task_id":"task","target_project_id":"target","access":"write"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        ..Default::default()
+    };
+    let forwarded = request
+        .forward(&request.owner.unwrap(), &params, None)
+        .unwrap();
+    assert_eq!(forwarded.uri, "/api/projects/home/tasks/task/workspace");
+    assert_eq!(
+        forwarded.body,
+        Some(json!({"target_project_id":"target","access":"write"}))
+    );
+
+    let batch = json!([{"target_project_id":"target","access":"read"},{"service":"postgres"}]);
+    for (principal, input, path) in [
+        (
+            Principal::Owner,
+            json!({"home_project_id":"home","task_id":"task","workspace":batch}),
+            "/api/projects/home/tasks/task/workspace",
+        ),
+        (
+            Principal::Agent,
+            json!({"workspace":batch}),
+            "/v1/agent/workspace/request",
+        ),
+    ] {
+        let forwarded = request
+            .forward(
+                request.route(principal).unwrap(),
+                &CommandRequest {
+                    params: input.as_object().unwrap().clone(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(forwarded.uri, path);
+        assert_eq!(forwarded.body, Some(json!({"workspace":batch})));
+    }
+
+    let decided = owner_mutation(
+        "project.workspace.decide",
+        json!({"home_project_id":"home","task_id":"task","target_project_id":"target",
+            "decision":"approved","project_revision":5,"commit_oid":"abc","access":"write"}),
+        None,
+    );
+    assert_eq!(
+        decided.uri,
+        "/api/projects/target/workspace-requests/home/task/decision"
+    );
+    assert_eq!(
+        decided.body,
+        Some(
+            json!({"decision":"approved","project_revision":5,"commit_oid":"abc","access":"write"})
+        )
+    );
+    for (name, path) in [
+        (
+            "task.workspace.show",
+            "/api/projects/home/tasks/task/workspace",
+        ),
+        (
+            "project.workspace.requests",
+            "/api/projects/target/workspace-requests",
+        ),
+    ] {
+        let command = registry.get(name).unwrap();
+        let body = if name == "task.workspace.show" {
+            json!({"home_project_id":"home","task_id":"task"})
+        } else {
+            json!({"target_project_id":"target"})
+        };
+        let read = CommandRequest {
+            params: body.as_object().unwrap().clone(),
+            ..Default::default()
+        };
+        let forwarded = command
+            .forward(&command.owner.unwrap(), &read, None)
+            .unwrap();
+        assert_eq!(forwarded.method, "GET");
+        assert_eq!(forwarded.uri, path);
+        assert!(command.agent.is_none() && command.supervisor.is_none());
+    }
+}
