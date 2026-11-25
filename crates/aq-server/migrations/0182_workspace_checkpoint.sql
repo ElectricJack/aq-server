@@ -16,4 +16,29 @@ CREATE INDEX task_workspace_sources_requester
 CREATE INDEX task_workspace_services_requester
     ON task_workspace_services(requested_attempt_id) WHERE requested_attempt_id IS NOT NULL;
 
+-- The request and checkpoint intent share a transaction. A machine poll
+-- sees only committed handoffs and keeps redelivering while the attempt runs.
+CREATE FUNCTION task_workspace_request_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at)
+    SELECT a.attempt_id,a.node_id,'workspace_expansion',clock_timestamp()
+    FROM execution_attempts a
+    JOIN profiled_launches l ON l.attempt_id=a.attempt_id
+    WHERE a.attempt_id=NEW.requested_attempt_id
+      AND a.kind='profiled_v1' AND a.holds_task AND a.task_id=NEW.task_id
+      AND l.launch_manifest#>>'{bindings,project_id}'=NEW.home_project_id::text
+    ON CONFLICT(attempt_id) DO NOTHING;
+    RETURN NULL;
+END $$;
+
+CREATE TRIGGER task_workspace_source_checkpoint
+    AFTER INSERT OR UPDATE OF requested_attempt_id ON task_workspace_sources
+    FOR EACH ROW WHEN (NEW.requested_attempt_id IS NOT NULL)
+    EXECUTE FUNCTION task_workspace_request_checkpoint();
+
+CREATE TRIGGER task_workspace_service_checkpoint
+    AFTER INSERT OR UPDATE OF requested_attempt_id ON task_workspace_services
+    FOR EACH ROW WHEN (NEW.requested_attempt_id IS NOT NULL)
+    EXECUTE FUNCTION task_workspace_request_checkpoint();
+
 UPDATE meta SET value='182' WHERE key='state_format_version';

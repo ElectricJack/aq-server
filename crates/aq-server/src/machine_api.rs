@@ -131,7 +131,6 @@ async fn control(
         ));
     };
     let c = mc::control(&mut conn, &key).await.map_err(mapped)?;
-    crate::task_workspace_resume::request_checkpoints(&mut conn, &key, now).await?;
     let handoff = mc::pending_handoffs(&mut conn, &key)
         .await
         .map_err(mapped)?;

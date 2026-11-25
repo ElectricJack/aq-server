@@ -2,7 +2,7 @@
 //! A fresh admission re-evaluates the reviewed scope and worker capability.
 use crate::error::{AppError, db};
 use serde_json::Value;
-use sqlx::{PgConnection, PgExecutor, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 pub(crate) const HEADER: &str = "aq-workspace-expansion";
@@ -11,43 +11,11 @@ pub(crate) const UNSUPPORTED: &str = "workspace_expansion_worker_unsupported";
 pub(crate) const CHANGED: &str = "workspace_expansion_offer_scope_changed";
 pub(crate) const CHECKPOINT: &str = "workspace_expansion_checkpoint_pending";
 
-pub(crate) async fn request_checkpoints(
-    connection: &mut PgConnection,
-    machine: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), AppError> {
-    // Machine control redelivers the persisted handoff until the worker reports
-    // stopped. No worker polls another machine's handoffs, or stops its siblings.
-    sqlx::query(
-        "INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at)
-         SELECT a.attempt_id,a.node_id,'workspace_expansion',$2
-         FROM execution_attempts a
-         JOIN nodes n ON n.id=a.node_id
-         JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id
-         JOIN profiled_launches l ON l.attempt_id=a.attempt_id
-         WHERE n.machine_key=$1 AND n.revoked_at IS NULL AND a.kind='profiled_v1'
-           AND a.holds_task AND h.state->'stop'->>'kind' IN ('unknown','running')
-           AND (
-               EXISTS(
-                   SELECT 1 FROM task_workspace_sources s
-                   WHERE s.requested_attempt_id=a.attempt_id AND s.task_id=a.task_id
-                     AND s.home_project_id::text=l.launch_manifest#>>'{bindings,project_id}'
-               ) OR EXISTS(
-                   SELECT 1 FROM task_workspace_services s
-                   WHERE s.requested_attempt_id=a.attempt_id AND s.task_id=a.task_id
-                     AND s.home_project_id::text=l.launch_manifest#>>'{bindings,project_id}'
-               )
-           )
-           AND NOT EXISTS(SELECT 1 FROM attempt_handoffs f WHERE f.attempt_id=a.attempt_id)
-         ORDER BY a.attempt_id LIMIT 64
-         ON CONFLICT (attempt_id) DO NOTHING",
-    )
-    .bind(machine)
-    .bind(now)
-    .execute(connection)
-    .await
-    .map_err(db)?;
-    Ok(())
+async fn supported(connection: &mut PgConnection) -> Result<bool, AppError> {
+    sqlx::query_scalar("SELECT to_regclass('task_workspace_offer_fences') IS NOT NULL")
+        .fetch_one(connection)
+        .await
+        .map_err(db)
 }
 
 #[derive(Clone)]
@@ -55,6 +23,7 @@ pub(crate) struct Scope {
     pub evidence: Value,
     blocker: Option<&'static str>,
     requires_workspace: bool,
+    supported: bool,
 }
 
 impl Scope {
@@ -100,11 +69,27 @@ impl Scope {
     }
 }
 
-pub(crate) async fn scope<'e>(
-    executor: impl PgExecutor<'e>,
+pub(crate) async fn scope_at_poll(
+    pool: &PgPool,
     project: Uuid,
     task: Uuid,
 ) -> Result<Scope, AppError> {
+    scope(&mut *pool.acquire().await.map_err(db)?, project, task).await
+}
+
+pub(crate) async fn scope(
+    connection: &mut PgConnection,
+    project: Uuid,
+    task: Uuid,
+) -> Result<Scope, AppError> {
+    if !supported(connection).await? {
+        return Ok(Scope {
+            evidence: serde_json::json!({"sources":[],"services":[]}),
+            blocker: None,
+            requires_workspace: false,
+            supported: false,
+        });
+    }
     let row = sqlx::query(
         "WITH sources AS (
              SELECT s.*, p.project_id IS NOT NULL
@@ -135,7 +120,7 @@ pub(crate) async fn scope<'e>(
     )
     .bind(project)
     .bind(task)
-    .fetch_one(executor)
+    .fetch_one(connection)
     .await
     .map_err(db)?;
     Ok(Scope {
@@ -153,6 +138,7 @@ pub(crate) async fn scope<'e>(
             _ => None,
         },
         requires_workspace: row.get("required"),
+        supported: true,
     })
 }
 
@@ -179,7 +165,10 @@ pub(crate) async fn still_current(
     attempt: Uuid,
     capable: bool,
 ) -> Result<Option<&'static str>, AppError> {
-    let current = scope(&mut *connection, project, task).await?;
+    let current = scope(connection, project, task).await?;
+    if !current.supported {
+        return Ok(None);
+    }
     if let Some(blocker) = current.blocker(capable) {
         return Ok(Some(blocker));
     }
@@ -213,6 +202,9 @@ pub(crate) async fn checkpoint_required(
     connection: &mut PgConnection,
     attempt: Uuid,
 ) -> Result<bool, AppError> {
+    if !supported(connection).await? {
+        return Ok(false);
+    }
     sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM attempt_handoffs
                        WHERE attempt_id=$1 AND reason='workspace_expansion')

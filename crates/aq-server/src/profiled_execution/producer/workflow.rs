@@ -697,7 +697,7 @@ async fn offers(
                             return Ok(Assessment::Blocked("git_author_unsupported"));
                         }
                         if let Some(reason) =
-                            crate::task_workspace_resume::scope(pool, project, task)
+                            crate::task_workspace_resume::scope_at_poll(pool, project, task)
                                 .await?
                                 .blocker(supports_workspace)
                         {
@@ -785,9 +785,12 @@ async fn offers(
         let generation =
             on_heap(|| super::super::no_grant::next_generation(&state.store.pool, task.task_id))
                 .await?;
-        let workspace =
-            crate::task_workspace_resume::scope(&state.store.pool, policy.project_id, task.task_id)
-                .await?;
+        let workspace = crate::task_workspace_resume::scope_at_poll(
+            &state.store.pool,
+            policy.project_id,
+            task.task_id,
+        )
+        .await?;
         if let Some(reason) = workspace.blocker(supports_workspace) {
             diagnostics.record(Some(task.task_id), reason);
             skipped.insert(task.task_id);
