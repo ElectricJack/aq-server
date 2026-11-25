@@ -1,36 +1,43 @@
 use super::*;
 use aq_machine_control::{self as control, management, slots};
 use chrono::{DateTime, Utc};
+use tokio::sync::watch;
 
 const RETENTION: i64 = 7 * DAY;
 const MAX_NODES: usize = 256;
 const MAX_PROJECTS: usize = 16;
 
-pub(crate) fn spawn(state: AppState) {
+pub(crate) fn spawn(state: AppState, mut shutdown: watch::Receiver<bool>) {
     if std::env::var("AQ_PERFORMANCE_SAMPLING").as_deref() == Ok("off") {
         return;
     }
     tokio::spawn(async move {
-        loop {
-            let now = (state.clock)();
-            match tokio::time::timeout(Duration::from_secs(45), tick(&state, now)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(%error, "performance minute could not be sampled");
-                }
-                Err(_) => tracing::warn!("performance minute sampling timed out"),
-            }
-            let at = (state.clock)().timestamp_millis();
-            let delay = MINUTE - at.rem_euclid(MINUTE);
-            tokio::time::sleep(Duration::from_millis(delay as u64)).await;
+        tokio::select! {
+            _ = shutdown.wait_for(|stop| *stop) => (),
+            _ = run(&state) => (),
         }
     });
 }
 
+async fn run(state: &AppState) {
+    loop {
+        let now = (state.clock)();
+        match tokio::time::timeout(Duration::from_secs(45), tick(state, now)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "performance minute could not be sampled");
+            }
+            Err(_) => tracing::warn!("performance minute sampling timed out"),
+        }
+        let at = (state.clock)().timestamp_millis();
+        let delay = MINUTE - at.rem_euclid(MINUTE);
+        tokio::time::sleep(Duration::from_millis(delay as u64)).await;
+    }
+}
+
 async fn tick(state: &AppState, now: DateTime<Utc>) -> Result<()> {
     let pool = &state.store.pool;
-    let observed = now.timestamp_millis();
-    let minute = observed.div_euclid(MINUTE) * MINUTE;
+    let minute = now.timestamp_millis().div_euclid(MINUTE) * MINUTE;
     // Avoid work on a replay or when another server has already committed this tick.
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM performance_fleet_minutes WHERE minute_ms=$1)",
@@ -43,6 +50,21 @@ async fn tick(state: &AppState, now: DateTime<Utc>) -> Result<()> {
     }
     let (inventory, ready) = tokio::join!(inventory(state, now), ready(state));
     let (inventory_complete, samples) = inventory?;
+    let observed = (state.clock)().timestamp_millis();
+    if observed.div_euclid(MINUTE) * MINUTE != minute {
+        return Ok(());
+    }
+    store_tick(pool, minute, observed, inventory_complete, samples, ready).await
+}
+
+async fn store_tick(
+    pool: &PgPool,
+    minute: i64,
+    observed: i64,
+    inventory_complete: bool,
+    samples: BTreeMap<String, Machine>,
+    ready: Ready,
+) -> Result<()> {
     let mut tx = pool.begin().await?;
     // First successful collector wins. The foreign key and transaction keep
     // concurrent collectors, cancellation and restart from publishing half a tick.
@@ -77,10 +99,15 @@ async fn tick(state: &AppState, now: DateTime<Utc>) -> Result<()> {
             });
             query.build().execute(&mut *tx).await?;
         }
-        sqlx::query("DELETE FROM performance_fleet_minutes WHERE minute_ms <= $1")
-            .bind(minute - RETENTION)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "DELETE FROM performance_fleet_minutes WHERE minute_ms IN (
+               SELECT minute_ms FROM performance_fleet_minutes WHERE minute_ms <= $1
+               ORDER BY minute_ms LIMIT 120
+             )",
+        )
+        .bind(minute - RETENTION)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(())

@@ -15,6 +15,10 @@ pub(crate) use sampler::spawn;
 
 const MINUTE: i64 = 60_000;
 const DAY: i64 = 1_440 * MINUTE;
+// Reserve room for the ready series, machine metadata and the dashboard
+// envelope, even when every detailed sample uses three 64-bit counters.
+const MAX_DETAIL_SAMPLES: usize = 4_000;
+const MAX_DISPLAY_MACHINES: usize = 256;
 
 #[derive(Serialize)]
 struct FleetMinute {
@@ -132,9 +136,14 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
             .or_default()
             .push(sample);
     }
+    let mut grouped = grouped.into_iter().collect::<Vec<_>>();
+    grouped.sort_by_key(|(_, samples)| std::cmp::Reverse(samples[samples.len() - 1].minute_ms));
+    let fleet_limited = grouped.len() > MAX_DISPLAY_MACHINES;
     let mut machines: Vec<Value> = Vec::new();
     let mut partial = false;
-    for (id, samples) in grouped {
+    let mut detail_left = MAX_DETAIL_SAMPLES;
+    let mut detail_limited = false;
+    for (id, samples) in grouped.into_iter().take(MAX_DISPLAY_MACHINES) {
         let label = &samples[samples.len() - 1].label;
         partial |= samples.iter().any(|sample| sample.state == "partial");
         let (enabled, occupied) = samples
@@ -146,9 +155,17 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
                     used + sample.enabled_occupied_slots,
                 )
             });
+        let detail = if samples.len() <= detail_left {
+            detail_left -= samples.len();
+            samples.as_slice()
+        } else {
+            detail_limited = true;
+            &[]
+        };
         machines.push(json!({
-            "id": id, "label": label, "samples": samples,
-            "idle_with_queue": idle_with_queue(&samples, &queued),
+            "id": id, "label": label, "samples": detail,
+            "detail_complete": detail.len() == samples.len(),
+            "idle_with_queue": idle_with_queue(detail, &queued),
             "utilization": {
                 "occupied_slot_minutes": occupied, "enabled_slot_minutes": enabled,
                 "value": (enabled > 0).then(|| occupied as f64 / enabled as f64),
@@ -162,6 +179,18 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
         .count() as i64;
     let (state, reason) = if ready.is_empty() {
         ("unavailable", Some("No sampled minutes in this window"))
+    } else if fleet_limited {
+        (
+            "partial",
+            Some("Only the 256 most recently sampled machines are shown"),
+        )
+    } else if detail_limited {
+        (
+            "partial",
+            Some(
+                "Timeline detail exceeds the response limit. Utilization totals still include all machines.",
+            ),
+        )
     } else if observed < expected || ready.iter().any(|tick| tick.accuracy != "exact") || partial {
         (
             "partial",
