@@ -49,91 +49,14 @@ async fn post(
 }
 #[tokio::test]
 async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner_file() {
-    use common::profiled::{NOW, artifact, fixture};
+    use common::profiled::fixture;
     let mut f = fixture().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("private-material");
     std::fs::write(&path, b"synthetic-key").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let delivery = configure_native_inventory(&mut f, &path).await;
     let choice = &f.selection.choice;
-    let mut config = (*f.state.config).clone();
-    config.intelligence = Some(Arc::new(
-        IntelligenceConfig {
-            accounting: Default::default(),
-            material_store: None,
-            revision: 1,
-            credentials: vec![CredentialConfig {
-                kind: Default::default(),
-                allowed_backends: aq_selection::default_allowed_backends(),
-                credential: AuthorizedCredential {
-                    profile: choice.credential_profile.clone(),
-                    provider: choice.provider.clone(),
-                    account_reference: choice.account_reference.clone(),
-                    endpoint_reference: choice.endpoint_reference.clone(),
-                    revision: f.selection.credential_revision,
-                    enabled: true,
-                    provisionable: false,
-                    material_owner: None,
-                    allowed_backends: aq_selection::default_allowed_backends(),
-                },
-                allowed_node_ids: vec![f.node.node_id],
-                allow_enrolled_nodes: false,
-                secret_file: Some(path.clone()),
-                delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
-            }],
-            qualified_harnesses: vec![],
-        }
-        .load()
-        .unwrap(),
-    ));
-    let request = Register {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: WorkerIdentity {
-            node_id: f.node.node_id,
-            boot_id: f.node.boot_id,
-        },
-        runtime: artifact("synthetic-runtime", b"code"),
-        capabilities: vec![],
-        features: vec![Feature::ServerMaterialV1],
-    };
-    let qualification = artifact("synthetic-qualification", b"qualification");
-    let delivery = DeliveryCapability {
-        adapter: artifact("synthetic-material-delivery", b"delivery"),
-        version: 1,
-    };
-    config.profiled_execution = Some(Arc::new(ProfiledConfig {
-        definition_bodies: vec![],
-        revision: 1,
-        qualified_runtimes: vec![QualifiedRuntime {
-            backend_kind: None,
-            runtime: request.runtime.clone(),
-            qualification: qualification.clone(),
-            capabilities: vec![],
-            features: request.features.clone(),
-            material_delivery: Some(delivery.clone()),
-        }],
-        projects: vec![],
-    }));
-    f.state.config = Arc::new(config);
-    aq_server::profiled_execution::policies::install(&f.state)
-        .await
-        .unwrap();
-    // Explicit fixture admission only; qualification is synthetic, not a host.
-    let metadata = NativeRegistration {
-        schema_version: 1,
-        semantic_digest: registration::semantic_digest(&request).unwrap(),
-        request,
-        qualification,
-        configuration_revision: 1,
-        registered_at_ms: NOW,
-    };
-    sqlx::query("UPDATE execution_nodes SET state=jsonb_set(state,'{native}',$2) WHERE node_id=$1")
-        .bind(f.node.node_id)
-        .bind(json!(metadata))
-        .execute(&f.db.pool().await)
-        .await
-        .unwrap();
     let admin = aq_server::build_admin_router(f.state.clone());
     assert_eq!(
         post(&admin, "/api/intelligence/register", json!({}), None)
@@ -259,4 +182,91 @@ async fn cold_native_inventory_requires_exact_qualified_delivery_and_fresh_owner
             .await
             .unwrap();
     assert_eq!(sequence, 2);
+}
+
+async fn configure_native_inventory(
+    f: &mut common::profiled::Fixture,
+    path: &std::path::Path,
+) -> DeliveryCapability {
+    use common::profiled::{NOW, artifact};
+    let choice = &f.selection.choice;
+    let mut config = (*f.state.config).clone();
+    config.intelligence = Some(Arc::new(
+        IntelligenceConfig {
+            accounting: Default::default(),
+            material_store: None,
+            revision: 1,
+            credentials: vec![CredentialConfig {
+                kind: Default::default(),
+                allowed_backends: aq_selection::default_allowed_backends(),
+                credential: AuthorizedCredential {
+                    profile: choice.credential_profile.clone(),
+                    provider: choice.provider.clone(),
+                    account_reference: choice.account_reference.clone(),
+                    endpoint_reference: choice.endpoint_reference.clone(),
+                    revision: f.selection.credential_revision,
+                    enabled: true,
+                    provisionable: false,
+                    material_owner: None,
+                    allowed_backends: aq_selection::default_allowed_backends(),
+                },
+                allowed_node_ids: vec![f.node.node_id],
+                allow_enrolled_nodes: false,
+                secret_file: Some(path.to_path_buf()),
+                delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
+            }],
+            qualified_harnesses: vec![],
+        }
+        .load()
+        .unwrap(),
+    ));
+    let request = Register {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: WorkerIdentity {
+            node_id: f.node.node_id,
+            boot_id: f.node.boot_id,
+        },
+        runtime: artifact("synthetic-runtime", b"code"),
+        capabilities: vec![],
+        features: vec![Feature::ServerMaterialV1],
+    };
+    let qualification = artifact("synthetic-qualification", b"qualification");
+    let delivery = DeliveryCapability {
+        adapter: artifact("synthetic-material-delivery", b"delivery"),
+        version: 1,
+    };
+    config.profiled_execution = Some(Arc::new(ProfiledConfig {
+        definition_bodies: vec![],
+        revision: 1,
+        qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
+            runtime: request.runtime.clone(),
+            qualification: qualification.clone(),
+            capabilities: vec![],
+            features: request.features.clone(),
+            material_delivery: Some(delivery.clone()),
+        }],
+        projects: vec![],
+    }));
+    f.state.config = Arc::new(config);
+    aq_server::profiled_execution::policies::install(&f.state)
+        .await
+        .unwrap();
+    // Explicit fixture admission only; qualification is synthetic, not a host.
+    let metadata = NativeRegistration {
+        schema_version: 1,
+        semantic_digest: registration::semantic_digest(&request).unwrap(),
+        request,
+        qualification,
+        configuration_revision: 1,
+        registered_at_ms: NOW,
+    };
+    sqlx::query("UPDATE execution_nodes SET state=jsonb_set(state,'{native}',$2) WHERE node_id=$1")
+        .bind(f.node.node_id)
+        .bind(json!(metadata))
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    delivery
 }

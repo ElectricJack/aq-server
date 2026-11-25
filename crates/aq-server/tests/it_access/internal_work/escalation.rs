@@ -39,7 +39,7 @@ async fn fixture() -> Fixture {
     let sink = told.clone();
     let notify: NotifySupervisor = Arc::new(move |project, body| {
         sink.lock().unwrap().push((project, body));
-        Box::pin(async { Ok(()) })
+        Box::pin(async { Ok(Uuid::new_v4()) })
     });
     let now = clock.clone();
     let service = Service::new(

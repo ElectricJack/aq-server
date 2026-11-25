@@ -129,6 +129,8 @@ pub async fn serve_jwks(json: Value) -> JwksServer {
 /// Fixture-only actual profiled authority builder; never production seeding.
 pub mod profiled;
 
+pub mod supervisor;
+
 /// A provider API stand-in for internal work tests.
 pub mod fake_api;
 

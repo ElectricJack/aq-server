@@ -215,6 +215,16 @@ mod tests {
         }
     }
 
+    /// `attempt.settle_closed_launch` names its project in the path; the owner handler then
+    /// refuses an attempt launched in another project.
+    #[test]
+    fn closed_launch_settlement_reaches_only_its_own_project() {
+        let a = Uuid::from_u128(3);
+        let path = |p| format!("/api/execution/projects/{p}/attempts/{a}/closed-launch-settlement");
+        assert!(names_only(P, &Method::POST, &path(P), None));
+        assert!(!names_only(P, &Method::POST, &path(Q), None));
+    }
+
     #[test]
     fn names_only_matches_case_insensitively() {
         let path = format!("/api/human/projects/{}/tasks", P.to_string().to_uppercase());

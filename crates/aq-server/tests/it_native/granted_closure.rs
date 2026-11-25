@@ -607,6 +607,31 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
     );
 }
 
+async fn disposition(
+    state: &aq_server::AppState,
+    attempt: Uuid,
+    email: &str,
+    body: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let response = aq_server::build_admin_router(state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                .header("content-type", "application/json")
+                .header("x-aq-dev-email", email)
+                .header("X-AQ-Request", "1")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+    )
+}
+
 /// The owner's abandon covers a granted launch closed before the agent started. Such an
 /// attempt has no stopped receipt; its stop proof is the launch closure's receipt.
 #[tokio::test]
@@ -639,27 +664,8 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
     };
     assert_eq!(history_live().await, (true, true));
     let state = &c.case.env.env.state;
-    let abandon = |email: &'static str, body: serde_json::Value| async move {
-        let response = aq_server::build_admin_router(state.clone())
-            .oneshot(
-                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
-                    .header("content-type", "application/json")
-                    .header("x-aq-dev-email", email)
-                    .header("X-AQ-Request", "1")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-        )
-    };
     let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "launch failed before the agent started"});
-    let (status, receipt) = abandon("owner@localhost", body.clone()).await;
+    let (status, receipt) = disposition(state, attempt, "owner@localhost", body.clone()).await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["disposition"], "abandoned");
     let closure: String = sqlx::query_scalar(
@@ -679,7 +685,7 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         (false, false),
         "the same closure discharges live history after verified abandonment"
     );
-    let (status, replay) = abandon("owner@localhost", body).await;
+    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
 
@@ -737,7 +743,7 @@ mod never_started {
             .map(drop)
     }
     async fn settle(c: &Prepared) -> ClosureSettlement {
-        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id)
+        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id, None)
             .await
             .unwrap()
     }
@@ -901,8 +907,8 @@ mod never_started {
         let late = started(&r, c.request.journal_revision);
         let attempt = r.binding.attempt_id;
         let (_, _, start) = tokio::join!(
-            settlement::settle_and_release(state, attempt),
-            settlement::settle_and_release(state, attempt),
+            settlement::settle_and_release(state, attempt, None),
+            settlement::settle_and_release(state, attempt, None),
             started_owner::record(state, &auth, &late)
         );
         assert!(start.is_err());
@@ -942,3 +948,4 @@ mod never_started {
         );
     }
 }
+mod attested;

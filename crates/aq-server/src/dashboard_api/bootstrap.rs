@@ -186,6 +186,11 @@ impl CapabilitySources<'_> {
         vec![
             capability("dashboard.overview", true, ""),
             capability(
+                "performance.metrics.v1",
+                a.owner,
+                "Performance requires project inspection access",
+            ),
+            capability(
                 "sessions.read",
                 a.visibility_complete,
                 "Session inspection is unavailable for this account",

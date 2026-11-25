@@ -120,28 +120,36 @@ impl<P: GraphPayload> Dispatch<'_, P> {
         if self.blocked(subject.id).await? {
             return Ok(existing::disposition(Disposition::Rejected));
         }
-        let operations:Vec<_>=self.action.guards.iter().map(|(id,version)|json!({"op":"update_node","id":id,"expected_version":version,"patch":{}})).chain(mutations).collect();
-        let id = self.payload.operation_id();
-        let bytes = self.body(id, &operations)?;
-        let service = settlement_service_identity(graph, subject.workspace)?;
-        journal::Admission {
-            id,
-            record: &record,
-            service: &service,
-            body: &bytes,
-        }
-        .retain(self.state, self.user)
-        .await?;
-        // After retaining the intent, a transport failure leaves the effect unknown.
-        let posted = tokio::time::timeout(
-            Duration::from_secs(3),
-            settlement_post(graph, subject.workspace, bytes),
-        )
-        .await;
-        match posted {
-            Ok(Ok(response)) => Ok(subject.outcome::<P>(graph, response, &operations).await),
-            _ => Ok(Outcome::unknown()),
-        }
+        let edge = async {
+            let operations:Vec<_>=self.action.guards.iter().map(|(id,version)|json!({"op":"update_node","id":id,"expected_version":version,"patch":{}})).chain(mutations).collect();
+            let id = self.payload.operation_id();
+            let bytes = self.body(id, &operations)?;
+            let service = settlement_service_identity(graph, subject.workspace)?;
+            journal::Admission {
+                id,
+                record: &record,
+                service: &service,
+                body: &bytes,
+            }
+            .retain(self.state, self.user)
+            .await?;
+            // After retaining the intent, a transport failure leaves the effect unknown.
+            let posted = tokio::time::timeout(
+                Duration::from_secs(3),
+                settlement_post(graph, subject.workspace, bytes),
+            )
+            .await;
+            match posted {
+                Ok(Ok(response)) => Ok(subject.outcome::<P>(graph, response, &operations).await),
+                _ => Ok(Outcome::unknown()),
+            }
+        };
+        let Some(blocker) = self.payload.resume_held() else {
+            return edge.await;
+        };
+        let at = (&record, subject.workspace, subject.id, blocker);
+        let caller = (self.state, self.user, self.request);
+        super::super::task_execution::resume_held(caller, at, edge).await
     }
     async fn subject(&self, rt: &Runtime, record: &ProjectRecord, id: Uuid) -> Result<Subject> {
         let workspace = record.binding.graph_workspace_id;

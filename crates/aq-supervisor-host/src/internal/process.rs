@@ -8,7 +8,7 @@ const DRAIN_MS: u64 = 500;
 /// The process session a native leads, so that the runner can stop the run
 /// from outside it. No native starts once the session was stopped or its
 /// stop time has passed.
-pub(super) struct Session {
+pub(crate) struct Session {
     state: std::sync::Mutex<SessionState>,
     stop_at: Instant,
     /// The agent's uid, whose every process [`Session::kill`] kills too, so
@@ -23,7 +23,7 @@ enum SessionState {
 }
 
 impl Session {
-    pub(super) fn new(stop_at: Instant, sweep: Option<u32>) -> Self {
+    pub(crate) fn new(stop_at: Instant, sweep: Option<u32>) -> Self {
         Session {
             state: std::sync::Mutex::new(SessionState::NotStarted),
             stop_at,
@@ -169,7 +169,7 @@ pub(super) async fn execute(
 
 /// [`execute`], handing each piece of stdout to `out` as it arrives instead
 /// of collecting it, so an agent's long event stream is read whole.
-pub(super) async fn execute_into(
+pub(crate) async fn execute_into(
     command: std::process::Command,
     prompt: String,
     session: &Session,

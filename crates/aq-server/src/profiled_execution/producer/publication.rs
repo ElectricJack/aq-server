@@ -8,7 +8,7 @@ use crate::{
     source_retention::profiled_base::{RetentionObservation, VerifiedExport},
     worker_api::AuthenticatedNode,
 };
-use aq_profiled_state::git_author::{GitAuthor, OfferDelivery};
+use aq_profiled_state::{git_author::*, replacement_sql::repins_retained};
 use aq_selection::ExecutionTarget;
 
 use crate::error::db;
@@ -113,14 +113,12 @@ pub(super) async fn publish(
         .await?;
         let shared = retained.token().request_digest() == export.request_digest()
             && retained.fact().canonical_bytes()? == fact.canonical_bytes()?;
-        // Spec 0007: a handoff successor's own export of the saved commit.
+        // Spec 0007: a handoff successor's own export of the saved commit, or a re-pin.
+        let predecessor = replacement.predecessor_attempt_id;
         if !shared
-            && !super::super::handoff::export_is_handoff(
-                &mut tx,
-                replacement.predecessor_attempt_id,
-                export.request(),
-            )
-            .await?
+            && !super::super::handoff::export_is_handoff(&mut tx, predecessor, export.request())
+                .await?
+            && !repins_retained(&mut tx, predecessor, export.request()).await?
         {
             return Err(refused());
         }
@@ -273,7 +271,30 @@ pub(super) async fn publish(
     aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
         .await
         .map_err(crate::machine_api::mapped)?;
+    // At this point the task and compatible slot passed publication's gates.
+    // Keep the episode local to the transaction so a rollback cannot qualify.
+    let capture = state.store.scheduling_diagnostics.as_ref();
+    let eligible = capture.map(|_| (state.clock)().timestamp_millis());
     tx.commit().await.map_err(db)?;
+    if let Some((capture, eligible)) = capture.zip(eligible) {
+        let claimed = (state.clock)().timestamp_millis();
+        let expires = built
+            .deadline
+            .min(inspection.expires_at_ms())
+            .min(built.source.admission.expires_at_ms)
+            .min(built.decision.inputs.node.expires_at_ms)
+            .min(built.read_provenance.ready_expires_at_ms)
+            .min(built.read_provenance.context_expires_at_ms);
+        if eligible >= time as i64 && (claimed as u64) < expires {
+            capture.claim(
+                binding.attempt_id,
+                task,
+                binding.assignment_generation,
+                eligible,
+                claimed,
+            );
+        }
+    }
     Ok(Outcome::Published(Box::new(delivery)))
 }
 

@@ -47,7 +47,7 @@ pub fn phrase(code: &str) -> String {
         }
         "never_granted_retry_bound_exhausted" => "too many of its offers were never granted",
         "replacement_project_revision_changed" => {
-            "the project binding changed since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
+            "the project binding changed beyond which nodes may run it since its last attempt, whose input a retry would reuse (an owner retry with fresh=true starts it again from the project's current source)"
         }
         "replacement_after_unpublished_delivery_needs_new_source" => {
             "its delivery was not published, so a retry needs a new source"
@@ -72,6 +72,12 @@ pub fn phrase(code: &str) -> String {
         "route_class_unassigned" => {
             "its route names a class with no assigned profile, so it is routed again"
         }
+        "returns_exhausted" => "delivery reached its repair-return limit for its result",
+        "delivery_policy_held" => "the delivery playbook held its failed result",
+        "delivery_result_held" => "the delivery playbook held its result",
+        "replacement_delivery_effects_pending" => {
+            "a delivery operation for its held result is still running"
+        }
         _ => return format!("held by the retry policy: {code}"),
     };
     fixed.into()
@@ -93,19 +99,22 @@ pub fn retry_refusal(code: &str) -> String {
 
 /// A hold that is only a limit: attempts, cost or never-granted offers used up (the
 /// `replacement_policy_*` codes are holds recorded before the budgets became one). An owner retry overrides it and
-/// every budget starts again (owner decision 2026-11-18). Every other hold is about what
-/// happened to the task and is never overridden.
+/// every budget starts again (owner decision 2026-11-18). So does the delivery playbook's hold of
+/// a result an owner retry reconciles: its return limit, or its policy hold of a failed result.
+/// Every other hold is about what happened to the task and is never overridden.
 pub fn is_budget_hold(code: &str) -> bool {
     budget_code(code).is_some()
 }
 /// `code` as the fixed code of a limit hold, if it is one.
 pub fn budget_code(code: &str) -> Option<&'static str> {
-    const CODES: [&str; 5] = [
+    const CODES: [&str; 7] = [
         "lineage_retry_budget_exhausted",
         "lineage_cost_budget_exhausted",
         "never_granted_retry_bound_exhausted",
         "replacement_policy_retry_budget_exhausted",
         "replacement_policy_time_budget_exhausted",
+        "returns_exhausted",
+        "delivery_policy_held",
     ];
     CODES.into_iter().find(|c| *c == code)
 }
@@ -140,7 +149,8 @@ pub fn override_comment(code: &str, actor: &str, reason: &str) -> String {
     )
 }
 /// Records the override once per `operation_id` (a replay records nothing) and clears the
-/// task's current hold. Attempts offered up to `now_ms` are no longer charged.
+/// task's current hold. Attempts offered up to `now_ms` are no longer charged, and the delivery
+/// return count starts again.
 pub async fn record_override(
     conn: &mut PgConnection,
     task: Uuid,
@@ -187,6 +197,10 @@ pub async fn record_override(
     .bind(now)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE delivery_tasks SET returns=0 WHERE task_id=$1")
+        .bind(task)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -903,6 +917,10 @@ mod tests {
         ] {
             assert!(is_budget_hold(code) && is_hold(code), "{code}");
         }
+        // A delivery hold is the playbook's, never recorded by the offer path.
+        for code in ["returns_exhausted", "delivery_policy_held"] {
+            assert!(is_budget_hold(code) && !is_hold(code), "{code}");
+        }
         // What happened to the task is never overridden.
         for code in [
             "stall_quarantined",
@@ -919,6 +937,8 @@ mod tests {
             "handoff_successor_stuck",
             "replacement_successor_stuck",
             "route_class_unassigned",
+            "delivery_result_held",
+            "replacement_delivery_effects_pending",
         ] {
             assert!(!is_budget_hold(code), "{code}");
         }

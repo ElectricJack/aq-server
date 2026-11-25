@@ -1,7 +1,6 @@
 //! The startup text of one attempt (spec 0014 §6.1): a fixed order, joined
 //! the way the renderer joins instructions (`utf8_double_newline_v1`), and
-//! refused when over the byte limit. Nothing is optional and nothing is
-//! dropped to fit.
+//! refused when the required context exceeds the byte limit.
 use super::Role;
 
 /// The separator of the `utf8_double_newline_v1` rendering.
@@ -18,6 +17,7 @@ pub enum StartupPart {
     Task,
     TaskThread,
     Reporting,
+    RetryEvidence,
 }
 impl StartupPart {
     pub fn label(self) -> &'static str {
@@ -30,6 +30,7 @@ impl StartupPart {
             Self::Task => "task",
             Self::TaskThread => "task thread",
             Self::Reporting => "reporting contract",
+            Self::RetryEvidence => "previous delivery check",
         }
     }
 }
@@ -56,6 +57,18 @@ pub struct StartupText {
     pub instructions: Vec<(StartupPart, String)>,
     /// The instructions joined by a blank line: the bytes the harness gets.
     pub rendered: String,
+}
+impl StartupText {
+    /// Attach separately bounded evidence before hashing and counting the launch.
+    pub fn with_retry_evidence(mut self, render: impl FnOnce(usize) -> Option<String>) -> Self {
+        if let Some(evidence) = render(self.rendered.len()) {
+            self.rendered.push_str(SEPARATOR);
+            self.rendered.push_str(&evidence);
+            self.instructions
+                .push((StartupPart::RetryEvidence, evidence));
+        }
+        self
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StartupError {

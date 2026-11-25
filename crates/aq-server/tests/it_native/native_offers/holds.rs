@@ -335,7 +335,7 @@ async fn retry(c: &Case, operation: Uuid, reason: Option<&str>) -> (axum::http::
     retry_with(c, operation, reason, false).await
 }
 /// [`retry`], with the payload's `fresh` option when asked for.
-async fn retry_with(
+pub(super) async fn retry_with(
     c: &Case,
     operation: Uuid,
     reason: Option<&str>,
@@ -367,7 +367,7 @@ async fn retry_with(
     (status, serde_json::from_slice(&body).unwrap())
 }
 /// Owner task actions need the configured Graph mutation identity.
-async fn owner_actions(c: &mut Case) {
+pub(super) async fn owner_actions(c: &mut Case) {
     let config = aq_server::agent_access::AgentAccessConfig {
         graph_url: c.graph_url.clone(),
         graph_token_file: c.env.env._dir.path().join("graph-token"),
@@ -504,6 +504,126 @@ async fn an_owner_retry_overrides_each_budget_hold_and_records_the_reason() {
                 .unwrap();
         assert_eq!(attempts, 2, "{code}: a new attempt of the task");
     }
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_grant_backed_retry_seals_only_its_exact_predecessors_failed_check_in_startup() {
+    use aq_playbook_domain::retry_check;
+    let mut c = setup().await;
+    pin_policy(&mut c, |p| p.max_attempts = 1).await;
+    let repository = c.env.frozen.project.binding.repository_id;
+    let git_root = c
+        .env
+        .env
+        .state
+        .source_retention
+        .as_ref()
+        .unwrap()
+        .config
+        .git_root
+        .clone();
+    let git =
+        aq_delivery::git_grant::fake::FakeGitHttp::start(&git_root, repository, "refs/heads/main")
+            .await;
+    let (previous, grant) = super::git_grant::granted_offer(&mut c, &git).await;
+    let predecessor = previous.offered.lifecycle_binding.attempt_id;
+    native_offer::fail(&c, predecessor).await;
+    let result = seed_failed_check(&c, predecessor, &grant).await;
+
+    let pool = c.env.env.pool.clone();
+    let lineage = &c.env.lineage;
+    let scope = (lineage.project_id, lineage.workspace_id, lineage.task_id);
+    let generation = c.env.frozen.project.binding.repository_binding_generation;
+    let evidence =
+        |attempt| retry_check::read(&pool, scope, (repository, generation), Some(attempt));
+    assert!(
+        evidence(predecessor).await.is_none(),
+        "the prior claim still holds"
+    );
+    let code = "lineage_retry_budget_exhausted";
+    holds::hold(&pool, decision(&c, code, 1), (c.env.env.state.clock)()).await;
+    owner_actions(&mut c).await;
+    let (status, response) =
+        retry(&c, Uuid::new_v4(), Some("Repair the recorded failed check")).await;
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["data"]["disposition"], "confirmed", "{response}");
+    assert!(evidence(Uuid::new_v4()).await.is_none());
+    for repo in [(Uuid::new_v4(), generation), (repository, generation + 1)] {
+        assert!(
+            retry_check::read(&pool, scope, repo, Some(predecessor))
+                .await
+                .is_none()
+        );
+    }
+    for (head, matches) in [("2".repeat(40), false), (grant.base.clone(), true)] {
+        sqlx::query("UPDATE delivery_pull_requests SET checks_log_head=$2 WHERE task_id=$1")
+            .bind(scope.2)
+            .bind(head)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(evidence(predecessor).await.is_some(), matches);
+    }
+
+    let (successor, _) = super::git_grant::granted_offer(&mut c, &git).await;
+    assert_ne!(successor.offered.lifecycle_binding.attempt_id, predecessor);
+    let payload = super::launches::startup_text(&c, &successor).await;
+    successor
+        .startup
+        .verify_payload(payload.as_bytes())
+        .unwrap();
+    assert!(payload.contains(&result.to_string()) && payload.contains(&grant.base));
+    assert!(payload.contains("untrusted CI output") && payload.contains("FAILED exact check"));
+    assert!(
+        successor
+            .offered
+            .offer
+            .manifest
+            .context
+            .references
+            .iter()
+            .any(|r| { r.provenance.as_str() == "aq.previous-delivery-check" && r.bytes <= 8192 })
+    );
+}
+
+#[cfg(feature = "delivery_playbook")]
+async fn seed_failed_check(
+    c: &Case,
+    attempt: Uuid,
+    grant: &aq_delivery::git_grant::GitGrant,
+) -> Uuid {
+    let lineage = &c.env.lineage;
+    let (report, namespace, operation) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = c.env.env.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Like `fail`, this supplies synthetic stop-owner data in the fixture DB.
+    let bytes = br#"{"outcome":"success"}"#.as_slice();
+    sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id) VALUES($1,$2,$3,$4,$5,encode(sha256($5),'hex'),'{}'::bytea,$4)")
+        .bind(report).bind(attempt).bind(c.env.env.node).bind(Uuid::new_v4()).bind(bytes).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO profiled_result_heads VALUES($1,$2)")
+        .bind(attempt)
+        .bind(report)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
+        .bind(report).bind(attempt).bind(&grant.task_ref).bind(&grant.base).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms,update_from_main) VALUES($1,$2,'returned','checks_failed',1000,false)")
+        .bind(report).bind(lineage.task_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,checks_log_head,checks_log_tail,updated_at_ms) VALUES($1,228,'https://example.test/pr/228','open','mergeable','failed','[\"unit\"]',$2,$3,1000)")
+        .bind(lineage.task_id).bind(&grant.base).bind("running unit\nFAILED exact check").execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest) VALUES($1,1,'retry',$2,$3,$4,repeat('a',64),repeat('b',64))")
+        .bind(namespace).bind(lineage.workspace_id).bind(lineage.project_id).bind(c.env.actor).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'pull_request.await_checks',$4,0,$5,'failed','{}',1000,1000)")
+        .bind(operation).bind(namespace).bind(operation.to_string()).bind(lineage.task_id.to_string())
+        .bind(serde_json::json!({"result_ready":{"result_id":report,"attempt_id":attempt},"result_head":grant.base}))
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    report
 }
 
 /// A retry that states no reason still releases the task (the owner is never stuck), and the
@@ -903,7 +1023,7 @@ async fn binding_changed() -> (Case, Uuid, i64) {
     native_offer::fail(&c, predecessor).await;
     // The fixture's binding is not at revision 1, so the change is relative.
     let revision: i64 = sqlx::query_scalar(
-        "UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1 RETURNING revision",
+        "UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1 RETURNING revision",
     )
     .bind(c.env.lineage.project_id)
     .fetch_one(&c.env.env.pool)
@@ -1093,7 +1213,7 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_
     let (status, same) = retry_with(&c, Uuid::new_v4(), Some("same binding"), true).await;
     assert_eq!(status, 422, "{same}");
     assert_eq!(same["code"], "lineage_retry_budget_exhausted");
-    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1 WHERE project_id=$1")
+    sqlx::query("UPDATE project_execution_bindings SET revision=revision+1,binding=jsonb_set(binding,'{ceilings,wall_time_ms}',to_jsonb((binding#>>'{ceilings,wall_time_ms}')::bigint+1)) WHERE project_id=$1")
         .bind(c.env.lineage.project_id)
         .execute(&c.env.env.pool)
         .await
@@ -1117,4 +1237,288 @@ async fn a_changed_binding_can_start_fresh_after_its_old_lineage_budget_is_used_
     .await
     .unwrap();
     assert_eq!(recorded, predecessor);
+}
+
+/// An owner action on the case's task, as the dashboard posts it.
+async fn owner_action(c: &Case, action: Value) -> (axum::http::StatusCode, Value) {
+    let res = aq_server::build_admin_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/api/v1/actions")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(action.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+/// `task.dependency.add` with `resume_held`: the case's second task blocks its task.
+async fn wait_on(c: &Case, operation: Uuid) -> (axum::http::StatusCode, Value) {
+    let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
+    owner_action(
+        c,
+        serde_json::json!({"operation_id":operation,"kind":"task.dependency.add",
+        "subject":{"type":"task","id":task,"revision":"1"},"expected_versions":{"task":"1"},
+        "payload":{"operation_id":operation,"project_id":project,"expected_version":"1",
+            "blocker_id":c.second_task,"resume_held":true}}),
+    )
+    .await
+}
+async fn attempts(c: &Case) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM execution_attempts WHERE task_id=$1")
+        .bind(c.env.lineage.task_id)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+async fn holds_claim(c: &Case, attempt: Uuid) -> bool {
+    sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&c.env.env.pool)
+        .await
+        .unwrap()
+}
+/// The node gets a second slot, which polls while the held attempt keeps the first.
+async fn second_slot(c: &Case) {
+    super::node_slots::register(c, 2, None).await;
+}
+/// The second slot's poll is offered nothing.
+async fn nothing_offered(c: &Case) {
+    assert!(super::node_slots::poll_slot(c, 2).await.is_empty());
+    native_offer::assembled(c).await;
+    assert!(super::node_slots::poll_slot(c, 2).await.is_empty());
+}
+
+/// Keep work moving (2026-11-24): `task.dependency.add` with `resume_held` turns a limit hold
+/// into a wait. The edge is added first, then the hold's override is recorded under the same
+/// operation id; the stopped attempt keeps the claim, so while the blocker is open (Graph does
+/// not list the task as ready) nothing is replaced. When the blocker completes, the ordinary
+/// poll replaces the attempt exactly once. A replay records nothing new.
+#[tokio::test]
+async fn resume_held_waits_on_the_blocker_and_the_poll_replaces_the_task_once_it_completes() {
+    let code = "lineage_retry_budget_exhausted";
+    let (mut c, predecessor) = budget_held(code).await;
+    let task = c.env.lineage.task_id;
+    owner_actions(&mut c).await;
+    second_slot(&c).await;
+    let operation = Uuid::new_v4();
+    for _ in 0..2 {
+        let (status, body) = wait_on(&c, operation).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    }
+    let edges = c.edges.lock().unwrap().clone();
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(
+        [
+            &edges[0]["source"],
+            &edges[0]["target"],
+            &edges[0]["edge_type"]
+        ],
+        [
+            &serde_json::json!(c.second_task),
+            &serde_json::json!(task),
+            &serde_json::json!("blocks")
+        ]
+    );
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    drop(conn);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (
+            recorded[0].operation_id,
+            recorded[0].attempt_id,
+            recorded[0].hold_code.as_str()
+        ),
+        (operation, predecessor, code)
+    );
+    assert_eq!(
+        recorded[0].reason,
+        format!("waits on task {}", c.second_task)
+    );
+    assert_eq!(held_reason(&work(&c, task).await), None, "no longer held");
+    assert!(holds_claim(&c, predecessor).await, "the claim stays");
+    // The blocker is open: Graph does not list the task as ready.
+    c.mode.store(3, Ordering::SeqCst);
+    nothing_offered(&c).await;
+    assert_eq!(attempts(&c).await, 1);
+    assert!(holds_claim(&c, predecessor).await);
+    // The blocker completed.
+    c.mode.store(0, Ordering::SeqCst);
+    let successor = super::node_slots::offered(&c, 2).await;
+    assert_eq!(successor.offered.offer.manifest.bindings.task_id, task);
+    assert!(!holds_claim(&c, predecessor).await);
+    assert!(super::node_slots::poll_slot(&c, 1).await.is_empty());
+    native_offer::assembled(&c).await;
+    assert_eq!(attempts(&c).await, 2, "exactly one successor");
+}
+
+/// A command as a supervisor sends it, on the machine listener's command surface.
+async fn supervisor_command(c: &Case, token: &str, name: &str, request: &Value) -> Value {
+    let res = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/v1/commands/{name}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body: Value =
+        serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status, 200, "{name}: {body}");
+    body
+}
+
+/// Live 2026-11-24: every supervisor `task.dependency.add` and `task.edit` (all task actions on
+/// the supervisor's machine route) was refused 503 `unavailable` before the Graph write: the
+/// journal's principal check admitted only the create kinds for a supervisor session. A project
+/// supervisor now makes the held task wait on the active blocker, a replay records nothing new,
+/// and its edit is journaled too.
+#[tokio::test]
+async fn a_project_supervisor_resumes_a_held_task_and_edits_it_through_the_command_surface() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
+    let (task, project) = (c.env.lineage.task_id, c.env.lineage.project_id);
+    owner_actions(&mut c).await;
+    let (state, pool) = (&c.env.env.state, &c.env.env.pool);
+    let token = crate::common::supervisor::supervisor_token(state, pool, Some(project)).await;
+    let operation = Uuid::new_v4();
+    let request = serde_json::json!({"operation_id":operation,"params":{"project_id":project,
+        "task_id":task,"expected_version":"1","blocker_id":c.second_task,"resume_held":true}});
+    for _ in 0..2 {
+        let body = supervisor_command(&c, &token, "task.dependency.add", &request).await;
+        assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    }
+    assert_eq!(c.edges.lock().unwrap().len(), 1);
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        (recorded[0].operation_id, recorded[0].attempt_id),
+        (operation, predecessor)
+    );
+    drop(conn);
+    assert_eq!(held_reason(&work(&c, task).await), None, "no longer held");
+    let edit = serde_json::json!({"operation_id":Uuid::new_v4(),"params":{"project_id":project,
+        "task_id":task,"expected_version":"1","story_points":5}});
+    let body = supervisor_command(&c, &token, "task.edit", &edit).await;
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+}
+
+/// A hold no retry overrides is not turned into a wait, and a task that is not held has nothing
+/// to resume: each is refused with its reason, and neither the edge nor an override is written.
+#[tokio::test]
+async fn resume_held_refuses_a_safety_hold_or_no_hold_and_adds_no_edge() {
+    let (mut c, predecessor) = budget_held("lineage_retry_budget_exhausted").await;
+    let task = c.env.lineage.task_id;
+    owner_actions(&mut c).await;
+    sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,'test quarantine','owner','{}',$3,1)")
+        .bind(predecessor)
+        .bind(task)
+        .bind(Uuid::new_v4())
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    let (status, body) = wait_on(&c, Uuid::new_v4()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(body["data"]["reason"], "stall_quarantined", "{body}");
+    assert!(c.edges.lock().unwrap().is_empty());
+    let mut conn = c.env.env.pool.acquire().await.unwrap();
+    assert!(holds::overrides(&mut conn, task).await.unwrap().is_empty());
+    drop(conn);
+    assert!(holds_claim(&c, predecessor).await);
+
+    drop(c);
+    // An attempt that has not stopped holds the task without a hold.
+    let mut c = setup().await;
+    owner_actions(&mut c).await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = wait_on(&c, Uuid::new_v4()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "rejected", "{body}");
+    assert_eq!(
+        body["data"]["reason"], "replacement_prior_execution_uncertain",
+        "{body}"
+    );
+    assert!(c.edges.lock().unwrap().is_empty());
+}
+
+/// A result the delivery playbook held at its return limit, with its stopped attempt proven,
+/// is not replaced by the poll. An owner retry still releases it as before: it overrides the
+/// return limit, starts the return count again, and the poll offers the task.
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn a_held_delivery_result_waits_for_an_owner_retry_which_resets_its_returns() {
+    let mut c = setup().await;
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    let predecessor = page.offers.remove(0).offered.offer.binding.attempt_id;
+    native_offer::fail(&c, predecessor).await;
+    let (task, pool) = (c.env.lineage.task_id, c.env.env.pool.clone());
+    let report = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL session_replication_role=replica")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Like `fail`, synthetic rows of the result and delivery owners.
+    sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id) VALUES($1,$2,$3,$4,$5,encode(sha256($5),'hex'),'{}'::bytea,$4)")
+        .bind(report).bind(predecessor).bind(c.env.env.node).bind(Uuid::new_v4())
+        .bind(br#"{"outcome":"failed"}"#.as_slice()).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO profiled_result_heads VALUES($1,$2)")
+        .bind(predecessor)
+        .bind(report)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO delivery_git_grants(attempt_id,repository_id,base,task_ref) VALUES($1,$2,repeat('c',40),$3)")
+        .bind(predecessor).bind(c.env.frozen.project.binding.repository_id)
+        .bind(aq_delivery::commands::task_branch(task)).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','returns_exhausted',1000)")
+        .bind(report).bind(task).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO delivery_tasks(task_id,returns) VALUES($1,3)")
+        .bind(task)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    second_slot(&c).await;
+    nothing_offered(&c).await;
+    assert!(
+        holds_claim(&c, predecessor).await,
+        "the held result keeps its claim"
+    );
+    owner_actions(&mut c).await;
+    let (status, body) = retry(&c, Uuid::new_v4(), Some("The sandbox has a database now")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["disposition"], "confirmed", "{body}");
+    let returns: i32 = sqlx::query_scalar("SELECT returns FROM delivery_tasks WHERE task_id=$1")
+        .bind(task)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(returns, 0);
+    let mut conn = pool.acquire().await.unwrap();
+    let recorded = holds::overrides(&mut conn, task).await.unwrap();
+    drop(conn);
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].hold_code, "returns_exhausted");
+    assert!(!holds_claim(&c, predecessor).await);
+    let (status, body) = poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(offered_tasks(&body), [task], "{body}");
+    assert_eq!(attempts(&c).await, 2);
 }

@@ -161,7 +161,7 @@ async fn execution_cancellation_refuses_positive_controller_fence_queued_before_
     );
 }
 
-async fn sibling_terminal(f: &mut Fixture, first: &Register) -> Register {
+pub(super) async fn sibling_terminal(f: &mut Fixture, first: &Register) -> Register {
     let old_state = f.profiled.clone();
     let old_selection = f.selection.clone();
     let old_decision = f.decision;

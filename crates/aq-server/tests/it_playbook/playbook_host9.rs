@@ -2401,6 +2401,8 @@ mod delivery {
             delete_unavailable: Mutex<bool>,
             merge_sha: Mutex<String>,
             branch_head: Mutex<String>,
+            refresh_refused: Mutex<bool>,
+            pr_head: Mutex<String>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2438,7 +2440,7 @@ mod delivery {
                 reference: &str,
                 expected_head: Option<&str>,
             ) -> std::result::Result<RefDeletion, GitFailure> {
-                assert_eq!(expected_head, Some(oid('a').as_str()));
+                assert_eq!(expected_head, Some(self.pr_head.lock().unwrap().as_str()));
                 self.log.lock().unwrap().push(format!("delete {reference}"));
                 if *self.delete_unavailable.lock().unwrap() {
                     return Err(GitFailure {
@@ -2447,6 +2449,19 @@ mod delivery {
                         transient: true,
                     });
                 }
+                Ok(RefDeletion::Deleted)
+            }
+            async fn delete_central_ref(
+                &self,
+                _: Uuid,
+                _: &GitTarget,
+                reference: &str,
+                _: Option<&str>,
+            ) -> std::result::Result<RefDeletion, GitFailure> {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("delete central {reference}"));
                 Ok(RefDeletion::Deleted)
             }
         }
@@ -2481,6 +2496,7 @@ mod delivery {
             ) -> GitHubResult<PullRequest> {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
+                    head_sha: self.pr_head.lock().unwrap().clone(),
                     ..pull(*self.pr_state.lock().unwrap())
                 })
             }
@@ -2533,6 +2549,31 @@ mod delivery {
             ) -> GitHubResult<aq_delivery::BranchDeletion> {
                 Ok(aq_delivery::BranchDeletion::Deleted)
             }
+            async fn update_branch(
+                &self,
+                _: &GitHubRepository,
+                pr: u64,
+                head: &str,
+            ) -> GitHubResult<()> {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("update-branch {pr} {head}"));
+                match *self.refresh_refused.lock().unwrap() {
+                    true => Err(aq_delivery::github::GitHubApiError::Invalid {
+                        message: "merge conflict between base and head".into(),
+                    }),
+                    false => Ok(()),
+                }
+            }
+            /// Every head is the merge of result head a and main b.
+            async fn commit_parents(
+                &self,
+                _: &GitHubRepository,
+                _: &str,
+            ) -> GitHubResult<Vec<String>> {
+                Ok(vec![oid('a'), oid('b')])
+            }
         }
         struct Ops(Arc<Fake>, DeliveryTarget);
         #[async_trait::async_trait]
@@ -2573,6 +2614,8 @@ mod delivery {
                 delete_unavailable: Mutex::new(false),
                 merge_sha: Mutex::new(oid('d')),
                 branch_head: Mutex::new(oid('b')),
+                refresh_refused: Mutex::new(false),
+                pr_head: Mutex::new(oid('a')),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
@@ -2581,9 +2624,7 @@ mod delivery {
             (h, fake)
         }
 
-        #[tokio::test]
-        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
-            let (h, forge) = harness().await;
+        async fn seed_recoverable_hold(h: &D, reason: &str) -> (Uuid, Uuid, Uuid, String) {
             h.activated().await;
             let pool = h.pool().await;
             let attempt = h.f.profiled.offer.binding.attempt_id;
@@ -2607,7 +2648,7 @@ mod delivery {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let hot = json!({"schema_version":1,"status":"finished","stop":{"kind":"stopped"}});
+            let hot = json!({"schema_version":1,"status":"finished","revoked":false,"stop":{"kind":"stopped"}});
             sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
                 .bind(attempt).bind(hot).execute(&mut *tx).await.unwrap();
             sqlx::query("INSERT INTO profiled_result_heads(attempt_id,report_id) VALUES($1,$2)")
@@ -2621,9 +2662,18 @@ mod delivery {
                 .bind(attempt).bind(Uuid::from_u128(1)).bind(oid('c')).bind(&branch).execute(&mut *tx).await.unwrap();
             sqlx::query("INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) VALUES($1,$2,$3,$4)")
                 .bind(result).bind(attempt).bind(&branch).bind(oid('a')).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held','publish_conflict',$3)")
-                .bind(result).bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_decisions(result_id,task_id,decision,reason,decided_at_ms) VALUES($1,$2,'held',$3,$4)")
+                .bind(result).bind(task).bind(reason).bind(h.clock()).execute(&mut *tx).await.unwrap();
             tx.commit().await.unwrap();
+            (attempt, task, result, branch)
+        }
+
+        #[tokio::test]
+        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+            let (h, forge) = harness().await;
+            let (attempt, task, result, branch) =
+                seed_recoverable_hold(&h, "publish_conflict").await;
+            let pool = h.pool().await;
 
             h.later(120_000);
             assert_eq!(h.asked().await, 0, "a divergent forge branch remains held");
@@ -2659,6 +2709,86 @@ mod delivery {
             assert_eq!(
                 hold, "held",
                 "the playbook still owns the delivery decision"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_repair_limit_rejoins_delivery_only_for_the_current_clean_green_result() {
+            let (h, forge) = harness().await;
+            let (attempt, task, result, _) = seed_recoverable_hold(&h, "returns_exhausted").await;
+            let pool = h.pool().await;
+            let head = oid('a');
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiled_result_reports(report_id,attempt_id,node_id,operation_id,report_bytes,report_digest,receipt_bytes,outcome_artifact_id)
+                         SELECT $1,$2,node_id,$3,$4,encode(sha256($4),'hex'),$4,$3 FROM execution_attempts WHERE attempt_id=$2")
+                .bind(result).bind(attempt).bind(Uuid::new_v4()).bind(br#"{"outcome":"success"}"#.as_slice())
+                .execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO delivery_pull_requests(task_id,number,url,state,mergeable,checks_state,checks_failed,updated_at_ms) VALUES($1,7,'https://example.test/pr/7','open','unknown','failed','[]',$2)")
+                .bind(task).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            let request = json!({
+                "result_ready":{"task_id":task,"project_id":h.scope.project_id,"attempt_id":attempt,"result_id":result},
+                "result_head":head,
+                "check_target":{
+                    "git":{"repository_id":Uuid::from_u128(1),"binding_generation":1},
+                    "github":{"owner":"Acme","name":"widgets"},
+                    "default_branch":"main"
+                },
+                "pull_request":7,"required":["lint"]
+            });
+            for (command, status, request, output) in [
+                (
+                    "branch.publish",
+                    "published",
+                    json!({}),
+                    json!({"head":head}),
+                ),
+                ("pull_request.await_checks", "passed", request, json!({})),
+            ] {
+                let op = Uuid::new_v4();
+                sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms)
+                             VALUES($1,$2,1,$3,$4,$5,3,$6,$7,$8,$9,$9)")
+                    .bind(op).bind(h.service.namespace.namespace_id).bind(op.to_string())
+                    .bind(command).bind(task.to_string()).bind(request).bind(status).bind(output)
+                    .bind(h.clock()).execute(&mut *tx).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+
+            *forge.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *forge.mergeability.lock().unwrap() = Mergeability::Clean;
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "a prior pass does not identify a failed check barrier"
+            );
+            sqlx::query(r#"UPDATE playbook_host_operations SET status='failed',output='{"names":["lint"]}' WHERE command_name='pull_request.await_checks'"#)
+                .execute(&pool).await.unwrap();
+            *forge.checks.lock().unwrap() = (ChecksState::Pending, vec![]);
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "pending checks leave the ticket held");
+            *forge.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *forge.mergeability.lock().unwrap() = Mergeability::Behind;
+            h.later(120_000);
+            assert_eq!(h.asked().await, 0, "a behind PR still requires repair");
+            *forge.mergeability.lock().unwrap() = Mergeability::Clean;
+            h.later(120_000);
+            assert_eq!(h.asked().await, 1);
+            assert_eq!(
+                h.events().await,
+                [json!({
+                    "task_id":task,"attempt_id":attempt,"project_id":h.scope.project_id,
+                    "result_id":result,"version":3
+                })]
+            );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "the existing event owns the delivery check"
             );
         }
         /// A disposable Host10 producer with its real operation/evidence store.
@@ -2870,7 +3000,10 @@ mod delivery {
             let (h, fake) = harness().await;
             let (task, pending) = h.stopped(h.scope.project_id, "success");
             h.pull_request(task, "passed", json!([])).await;
+            // Behind with green checks, and GitHub cannot merge main in.
             *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            *fake.refresh_refused.lock().unwrap() = true;
             let wait = h
                 .accepted(
                     "pull_request.await_checks",
@@ -2907,7 +3040,194 @@ mod delivery {
             let facts = h.read(task).await.output["facts"].clone();
             assert_eq!(facts["pull_request"]["number"], 7);
             assert_eq!(facts["pull_request"]["state"], "open");
-            assert!(fake.log.lock().unwrap().is_empty());
+            assert_eq!(
+                *fake.log.lock().unwrap(),
+                [format!("update-branch 7 {}", oid('a'))]
+            );
+        }
+
+        /// Frozen delivery steps for any task, run against the host's store
+        /// as the driver runs them, with the leases `frozen_request` adds.
+        struct Steps<'a> {
+            h: &'a D,
+            pool: sqlx::PgPool,
+            target: DeliveryTarget,
+            delivery: Delivery,
+        }
+        impl<'a> Steps<'a> {
+            async fn new(h: &'a D, fake: &Arc<Fake>) -> Self {
+                *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+                *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+                Self {
+                    h,
+                    pool: h.pool().await,
+                    target: DeliveryTarget {
+                        git: GitTarget {
+                            repository_id: Uuid::from_u128(1),
+                            binding_generation: 1,
+                        },
+                        github: GitHubRepository {
+                            owner: "Acme".into(),
+                            name: "widgets".into(),
+                        },
+                        default_branch: "main".into(),
+                    },
+                    delivery: Delivery::new(fake.clone(), fake.clone()),
+                }
+            }
+            /// One step of `command` for `task`'s result head a; a wait ends at `deadline`.
+            async fn run(&self, task: Uuid, command: &str, deadline: i64) -> Option<String> {
+                use aq_delivery::commands::{accepted_head, published_head};
+                let pool = &self.pool;
+                let request = json!({
+                    "command": command, "project": self.h.scope.project_id, "task": task,
+                    "pull_request": 7, "result_head": oid('a'), "check_target": self.target,
+                    "merge_target": self.target, "method": "merge", "expected_head_sha": oid('a'),
+                    "deadline_at_ms": deadline, "longest_check_wait_ms": 3_600_000,
+                    "expected_old": published_head(pool, task).await.unwrap(),
+                    "pull_request_head": accepted_head(pool, Some(task), &oid('a')).await.unwrap(),
+                });
+                let frozen =
+                    aq_delivery::commands::FrozenCommand::new(Uuid::new_v4(), command, &request);
+                let runtime = aq_delivery::commands::DeliveryRuntime {
+                    service: Some(&self.delivery),
+                    target: Some(&self.target),
+                };
+                let mut tx = pool.begin().await.unwrap();
+                let done =
+                    aq_delivery::commands::run_step(pool, &mut tx, runtime, frozen, self.h.clock())
+                        .await
+                        .unwrap();
+                tx.commit().await.unwrap();
+                done.map(|c| c.outcome.to_owned())
+            }
+            async fn wait(&self, task: Uuid) -> Option<String> {
+                self.run(
+                    task,
+                    "pull_request.await_checks",
+                    self.h.clock() + 1_800_000,
+                )
+                .await
+            }
+            async fn requested(&self, task: Uuid) -> bool {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM delivery_branch_refreshes WHERE task_id=$1 AND requested_at_ms IS NOT NULL)")
+                    .bind(task).fetch_one(&self.pool).await.unwrap()
+            }
+        }
+        fn updates(fake: &Fake) -> usize {
+            let log = fake.log.lock().unwrap();
+            log.iter()
+                .filter(|l| l.starts_with("update-branch"))
+                .count()
+        }
+
+        #[tokio::test]
+        async fn behind_green_prs_of_one_repository_are_refreshed_and_merged_oldest_first() {
+            let (h, fake) = harness().await;
+            let steps = Steps::new(&h, &fake).await;
+            let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let mut outcomes = vec![];
+            // a takes the repository's refresh slot; b, then c queue behind it.
+            assert_eq!(steps.wait(a).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(b).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(c).await, None);
+            assert_eq!(steps.wait(a).await, None, "a's refresh is pending");
+            assert_eq!(updates(&fake), 1);
+            // b's wait reaches its deadline in the queue: the run ends, no repair spent.
+            outcomes.push(steps.run(b, "pull_request.await_checks", h.clock()).await);
+            outcomes.push(steps.run(a, "pull_request.merge", 0).await);
+            // c looks first, but b queued earlier: c keeps waiting.
+            h.later(120_000);
+            assert_eq!(steps.wait(c).await, None);
+            assert!(!steps.requested(c).await);
+            // b's next run (the result-ready repeat after its timeout) refreshes it.
+            assert_eq!(steps.wait(b).await, None);
+            assert!(steps.requested(b).await);
+            assert_eq!(steps.wait(c).await, None);
+            assert_eq!(updates(&fake), 2);
+            outcomes.push(steps.run(b, "pull_request.merge", 0).await);
+            assert_eq!(steps.wait(c).await, None);
+            assert!(steps.requested(c).await);
+            outcomes.push(steps.run(c, "pull_request.merge", 0).await);
+            assert_eq!(updates(&fake), 3);
+            assert_eq!(
+                outcomes,
+                [
+                    Some("timeout"),
+                    Some("merged"),
+                    Some("merged"),
+                    Some("merged")
+                ]
+                .map(|o| o.map(String::from))
+            );
+            let returns: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM delivery_tasks WHERE returns>0")
+                    .fetch_one(&steps.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(returns, 0, "a refresh is not a return");
+            assert!(
+                !fake
+                    .log
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|l| l.starts_with("publish"))
+            );
+        }
+
+        #[tokio::test]
+        async fn a_replay_after_a_refreshed_merge_publishes_nothing_and_completes() {
+            let (h, fake) = harness().await;
+            h.activated().await;
+            let steps = Steps::new(&h, &fake).await;
+            let (task, pending) = h.stopped(h.scope.project_id, "success");
+            h.pull_request(task, "passed", json!([])).await;
+            const WAIT: &str = "pull_request.await_checks";
+            assert_eq!(steps.wait(task).await, None);
+            // GitHub's merge commit e of a and main b is the PR head; it passes and merges.
+            *fake.pr_head.lock().unwrap() = oid('e');
+            *fake.mergeability.lock().unwrap() = Mergeability::Clean;
+            assert_eq!(steps.wait(task).await.as_deref(), Some("passed"));
+            assert_eq!(
+                steps.run(task, "pull_request.merge", 0).await.as_deref(),
+                Some("merged")
+            );
+            // The run is replayed before it completed: the merged head counts as the result.
+            *fake.pr_state.lock().unwrap() = PullRequestState::Merged;
+            for (command, outcome) in [
+                ("branch.publish", "published"),
+                (WAIT, "passed"),
+                ("pull_request.merge", "merged"),
+            ] {
+                let deadline = h.clock() + 1_800_000;
+                assert_eq!(
+                    steps.run(task, command, deadline).await.as_deref(),
+                    Some(outcome),
+                    "{command}"
+                );
+            }
+            let input =
+                json!({"task": task.to_string(), "result_id": pending.result_id.to_string()});
+            assert_eq!(
+                h.run("complete", "work.complete", input).await.outcome,
+                "completed"
+            );
+            let log = fake.log.lock().unwrap().clone();
+            assert!(!log.iter().any(|l| l.starts_with("publish")), "{log:?}");
+            assert_eq!(
+                log.iter()
+                    .filter(|l| *l == &format!("merge merge {}", oid('e')))
+                    .count(),
+                2
+            );
+            let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM delivery_branch_refreshes")
+                .fetch_one(&steps.pool)
+                .await
+                .unwrap();
+            assert_eq!(rows, 0, "completion ends the refresh");
         }
 
         #[tokio::test]
