@@ -79,7 +79,9 @@ pub async fn record(
         recorded => recorded?,
     };
     if checkpoint {
-        if let Err(error) = super::settlement::record_replacement_facts(state, report.report_id).await {
+        if let Err(error) =
+            super::settlement::record_replacement_facts(state, report.report_id).await
+        {
             tracing::warn!(report_id = %report.report_id, ?error, "checkpoint facts deferred");
         }
         return Ok(receipt);
@@ -201,7 +203,8 @@ async fn record_only(
             &spec.outcome_artifact,
         )
         .await?;
-        let checkpoint = crate::task_workspace_resume::checkpoint_required(&mut tx, binding.attempt_id).await?;
+        let checkpoint =
+            crate::task_workspace_resume::checkpoint_required(&mut tx, binding.attempt_id).await?;
         tx.commit().await.map_err(db)?;
         return Ok((receipt, checkpoint));
     }
@@ -267,7 +270,8 @@ async fn record_only(
     .execute(&mut *tx)
     .await
     .map_err(db)?;
-    let checkpoint = !view.revoked && view.cancellation_id.is_none()
+    let checkpoint = !view.revoked
+        && view.cancellation_id.is_none()
         && crate::task_workspace_resume::settle_checkpoint(&mut tx, &receipt).await?;
     tx.commit().await.map_err(db)?;
     Ok((receipt, checkpoint))
