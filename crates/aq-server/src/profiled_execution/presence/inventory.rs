@@ -136,28 +136,8 @@ pub(super) async fn record_with_stage(
         runtime.backend_kind,
     )
     .await?;
-<<<<<<< HEAD
     validate_bindings(&mut bindings, request)?;
-=======
-    if !request.provisionable_only.is_empty() {
-        bindings.retain(|b| {
-            request
-                .provisionable_only
-                .iter()
-                .any(|p| p.profile == b.credential_profile && p.revision == b.credential_revision)
-        });
-        if bindings.len() != request.provisionable_only.len() {
-            return Err(changed());
-        }
-    }
-    if bindings
-        .iter()
-        .any(|b| b.available || b.preparation.is_none())
-    {
-        return Err(changed());
-    }
     *stage = "commit_inventory";
->>>>>>> refs/remotes/central/main
     let mut tx = super::begin(state).await?;
     crate::worker_api::lock_current_node(&mut tx, auth).await?;
     if let Some(old) = replay(&mut tx, request).await? {
@@ -173,25 +153,9 @@ pub(super) async fn record_with_stage(
         return Err(changed());
     }
     crate::intelligence::fence_current_registry(state, &mut tx).await?;
-<<<<<<< HEAD
     let revision = next_revision_locked(&mut tx, request).await?;
-=======
-    let old=sqlx::query("SELECT boot_id,sequence,revision FROM intelligence_node_snapshots WHERE node_id=$1 FOR UPDATE").bind(auth.id()).fetch_optional(&mut *tx).await.map_err(storage::db)?;
-    let revision = if let Some(old) = old {
-        if old.get::<uuid::Uuid, _>("boot_id") == request.identity.boot_id
-            && old.get::<i64, _>("sequence") as u64 >= request.sequence
-        {
-            return Err(changed());
-        }
-        old.get::<i64, _>("revision")
-            .checked_add(1)
-            .ok_or_else(unavailable)? as u64
-    } else {
-        1
-    };
     #[cfg(feature = "project_environments")]
     let harnesses = super::super::definitions::listed(state, &mut tx, auth.id(), harnesses).await?;
->>>>>>> refs/remotes/central/main
     let snapshot = CapabilitySnapshot {
         backend_kind: runtime.backend_kind,
         target: ExecutionTarget::Worker {
