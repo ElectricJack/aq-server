@@ -356,11 +356,11 @@ Playbook inspection no longer also takes the playbook work budget (2).
 eval "$(scripts/test-db)"   # disposable PostgreSQL on 127.0.0.1:55432
 # One test binary, or one module of it, while iterating (incremental rebuilds
 # take seconds; AGENTS.md "Running a subset" lists the binaries and filters):
-timeout 900 cargo nextest run -p aq-server --test it_dashboard
-timeout 900 cargo nextest run -p aq-server --test it_dashboard -E 'test(/^dashboard_actions::/)'
+cargo nextest run -p aq-server --test it_dashboard
+cargo nextest run -p aq-server --test it_dashboard -E 'test(/^dashboard_actions::/)'
 # The whole suite, as CI runs it (nextest: one process per test, in parallel):
-timeout 2400 cargo nextest run --workspace --locked --no-fail-fast
-timeout 900 cargo test --workspace --locked --doc   # nextest skips doctests
+cargo nextest run --workspace --locked --no-fail-fast
+cargo test --workspace --locked --doc   # nextest skips doctests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 python3 scripts/build-budget.py
