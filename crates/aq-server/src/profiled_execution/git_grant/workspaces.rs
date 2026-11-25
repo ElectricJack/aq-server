@@ -174,6 +174,55 @@ fn stale() -> AppError {
     AppError::Conflict("task workspace source or task branch changed".into())
 }
 
+async fn checked_scope(
+    db: &mut PgConnection,
+    id: Uuid,
+    attempt: &Attempt,
+) -> Result<(Vec<Source>, Vec<String>), AppError> {
+    let sources = sources_locked(db, id, attempt)
+        .await
+        .map_err(crate::error::db)?;
+    let services: Vec<String> = sqlx::query_scalar(
+        "SELECT s.service FROM task_workspace_services s
+         JOIN task_workspace_offer_fences f ON f.attempt_id=$3
+         WHERE s.home_project_id=$1 AND s.task_id=$2 AND s.requested_attempt_id IS DISTINCT FROM $3
+           AND s.service='postgres' AND f.scope->'services' ? s.service
+         ORDER BY s.service FOR SHARE OF s",
+    )
+    .bind(attempt.home_project_id)
+    .bind(attempt.task_id)
+    .bind(id)
+    .fetch_all(&mut *db)
+    .await
+    .map_err(crate::error::db)?;
+    let scope: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(id)
+            .fetch_optional(&mut *db)
+            .await
+            .map_err(crate::error::db)?;
+    if let Some(scope) = scope {
+        if scope["sources"].as_array().map(Vec::len) != Some(sources.len())
+            || scope["services"].as_array().map(Vec::len) != Some(services.len())
+        {
+            return Err(stale());
+        }
+    } else {
+        let workspace_required: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM profiled_launches WHERE attempt_id=$1
+                AND graph_task_observation #>> '{native_offer,workspace_required}'='true')",
+        )
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .map_err(crate::error::db)?;
+        if workspace_required {
+            return Err(stale());
+        }
+    }
+    Ok((sources, services))
+}
+
 async fn list(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -187,12 +236,8 @@ async fn list(
         .await
         .map_err(crate::error::db)?
         .ok_or_else(unauthorized)?;
-    let (sources, frozen) = (
-        sources_locked(&mut tx, id, &a)
-            .await
-            .map_err(crate::error::db)?,
-        frozen_locked(&mut tx, id).await.map_err(crate::error::db)?,
-    );
+    let (sources, services) = checked_scope(&mut tx, id, &a).await?;
+    let frozen = frozen_locked(&mut tx, id).await.map_err(crate::error::db)?;
     tx.commit().await.map_err(crate::error::db)?;
 
     let mut existing: BTreeMap<_, _> = frozen
@@ -234,11 +279,7 @@ async fn list(
         .await
         .map_err(crate::error::db)?
         .ok_or_else(unauthorized)?;
-    if sources_locked(&mut tx, id, &a)
-        .await
-        .map_err(crate::error::db)?
-        != sources
-    {
+    if checked_scope(&mut tx, id, &a).await? != (sources.clone(), services.clone()) {
         return Err(stale());
     }
     for g in enrollments {
@@ -255,19 +296,6 @@ async fn list(
         .filter(|g| current.get(&g.source.target_project_id) == Some(&g.source))
         .map(Frozen::into_wire)
         .collect();
-    let services: Vec<String> = sqlx::query_scalar(
-        "SELECT s.service FROM task_workspace_services s
-         JOIN task_workspace_offer_fences f ON f.attempt_id=$3
-         WHERE s.home_project_id=$1 AND s.task_id=$2 AND s.requested_attempt_id IS DISTINCT FROM $3
-           AND s.service='postgres' AND f.scope->'services' ? s.service
-         ORDER BY s.service FOR SHARE OF s",
-    )
-    .bind(a.home_project_id)
-    .bind(a.task_id)
-    .bind(id)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(crate::error::db)?;
     tx.commit().await.map_err(crate::error::db)?;
     Ok(Json(GrantList {
         workspaces,
@@ -420,6 +448,16 @@ async fn proxy(
         .ok_or_else(unauthorized)?;
     let socket = socket(&state).ok_or_else(unavailable)?;
     let query = request.uri().query();
+    if path == "aq-source-bundle" {
+        let offset = (request.method() == axum::http::Method::GET)
+            .then(|| query?.strip_prefix("offset=")?.parse::<u64>().ok())
+            .flatten()
+            .ok_or_else(|| AppError::BadRequest("invalid workspace bundle range".into()))?;
+        // Release assignment locks before export I/O, then recheck authority
+        // before returning these bounded bytes to the node.
+        tx.commit().await.map_err(crate::error::db)?;
+        return bundle(&state, &node, id, grant, offset).await;
+    }
     let push =
         aq_delivery::git_grant::route(request.method(), &path, query).map_err(super::refusal)?;
     if grant.access != "write" && (push || query == Some("service=git-receive-pack")) {
@@ -455,6 +493,53 @@ async fn proxy(
     .map_err(super::refusal)?;
     tx.commit().await.map_err(crate::error::db)?;
     Ok(response.map(axum::body::Body::new).into_response())
+}
+
+async fn bundle(
+    state: &AppState,
+    node: &crate::worker_api::AuthenticatedNode,
+    attempt: Uuid,
+    grant: WorkspaceGrant,
+    offset: u64,
+) -> Result<Response, AppError> {
+    let pool = &state.store.pool;
+    let repository = grant.grant.repository_id;
+    let generation = grant.binding_generation;
+    let base = &grant.grant.base;
+    let (size, digest, bytes) = crate::source_retention::profiled_base::workspace::chunk(
+        state,
+        grant.project_id,
+        repository,
+        generation,
+        base,
+        offset,
+    )
+    .await?;
+    let mut tx = pool.begin().await.map_err(crate::error::db)?;
+    crate::worker_api::read_current_node(&mut tx, node).await?;
+    let current = live_grant_locked(&mut tx, attempt, node.id(), grant.project_id)
+        .await
+        .map_err(crate::error::db)?
+        .ok_or_else(unauthorized)?;
+    if current.project_revision != grant.project_revision
+        || current.binding_generation != generation
+        || current.access != grant.access
+        || current.grant != grant.grant
+        || current.checkout_head != grant.checkout_head
+    {
+        return Err(stale());
+    }
+    tx.commit().await.map_err(crate::error::db)?;
+    Ok((
+        [
+            ("content-type", "application/x-git-bundle".into()),
+            ("cache-control", "no-store".into()),
+            ("aq-workspace-bundle-size", size.to_string()),
+            ("aq-workspace-bundle-sha256", digest),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 #[cfg(test)]

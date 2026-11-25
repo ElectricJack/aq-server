@@ -75,6 +75,17 @@ async fn configured_head(s: &AppState, target: &ProjectRecord, task: Uuid) -> Re
         }
     };
     verify(socket, repo, &oid, handle).await?;
+    sqlx::query(
+        "INSERT INTO task_workspace_retained_bases(repository_id,binding_generation,commit_oid,source_handle)
+         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+    )
+    .bind(repo.id)
+    .bind(repo.generation as i64)
+    .bind(&oid)
+    .bind(handle)
+    .execute(&s.store.pool)
+    .await
+    .map_err(db)?;
     Ok(oid)
 }
 
