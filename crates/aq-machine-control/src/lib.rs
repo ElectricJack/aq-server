@@ -209,7 +209,7 @@ fn reason_of(s: &str) -> Result<HandoffReason, Error> {
     match s {
         "owner_stop" => Ok(HandoffReason::OwnerStop),
         "service_stop" => Ok(HandoffReason::ServiceStop),
-        "restart" => Ok(HandoffReason::Restart),
+        "restart" | "workspace_expansion" => Ok(HandoffReason::Restart),
         _ => Err(Error::Invalid("reason")),
     }
 }

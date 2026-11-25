@@ -5,7 +5,7 @@
 use super::facts;
 use super::{completion, owner::*};
 use crate::execution::authority::{self, Policy};
-use crate::{AppState, profiled_execution::results};
+use crate::{AppState, error::AppError, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
@@ -15,7 +15,7 @@ use aq_profiled_state::graph_completion::{
 pub use aq_profiled_state::graph_completion::{AutoDisposition, AutoSettlement};
 pub use aq_profiled_state::result_reads::ReplacementFacts;
 use serde_json::{Value, json};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
@@ -30,6 +30,33 @@ pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>>
         .map_err(db)?;
     Ok(tx)
 }
+// The stopped result remains immutable even when the harness naturally exits
+// before receiving the handoff. Record checkpoint rework in the same write.
+pub(crate) async fn settle_workspace_checkpoint_locked(
+    connection: &mut PgConnection,
+    receipt: &aq_admission::result_record::Receipt,
+) -> Result<bool> {
+    let attempt = receipt.binding.attempt_id;
+    if !crate::task_workspace_resume::checkpoint_required(connection, attempt).await? {
+        return Ok(false);
+    }
+    graph_completion::fence_transaction(connection, OWNER)
+        .await
+        .map_err(db)?;
+    graph_completion::record_noncompletion(
+        connection,
+        receipt.report_id,
+        attempt,
+        (ACTOR, "rework_required", crate::task_workspace_resume::REQUESTED),
+        &serde_json::json!({"decided_by":"workspace_expansion","report_digest":receipt.report_digest}),
+        i64::try_from(receipt.recorded_at_ms).map_err(|_| AppError::Internal)?,
+    )
+    .await
+    .map_err(db)?
+    .ok_or(AppError::Internal)?;
+    Ok(true)
+}
+
 /// Only a Success report is acceptable (MS1 review B1). A native worker reports
 /// Success only for a harness exit it proved (exit 0 plus an explicit claim);
 /// Unknown, Failed, Expired and Cancelled go to rework, never to completion.
@@ -98,6 +125,14 @@ pub async fn settle_after_record(
     let (verdict, evidence) = match suspended {
         Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
         None => evaluate_locked(state, &mut tx, &r, delivery).await?,
+    };
+    #[cfg(feature = "delivery_playbook")]
+    let verdict = if matches!(verdict, Verdict::Complete)
+        && !crate::task_workspace_delivery::gate(state, &mut tx, &r, true).await?
+    {
+        Verdict::Hold("workspace_delivery_pending")
+    } else {
+        verdict
     };
     let time = now(state)?;
     let (disposition, reason) = match verdict {
@@ -665,6 +700,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
         AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
     };
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let fenced = fenced
+        && !crate::task_workspace_resume::checkpoint_required(&mut tx, r.report.binding.attempt_id)
+            .await?;
     let prior = existing.as_ref().map(status).transpose()?;
     match prior {
         Some(s)
@@ -687,6 +725,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
             return Ok(Settled::Stale);
         }
         _ => {}
+    }
+    if !crate::task_workspace_delivery::gate(state, &mut tx, &r, false).await? {
+        return Ok(Settled::Pending);
     }
     let evidence = json!({"policy_actor": ACTOR, "decided_by": "playbook", "decision": "work.complete", "report": r.receipt_artifact});
     let row = prepare_locked(state, &mut tx, &r, evidence, now(state)?, "Playbook").await?;

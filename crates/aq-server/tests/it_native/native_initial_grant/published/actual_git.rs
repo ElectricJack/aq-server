@@ -515,3 +515,7 @@ mod accepted_v2;
 
 #[path = "actual_git/worker_refresh_assembly.rs"]
 mod worker_refresh_assembly;
+
+#[cfg(feature = "delivery_playbook")]
+#[path = "actual_git/sibling_bundle.rs"]
+mod sibling_bundle;
