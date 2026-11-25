@@ -42,10 +42,20 @@ fn completion65_body(name: &str) -> Result<&'static str> {
     )
     .ok_or_else(corrupt)
 }
-pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
+    let name = "profiled_auto_settlement_owner";
+    let expected = if supported >= 168 {
+        aq_profiled_state::sql_function_body(
+            include_str!("../../migrations/0168_resume_graph_completion.sql"),
+            name,
+        )
+        .ok_or_else(corrupt)?
+    } else {
+        function_body(name)?
+    };
     let actual: Option<String> = sqlx::query_scalar("SELECT p.prosrc FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=to_regprocedure('profiled_auto_settlement_owner()') AND NOT p.prosecdef AND p.proconfig IS NULL AND l.lanname='plpgsql' AND p.prorettype=to_regtype('trigger')")
         .fetch_optional(&mut **tx).await?;
-    if actual.as_deref() != Some(function_body("profiled_auto_settlement_owner")?) {
+    if actual.as_deref() != Some(expected) {
         return Err(corrupt());
     }
     let guarded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('profiled_auto_settlements') AND tgname='profiled_auto_settlement_owner' AND NOT tgisinternal AND tgenabled='O' AND tgtype=31 AND tgnargs=0 AND tgqual IS NULL AND tgfoid=to_regprocedure('profiled_auto_settlement_owner()')) AND to_regclass('profiled_check_evidence') IS NOT NULL AND to_regclass('profiled_delivery_evidence') IS NOT NULL")

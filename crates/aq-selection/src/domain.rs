@@ -417,28 +417,49 @@ impl ResolvedSelection {
         target: &ExecutionTarget,
     ) -> bool {
         let choice = &self.choice;
+        self.subject_differs(manifest, target)
+            || choice.model_differs(manifest)
+            || choice.harness_differs(manifest)
+            || choice.resources.differs_from_manifest(manifest)
+            || manifest.credentials.is_empty()
+            || manifest
+                .credentials
+                .iter()
+                .any(|c| c.credential_profile != choice.credential_profile)
+    }
+    fn subject_differs(
+        &self,
+        manifest: &aq_session_protocol::LaunchManifest,
+        target: &ExecutionTarget,
+    ) -> bool {
         self.role_snapshot_digest != manifest.catalog.digest
             || self.project_revision != manifest.bindings.project_revision
             || self.lineage.task_id != manifest.bindings.task_id
             || self.lineage.workspace_id != manifest.bindings.graph_id
             || self.lineage.project_id != manifest.bindings.project_id
             || self.target != *target
-            || choice.provider != manifest.model.provider.as_str()
-            || choice.model != manifest.model.model.as_str()
-            || choice.native_reasoning != manifest.model.reasoning.as_str()
-            || choice.max_output_tokens != manifest.model.max_output_tokens
-            || choice.harness != manifest.harness.harness.as_str()
-            || choice.cli_version != manifest.harness.cli_version.as_str()
-            || choice.adapter != manifest.harness.adapter
-            || choice.environment != manifest.harness.environment
-            || choice.resources.memory_bytes != manifest.resources.memory_bytes
-            || choice.resources.cpu_millis != manifest.resources.cpu_millis
-            || choice.resources.process_limit != manifest.resources.process_limit
-            || choice.resources.wall_time_ms != manifest.resources.wall_time_ms
-            || manifest.credentials.is_empty()
-            || manifest
-                .credentials
-                .iter()
-                .any(|c| c.credential_profile != choice.credential_profile)
+    }
+}
+
+impl ConcreteChoice {
+    fn model_differs(&self, manifest: &aq_session_protocol::LaunchManifest) -> bool {
+        self.provider != manifest.model.provider.as_str()
+            || self.model != manifest.model.model.as_str()
+            || self.native_reasoning != manifest.model.reasoning.as_str()
+            || self.max_output_tokens != manifest.model.max_output_tokens
+    }
+    fn harness_differs(&self, manifest: &aq_session_protocol::LaunchManifest) -> bool {
+        self.harness != manifest.harness.harness.as_str()
+            || self.cli_version != manifest.harness.cli_version.as_str()
+            || self.adapter != manifest.harness.adapter
+            || self.environment != manifest.harness.environment
+    }
+}
+impl ResourceCeilings {
+    fn differs_from_manifest(&self, manifest: &aq_session_protocol::LaunchManifest) -> bool {
+        self.memory_bytes != manifest.resources.memory_bytes
+            || self.cpu_millis != manifest.resources.cpu_millis
+            || self.process_limit != manifest.resources.process_limit
+            || self.wall_time_ms != manifest.resources.wall_time_ms
     }
 }

@@ -56,24 +56,7 @@ async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::E
     let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,intelligence_profile}' AS profile, s.selection->'choice' AS choice, d.decision#>>'{inputs,project,role_snapshot_digest}' IS NOT NULL AS launched FROM execution_attempts a JOIN nodes n ON n.id=a.node_id LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND n.revoked_at IS NULL AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
     for row in rows {
-        let profile: Option<String> = row.get("profile");
-        let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
-        // A launch from a role snapshot names its level by id, and the choice
-        // names the provider. A decision recorded before roles and profiles
-        // names no role snapshot; its attempt is counted, unclassified, and
-        // nothing of its old catalog is read.
-        let launched: Option<bool> = row.get("launched");
-        let provider = text(&choice, "provider");
-        let cell = match (launched, profile, provider) {
-            (Some(true), Some(class), Some(provider)) => Cell {
-                provider: provider.into(),
-                intelligence_class: class,
-            },
-            _ => Cell {
-                provider: provider.unwrap_or("unknown").into(),
-                intelligence_class: "__unclassified".into(),
-            },
-        };
+        let cell = attempt_cell(&row);
         out.push((cell, false));
     }
     let manual: Vec<(Value, String, bool)> = sqlx::query_as(
@@ -104,6 +87,26 @@ async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::E
         ));
     }
     Ok(out)
+}
+fn attempt_cell(row: &sqlx::postgres::PgRow) -> Cell {
+    let profile: Option<String> = row.get("profile");
+    let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
+    // A launch from a role snapshot names its level by id, and the choice
+    // names the provider. A decision recorded before roles and profiles
+    // names no role snapshot; its attempt is counted, unclassified, and
+    // nothing of its old catalog is read.
+    let launched: Option<bool> = row.get("launched");
+    let provider = text(&choice, "provider");
+    match (launched, profile, provider) {
+        (Some(true), Some(class), Some(provider)) => Cell {
+            provider: provider.into(),
+            intelligence_class: class,
+        },
+        _ => Cell {
+            provider: provider.unwrap_or("unknown").into(),
+            intelligence_class: "__unclassified".into(),
+        },
+    }
 }
 pub async fn counts(conn: &mut PgConnection) -> Result<Vec<Count>, sqlx::Error> {
     let now: i64 =
@@ -165,18 +168,7 @@ pub async fn check(
             UNCLASSIFIED
         }));
     }
-    let configured = settings.normal.is_some()
-        || settings
-            .limits
-            .provider_limits
-            .iter()
-            .any(|p| p.limit.is_some())
-        || settings
-            .limits
-            .cell_limits
-            .iter()
-            .any(|c| c.limit.is_some());
-    if !configured {
+    if !has_limits(&settings) {
         return Ok(None);
     }
     // Publish a row version so SERIALIZABLE claimants retry after another wins.
@@ -186,45 +178,75 @@ pub async fn check(
     let Some(cell) = cell else {
         return Ok(Some(UNCLASSIFIED));
     };
+    let Some((provider_limit, limit)) = configured_limits(&settings, cell) else {
+        return Ok(Some(UNCLASSIFIED));
+    };
+    let active = occupancy(conn).await?;
+    Ok(capacity_block(&active, cell, provider_limit, limit))
+}
+fn configured_limits(
+    settings: &crate::Settings,
+    cell: &Cell,
+) -> Option<(Option<u32>, Option<u32>)> {
     let provider_limit = settings
         .limits
         .provider_limits
         .iter()
         .find(|p| p.provider == cell.provider)
         .and_then(|p| p.limit);
-    let limit = crate::effective_limit(&settings, &cell.provider, &cell.intelligence_class);
+    let limit = crate::effective_limit(settings, &cell.provider, &cell.intelligence_class);
     let explicit_cell =
         settings.limits.cell_limits.iter().any(|c| {
             c.provider == cell.provider && c.intelligence_class == cell.intelligence_class
         });
     // A complete matrix still refuses a class it does not name. Sparse independent
     // controls leave every other class unlimited.
-    if limit.is_none() && settings.normal.is_some() && !explicit_cell {
-        return Ok(Some(UNCLASSIFIED));
+    let missing_from_matrix = settings.normal.is_some() && !explicit_cell;
+    if limit.is_none() && missing_from_matrix {
+        return None;
     }
-    let active = occupancy(conn).await?;
-    if let Some(limit) = provider_limit {
-        let n = active
+    Some((provider_limit, limit))
+}
+fn capacity_block(
+    active: &[(Cell, bool)],
+    cell: &Cell,
+    provider_limit: Option<u32>,
+    limit: Option<u32>,
+) -> Option<&'static str> {
+    let provider_running = |c: &Cell, waiting: bool| {
+        !waiting && (c.provider == cell.provider || c.provider == "unknown")
+    };
+    if provider_limit.is_some_and(|limit| {
+        active
             .iter()
-            .filter(|(c, w)| !w && (c.provider == cell.provider || c.provider == "unknown"))
-            .count();
-        if n >= limit as usize {
-            return Ok(Some(CEILING));
-        }
+            .filter(|(c, w)| provider_running(c, *w))
+            .count()
+            >= limit as usize
+    }) {
+        return Some(CEILING);
     }
-    if let Some(limit) = limit {
-        if active.iter().any(|(c, w)| {
-            !w && (c.provider == cell.provider || c.provider == "unknown")
-                && c.intelligence_class == "__unclassified"
-        }) {
-            return Ok(Some(UNCLASSIFIED));
-        }
-        let n = active.iter().filter(|(c, w)| !w && c == cell).count();
-        if n >= limit as usize {
-            return Ok(Some(CEILING));
-        }
+    let limit = limit?;
+    if active
+        .iter()
+        .any(|(c, w)| provider_running(c, *w) && c.intelligence_class == "__unclassified")
+    {
+        return Some(UNCLASSIFIED);
     }
-    Ok(None)
+    let running = active.iter().filter(|(c, w)| !w && c == cell).count();
+    (running >= limit as usize).then_some(CEILING)
+}
+fn has_limits(settings: &crate::Settings) -> bool {
+    settings.normal.is_some()
+        || settings
+            .limits
+            .provider_limits
+            .iter()
+            .any(|p| p.limit.is_some())
+        || settings
+            .limits
+            .cell_limits
+            .iter()
+            .any(|c| c.limit.is_some())
 }
 /// Selection-only observation: routing has already chosen its requirement
 /// class. Capacity refuses that choice and never asks the router to downgrade.

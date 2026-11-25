@@ -53,30 +53,37 @@ pub fn operations(
         if branch["truncated"] != false || operations.len() == MAX_NODES {
             return Err(PlanError::Incomplete);
         }
-        let node = &branch["node"];
-        let id: Uuid = node["id"]
-            .as_str()
-            .and_then(|id| id.parse().ok())
-            .ok_or(PlanError::Invalid)?;
-        let version = node["version"]
-            .as_u64()
-            .filter(|v| (1..=i64::MAX as u64).contains(v))
-            .ok_or(PlanError::Invalid)?;
-        if node["workspace_id"] != json!(workspace)
-            || node["kind"] != "task"
-            || node["deleted"] != false
-            || !seen.insert(id)
-        {
-            return Err(PlanError::Invalid);
-        }
-        operations.push(if id != root && node["task_state"] == "draft" {
-            activate_task(id, version)
-        } else {
-            update(id, version, json!({}))
-        });
+        operations.push(node_operation(&branch["node"], workspace, root, &mut seen)?);
         todo.extend(branch["children"].as_array().ok_or(PlanError::Invalid)?);
     }
     Ok(operations)
+}
+
+fn node_operation(
+    node: &Value,
+    workspace: Uuid,
+    root: Uuid,
+    seen: &mut BTreeSet<Uuid>,
+) -> Result<Value, PlanError> {
+    let id: Uuid = node["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .ok_or(PlanError::Invalid)?;
+    let version = node["version"]
+        .as_u64()
+        .filter(|v| (1..=i64::MAX as u64).contains(v))
+        .ok_or(PlanError::Invalid)?;
+    let live_task = node["workspace_id"] == json!(workspace)
+        && node["kind"] == "task"
+        && node["deleted"] == false;
+    if !live_task || !seen.insert(id) {
+        return Err(PlanError::Invalid);
+    }
+    Ok(if id != root && node["task_state"] == "draft" {
+        activate_task(id, version)
+    } else {
+        update(id, version, json!({}))
+    })
 }
 
 pub struct Receipt<'a> {
@@ -94,16 +101,7 @@ pub fn receipt<'a>(operations: &[Value], results: &'a Value) -> Option<Receipt<'
     let mut activated = Vec::new();
     for (op, result) in operations.iter().zip(results) {
         let changes_state = op["patch"]["task_state"] == "active";
-        let revision = op["expected_version"]
-            .as_u64()?
-            .checked_add(u64::from(changes_state))?;
-        if result["id"] != op["id"]
-            || result["kind"] != "task"
-            || result["version"] != revision
-            || (changes_state && result["task_state"] != "active")
-        {
-            return None;
-        }
+        confirm_result(op, result, changes_state)?;
         if changes_state {
             activated.push(result);
         }
@@ -112,4 +110,13 @@ pub fn receipt<'a>(operations: &[Value], results: &'a Value) -> Option<Receipt<'
         skipped: results.len().checked_sub(activated.len() + 1)?,
         activated,
     })
+}
+
+fn confirm_result(op: &Value, result: &Value, changes_state: bool) -> Option<()> {
+    let revision = op["expected_version"]
+        .as_u64()?
+        .checked_add(u64::from(changes_state))?;
+    let same_task = result["id"] == op["id"] && result["kind"] == "task";
+    let state_confirmed = !changes_state || result["task_state"] == "active";
+    (same_task && state_confirmed && result["version"] == revision).then_some(())
 }

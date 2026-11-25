@@ -1,0 +1,55 @@
+{
+  "levels": [
+    "simple-high",
+    "standard-high",
+    "complex-high"
+  ],
+  "offers": {
+    "simple-high": {
+      "harnesses": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "providers": [
+        "anthropic",
+        "ollama",
+        "openai"
+      ]
+    },
+    "standard-high": {
+      "harnesses": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "providers": [
+        "anthropic",
+        "ollama",
+        "openai"
+      ]
+    },
+    "complex-high": {
+      "harnesses": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "providers": [
+        "anthropic",
+        "ollama",
+        "openai"
+      ]
+    }
+  },
+  "harnesses": [
+    "claude",
+    "codex",
+    "opencode"
+  ],
+  "providers": [
+    "anthropic",
+    "ollama",
+    "openai"
+  ]
+}

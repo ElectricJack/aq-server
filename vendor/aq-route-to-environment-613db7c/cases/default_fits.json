@@ -1,0 +1,118 @@
+{
+  "name": "default_fits",
+  "situation": "The project's default environment provides everything the task needs",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-21",
+        "revision": 2
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-21@3",
+          "subject": {
+            "id": "task-21",
+            "revision": 3
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a CSV export",
+            "description": "Export the report as CSV.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "rust"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-web",
+                "provides": [
+                  "rust",
+                  "git",
+                  "node"
+                ]
+              },
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "work.route": [
+      {
+        "outcome": "routed",
+        "output": {
+          "reference": "route-1",
+          "subject": {
+            "id": "task-21",
+            "revision": 3
+          },
+          "harnesses": [],
+          "providers": [],
+          "prefer": []
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "routed",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-21",
+            "revision": 2
+          }
+        }
+      },
+      {
+        "command": "work.route",
+        "input": {
+          "subject": {
+            "id": "task-21",
+            "revision": 3
+          },
+          "level": "standard-high",
+          "harnesses": [],
+          "providers": [],
+          "prefer": [],
+          "hold": false,
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "The project's default environment provides everything the task needs."
+            }
+          ],
+          "classification": null,
+          "environment": "rust-base"
+        }
+      }
+    ]
+  }
+}

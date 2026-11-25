@@ -5,6 +5,7 @@ pub mod evidence;
 pub mod freshness;
 pub mod ladder;
 pub mod policy;
+pub mod run;
 
 use uuid::Uuid;
 const EPISODE_NAMESPACE: Uuid = Uuid::from_bytes(*b"aq-stall-episode");

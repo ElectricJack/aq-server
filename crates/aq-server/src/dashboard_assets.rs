@@ -2,6 +2,9 @@
 mod manifest;
 use crate::{AppState, authz::CurrentUser, error::AppError};
 use anyhow::{Context, Result, ensure};
+use aq_dashboard_contract::release_manifest::assets::{
+    self, Files, MAX_TOTAL, asset_cache_control, mime,
+};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -11,10 +14,6 @@ use axum::{
     routing::get,
 };
 use manifest::Manifest;
-use serde::{
-    Deserialize,
-    de::{MapAccess, Visitor},
-};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
@@ -30,42 +29,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
-const MAX_FILES: usize = 512;
-const MAX_TOTAL: u64 = 32 * 1024 * 1024;
 const MAX_MANIFEST: u64 = 256 * 1024;
-struct Files(BTreeMap<String, Entry>);
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Entry {
-    sha256: String,
-    bytes: u64,
-}
-impl<'de> Deserialize<'de> for Files {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        struct Entries;
-        impl<'de> Visitor<'de> for Entries {
-            type Value = Files;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a bounded unique asset map")
-            }
-            fn visit_map<M: MapAccess<'de>>(
-                self,
-                mut m: M,
-            ) -> std::result::Result<Files, M::Error> {
-                let mut files = BTreeMap::new();
-                while let Some((name, entry)) = m.next_entry::<String, Entry>()? {
-                    if files.len() >= MAX_FILES || files.insert(name, entry).is_some() {
-                        return Err(serde::de::Error::custom(
-                            "duplicate asset or file count limit",
-                        ));
-                    }
-                }
-                Ok(Files(files))
-            }
-        }
-        d.deserialize_map(Entries)
-    }
-}
 #[derive(Clone)]
 struct Asset {
     bytes: Bytes,
@@ -104,65 +68,7 @@ impl DashboardAssets {
         let manifest: Manifest =
             serde_json::from_slice(&bytes).context("invalid dashboard manifest")?;
         manifest.validate_compatibility()?;
-        ensure!(
-            !manifest.files.0.is_empty() && manifest.files.0.contains_key("index.html"),
-            "dashboard index missing"
-        );
-        let mut total = 0u64;
-        for (name, entry) in &manifest.files.0 {
-            ensure!(
-                mime(name).is_some(),
-                "unsupported dashboard asset path/type"
-            );
-            ensure!(
-                entry.sha256.len() == 64
-                    && entry
-                        .sha256
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-                "dashboard digest must be lowercase SHA256"
-            );
-            total = total
-                .checked_add(entry.bytes)
-                .context("dashboard size overflow")?;
-            ensure!(total <= MAX_TOTAL, "dashboard bundle byte quota");
-        }
-        let assets = if manifest.files.0.keys().any(|p| p.starts_with("assets/")) {
-            Some(open_at(&root, "assets", true)?)
-        } else {
-            None
-        };
-        let mut files = BTreeMap::new();
-        for (name, entry) in manifest.files.0 {
-            let bytes = if let Some(file) = name.strip_prefix("assets/") {
-                read_file(
-                    assets
-                        .as_ref()
-                        .context("dashboard assets directory missing")?,
-                    file,
-                    entry.bytes,
-                    Some(entry.bytes),
-                )?
-            } else {
-                read_file(&root, &name, entry.bytes, Some(entry.bytes))?
-            };
-            ensure!(
-                hex::encode(Sha256::digest(&bytes)) == entry.sha256,
-                "dashboard asset integrity mismatch"
-            );
-            ensure!(
-                name != "index.html" || !bytes.is_empty(),
-                "empty dashboard index"
-            );
-            files.insert(
-                name.clone(),
-                Asset {
-                    bytes: Bytes::from(bytes),
-                    mime: mime(&name).context("dashboard MIME missing")?,
-                    cache_control: asset_cache_control(&name),
-                },
-            );
-        }
+        let files = load_assets(&root, manifest.files)?;
         let current = std::fs::symlink_metadata(directory)?;
         ensure!(
             current.is_dir() && (current.dev(), current.ino()) == (original.dev(), original.ino()),
@@ -178,6 +84,44 @@ impl DashboardAssets {
             },
         })
     }
+}
+fn load_assets(root: &File, declaration: Files) -> Result<BTreeMap<String, Asset>> {
+    let entries = declaration.validated()?;
+    let assets = if entries.keys().any(|p| p.starts_with("assets/")) {
+        Some(open_at(root, "assets", true)?)
+    } else {
+        None
+    };
+    let mut files = BTreeMap::new();
+    for (name, entry) in entries {
+        let bytes = if let Some(file) = name.strip_prefix("assets/") {
+            read_file(
+                assets
+                    .as_ref()
+                    .context("dashboard assets directory missing")?,
+                file,
+                entry.bytes,
+                Some(entry.bytes),
+            )?
+        } else {
+            read_file(root, &name, entry.bytes, Some(entry.bytes))?
+        };
+        ensure!(
+            hex::encode(Sha256::digest(&bytes)) == entry.sha256,
+            "dashboard asset integrity mismatch"
+        );
+        ensure!(
+            name != "index.html" || !bytes.is_empty(),
+            "empty dashboard index"
+        );
+        let asset = Asset {
+            bytes: Bytes::from(bytes),
+            mime: mime(&name).context("dashboard MIME missing")?,
+            cache_control: asset_cache_control(&name),
+        };
+        files.insert(name, asset);
+    }
+    Ok(files)
 }
 fn open_at(directory: &File, name: &str, is_directory: bool) -> Result<File> {
     ensure!(
@@ -221,45 +165,6 @@ fn read_file(directory: &File, name: &str, limit: u64, exact: Option<u64>) -> Re
     );
     Ok(bytes)
 }
-fn mime(name: &str) -> Option<&'static str> {
-    if name == "index.html" {
-        return Some("text/html; charset=utf-8");
-    }
-    let file = name.strip_prefix("assets/")?;
-    if file.is_empty()
-        || file.len() > 240
-        || !file
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-        || matches!(file, "." | "..")
-    {
-        return None;
-    }
-    let (base, extension) = file.rsplit_once('.')?;
-    if base.is_empty() {
-        return None;
-    }
-    match extension {
-        "js" => Some("text/javascript; charset=utf-8"),
-        "css" => Some("text/css; charset=utf-8"),
-        "woff" => Some("font/woff"),
-        "woff2" => Some("font/woff2"),
-        "png" => Some("image/png"),
-        "svg" => Some("image/svg+xml"),
-        "jpg" => Some("image/jpeg"),
-        "webp" => Some("image/webp"),
-        "ico" => Some("image/x-icon"),
-        _ => None,
-    }
-}
-fn segment(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && !matches!(value, "." | "..")
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-}
 fn spa(path: &str) -> bool {
     if path.len() > 512 {
         return false;
@@ -275,31 +180,12 @@ fn spa(path: &str) -> bool {
         ] => true,
         ["settings", "intelligence"] => true,
         ["work" | "decisions" | "agents" | "knowledge", id] | ["playbooks", "runs", id] => {
-            segment(id)
+            assets::valid_segment(id, 128)
         }
-        ["results", id, "revisions", revision] => segment(id) && segment(revision),
+        ["results", id, "revisions", revision] => {
+            assets::valid_segment(id, 128) && assets::valid_segment(revision, 128)
+        }
         _ => false,
-    }
-}
-fn asset_cache_control(name: &str) -> &'static str {
-    let Some(base) = name
-        .strip_prefix("assets/")
-        .and_then(|file| file.rsplit_once('.').map(|(base, _)| base))
-    else {
-        return "no-cache";
-    };
-    // Vite's content hashes use URL-safe base64, including '_' and '-'.
-    if base.match_indices('-').any(|(offset, _)| {
-        let hash = &base[offset + 1..];
-        offset > 0
-            && hash.len() >= 8
-            && hash
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-    }) {
-        "private, max-age=31536000, immutable"
-    } else {
-        "no-cache"
     }
 }
 /// SO-02: a hard-loaded unknown page outside `/api`, `/v1` and `/assets` gets
@@ -312,19 +198,7 @@ pub(crate) async fn browser_not_found(state: AppState, request: Request) -> Opti
         .files
         .get("index.html")?
         .clone();
-    let path = request.uri().path();
-    let accepts_html = request
-        .headers()
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("text/html"));
-    if !matches!(*request.method(), Method::GET | Method::HEAD)
-        || !accepts_html
-        || ["/api", "/v1", "/assets"].iter().any(|p| {
-            path.strip_prefix(p)
-                .is_some_and(|r| r.is_empty() || r.starts_with('/'))
-        })
-    {
+    if !accepts_dashboard_navigation(&request) {
         return None;
     }
     let mut response = serve(&index, &state, request).await.into_response();
@@ -332,6 +206,20 @@ pub(crate) async fn browser_not_found(state: AppState, request: Request) -> Opti
         *response.status_mut() = StatusCode::NOT_FOUND;
     }
     Some(response)
+}
+fn accepts_dashboard_navigation(request: &Request) -> bool {
+    let path = request.uri().path();
+    let accepts_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/html"));
+    let browser_method = matches!(*request.method(), Method::GET | Method::HEAD);
+    let reserved = ["/api", "/v1", "/assets"].iter().any(|p| {
+        path.strip_prefix(p)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    });
+    browser_method && accepts_html && !reserved
 }
 async fn serve(asset: &Asset, state: &AppState, request: Request) -> Result<Response, AppError> {
     let (mut parts, _) = request.into_parts();
@@ -631,14 +519,7 @@ mod release_tests {
         let path = root.path().join("dashboard-manifest.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        manifest["schema_version"] = json!(2);
-        manifest["version"] = json!("0.1.0");
-        manifest["source"] = json!({"revision":"a".repeat(40), "dirty":false, "official":true});
-        manifest["toolchain"] =
-            json!({"node":"v24.15.0", "pnpm":"10.34.5", "lockfile_sha256":"b".repeat(64)});
-        manifest["required_api_versions"] = json!(["dashboard-read-1", "dashboard-actions-1"]);
-        manifest["required_capabilities"] =
-            json!(["dashboard.overview", "tasks.read", "results.media.read"]);
+        add_release_metadata(&mut manifest);
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         assert!(DashboardAssets::load(root.path()).is_ok());
         for mode in [
@@ -658,43 +539,7 @@ mod release_tests {
             "future",
         ] {
             let mut invalid = manifest.clone();
-            match mode {
-                "api" => invalid["required_api_versions"] = json!(["dashboard-read-2"]),
-                "capability" => invalid["required_capabilities"] = json!(["future.capability"]),
-                "unimplemented-capability" => {
-                    invalid["required_capabilities"] = json!(["supervisor.conversation"])
-                }
-                "missing-version" => {
-                    invalid.as_object_mut().unwrap().remove("version");
-                }
-                "missing-source" => {
-                    invalid.as_object_mut().unwrap().remove("source");
-                }
-                "missing-toolchain" => {
-                    invalid.as_object_mut().unwrap().remove("toolchain");
-                }
-                "missing-contracts" => {
-                    invalid
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("required_api_versions");
-                }
-                "no-read-contract" => {
-                    invalid["required_api_versions"] = json!(["dashboard-actions-1"])
-                }
-                "missing" => {
-                    invalid
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("required_capabilities");
-                }
-                "revision" => invalid["source"]["revision"] = json!("main"),
-                "lockfile" => invalid["toolchain"]["lockfile_sha256"] = json!("bad"),
-                "dirty-official" => invalid["source"]["dirty"] = json!(true),
-                "unknown" => invalid["toolchain"]["unexpected"] = json!(true),
-                "future" => invalid["schema_version"] = json!(3),
-                _ => unreachable!(),
-            }
+            invalidate(&mut invalid, mode);
             std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
             assert!(DashboardAssets::load(root.path()).is_err(), "{mode}");
         }
@@ -702,5 +547,52 @@ mod release_tests {
         manifest["source"]["official"] = json!(false);
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         assert!(DashboardAssets::load(root.path()).is_ok());
+    }
+    fn add_release_metadata(manifest: &mut serde_json::Value) {
+        manifest["schema_version"] = json!(2);
+        manifest["version"] = json!("0.1.0");
+        manifest["source"] = json!({"revision":"a".repeat(40), "dirty":false, "official":true});
+        manifest["toolchain"] =
+            json!({"node":"v24.15.0", "pnpm":"10.34.5", "lockfile_sha256":"b".repeat(64)});
+        manifest["required_api_versions"] = json!(["dashboard-read-1", "dashboard-actions-1"]);
+        manifest["required_capabilities"] =
+            json!(["dashboard.overview", "tasks.read", "results.media.read"]);
+    }
+    fn invalidate(invalid: &mut serde_json::Value, mode: &str) {
+        match mode {
+            "api" => invalid["required_api_versions"] = json!(["dashboard-read-2"]),
+            "capability" => invalid["required_capabilities"] = json!(["future.capability"]),
+            "unimplemented-capability" => {
+                invalid["required_capabilities"] = json!(["supervisor.conversation"])
+            }
+            "missing-version" => {
+                invalid.as_object_mut().unwrap().remove("version");
+            }
+            "missing-source" => {
+                invalid.as_object_mut().unwrap().remove("source");
+            }
+            "missing-toolchain" => {
+                invalid.as_object_mut().unwrap().remove("toolchain");
+            }
+            "missing-contracts" => {
+                invalid
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("required_api_versions");
+            }
+            "no-read-contract" => invalid["required_api_versions"] = json!(["dashboard-actions-1"]),
+            "missing" => {
+                invalid
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("required_capabilities");
+            }
+            "revision" => invalid["source"]["revision"] = json!("main"),
+            "lockfile" => invalid["toolchain"]["lockfile_sha256"] = json!("bad"),
+            "dirty-official" => invalid["source"]["dirty"] = json!(true),
+            "unknown" => invalid["toolchain"]["unexpected"] = json!(true),
+            "future" => invalid["schema_version"] = json!(3),
+            _ => unreachable!(),
+        }
     }
 }

@@ -1,7 +1,10 @@
 //! Checks over aq-git's public source observations, moved out of the
 //! aq-server profiled source reader. Pure: no I/O and no decision. A `false`
 //! or `None` means the observation does not prove what the caller needs.
-use serde::{Deserialize, Serialize};
+mod head;
+pub use head::SourceHead;
+#[cfg(feature = "source_observation")]
+pub mod observation;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -13,56 +16,26 @@ pub fn hex40(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The project's integration-branch head as last published by AQ. Recorded in
-/// the `published` delivery evidence that established it; the newest
-/// `sequence` per project, repository, generation and target is current.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceHead {
-    pub schema_version: u32,
-    pub project_id: Uuid,
-    pub repository_id: Uuid,
-    pub binding_generation: u64,
-    pub target: String,
-    pub sequence: u64,
-    /// The published commit (40 lowercase hex digits).
-    pub oid: String,
-    /// The aq-git candidate retention handle that retains `oid` centrally.
-    pub retention_handle: Uuid,
-    pub candidate_operation_id: Uuid,
-    pub publication_operation_id: Uuid,
-    /// The `expected_old` this publication fast-forwarded.
-    pub previous: String,
+/// Repository identity used for fixed aq-git operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Repository {
+    pub id: Uuid,
+    pub generation: u64,
 }
-impl SourceHead {
-    pub fn validate(&self) -> bool {
-        self.schema_version == 1
-            && ![
-                self.project_id,
-                self.repository_id,
-                self.retention_handle,
-                self.candidate_operation_id,
-                self.publication_operation_id,
-            ]
-            .iter()
-            .any(Uuid::is_nil)
-            && (1..=i64::MAX as u64).contains(&self.binding_generation)
-            && (1..=i64::MAX as u64).contains(&self.sequence)
-            && self.target.starts_with("refs/heads/")
-            && self.target.len() <= 1024
-            && hex40(&self.oid)
-            && hex40(&self.previous)
-    }
+pub fn commit_matches(value: &Value, hex: &str) -> bool {
+    let oid = json!({"algorithm":"sha1","hex":hex});
+    let tree = &value["tree"];
+    value["oid"] == oid && tree["algorithm"] == "sha1" && hex40(tree["hex"].as_str().unwrap_or(""))
 }
-
 /// The commit a complete, original, fresh `repo.observation` reports for
 /// `reference` at `generation`, as of `now`.
 pub fn resolve_ref(value: &Value, reference: &str, generation: u64, now: u64) -> Option<String> {
-    let completed = value["completed_at_ms"].as_u64()?;
+    let observation = RefObservation(value);
+    let completed = *observation.interval()?.end();
     if completed > now || now - completed > 30_000 {
         return None;
     }
-    observed_ref(value, reference, generation).map(str::to_owned)
+    observation.oid(reference, generation).map(str::to_owned)
 }
 
 /// The retained SHA-1 observation of this exact ref and generation, without a
@@ -72,71 +45,72 @@ pub(crate) fn observed_ref<'a>(
     reference: &str,
     generation: u64,
 ) -> Option<&'a str> {
-    let completed = value["completed_at_ms"].as_u64()?;
-    let started = value["started_at_ms"].as_u64()?;
-    if started == 0
-        || completed < started
-        || value["binding_generation"] != generation
-        || value["observation_id"]
-            .as_str()
-            .and_then(|s| Uuid::parse_str(s).ok())
-            .is_none_or(|id| id.is_nil())
-        || value["covered_refs"]
-            .as_array()
-            .is_none_or(|a| a.len() > 128 || !a.contains(&json!(reference)))
-        || value.get("last_refresh_error").is_none_or(|v| !v.is_null())
-    {
-        return None;
-    }
-    let hex = value["refs"][reference].as_str()?;
-    hex40(hex).then_some(hex)
+    let observation = RefObservation(value);
+    observation.interval()?;
+    observation.oid(reference, generation)
 }
 
+struct RefObservation<'a>(&'a Value);
+impl<'a> RefObservation<'a> {
+    fn oid(&self, reference: &str, generation: u64) -> Option<&'a str> {
+        let scoped = self.covers(reference) && self.has_identity(generation);
+        let success = self.0.get("last_refresh_error") == Some(&Value::Null);
+        if !scoped || !success {
+            return None;
+        }
+        let hex = self.0["refs"][reference].as_str()?;
+        hex40(hex).then_some(hex)
+    }
+    fn covers(&self, reference: &str) -> bool {
+        self.0["covered_refs"]
+            .as_array()
+            .is_some_and(|refs| refs.len() <= 128 && refs.contains(&json!(reference)))
+    }
+    fn has_identity(&self, generation: u64) -> bool {
+        let id = self.0["observation_id"]
+            .as_str()
+            .and_then(|s| Uuid::parse_str(s).ok());
+        id.is_some_and(|id| !id.is_nil()) && self.0["binding_generation"] == generation
+    }
+    fn interval(&self) -> Option<std::ops::RangeInclusive<u64>> {
+        let start = self.0["started_at_ms"].as_u64()?;
+        let end = self.0["completed_at_ms"].as_u64()?;
+        (start > 0 && start <= end).then_some(start..=end)
+    }
+}
 /// A `retention.inspect` reply proves `handle` is an exact, active, complete
 /// retention of the commit `hex` in this repository binding.
-pub fn retention_holds(
-    value: &Value,
-    handle: Uuid,
-    repository: Uuid,
-    generation: u64,
-    hex: &str,
-) -> bool {
+pub fn retention_holds(value: &Value, handle: Uuid, repository: Repository, hex: &str) -> bool {
     let Some(refs) = value["refs"].as_array() else {
         return false;
     };
-    let mut names = std::collections::BTreeSet::new();
-    if refs.iter().any(|r| {
-        r["name"]
-            .as_str()
-            .is_none_or(|name| name.is_empty() || name.len() > 4096 || !names.insert(name))
-            || !hex40(r["oid"].as_str().unwrap_or(""))
-    }) {
-        return false;
-    }
-    !(value["version"] != 1
-        || value["id"] != handle.to_string()
-        || value["repository_id"] != repository.to_string()
-        || value["binding_generation"] != generation
-        || value["generation"].as_u64().is_none_or(|g| g == 0)
-        || value["state"] != "active"
-        || refs.len() > 256
-        || !refs.iter().any(|r| r["oid"] == hex)
-        || value.get("release_operation").is_none_or(|v| !v.is_null())
-        || value.get("release_reason").is_none_or(|v| !v.is_null()))
+    let record = crate::source_transport::RetentionRecord(value);
+    let matches =
+        record.matches_handle(handle, repository.id, repository.generation) && record.unreleased();
+    let active = value["generation"].as_u64().is_some_and(|g| g > 0) && value["state"] == "active";
+    matches && active && retained_refs(refs, hex)
 }
-
+fn retained_refs(refs: &[Value], hex: &str) -> bool {
+    let mut names = std::collections::BTreeSet::new();
+    let valid = refs.iter().all(|r| {
+        let named = r["name"]
+            .as_str()
+            .is_some_and(|name| (1..=4096).contains(&name.len()) && names.insert(name));
+        named && hex40(r["oid"].as_str().unwrap_or(""))
+    });
+    valid && refs.len() <= 256 && refs.iter().any(|r| r["oid"] == hex)
+}
 /// The logical identity a `repo.show` reply gives this central SHA-1
 /// repository binding.
 pub fn repository_identity(value: &Value, repository: Uuid, generation: u64) -> Option<String> {
     let identity = value["identity"].as_str()?;
-    if value["repository_id"] != repository.to_string()
-        || value["binding_generation"] != generation
-        || value["mode"] != "central"
-        || value["object_format"] != "sha1"
-        || identity.trim().is_empty()
-        || identity.len() > 512
-        || identity.chars().any(char::is_control)
-    {
+    let bound = value["repository_id"] == repository.to_string()
+        && value["binding_generation"] == generation;
+    let central = value["mode"] == "central" && value["object_format"] == "sha1";
+    let valid_name = !identity.trim().is_empty()
+        && identity.len() <= 512
+        && !identity.chars().any(char::is_control);
+    if ![bound, central, valid_name].into_iter().all(|valid| valid) {
         return None;
     }
     Some(identity.to_owned())
@@ -171,9 +145,13 @@ mod tests {
     fn retention_is_exact_active_complete_and_never_inferred_from_missing_fields() {
         let handle = Uuid::new_v4();
         let repository = Uuid::new_v4();
+        let binding = Repository {
+            id: repository,
+            generation: 2,
+        };
         let hex = "a".repeat(40);
         let valid = json!({"version":1,"id":handle,"repository_id":repository,"binding_generation":2,"generation":1,"state":"active","refs":[{"name":"refs/aq-git/checkpoints/test","oid":hex}],"release_operation":null,"release_reason":null});
-        assert!(retention_holds(&valid, handle, repository, 2, &hex));
+        assert!(retention_holds(&valid, handle, binding, &hex));
         for (field, bad) in [
             ("state", json!("released")),
             ("id", json!(Uuid::new_v4())),
@@ -185,55 +163,13 @@ mod tests {
         ] {
             let mut value = valid.clone();
             value[field] = bad;
-            assert!(
-                !retention_holds(&value, handle, repository, 2, &hex),
-                "{field}"
-            );
+            assert!(!retention_holds(&value, handle, binding, &hex), "{field}");
         }
         let mut incomplete = valid.clone();
         incomplete
             .as_object_mut()
             .unwrap()
             .remove("release_operation");
-        assert!(!retention_holds(&incomplete, handle, repository, 2, &hex));
-    }
-}
-
-#[cfg(test)]
-mod source_head_tests {
-    use super::*;
-    fn head() -> SourceHead {
-        SourceHead {
-            schema_version: 1,
-            project_id: Uuid::from_u128(1),
-            repository_id: Uuid::from_u128(2),
-            binding_generation: 1,
-            target: "refs/heads/main".into(),
-            sequence: 1,
-            oid: "a".repeat(40),
-            retention_handle: Uuid::from_u128(3),
-            candidate_operation_id: Uuid::from_u128(3),
-            publication_operation_id: Uuid::from_u128(4),
-            previous: "b".repeat(40),
-        }
-    }
-    #[test]
-    fn source_head_shape_is_exact() {
-        assert!(head().validate());
-        let mut h = head();
-        h.oid = "0".repeat(40);
-        assert!(!h.validate());
-        let mut h = head();
-        h.target = "refs/tags/v1".into();
-        assert!(!h.validate());
-        let mut h = head();
-        h.sequence = 0;
-        assert!(!h.validate());
-        let mut h = head();
-        h.retention_handle = Uuid::nil();
-        assert!(!h.validate());
-        let mut v = serde_json::to_value(head()).unwrap();
-        v["extra"] = json!(1);
-        assert!(serde_json::from_value::<SourceHead>(v).is_err());
+        assert!(!retention_holds(&incomplete, handle, binding, &hex));
     }
 }

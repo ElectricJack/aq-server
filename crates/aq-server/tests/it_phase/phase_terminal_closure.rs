@@ -457,9 +457,40 @@ async fn closed_launch_settles_only_a_proven_nonstart_and_keeps_the_claim() {
             vec![attempt]
         );
         if kind == 0 {
+<<<<<<< HEAD
             assert_suppression_history_fences(&f, attempt, &before).await;
+=======
+            // Held while any execution history or AQ effect exists for it.
+            let pool = &f.c.env.env.pool;
+            let replica = |sql: &'static str| async move {
+                let mut tx = pool.begin().await.unwrap();
+                sqlx::query("SET LOCAL session_replication_role=replica")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                sqlx::query(sql)
+                    .bind(attempt)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            };
+            replica("INSERT INTO agent_graph_operations(operation_id,attempt_id,node_id,request,payload_digest,mapped,policy,status,phase,created_at_ms,retained_bytes) SELECT gen_random_uuid(),$1,node_id,'{}','0','{}','{}','{}','queued',1,1 FROM execution_attempts WHERE attempt_id=$1").await;
+            assert_eq!(
+                settlement::settle(state, attempt, None).await.unwrap(),
+                ClosureSettlement::Held("closure_effects_present")
+            );
+            replica("DELETE FROM agent_graph_operations WHERE attempt_id=$1").await;
+            replica("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest) SELECT gen_random_uuid(),$1,node_id,gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}' FROM execution_attempts WHERE attempt_id=$1").await;
+            assert_eq!(
+                settlement::settle(state, attempt, None).await.unwrap(),
+                ClosureSettlement::Held("closure_has_execution_history")
+            );
+            replica("DELETE FROM source_transfers WHERE attempt_id=$1").await;
+            assert_eq!(snapshot(&f).await, before, "held cases change nothing");
+>>>>>>> refs/remotes/central/main
         }
-        let outcome = settlement::settle(state, attempt).await.unwrap();
+        let outcome = settlement::settle(state, attempt, None).await.unwrap();
         if kind == 1 || kind == 2 {
             assert_eq!(
                 outcome,
@@ -473,7 +504,49 @@ async fn closed_launch_settles_only_a_proven_nonstart_and_keeps_the_claim() {
             continue;
         }
         assert_eq!(outcome, ClosureSettlement::Settled);
+<<<<<<< HEAD
         assert_settled_held(&f, &q, &before).await;
+=======
+        let after = snapshot(&f).await;
+        let hot = &after["hot"]["state"];
+        assert_eq!(hot["status"], "finished");
+        assert_eq!(hot["stop"]["kind"], "not_started");
+        assert_eq!(
+            hot["stop"]["receipt"]["id"],
+            format!("aq.launch-closure/{}", q.original.operation_id)
+        );
+        let receipt_digest: String =
+            sqlx::query_scalar("SELECT receipt_digest FROM profiled_launch_closures")
+                .fetch_one(&f.c.env.env.pool)
+                .await
+                .unwrap();
+        assert_eq!(hot["stop"]["receipt"]["digest"], json!(receipt_digest));
+        assert_eq!(hot["retention"]["kind"], "retained");
+        assert!(
+            hot["retention"]["receipt"]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("aq.source-export/")
+        );
+        assert_eq!(hot["effects"]["kind"], "quiescent");
+        assert_eq!(
+            after["attempt"]["holds_task"], true,
+            "B4 releases, not this"
+        );
+        assert_eq!(after["leases"], before["leases"]);
+        assert_eq!(after["bindings"], before["bindings"]);
+        // Idempotent, and no longer awaiting settlement.
+        assert_eq!(
+            settlement::settle(state, attempt, None).await.unwrap(),
+            ClosureSettlement::Unchanged
+        );
+        // Still listed until B4 releases its claim (settle_and_release).
+        assert_eq!(
+            settlement::awaiting(state, None, 8).await.unwrap(),
+            vec![attempt]
+        );
+        assert_eq!(snapshot(&f).await, after);
+>>>>>>> refs/remotes/central/main
         // B4 eligibility of these facts is the pure `replacement::assess`
         // (closed_unstarted_attempt_is_replaceable); this schema-32 fixture has
         // no B4 tables.

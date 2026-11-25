@@ -87,8 +87,7 @@ impl Fixture {
             .start(
                 &plan.binding().unwrap(),
                 launch.clone(),
-                60_000,
-                clock(1000),
+                PermitWindow::new(60_000, clock(1000)),
             )
             .await
             .unwrap()

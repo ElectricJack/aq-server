@@ -19,6 +19,35 @@ def write_skill(destination: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def validate_target(directory: Path) -> None:
+    target = directory / "SKILL.md"
+    if directory.is_symlink() or target.is_symlink():
+        raise ValueError(f"Refusing to replace a symlink at {directory} or {target}")
+    for path, check, expected in (
+        (directory, directory.is_dir, "a skill directory"),
+        (target, target.is_file, "a regular skill file"),
+    ):
+        if path.exists() and not check():
+            raise ValueError(f"Expected {expected} at {path}")
+
+
+def install_one(directory: Path, content: bytes) -> None:
+    target = directory / "SKILL.md"
+    if target.exists():
+        current = target.read_bytes()
+        if current == content:
+            print(f"Current: {directory.name}")
+            return
+        with tempfile.NamedTemporaryFile(
+            dir=directory, prefix="SKILL.md.aq-backup-", delete=False
+        ) as backup:
+            backup.write(current)
+        print(f"Backed up: {backup.name}")
+    directory.mkdir(exist_ok=True)
+    write_skill(target, content)
+    print(f"Installed: {target}")
+
+
 def install(source: Path, destination: Path) -> None:
     contents = {
         skill.parent.name: skill.read_bytes()
@@ -32,31 +61,9 @@ def install(source: Path, destination: Path) -> None:
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         for name in contents:
-            directory = destination / name
-            target = directory / "SKILL.md"
-            if directory.is_symlink() or target.is_symlink():
-                raise ValueError(f"Refusing to replace a symlink at {directory} or {target}")
-            if directory.exists() and not directory.is_dir():
-                raise ValueError(f"Expected a skill directory at {directory}")
-            if target.exists() and not target.is_file():
-                raise ValueError(f"Expected a regular skill file at {target}")
-
+            validate_target(destination / name)
         for name, content in contents.items():
-            directory = destination / name
-            target = directory / "SKILL.md"
-            if target.exists():
-                current = target.read_bytes()
-                if current == content:
-                    print(f"Current: {name}")
-                    continue
-                with tempfile.NamedTemporaryFile(
-                    dir=directory, prefix="SKILL.md.aq-backup-", delete=False
-                ) as backup:
-                    backup.write(current)
-                print(f"Backed up: {backup.name}")
-            directory.mkdir(exist_ok=True)
-            write_skill(target, content)
-            print(f"Installed: {target}")
+            install_one(destination / name, content)
     finally:
         os.close(lock)
 

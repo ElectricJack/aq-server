@@ -89,7 +89,8 @@ pub fn refusal(body: &Value) -> Option<Value> {
     let message = body["message"]
         .as_str()
         .filter(|m| !m.is_empty() && m.len() <= 4096)?;
-    if !known || body["effect"] != "not_applied" || !body["command"].is_string() {
+    let unapplied_command = body["effect"] == "not_applied" && body["command"].is_string();
+    if !known || !unapplied_command {
         return None;
     }
     let held = body["held"]
@@ -129,10 +130,6 @@ pub async fn invoke(ctx: &Ctx, inv: &Invocation) -> Result<Value> {
             "A command name is lowercase letters, digits, `.`, `_` and `-`",
         ));
     }
-    let attach = |e: Value| match inv.operation_id {
-        Some(id) => with_operation_in(ctx.mode, e, id),
-        None => e,
-    };
     let raw = ctx
         .http
         .post_json_response(
@@ -140,53 +137,58 @@ pub async fn invoke(ctx: &Ctx, inv: &Invocation) -> Result<Value> {
             &Value::Object(inv.request.clone()),
         )
         .await
-        .map_err(|e| attach(client::http_error(e)))?;
-    if (200..300).contains(&raw.status) {
-        if let Some(id) = inv.operation_id {
-            if raw.body["api_version"] == "dashboard-actions-1" {
-                client::validate_receipt(&raw.body, id).map_err(attach)?;
+        .map_err(|e| inv.failure(ctx.mode, client::http_error(e)))?;
+    inv.response(ctx.mode, raw)
+}
+impl Invocation {
+    fn failure(&self, mode: crate::Mode, err: Value) -> Value {
+        match self.operation_id {
+            Some(id) => with_operation_in(mode, err, id),
+            None => err,
+        }
+    }
+    fn response(&self, mode: crate::Mode, raw: aq_human_http::JsonResponse) -> Result<Value> {
+        if (200..300).contains(&raw.status) {
+            return self.success(mode, raw.body);
+        }
+
+        if let Some(mut r) = refusal(&raw.body) {
+            // A refusal is `not_applied`: nothing to recover, but keep the ID.
+            if let Some(id) = self.operation_id {
+                r["operation_id"] = json!(id);
             }
-            if unconfirmed(&raw.body).is_some() {
-                let mut e = attach(error(
+            return Err(r);
+        }
+        Err(self.failure(
+            mode,
+            client::response(raw)
+                .err()
+                .unwrap_or_else(|| error("invalid_response", "Unexpected command response")),
+        ))
+    }
+
+    fn success(&self, mode: crate::Mode, body: Value) -> Result<Value> {
+        if let Some(id) = self.operation_id {
+            if body["api_version"] == "dashboard-actions-1" {
+                client::validate_receipt(&body, id).map_err(|e| self.failure(mode, e))?;
+            }
+            if unconfirmed(&body).is_some() {
+                let mut e = self.failure(mode,error(
                     "operation_unconfirmed",
                     "Operation is not confirmed; inspect its original ID before taking further action",
                 ));
-                e["operation"] = raw.body;
+                e["operation"] = body;
                 return Err(e);
             }
         }
-        return Ok(raw.body);
+        Ok(body)
     }
-    if let Some(mut r) = refusal(&raw.body) {
-        // A refusal is `not_applied`: nothing to recover, but keep the ID.
-        if let Some(id) = inv.operation_id {
-            r["operation_id"] = json!(id);
-        }
-        return Err(r);
-    }
-    Err(attach(client::response(raw).err().unwrap_or_else(|| {
-        error("invalid_response", "Unexpected command response")
-    })))
 }
-
 /// `run NAME`: params from flags; a mutation gets a fresh operation ID, also
 /// bound into params when the command's params carry one.
 pub fn build(mode: crate::Mode, name: &str, flags: &RunFlags) -> Result<Invocation> {
     let mut params = input::params(flags.params_file.as_deref(), &flags.params)?;
-    let from_params = params
-        .get("operation_id")
-        .and_then(|v| v.as_str()?.parse::<Uuid>().ok());
-    // A command this binary does not know is treated as a possible mutation.
-    let mutation = catalog::is_mutation(name).unwrap_or(true);
-    let op = flags
-        .operation_id
-        .or(from_params)
-        .or_else(|| mutation.then(Uuid::new_v4));
-    if let Some(id) = op
-        && catalog::takes_operation_id(name, mode.principal())
-    {
-        params.entry("operation_id").or_insert(json!(id));
-    }
+    let op = operation_id(mode, name, flags.operation_id, &mut params);
     let mut request = Map::new();
     if let Some(id) = op {
         request.insert("operation_id".into(), json!(id));
@@ -219,6 +221,27 @@ pub fn build(mode: crate::Mode, name: &str, flags: &RunFlags) -> Result<Invocati
         request,
         operation_id: op,
     })
+}
+fn operation_id(
+    mode: crate::Mode,
+    name: &str,
+    explicit: Option<Uuid>,
+    params: &mut Map<String, Value>,
+) -> Option<Uuid> {
+    let from_params = params
+        .get("operation_id")
+        .and_then(|v| v.as_str()?.parse::<Uuid>().ok());
+    // A command this binary does not know is treated as a possible mutation.
+    let mutation = catalog::is_mutation(name).unwrap_or(true);
+    let op = explicit
+        .or(from_params)
+        .or_else(|| mutation.then(Uuid::new_v4));
+    if let Some(id) = op
+        && catalog::takes_operation_id(name, mode.principal())
+    {
+        params.entry("operation_id").or_insert(json!(id));
+    }
+    op
 }
 pub async fn run(ctx: &Ctx, name: &str, flags: &RunFlags) -> Result<Value> {
     if flags.describe {
