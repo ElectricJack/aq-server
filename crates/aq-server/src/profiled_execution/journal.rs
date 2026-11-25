@@ -4,7 +4,7 @@
 use crate::{error::AppError, execution::authority::hot::LaunchOwner};
 use aq_admission::{Digest, LaunchBinding};
 use aq_session_protocol::Validate;
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 pub(super) fn conflict() -> AppError {
     AppError::Conflict("launch owner journal conflict or unavailable".into())
@@ -27,8 +27,16 @@ pub async fn record_prepared(
     revision: u64,
     digest: &Digest,
 ) -> Result<(), AppError> {
-    let g = Some(grant);
-    record(tx, binding, owner, g, "prepared", revision, digest).await
+    record(
+        tx,
+        binding,
+        owner,
+        Some(grant),
+        "prepared",
+        revision,
+        digest,
+    )
+    .await
 }
 pub(super) async fn record_started(
     tx: &mut Transaction<'_, Postgres>,
@@ -77,6 +85,53 @@ pub(super) async fn revoke(tx: &mut Transaction<'_, Postgres>, a: Uuid) -> Resul
 pub async fn revoke_if(tx: &mut Transaction<'_, Postgres>, a: Uuid, on: bool) -> sqlx::Result<()> {
     sqlx::query("UPDATE agent_launch_bindings SET revoked=true,credential_verifier=NULL,credential_expires_at_ms=NULL,credential_version=credential_version+1,authority_revision=authority_revision+1 WHERE attempt_id=$1 AND $2").bind(a).bind(on).execute(&mut **tx).await.map(drop)
 }
+
+#[derive(PartialEq)]
+struct Checkpoint<'a> {
+    phase: &'a str,
+    grant: Option<Uuid>,
+    revision: i64,
+    digest: &'a str,
+}
+#[derive(Debug, PartialEq)]
+enum Transition {
+    Replay,
+    Advance,
+}
+impl Checkpoint<'_> {
+    fn transition_to(&self, next: &Self) -> Result<Transition, AppError> {
+        if self.phase == next.phase {
+            return if self == next {
+                Ok(Transition::Replay)
+            } else {
+                Err(conflict())
+            };
+        }
+        if next.revision <= self.revision
+            || !matches!(
+                (self.phase, next.phase),
+                ("reserved", "prepared") | ("prepared", "started") | ("started", "stopped")
+            )
+        {
+            return Err(conflict());
+        }
+        Ok(Transition::Advance)
+    }
+}
+fn require_owner(
+    old: &PgRow,
+    binding: &serde_json::Value,
+    owner: &LaunchOwner,
+) -> Result<(), AppError> {
+    if old.get::<serde_json::Value, _>("binding") != *binding
+        || old.get::<Uuid, _>("guardian_id") != owner.guardian_id
+        || old.get::<Uuid, _>("launch_id") != owner.launch_id
+        || old.get::<Uuid, _>("reservation_id") != owner.reservation_id
+    {
+        return Err(conflict());
+    }
+    Ok(())
+}
 async fn record(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,
@@ -99,30 +154,23 @@ async fn record(
     let body = serde_json::to_value(binding).map_err(|_| AppError::Internal)?;
     let old=sqlx::query("SELECT binding,guardian_id,launch_id,reservation_id,phase,grant_id,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE").bind(binding.attempt_id).fetch_optional(&mut **tx).await.map_err(db)?;
     if let Some(old) = old {
-        if old.get::<serde_json::Value, _>("binding") != body
-            || old.get::<Uuid, _>("guardian_id") != owner.guardian_id
-            || old.get::<Uuid, _>("launch_id") != owner.launch_id
-            || old.get::<Uuid, _>("reservation_id") != owner.reservation_id
-        {
-            return Err(conflict());
-        }
-        let previous = old.get::<String, _>("phase");
-        if previous == phase {
-            return if old.get::<Option<Uuid>, _>("grant_id") == grant
-                && old.get::<i64, _>("revision") == revision as i64
-                && old.get::<String, _>("digest") == digest.as_str()
-            {
-                Ok(())
-            } else {
-                Err(conflict())
-            };
-        }
-        if !matches!(
-            (previous.as_str(), phase),
-            ("reserved", "prepared") | ("prepared", "started") | ("started", "stopped")
-        ) || revision as i64 <= old.get::<i64, _>("revision")
-        {
-            return Err(conflict());
+        require_owner(&old, &body, owner)?;
+        let previous_phase = old.get::<String, _>("phase");
+        let previous_digest = old.get::<String, _>("digest");
+        let previous = Checkpoint {
+            phase: &previous_phase,
+            grant: old.get("grant_id"),
+            revision: old.get("revision"),
+            digest: &previous_digest,
+        };
+        let next = Checkpoint {
+            phase,
+            grant,
+            revision: revision as i64,
+            digest: digest.as_str(),
+        };
+        if previous.transition_to(&next)? == Transition::Replay {
+            return Ok(());
         }
         sqlx::query("UPDATE profiled_owner_journals SET phase=$2,grant_id=$3,revision=$4,digest=$5 WHERE attempt_id=$1").bind(binding.attempt_id).bind(phase).bind(grant).bind(revision as i64).bind(digest.as_str()).execute(&mut **tx).await.map_err(db)?;
     } else {
@@ -133,3 +181,6 @@ async fn record(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
