@@ -1,9 +1,34 @@
 //! Registered hot-migration qualification; no production grant producer.
-use crate::common;
-use aq_server::execution::authority::hot::HotState;
-use common::profiled::{fixture, insert};
+use crate::{common, profiled_authority::load_fixture_authority};
+use aq_server::execution::authority::{
+    cache::{Facts, Key, VerifiedCache},
+    hot::HotState,
+};
+use common::profiled::{Fixture, fixture, insert};
 use serde_json::json;
 use sqlx::Row;
+use uuid::Uuid;
+
+fn cache_entry(f: &Fixture) -> (Key, Facts) {
+    let binding = &f.profiled.offer.binding;
+    let facts = Facts {
+        binding: binding.clone(),
+        project_id: f.profiled.offer.manifest.bindings.project_id,
+        task_id: f.profiled.offer.manifest.bindings.task_id,
+        graph: f.profiled.graph.clone(),
+        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
+        source: f.profiled.source.clone(),
+    };
+    let key = Key {
+        attempt_id: binding.attempt_id,
+        decision_id: f.decision,
+        source_observation_id: Uuid::new_v4(),
+        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
+        launch_manifest_digest: binding.launch_manifest_digest.clone(),
+        selection_digest: aq_selection::digest(&f.selection).unwrap(),
+    };
+    (key, facts)
+}
 
 #[tokio::test]
 async fn adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_seals() {
@@ -110,28 +135,21 @@ async fn adoption_preserves_actual_authority_and_guards_snapshot_revisions_and_s
     assert!(sqlx::query("UPDATE profiled_authority_hot SET state=jsonb_set(state,'{execution_deadline_ms}','1000002') WHERE attempt_id=$1").bind(attempt).execute(&pool).await.is_err());
 }
 
+fn insert_fresh_cache_attempt(cache: &mut VerifiedCache, key: &mut Key, facts: &mut Facts) {
+    key.attempt_id = Uuid::new_v4();
+    facts.binding.attempt_id = key.attempt_id;
+    if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
+        &mut facts.binding.session
+    {
+        *attempt_id = key.attempt_id;
+    }
+    assert!(cache.insert_verified(key.clone(), facts.clone()));
+}
+
 #[tokio::test]
 async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
-    use aq_server::execution::authority::cache::{Facts, Key, VerifiedCache};
-    use uuid::Uuid;
     let f = fixture().await;
-    let binding = &f.profiled.offer.binding;
-    let mut facts = Facts {
-        binding: binding.clone(),
-        project_id: f.profiled.offer.manifest.bindings.project_id,
-        task_id: f.profiled.offer.manifest.bindings.task_id,
-        graph: f.profiled.graph.clone(),
-        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
-        source: f.profiled.source.clone(),
-    };
-    let mut key = Key {
-        attempt_id: binding.attempt_id,
-        decision_id: f.decision,
-        source_observation_id: Uuid::new_v4(),
-        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
-        launch_manifest_digest: binding.launch_manifest_digest.clone(),
-        selection_digest: aq_selection::digest(&f.selection).unwrap(),
-    };
+    let (mut key, mut facts) = cache_entry(&f);
     let first_key = key.clone();
     let mut cache = VerifiedCache::default();
     assert!(cache.get(&key).is_none());
@@ -143,14 +161,7 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
     let mut thousand = Vec::new();
     let started = std::time::Instant::now();
     for _ in 0..1000 {
-        key.attempt_id = Uuid::new_v4();
-        facts.binding.attempt_id = key.attempt_id;
-        if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
-            &mut facts.binding.session
-        {
-            *attempt_id = key.attempt_id;
-        }
-        assert!(cache.insert_verified(key.clone(), facts.clone()));
+        insert_fresh_cache_attempt(&mut cache, &mut key, &mut facts);
         thousand.push(key.clone());
     }
     let hits = thousand
@@ -165,14 +176,7 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
     assert_eq!(hits, 1000);
     assert!(count <= VerifiedCache::MAX_ENTRIES && bytes <= VerifiedCache::MAX_BYTES);
     for _ in 0..1100 {
-        key.attempt_id = Uuid::new_v4();
-        facts.binding.attempt_id = key.attempt_id;
-        if let aq_session_protocol::SessionIdentity::Remote { attempt_id, .. } =
-            &mut facts.binding.session
-        {
-            *attempt_id = key.attempt_id;
-        }
-        assert!(cache.insert_verified(key.clone(), facts.clone()));
+        insert_fresh_cache_attempt(&mut cache, &mut key, &mut facts);
     }
     assert!(cache.get(&first_key).is_none());
     key.execution_spec_digest = "x".repeat(100_000);
@@ -182,33 +186,14 @@ async fn immutable_cache_is_exact_keyed_count_and_byte_bounded() {
 #[tokio::test]
 async fn immutable_cache_hit_never_caches_renewal_revocation_or_expiry() {
     use aq_server::execution::{
-        authority::{
-            cache::{Facts, Key, VerifiedCache},
-            hot::{self, LaunchOwner},
-        },
+        authority::hot::{self, LaunchOwner},
         profiled::{Status, Stop},
     };
     use aq_session_protocol::ProfiledGrant;
     use common::profiled::NOW;
-    use uuid::Uuid;
     let f = fixture().await;
     let binding = f.profiled.offer.binding.clone();
-    let key = Key {
-        attempt_id: binding.attempt_id,
-        decision_id: f.decision,
-        source_observation_id: Uuid::new_v4(),
-        execution_spec_digest: binding.execution_spec_digest.as_str().into(),
-        launch_manifest_digest: binding.launch_manifest_digest.clone(),
-        selection_digest: aq_selection::digest(&f.selection).unwrap(),
-    };
-    let facts = Facts {
-        binding: binding.clone(),
-        project_id: f.profiled.offer.manifest.bindings.project_id,
-        task_id: f.profiled.offer.manifest.bindings.task_id,
-        graph: f.profiled.graph.clone(),
-        terminal_policy: f.profiled.offer.manifest.terminal.clone(),
-        source: f.profiled.source.clone(),
-    };
+    let (key, facts) = cache_entry(&f);
     let mut cache = VerifiedCache::default();
     assert!(cache.insert_verified(key.clone(), facts));
     let mut state = HotState::from_compat(&f.profiled).unwrap();
@@ -256,12 +241,11 @@ async fn immutable_cache_hit_never_caches_renewal_revocation_or_expiry() {
 #[tokio::test]
 async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fallback() {
     use aq_server::execution::{
-        authority::{self, AuthorityError, Policy, hot::LaunchOwner},
+        authority::{AuthorityError, Policy, hot::LaunchOwner},
         profiled::{Status, Stop},
     };
     use aq_session_protocol::ProfiledGrant;
     use common::profiled::{NOW, artifact};
-    use uuid::Uuid;
     // Qualify the original hot/compatibility storage contract with its actual
     // pre-settlement schema. Synthetic release records cannot satisfy owner39.
     let mut f = aq_server::test_support::with_store_profile(27, fixture()).await;
@@ -275,14 +259,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
     let attempt = insert(&f).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
-    let fallback = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::IdentityOnly,
-    )
-    .await
-    .unwrap();
+    let fallback = load_fixture_authority(&f, &mut tx, Policy::IdentityOnly)
+        .await
+        .unwrap();
     assert_eq!(fallback.status, Status::Offered);
     tx.rollback().await.unwrap();
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
@@ -314,14 +293,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let first = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let first = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(first.grant_expires_at_ms, NOW + 1000);
     assert_eq!(
@@ -337,14 +311,9 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let renewed = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let renewed = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(renewed.grant_expires_at_ms, NOW + 2000);
     assert_eq!(renewed.terminal_policy, first.terminal_policy);
@@ -382,13 +351,7 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
@@ -488,25 +451,14 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let historical = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalHistorical,
-    )
-    .await
-    .unwrap();
+    let historical = load_fixture_authority(&f, &mut tx, Policy::TerminalHistorical)
+        .await
+        .unwrap();
     assert!(!historical.holds_task);
     assert!(historical.active_at(NOW).is_err());
     tx.rollback().await.unwrap();
@@ -515,7 +467,7 @@ async fn actual_common_loader_reads_hot_renewal_revocation_and_compatibility_fal
 #[tokio::test]
 async fn production_typed_spec_checks_actual_sealed_selection_and_source() {
     use aq_admission::{execution_spec::ProfiledExecutionSpec, *};
-    use aq_server::execution::authority::{self, AuthorityError, Policy};
+    use aq_server::execution::authority::{AuthorityError, Policy};
     use aq_session_protocol::{ContextDelivery, ContextRef};
     use common::profiled::{NOW, artifact, insert_typed};
     for case in 0..3 {
@@ -600,13 +552,7 @@ async fn production_typed_spec_checks_actual_sealed_selection_and_source() {
         insert_typed(&f, &spec).await;
         let pool = f.db.pool().await;
         let mut tx = pool.begin().await.unwrap();
-        let result = authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::IdentityOnly,
-        )
-        .await;
+        let result = load_fixture_authority(&f, &mut tx, Policy::IdentityOnly).await;
         if case != 0 {
             assert!(matches!(result, Err(AuthorityError::InvalidState)));
         } else {

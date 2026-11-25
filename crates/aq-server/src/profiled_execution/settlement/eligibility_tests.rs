@@ -390,6 +390,51 @@ fn synthetic_policy_and_revision_changes_never_inherit_approval() {
     assert_eq!(f.reason(), Some(Reason::ReviewRejected));
 }
 #[test]
+fn synthetic_review_mismatches_precede_rejection_and_missing_effects() {
+    let changes: &[fn(&mut aq_review_protocol::ReviewSubject)] = &[
+        |s| s.result.report_id = Uuid::nil(),
+        |s| s.result.report_digest = Digest::of(b"changed report"),
+        |s| s.result.record_receipt.digest = Digest::of(b"changed receipt"),
+        |s| s.result.stopped_receipt.digest = Digest::of(b"changed stop"),
+        |s| s.binding.attempt_id = Uuid::nil(),
+        |s| s.validation_policy.digest = Digest::of(b"changed policy"),
+        |s| s.expected_outcome.digest = Digest::of(b"changed outcome"),
+        |s| s.task_observation.digest = Digest::of(b"changed observation"),
+        |s| s.task_context.digest = Digest::of(b"changed context"),
+        |s| s.execution_spec.digest = Digest::of(b"changed spec"),
+        |s| s.source.resulting_object.hex = "3".repeat(40),
+        |s| s.source.source_receipt_id = Uuid::nil(),
+        |s| s.source.repository_id = Uuid::nil(),
+        |s| s.source.binding_generation += 1,
+        |s| s.source.base.hex = "3".repeat(40),
+        |s| s.source.input_artifact.digest = Digest::of(b"changed input"),
+        |s| s.source.resulting_artifact.id = Text::new("changed-manifest").unwrap(),
+        |s| s.source.resulting_artifact.version = Text::new("2").unwrap(),
+        |s| s.source.resulting_artifact.digest = Digest::of(b"changed manifest"),
+        |s| s.source.retention_receipt.id = Text::new("changed-retention").unwrap(),
+        |s| s.source.retention_receipt.version = Text::new("2").unwrap(),
+        |s| s.source.retention_receipt.digest = Digest::of(b"changed retention"),
+        |s| s.project_id = Uuid::nil(),
+        |s| s.original_project_revision += 1,
+        |s| s.criteria.clear(),
+        |s| s.task.task_id = Uuid::nil(),
+        |s| s.task.workspace_id = Uuid::nil(),
+        |s| s.task.version += 1,
+        |s| s.task.content_revision += 1,
+    ];
+    for (index, change) in changes.iter().enumerate() {
+        let mut f = Synthetic::new();
+        change(&mut f.review.subject);
+        f.review.approved = false;
+        let mut evidence = f.evidence();
+        evidence.aq_effects = None;
+        let plan = evaluate_pilot(&f.result, &f.source, &evidence).unwrap();
+        assert_eq!(plan.disposition, Disposition::Stale, "case {index}");
+        assert_eq!(plan.reason, Some(Reason::ReviewMismatch), "case {index}");
+    }
+}
+
+#[test]
 fn synthetic_reconciliation_and_applicability_remain_bound_to_original_facts() {
     let mut f = Synthetic::new();
     f.aq = AqEffectsSnapshot::synthetic(&f.result, LedgerDisposition::NeedsReconciliation);

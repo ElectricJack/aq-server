@@ -58,43 +58,53 @@ async fn post(
     .await
     .unwrap()
 }
+fn material_intelligence(f: &Fixture, path: &std::path::Path) -> IntelligenceConfig {
+    let choice = &f.selection.choice;
+    IntelligenceConfig {
+        accounting: Default::default(),
+        material_store: None,
+        revision: 1,
+        credentials: vec![CredentialConfig {
+            kind: Default::default(),
+            allowed_backends: aq_selection::default_allowed_backends(),
+            credential: AuthorizedCredential {
+                profile: choice.credential_profile.clone(),
+                provider: choice.provider.clone(),
+                account_reference: choice.account_reference.clone(),
+                endpoint_reference: choice.endpoint_reference.clone(),
+                revision: f.selection.credential_revision,
+                enabled: true,
+                provisionable: false,
+                material_owner: None,
+                allowed_backends: aq_selection::default_allowed_backends(),
+            },
+            allowed_node_ids: vec![f.node.node_id],
+            allow_enrolled_nodes: false,
+            secret_file: Some(path.to_path_buf()),
+            delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
+        }],
+        qualified_harnesses: vec![],
+    }
+}
+
 async fn setup() -> Case {
     let mut f = fixture().await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("provider");
     std::fs::write(&path, SECRET).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let choice = &f.selection.choice;
+    configure_material_delivery(&mut f, &path).await;
+    let request = prepare(&f).await;
+    Case {
+        f,
+        request,
+        path,
+        _dir: dir,
+    }
+}
+async fn configure_material_delivery(f: &mut Fixture, path: &std::path::Path) {
     let mut cfg = (*f.state.config).clone();
-    cfg.intelligence = Some(Arc::new(
-        IntelligenceConfig {
-            accounting: Default::default(),
-            material_store: None,
-            revision: 1,
-            credentials: vec![CredentialConfig {
-                kind: Default::default(),
-                allowed_backends: aq_selection::default_allowed_backends(),
-                credential: AuthorizedCredential {
-                    profile: choice.credential_profile.clone(),
-                    provider: choice.provider.clone(),
-                    account_reference: choice.account_reference.clone(),
-                    endpoint_reference: choice.endpoint_reference.clone(),
-                    revision: f.selection.credential_revision,
-                    enabled: true,
-                    provisionable: false,
-                    material_owner: None,
-                    allowed_backends: aq_selection::default_allowed_backends(),
-                },
-                allowed_node_ids: vec![f.node.node_id],
-                allow_enrolled_nodes: false,
-                secret_file: Some(path.clone()),
-                delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
-            }],
-            qualified_harnesses: vec![],
-        }
-        .load()
-        .unwrap(),
-    ));
+    cfg.intelligence = Some(Arc::new(material_intelligence(f, path).load().unwrap()));
     let registration = Register {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -150,14 +160,8 @@ async fn setup() -> Case {
     )
     .await;
     assert_eq!(installed.status(), StatusCode::OK);
-    let request = prepare(&f).await;
-    Case {
-        f,
-        request,
-        path,
-        _dir: dir,
-    }
 }
+
 async fn prepare(f: &Fixture) -> MaterialFetch {
     let pool = f.db.pool().await;
     let attempt = insert(f).await;

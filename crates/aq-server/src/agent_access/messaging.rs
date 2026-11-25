@@ -825,6 +825,42 @@ struct BodyChunk {
     offset: String,
     max_bytes: u32,
 }
+impl BodyChunk {
+    /// Fit complete UTF-8 characters and the full wire envelope to both budgets.
+    fn bounded_response(
+        &self,
+        p: &Principal,
+        text: &str,
+        offset: usize,
+        cursor: i64,
+        payload_digest: &str,
+    ) -> Result<Value> {
+        if !text.is_char_boundary(offset) {
+            return Err(Error("invalid_request"));
+        }
+        let mut end = offset
+            .saturating_add(self.max_bytes as usize)
+            .min(text.len());
+        let response = loop {
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let response = json!({"api_version":1,"message_id":self.message_id,"cursor":cursor.to_string(),"payload_digest":payload_digest,"offset":self.offset,"next_offset":end.to_string(),"complete":end==text.len(),"body":&text[offset..end]});
+            if p.bound(&response).is_ok() && (end > offset || offset == text.len()) {
+                break response;
+            }
+            if end <= offset {
+                return Err(Error("response_too_large"));
+            }
+            let used = canonical(&response)?.len();
+            let budget = p.profile["max_response_bytes"].as_u64().unwrap_or(0) as usize;
+            end = end
+                .saturating_sub(used.saturating_sub(budget).max(1))
+                .max(offset);
+        };
+        Ok(response)
+    }
+}
 async fn agent_body(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -840,30 +876,108 @@ async fn agent_body(
     }
     let row=sqlx::query("SELECT body,payload_digest,cursor FROM mailbox_messages WHERE message_id=$1 AND mailbox_key=$2").bind(r.message_id).bind(r.recipient.key()?).fetch_optional(&mut *tx).await?.ok_or(Error("not_found"))?;
     let text: String = row.get("body");
-    if !text.is_char_boundary(offset) {
-        return Err(Error("invalid_request"));
-    }
-    let mut end = offset.saturating_add(r.max_bytes as usize).min(text.len());
-    let response = loop {
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        let response = json!({"api_version":1,"message_id":r.message_id,"cursor":row.get::<i64,_>("cursor").to_string(),"payload_digest":row.get::<String,_>("payload_digest"),"offset":r.offset,"next_offset":end.to_string(),"complete":end==text.len(),"body":&text[offset..end]});
-        if p.bound(&response).is_ok() && (end > offset || offset == text.len()) {
-            break response;
-        }
-        if end <= offset {
-            return Err(Error("response_too_large"));
-        }
-        let used = canonical(&response)?.len();
-        let budget = p.profile["max_response_bytes"].as_u64().unwrap_or(0) as usize;
-        end = end
-            .saturating_sub(used.saturating_sub(budget).max(1))
-            .max(offset);
-    };
+    let response = r.bounded_response(
+        &p,
+        &text,
+        offset,
+        row.get("cursor"),
+        &row.get::<String, _>("payload_digest"),
+    )?;
     if p.expires <= now(&state) {
         return Err(Error("session_expired"));
     }
     tx.commit().await?;
     Ok(ok(response))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(offset: usize, max_bytes: u32) -> BodyChunk {
+        BodyChunk {
+            recipient: Recipient::Task {
+                workspace_id: Uuid::from_u128(1),
+                project_id: Uuid::from_u128(2),
+                task_id: Uuid::from_u128(3),
+            },
+            message_id: Uuid::from_u128(4),
+            offset: offset.to_string(),
+            max_bytes,
+        }
+    }
+    fn principal(budget: usize) -> Principal {
+        Principal {
+            profile: json!({"max_response_bytes": budget}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn body_chunks_preserve_utf8_offsets_and_complete_envelope_budget() {
+        let text = "é🙂\"\n".repeat(1000);
+        let p = principal(4096);
+        let payload = "a".repeat(64);
+        let mut offset = 0;
+        let mut read = String::new();
+        while offset < text.len() {
+            let response = chunk(offset, 16384)
+                .bounded_response(&p, &text, offset, 7, &payload)
+                .unwrap();
+            assert!(canonical(&response).unwrap().len() <= 4096);
+            assert_eq!(response["offset"], offset.to_string());
+            assert_eq!(response["cursor"], "7");
+            assert_eq!(response["payload_digest"], payload);
+            let next: usize = response["next_offset"].as_str().unwrap().parse().unwrap();
+            assert!(next > offset && text.is_char_boundary(next));
+            assert_eq!(response["complete"], next == text.len());
+            read.push_str(response["body"].as_str().unwrap());
+            offset = next;
+        }
+        assert_eq!(read, text);
+    }
+
+    #[test]
+    fn body_chunks_honor_requested_bytes_and_allow_empty_terminal_chunk() {
+        let p = principal(1024);
+        let payload = "a".repeat(64);
+        let response = chunk(0, 3)
+            .bounded_response(&p, "é🙂", 0, 7, &payload)
+            .unwrap();
+        assert_eq!(response["body"], "é");
+        assert_eq!(response["next_offset"], "2");
+        assert_eq!(response["complete"], false);
+        let response = chunk(6, 1)
+            .bounded_response(&p, "é🙂", 6, 7, &payload)
+            .unwrap();
+        assert_eq!(response["body"], "");
+        assert_eq!(response["next_offset"], "6");
+        assert_eq!(response["complete"], true);
+    }
+
+    #[test]
+    fn body_chunks_refuse_split_or_out_of_range_offsets() {
+        for offset in [1, 3, 7] {
+            assert_eq!(
+                chunk(offset, 4)
+                    .bounded_response(&principal(1024), "é🙂", offset, 7, "digest")
+                    .unwrap_err()
+                    .0,
+                "invalid_request"
+            );
+        }
+    }
+
+    #[test]
+    fn body_chunks_refuse_when_no_character_or_envelope_fits() {
+        for (budget, max_bytes) in [(1024, 1), (1, 16384)] {
+            assert_eq!(
+                chunk(0, max_bytes)
+                    .bounded_response(&principal(budget), "🙂", 0, 7, "digest")
+                    .unwrap_err()
+                    .0,
+                "response_too_large"
+            );
+        }
+    }
 }

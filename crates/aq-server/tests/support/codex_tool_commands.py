@@ -131,7 +131,8 @@ def _output(value):
     return result
 
 
-def _trace(requests):
+def _tool_history(requests):
+    """Deduplicate cumulative request history without losing first-output order."""
     _require(isinstance(requests, list) and 1 <= len(requests) <= MAX_REQUESTS,
              "finite request count")
     outputs, definitions = {}, {}
@@ -163,6 +164,42 @@ def _trace(requests):
                 if call not in outputs:
                     order.append(call)
                 outputs[call] = text
+    return outputs, definitions, order
+
+
+def _observe_session(text, sessions, active):
+    observed = _RUNNING.findall(text)
+    if not observed:
+        return
+    _require(len(set(observed)) == 1, "ambiguous tool session")
+    session = int(observed[0])
+    _require(0 < session <= 2**31 - 1
+             and (active not in sessions or sessions[active] == session),
+             "changed tool session")
+    sessions[active] = session
+
+
+def _validate_exec_call(call, definitions):
+    if call not in definitions:
+        return
+    tool, arguments = definitions[call]
+    command = edit_command() if call == EDIT_CALL_ID else submit_command()
+    _require(tool == "exec_command" and arguments.get("cmd") == command,
+             "fixture command differs")
+
+
+def _validate_poll_call(call, definitions, session):
+    # A poll is admitted only for the actual session returned by the
+    # controlled tool, never an invented/fallback process identifier.
+    _require(call in definitions
+             and definitions[call] == ("write_stdin", {
+                 "session_id": session, "chars": "",
+                 "yield_time_ms": 1000, "max_output_tokens": 2048}),
+             "poll differs from observed session")
+
+
+def _trace(requests):
+    outputs, definitions, order = _tool_history(requests)
     streams = {EDIT_CALL_ID: "", SUBMIT_CALL_ID: ""}
     sessions = {}
     active = None
@@ -175,31 +212,14 @@ def _trace(requests):
                 _require(_EDIT_DONE in streams[EDIT_CALL_ID].splitlines(),
                          "submit preceded genuine edit/check output")
             active = call
-            if call in definitions:
-                _require(definitions[call][0] == "exec_command"
-                         and definitions[call][1].get("cmd") == (
-                             edit_command() if call == EDIT_CALL_ID else submit_command()),
-                         "fixture command differs")
+            _validate_exec_call(call, definitions)
         else:
             polls += 1
             _require(call == f"call_gate04_poll_{polls}" and active in sessions,
                      "poll has no observed original session")
-            # A poll is admitted only for the actual session returned by the
-            # controlled tool, never an invented/fallback process identifier.
-            _require(call in definitions
-                     and definitions[call] == ("write_stdin", {
-                         "session_id": sessions[active], "chars": "",
-                         "yield_time_ms": 1000, "max_output_tokens": 2048}),
-                     "poll differs from observed session")
+            _validate_poll_call(call, definitions, sessions[active])
         streams[active] += text + "\n"
-        observed = _RUNNING.findall(text)
-        if observed:
-            _require(len(set(observed)) == 1, "ambiguous tool session")
-            session = int(observed[0])
-            _require(0 < session <= 2**31 - 1
-                     and (active not in sessions or sessions[active] == session),
-                     "changed tool session")
-            sessions[active] = session
+        _observe_session(text, sessions, active)
         done = _EDIT_DONE if active == EDIT_CALL_ID else _DONE
         if done in streams[active].splitlines():
             active = None
@@ -239,6 +259,51 @@ def _block(lines, start, end):
     return documents[0], code
 
 
+def _binding_digests(binding):
+    _require(isinstance(binding, dict) and set(binding) == {
+        "schema_version", "launch", "execution_record_digest", "expected_outcome",
+        "operation_id", "report_id", "nonce"} and binding["schema_version"] == 1,
+        "original worker binding required")
+    ids = [uuid.UUID(binding[key]) for key in ("operation_id", "report_id", "nonce")]
+    _require(all(ids) and all(i.int for i in ids) and len(set(ids)) == 3,
+             "original binding UUIDs")
+    return _digest(binding), _digest({"schema_version": 1, "binding": binding,
+                                     "conclusion": CONCLUSION})
+
+
+def _validate_client_scope(value, binding, scope_digest, submission_digest):
+    expected_keys = {"contract", "operation_id", "report_id", "binding_digest",
+                     "expected_outcome", "submission_digest", "phase", "owner_present", "projection"}
+    _require(set(value) == expected_keys
+             and value["contract"] == "aq-agent-result-local-1"
+             and value["operation_id"] == binding["operation_id"]
+             and value["report_id"] == binding["report_id"]
+             and value["binding_digest"] == scope_digest
+             and value["expected_outcome"] == binding["expected_outcome"]
+             and value["submission_digest"] == submission_digest
+             and value["projection"] == "local_result_data_only"
+             and isinstance(value["owner_present"], bool),
+             "client output differs from original claim scope")
+
+
+def _validate_client_phase(value, code, report_id, allow_pending):
+    phase = value["phase"]
+    kind = phase.get("kind") if isinstance(phase, dict) else None
+    if kind == "recorded":
+        receipt = phase.get("receipt")
+        _require(code == 0 and set(phase) == {"kind", "receipt"}
+                 and isinstance(receipt, dict) and set(receipt) == {"id", "version", "digest"}
+                 and receipt["id"] == "aq.result-record/" + report_id
+                 and receipt["version"] == "1"
+                 and re.fullmatch(r"[0-9a-f]{64}", receipt["digest"]),
+                 "recorded reference mismatch")
+    else:
+        allowed = ("accepted", "finalizing", "pending_local") if allow_pending else ("accepted", "finalizing")
+        _require(kind in allowed and set(phase) == {"kind"}
+                 and code == 10 and value["owner_present"] is True,
+                 "worker acknowledgment absent or owner lost")
+
+
 def validate_tool_outputs(requests, binding):
     """Check original client data against the independently read actual Binding.
 
@@ -249,47 +314,13 @@ def validate_tool_outputs(requests, binding):
     _require(active is None and _EDIT_DONE in streams[EDIT_CALL_ID].splitlines()
              and _DONE in streams[SUBMIT_CALL_ID].splitlines(),
              "controlled tool sequence incomplete")
-    _require(isinstance(binding, dict) and set(binding) == {
-        "schema_version", "launch", "execution_record_digest", "expected_outcome",
-        "operation_id", "report_id", "nonce"} and binding["schema_version"] == 1,
-        "original worker binding required")
-    ids = [uuid.UUID(binding[key]) for key in ("operation_id", "report_id", "nonce")]
-    _require(all(ids) and all(i.int for i in ids) and len(set(ids)) == 3,
-             "original binding UUIDs")
-    scope_digest = _digest(binding)
-    submission_digest = _digest({"schema_version": 1, "binding": binding,
-                                 "conclusion": CONCLUSION})
+    scope_digest, submission_digest = _binding_digests(binding)
     lines = streams[SUBMIT_CALL_ID].splitlines()
     submitted, submit_exit = _block(lines, "AQ_GATE04_SUBMIT_BEGIN", "AQ_GATE04_SUBMIT_EXIT")
     status, status_exit = _block(lines, "AQ_GATE04_STATUS_BEGIN", "AQ_GATE04_STATUS_EXIT")
-    expected_keys = {"contract", "operation_id", "report_id", "binding_digest",
-                     "expected_outcome", "submission_digest", "phase", "owner_present", "projection"}
     for value, code, allow_pending in [(submitted, submit_exit, True), (status, status_exit, False)]:
-        _require(set(value) == expected_keys
-                 and value["contract"] == "aq-agent-result-local-1"
-                 and value["operation_id"] == binding["operation_id"]
-                 and value["report_id"] == binding["report_id"]
-                 and value["binding_digest"] == scope_digest
-                 and value["expected_outcome"] == binding["expected_outcome"]
-                 and value["submission_digest"] == submission_digest
-                 and value["projection"] == "local_result_data_only"
-                 and isinstance(value["owner_present"], bool),
-                 "client output differs from original claim scope")
-        phase = value["phase"]
-        kind = phase.get("kind") if isinstance(phase, dict) else None
-        if kind == "recorded":
-            receipt = phase.get("receipt")
-            _require(code == 0 and set(phase) == {"kind", "receipt"}
-                     and isinstance(receipt, dict) and set(receipt) == {"id", "version", "digest"}
-                     and receipt["id"] == "aq.result-record/" + binding["report_id"]
-                     and receipt["version"] == "1"
-                     and re.fullmatch(r"[0-9a-f]{64}", receipt["digest"]),
-                     "recorded reference mismatch")
-        else:
-            allowed = ("accepted", "finalizing", "pending_local") if allow_pending else ("accepted", "finalizing")
-            _require(kind in allowed and set(phase) == {"kind"}
-                     and code == 10 and value["owner_present"] is True,
-                     "worker acknowledgment absent or owner lost")
+        _validate_client_scope(value, binding, scope_digest, submission_digest)
+        _validate_client_phase(value, code, binding["report_id"], allow_pending)
     return {"operation_id": binding["operation_id"], "report_id": binding["report_id"],
             "binding_digest": scope_digest, "submission_digest": submission_digest,
             "phase": status["phase"]["kind"], "projection": "local_result_data_only"}

@@ -84,16 +84,45 @@ fn node(
     }
     Ok(value)
 }
-/// The supplied project/repository/workspace/permissions are daemon-owned
-/// binding facts, not caller authority. Final admission must fence them again.
-pub fn project(
+fn project_edge(
+    edge: &Value,
+    current: &BTreeSet<Uuid>,
+    expected_pins: &mut BTreeSet<(Uuid, String)>,
+) -> Result<Value, Error> {
+    let mut value = serde_json::Map::new();
+    for field in ["id", "source", "target", "edge_type", "description"] {
+        value.insert(field.into(), edge.get(field).ok_or(Error::Invalid)?.clone());
+    }
+    value.insert("version".into(), json!(positive(&edge["version"])?));
+    for (endpoint, revision) in [("source", "source_revision"), ("target", "target_revision")] {
+        let endpoint_id = id(&edge[endpoint])?;
+        if !current.contains(&endpoint_id) {
+            return Err(Error::Invalid);
+        }
+        let raw_revision = edge.get(revision).ok_or(Error::Invalid)?;
+        let revision_value = if raw_revision.is_null() {
+            Value::Null
+        } else {
+            let v = positive(raw_revision)?;
+            expected_pins.insert((endpoint_id, v.clone()));
+            json!(v)
+        };
+        value.insert(revision.into(), revision_value);
+    }
+    let value = Value::Object(value);
+    if !aq_agent_api::valid("ScopedEdge", &value) {
+        return Err(Error::Invalid);
+    }
+    Ok(value)
+}
+fn validate_observation(
     observation: &TaskContext,
     project_id: Uuid,
     repository_id: Uuid,
     workspace_id: Uuid,
     permissions: &[Permission],
     now_ms: u64,
-) -> Result<Projection, Error> {
+) -> Result<(), Error> {
     if [project_id, repository_id, workspace_id]
         .iter()
         .any(Uuid::is_nil)
@@ -123,6 +152,27 @@ pub fn project(
     {
         return Err(Error::Invalid);
     }
+    Ok(())
+}
+/// The supplied project/repository/workspace/permissions are daemon-owned
+/// binding facts, not caller authority. Final admission must fence them again.
+pub fn project(
+    observation: &TaskContext,
+    project_id: Uuid,
+    repository_id: Uuid,
+    workspace_id: Uuid,
+    permissions: &[Permission],
+    now_ms: u64,
+) -> Result<Projection, Error> {
+    validate_observation(
+        observation,
+        project_id,
+        repository_id,
+        workspace_id,
+        permissions,
+        now_ms,
+    )?;
+    let stamp = &observation.stamp;
     let raw = &observation.context;
     if id(&raw["node"]["id"])? != observation.revision.task_id
         || raw["node"]["version"] != observation.revision.version
@@ -152,11 +202,6 @@ pub fn project(
         }
     }
     dependents.remove(&root);
-    let names_dependent =
-        |edge: &Value| -> Result<bool, Error> {
-            Ok(dependents.contains(&id(&edge["source"])?)
-                || dependents.contains(&id(&edge["target"])?))
-        };
     let mut nodes = vec![node(&raw["node"], workspace_id, project_id, permissions)?];
     let mut current = BTreeSet::from([observation.revision.task_id]);
     for record in extra {
@@ -182,59 +227,14 @@ pub fn project(
         record_ids.insert(key.0);
         pinned.push(node(record, workspace_id, project_id, permissions)?);
     }
-    let mut projected_edges = Vec::new();
-    let mut edge_ids = BTreeSet::new();
-    let mut edge_types = BTreeSet::new();
-    let mut expected_pins = BTreeSet::new();
-    for edge in edges {
-        if names_dependent(edge)? {
-            continue;
-        }
-        if id(&edge["workspace_id"])? != workspace_id
-            || edge["deleted"] != false
-            || !edge_ids.insert(id(&edge["id"])?)
-        {
-            return Err(Error::Invalid);
-        }
-        let mut value = serde_json::Map::new();
-        for field in ["id", "source", "target", "edge_type", "description"] {
-            value.insert(field.into(), edge.get(field).ok_or(Error::Invalid)?.clone());
-        }
-        value.insert("version".into(), json!(positive(&edge["version"])?));
-        for (endpoint, revision) in [("source", "source_revision"), ("target", "target_revision")] {
-            let endpoint_id = id(&edge[endpoint])?;
-            if !current.contains(&endpoint_id) {
-                return Err(Error::Invalid);
-            }
-            let raw_revision = edge.get(revision).ok_or(Error::Invalid)?;
-            let revision_value = if raw_revision.is_null() {
-                Value::Null
-            } else {
-                let v = positive(raw_revision)?;
-                expected_pins.insert((endpoint_id, v.clone()));
-                json!(v)
-            };
-            value.insert(revision.into(), revision_value);
-        }
-        let value = Value::Object(value);
-        if !aq_agent_api::valid("ScopedEdge", &value) {
-            return Err(Error::Invalid);
-        }
-        edge_types.insert(serde_json::to_string(&value["edge_type"]).map_err(|_| Error::Invalid)?);
-        projected_edges.push(value);
-    }
+    let ProjectedEdges {
+        records: mut projected_edges,
+        edge_types,
+        expected_pins,
+    } = project_edges(edges, workspace_id, &dependents, &current)?;
     if pin_ids != expected_pins {
         return Err(Error::Invalid);
     }
-    let sort_nodes = |records: &mut Vec<Value>| {
-        records.sort_by(|a, b| {
-            a["id"].as_str().cmp(&b["id"].as_str()).then_with(|| {
-                a["content_revision"]
-                    .as_str()
-                    .cmp(&b["content_revision"].as_str())
-            })
-        })
-    };
     sort_nodes(&mut nodes);
     sort_nodes(&mut pinned);
     projected_edges.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
@@ -276,6 +276,54 @@ pub fn project(
         source_response_digest: observation.digest.clone(),
         observed_at_ms: stamp.requested_at_ms,
         expires_at_ms: stamp.expires_at_ms,
+    })
+}
+
+struct ProjectedEdges {
+    records: Vec<Value>,
+    edge_types: BTreeSet<String>,
+    expected_pins: BTreeSet<(Uuid, String)>,
+}
+
+fn project_edges(
+    edges: &[Value],
+    workspace_id: Uuid,
+    dependents: &BTreeSet<Uuid>,
+    current: &BTreeSet<Uuid>,
+) -> Result<ProjectedEdges, Error> {
+    let mut records = Vec::new();
+    let mut edge_ids = BTreeSet::new();
+    let mut edge_types = BTreeSet::new();
+    let mut expected_pins = BTreeSet::new();
+    for edge in edges {
+        if dependents.contains(&id(&edge["source"])?) || dependents.contains(&id(&edge["target"])?)
+        {
+            continue;
+        }
+        if id(&edge["workspace_id"])? != workspace_id
+            || edge["deleted"] != false
+            || !edge_ids.insert(id(&edge["id"])?)
+        {
+            return Err(Error::Invalid);
+        }
+        let value = project_edge(edge, current, &mut expected_pins)?;
+        edge_types.insert(serde_json::to_string(&value["edge_type"]).map_err(|_| Error::Invalid)?);
+        records.push(value);
+    }
+    Ok(ProjectedEdges {
+        records,
+        edge_types,
+        expected_pins,
+    })
+}
+
+fn sort_nodes(records: &mut [Value]) {
+    records.sort_by(|a, b| {
+        a["id"].as_str().cmp(&b["id"].as_str()).then_with(|| {
+            a["content_revision"]
+                .as_str()
+                .cmp(&b["content_revision"].as_str())
+        })
     })
 }
 
@@ -426,6 +474,34 @@ mod tests {
         assert_eq!(projected.context["edges"].as_array().unwrap().len(), 1);
         assert_eq!(projected.context["edges"][0]["id"], json!(uid(8)));
         assert!(aq_agent_api::valid("ContextSnapshot", &projected.context));
+    }
+    #[test]
+    fn equivalent_graph_order_preserves_projection_bytes_and_scope() {
+        let mut input = observation(true);
+        input.context["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(raw_node(5, "task"));
+        let edge = |edge_id, target, revision| json!({"id":uid(edge_id),"workspace_id":uid(2),"source":uid(3),"target":uid(target),"edge_type":"references","version":1,"source_revision":null,"target_revision":revision,"description":null,"deleted":false});
+        input.context["edges"] = json!([edge(8, 4, 1), edge(9, 5, 1)]);
+        input.context["pinned_revisions"] = json!([raw_node(4, "knowledge"), raw_node(5, "task")]);
+        refresh(&mut input);
+        let first = project(&input, uid(1), uid(41), uid(2), &permissions(), 2000).unwrap();
+        for field in ["nodes", "edges", "pinned_revisions"] {
+            input.context[field].as_array_mut().unwrap().reverse();
+        }
+        refresh(&mut input);
+        let reordered = project(&input, uid(1), uid(41), uid(2), &permissions(), 2000).unwrap();
+        assert_eq!(first.bytes, reordered.bytes);
+        assert_eq!(first.artifact, reordered.artifact);
+        assert_eq!(
+            serde_json::to_value(&first.scope).unwrap(),
+            serde_json::to_value(&reordered.scope).unwrap()
+        );
+        assert_ne!(
+            first.source_response_digest,
+            reordered.source_response_digest
+        );
     }
     #[test]
     fn scoped_edges_require_exact_authorized_endpoints_and_pinned_revisions() {
