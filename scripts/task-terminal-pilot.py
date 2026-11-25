@@ -39,8 +39,10 @@ class Pane:
         run(*self.tmux, "pipe-pane", "cat >> " + shlex.quote(str(self.log)))
 
     def screen(self):
-        return run(*self.tmux, "capture-pane", "-p", "-e", "-S", "-100",
-                   capture_output=True).stdout.replace(b"\n", b"\r\n")
+        snapshot = run(*self.tmux, "capture-pane", "-p", "-e", "-S", "-100",
+                       capture_output=True).stdout
+        # Do not scroll a full screen of blank rows past the initial prompt.
+        return snapshot.rstrip(b"\n").replace(b"\n", b"\r\n")
 
     def input(self, data):
         run(*self.tmux, "send-keys", "-H", *(f"{byte:02x}" for byte in data))
