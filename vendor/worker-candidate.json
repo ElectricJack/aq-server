@@ -10,5 +10,5 @@
   "execution_protocol": 2,
   "worker_journal_format": 4,
   "controller_journal_format": 1,
-  "distribution": "Immutable local integration source candidate; not a published or hosted release. Builds require no sibling source checkout."
+  "distribution": "Source archive from the merged aq-worker revision. Builds use the vendored archive and public contracts."
 }
