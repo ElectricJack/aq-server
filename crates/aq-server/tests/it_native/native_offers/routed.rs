@@ -1,6 +1,6 @@
 //! Spec 0011 §4 and spec 0014 §5.2: placement honors a task's route. A route names its
-//! level by class id, so a routed task is offered on the level document of that id within
-//! the route's limits; an unrouted one waits while routing is on and otherwise runs on the
+//! level by class id, so a routed task is offered on the level document of that id with
+//! the route's preferences; an unrouted one waits while routing is on and otherwise runs on the
 //! project's default level; a route that cannot be read is cleared so the task is routed
 //! again, and a class with no level document holds the task. The actual mounted poll,
 //! selection and publication run; the Graph peer and the routing switch are synthetic owner
@@ -44,7 +44,7 @@ async fn routing(c: &Case, on: bool) {
         .await
         .unwrap();
 }
-/// Puts a router route of `class` with harness allowlist `harnesses` on the task.
+/// Puts a router route of `class` with preferred harnesses `harnesses` on the task.
 fn route(c: &Case, class: &str, harnesses: &[&str]) {
     let route = json!({"c":class,"h":harnesses,"p":[],"pf":[],"l":null,"i":"any","d":null,"s":"router","n":1});
     *c.metadata.lock().unwrap() = json!({"aq:route": route});
@@ -312,24 +312,6 @@ async fn an_unreadable_route_is_cleared_and_a_class_with_no_level_document_holds
     assert_eq!(offered_on(&c).await, "intelligence:deep-max");
 }
 
-#[tokio::test]
-async fn route_excluding_every_candidate_is_refused_and_no_offer_is_published() {
-    let mut c = setup().await;
-    on_the_router(&mut c).await;
-    routing(&c, true).await;
-    route(&c, "standard-high", &["no-such-harness"]);
-    // Selection refuses it for a route reason: skipped for the poll, not a failed poll.
-    assert_eq!(not_offered(&c).await, 0);
-    assert!(
-        stored_route(&c).is_some(),
-        "a refused route is not rerouted"
-    );
-    // Positive control: allowing the installed harness places it.
-    let harness = c.env.input.node.harnesses[0].harness.clone();
-    route(&c, "standard-high", &[harness.as_str()]);
-    assert_eq!(offered_on(&c).await, LEVEL);
-}
-
 /// Review finding 2: a running routed attempt is counted in its class profile's capacity
 /// cell, not the router's, so a cell limit holds for routed work. The class profile's model
 /// is not among the router's candidates.
@@ -418,27 +400,21 @@ async fn an_attempt_recorded_before_roles_is_counted_unclassified() {
     tx.rollback().await.unwrap();
 }
 
-/// Review finding 3: a routed first attempt this node cannot serve (its route allows only a
-/// harness the node lacks) is skipped for the poll; the project's next ready task is offered
-/// instead of the poll failing.
 #[tokio::test]
-async fn a_routed_task_this_node_cannot_serve_does_not_block_its_project() {
+async fn unknown_harness_preference_keeps_the_routed_level_eligible() {
     let mut c = setup().await;
     on_the_router(&mut c).await;
     c.mode.store(7, Ordering::SeqCst);
     route(&c, "standard-high", &["claude-code"]);
-    assert_eq!(offered_task(&c).await, c.second_task);
-    assert!(
-        stored_route(&c).is_some(),
-        "the route is valid, so it is kept"
-    );
+    let prior = stored_route(&c);
+    provider_offer(&c, "fixture-a", CLASS_MODEL).await;
+    assert_eq!(stored_route(&c), prior);
     assert_eq!(holds(&c).await, 0);
 }
 
-/// Review finding 3: a pinned route whose provider is unavailable here refuses fallback; the
-/// task is skipped for the poll and the project's next ready task is offered.
+/// An unavailable level with no eligible candidate leaves the next ready task schedulable.
 #[tokio::test]
-async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
+async fn a_level_without_an_available_candidate_does_not_fail_the_poll() {
     let mut c = setup().await;
     on_the_router(&mut c).await;
     let mut scope = c.env.input.observations[0].scope.clone();
@@ -465,7 +441,7 @@ async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
     assert_eq!(holds(&c).await, 0);
 }
 
-async fn two_provider_capacity_case(pinned: bool) -> Case {
+async fn two_provider_capacity_case() -> Case {
     use crate::common::native_offer::setup_with_secondary_provider;
 
     let c = setup_with_secondary_provider().await;
@@ -500,11 +476,7 @@ async fn two_provider_capacity_case(pinned: bool) -> Case {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    if pinned {
-        pinned_route(&c, "standard-high");
-    } else {
-        route(&c, "standard-high", &[]);
-    }
+    route(&c, "standard-high", &[]);
     c
 }
 
@@ -581,7 +553,7 @@ async fn assert_capacity_wait(c: &Case) {
 
 #[tokio::test]
 async fn provider_capacity_keeps_the_preferred_choice_when_both_cells_are_open() {
-    let c = two_provider_capacity_case(false).await;
+    let c = two_provider_capacity_case().await;
     limits(&c, 1, 1).await;
     provider_offer(&c, "fixture-a", "model-a").await;
 }
@@ -591,7 +563,7 @@ async fn provider_capacity_waits_for_the_secondary_without_consuming_attempts() 
     use crate::common::native_offer::prepare_request;
     use aq_server::{profiled_execution::initial_grant, worker_api};
 
-    let mut c = two_provider_capacity_case(false).await;
+    let mut c = two_provider_capacity_case().await;
     limits(&c, 0, 0).await;
     assert_capacity_wait(&c).await;
     limits(&c, 0, 1).await;
@@ -623,17 +595,23 @@ async fn provider_capacity_waits_for_the_secondary_without_consuming_attempts() 
 }
 
 #[tokio::test]
-async fn provider_capacity_waits_on_a_pinned_route_even_with_a_free_alternate() {
-    let c = two_provider_capacity_case(true).await;
-    limits(&c, 0, 1).await;
-    assert_capacity_wait(&c).await;
-    limits(&c, 1, 1).await;
-    provider_offer(&c, "fixture-a", "model-a").await;
+async fn provider_capacity_can_use_an_alternate_for_legacy_owner_and_playbook_routes() {
+    for source in ["owner", "router"] {
+        let c = two_provider_capacity_case().await;
+        let legacy = json!({"c":"standard-high","h":["opencode"],"p":["fixture-a"],"pf":[],
+            "l":null,"i":"pinned","d":null,"s":source,"n":1});
+        *c.metadata.lock().unwrap() = json!({"aq:route": legacy});
+        limits(&c, 0, 1).await;
+        provider_offer(&c, "anthropic", "model-b").await;
+        assert_eq!(stored_route(&c), Some(legacy));
+        assert_eq!(holds(&c).await, 0);
+        assert_eq!(skips(&c).await, 0);
+    }
 }
 
 #[tokio::test]
 async fn provider_capacity_wait_does_not_charge_a_blocked_successor() {
-    let c = two_provider_capacity_case(false).await;
+    let c = two_provider_capacity_case().await;
     limits(&c, 1, 1).await;
     let first = provider_offer(&c, "fixture-a", "model-a").await;
     fail_and_release(&c, first.offered.offer.binding.attempt_id).await;
@@ -657,7 +635,7 @@ async fn provider_capacity_wait_does_not_charge_a_blocked_successor() {
 async fn provider_capacity_lost_at_publication_leaves_the_rest_of_the_poll_eligible() {
     use std::time::Duration;
 
-    let c = two_provider_capacity_case(false).await;
+    let c = two_provider_capacity_case().await;
     limits(&c, 1, 1).await;
     c.mode.store(13, Ordering::SeqCst);
     let fill = async {
