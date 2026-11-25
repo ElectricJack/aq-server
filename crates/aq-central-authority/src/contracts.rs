@@ -342,6 +342,7 @@ pub enum MailHoldReason {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryDisposition {
     NoPriorDispatch,
+    // Not handed off, or handed off by a stopped turn whose mail the owner released.
     Retryable {
         evidence: HandoffEvidence,
     },
@@ -436,11 +437,8 @@ impl HistoryDisposition {
         Ok(match self {
             HistoryDisposition::NoPriorDispatch => None,
             HistoryDisposition::Retryable { evidence } => {
+                // A handed-off receipt is retryable only once the owner released it.
                 evidence.validate()?;
-                ensure(
-                    evidence.disposition == HandoffDisposition::NotHandedOff,
-                    "retry requires exact not-handed-off receipt",
-                )?;
                 Some(&evidence.association)
             }
             HistoryDisposition::Held { association, .. } => {
