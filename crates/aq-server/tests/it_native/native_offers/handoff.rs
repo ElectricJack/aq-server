@@ -54,7 +54,12 @@ fn sole_offer(body: &Value) -> NativeOffer {
 
 /// The granted predecessor starts, saves `checkpoint`, is stopped by its owner
 /// (an `owner_stop` handoff) and reports Failed with that checkpoint's receipt.
-async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &str) {
+async fn run_and_hand_off(
+    c: &Case,
+    grant: &InitialGrantDelivery,
+    checkpoint: &str,
+    expanded: bool,
+) {
     let state = &c.env.env.state;
     let auth = auth(c).await;
     let g = &grant.original;
@@ -82,6 +87,13 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     intent.manifest_digest = start.binding.launch_manifest_digest.clone();
     start.observation_digest = start.observation.digest().unwrap();
     started::record(state, &auth, &start).await.unwrap();
+    if expanded {
+        sqlx::query("INSERT INTO task_workspace_services(home_project_id,task_id,service,requested_attempt_id) VALUES($1,$2,'postgres',$3)")
+            .bind(c.env.lineage.project_id)
+            .bind(c.env.lineage.task_id)
+            .bind(start.binding.attempt_id)
+            .execute(&c.env.env.pool).await.unwrap();
+    }
     let stop = native_started::stop_request(&start);
     // The legacy stop and result owners need host stop evidence: the synthetic
     // host advertises it for those reports, then the registration is restored.
@@ -129,8 +141,10 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         unreachable!()
     };
     let source = retain_checkpoint(c, binding, checkpoint).await;
-    sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
-        .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    if !expanded {
+        sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
+            .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
+    }
     let report = ResultReport {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -138,13 +152,31 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
         identity: c.request.identity.clone(),
         binding: binding.clone(),
         supersedes: None,
-        outcome: ProcessOutcome::Failed,
+        outcome: if expanded {
+            ProcessOutcome::Success
+        } else {
+            ProcessOutcome::Failed
+        },
         stop: stop.evidence,
         source_receipt_ids: vec![source],
         pending_effect_ids: vec![],
         conclusion: Label::new("Handoff (owner stop): step1 and step2 saved").unwrap(),
     };
     results::record(state, &auth, &report).await.unwrap();
+    if expanded {
+        let (worker_outcome, disposition, reason): (String, String, String) = sqlx::query_as(
+            "SELECT convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome', s.disposition, s.reason
+             FROM profiled_result_reports r JOIN profiled_auto_settlements s USING(report_id)
+             WHERE r.report_id=$1",
+        )
+        .bind(report.report_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(worker_outcome, "success");
+        assert_eq!(disposition, "rework_required");
+        assert_eq!(reason, "workspace_expansion_requested");
+    }
     registered(native).await;
 
     // Synthetic retained and quiescent owner facts; the actual stop is kept.
@@ -239,8 +271,17 @@ async fn refused_poll(c: &Case) {
 async fn handed_off() -> (Case, Uuid) {
     let (mut c, first) = native_offer::published().await;
     let grant = granted(&mut c, &first).await;
-    run_and_hand_off(&c, &grant, &"5".repeat(40)).await;
+    run_and_hand_off(&c, &grant, &"5".repeat(40), false).await;
     (c, first.offered.offer.binding.attempt_id)
+}
+
+#[tokio::test]
+async fn workspace_request_retains_natural_success_as_checkpoint_rework() {
+    let (mut c, first) = native_offer::published().await;
+    let grant = granted(&mut c, &first).await;
+    // The worker submits its physical success before the machine poll has
+    // delivered the workspace stop request.
+    run_and_hand_off(&c, &grant, &"5".repeat(40), true).await;
 }
 
 #[tokio::test]

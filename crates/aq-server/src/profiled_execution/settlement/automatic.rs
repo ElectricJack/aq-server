@@ -669,6 +669,9 @@ pub async fn complete_by_playbook(state: &AppState, report_id: Uuid) -> Result<S
         AutoDisposition::Held | AutoDisposition::ReworkRequired => Settled::Stale,
     };
     let (mut tx, r, existing, fenced) = playbook_locked(state, report_id).await?;
+    let fenced = fenced
+        && !crate::task_workspace_resume::checkpoint_required(&mut tx, r.report.binding.attempt_id)
+            .await?;
     let prior = existing.as_ref().map(status).transpose()?;
     match prior {
         Some(s)

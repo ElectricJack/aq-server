@@ -266,6 +266,7 @@ impl Service {
         source_operation: Uuid,
         observation: Option<&super::applicability::Observation>,
     ) -> Result<()> {
+        crate::task_workspace_resume::fence_completion(tx, e.attempt_id).await?;
         let v = crate::execution::authority::load_locked(
             &self.state,
             tx,

@@ -226,6 +226,7 @@ impl Service {
             tx.commit().await.map_err(db)?;
             return Ok(r);
         }
+        crate::task_workspace_resume::fence_completion(&mut tx, result.report.binding.attempt_id).await?;
         let source =
             source_retention::load_confirmed_locked(&mut tx, request.source_operation_id, &result)
                 .await?;
