@@ -423,7 +423,12 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         discovery["conversation"]
     );
 
-    let poll = json!({"max_slots":3,"repositories":[repo],"reports":[]});
+    sqlx::query("UPDATE worker_settings SET max_agents=4 WHERE kind='node' AND id=$1")
+        .bind(node.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let poll = json!({"max_slots":4,"repositories":[repo],"reports":[]});
     assert_eq!(
         call(
             &worker,
@@ -622,20 +627,31 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["status"], "preparing");
+    assert_eq!(response["pending_count"], 1, "a new launch gets priority");
     let running = json!({"id":id,"status":"running","stage":"Ready to connect","snapshot":"real fixture screen","acknowledged":[]});
-    let report = json!({"max_slots":3,"repositories":[repo],"reports":[running]});
+    let report = json!({"max_slots":4,"repositories":[repo],"reports":[running]});
+    let (status, leased) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(report.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{leased}");
+    assert_eq!(leased["sessions"][0]["id"], json!(id));
+    assert_eq!(leased["lease_ms"], 45_000);
     assert_eq!(
-        call(
-            &worker,
-            "/v1/worker/manual-agents",
-            Some(report.clone()),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
+        leased["pending_count"], 0,
+        "running work lets native pollers resume"
     );
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (1, 3));
+    let manual_slot = leased["sessions"][0]["spec"]["node_slot"].as_u64().unwrap() as u32;
+    assert!(!view.free(manual_slot));
+    assert_eq!((1..=4).filter(|slot| view.free(*slot)).count(), 3);
     let terminal = format!("/api/manual-agents/{id}/terminal");
     let client = Uuid::new_v4();
     let (status, control) = call(
@@ -818,7 +834,10 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         1,
         "removing capacity keeps the running session and queues new sessions"
     );
-    assert_eq!(response["pending_count"], 2);
+    assert_eq!(
+        response["pending_count"], 1,
+        "only the waiting launch asks native pollers to yield"
+    );
     let stop = format!("/api/manual-agents/{id}/stop");
     assert_eq!(
         call(
@@ -842,6 +861,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     .await
     .1;
     assert_eq!(response["sessions"][0]["desired_running"], false);
+    assert_eq!(response["pending_count"], 1);
     let mut stopped = report;
     stopped["reports"][0]["status"] = json!("stopped");
     call(
@@ -852,6 +872,30 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         false,
     )
     .await;
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
+        .await
+        .unwrap();
+    assert_eq!((view.occupied, view.idle), (0, 4));
+    let (status, restored) = call(
+        &admin,
+        &slots,
+        Some(json!({"operation_id":Uuid::new_v4(),"expected_revision":changed["revision"],"slots":1})),
+        None,
+        true,
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    let (status, next_poll) = call(
+        &worker,
+        "/v1/worker/manual-agents",
+        Some(poll.clone()),
+        Some(&f.credential),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next_poll}");
+    assert_eq!(next_poll["pending_count"], 1);
+    assert_eq!(next_poll["sessions"][0]["id"], json!(next));
+    assert_eq!(next_poll["sessions"][0]["status"], "preparing");
     assert_eq!(
         call(
             &admin,

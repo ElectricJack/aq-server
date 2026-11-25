@@ -404,9 +404,11 @@ async fn setup_actual() -> Actual {
         base,
     }
 }
-async fn download(c: &Prepared, member: &str) -> Vec<u8> {
-    let expected = c
-        .request
+fn source_artifact<'a>(
+    c: &'a Prepared,
+    member: &str,
+) -> &'a aq_admission::transport::ArtifactReceipt {
+    c.request
         .artifacts
         .iter()
         .find(|r| {
@@ -416,7 +418,9 @@ async fn download(c: &Prepared, member: &str) -> Vec<u8> {
                 .starts_with(&format!("aq.source-{member}/"))
         })
         .unwrap()
-        .bytes;
+}
+async fn download(c: &Prepared, member: &str) -> Vec<u8> {
+    let expected = source_artifact(c, member).bytes;
     assert!(expected > 0 && expected <= 1_048_576);
     let mut bytes = Vec::new();
     while (bytes.len() as u64) < expected {
@@ -460,17 +464,7 @@ async fn real_git_publication_download_and_initial_grant_share_exact_export() {
     assert_eq!(manifest["bundle_size"], bundle.len());
     assert_eq!(manifest["bundle_sha256"], Digest::of(&bundle).as_str());
     for (name, bytes) in [("manifest", &manifest_bytes), ("bundle", &bundle)] {
-        let receipt = c
-            .request
-            .artifacts
-            .iter()
-            .find(|r| {
-                r.artifact
-                    .id
-                    .as_str()
-                    .starts_with(&format!("aq.source-{name}/"))
-            })
-            .unwrap();
+        let receipt = source_artifact(c, name);
         assert_eq!(receipt.digest, Digest::of(bytes));
         assert_eq!(receipt.bytes, bytes.len() as u64);
     }

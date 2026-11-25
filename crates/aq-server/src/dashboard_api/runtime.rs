@@ -78,9 +78,10 @@ impl Snapshot {
 pub struct Runtime {
     pub reviews: Option<std::sync::Arc<crate::reviews::Service>>,
     pub pool: PgPool,
+    pub(super) performance_pool: PgPool,
     pub gate: Semaphore,
     pub quota: super::quota::Collector,
-    codec: CursorCodec,
+    pub(super) codec: CursorCodec,
     snapshots: Mutex<BTreeMap<Uuid, Snapshot>>,
 }
 impl Runtime {
@@ -92,7 +93,19 @@ impl Runtime {
             .as_ref()
             .clone()
             .application_name("aq-dashboard-read");
+        let performance_options = options
+            .clone()
+            .application_name("aq-performance-read")
+            .options([
+                ("statement_timeout", "3500ms"),
+                ("lock_timeout", "500ms"),
+                ("default_transaction_read_only", "on"),
+            ]);
         Self {
+            performance_pool: PgPoolOptions::new()
+                .max_connections(3)
+                .acquire_timeout(Duration::from_millis(700))
+                .connect_lazy_with(performance_options),
             pool: PgPoolOptions::new()
                 .max_connections(2)
                 .acquire_timeout(Duration::from_millis(500))
@@ -177,6 +190,9 @@ mod tests {
     use super::*;
     fn runtime() -> Runtime {
         Runtime {
+            performance_pool: PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/unused")
+                .unwrap(),
             pool: PgPoolOptions::new()
                 .connect_lazy("postgres://localhost/unused")
                 .unwrap(),

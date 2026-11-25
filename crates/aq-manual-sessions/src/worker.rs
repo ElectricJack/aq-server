@@ -84,6 +84,13 @@ async fn poll(
             .bind(node)
             .fetch_all(&mut *tx)
             .await?;
+    // Waiting launches ask native pollers to yield long enough for a claim.
+    // Count them before the scheduler can move them to preparing. Once a
+    // session holds a slot, the slot fence accounts for its occupancy.
+    let pending_count = sessions
+        .iter()
+        .filter(|s| s.desired_running && s.status == "pending")
+        .count();
     let mut scheduler = Scheduler::new(&sessions, slots, &v, desired.as_deref());
     if let Some(witness) = s.compute_witness {
         witness(&mut tx, node).await?;
@@ -98,7 +105,7 @@ async fn poll(
     tx.commit().await?;
     let commands = commands(&s, owned, &jobs, at).await?;
     Ok(Json(
-        json!({"sessions":jobs,"commands":commands,"pending_count":sessions.iter().filter(|s|s.desired_running).count(),"lease_ms":45000,"server_time_ms":at}),
+        json!({"sessions":jobs,"commands":commands,"pending_count":pending_count,"lease_ms":45000,"server_time_ms":at}),
     ))
 }
 

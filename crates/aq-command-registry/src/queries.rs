@@ -383,6 +383,14 @@ fn operational_query(path: &str) -> Option<&'static [QueryParam]> {
         // agent_access/waits/routes.rs::owner_list (`ListQuery`), ::owner_show
         "/api/waits" => const { &[PROJECT] },
         "/api/waits/{wait_id}" => NONE,
+        "/api/settings/performance/delivery/{id}" => {
+            const {
+                &[opt(
+                    "work_class",
+                    r#"{"type":"string","minLength":1,"maxLength":128}"#,
+                )]
+            }
+        }
         // project_bindings.rs::inspect, ::history
         "/api/projects/{id}" | "/api/projects/{id}/revisions/{revision}" => NONE,
         // admin_api.rs::workers, ::status; execution/api.rs::inspect

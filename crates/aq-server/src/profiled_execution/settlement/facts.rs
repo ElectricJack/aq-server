@@ -10,12 +10,31 @@ use uuid::Uuid;
 
 pub(super) use aq_profiled_state::result_facts::{CheckVerdict, DeliveryState};
 
+type SourcePin = (Uuid, String, bool);
+
+#[derive(Default)]
+struct SourceFacts {
+    pin: Option<SourcePin>,
+    lineage_unknown: bool,
+}
+
+impl SourceFacts {
+    fn retained(operation: Uuid, checkpoint: String, base: Option<String>) -> Self {
+        let lineage_unknown = base.is_none();
+        let changed = base.is_none_or(|base| checkpoint != base);
+        Self {
+            pin: Some((operation, checkpoint, changed)),
+            lineage_unknown,
+        }
+    }
+}
+
 /// What is known of a recorded result under the report/attempt locks.
 pub(super) struct Gathered {
     /// The attempt's fences: stopped, cancelled, revoked, holds the task.
     pub view: authority::AuthorityView,
     /// The pinned central receipt: (import operation, checkpoint, changed).
-    pub source: Option<(Uuid, String, bool)>,
+    pub source: Option<SourcePin>,
     pub lineage_unknown: bool,
     /// One verdict per offered `required_checks` entry, and as evidence.
     pub checks: Vec<CheckVerdict>,
@@ -37,49 +56,75 @@ pub(super) async fn gather_locked(
         authority::Policy::IdentityOnly,
     )
     .await?;
-    // The exact retained source is the central receipt pinned by this report.
-    let (mut source, mut lineage_unknown) = (None, false);
+    let source = gather_source_locked(tx, r, enrolled).await?;
+    let (checks, check_evidence) = gather_checks_locked(tx, r, source.pin.as_ref()).await?;
+    let delivery_state =
+        delivery_state_locked(tx, r.report.binding.attempt_id, source.pin.as_ref()).await?;
+    Ok(Gathered {
+        view,
+        source: source.pin,
+        lineage_unknown: source.lineage_unknown,
+        checks,
+        check_evidence,
+        delivery_state,
+    })
+}
+
+async fn gather_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    enrolled: bool,
+) -> Result<SourceFacts> {
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
     // head when the report was recorded; the report id keys its evidence.
+    if !enrolled {
+        return gather_confirmed_source_locked(tx, r).await;
+    }
     #[cfg(feature = "delivery_playbook")]
-    if enrolled
-        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
-            .await
-            .map_err(db)?
+    if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
+        .await
+        .map_err(db)?
     {
         let start = &r.spec.source.resolved_object.hex;
         let base = aq_machine_control::lineage_base(tx, r.spec.task.task_id, start).await?;
-        lineage_unknown = base.is_none();
-        let changed = base.is_none_or(|base| pushed.head != base);
-        source = Some((r.report.report_id, pushed.head, changed));
+        return Ok(SourceFacts::retained(r.report.report_id, pushed.head, base));
     }
-    if !enrolled {
-        for op in &r.report.source_receipt_ids {
-            match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
-                Ok(confirmed) => {
-                    // Review C-1: judged against the lineage's original base, never a handoff
-                    // successor's own starting commit (its predecessor's saved edits).
-                    let m = &confirmed.manifest;
-                    let task = r.spec.task.task_id;
-                    let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                    // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
-                    // the D3 gate holds only a report that would otherwise succeed.
-                    let base = base.await?;
-                    lineage_unknown = base.is_none();
-                    let changed = base.is_none_or(|base| m.checkpoint.hex != base);
-                    source = Some((*op, m.checkpoint.hex.clone(), changed));
-                    break;
-                }
-                Err(crate::error::AppError::Conflict(_)) => {}
-                Err(e) => return Err(e),
-            }
-        }
+    Ok(SourceFacts::default())
+}
+
+async fn gather_confirmed_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+) -> Result<SourceFacts> {
+    // The first confirmed central receipt pinned by this report is authoritative.
+    for op in &r.report.source_receipt_ids {
+        let confirmed = match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
+            Ok(confirmed) => confirmed,
+            Err(crate::error::AppError::Conflict(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        // Review C-1: judge against the lineage's original base, never a handoff
+        // successor's own starting commit (its predecessor's saved edits).
+        let m = &confirmed.manifest;
+        let base =
+            aq_machine_control::lineage_base(tx, r.spec.task.task_id, &m.source.base.hex).await?;
+        // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
+        // the D3 gate holds only a report that would otherwise succeed.
+        return Ok(SourceFacts::retained(*op, m.checkpoint.hex.clone(), base));
     }
+    Ok(SourceFacts::default())
+}
+
+async fn gather_checks_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+    source: Option<&SourcePin>,
+) -> Result<(Vec<CheckVerdict>, Vec<Value>)> {
     let attempt = r.report.binding.attempt_id;
     let mut checks = Vec::with_capacity(r.outcome.required_checks.len());
     let mut check_evidence = Vec::with_capacity(r.outcome.required_checks.len());
     for check in &r.outcome.required_checks {
-        let verdict = match &source {
+        let verdict = match source {
             None => CheckVerdict::Missing,
             Some((op, checkpoint, _)) => {
                 let found: Option<String> = sqlx::query_scalar("SELECT verdict FROM profiled_check_evidence WHERE attempt_id=$1 AND check_id=$2 AND source_operation_id=$3 AND checkpoint=$4 AND validator_digest=$5")
@@ -96,7 +141,15 @@ pub(super) async fn gather_locked(
         checks.push(verdict);
         check_evidence.push(json!({"id":check.id.as_str(),"validator_digest":check.validator.digest.as_str(),"verdict":verdict}));
     }
-    let delivery_state = match &source {
+    Ok((checks, check_evidence))
+}
+
+async fn delivery_state_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    attempt: Uuid,
+    source: Option<&SourcePin>,
+) -> Result<DeliveryState> {
+    let delivery_state = match source {
         None => DeliveryState::Missing,
         // An unchanged source has nothing to publish (owner decision 2026-11-13).
         Some((_, _, false)) => DeliveryState::NoChange,
@@ -118,14 +171,7 @@ pub(super) async fn gather_locked(
             }
         }
     };
-    Ok(Gathered {
-        view,
-        source,
-        lineage_unknown,
-        checks,
-        check_evidence,
-        delivery_state,
-    })
+    Ok(delivery_state)
 }
 
 impl Gathered {
@@ -188,4 +234,24 @@ pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(facts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_source_change_is_relative_to_the_original_lineage_base() {
+        let operation = Uuid::from_u128(1);
+        for (base, changed, lineage_unknown) in [
+            (Some("checkpoint"), false, false),
+            (Some("original-base"), true, false),
+            (None, true, true),
+        ] {
+            let facts =
+                SourceFacts::retained(operation, "checkpoint".into(), base.map(str::to_owned));
+            assert_eq!(facts.pin, Some((operation, "checkpoint".into(), changed)));
+            assert_eq!(facts.lineage_unknown, lineage_unknown);
+        }
+    }
 }
