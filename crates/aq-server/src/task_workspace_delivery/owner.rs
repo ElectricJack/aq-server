@@ -106,7 +106,7 @@ async fn read(
     Path(subject): Path<Subject>,
 ) -> Result<Json<Value>, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(crate::error::db)?;
-    let plan = plan(&state, &mut tx, subject).await?;
+    let plan = plan(&state, &mut tx, subject, false).await?;
     let body = read_plan(&mut tx, &plan).await?;
     tx.commit().await.map_err(crate::error::db)?;
     Ok(Json(body))
@@ -125,7 +125,7 @@ async fn write(
     }
     let actor = ActorPin::observe(&state, &actor).await?;
     let mut tx = state.store.pool.begin().await.map_err(crate::error::db)?;
-    let plan = plan(&state, &mut tx, subject).await?;
+    let plan = plan(&state, &mut tx, subject, true).await?;
     actor.fence(&mut tx).await?;
     let (operation, at) = (command.operation_id, now(&state)?);
     let external = matches!(&command.action, Action::ExternalDelivery { .. });
@@ -240,6 +240,7 @@ async fn plan(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     subject: Subject,
+    require_live: bool,
 ) -> Result<Plan, AppError> {
     let result = results::load_locked(state, tx, subject.report).await?;
     if result.spec.lifecycle.project_id != subject.project
@@ -251,6 +252,19 @@ async fn plan(
         return Err(conflict(
             "workspace delivery needs the current retained result",
         ));
+    }
+    if require_live {
+        let holds_task: bool =
+            sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
+                .bind(result.report.binding.attempt_id)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(crate::error::db)?;
+        if !holds_task {
+            return Err(conflict(
+                "another attempt can now change the task workspaces",
+            ));
+        }
     }
     load(state, tx, &result)
         .await?

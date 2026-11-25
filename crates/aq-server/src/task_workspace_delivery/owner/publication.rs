@@ -128,7 +128,7 @@ impl Pending<'_> {
         state: &AppState,
         db: &mut Transaction<'_, Postgres>,
     ) -> Result<(Delivery, DeliveryTarget), AppError> {
-        let plan = plan(state, db, self.subject).await?;
+        let plan = plan(state, db, self.subject, true).await?;
         self.actor.fence(db).await?;
         let source = source(&plan, self.project, self.head)?;
         configured(state, source, db).await
