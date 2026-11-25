@@ -175,6 +175,27 @@ impl Validate for Owner {
         Ok(())
     }
 }
+impl Owner {
+    fn prepared_on(&self, boot_id: Uuid, store_id: Uuid) -> bool {
+        self.phase == Phase::Prepared
+            && self.marker.initial_boot_id == boot_id
+            && self.marker.store_id == store_id
+    }
+    fn activated(&self, marker: &Marker) -> bool {
+        self.phase == Phase::Active
+            && self.revision == 2
+            && self.boot_transitions == 0
+            && self.current_boot_id == marker.initial_boot_id
+            && &self.marker == marker
+    }
+    fn advanced(&self, marker: &Marker, boot_id: Uuid, expected_revision: u64) -> bool {
+        self.phase == Phase::Active
+            && self.revision == expected_revision + 1
+            && self.boot_transitions > 0
+            && self.current_boot_id == boot_id
+            && &self.marker == marker
+    }
+}
 /// Immutable operation receipt. Current state is supplied separately on replay.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -197,36 +218,22 @@ impl Receipt {
         ensure(owner.marker.node_id == request.node_id, "receipt node")?;
         match &request.operation {
             Operation::Prepare { boot_id, store_id } => ensure(
-                owner.phase == Phase::Prepared
-                    && owner.marker.initial_boot_id == *boot_id
-                    && owner.marker.store_id == *store_id
+                owner.prepared_on(*boot_id, *store_id)
                     && owner.marker.prepare_operation_id == request.operation_id
                     && owner.marker.prepare_digest == self.request_digest,
                 "prepare receipt",
-            )?,
-            Operation::Activate { marker } => ensure(
-                owner.phase == Phase::Active
-                    && owner.revision == 2
-                    && owner.boot_transitions == 0
-                    && owner.current_boot_id == marker.initial_boot_id
-                    && &owner.marker == marker,
-                "activation receipt",
-            )?,
+            ),
+            Operation::Activate { marker } => ensure(owner.activated(marker), "activation receipt"),
             Operation::AdvanceBoot {
                 marker,
                 new_boot_id,
                 expected_revision,
                 ..
             } => ensure(
-                owner.phase == Phase::Active
-                    && owner.revision == expected_revision + 1
-                    && owner.boot_transitions > 0
-                    && owner.current_boot_id == *new_boot_id
-                    && &owner.marker == marker,
+                owner.advanced(marker, *new_boot_id, *expected_revision),
                 "boot receipt",
-            )?,
+            ),
         }
-        Ok(())
     }
     pub fn digest(&self) -> Result<Digest, ContractError> {
         ensure(self.version == VERSION, "receipt version")?;
@@ -293,138 +300,8 @@ pub struct Transition {
     pub reply: Reply,
     pub changed: bool,
 }
-/// Reducer only: the adapter atomically stores owner + immutable receipt. An
-/// existing receipt is looked up by node/operation ID, never provided by a worker.
-pub fn apply(
-    current: Option<&Owner>,
-    previous: Option<&Receipt>,
-    request: &Request,
-    access: &Access,
-    allocated_owner_id: Option<Uuid>,
-) -> Result<Transition, ContractError> {
-    request.validate()?;
-    valid_id(access.node_id)?;
-    valid_id(access.boot_id)?;
-    ensure(
-        request.node_id == access.node_id,
-        "authenticated node mismatch",
-    )?;
-    ensure(
-        access.accepted_through < i64::MAX as u64
-            && (1..=MAX_PENDING_DISTANCE).contains(&access.max_pending_distance),
-        "owner cursor bounds",
-    )?;
-    if let Some(owner) = current {
-        owner.validate()?;
-        ensure(
-            owner.marker.node_id == access.node_id,
-            "owner node mismatch",
-        )?;
-    }
-    if let Some(receipt) = previous {
-        receipt.validate_against(request)?;
-        let current = current.ok_or(ContractError::Invalid("missing retained owner"))?;
-        let reply = Reply {
-            receipt: receipt.clone(),
-            current_owner: current.clone(),
-            accepted_through: access.accepted_through,
-            admitted_node_boot_id: access.boot_id,
-        };
-        reply.validate_against(request)?;
-        return Ok(Transition {
-            reply,
-            changed: false,
-        });
-    }
-    let next = match &request.operation {
-        Operation::Prepare { boot_id, store_id } => {
-            ensure(
-                current.is_none() && access.accepted_through == 0 && *boot_id == access.boot_id,
-                "existing owner or history; recovery required",
-            )?;
-            let owner_id =
-                allocated_owner_id.ok_or(ContractError::Invalid("owner allocation missing"))?;
-            valid_id(owner_id)?;
-            Owner {
-                marker: Marker {
-                    version: VERSION,
-                    node_id: request.node_id,
-                    store_id: *store_id,
-                    owner_id,
-                    initial_boot_id: *boot_id,
-                    prepare_operation_id: request.operation_id,
-                    prepare_digest: request.digest()?,
-                },
-                phase: Phase::Prepared,
-                current_boot_id: *boot_id,
-                revision: 1,
-                boot_transitions: 0,
-            }
-        }
-        Operation::Activate { marker } => {
-            let old = current.ok_or(ContractError::Invalid("owner absent"))?;
-            ensure(
-                old.phase == Phase::Prepared
-                    && &old.marker == marker
-                    && old.current_boot_id == access.boot_id
-                    && access.accepted_through == 0,
-                "activation fence",
-            )?;
-            Owner {
-                phase: Phase::Active,
-                revision: 2,
-                ..old.clone()
-            }
-        }
-        Operation::AdvanceBoot {
-            marker,
-            expected_boot_id,
-            expected_revision,
-            new_boot_id,
-            next_sequence,
-        } => {
-            let old = current.ok_or(ContractError::Invalid("owner absent"))?;
-            ensure(
-                old.phase == Phase::Active
-                    && &old.marker == marker
-                    && old.current_boot_id == *expected_boot_id
-                    && old.revision == *expected_revision
-                    && !access.new_boot_previously_owned
-                    && *new_boot_id != old.marker.initial_boot_id
-                    && *new_boot_id == access.boot_id,
-                "boot owner fence",
-            )?;
-            ensure(
-                *next_sequence > access.accepted_through
-                    && *next_sequence - access.accepted_through - 1 <= access.max_pending_distance,
-                "pending observation sequence bound",
-            )?;
-            Owner {
-                current_boot_id: *new_boot_id,
-                revision: old.revision + 1,
-                boot_transitions: old.boot_transitions + 1,
-                ..old.clone()
-            }
-        }
-    };
-    let receipt = Receipt {
-        version: VERSION,
-        operation_id: request.operation_id,
-        request_digest: request.digest()?,
-        resulting_owner: next.clone(),
-    };
-    let reply = Reply {
-        receipt,
-        current_owner: next,
-        accepted_through: access.accepted_through,
-        admitted_node_boot_id: access.boot_id,
-    };
-    reply.validate_against(request)?;
-    Ok(Transition {
-        reply,
-        changed: true,
-    })
-}
+mod transition;
+pub use transition::{Retained, apply};
 
 /// A read-only status response is deliberately a different type from Reply.
 /// It can authorize resuming an existing matching store through an owner adapter;
@@ -548,6 +425,11 @@ pub struct RefusedSource {
     pub generation: u64,
     pub reason: RefusalReason,
 }
+pub struct EnrolledSource<'a> {
+    pub binding: &'a wire::Binding,
+    pub session_key: &'a wire::Text,
+    pub parser_listed: bool,
+}
 /// The refused sources of one batch while an adapter admits it. A refused
 /// source loses every record of the batch, also those before the refused one.
 #[derive(Default)]
@@ -570,20 +452,16 @@ impl Refusals {
     ) {
         self.0.insert(Self::key(record), (reason, enrolled));
     }
-    /// Refuses the record's source unless it is `bound` (its attempt may be
-    /// observed) and the enrolled source admits the record ([`refusal`]).
-    pub fn check(
-        &mut self,
-        record: &wire::ObservationRecord,
-        bound: bool,
-        binding: &wire::Binding,
-        session_key: &wire::Text,
-        parser_listed: bool,
-    ) {
-        let reason = if bound {
-            refusal(record, binding, session_key, parser_listed)
-        } else {
-            Some(RefusalReason::Binding)
+    /// The adapter supplies the enrolled source only when its attempt may be observed.
+    pub fn check(&mut self, record: &wire::ObservationRecord, source: Option<EnrolledSource<'_>>) {
+        let reason = match source {
+            Some(source) => refusal(
+                record,
+                source.binding,
+                source.session_key,
+                source.parser_listed,
+            ),
+            None => Some(RefusalReason::Binding),
         };
         if let Some(reason) = reason {
             self.refuse(record, reason, true);

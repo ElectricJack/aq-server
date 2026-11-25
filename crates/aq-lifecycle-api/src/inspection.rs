@@ -315,6 +315,26 @@ impl Validate for InspectionItem {
         }
     }
 }
+impl InspectionItem {
+    fn validate_scope(&self, scope: &Scope) -> Result<(), ContractError> {
+        let project = match self {
+            InspectionItem::Session(v) => v.binding.project_id,
+            InspectionItem::Wait(v) => v.registration.scope.project_id,
+            InspectionItem::Notification(v) => v.scope.project_id,
+        };
+        ensure(project == scope.project_id, "inspection item project")?;
+        match self {
+            InspectionItem::Wait(v) => {
+                ensure(v.registration.scope == *scope, "wait inspection workspace")?
+            }
+            InspectionItem::Notification(v) => {
+                ensure(v.scope == *scope, "notification inspection workspace")?
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
 record!(InspectionPage {scope:Scope,items:Vec<InspectionItem>,next_cursor:Option<Text>,complete_for_authorized_scope:bool,reasons:Vec<Text>});
 impl Validate for InspectionPage {
     fn validate(&self) -> Result<(), ContractError> {
@@ -325,22 +345,7 @@ impl Validate for InspectionPage {
         )?;
         for item in &self.items {
             item.validate()?;
-            let project = match item {
-                InspectionItem::Session(v) => v.binding.project_id,
-                InspectionItem::Wait(v) => v.registration.scope.project_id,
-                InspectionItem::Notification(v) => v.scope.project_id,
-            };
-            ensure(project == self.scope.project_id, "inspection item project")?;
-            match item {
-                InspectionItem::Wait(v) => ensure(
-                    v.registration.scope == self.scope,
-                    "wait inspection workspace",
-                )?,
-                InspectionItem::Notification(v) => {
-                    ensure(v.scope == self.scope, "notification inspection workspace")?
-                }
-                _ => {}
-            }
+            item.validate_scope(&self.scope)?;
         }
         if let Some(cursor) = &self.next_cursor {
             cursor.validate()?;

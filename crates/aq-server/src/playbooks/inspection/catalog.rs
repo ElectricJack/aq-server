@@ -6,7 +6,7 @@ use crate::{
     playbooks::{domain::Error, driver::Driver},
 };
 use aq_playbook_host::{CatalogCallError, runner};
-use axum::{Extension, Json, extract::Query};
+use axum::{Extension, extract::Query};
 use std::{sync::Arc, time::Duration};
 
 pub use super::super::domain::catalog_view::*;
@@ -50,27 +50,15 @@ impl Driver {
         )?)
     }
 }
-pub(super) async fn definitions(
-    RequireOwner(actor): RequireOwner,
-    Extension(driver): Extension<Arc<Driver>>,
-    Query(query): Query<CatalogQuery>,
-) -> std::result::Result<Json<CatalogPage>, CatalogReadError> {
-    Ok(bounded(
-        driver
-            .inspect_current_catalog(&actor, Kind::Definitions, query)
-            .await?,
-    )?)
-}
-pub(super) async fn activations(
-    RequireOwner(actor): RequireOwner,
-    Extension(driver): Extension<Arc<Driver>>,
-    Query(query): Query<CatalogQuery>,
-) -> std::result::Result<Json<CatalogPage>, CatalogReadError> {
-    Ok(bounded(
-        driver
-            .inspect_current_catalog(&actor, Kind::Activations, query)
-            .await?,
-    )?)
+pub(super) fn read(kind: Kind) -> axum::routing::MethodRouter<crate::AppState> {
+    axum::routing::get(
+        move |RequireOwner(actor): RequireOwner,
+              Extension(driver): Extension<Arc<Driver>>,
+              Query(query): Query<CatalogQuery>| async move {
+            let page = driver.inspect_current_catalog(&actor, kind, query).await?;
+            Ok::<_, CatalogReadError>(bounded(page)?)
+        },
+    )
 }
 pub fn schema_bytes() -> Vec<u8> {
     serde_json::to_vec_pretty(&schemars::schema_for!(CatalogPage))

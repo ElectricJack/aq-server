@@ -13,13 +13,11 @@ use crate::{
 };
 pub use api::routes;
 use aq_admission::{
-    ArtifactRef, Digest, LaunchBinding, SessionIdentity,
-    control::{
-        CurrentAuthority, CurrentPhase, FailureCode, LaunchOwner, ReconcileEntry, ReconcilePage,
-        Versions,
-    },
-    transport::{PreparationPlan, Reconcile, ReconcileAttempt, TransportDocument},
+    LaunchBinding, SessionIdentity,
+    control::{FailureCode, ReconcileEntry, ReconcilePage, Versions},
+    transport::{Reconcile, ReconcileAttempt, TransportDocument},
 };
+use aq_profiled_state::reconciliation::{Snapshot, lapsed_release};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 fn invalid() -> AppError {
@@ -34,6 +32,7 @@ fn now(state: &AppState) -> Result<u64, AppError> {
         .filter(|v| *v > 0)
         .ok_or_else(invalid)
 }
+<<<<<<< HEAD
 fn owner(hot: &HotState) -> Option<LaunchOwner> {
     hot.owner.as_ref().map(|o| LaunchOwner {
         reservation_id: o.reservation_id,
@@ -138,6 +137,8 @@ impl Snapshot {
         Ok(authority)
     }
 }
+=======
+>>>>>>> refs/remotes/central/main
 fn scope(binding: &LaunchBinding, node: Uuid, boot: Uuid) -> bool {
     matches!(binding.session,SessionIdentity::Remote {node_id,boot_id,..} if node_id==node && boot_id==boot)
 }
@@ -164,7 +165,6 @@ async fn snapshot(
     if session_id != row.get::<Uuid, _>("session_id") {
         return Err(invalid());
     }
-    super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
     let hot: HotState = serde_json::from_value(row.get("hot")).map_err(|_| invalid())?;
     hot.validate_against(&binding).map_err(|_| invalid())?;
     if let Some(expected) = expected
@@ -196,7 +196,23 @@ async fn snapshot(
     if (versions.grant_revision > 0) != hot.grant.is_some() {
         return Err(invalid());
     }
-    let holds_task = row.get("holds_task");
+    let holds_task: bool = row.get("holds_task");
+    let release = if !holds_task && expected.is_some() {
+        lapsed_release(
+            tx,
+            binding.attempt_id,
+            &hot,
+            aq_machine_control::lapse::RECEIPT,
+        )
+        .await
+        .map_err(db)?
+    } else {
+        None
+    };
+    // Exact terminal history cannot supply live launch authority for any profile.
+    if release.is_none() && (hot.status != Status::NeverGranted || expected.is_none()) {
+        super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
+    }
     let offer_expiry = row
         .get::<i64, _>("offer_expires_at_ms")
         .try_into()
@@ -206,13 +222,15 @@ async fn snapshot(
     } else {
         None
     };
-    let started = if hot.grant.is_some() {
+    let started = if holds_task && hot.grant.is_some() {
         receipts::started(tx, &binding, &hot).await?
     } else {
         None
     };
     let terminal = if hot.status == Status::NeverGranted {
         Some(receipts::never_granted(tx, &binding).await?)
+    } else if !holds_task {
+        release
     } else if matches!(hot.stop, Stop::Stopped { .. }) {
         Some(receipts::stopped(tx, &binding, &hot).await?)
     } else {
@@ -323,7 +341,7 @@ fn render_attempts(
                 match snapshots
                     .remove(&id)
                     .and_then(|v| v.ok())
-                    .and_then(|s| s.render(time, current_boot).ok())
+                    .and_then(|s| s.render(time, current_boot))
                 {
                     Some(authority) => ReconcileEntry::Current {
                         authority: Box::new(authority),
@@ -337,7 +355,7 @@ fn render_attempts(
         }
     } else {
         for (_, value) in snapshots {
-            if let Ok(authority) = value.and_then(|s| s.render(time, current_boot)) {
+            if let Some(authority) = value.ok().and_then(|s| s.render(time, current_boot)) {
                 attempts.push(ReconcileEntry::Current {
                     authority: Box::new(authority),
                 });

@@ -6,8 +6,8 @@
 //! holding its files, with its event stream kept as the transcript and its
 //! answer read from the outcome file.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, execute_into, failure,
-    in_run_dirs, scrub, unavailable,
+    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, failure, in_run_dirs, scrub,
+    unavailable,
 };
 use crate::subscription::{
     Identity, copy_back, exec_arguments, exec_finish, exec_overrides, native_command, read_reply,
@@ -24,13 +24,8 @@ pub(crate) const SANDBOX_CANNOT_START: &str = "codex sandbox cannot start on thi
 /// Runs `run`'s task once on the Codex login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
-pub(crate) async fn codex(
-    h: &Harness,
-    homes: &Path,
-    scratch: &Path,
-    run: Run<'_>,
-) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(h, homes, scratch, run, async |executable, place| {
+pub(crate) async fn codex(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
+    in_run_dirs(h, run, async |executable, place| {
         attempt(h, executable, place, run).await
     })
     .await
@@ -56,20 +51,125 @@ fn agent_overrides(place: &Place) -> [String; 4] {
     ]
 }
 
+fn native(
+    executable: &std::fs::File,
+    place: &Place,
+    run: Run<'_>,
+    output: &Path,
+) -> Result<std::process::Command, Failure> {
+    let claimed = run.claimed;
+    let candidate = &claimed.candidate;
+    let (home, cwd) = (&place.home, &place.cwd);
+    let agent = claimed.request.agent.is_some();
+    let sandbox = if agent {
+        "workspace-write"
+    } else {
+        "read-only"
+    };
+    let args = exec_arguments(sandbox, &candidate.model, cwd, output)
+        .map_err(|_| failure(Reason::ProviderError, "native run could not be prepared"))?;
+    // The level's effort; without one Codex keeps its default.
+    let mut overrides = exec_overrides(candidate.reasoning.as_deref());
+    if agent {
+        // In place of the fixed shell `PATH`.
+        overrides.retain(|o| !o.starts_with("shell_environment_policy.set.PATH="));
+        overrides.extend(agent_overrides(place));
+    }
+    let args = exec_finish(args, overrides);
+    let mut command = native_command(
+        executable,
+        args,
+        crate::subscription::CommandHome { home, cwd },
+        run.identity,
+    );
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    if agent {
+        command
+            .env("PATH", place.path(true))
+            .env("TMPDIR", place.tmp());
+    }
+    Ok(command)
+}
+
+struct Captured {
+    events: Events,
+    transcript: agent::Transcript,
+    ran: std::io::Result<(ExitStatus, Vec<u8>)>,
+}
+
+impl Captured {
+    async fn read(command: std::process::Command, run: Run<'_>) -> Self {
+        let (mut events, mut transcript) = (Events::default(), agent::Transcript::default());
+        let ran = if run.claimed.request.agent.is_some() {
+            let prompt = validate::agent_prompt(&run.claimed.request);
+            let mut each = |line: &[u8]| {
+                if let Ok(event) = serde_json::from_slice::<Value>(line) {
+                    events.line(&event);
+                    transcript.codex(&event);
+                }
+            };
+            let ran = agent::stream_events(command, prompt, run.session, &mut each).await;
+            ran.map(|status| (status, Vec::new()))
+        } else {
+            execute(command, validate::prompt(&run.claimed.request), run.session).await
+        };
+        Self {
+            events,
+            transcript,
+            ran,
+        }
+    }
+
+    fn reply(
+        self,
+        place: &Place,
+        run: Run<'_>,
+        redact: impl Fn(String) -> Option<String> + Copy,
+    ) -> Result<(String, Option<Usage>), Failure> {
+        let agent = run.claimed.request.agent.is_some();
+        let Self {
+            mut events,
+            transcript,
+            ran,
+        } = self;
+        if agent {
+            run.keep(transcript.finish(|text| redact(text.to_owned())));
+        }
+        let (status, stdout) =
+            ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
+        if !agent {
+            events = Events::parse(&stdout);
+        }
+        let failed = (!status.success()).then(|| events.failure(status, redact));
+        if agent {
+            // The harness's own failure counts only when there is no outcome.
+            let limit = run.claimed.request.max_output_bytes;
+            let reply = agent::conclude(&place.cwd, limit, failed, redact)?;
+            return Ok((reply, events.usage));
+        }
+        if let Some(failed) = failed {
+            return Err(failed);
+        }
+        let reply = read_reply(&place.home.join("last-message.txt"), run.identity.run_as)
+            .map_err(|_| failure(Reason::ProviderError, "native final reply missing"))?;
+        let reply = redact(reply)
+            .ok_or_else(|| failure(Reason::ProviderError, "native reply could not be redacted"))?;
+        Ok((reply, events.usage))
+    }
+}
+
 async fn attempt(
     h: &Harness,
     executable: &std::fs::File,
     place: &Place,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    let (home, cwd) = (place.home.as_path(), place.cwd.as_path());
+    let home = place.home.as_path();
     let Run {
-        claimed,
-        identity,
-        session,
-        ..
+        claimed, identity, ..
     } = run;
-    let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     if claimed.request.agent.is_some() && !h.sandbox_starts(executable, place, identity).await {
         // The next candidate takes over at once.
         return Err(failure(Reason::ProviderUnavailable, SANDBOX_CANNOT_START));
@@ -87,50 +187,8 @@ async fn attempt(
         done: false,
     };
     let output = home.join("last-message.txt");
-    let candidate = &claimed.candidate;
-    let agent = claimed.request.agent.is_some();
-    let sandbox = if agent {
-        "workspace-write"
-    } else {
-        "read-only"
-    };
-    let args = exec_arguments(sandbox, &candidate.model, cwd, &output).map_err(|_| setup())?;
-    // The level's effort; without one Codex keeps its default.
-    let mut overrides = exec_overrides(candidate.reasoning.as_deref());
-    if agent {
-        // In place of the fixed shell `PATH`.
-        overrides.retain(|o| !o.starts_with("shell_environment_policy.set.PATH="));
-        overrides.extend(agent_overrides(place));
-    }
-    let args = exec_finish(args, overrides);
-    let mut command = native_command(executable, args, home, cwd, identity);
-    command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    if agent {
-        command
-            .env("PATH", place.path(true))
-            .env("TMPDIR", place.tmp());
-    }
-    let (mut events, mut transcript) = (Events::default(), agent::Transcript::default());
-    let ran = if agent {
-        let prompt = validate::agent_prompt(&claimed.request);
-        let mut each = |line: &[u8]| {
-            if let Ok(event) = serde_json::from_slice::<Value>(line) {
-                events.line(&event);
-                transcript.codex(&event);
-            }
-        };
-        let mut lines = agent::Lines::default();
-        let ran = execute_into(command, prompt, session, &mut |chunk| {
-            lines.feed(chunk, &mut each)
-        })
-        .await;
-        lines.end(&mut each);
-        ran.map(|status| (status, Vec::new()))
-    } else {
-        execute(command, validate::prompt(&claimed.request), session).await
-    };
+    let command = native(executable, place, run, &output)?;
+    let captured = Captured::read(command, run).await;
     #[cfg(feature = "test-support")]
     {
         use std::sync::atomic::Ordering::SeqCst;
@@ -158,29 +216,7 @@ async fn attempt(
             .ok()
             .map(|t| scrub(t, &secrets))
     };
-    if agent {
-        run.keep(transcript.finish(|text| redact(text.to_owned())));
-    }
-    let (status, stdout) =
-        ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
-    if !agent {
-        events = Events::parse(&stdout);
-    }
-    let failed = (!status.success()).then(|| events.failure(status, redact));
-    if agent {
-        // The harness's own failure counts only when there is no outcome.
-        let limit = claimed.request.max_output_bytes;
-        let reply = agent::conclude(cwd, limit, failed, redact)?;
-        return Ok((reply, events.usage));
-    }
-    if let Some(failed) = failed {
-        return Err(failed);
-    }
-    let reply = read_reply(&output, identity.run_as)
-        .map_err(|_| failure(Reason::ProviderError, "native final reply missing"))?;
-    let reply = redact(reply)
-        .ok_or_else(|| failure(Reason::ProviderError, "native reply could not be redacted"))?;
-    Ok((reply, events.usage))
+    captured.reply(place, run, redact)
 }
 
 /// Copies the run's login back to the login file ([`copy_back`]) and removes

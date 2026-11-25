@@ -47,16 +47,17 @@ impl RateCard {
             .collect(),
         }
     }
-    pub fn cost(&self, size: Size, duration_ms: u64) -> Result<u64> {
-        if self.revision.is_empty()
-            || self.revision.len() > 128
-            || self.currency.len() != 3
-            || !self.currency.bytes().all(|c| c.is_ascii_uppercase())
-            || self.rates.len() != 4
-            || [Size::Small, Size::Default, Size::Large, Size::Xlarge]
+    fn valid(&self) -> bool {
+        (1..=128).contains(&self.revision.len())
+            && self.currency.len() == 3
+            && self.currency.bytes().all(|c| c.is_ascii_uppercase())
+            && self.rates.len() == 4
+            && [Size::Small, Size::Default, Size::Large, Size::Xlarge]
                 .iter()
-                .any(|s| self.rates.iter().filter(|r| r.size == *s).count() != 1)
-        {
+                .all(|s| self.rates.iter().filter(|r| r.size == *s).count() == 1)
+    }
+    pub fn cost(&self, size: Size, duration_ms: u64) -> Result<u64> {
+        if !self.valid() {
             return Err(Error::Invalid);
         }
         let rate = self
@@ -84,19 +85,21 @@ pub struct Fact {
 }
 impl Fact {
     pub fn validate(&self, now_ms: u64) -> Result<()> {
-        if self.attempt_id.is_nil()
-            || self.sandbox_id.is_empty()
-            || self.sandbox_id.len() > 256
-            || self.sandbox_id.chars().any(char::is_control)
-            || self.started_at_ms == 0
-            || self.started_at_ms > now_ms
-            || self
-                .stopped_at_ms
-                .is_some_and(|end| end < self.started_at_ms || end > now_ms)
-        {
+        if !self.valid_identity() || !self.valid_time(now_ms) {
             return Err(Error::Invalid);
         }
         Ok(())
+    }
+    fn valid_identity(&self) -> bool {
+        !self.attempt_id.is_nil()
+            && (1..=256).contains(&self.sandbox_id.len())
+            && !self.sandbox_id.chars().any(char::is_control)
+    }
+    fn valid_time(&self, now_ms: u64) -> bool {
+        (1..=now_ms).contains(&self.started_at_ms)
+            && self
+                .stopped_at_ms
+                .is_none_or(|end| (self.started_at_ms..=now_ms).contains(&end))
     }
     pub fn succeeds(&self, previous: &Self) -> bool {
         self.attempt_id == previous.attempt_id
@@ -118,10 +121,7 @@ pub struct MonthlyBudget {
 impl MonthlyBudget {
     pub fn cost(&self, fact: &Fact, card: &RateCard, now_ms: u64) -> Result<u64> {
         fact.validate(now_ms)?;
-        if self.month_start_ms >= self.next_month_start_ms
-            || now_ms < self.month_start_ms
-            || now_ms >= self.next_month_start_ms
-        {
+        if !(self.month_start_ms..self.next_month_start_ms).contains(&now_ms) {
             return Err(Error::Invalid);
         }
         let start = fact.started_at_ms.max(self.month_start_ms);

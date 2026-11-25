@@ -88,10 +88,9 @@ pub fn count(
 ) -> Result<(CountedStartup, Renderer), Error> {
     let bytes = startup.rendered.as_bytes().to_vec();
     let output = selection.choice.max_output_tokens;
-    if startup.instructions.is_empty()
-        || output == 0
-        || bytes.len() as u64 > selection.choice.resources.context_bytes
-    {
+    let within_context = bytes.len() as u64 <= selection.choice.resources.context_bytes;
+    let has_budget = within_context && output > 0;
+    if startup.instructions.is_empty() || !has_budget {
         return Err(Error::Input);
     }
     let bounds: Vec<InstructionBound> = (startup.instructions.iter().enumerate())

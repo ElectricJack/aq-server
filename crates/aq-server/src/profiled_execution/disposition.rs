@@ -1,7 +1,7 @@
 //! Explicit owner abandonment of stopped, unsettled attempts. This is a terminal
 //! server disposition, not successful Graph completion or source/effect release.
 use super::settlement::actor::ActorPin;
-use crate::{AppState, authz::RequireOwner, error::AppError, store::User};
+use crate::{AppState, admin_api::ApiJson, authz::RequireOwner, error::AppError, store::User};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
@@ -237,6 +237,10 @@ pub fn routes(state: AppState) -> Router<AppState> {
             "/api/execution/attempts/{id}/disposition",
             get(read).post(write),
         )
+        .route(
+            "/api/execution/projects/{project}/attempts/{id}/closed-launch-settlement",
+            axum::routing::post(settle_closed),
+        )
         .layer(DefaultBodyLimit::max(8192))
         .with_state(state.control_view())
 }
@@ -244,9 +248,36 @@ async fn write(
     State(state): State<AppState>,
     RequireOwner(actor): RequireOwner,
     Path(id): Path<Uuid>,
-    crate::admin_api::ApiJson(request): crate::admin_api::ApiJson<Request>,
+    ApiJson(request): ApiJson<Request>,
 ) -> Result<Json<Receipt>, AppError> {
     Ok(Json(abandon(&state, &actor, id, &request).await?))
+}
+/// `attempt.settle_closed_launch`: the attested settlement of a closed launch that does not
+/// prove nonstart (`aq_machine_control::closed_launch`); never a disposition. Idempotent.
+async fn settle_closed(
+    State(state): State<AppState>,
+    RequireOwner(actor): RequireOwner,
+    Path((project, attempt)): Path<(Uuid, Uuid)>,
+    ApiJson(r): ApiJson<Request>,
+) -> Result<Json<Value>, AppError> {
+    use super::closure::settlement::{ClosureSettlement::Held, settle_and_release};
+    use aq_machine_control::closed_launch::{Attestation, admit, receipt};
+    let (pool, mc) = (&state.store.pool, crate::machine_api::mapped);
+    let retention = state.source_retention.as_deref();
+    let socket = retention.map(|r| r.config.git_socket.as_path());
+    #[cfg(feature = "delivery_playbook")]
+    let head = aq_delivery::git_grant::granted_ref_head(pool, socket, attempt).await;
+    #[cfg(not(feature = "delivery_playbook"))]
+    let head = socket.and(None);
+    let actor = (actor.id, actor.email);
+    let a = Attestation::new(r.operation_id, r.reason, project, actor, head);
+    admit(pool, attempt, &a).await.map_err(mc)?;
+    let settled = settle_and_release(&state, attempt, Some(&a)).await?;
+    match (receipt(pool, attempt, &a).await.map_err(mc)?, settled) {
+        (Some(r), s) => Ok(Json(json!({"attestation": r, "settlement": s}))),
+        (None, Held(code)) => Err(AppError::Conflict(code.into())),
+        (None, _) => Err(AppError::Conflict("closed_launch_not_held".into())),
+    }
 }
 async fn read(
     State(state): State<AppState>,

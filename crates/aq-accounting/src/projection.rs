@@ -13,13 +13,13 @@ pub struct Projection {
 }
 impl Projection {
     pub fn validate(&self) -> Result<()> {
-        if self.incomplete_calls > self.canonical_calls
-            || self
-                .unknown_contributions
-                .iter()
-                .any(|n| *n > self.canonical_calls)
-            || (self.canonical_calls == 0 && self.known_subtotals.iter().any(|n| *n != 0))
-        {
+        let invalid_counts = self
+            .unknown_contributions
+            .iter()
+            .chain(std::iter::once(&self.incomplete_calls))
+            .any(|n| *n > self.canonical_calls);
+        let unexpected_subtotals = self.canonical_calls == 0 && self.known_subtotals != [0; 5];
+        if invalid_counts || unexpected_subtotals {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -39,18 +39,13 @@ impl Projection {
             }
         }
         let mut next = self.replace(old.map(|v| &v.contribution), &new.contribution)?;
-        if old.is_some_and(|v| {
-            v.complete_accounting_evidence.is_none()
-                || !matches!(v.usage.completeness, wire::Completeness::ReportedComplete)
-        }) {
+        if old.is_some_and(crate::reconcile::Fact::source_incomplete) {
             next.incomplete_calls = next
                 .incomplete_calls
                 .checked_sub(1)
                 .ok_or(Error::Conflict)?;
         }
-        if new.complete_accounting_evidence.is_none()
-            || !matches!(new.usage.completeness, wire::Completeness::ReportedComplete)
-        {
+        if new.source_incomplete() {
             next.incomplete_calls = next
                 .incomplete_calls
                 .checked_add(1)
@@ -111,10 +106,7 @@ impl Projection {
                 wire::Counter::Unknown {
                     reason: wire::UnknownReason::NotReported,
                 }
-            } else if self.unknown_contributions[i] > 0
-                || self.unresolved_events > 0
-                || self.incomplete_calls > 0
-            {
+            } else if self.unknown_contributions[i] > 0 || self.incomplete_calls > 0 {
                 wire::Counter::Unknown {
                     reason: wire::UnknownReason::Incomplete,
                 }

@@ -22,6 +22,7 @@ pub struct RegisteredRuntime {
     pub runtime: ArtifactRef,
     pub qualification: ArtifactRef,
     pub boot_id: Uuid,
+    pub backend_kind: Option<aq_selection::BackendKind>,
 }
 pub fn semantic_digest(request: &Register) -> Result<Digest, AppError> {
     let mut value = serde_json::to_value(request).map_err(|_| AppError::Internal)?;
@@ -66,6 +67,7 @@ pub async fn current_runtime_locked(
         runtime: metadata.request.runtime,
         qualification: metadata.qualification,
         boot_id: boot,
+        backend_kind: qualified.backend_kind,
     })
 }
 /// Read original admitted runtime for terminal evidence under the node lock.
@@ -128,7 +130,7 @@ pub async fn register_slots(
     let (pool, now) = (&state.store.pool, (state.clock)().timestamp_millis());
     let lapsed = aq_machine_control::lapse::on_node(pool, auth.id(), now).await;
     for attempt in lapsed.unwrap_or_default() {
-        let _ = super::closure::settlement::settle_and_release(state, attempt).await;
+        let _ = super::closure::settlement::settle_and_release(state, attempt, None).await;
     }
     let mut tx = pool.begin().await.map_err(|_| AppError::Internal)?;
     let reply = register_slots_locked(state, &mut tx, auth, request, slots).await?;

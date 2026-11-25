@@ -6,6 +6,9 @@ publish.workspace = true
 [features]
 # Supervisors get full access (owner scope and registry); off by default.
 supervisor_full_access = ["dep:tower"]
+# Read-only code access through aq-git (`/v1/supervisor/git`), mounted only
+# together with supervisor_full_access.
+delivery_playbook = ["dep:aq-delivery", "aq-delivery/delivery_playbook"]
 
 [dependencies]
 axum.workspace = true
@@ -19,6 +22,7 @@ tower = { workspace = true, optional = true }
 uuid.workspace = true
 aq-manual-sessions = { path = "../aq-manual-sessions" }
 aq-central-authority = { path = "../aq-central-authority" }
+aq-delivery = { path = "../aq-delivery", optional = true }
 async-trait.workspace = true
 sha2.workspace = true
 # Already a workspace dependency (aq-result-media); bounded inflate for PDF and DOCX.
