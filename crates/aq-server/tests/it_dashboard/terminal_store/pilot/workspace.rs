@@ -9,6 +9,7 @@ use aq_session_protocol::ArtifactRef;
 use axum::{Router, body::Body, http::Request};
 use http_body_util::BodyExt;
 use serde_json::Value;
+use std::os::unix::fs::FileTypeExt;
 use tower::ServiceExt;
 
 pub(super) struct Workspace {
@@ -23,9 +24,21 @@ pub(super) struct Workspace {
 
 impl Workspace {
     pub(super) fn from_environment() -> Option<Self> {
-        let inventory = std::env::var_os("AQ_TERMINAL_PILOT_GIT_INVENTORY")?;
-        let raw = std::fs::read(inventory).unwrap();
-        let inventory: Value = serde_json::from_slice(&raw).unwrap();
+        let path = PathBuf::from(std::env::var_os("AQ_TERMINAL_PILOT_GIT_INVENTORY")?);
+        let directory = path.parent().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let inventory: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let socket = directory.join("git.sock");
+        assert_eq!(inventory["socket"], json!(socket));
+        assert!(
+            std::fs::symlink_metadata(&socket)
+                .unwrap()
+                .file_type()
+                .is_socket()
+        );
         let repo = &inventory["aq-dashboard"];
         let api: Value = serde_json::from_str(include_str!(
             "../../../../../../protocol/agent-access/v1/fixtures/base.json"
@@ -39,7 +52,7 @@ impl Workspace {
                 repo["retained_fixture"]["base_retention_handle"].clone(),
             )
             .unwrap(),
-            socket: repo_path(&inventory["socket"]),
+            socket,
             profile: api["context"]["profile"].clone(),
             context: api["context"]["context"].clone(),
         })
@@ -279,12 +292,6 @@ impl Workspace {
                "pinned_commit":self.commit,"checkpoint_intent":checkpoint,
                "postgres_requested":true,"approval":"approved"})
     }
-}
-
-fn repo_path(v: &Value) -> PathBuf {
-    let path = PathBuf::from(v.as_str().unwrap());
-    assert!(path.is_absolute());
-    path
 }
 
 async fn post(app: &Router, path: &str, token: Option<&str>, value: Value) -> (u16, Value) {
