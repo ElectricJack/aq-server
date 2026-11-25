@@ -217,7 +217,6 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     out
 }
 
-<<<<<<< HEAD
 fn parse_source_routes(
     path: &Path,
     text: &str,
@@ -279,7 +278,8 @@ mod tests {
         parse_source_routes(Path::new("fixture.rs"), source, &consts),
         ["/chained", "/constant", "/variable", "/nested"]
     );
-=======
+}
+
 /// Node routes reviewed here rather than in the published `routes.json`,
 /// which documents the default build: spec 0017's builder and environment
 /// routes under the node credential (`worker_api::authenticate_context`;
@@ -295,7 +295,6 @@ fn reviewed_node_route(path: &str) -> bool {
                 | "/v1/worker/environments/claim"
                 | "/v1/worker/environments/complete"
         )
->>>>>>> refs/remotes/central/main
 }
 
 #[test]

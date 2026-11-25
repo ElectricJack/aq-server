@@ -194,17 +194,6 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let node = f.node.node_id;
     // The level a manual session and the supervisor choose from: one
     // candidate per logged-in harness.
-<<<<<<< HEAD
-=======
-    let level = |id: &str, rows: &str| {
-        format!(
-            "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
-             ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
-        )
-    };
-    let claude_row = "| anthropic | fixture-model | medium | claude |\n";
-    let codex_row = "| openai | gpt-test | high | codex |\n";
->>>>>>> refs/remotes/central/main
     let mut execution = common::roles::execution(8192);
     execution = execution
         .replace("harnesses: [claude,", "harnesses: [claude, codex,")
@@ -218,10 +207,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-<<<<<<< HEAD
-        &manual_level(&format!("{CLAUDE_ROW}{CODEX_ROW}")),
-=======
-        &level("manual-model", &format!("{claude_row}{codex_row}")),
+        &intelligence_level("manual-model", &format!("{CLAUDE_ROW}{CODEX_ROW}")),
     )
     .await;
     common::roles::save(
@@ -229,8 +215,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "default-codex",
-        &level("default-codex", "| openai | gpt-test | default | codex |\n"),
->>>>>>> refs/remotes/central/main
+        &intelligence_level("default-codex", "| openai | gpt-test | default | codex |\n"),
     )
     .await;
     let snapshot_digest = common::roles::active(&pool).await.digest().to_owned();
@@ -241,198 +226,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     f.state.config = Arc::new(config);
     let admin = build_admin_router(f.state.clone());
     let worker = build_worker_router(f.state.clone());
-<<<<<<< HEAD
     supervisor_profile_tracks_active_level(&f, &admin, &pool, &snapshot_digest).await;
-=======
-    let (status, fleet) = call(&admin, "/api/supervisors", None, None, false).await;
-    assert_eq!(status, StatusCode::OK, "{fleet}");
-    let profiles = fleet["profiles"].as_array().unwrap();
-    let offered: Vec<_> = profiles
-        .iter()
-        .filter(|p| p["profile_id"] == "manual-model")
-        .map(|p| p["candidate_id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        offered,
-        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
-    );
-    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
-    let scopes = fleet["supervisors"].as_array().unwrap();
-    let project_scope = scopes
-        .iter()
-        .find(|s| s["project_id"] == project.to_string())
-        .unwrap();
-    let conversation = project_scope["id"].as_str().unwrap();
-    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
-        .as_str()
-        .unwrap();
-    assert_ne!(conversation, global);
-    let global_uri = format!("/api/supervisors/{global}/control");
-    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
-    assert_eq!(
-        call(&admin, &global_uri, Some(unsupported), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
-    let (status, saved) = call(&admin, &global_uri, Some(claude), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{saved}");
-    assert_eq!(
-        saved["profile"],
-        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
-    );
-    let (_, updated) = call(&admin, "/api/supervisors", None, None, false).await;
-    let stored_global = updated["supervisors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"] == global)
-        .unwrap();
-    assert_eq!(stored_global["enabled"], true);
-    assert_eq!(stored_global["profile"], saved["profile"]);
-    assert!(stored_global.get("unavailable_reason").is_none());
-    let uri = format!("/api/supervisors/{conversation}/control");
-    let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
-    assert_eq!(
-        call(&admin, &uri, Some(control.clone()), None, false)
-            .await
-            .0,
-        StatusCode::FORBIDDEN
-    );
-    let (status, receipt) = call(&admin, &uri, Some(control.clone()), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{receipt}");
-    // The saved profile is the level choice, and its admission class is the
-    // level's id on the candidate's provider.
-    assert_eq!(
-        receipt["profile"],
-        json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
-    );
-    let class = aq_swarm_settings::admission::pinned_cell(&receipt["profile"]).unwrap();
-    assert_eq!(
-        (class.provider.as_str(), class.intelligence_class.as_str()),
-        ("openai", "manual-model")
-    );
-    assert_eq!(
-        call(&admin, &uri, Some(control.clone()), None, true)
-            .await
-            .1,
-        receipt
-    );
-    // The stored choice names no snapshot: every read and every start
-    // resolves it against the active one. While the level does not list the
-    // candidate, or does not exist, the control stays enabled with its
-    // profile and says why the supervisor is not running.
-    let entry = |fleet: &Value| {
-        let all = fleet["supervisors"].as_array().unwrap();
-        all.iter()
-            .find(|s| s["id"] == conversation)
-            .unwrap()
-            .clone()
-    };
-    let read = || async { entry(&call(&admin, "/api/supervisors", None, None, false).await.1) };
-    assert!(read().await.get("unavailable_reason").is_none());
-    assert_eq!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap(),
-        Ok(snapshot_digest.clone())
-    );
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", claude_row),
-    )
-    .await;
-    let unlisted = read().await;
-    assert_eq!(
-        unlisted["unavailable_reason"],
-        "its level `manual-model` no longer lists gpt-test on codex; choose a level"
-    );
-    assert_eq!(unlisted["enabled"], true);
-    assert_eq!(unlisted["profile"], receipt["profile"]);
-    assert!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap()
-            .is_err()
-    );
-    // Once the level lists the candidate again it resolves, with no owner
-    // action, against the snapshot that is active now.
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", &format!("{claude_row}{codex_row}")),
-    )
-    .await;
-    assert!(read().await.get("unavailable_reason").is_none());
-    assert_eq!(
-        aq_supervisor_control::resolve_stored(&pool, &receipt["profile"])
-            .await
-            .ok()
-            .unwrap(),
-        Ok(common::roles::active(&pool).await.digest().to_owned())
-    );
-    // A carried choice whose level has no document (migration 0134 keeps an
-    // old profile id that is no level).
-    sqlx::query("UPDATE supervisor_controls SET profile=jsonb_set(profile,'{profile_id}','\"engineering\"') WHERE conversation_id=$1::uuid")
-        .bind(conversation)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let gone = read().await;
-    assert_eq!(
-        gone["unavailable_reason"],
-        "its level `engineering` no longer exists; choose a level"
-    );
-    assert_eq!(gone["enabled"], true);
-    sqlx::query("UPDATE supervisor_controls SET profile=$2 WHERE conversation_id=$1::uuid")
-        .bind(conversation)
-        .bind(&receipt["profile"])
-        .execute(&pool)
-        .await
-        .unwrap();
-    let stale = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":false});
-    assert_eq!(
-        call(&admin, &uri, Some(stale), None, true).await.0,
-        StatusCode::CONFLICT
-    );
-    let discover = format!("/api/human/conversations/projects/{project}");
-    let (status, discovery) = call(&admin, &discover, None, None, false).await;
-    assert_eq!(status, StatusCode::OK, "{discovery}");
-    assert_eq!(discovery["conversation"]["id"], conversation);
-    let message_operation = Uuid::new_v4();
-    let message_id = Uuid::new_v4();
-    let send = json!({"operation_id":message_operation,"kind":"supervisor.message.send","subject":{"type":"conversation","id":conversation,"revision":"1"},"expected_versions":{"conversation":"1"},"payload":{"operation_id":message_operation,"message_id":message_id,"expected_conversation_revision":"1","body":"Project message receipt QA","context":[],"attachments":[]}});
-    let (status, sent) = call(&admin, "/api/v1/actions", Some(send), None, true).await;
-    assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(sent["data"]["disposition"], "confirmed");
-    let (status, looked) = call(
-        &admin,
-        &format!("/api/v1/operations/{message_operation}"),
-        None,
-        None,
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{looked}");
-    assert_eq!(looked["data"]["disposition"], "confirmed");
-    let stop = json!({"operation_id":Uuid::new_v4(),"expected_revision":1,"enabled":false});
-    assert_eq!(
-        call(&admin, &uri, Some(stop), None, true).await.0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        call(&admin, &discover, None, None, false).await.1["conversation"],
-        discovery["conversation"]
-    );
->>>>>>> refs/remotes/central/main
 
     let poll = json!({"max_slots":3,"repositories":[repo],"reports":[]});
     assert_eq!(
@@ -459,133 +253,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         .0,
         StatusCode::OK
     );
-<<<<<<< HEAD
     selected_launch_pins_snapshot(&f, &admin, &worker, &pool, &snapshot_digest, &poll).await;
-=======
-    let selected = json!({"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"});
-    let selected_id = Uuid::new_v4();
-    let selected_launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
-    let selected_body = json!({"operation_id":selected_id,"intelligence_profile":selected});
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT,
-        "old worker does not advertise Codex"
-    );
-    let mut upgraded_poll = poll.clone();
-    upgraded_poll["providers"] = json!(["anthropic", "openai"]);
-    assert_eq!(
-        call(
-            &worker,
-            "/v1/worker/manual-agents",
-            Some(upgraded_poll),
-            Some(&f.credential),
-            false
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let choices = call(&admin, "/api/manual-agents", None, None, false)
-        .await
-        .1;
-    // Manual sessions list the levels of the active snapshot: one entry per
-    // level candidate a logged-in harness can run.
-    let offered: Vec<&Value> = (choices["launch_profiles"].as_array().unwrap().iter())
-        .filter(|c| c["profile_id"] == "manual-model")
-        .collect();
-    assert_eq!(offered.len(), 2, "{choices}");
-    assert_eq!(
-        offered[1],
-        &json!({"snapshot_digest":snapshot_digest,"profile_id":"manual-model","candidate_id":"openai:gpt-test:high","name":"Standard","provider":"openai","model":"gpt-test","reasoning":"high","harness":"codex"})
-    );
-    let (status, chosen) = call(
-        &admin,
-        &selected_launch,
-        Some(selected_body.clone()),
-        None,
-        true,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{chosen}");
-    assert_eq!(chosen["spec"]["model"], "gpt-test");
-    assert_eq!(chosen["spec"]["reasoning"], "high");
-    // The launch pins its level (the admission class) and the snapshot.
-    assert_eq!(chosen["spec"]["intelligence_class"], "manual-model");
-    assert_eq!(chosen["spec"]["harness"], "codex");
-    assert_eq!(chosen["spec"]["snapshot_digest"], snapshot_digest);
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .1,
-        chosen
-    );
-    let mut changed = selected_body.clone();
-    changed["intelligence_profile"]["candidate_id"] = json!("anthropic:fixture-model:medium");
-    assert_eq!(
-        call(&admin, &selected_launch, Some(changed), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    let mut stale = selected_body.clone();
-    stale["operation_id"] = json!(Uuid::new_v4());
-    stale["intelligence_profile"]["profile_id"] = json!("no-such-level");
-    assert_eq!(
-        call(&admin, &selected_launch, Some(stale), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    // The level loses its Codex candidate.
-    common::roles::save(
-        &pool,
-        f.actor,
-        Kind::Intelligence,
-        "manual-model",
-        &level("manual-model", claude_row),
-    )
-    .await;
-    assert_eq!(
-        call(
-            &admin,
-            &selected_launch,
-            Some(selected_body.clone()),
-            None,
-            true
-        )
-        .await
-        .1,
-        chosen,
-        "exact retry retains admitted snapshot after a profile is edited/deleted"
-    );
-    let mut removed = selected_body.clone();
-    removed["operation_id"] = json!(Uuid::new_v4());
-    assert_eq!(
-        call(&admin, &selected_launch, Some(removed), None, true)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    sqlx::query("DELETE FROM manual_agent_sessions WHERE id=$1")
-        .bind(selected_id)
-        .execute(&pool)
-        .await
-        .unwrap();
->>>>>>> refs/remotes/central/main
     let id = Uuid::new_v4();
     let launch = format!("/api/manual-agents/workers/{node}/projects/{project}");
     assert_eq!(
@@ -927,11 +595,39 @@ async fn terminal_input_is_applied_once(
 const CLAUDE_ROW: &str = "| anthropic | fixture-model | medium | claude |\n";
 const CODEX_ROW: &str = "| openai | gpt-test | high | codex |\n";
 
-fn manual_level(rows: &str) -> String {
+fn intelligence_level(id: &str, rows: &str) -> String {
     format!(
-        "---\nid: manual-model\nname: Standard\ndescription: Manual fixture level.\n---\n\
+        "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
          ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
     )
+}
+
+async fn global_supervisor_accepts_supported_reasoning(admin: &Router, global: &str) {
+    let global_uri = format!("/api/supervisors/{global}/control");
+    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
+    assert_eq!(
+        call(admin, &global_uri, Some(unsupported), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
+    let (status, saved) = call(admin, &global_uri, Some(claude), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
+    );
+    let (_, updated) = call(admin, "/api/supervisors", None, None, false).await;
+    let stored_global = updated["supervisors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == global)
+        .unwrap();
+    assert_eq!(stored_global["enabled"], true);
+    assert_eq!(stored_global["profile"], saved["profile"]);
+    assert!(stored_global.get("unavailable_reason").is_none());
 }
 
 async fn supervisor_profile_tracks_active_level(
@@ -943,16 +639,28 @@ async fn supervisor_profile_tracks_active_level(
     let project = f.selection.lineage.project_id;
     let (status, fleet) = call(admin, "/api/supervisors", None, None, false).await;
     assert_eq!(status, StatusCode::OK, "{fleet}");
+    let profiles = fleet["profiles"].as_array().unwrap();
+    let offered: Vec<_> = profiles
+        .iter()
+        .filter(|p| p["profile_id"] == "manual-model")
+        .map(|p| p["candidate_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        offered,
+        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
+    );
+    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
     let scopes = fleet["supervisors"].as_array().unwrap();
     let project_scope = scopes
         .iter()
         .find(|s| s["project_id"] == project.to_string())
         .unwrap();
     let conversation = project_scope["id"].as_str().unwrap();
-    assert_ne!(
-        conversation,
-        scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
-    );
+    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(conversation, global);
+    global_supervisor_accepts_supported_reasoning(admin, global).await;
     let uri = format!("/api/supervisors/{conversation}/control");
     let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
     assert_eq!(
@@ -1003,7 +711,7 @@ async fn supervisor_profile_tracks_active_level(
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &manual_level(CLAUDE_ROW),
+        &intelligence_level("manual-model", CLAUDE_ROW),
     )
     .await;
     let unlisted = read().await;
@@ -1027,7 +735,7 @@ async fn supervisor_profile_tracks_active_level(
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &manual_level(&format!("{CLAUDE_ROW}{CODEX_ROW}")),
+        &intelligence_level("manual-model", &format!("{CLAUDE_ROW}{CODEX_ROW}")),
     )
     .await;
     assert!(read().await.get("unavailable_reason").is_none());
@@ -1195,7 +903,7 @@ async fn selected_launch_pins_snapshot(
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &manual_level(CLAUDE_ROW),
+        &intelligence_level("manual-model", CLAUDE_ROW),
     )
     .await;
     assert_eq!(
