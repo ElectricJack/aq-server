@@ -91,8 +91,10 @@ async fn monthly_vm_budget_prices_authenticated_facts_and_refuses_placement() {
             currency: "USD".into(),
             micros: 4_500,
         },
-        NOW,
-        Some(fact.attempt_id),
+        observations::vm_time::SpendObservation {
+            now_ms: NOW,
+            exclude_attempt: Some(fact.attempt_id),
+        },
     )
     .await
     .unwrap()
@@ -145,8 +147,10 @@ async fn monthly_vm_budget_prices_authenticated_facts_and_refuses_placement() {
             currency: "USD".into(),
             micros: 4_500,
         },
-        NOW + 3_600_000,
-        None,
+        observations::vm_time::SpendObservation {
+            now_ms: NOW + 3_600_000,
+            exclude_attempt: None,
+        },
     )
     .await
     .unwrap()
@@ -522,9 +526,14 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
     );
     // An hour without progress: one monitoring incident and no recovery.
     for minute in 0..=60 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
+        engine::tick(
+            &pool,
+            &ports,
+            &target,
+            engine::Tick::new(&policy, NOW + minute * 60_000),
+        )
+        .await
+        .unwrap();
     }
     let actions = |pool: sqlx::PgPool| async move {
         sqlx::query_scalar::<_, String>(
@@ -570,9 +579,14 @@ async fn control_records_are_admitted_by_kind_and_read_as_unknown_by_the_ladder(
         Some(Explanation::ObservationsUnavailable)
     );
     for minute in 61..=90 {
-        engine::tick(&pool, &ports, &target, &policy, NOW + minute * 60_000)
-            .await
-            .unwrap();
+        engine::tick(
+            &pool,
+            &ports,
+            &target,
+            engine::Tick::new(&policy, NOW + minute * 60_000),
+        )
+        .await
+        .unwrap();
     }
     assert_eq!(actions(pool).await, ["monitoring_incident"]);
     drop(f);
@@ -973,10 +987,18 @@ async fn inspection_uses_exact_acl_and_stable_bounded_snapshot_pages() {
     )
     .await
     .unwrap();
-    let first =
-        observations::inspection::events(&f.state, f.actor, s.binding.attempt_id, 0, None, 1)
-            .await
-            .unwrap();
+    let first = observations::inspection::events(
+        &f.state,
+        f.actor,
+        s.binding.attempt_id,
+        observations::inspection::EventPageQuery {
+            after_sequence: 0,
+            through_sequence: None,
+            limit: 1,
+        },
+    )
+    .await
+    .unwrap();
     first.validate().unwrap();
     assert_eq!(first.through_sequence, 2);
     assert_eq!(first.next_after, Some(1));
@@ -984,29 +1006,63 @@ async fn inspection_uses_exact_acl_and_stable_bounded_snapshot_pages() {
     observations::ingest(&f.state, f.node.node_id, &packet(&f, vec![distinct(3)]))
         .await
         .unwrap();
-    let second =
-        observations::inspection::events(&f.state, f.actor, s.binding.attempt_id, 1, Some(2), 1)
-            .await
-            .unwrap();
+    let second = observations::inspection::events(
+        &f.state,
+        f.actor,
+        s.binding.attempt_id,
+        observations::inspection::EventPageQuery {
+            after_sequence: 1,
+            through_sequence: Some(2),
+            limit: 1,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(second.events.len(), 1);
     assert_eq!(second.events[0].record.body.sequence, 2);
     assert!(second.complete_for_snapshot);
-    let latest =
-        observations::inspection::events(&f.state, f.actor, s.binding.attempt_id, 2, None, 16)
-            .await
-            .unwrap();
+    let latest = observations::inspection::events(
+        &f.state,
+        f.actor,
+        s.binding.attempt_id,
+        observations::inspection::EventPageQuery {
+            after_sequence: 2,
+            through_sequence: None,
+            limit: 16,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(latest.events.len(), 1);
     assert_eq!(latest.events[0].record.body.sequence, 3);
     optional_events_browser(&f, &s.binding).await;
     assert!(
-        observations::inspection::events(&f.state, f.actor, s.binding.attempt_id, 4, None, 16)
-            .await
-            .is_err()
+        observations::inspection::events(
+            &f.state,
+            f.actor,
+            s.binding.attempt_id,
+            observations::inspection::EventPageQuery {
+                after_sequence: 4,
+                through_sequence: None,
+                limit: 16
+            }
+        )
+        .await
+        .is_err()
     );
     assert!(
-        observations::inspection::events(&f.state, f.actor, s.binding.attempt_id, 0, None, 17)
-            .await
-            .is_err()
+        observations::inspection::events(
+            &f.state,
+            f.actor,
+            s.binding.attempt_id,
+            observations::inspection::EventPageQuery {
+                after_sequence: 0,
+                through_sequence: None,
+                limit: 17
+            }
+        )
+        .await
+        .is_err()
     );
     let viewer = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email,role,created_at,issuer,subject) VALUES($1,'observer@fixture.test','viewer',now(),'dev','observer@fixture.test')").bind(viewer).execute(&pool).await.unwrap();

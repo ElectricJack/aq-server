@@ -1,7 +1,7 @@
 //! The structured refusal (§6.8). It describes only the caller's own
 //! authority: the command, the grant it lacked and the grants of the same
 //! family it holds. It never names or confirms any other record.
-use super::Grant;
+use super::{Grant, RequiredGrant};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -136,65 +136,70 @@ fn held_text(held: &[Grant]) -> String {
 }
 const ASK: &str = "Use `aq question ask` to request it.";
 impl Refusal {
-    fn new(
-        code: RefusalCode,
-        command: &str,
-        grant: &str,
-        held: Vec<Grant>,
-        message: String,
-    ) -> Self {
-        Self {
-            code,
-            command: command.into(),
-            grant: Some(grant.into()),
-            held,
-            message,
-            effect: "not_applied".into(),
-            request_id: None,
-        }
-    }
-    pub fn grant_missing(command: &str, grant: &str, held: Vec<Grant>) -> Self {
-        let message = format!(
-            "This agent does not hold the `{grant}` grant that `{command}` needs (holds: {}). {ASK}",
-            held_text(&held)
-        );
-        Self::new(RefusalCode::GrantMissing, command, grant, held, message)
-    }
-    pub fn scope_denied(command: &str, grant: &str, held: Vec<Grant>) -> Self {
-        let message = format!(
-            "This agent holds `{grant}` only as {}; the target of `{command}` is outside that scope. {ASK}",
-            held_text(&held)
-        );
-        Self::new(RefusalCode::ScopeDenied, command, grant, held, message)
-    }
-    /// The parent of an agent's create is not recorded as a task of the
-    /// caller's project in the Graph (`aq:project_id`).
-    pub fn parent_outside_project(command: &str, grant: &str, held: Vec<Grant>) -> Self {
-        let message = "The parent task is not recorded as a task of this project (its Graph aq:project_id does not match), so a subtask cannot be created under it.".into();
-        Self::new(RefusalCode::ScopeDenied, command, grant, held, message)
-    }
-    pub fn owner_only(command: &str, grant: &str) -> Self {
-        let message =
-            format!("`{command}` is an owner-only command and can never be granted to an agent.");
-        Self::new(RefusalCode::OwnerOnly, command, grant, Vec::new(), message)
-    }
-    pub fn quota_exceeded(command: &str, grant: &str, held: Vec<Grant>, limit: &str) -> Self {
-        let message = format!(
-            "This agent reached the `{limit}` limit of its `{grant}` grant for `{command}`. {ASK}"
-        );
-        Self::new(RefusalCode::QuotaExceeded, command, grant, held, message)
-    }
-    /// A command-surface error that names no grant.
-    pub fn error(code: RefusalCode, command: &str, message: &str) -> Self {
+    fn new(code: RefusalCode, command: &str, message: String) -> Self {
         Self {
             code,
             command: command.into(),
             grant: None,
             held: Vec::new(),
-            message: message.into(),
+            message,
             effect: "not_applied".into(),
             request_id: None,
         }
+    }
+    fn with_grant(mut self, grant: &str, held: Vec<Grant>) -> Self {
+        self.grant = Some(grant.into());
+        self.held = held;
+        self
+    }
+    fn denied_grant(
+        required: RequiredGrant<'_>,
+        held: Vec<Grant>,
+        code: RefusalCode,
+        message: String,
+    ) -> Self {
+        Self::new(code, required.command, message).with_grant(required.operation, held)
+    }
+    pub fn grant_missing(required: RequiredGrant<'_>, held: Vec<Grant>) -> Self {
+        let message = format!(
+            "This agent does not hold the `{}` grant that `{}` needs (holds: {}). {ASK}",
+            required.operation,
+            required.command,
+            held_text(&held)
+        );
+        Self::denied_grant(required, held, RefusalCode::GrantMissing, message)
+    }
+    pub fn scope_denied(required: RequiredGrant<'_>, held: Vec<Grant>) -> Self {
+        let message = format!(
+            "This agent holds `{}` only as {}; the target of `{}` is outside that scope. {ASK}",
+            required.operation,
+            held_text(&held),
+            required.command
+        );
+        Self::denied_grant(required, held, RefusalCode::ScopeDenied, message)
+    }
+    /// The parent of an agent's create is not recorded as a task of the
+    /// caller's project in the Graph (`aq:project_id`).
+    pub fn parent_outside_project(command: &str, grant: &str, held: Vec<Grant>) -> Self {
+        let message = "The parent task is not recorded as a task of this project (its Graph aq:project_id does not match), so a subtask cannot be created under it.".into();
+        Self::new(RefusalCode::ScopeDenied, command, message).with_grant(grant, held)
+    }
+    pub fn owner_only(request: RequiredGrant<'_>) -> Self {
+        let command = request.command;
+        let grant = request.operation;
+        let message =
+            format!("`{command}` is an owner-only command and can never be granted to an agent.");
+        Self::new(RefusalCode::OwnerOnly, command, message).with_grant(grant, Vec::new())
+    }
+    pub fn quota_exceeded(command: &str, grant: &str, held: Vec<Grant>, limit: &str) -> Self {
+        let message = format!(
+            "This agent reached the `{limit}` limit of its `{grant}` grant for `{command}`. {ASK}"
+        );
+        Self::new(RefusalCode::QuotaExceeded, command, message).with_grant(grant, held)
+    }
+    /// A command-surface error that names no grant.
+    pub fn error(code: RefusalCode, command: &str, message: &str) -> Self {
+        Self::new(code, command, message.into())
     }
     pub fn with_request(mut self, request_id: Uuid) -> Self {
         self.request_id = Some(request_id);

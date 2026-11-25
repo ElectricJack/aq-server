@@ -32,7 +32,7 @@ fn request(a: &Access, operation: Operation) -> Request {
 }
 fn allocation(a: &Access) -> (Request, Transition) {
     let r = prepare(a);
-    let t = apply(None, None, &r, a, Some(Uuid::new_v4())).unwrap();
+    let t = apply(Retained::new(None, None), &r, a, Some(Uuid::new_v4())).unwrap();
     (r, t)
 }
 fn activate(a: &Access, o: &Owner) -> (Request, Transition) {
@@ -42,7 +42,7 @@ fn activate(a: &Access, o: &Owner) -> (Request, Transition) {
             marker: o.marker.clone(),
         },
     );
-    let t = apply(Some(o), None, &r, a, None).unwrap();
+    let t = apply(Retained::new(Some(o), None), &r, a, None).unwrap();
     (r, t)
 }
 #[test]
@@ -51,8 +51,7 @@ fn lost_prepare_reply_retains_one_owner_and_changes_conflict() {
     let (r, t) = allocation(&a);
     assert!(t.reply.may_create(&r).unwrap());
     let replay = apply(
-        Some(&t.reply.current_owner),
-        Some(&t.reply.receipt),
+        Retained::new(Some(&t.reply.current_owner), Some(&t.reply.receipt)),
         &r,
         &a,
         None,
@@ -66,8 +65,7 @@ fn lost_prepare_reply_retains_one_owner_and_changes_conflict() {
     }
     assert!(
         apply(
-            Some(&t.reply.current_owner),
-            Some(&t.reply.receipt),
+            Retained::new(Some(&t.reply.current_owner), Some(&t.reply.receipt)),
             &changed,
             &a,
             None
@@ -76,8 +74,7 @@ fn lost_prepare_reply_retains_one_owner_and_changes_conflict() {
     );
     assert!(
         apply(
-            Some(&t.reply.current_owner),
-            None,
+            Retained::new(Some(&t.reply.current_owner), None),
             &prepare(&a),
             &a,
             Some(Uuid::new_v4())
@@ -91,8 +88,7 @@ fn activated_zero_cursor_never_becomes_permission_to_create() {
     let (p, t) = allocation(&a);
     let (r, active) = activate(&a, &t.reply.current_owner);
     let old = apply(
-        Some(&active.reply.current_owner),
-        Some(&t.reply.receipt),
+        Retained::new(Some(&active.reply.current_owner), Some(&t.reply.receipt)),
         &p,
         &a,
         None,
@@ -101,8 +97,10 @@ fn activated_zero_cursor_never_becomes_permission_to_create() {
     assert!(!old.reply.may_create(&p).unwrap());
     assert_eq!(old.reply.accepted_through, 0);
     let replay = apply(
-        Some(&active.reply.current_owner),
-        Some(&active.reply.receipt),
+        Retained::new(
+            Some(&active.reply.current_owner),
+            Some(&active.reply.receipt),
+        ),
         &r,
         &a,
         None,
@@ -112,8 +110,7 @@ fn activated_zero_cursor_never_becomes_permission_to_create() {
     assert_eq!(replay.reply, active.reply);
     assert!(
         apply(
-            Some(&active.reply.current_owner),
-            None,
+            Retained::new(Some(&active.reply.current_owner), None),
             &prepare(&a),
             &a,
             Some(Uuid::new_v4())
@@ -123,8 +120,7 @@ fn activated_zero_cursor_never_becomes_permission_to_create() {
     let new_activation = request(&a, r.operation.clone());
     assert!(
         apply(
-            Some(&active.reply.current_owner),
-            None,
+            Retained::new(Some(&active.reply.current_owner), None),
             &new_activation,
             &a,
             None
@@ -138,8 +134,7 @@ fn late_prepare_reply_on_replaced_node_boot_cannot_create() {
     let (r, t) = allocation(&a);
     a.boot_id = Uuid::new_v4();
     let replay = apply(
-        Some(&t.reply.current_owner),
-        Some(&t.reply.receipt),
+        Retained::new(Some(&t.reply.current_owner), Some(&t.reply.receipt)),
         &r,
         &a,
         None,
@@ -152,7 +147,15 @@ fn late_prepare_reply_on_replaced_node_boot_cannot_create() {
             marker: t.reply.current_owner.marker.clone(),
         },
     );
-    assert!(apply(Some(&t.reply.current_owner), None, &activate, &a, None).is_err());
+    assert!(
+        apply(
+            Retained::new(Some(&t.reply.current_owner), None),
+            &activate,
+            &a,
+            None
+        )
+        .is_err()
+    );
 }
 #[test]
 fn pending_old_packets_allow_boot_transition_without_acknowledging_them() {
@@ -172,7 +175,13 @@ fn pending_old_packets_allow_boot_transition_without_acknowledging_them() {
             next_sequence: 42,
         },
     );
-    let t = apply(Some(&active.reply.current_owner), None, &r, &a, None).unwrap();
+    let t = apply(
+        Retained::new(Some(&active.reply.current_owner), None),
+        &r,
+        &a,
+        None,
+    )
+    .unwrap();
     assert_eq!(t.reply.accepted_through, 10);
     assert_eq!(t.reply.current_owner.current_boot_id, a.boot_id);
     for next_sequence in [10, 112, i64::MAX as u64] {
@@ -183,7 +192,15 @@ fn pending_old_packets_allow_boot_transition_without_acknowledging_them() {
         {
             *s = next_sequence;
         }
-        assert!(apply(Some(&active.reply.current_owner), None, &bad, &a, None).is_err());
+        assert!(
+            apply(
+                Retained::new(Some(&active.reply.current_owner), None),
+                &bad,
+                &a,
+                None
+            )
+            .is_err()
+        );
     }
 }
 #[test]
@@ -206,14 +223,14 @@ fn old_boot_receipt_cannot_roll_back_current_owner() {
                 next_sequence: 1,
             },
         );
-        let t = apply(Some(&owner), None, &r, &a, None).unwrap();
+        let t = apply(Retained::new(Some(&owner), None), &r, &a, None).unwrap();
         owner = t.reply.current_owner.clone();
         if n == 0 {
             saved = Some((r, t.reply.receipt));
         }
     }
     let (r, receipt) = saved.unwrap();
-    let replay = apply(Some(&owner), Some(&receipt), &r, &a, None).unwrap();
+    let replay = apply(Retained::new(Some(&owner), Some(&receipt)), &r, &a, None).unwrap();
     assert!(!replay.changed);
     assert_eq!(replay.reply.current_owner, owner);
     assert_ne!(receipt.resulting_owner, owner);
@@ -226,12 +243,22 @@ fn scope_markers_history_and_boot_quota_refuse() {
     if let Operation::Activate { marker } = &mut r.operation {
         marker.store_id = Uuid::new_v4();
     }
-    assert!(apply(Some(&t.reply.current_owner), None, &r, &a, None).is_err());
+    assert!(
+        apply(
+            Retained::new(Some(&t.reply.current_owner), None),
+            &r,
+            &a,
+            None
+        )
+        .is_err()
+    );
     a.node_id = Uuid::new_v4();
     assert!(
         apply(
-            Some(&active.reply.current_owner),
-            Some(&active.reply.receipt),
+            Retained::new(
+                Some(&active.reply.current_owner),
+                Some(&active.reply.receipt)
+            ),
             &r,
             &a,
             None
@@ -240,7 +267,15 @@ fn scope_markers_history_and_boot_quota_refuse() {
     );
     let mut a = access();
     a.accepted_through = 1;
-    assert!(apply(None, None, &prepare(&a), &a, Some(Uuid::new_v4())).is_err());
+    assert!(
+        apply(
+            Retained::new(None, None),
+            &prepare(&a),
+            &a,
+            Some(Uuid::new_v4())
+        )
+        .is_err()
+    );
 }
 #[test]
 fn a_node_restarts_without_limit_and_a_stale_boot_is_still_refused() {
@@ -266,7 +301,7 @@ fn a_node_restarts_without_limit_and_a_stale_boot_is_still_refused() {
         let r = advance(&owner, &a);
         // The request and owner of the boot before this one.
         stale = Some((r.clone(), owner.clone()));
-        owner = apply(Some(&owner), None, &r, &a, None)
+        owner = apply(Retained::new(Some(&owner), None), &r, &a, None)
             .unwrap()
             .reply
             .current_owner;
@@ -274,17 +309,25 @@ fn a_node_restarts_without_limit_and_a_stale_boot_is_still_refused() {
     assert_eq!((owner.boot_transitions, owner.revision), (200, 202));
     // The superseded boot's request names an owner revision that has passed.
     let (old_request, old_owner) = stale.unwrap();
-    assert!(apply(Some(&owner), None, &old_request, &a, None).is_err());
+    assert!(apply(Retained::new(Some(&owner), None), &old_request, &a, None).is_err());
     // A boot that is not the node's admitted boot cannot take the owner.
     let mut other = advance(&owner, &a);
     if let Operation::AdvanceBoot { new_boot_id, .. } = &mut other.operation {
         *new_boot_id = old_owner.current_boot_id;
     }
-    assert!(apply(Some(&owner), None, &other, &a, None).is_err());
+    assert!(apply(Retained::new(Some(&owner), None), &other, &a, None).is_err());
     // Nor can a boot the adapter remembers as a previous owner.
     a.boot_id = Uuid::new_v4();
     a.new_boot_previously_owned = true;
-    assert!(apply(Some(&owner), None, &advance(&owner, &a), &a, None).is_err());
+    assert!(
+        apply(
+            Retained::new(Some(&owner), None),
+            &advance(&owner, &a),
+            &a,
+            None
+        )
+        .is_err()
+    );
 }
 #[test]
 fn strict_bounded_decoders_and_status_cannot_replace_create_receipt() {
@@ -333,7 +376,7 @@ fn equal_revision_requires_identical_owner_and_boot_revision_is_exact() {
             next_sequence: 1,
         },
     );
-    let t = apply(Some(&owner), None, &r, &a, None).unwrap();
+    let t = apply(Retained::new(Some(&owner), None), &r, &a, None).unwrap();
     let mut forged = t.reply.clone();
     forged.current_owner.current_boot_id = Uuid::new_v4();
     assert!(forged.validate_against(&r).is_err());
@@ -344,16 +387,15 @@ fn equal_revision_requires_identical_owner_and_boot_revision_is_exact() {
     {
         *expected_revision += 1;
     }
-    assert!(apply(Some(&owner), None, &bad, &a, None).is_err());
+    assert!(apply(Retained::new(Some(&owner), None), &bad, &a, None).is_err());
     let mut fabricated = t.reply.receipt.clone();
     fabricated.resulting_owner.revision += 1;
     fabricated.resulting_owner.boot_transitions += 1;
     assert!(fabricated.validate_against(&r).is_err());
     a.new_boot_previously_owned = true;
-    assert!(apply(Some(&owner), None, &r, &a, None).is_err());
+    assert!(apply(Retained::new(Some(&owner), None), &r, &a, None).is_err());
     let replay = apply(
-        Some(&t.reply.current_owner),
-        Some(&t.reply.receipt),
+        Retained::new(Some(&t.reply.current_owner), Some(&t.reply.receipt)),
         &r,
         &a,
         None,

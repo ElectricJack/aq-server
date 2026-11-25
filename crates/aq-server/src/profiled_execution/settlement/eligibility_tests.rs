@@ -27,198 +27,10 @@ impl Synthetic {
         Self::with_pending(process, Vec::new())
     }
     fn with_pending(process: aq_admission::transport::ProcessOutcome, pending: Vec<Uuid>) -> Self {
-        let record: Value = serde_json::from_str(include_str!(
-            "../../../../aq-review-protocol/artifacts/upstream-result-record-v1.fixture.json"
-        ))
-        .unwrap();
-        let mut report: aq_admission::transport::ResultReport =
-            serde_json::from_value(record["report"].clone()).unwrap();
-        report.outcome = process;
-        report.pending_effect_ids = pending;
-        let mut receipt: aq_admission::result_record::Receipt =
-            serde_json::from_value(record["receipt"].clone()).unwrap();
-        let body =
-            r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
-        let definition = crate::profiled_execution::definitions::Definition::new(
-            pin("synthetic-pilot-policy", body.as_bytes()),
-            ArtifactKind::Definition,
-            body.into(),
-        )
-        .unwrap();
-        let policy = PilotPolicy::from_definition(&definition).unwrap();
-        let mut outcome: aq_admission::outcome::ExpectedOutcomeDefinition =
-            serde_json::from_str(include_str!(
-                "../../../../aq-review-protocol/artifacts/upstream-outcome-v1.fixture.json"
-            ))
-            .unwrap();
-        outcome.required_checks.clear();
-        outcome.validation_policy = policy.artifact.clone();
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../aq-admission/artifacts/execution-spec.fixture.json"
-        ))
-        .unwrap();
-        let mut spec: aq_admission::execution_spec::ProfiledExecutionSpec =
-            serde_json::from_value(fixture["spec"].clone()).unwrap();
-        spec.lifecycle = aq_lifecycle_api::Binding {
-            project_id: outcome.project_id,
-            task_id: outcome.task.task_id,
-            lineage_id: aq_admission::transport::task_lineage_id(
-                outcome.project_id,
-                outcome.task.workspace_id,
-                outcome.task.task_id,
-            )
-            .unwrap(),
-            attempt_id: report.binding.attempt_id,
-            attempt_generation: report.binding.assignment_generation,
-            session: report.binding.session.clone(),
-        };
-        spec.project_revision = outcome.project_revision;
-        spec.task = outcome.task.clone();
-        spec.source.project_id = outcome.project_id;
-        spec.source.project_revision = outcome.project_revision;
-        spec.source.repository_id = outcome.source.repository_id;
-        spec.source.repository_binding_generation = outcome.source.binding_generation;
-        spec.source.resolved_object = outcome.source.base.clone();
-        spec.source_artifact = outcome.source.artifact.clone();
-        spec.outcome_artifact = outcome.artifact().unwrap();
-        spec.task_observation = outcome.task_observation.clone();
-        spec.task_context = outcome.task_context.clone();
-        outcome.validate_against(&spec).unwrap();
-        report.binding.execution_spec_digest = spec.artifact().unwrap().digest;
-        report.binding.graph_access_profile_digest = spec.graph_access_profile.digest.clone();
-        report.stop.binding = report.binding.clone();
-        aq_admission::result_record::validate_report(&report).unwrap();
-        receipt.binding = report.binding.clone();
-        receipt.expected_outcome = spec.outcome_artifact.clone();
-        receipt.report_digest = aq_admission::result_record::report_digest(&report).unwrap();
-        receipt.validate_for(&report).unwrap();
-        let receipt_artifact = receipt.artifact(&report).unwrap();
-        let outcome_descriptor = RetainedArtifact {
-            artifact: spec.outcome_artifact.clone(),
-            kind: ArtifactKind::Outcome,
-            bytes: outcome.canonical_bytes().unwrap().len() as u64,
-            retention_receipt: pin("synthetic-retained-outcome", b"fixture"),
-            retained_at_ms: 1000,
-            retain_until_ms: 2000,
-        };
-        let head_report_id = report.report_id;
-        let result = RecordedResult {
-            origin: crate::profiled_execution::results::RecordedOrigin::LegacyPrepareV1,
-            report,
-            receipt,
-            receipt_artifact,
-            spec,
-            outcome,
-            outcome_descriptor,
-            head_report_id,
-            is_current_report_head: true,
-        };
-        let source_id = result.report.source_receipt_ids[0];
-        let artifact = Uuid::from_u128(9001);
-        let transfer = Uuid::from_u128(9002);
-        let base = aq_worker_protocol::ObjectId {
-            algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
-            hex: result.spec.source.resolved_object.hex.clone(),
-        };
-        let object = aq_worker_protocol::ObjectId {
-            algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
-            hex: "2".repeat(40),
-        };
-        let aq_admission::SessionIdentity::Remote { session_id, .. } =
-            result.report.binding.session
-        else {
-            unreachable!()
-        };
-        let manifest = aq_worker_protocol::TransferManifest {
-            transfer_id: transfer,
-            role: aq_worker_protocol::SourceRole::Checkpoint,
-            checkpoint: object.clone(),
-            attempt: aq_worker_protocol::AttemptRef {
-                attempt_id: result.report.binding.attempt_id,
-                session_id,
-                generation: result.report.binding.assignment_generation,
-            },
-            resolved_spec_digest: result.report.binding.execution_spec_digest.as_str().into(),
-            source: aq_worker_protocol::SourceBinding {
-                repository_id: result.spec.source.repository_id,
-                binding_generation: result.spec.source.repository_binding_generation,
-                logical_identity: "synthetic-only".into(),
-                base,
-            },
-            artifact_id: artifact,
-            manifest_digest: "a".repeat(64),
-            bundle_digest: None,
-            manifest_bytes: 1,
-            bundle_bytes: 0,
-        };
-        let source = RecordedSourceConfirmation {
-            manifest,
-            receipt: aq_worker_protocol::CentralRetentionReceipt {
-                receipt_id: source_id,
-                transfer_id: transfer,
-                repository_id: result.spec.source.repository_id,
-                binding_generation: result.spec.source.repository_binding_generation,
-                source: object,
-                retention_handle: artifact,
-                manifest_digest: "b".repeat(64),
-            },
-            acknowledgement: json!({"synthetic":true}),
-        };
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../aq-review-protocol/artifacts/fixtures.json"
-        ))
-        .unwrap();
-        let mut subject: aq_review_protocol::ReviewSubject =
-            serde_json::from_value(fixture["subject"].clone()).unwrap();
-        subject.project_id = result.spec.lifecycle.project_id;
-        subject.original_project_revision = result.spec.project_revision;
-        subject.task = aq_review_protocol::TaskRevision {
-            workspace_id: result.spec.task.workspace_id,
-            task_id: result.spec.task.task_id,
-            version: result.spec.task.version,
-            content_revision: result.spec.task.content_revision,
-        };
-        subject.binding = result.report.binding.clone();
-        subject.execution_spec = result.spec.artifact().unwrap();
-        subject.expected_outcome = result.spec.outcome_artifact.clone();
-        subject.task_observation = result.spec.task_observation.clone();
-        subject.task_context = result.spec.task_context.clone();
-        subject.validation_policy = policy.artifact.clone();
-        subject.result = aq_review_protocol::ResultPin {
-            report_id: result.report.report_id,
-            report_digest: result.receipt.report_digest.clone(),
-            record_receipt: result.receipt_artifact.clone(),
-            stopped_receipt: result.receipt.stopped_receipt.clone(),
-        };
-        subject.source.repository_id = source.receipt.repository_id;
-        subject.source.binding_generation = source.receipt.binding_generation;
-        subject.source.base.hex = source.manifest.source.base.hex.clone();
-        subject.source.resulting_object.hex = source.receipt.source.hex.clone();
-        subject.source.input_artifact = result.spec.source_artifact.clone();
-        subject.source.source_receipt_id = source_id;
-        subject.source.resulting_artifact = ArtifactRef {
-            id: Text::new(format!("aq.git-import-manifest/{artifact}")).unwrap(),
-            version: Text::new("1").unwrap(),
-            digest: serde_json::from_value(json!(source.receipt.manifest_digest)).unwrap(),
-        };
-        subject.source.retention_receipt = ArtifactRef {
-            id: Text::new(format!("aq.git-import-receipt/{source_id}")).unwrap(),
-            version: Text::new("1").unwrap(),
-            digest: aq_review_protocol::digest(&source.acknowledgement).unwrap(),
-        };
-        subject.criteria = result
-            .outcome
-            .acceptance_criteria
-            .iter()
-            .map(|c| Text::new(c.id.as_str()).unwrap())
-            .collect();
-        subject.validate().unwrap();
-        let review = VerifiedReviewEvidence {
-            subject,
-            receipt: pin("synthetic-code-review", b"approve"),
-            combined_subject: None,
-            approved: true,
-        };
+        let policy = synthetic_policy();
+        let result = synthetic_result(process, pending, &policy);
+        let source = synthetic_source(&result);
+        let review = synthetic_review(&result, &source, &policy);
         let aq = AqEffectsSnapshot::synthetic(&result, LedgerDisposition::Settled);
         let external = VerifiedEffectDisposition {
             report: result.receipt_artifact.clone(),
@@ -261,6 +73,231 @@ impl Synthetic {
         evaluate_pilot(&self.result, &self.source, &self.evidence())
             .unwrap()
             .reason
+    }
+}
+
+fn synthetic_policy() -> PilotPolicy {
+    let body = r#"{"schema_version":1,"kind":"source_change_reviewed_human_owner_no_checks_v1"}"#;
+    let definition = crate::profiled_execution::definitions::Definition::new(
+        pin("synthetic-pilot-policy", body.as_bytes()),
+        ArtifactKind::Definition,
+        body.into(),
+    )
+    .unwrap();
+    PilotPolicy::from_definition(&definition).unwrap()
+}
+
+fn synthetic_result(
+    process: aq_admission::transport::ProcessOutcome,
+    pending: Vec<Uuid>,
+    policy: &PilotPolicy,
+) -> RecordedResult {
+    let record: Value = serde_json::from_str(include_str!(
+        "../../../../aq-review-protocol/artifacts/upstream-result-record-v1.fixture.json"
+    ))
+    .unwrap();
+    let mut report: aq_admission::transport::ResultReport =
+        serde_json::from_value(record["report"].clone()).unwrap();
+    report.outcome = process;
+    report.pending_effect_ids = pending;
+    let mut receipt: aq_admission::result_record::Receipt =
+        serde_json::from_value(record["receipt"].clone()).unwrap();
+    let mut outcome: aq_admission::outcome::ExpectedOutcomeDefinition = serde_json::from_str(
+        include_str!("../../../../aq-review-protocol/artifacts/upstream-outcome-v1.fixture.json"),
+    )
+    .unwrap();
+    outcome.required_checks.clear();
+    outcome.validation_policy = policy.artifact.clone();
+    let spec = synthetic_spec(&outcome, &report.binding);
+    report.binding.execution_spec_digest = spec.artifact().unwrap().digest;
+    report.binding.graph_access_profile_digest = spec.graph_access_profile.digest.clone();
+    report.stop.binding = report.binding.clone();
+    aq_admission::result_record::validate_report(&report).unwrap();
+    receipt.binding = report.binding.clone();
+    receipt.expected_outcome = spec.outcome_artifact.clone();
+    receipt.report_digest = aq_admission::result_record::report_digest(&report).unwrap();
+    receipt.validate_for(&report).unwrap();
+    let receipt_artifact = receipt.artifact(&report).unwrap();
+    let outcome_descriptor = RetainedArtifact {
+        artifact: spec.outcome_artifact.clone(),
+        kind: ArtifactKind::Outcome,
+        bytes: outcome.canonical_bytes().unwrap().len() as u64,
+        retention_receipt: pin("synthetic-retained-outcome", b"fixture"),
+        retained_at_ms: 1000,
+        retain_until_ms: 2000,
+    };
+    let head_report_id = report.report_id;
+    RecordedResult {
+        origin: crate::profiled_execution::results::RecordedOrigin::LegacyPrepareV1,
+        report,
+        receipt,
+        receipt_artifact,
+        spec,
+        outcome,
+        outcome_descriptor,
+        head_report_id,
+        is_current_report_head: true,
+    }
+}
+
+fn synthetic_spec(
+    outcome: &aq_admission::outcome::ExpectedOutcomeDefinition,
+    binding: &aq_admission::LaunchBinding,
+) -> aq_admission::execution_spec::ProfiledExecutionSpec {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../aq-admission/artifacts/execution-spec.fixture.json"
+    ))
+    .unwrap();
+    let mut spec: aq_admission::execution_spec::ProfiledExecutionSpec =
+        serde_json::from_value(fixture["spec"].clone()).unwrap();
+    spec.lifecycle = aq_lifecycle_api::Binding {
+        project_id: outcome.project_id,
+        task_id: outcome.task.task_id,
+        lineage_id: aq_admission::transport::task_lineage_id(
+            outcome.project_id,
+            outcome.task.workspace_id,
+            outcome.task.task_id,
+        )
+        .unwrap(),
+        attempt_id: binding.attempt_id,
+        attempt_generation: binding.assignment_generation,
+        session: binding.session.clone(),
+    };
+    spec.project_revision = outcome.project_revision;
+    spec.task = outcome.task.clone();
+    spec.source.project_id = outcome.project_id;
+    spec.source.project_revision = outcome.project_revision;
+    spec.source.repository_id = outcome.source.repository_id;
+    spec.source.repository_binding_generation = outcome.source.binding_generation;
+    spec.source.resolved_object = outcome.source.base.clone();
+    spec.source_artifact = outcome.source.artifact.clone();
+    spec.outcome_artifact = outcome.artifact().unwrap();
+    spec.task_observation = outcome.task_observation.clone();
+    spec.task_context = outcome.task_context.clone();
+    outcome.validate_against(&spec).unwrap();
+    spec
+}
+
+fn synthetic_source(result: &RecordedResult) -> RecordedSourceConfirmation {
+    let source_id = result.report.source_receipt_ids[0];
+    let artifact = Uuid::from_u128(9001);
+    let transfer = Uuid::from_u128(9002);
+    let base = aq_worker_protocol::ObjectId {
+        algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
+        hex: result.spec.source.resolved_object.hex.clone(),
+    };
+    let object = aq_worker_protocol::ObjectId {
+        algorithm: aq_worker_protocol::ObjectAlgorithm::Sha1,
+        hex: "2".repeat(40),
+    };
+    let aq_admission::SessionIdentity::Remote { session_id, .. } = result.report.binding.session
+    else {
+        unreachable!()
+    };
+    let manifest = aq_worker_protocol::TransferManifest {
+        transfer_id: transfer,
+        role: aq_worker_protocol::SourceRole::Checkpoint,
+        checkpoint: object.clone(),
+        attempt: aq_worker_protocol::AttemptRef {
+            attempt_id: result.report.binding.attempt_id,
+            session_id,
+            generation: result.report.binding.assignment_generation,
+        },
+        resolved_spec_digest: result.report.binding.execution_spec_digest.as_str().into(),
+        source: aq_worker_protocol::SourceBinding {
+            repository_id: result.spec.source.repository_id,
+            binding_generation: result.spec.source.repository_binding_generation,
+            logical_identity: "synthetic-only".into(),
+            base,
+        },
+        artifact_id: artifact,
+        manifest_digest: "a".repeat(64),
+        bundle_digest: None,
+        manifest_bytes: 1,
+        bundle_bytes: 0,
+    };
+    RecordedSourceConfirmation {
+        manifest,
+        receipt: aq_worker_protocol::CentralRetentionReceipt {
+            receipt_id: source_id,
+            transfer_id: transfer,
+            repository_id: result.spec.source.repository_id,
+            binding_generation: result.spec.source.repository_binding_generation,
+            source: object,
+            retention_handle: artifact,
+            manifest_digest: "b".repeat(64),
+        },
+        acknowledgement: json!({"synthetic":true}),
+    }
+}
+
+fn synthetic_review(
+    result: &RecordedResult,
+    source: &RecordedSourceConfirmation,
+    policy: &PilotPolicy,
+) -> VerifiedReviewEvidence {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../aq-review-protocol/artifacts/fixtures.json"
+    ))
+    .unwrap();
+    let mut subject: aq_review_protocol::ReviewSubject =
+        serde_json::from_value(fixture["subject"].clone()).unwrap();
+    subject.project_id = result.spec.lifecycle.project_id;
+    subject.original_project_revision = result.spec.project_revision;
+    subject.task = aq_review_protocol::TaskRevision {
+        workspace_id: result.spec.task.workspace_id,
+        task_id: result.spec.task.task_id,
+        version: result.spec.task.version,
+        content_revision: result.spec.task.content_revision,
+    };
+    subject.binding = result.report.binding.clone();
+    subject.execution_spec = result.spec.artifact().unwrap();
+    subject.expected_outcome = result.spec.outcome_artifact.clone();
+    subject.task_observation = result.spec.task_observation.clone();
+    subject.task_context = result.spec.task_context.clone();
+    subject.validation_policy = policy.artifact.clone();
+    subject.result = aq_review_protocol::ResultPin {
+        report_id: result.report.report_id,
+        report_digest: result.receipt.report_digest.clone(),
+        record_receipt: result.receipt_artifact.clone(),
+        stopped_receipt: result.receipt.stopped_receipt.clone(),
+    };
+    subject.source.repository_id = source.receipt.repository_id;
+    subject.source.binding_generation = source.receipt.binding_generation;
+    subject.source.base.hex = source.manifest.source.base.hex.clone();
+    subject.source.resulting_object.hex = source.receipt.source.hex.clone();
+    subject.source.input_artifact = result.spec.source_artifact.clone();
+    subject.source.source_receipt_id = source.receipt.receipt_id;
+    subject.source.resulting_artifact = ArtifactRef {
+        id: Text::new(format!(
+            "aq.git-import-manifest/{}",
+            source.manifest.artifact_id
+        ))
+        .unwrap(),
+        version: Text::new("1").unwrap(),
+        digest: serde_json::from_value(json!(source.receipt.manifest_digest)).unwrap(),
+    };
+    subject.source.retention_receipt = ArtifactRef {
+        id: Text::new(format!(
+            "aq.git-import-receipt/{}",
+            source.receipt.receipt_id
+        ))
+        .unwrap(),
+        version: Text::new("1").unwrap(),
+        digest: aq_review_protocol::digest(&source.acknowledgement).unwrap(),
+    };
+    subject.criteria = result
+        .outcome
+        .acceptance_criteria
+        .iter()
+        .map(|c| Text::new(c.id.as_str()).unwrap())
+        .collect();
+    subject.validate().unwrap();
+    VerifiedReviewEvidence {
+        subject,
+        receipt: pin("synthetic-code-review", b"approve"),
+        combined_subject: None,
+        approved: true,
     }
 }
 

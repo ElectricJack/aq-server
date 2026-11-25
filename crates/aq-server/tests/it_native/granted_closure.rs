@@ -607,6 +607,31 @@ async fn credential_rotation_during_node_lock_wait_cannot_commit_a_closure() {
     );
 }
 
+async fn disposition(
+    state: &aq_server::AppState,
+    attempt: Uuid,
+    email: &str,
+    body: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let response = aq_server::build_admin_router(state.clone())
+        .oneshot(
+            axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
+                .header("content-type", "application/json")
+                .header("x-aq-dev-email", email)
+                .header("X-AQ-Request", "1")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+    )
+}
+
 /// The owner's abandon covers a granted launch closed before the agent started. Such an
 /// attempt has no stopped receipt; its stop proof is the launch closure's receipt.
 #[tokio::test]
@@ -628,28 +653,19 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         .unwrap()
     };
     assert!(held().await, "a closed launch keeps its claim");
-    let state = &c.case.env.env.state;
-    let abandon = |email: &'static str, body: serde_json::Value| async move {
-        let response = aq_server::build_admin_router(state.clone())
-            .oneshot(
-                axum::http::Request::post(format!("/api/execution/attempts/{attempt}/disposition"))
-                    .header("content-type", "application/json")
-                    .header("x-aq-dev-email", email)
-                    .header("X-AQ-Request", "1")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        (
-            status,
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+    let history_live = || async {
+        sqlx::query_as::<_, (bool, bool)>(
+            "SELECT sealed_attempt_live($1),EXISTS(SELECT 1 FROM sealed_live_attempt_ids WHERE attempt_id=$1)",
         )
+        .bind(attempt)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     };
+    assert_eq!(history_live().await, (true, true));
+    let state = &c.case.env.env.state;
     let body = serde_json::json!({"operation_id": Uuid::new_v4(), "reason": "launch failed before the agent started"});
-    let (status, receipt) = abandon("owner@localhost", body.clone()).await;
+    let (status, receipt) = disposition(state, attempt, "owner@localhost", body.clone()).await;
     assert_eq!(status, 200, "{receipt}");
     assert_eq!(receipt["disposition"], "abandoned");
     let closure: String = sqlx::query_scalar(
@@ -664,7 +680,12 @@ async fn owner_abandons_a_launch_closed_before_it_started() {
         "the stop proof is the closure receipt"
     );
     assert!(!held().await, "the claim is released");
-    let (status, replay) = abandon("owner@localhost", body).await;
+    assert_eq!(
+        history_live().await,
+        (false, false),
+        "the same closure discharges live history after verified abandonment"
+    );
+    let (status, replay) = disposition(state, attempt, "owner@localhost", body).await;
     assert_eq!((status, &replay), (axum::http::StatusCode::OK, &receipt));
 }
 
@@ -672,6 +693,11 @@ mod never_started {
     //! A granted attempt that never started is closed by the server once its grant expired
     //! (`aq_machine_control::lapse`): nothing it holds is held forever.
     use super::*;
+    use aq_admission::{
+        SessionIdentity,
+        control::{CurrentPhase, ReconcileEntry},
+        transport::{JournalEvidence, Reconcile, ReconcileAttempt, WorkerIdentity},
+    };
     use aq_server::profiled_execution::{
         cancellation, closure::settlement, closure::settlement::ClosureSettlement,
         expiry::ClosureSweep, registration, replacement, started as started_owner,
@@ -717,9 +743,46 @@ mod never_started {
             .map(drop)
     }
     async fn settle(c: &Prepared) -> ClosureSettlement {
-        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id)
+        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id, None)
             .await
             .unwrap()
+    }
+    async fn reconcile_lost_grant(c: &Prepared, r: &Request, guardian_id: Uuid) -> ReconcileEntry {
+        let SessionIdentity::Remote {
+            node_id, boot_id, ..
+        } = r.binding.session
+        else {
+            panic!("remote fixture");
+        };
+        let request = Reconcile {
+            schema_version: 1,
+            operation_id: Uuid::new_v4(),
+            identity: WorkerIdentity { node_id, boot_id },
+            after_attempt: None,
+            limit: 1,
+            attempts: vec![ReconcileAttempt {
+                binding: r.binding.clone(),
+                guardian_id,
+                launch_id: r.launch_id,
+                last_grant_id: None,
+                journal: JournalEvidence::Recorded {
+                    revision: r.journal.revision,
+                    digest: r.journal.digest.clone(),
+                },
+            }],
+        };
+        let auth = closure::auth(c).await;
+        aq_server::profiled_execution::reconciliation::reconcile(
+            &c.case.env.env.state,
+            &auth,
+            &request,
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap()
+        .attempts
+        .pop()
+        .unwrap()
     }
     async fn abandon(c: &Prepared) -> String {
         let attempt = c.request.binding.attempt_id;
@@ -748,6 +811,10 @@ mod never_started {
         // Not expired: it may still start, so everything stays held.
         assert_eq!(settle(&c).await, ClosureSettlement::Unchanged);
         assert!(held(&c).await);
+        let before = reconcile_lost_grant(&c, &r, r.guardian_id).await;
+        assert!(
+            !matches!(before, ReconcileEntry::Current { authority } if matches!(authority.phase, CurrentPhase::Released { .. }))
+        );
         let refused = abandon(&c).await;
         assert!(
             refused.contains("may still start until its grant expires at")
@@ -786,6 +853,19 @@ mod never_started {
         let (released, task): (i64, Uuid) = sqlx::query_as("SELECT (SELECT count(*) FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id),a.task_id FROM execution_attempts a WHERE a.attempt_id=$1")
             .bind(attempt).fetch_one(&c.case.env.env.pool).await.unwrap();
         assert_eq!(released, 1);
+        let ReconcileEntry::Current { authority } =
+            reconcile_lost_grant(&c, &r, r.guardian_id).await
+        else {
+            panic!("original journal did not receive its exact expired launch release");
+        };
+        assert!(
+            matches!(&authority.phase, CurrentPhase::Released { release }
+            if serde_json::to_value(release).unwrap() == hot["stop"]["receipt"])
+        );
+        assert!(matches!(
+            reconcile_lost_grant(&c, &r, Uuid::new_v4()).await,
+            ReconcileEntry::Refused { .. }
+        ));
         // The task is replaceable by the normal rules, and the attempt is not charged.
         let now = (state.clock)().timestamp_millis() as u64;
         let assessed = replacement::assess_task(state, task, now).await.unwrap();
@@ -827,8 +907,8 @@ mod never_started {
         let late = started(&r, c.request.journal_revision);
         let attempt = r.binding.attempt_id;
         let (_, _, start) = tokio::join!(
-            settlement::settle_and_release(state, attempt),
-            settlement::settle_and_release(state, attempt),
+            settlement::settle_and_release(state, attempt, None),
+            settlement::settle_and_release(state, attempt, None),
             started_owner::record(state, &auth, &late)
         );
         assert!(start.is_err());
@@ -868,3 +948,4 @@ mod never_started {
         );
     }
 }
+mod attested;

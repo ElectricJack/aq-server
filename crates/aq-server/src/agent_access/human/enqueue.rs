@@ -4,9 +4,9 @@ use super::graph_actions::{Current, GraphPayload};
 use super::*;
 use crate::dashboard_api::errors::ApiError;
 use aq_human_work::task_graph::Author;
-pub(crate) use aq_human_work::task_graph::{GraphCreate, Task, hints_valid, metadata};
 #[cfg(feature = "project_environments")]
-pub(crate) use aq_human_work::task_graph::{Needs, needs};
+pub(crate) use aq_human_work::task_graph::Needs;
+pub(crate) use aq_human_work::task_graph::{GraphCreate, Task, hints_valid};
 
 impl GraphPayload for GraphCreate {
     const KIND: &'static str = "task.graph.create";

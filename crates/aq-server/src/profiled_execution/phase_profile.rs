@@ -74,15 +74,10 @@ pub(super) enum AcceptRequest {
     Refresh(refresh::AcceptRequest),
 }
 pub(super) fn decode_accept(bytes: &[u8]) -> Result<AcceptRequest, AppError> {
-    match Profile::from_document(bytes)? {
-        Profile::Frozen => match frozen::decode(bytes).map_err(|_| malformed())? {
-            frozen::Document::Accept(value) => Ok(AcceptRequest::Frozen(*value)),
-            _ => Err(malformed()),
-        },
-        Profile::Refresh => match refresh::decode(bytes).map_err(|_| malformed())? {
-            refresh::Document::Accept(value) => Ok(AcceptRequest::Refresh(*value)),
-            _ => Err(malformed()),
-        },
+    match decode_document(bytes)? {
+        Document::Frozen(frozen::Document::Accept(value)) => Ok(AcceptRequest::Frozen(*value)),
+        Document::Refresh(refresh::Document::Accept(value)) => Ok(AcceptRequest::Refresh(*value)),
+        _ => Err(malformed()),
     }
 }
 pub(super) enum PrepareRequest {
@@ -90,16 +85,23 @@ pub(super) enum PrepareRequest {
     Refresh(refresh::PrepareRequest),
 }
 pub(super) fn decode_prepare(bytes: &[u8]) -> Result<PrepareRequest, AppError> {
-    match Profile::from_document(bytes)? {
-        Profile::Frozen => match frozen::decode(bytes).map_err(|_| malformed())? {
-            frozen::Document::Prepare(value) => Ok(PrepareRequest::Frozen(*value)),
-            _ => Err(malformed()),
-        },
-        Profile::Refresh => match refresh::decode(bytes).map_err(|_| malformed())? {
-            refresh::Document::Prepare(value) => Ok(PrepareRequest::Refresh(*value)),
-            _ => Err(malformed()),
-        },
+    match decode_document(bytes)? {
+        Document::Frozen(frozen::Document::Prepare(value)) => Ok(PrepareRequest::Frozen(*value)),
+        Document::Refresh(refresh::Document::Prepare(value)) => Ok(PrepareRequest::Refresh(*value)),
+        _ => Err(malformed()),
     }
+}
+
+enum Document {
+    Frozen(frozen::Document),
+    Refresh(refresh::Document),
+}
+fn decode_document(bytes: &[u8]) -> Result<Document, AppError> {
+    match Profile::from_document(bytes)? {
+        Profile::Frozen => frozen::decode(bytes).map(Document::Frozen),
+        Profile::Refresh => refresh::decode(bytes).map(Document::Refresh),
+    }
+    .map_err(|_| malformed())
 }
 
 pub(super) async fn for_attempt_locked(
@@ -192,5 +194,37 @@ mod tests {
         let mut oversized = raw.into_bytes();
         oversized.resize(frozen::MAX_BYTES + 1, b' ');
         assert!(decode_proposal(&oversized).is_err());
+    }
+    #[test]
+    fn document_dispatch_preserves_family_kind_and_strict_decoding() {
+        for refresh in [false, true] {
+            let fixture = fixture(refresh);
+            let accept = json!({"kind":"accept","body":fixture["accept"]});
+            let prepare = json!({"kind":"prepare","body":fixture["prepare"]});
+            let accept_bytes = serde_json::to_vec(&accept).unwrap();
+            let prepare_bytes = serde_json::to_vec(&prepare).unwrap();
+            assert!(matches!(
+                (refresh, decode_prepare(&prepare_bytes).unwrap()),
+                (false, PrepareRequest::Frozen(_)) | (true, PrepareRequest::Refresh(_))
+            ));
+            assert!(decode_accept(&prepare_bytes).is_err());
+            assert!(decode_prepare(&accept_bytes).is_err());
+            for document in [accept, prepare] {
+                let raw = serde_json::to_string(&document).unwrap();
+                let duplicate = raw.replacen('{', &format!("{{\"body\":{},", document["body"]), 1);
+                let mut unknown = document;
+                unknown["unqualified_profile_hint"] = json!(true);
+                let mut oversized = raw.into_bytes();
+                oversized.resize(frozen::MAX_BYTES + 1, b' ');
+                for bytes in [
+                    duplicate.into_bytes(),
+                    serde_json::to_vec(&unknown).unwrap(),
+                    oversized,
+                ] {
+                    assert!(decode_accept(&bytes).is_err());
+                    assert!(decode_prepare(&bytes).is_err());
+                }
+            }
+        }
     }
 }

@@ -1,0 +1,107 @@
+{
+  "name": "route_is_stale",
+  "situation": "The task changed after it was read, so nothing is written",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-27",
+        "revision": 1
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-27@1",
+          "subject": {
+            "id": "task-27",
+            "revision": 1
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a CSV export",
+            "description": "",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "rust"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "work.route": [
+      {
+        "outcome": "stale",
+        "output": {
+          "reference": "route-2",
+          "subject": {
+            "id": "task-27",
+            "revision": 1
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "skipped",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-27",
+            "revision": 1
+          }
+        }
+      },
+      {
+        "command": "work.route",
+        "input": {
+          "subject": {
+            "id": "task-27",
+            "revision": 1
+          },
+          "level": "standard-high",
+          "harnesses": [],
+          "providers": [],
+          "prefer": [],
+          "hold": false,
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "The project's default environment provides everything the task needs."
+            }
+          ],
+          "classification": null,
+          "environment": "rust-base"
+        }
+      }
+    ]
+  }
+}

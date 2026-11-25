@@ -110,6 +110,7 @@ async fn setup_actual_with_prefix(task_prefix: bool) -> Unpublished {
     let repo = case.env.frozen.project.binding.repository_id;
     let mut binding = json!({"identity":"native-real-git-fixture","mode":"central","remote_url":seed,"allow_file_transport":true,"allowed_refs":["refs/heads/main"],"allowed_targets":["refs/heads/main"]});
     if task_prefix {
+        binding["allowed_targets"] = json!([]);
         binding["allowed_target_prefixes"] = json!(["refs/heads/aq/"]);
     }
     rpc(&socket, repo, "repo.register", binding).await;
@@ -158,6 +159,115 @@ async fn setup_actual_with_prefix(task_prefix: bool) -> Unpublished {
         base,
     }
 }
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+#[ignore = "qualification requires an actual aq-git with followed-main retention"]
+async fn unchanged_main_refreshes_at_completion_and_publishes_an_offer() {
+    use aq_admission::{Label, SourceSelection};
+    use aq_delivery::main_sync::{self, Scope};
+    use aq_role_settings::delivery::DeliveryLimits;
+
+    let mut f = setup_actual_with_prefix(true).await;
+    let task = f.case.env.lineage.task_id;
+    let project = f.case.env.lineage.project_id;
+    let repo = f.case.env.frozen.project.binding.repository_id;
+    let pool = &f.case.env.env.pool;
+    let state = &mut f.case.env.env.state;
+    state.clock = Arc::new(chrono::Utc::now);
+    let config = Arc::make_mut(&mut state.config);
+    config.delivery = Some(aq_delivery::github::DeliveryConfig {
+        project_allowlist: [project].into(),
+        task_allowlist: Some([task].into()),
+        git_http_socket: Some(f.socket.with_extension("http")),
+        ..Default::default()
+    });
+    let profiled = Arc::make_mut(config.profiled_execution.as_mut().unwrap());
+    profiled.revision += 1;
+    profiled.projects[0].source = SourceSelection::NamedRef {
+        reference: Label::new("refs/heads/main").unwrap(),
+    };
+    aq_server::profiled_execution::policies::install(state)
+        .await
+        .unwrap();
+    let now = || chrono::Utc::now().timestamp_millis() as u64;
+    let limits = DeliveryLimits {
+        main_freshness_ms: 1_000,
+        ..Default::default()
+    };
+    let edit =
+        aq_role_settings::Writer::new(pool, f.case.env.actor, now() as i64).edit(0, Uuid::new_v4());
+    aq_role_settings::save_delivery_limits(edit, &limits)
+        .await
+        .unwrap();
+
+    let scope = Scope::new(project, repo, 1, "refs/heads/main");
+    let first = main_sync::MainFollower::new(pool, &f.socket, now)
+        .current(&scope)
+        .await
+        .unwrap();
+    assert_eq!(first.head, f.base);
+    tokio::time::sleep(std::time::Duration::from_millis(limits.main_freshness_ms)).await;
+    let poll_started_at_ms = now();
+    assert!(!first.fresh(poll_started_at_ms, limits.main_freshness_ms));
+
+    let (status, body) = native_offer::poll_offered(&f.case).await;
+    // The installed baseline is expected to refuse. Close the disposable
+    // daemon before asserting so the negative run drains its log pipes too.
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(f.process.id().unwrap() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(10), f.process.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stopped.success());
+
+    let renewed = main_sync::latest(pool, &scope).await.unwrap().unwrap();
+    let page = match decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap() {
+        ControlReply::Poll(page) if status == 200 && page.offers.len() == 1 => page,
+        _ => {
+            let refusal = aq_role_settings::refusals::shown(pool, task).await;
+            panic!(
+                "no offer after unchanged main refresh: HTTP {status}, {body}; initial={first:?}; latest={renewed:?}; refusal={refusal:?}"
+            );
+        }
+    };
+    page.validate_for(&f.case.request).unwrap();
+    let offer = &page.offers[0];
+    assert_eq!(renewed.head, first.head);
+    assert_eq!(renewed.retention_handle, first.retention_handle);
+    assert!(
+        renewed.synced_at_ms > poll_started_at_ms,
+        "the real sync must complete after the offer poll begins"
+    );
+    let (grant_base, task_ref, observation): (String, String, Value) = sqlx::query_as(
+        "SELECT g.base, g.task_ref, s.observation FROM delivery_git_grants g
+         JOIN profiled_launches l USING (attempt_id)
+         JOIN admission_source_observations s ON s.observation_id=l.source_observation_id
+         WHERE g.attempt_id=$1",
+    )
+    .bind(offer.offered.lifecycle_binding.attempt_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(offer.offered.lifecycle_binding.task_id, task);
+    assert_eq!(grant_base, f.base);
+    assert_eq!(task_ref, aq_delivery::commands::task_branch(task));
+    let observed_at = observation["observed_at_ms"].as_u64().unwrap();
+    let observed = main_sync::ObservedHead {
+        head: &grant_base,
+        handle: first.retention_handle,
+        observed_at_ms: observed_at,
+    };
+    assert!(renewed.proves(&scope, observed));
+    println!(
+        "followed-main offer proof base={grant_base} handle={} old_sync={} poll_start={poll_started_at_ms} new_sync={} source_observed={observed_at}",
+        first.retention_handle, first.synced_at_ms, renewed.synced_at_ms
+    );
+}
+
 #[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 #[ignore = "qualification requires a delivery-enabled aq-git with source leases"]
@@ -294,9 +404,11 @@ async fn setup_actual() -> Actual {
         base,
     }
 }
-async fn download(c: &Prepared, member: &str) -> Vec<u8> {
-    let expected = c
-        .request
+fn source_artifact<'a>(
+    c: &'a Prepared,
+    member: &str,
+) -> &'a aq_admission::transport::ArtifactReceipt {
+    c.request
         .artifacts
         .iter()
         .find(|r| {
@@ -306,7 +418,9 @@ async fn download(c: &Prepared, member: &str) -> Vec<u8> {
                 .starts_with(&format!("aq.source-{member}/"))
         })
         .unwrap()
-        .bytes;
+}
+async fn download(c: &Prepared, member: &str) -> Vec<u8> {
+    let expected = source_artifact(c, member).bytes;
     assert!(expected > 0 && expected <= 1_048_576);
     let mut bytes = Vec::new();
     while (bytes.len() as u64) < expected {
@@ -350,17 +464,7 @@ async fn real_git_publication_download_and_initial_grant_share_exact_export() {
     assert_eq!(manifest["bundle_size"], bundle.len());
     assert_eq!(manifest["bundle_sha256"], Digest::of(&bundle).as_str());
     for (name, bytes) in [("manifest", &manifest_bytes), ("bundle", &bundle)] {
-        let receipt = c
-            .request
-            .artifacts
-            .iter()
-            .find(|r| {
-                r.artifact
-                    .id
-                    .as_str()
-                    .starts_with(&format!("aq.source-{name}/"))
-            })
-            .unwrap();
+        let receipt = source_artifact(c, name);
         assert_eq!(receipt.digest, Digest::of(bytes));
         assert_eq!(receipt.bytes, bytes.len() as u64);
     }

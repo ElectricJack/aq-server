@@ -41,16 +41,22 @@ pub struct StorageReport {
 
 impl StorageReport {
     pub fn validate(&self) -> Result<(), AppError> {
-        let max = i64::MAX as u64;
-        if self.disk_total_bytes == 0
-            || self.disk_used_bytes > self.disk_total_bytes
-            || self.disk_free_bytes > self.disk_total_bytes
-            || self.disk_reserved_bytes > self.disk_total_bytes
-            || self.disk_total_bytes > max
-            || self.preserved_bytes > max
-            || self.retained_snapshot_bytes.is_some_and(|b| b > max)
-            || self.database_bytes.is_some_and(|b| b > max)
-        {
+        let valid_disk = self.disk_total_bytes > 0
+            && [
+                self.disk_used_bytes,
+                self.disk_free_bytes,
+                self.disk_reserved_bytes,
+            ]
+            .iter()
+            .all(|&bytes| bytes <= self.disk_total_bytes);
+        let stored_sizes = [
+            self.disk_total_bytes,
+            self.preserved_bytes,
+            self.retained_snapshot_bytes.unwrap_or(0),
+            self.database_bytes.unwrap_or(0),
+        ];
+        let representable = stored_sizes.iter().all(|&bytes| bytes <= i64::MAX as u64);
+        if !valid_disk || !representable {
             return Err(AppError::BadRequest("invalid storage report".into()));
         }
         Ok(())
@@ -83,10 +89,9 @@ impl StorageReport {
     }
 }
 
-/// Upsert the latest report for `subject` (a node id or [`CENTRAL`]).
+/// Upsert the latest report for a node, or for the central host when no node is supplied.
 pub async fn record(
     conn: &mut PgConnection,
-    subject: &str,
     node_id: Option<Uuid>,
     report: &StorageReport,
     observed_at_ms: u64,
@@ -98,7 +103,7 @@ pub async fn record(
          VALUES($1,$2,$3,$4,$5) ON CONFLICT(subject) DO UPDATE SET node_id=excluded.node_id,\
          used_bps=excluded.used_bps,report=excluded.report,observed_at_ms=excluded.observed_at_ms",
     )
-    .bind(subject)
+    .bind(node_id.map_or_else(|| CENTRAL.to_owned(), |id| id.to_string()))
     .bind(node_id)
     .bind(report.used_bps())
     .bind(value)
@@ -168,7 +173,7 @@ pub async fn sample_central(
         .await
         .map_err(|_| AppError::Internal)?;
     report.database_bytes = u64::try_from(size).ok();
-    record(&mut conn, CENTRAL, None, &report, now_ms).await?;
+    record(&mut conn, None, &report, now_ms).await?;
     Ok(true)
 }
 
@@ -205,10 +210,12 @@ async fn preserved(
     match policy
         .observe_preserved(
             event.event_id,
-            auth.node().id,
-            event.attempt_id,
-            event.preserved_bytes,
-            event.expires_at_ms,
+            crate::notifications::sources::Preservation {
+                node: auth.node().id,
+                attempt: event.attempt_id,
+                bytes: event.preserved_bytes,
+                expires_at_ms: event.expires_at_ms,
+            },
         )
         .await
     {

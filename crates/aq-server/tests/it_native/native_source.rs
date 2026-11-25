@@ -19,26 +19,7 @@ use uuid::Uuid;
 async fn actual_source_owner_retains_typed_bytes_without_relabeling_context_proposal() {
     let (f, request, _dir) = setup().await;
     let pool = f.db.pool().await;
-    let row=sqlx::query("SELECT artifact_id,body,descriptor FROM admission_artifacts WHERE descriptor->'artifact'=$1 AND owner_kind='source_retention'").bind(serde_json::to_value(&request.source_observation).unwrap()).fetch_one(&pool).await.unwrap();
-    let bytes: Vec<u8> = row.get("body");
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let mut invalid = body.clone();
-    invalid["evidence"]["commit_inspection"]["tree"]["hex"] = "0".repeat(40).into();
-    assert!(
-        source::validate_body(
-            &serde_json::to_vec(&invalid).unwrap(),
-            request.project_id,
-            NOW
-        )
-        .is_err(),
-        "Git's null tree ID cannot be source admission evidence"
-    );
-    let observation = source::Observation {
-        admission: serde_json::from_value(body["admission"].clone()).unwrap(),
-        retention_handle: request.source_retention_handle,
-        artifact: request.source_observation.clone(),
-        bytes,
-    };
+    let (artifact_id, observation) = original_observation(&pool, &request).await;
     let operation = Uuid::from_u128(1);
     let retained = source::retain_admission(&f.state, operation, &observation, NOW + 600000)
         .await
@@ -54,7 +35,7 @@ async fn actual_source_owner_retains_typed_bytes_without_relabeling_context_prop
     );
     let old: serde_json::Value =
         sqlx::query_scalar("SELECT descriptor FROM admission_artifacts WHERE artifact_id=$1")
-            .bind(row.get::<Uuid, _>("artifact_id"))
+            .bind(artifact_id)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -110,48 +91,9 @@ async fn prepared() -> Prepared {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (f, request, dir) = setup().await;
     let pool = f.db.pool().await;
-    let Reservation::Pending(token) = source_exports::reserve(&f.state, request.clone())
-        .await
-        .unwrap()
-    else {
-        panic!()
-    };
-    let fact = synthetic_fact(&token);
-    source_exports::finalize(&f.state, &token, &fact)
-        .await
-        .unwrap();
-    let value: serde_json::Value =
-        serde_json::from_slice(&fact.canonical_bytes().unwrap()).unwrap();
+    let (fact, value) = link_export(&f, &pool, &request).await;
     let retention = value["retention_inspection"].clone();
-    let observation=serde_json::from_value(serde_json::json!({"request_digest":token.request_digest(),"export_operation_id":request.operation_id,"inspection":retention,"observed_at_ms":NOW,"expires_at_ms":NOW+30000})).unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    source_exports::link_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        &token,
-        &fact,
-        &observation,
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
-        .bind(f.profiled.offer.binding.attempt_id)
-        .bind(serde_json::json!(aq_server::execution::authority::hot::HotState::from_compat(&f.profiled).unwrap()))
-        .execute(&pool).await.unwrap();
-    let root = &f.state.source_retention.as_ref().unwrap().config.git_root;
-    let artifact = root
-        .join("artifacts")
-        .join(request.operation_id.to_string());
-    std::fs::create_dir_all(&artifact).unwrap();
-    std::fs::write(root.join("format.json"),serde_json::to_vec(&serde_json::json!({"format_version":1,"installation_id":value["producer_installation_id"]})).unwrap()).unwrap();
-    std::fs::write(artifact.join("manifest.json"), fact.manifest_bytes()).unwrap();
-    std::fs::write(
-        artifact.join("objects.bundle"),
-        b"synthetic component bundle",
-    )
-    .unwrap();
+    install_export(&f, request.operation_id, &fact, &value);
     let listener = tokio::net::UnixListener::bind(
         &f.state.source_retention.as_ref().unwrap().config.git_socket,
     )
@@ -336,64 +278,12 @@ async fn version_range_unknown_fields_auth_and_symlink_fail_with_bounded_typed_e
 
 #[tokio::test]
 async fn preparing_and_granted_source_reads_use_original_plan_and_current_authority() {
-    use aq_admission::{
-        Digest, Label, MaterialLease,
-        transport::{DeliveryClock, NoLaunchReservation, PreparationPlan, TransportDocument},
-    };
-    use aq_server::execution::{
-        authority::hot::{HotState, LaunchOwner},
-        profiled::Status,
-    };
+    use aq_server::execution::profiled::Status;
     let p = prepared().await;
     let pool = p.f.db.pool().await;
     let binding = p.f.profiled.offer.binding.clone();
-    let owner = LaunchOwner {
-        guardian_id: Uuid::new_v4(),
-        launch_id: Uuid::new_v4(),
-        reservation_id: Uuid::new_v4(),
-    };
-    let operation = Uuid::new_v4();
-    let plan = PreparationPlan {
-        schema_version: 1,
-        operation_id: operation,
-        binding: binding.clone(),
-        reservation: NoLaunchReservation {
-            reservation_id: owner.reservation_id,
-            reservation_operation_id: Uuid::new_v4(),
-            reservation_journal_digest: Digest::of(b"synthetic-reservation"),
-        },
-        guardian_id: owner.guardian_id,
-        launch_id: owner.launch_id,
-        clock: DeliveryClock::new(NOW, NOW + 1000).unwrap(),
-        materials: vec![MaterialLease {
-            schema_version: 1,
-            lease_id: Uuid::new_v4(),
-            binding: binding.clone(),
-            credential_profile: p.f.selection.choice.credential_profile.clone(),
-            credential_revision: p.f.selection.credential_revision,
-            provider: Label::new(&p.f.selection.choice.provider).unwrap(),
-            account_reference: Label::new(&p.f.selection.choice.account_reference).unwrap(),
-            endpoint_reference: Label::new(&p.f.selection.choice.endpoint_reference).unwrap(),
-            purpose: Label::new("model-authentication").unwrap(),
-            material_digest: Digest::of(b"synthetic-secret"),
-            material_bytes: 16,
-            issued_at_ms: NOW,
-            expires_at_ms: NOW + 1000,
-        }],
-    };
-    let doc = TransportDocument::PreparationPlan(plan);
-    doc.validate().unwrap();
-    let mut hot = HotState::from_compat(&p.f.profiled).unwrap();
-    hot.status = Status::Preparing;
-    hot.owner = Some(owner);
-    hot.preparation_operation_id = Some(operation);
-    sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'accept',$3,$4)").bind(p.f.node.node_id).bind(operation).bind(Digest::of(b"synthetic-accept").as_str()).bind(serde_json::json!(doc)).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-        .bind(binding.attempt_id)
-        .bind(serde_json::json!(hot))
-        .execute(&pool)
-        .await
-        .unwrap();
+    let mut hot = prepare_authority(&p, &pool).await;
+    save_authority(&pool, binding.attempt_id, &hot).await;
     assert_eq!(get(&p, "", &p.f.credential, Some("1")).await.status(), 200);
     p.f.time
         .store((NOW + 1001) as i64, std::sync::atomic::Ordering::SeqCst);
@@ -407,12 +297,7 @@ async fn preparing_and_granted_source_reads_use_original_plan_and_current_author
         grant_id: Uuid::new_v4(),
         expires_at_ms: NOW + 1000,
     });
-    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-        .bind(binding.attempt_id)
-        .bind(serde_json::json!(hot))
-        .execute(&pool)
-        .await
-        .unwrap();
+    save_authority(&pool, binding.attempt_id, &hot).await;
     assert_eq!(
         get(&p, "/bundle?offset=0&limit=1", &p.f.credential, Some("1"))
             .await
@@ -426,12 +311,7 @@ async fn preparing_and_granted_source_reads_use_original_plan_and_current_author
         .store(NOW as i64, std::sync::atomic::Ordering::SeqCst);
     hot.status = Status::Cancelling;
     hot.cancellation_id = Some(Uuid::new_v4());
-    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-        .bind(binding.attempt_id)
-        .bind(serde_json::json!(hot))
-        .execute(&pool)
-        .await
-        .unwrap();
+    save_authority(&pool, binding.attempt_id, &hot).await;
     assert_eq!(get(&p, "", &p.f.credential, Some("1")).await.status(), 409);
 }
 
@@ -472,4 +352,158 @@ async fn offer_expiry_during_git_io_refuses_preflight_authority() {
     };
     let (response, ()) = tokio::join!(read, expire);
     assert_eq!(response.status(), 409);
+}
+
+async fn original_observation(
+    pool: &sqlx::PgPool,
+    request: &source_exports::Request,
+) -> (Uuid, source::Observation) {
+    let row=sqlx::query("SELECT artifact_id,body,descriptor FROM admission_artifacts WHERE descriptor->'artifact'=$1 AND owner_kind='source_retention'").bind(serde_json::to_value(&request.source_observation).unwrap()).fetch_one(pool).await.unwrap();
+    let bytes: Vec<u8> = row.get("body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut invalid = body.clone();
+    invalid["evidence"]["commit_inspection"]["tree"]["hex"] = "0".repeat(40).into();
+    assert!(
+        source::validate_body(
+            &serde_json::to_vec(&invalid).unwrap(),
+            request.project_id,
+            NOW
+        )
+        .is_err(),
+        "Git's null tree ID cannot be source admission evidence"
+    );
+    let observation = source::Observation {
+        admission: serde_json::from_value(body["admission"].clone()).unwrap(),
+        retention_handle: request.source_retention_handle,
+        artifact: request.source_observation.clone(),
+        bytes,
+    };
+    (row.get("artifact_id"), observation)
+}
+
+fn install_export(
+    f: &common::profiled::Fixture,
+    operation: Uuid,
+    fact: &aq_server::source_retention::profiled_base::VerifiedExport,
+    value: &serde_json::Value,
+) {
+    let root = &f.state.source_retention.as_ref().unwrap().config.git_root;
+    let artifact = root.join("artifacts").join(operation.to_string());
+    std::fs::create_dir_all(&artifact).unwrap();
+    std::fs::write(root.join("format.json"),serde_json::to_vec(&serde_json::json!({"format_version":1,"installation_id":value["producer_installation_id"]})).unwrap()).unwrap();
+    std::fs::write(artifact.join("manifest.json"), fact.manifest_bytes()).unwrap();
+    std::fs::write(
+        artifact.join("objects.bundle"),
+        b"synthetic component bundle",
+    )
+    .unwrap();
+}
+
+async fn save_authority(
+    pool: &sqlx::PgPool,
+    attempt: Uuid,
+    hot: &aq_server::execution::authority::hot::HotState,
+) {
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(serde_json::json!(hot))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn prepare_authority(
+    p: &Prepared,
+    pool: &sqlx::PgPool,
+) -> aq_server::execution::authority::hot::HotState {
+    use aq_admission::{
+        Digest, Label, MaterialLease,
+        transport::{DeliveryClock, NoLaunchReservation, PreparationPlan, TransportDocument},
+    };
+    use aq_server::execution::{
+        authority::hot::{HotState, LaunchOwner},
+        profiled::Status,
+    };
+    let binding = &p.f.profiled.offer.binding;
+    let owner = LaunchOwner {
+        guardian_id: Uuid::new_v4(),
+        launch_id: Uuid::new_v4(),
+        reservation_id: Uuid::new_v4(),
+    };
+    let operation = Uuid::new_v4();
+    let plan = PreparationPlan {
+        schema_version: 1,
+        operation_id: operation,
+        binding: binding.clone(),
+        reservation: NoLaunchReservation {
+            reservation_id: owner.reservation_id,
+            reservation_operation_id: Uuid::new_v4(),
+            reservation_journal_digest: Digest::of(b"synthetic-reservation"),
+        },
+        guardian_id: owner.guardian_id,
+        launch_id: owner.launch_id,
+        clock: DeliveryClock::new(NOW, NOW + 1000).unwrap(),
+        materials: vec![MaterialLease {
+            schema_version: 1,
+            lease_id: Uuid::new_v4(),
+            binding: binding.clone(),
+            credential_profile: p.f.selection.choice.credential_profile.clone(),
+            credential_revision: p.f.selection.credential_revision,
+            provider: Label::new(&p.f.selection.choice.provider).unwrap(),
+            account_reference: Label::new(&p.f.selection.choice.account_reference).unwrap(),
+            endpoint_reference: Label::new(&p.f.selection.choice.endpoint_reference).unwrap(),
+            purpose: Label::new("model-authentication").unwrap(),
+            material_digest: Digest::of(b"synthetic-secret"),
+            material_bytes: 16,
+            issued_at_ms: NOW,
+            expires_at_ms: NOW + 1000,
+        }],
+    };
+    let doc = TransportDocument::PreparationPlan(plan);
+    doc.validate().unwrap();
+    let mut hot = HotState::from_compat(&p.f.profiled).unwrap();
+    hot.status = Status::Preparing;
+    hot.owner = Some(owner);
+    hot.preparation_operation_id = Some(operation);
+    sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'accept',$3,$4)").bind(p.f.node.node_id).bind(operation).bind(Digest::of(b"synthetic-accept").as_str()).bind(serde_json::json!(doc)).execute(pool).await.unwrap();
+    hot
+}
+
+async fn link_export(
+    f: &common::profiled::Fixture,
+    pool: &sqlx::PgPool,
+    request: &source_exports::Request,
+) -> (
+    aq_server::source_retention::profiled_base::VerifiedExport,
+    serde_json::Value,
+) {
+    let Reservation::Pending(token) = source_exports::reserve(&f.state, request.clone())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let fact = synthetic_fact(&token);
+    source_exports::finalize(&f.state, &token, &fact)
+        .await
+        .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(&fact.canonical_bytes().unwrap()).unwrap();
+    let retention = value["retention_inspection"].clone();
+    let observation=serde_json::from_value(serde_json::json!({"request_digest":token.request_digest(),"export_operation_id":request.operation_id,"inspection":retention,"observed_at_ms":NOW,"expires_at_ms":NOW+30000})).unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    source_exports::link_locked(
+        &f.state,
+        &mut tx,
+        &f.profiled.offer.binding.session,
+        source_exports::LinkEvidence::new(&token, &fact, &observation),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query("INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,grant_revision) VALUES($1,$2,1,1,0)")
+        .bind(f.profiled.offer.binding.attempt_id)
+        .bind(serde_json::json!(aq_server::execution::authority::hot::HotState::from_compat(&f.profiled).unwrap()))
+        .execute(pool).await.unwrap();
+    (fact, value)
 }

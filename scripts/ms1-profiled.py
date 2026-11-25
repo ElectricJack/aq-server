@@ -25,6 +25,7 @@ Commands (paths come from the environment set by scripts/ms1-demo.sh):
 No credential bytes are read or written by this script.
 """
 import hashlib
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -78,7 +79,11 @@ INTELLIGENCE_REVISION = _REV + 1
 DEFINITION_VERSION = str(_REV)
 
 
-def _accounting_source(provider, harness, parser_id, parser_digest, cache_read):
+def parser_reference(identifier, digest):
+    return {"id": identifier, "version": "0.0.1-engine", "digest": digest}
+
+
+def _accounting_source(provider, harness, parser, cache_read):
     """One [[intelligence.accounting.sources]] entry. `reference` and the layout
     policy are owner names (digest = SHA-256 of the id and version); the parser
     reference must equal the one the worker's observation engine stamps on its
@@ -86,7 +91,6 @@ def _accounting_source(provider, harness, parser_id, parser_digest, cache_read):
     def named(kind):
         name = f"aq.accounting.{kind}/{provider}-{harness}"
         return {"id": name, "version": "1", "digest": sha(name + "/v1")}
-    parser = {"id": parser_id, "version": "0.0.1-engine", "digest": parser_digest}
     return {"provider": provider, "harness": harness, "reference": named("source"),
             "layout": {"policy": named("layout"), "input_includes_cache_read": cache_read,
                        "input_includes_cache_write": False, "output_includes_reasoning": True},
@@ -147,8 +151,14 @@ def toml_value(value):
     if isinstance(value, list):
         return "[" + ", ".join(toml_value(v) for v in value) + "]"
     if isinstance(value, dict):
-        return "{" + ", ".join(f"{json.dumps(k)} = {toml_value(v)}" for k, v in value.items() if v is not None) + "}"
+        return toml_inline_table(value)
     raise ValueError(type(value).__name__)
+
+
+def toml_inline_table(value):
+    settings = (f"{json.dumps(key)} = {toml_value(item)}"
+                for key, item in value.items() if item is not None)
+    return "{" + ", ".join(settings) + "}"
 
 
 def snake(kind):
@@ -245,7 +255,45 @@ def tmux_pin():
             "bytes": len(data)}
 
 
-def build():
+@dataclass(frozen=True)
+class NodeProfileInputs:
+    seed: dict
+    source: dict
+    worker: dict
+    node_id: str
+    allowed: list
+    worker_definitions: dict
+    template: dict
+    scope: str
+    host: dict
+    client: dict
+    tmux: dict
+
+
+@dataclass(frozen=True)
+class RuntimeDefinitions:
+    policy: dict
+    runtime: dict
+    environment: dict
+    composite: dict
+    adapter: dict
+    qualification: dict
+    harness: dict
+    credential: dict
+    renderer: dict
+
+
+@dataclass(frozen=True)
+class RefreshDefinitions:
+    source_profile: dict
+    presence: dict
+    presence_ref: dict
+    inventory_adapter: dict
+    inventory_evidence: dict
+    material: dict
+
+
+def read_node_profile_inputs():
     seed = json.loads((STATE / "seed.json").read_text())
     src = json.loads((STATE / "ms1-source.json").read_text())
     worker = json.loads((BASE / "worker" / "node.json").read_text())
@@ -264,13 +312,27 @@ def build():
     host, client = (pin("aq-session-host", "aq.ms1-host/aq-session-host"),
                     pin("aq-agent", "aq.ms1-host/aq-agent"))
     tmux = tmux_pin()
+    return NodeProfileInputs(
+        seed=seed, source=src, worker=worker, node_id=node_id, allowed=allowed,
+        worker_definitions=worker_defs, template=template, scope=scope,
+        host=host, client=client, tmux=tmux,
+    )
+
+
+def permission_contract():
     permissions = [{"operation": "task.read", "scope_reference": f"project:{PROJECT}"},
                    {"operation": "knowledge.read", "scope_reference": f"project:{PROJECT}"},
                    {"operation": "source.write", "scope_reference": f"repository:{REPOSITORY}"}]
     scopes = [{"operation": p["operation"], "resource": p["scope_reference"]} for p in permissions]
     permission_digest = sha(canonical({"requested": scopes, "effective": scopes, "required": scopes,
                                        "omissions": []}))
-    b = Builder()
+    return permissions, permission_digest
+
+
+def define_runtime(b, node, permission_digest):
+    scope, template = node.scope, node.template
+    host, client, tmux = node.host, node.client, node.tmux
+    worker_defs = node.worker_definitions
     policy = b.add(f"aq.ms1-project-policy:{PROJECT}", POLICY_BODY)
     runtime = b.add("aq.ms1-runtime", {"schema_version": 1, "scope": scope}, DEFINITION_VERSION)
     environment = b.add(ENVIRONMENT, {
@@ -325,6 +387,16 @@ def build():
     # until the worker drops its renderer pin (spec 0014 §8).
     rendering = canonical({"rendering": "utf8_double_newline_v1", "schema_version": 1})
     renderer = {"id": f"aq.startup-renderer/{sha(rendering)}", "version": "1", "digest": sha(rendering)}
+    return RuntimeDefinitions(
+        policy=policy, runtime=runtime, environment=environment, composite=composite,
+        adapter=adapter, qualification=qualification, harness=harness_q,
+        credential=credential, renderer=renderer,
+    )
+
+
+def define_refresh(b, node, definition):
+    runtime, qualification = definition.runtime, definition.qualification
+    host, tmux, scope = node.host, node.tmux, node.scope
     source_profile = b.add("aq.ms1-default-git-profile", {
         "schema_version": 1, "checkout_profile": "no_attributes_v1", "max_expanded_bytes": 10737418240,
         "max_bundle_bytes": 1073741824, "source_disk_bytes": SOURCE_DISK_BYTES,
@@ -367,16 +439,18 @@ def build():
     material = b.add("aq.server-material", {
         "schema_version": 1, "server_source": "aq-ms1", "adapter": "aq.server-material", "version": 1,
         "scope": "authenticated exact-attempt private material owner; owner Claude login for the desktop node only"})
-    definitions = b.definitions
-    sizes = [len(d["body"].encode()) for d in definitions]
-    require(len(definitions) <= 64 and max(sizes) <= 2 * 1024 * 1024, "definition bounds")
-    harness = {"harness": HARNESS, "cli_version": CLI_VERSION, "adapter": adapter, "environment": environment,
-               "qualification": harness_q,
-               "capabilities": CAPABILITIES,
-               "limits": {"context_bytes": CONTEXT_BYTES, "max_output_tokens": MAX_OUTPUT_TOKENS,
-                          "wall_time_ms": EXECUTION_MS, "memory_bytes": MEMORY_BYTES, "cpu_millis": CPU_MILLIS,
-                          "process_limit": PROCESS_LIMIT}}
-    profiled = {"revision": PROFILED_REVISION,
+    return RefreshDefinitions(
+        source_profile=source_profile, presence=presence, presence_ref=presence_ref,
+        inventory_adapter=inventory_adapter, inventory_evidence=inventory_evidence,
+        material=material,
+    )
+
+
+def profiled_config(src, definition, refresh, definitions):
+    qualification = definition.qualification
+    material = refresh.material
+    runtime = definition.runtime
+    return {"revision": PROFILED_REVISION,
                 "qualified_runtimes": [{"runtime": runtime, "qualification": qualification,
                                         "capabilities": CAPABILITIES, "features": FEATURES,
                                         "material_delivery": {"adapter": material, "version": 1}}],
@@ -386,7 +460,18 @@ def build():
                                          "object": {"format": src["base"]["algorithm"], "hex": src["base"]["hex"]}},
                               "retention_handle": src["retention_handle"]}],
                 "definition_bodies": definitions}
-    intelligence = {"revision": INTELLIGENCE_REVISION, "material_store": "/var/lib/aq/login-material",
+
+
+def intelligence_config(allowed, definition):
+    adapter, environment, harness_q = definition.adapter, definition.environment, definition.harness
+    credential = definition.credential
+    harness = {"harness": HARNESS, "cli_version": CLI_VERSION, "adapter": adapter, "environment": environment,
+               "qualification": harness_q,
+               "capabilities": CAPABILITIES,
+               "limits": {"context_bytes": CONTEXT_BYTES, "max_output_tokens": MAX_OUTPUT_TOKENS,
+                          "wall_time_ms": EXECUTION_MS, "memory_bytes": MEMORY_BYTES, "cpu_millis": CPU_MILLIS,
+                          "process_limit": PROCESS_LIMIT}}
+    return {"revision": INTELLIGENCE_REVISION, "material_store": "/var/lib/aq/login-material",
                     "credentials": [{
                         "kind": "subscription-login",
                         "credential": {"profile": credential, "provider": PROVIDER, "account_reference": ACCOUNT,
@@ -400,10 +485,25 @@ def build():
                     # Without a source the server refuses the sessions' observations and
                     # the stall ladder has no progress evidence.
                     "accounting": {"sources": [
-                        _accounting_source("anthropic", "claude", "claude-v1-9a9b8e8",
-                                           "9288a6738990e4f9c64681c523adb32dc0fb8178509be0506cfb78ce9a201c11", False),
-                        _accounting_source("openai", "codex", "codex-rollout-67f0994",
-                                           "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22", True)]}}
+                        _accounting_source(
+                            "anthropic", "claude",
+                            parser_reference("claude-v1-9a9b8e8",
+                                             "9288a6738990e4f9c64681c523adb32dc0fb8178509be0506cfb78ce9a201c11"),
+                            False),
+                        _accounting_source(
+                            "openai", "codex",
+                            parser_reference("codex-rollout-67f0994",
+                                             "feadbbde6a051b5f839c6592b92f3fdf04b42a609a2beb14aef2e832f5373b22"),
+                            True)]}}
+
+
+def node_config_files(node, definition, refresh, permission_digest):
+    worker, template, host, tmux = node.worker, node.template, node.host, node.tmux
+    renderer, runtime, qualification = definition.renderer, definition.runtime, definition.qualification
+    adapter, environment, harness_q = definition.adapter, definition.environment, definition.harness
+    composite = definition.composite
+    source_profile, presence_ref, presence = refresh.source_profile, refresh.presence_ref, refresh.presence
+    inventory_adapter, inventory_evidence = refresh.inventory_adapter, refresh.inventory_evidence
     state_dir = NODE / "state"
     docker = dict(worker["docker_local"])
     host_config = {
@@ -428,10 +528,27 @@ def build():
         "executor": {"kind": PROFILE, "composite_definition": str(NODE / "config/composite.json"),
                      "settings": {"host": host_config, "environment": environment,
                                   "permissions_digest": permission_digest}}}
-    files = {"native.json": canonical(native), "adapter.json": canonical(placeholder),
+    return {"native.json": canonical(native), "adapter.json": canonical(placeholder),
              "composite.json": canonical(composite), "inventory.json": canonical(presence)}
-    return dict(definitions=definitions, profiled=profiled, intelligence=intelligence, files=files, policy=policy,
-                permissions=permissions, renderer=renderer, node_id=node_id, seed=seed, allowed=allowed)
+
+
+def build():
+    node = read_node_profile_inputs()
+    permissions, permission_digest = permission_contract()
+    b = Builder()
+    runtime = define_runtime(b, node, permission_digest)
+    refresh = define_refresh(b, node, runtime)
+    definitions = b.definitions
+    sizes = [len(d["body"].encode()) for d in definitions]
+    require(len(definitions) <= 64 and max(sizes) <= 2 * 1024 * 1024, "definition bounds")
+    return dict(
+        definitions=definitions,
+        profiled=profiled_config(node.source, runtime, refresh, definitions),
+        intelligence=intelligence_config(node.allowed, runtime),
+        files=node_config_files(node, runtime, refresh, permission_digest),
+        policy=runtime.policy, permissions=permissions, renderer=runtime.renderer,
+        node_id=node.node_id, seed=node.seed, allowed=node.allowed,
+    )
 
 
 def binding_rev(built, current):

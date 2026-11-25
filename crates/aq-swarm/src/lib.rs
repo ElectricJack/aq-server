@@ -4,6 +4,7 @@ pub mod agents;
 pub mod assemble;
 pub mod capacity;
 pub mod class;
+pub mod inventory_diagnostics;
 pub mod machine;
 pub mod management;
 pub mod routing;
