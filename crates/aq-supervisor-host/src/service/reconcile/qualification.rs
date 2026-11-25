@@ -164,8 +164,8 @@ async fn provider_switch_preserves_recovered_turn_and_changes_only_its_successor
     assert_eq!(other.subscription.as_ref().unwrap().control_revision, 1);
 }
 
-#[test]
-fn a_stale_unprepared_turn_is_set_aside_and_replanned_from_its_recorded_input() {
+#[tokio::test]
+async fn a_stale_unprepared_turn_is_set_aside_and_replanned_from_its_recorded_input() {
     let tmp = tempfile::tempdir().unwrap();
     let config = service_config(tmp.path().join("project"));
     let control = initial_control(Some(Uuid::new_v4()));
