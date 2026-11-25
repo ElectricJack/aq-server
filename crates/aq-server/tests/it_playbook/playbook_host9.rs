@@ -2168,6 +2168,94 @@ mod delivery {
     }
 
     #[tokio::test]
+    async fn definitive_publication_rejection_uses_the_slow_followup_cadence() {
+        let h = delivery(false).await;
+        h.limits(DeliveryLimits {
+            decision_repeat_ms: 120_000,
+            hold_followup_interval_ms: 600_000,
+            ..Default::default()
+        })
+        .await;
+        h.activated().await;
+        let (task, pending) = h.stopped(h.scope.project_id, "success");
+        let refused = |at, diagnostic: Option<&str>| {
+            let id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO playbook_host_operations
+                 (operation_id,namespace_id,generation,intent_id,command_name,subject_id,
+                  subject_revision,request,status,output,created_at_ms,completed_at_ms)
+                 VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused',
+                        jsonb_build_object('reason','unreachable'),$6,$6)",
+            )
+            .bind(id)
+            .bind(h.service.namespace.namespace_id)
+            .bind(id.to_string())
+            .bind(task.to_string())
+            .bind(json!({
+                "result_ready": {
+                    "project_id":pending.project_id,
+                    "attempt_id":pending.attempt_id,
+                    "result_id":pending.result_id,
+                },
+                "result_head":"a".repeat(40),
+                "expected_old":null,
+                "answer_note":diagnostic,
+            }))
+            .bind(at)
+        };
+        assert_eq!(h.asked().await, 1);
+        h.acknowledge_ready(Some(&[]), true).await;
+        refused(h.clock(), Some("remote_rejected"))
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(120_000);
+        assert_eq!(
+            h.asked().await,
+            0,
+            "a timer is not new publication evidence"
+        );
+        h.later(120_000);
+        assert_eq!(
+            h.asked().await,
+            0,
+            "the exact rejection survives more ticks"
+        );
+
+        h.main_moved(pending.project_id, &"c".repeat(40)).await;
+        assert_eq!(h.asked().await, 1, "changed facts still start delivery");
+        h.acknowledge_ready(Some(&[]), true).await;
+        refused(h.clock(), Some("remote_rejected"))
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(120_000);
+        assert_eq!(h.asked().await, 0, "a second exact rejection is durable");
+        h.later(479_999);
+        assert_eq!(h.asked().await, 0, "wait for the configured follow-up");
+        h.later(1);
+        assert_eq!(
+            h.asked().await,
+            1,
+            "allow recovery from unseen authority changes"
+        );
+        assert_eq!(h.asked().await, 0, "the emitted event suppresses any burst");
+        h.acknowledge_ready(Some(&[]), true).await;
+
+        h.later(1);
+        refused(h.clock(), None)
+            .execute(&h.pool().await)
+            .await
+            .unwrap();
+        h.later(119_999);
+        assert_eq!(
+            h.asked().await,
+            1,
+            "an unresolved transport refusal retries normally"
+        );
+    }
+
+    #[tokio::test]
     async fn queued_and_admitted_delivery_block_a_second_event_before_work_read() {
         let h = delivery(false).await;
         h.activated().await;
