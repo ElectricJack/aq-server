@@ -31,6 +31,16 @@ enum Mode {
     Output,
 }
 impl Mode {
+    fn expected_phase(self) -> &'static str {
+        match self {
+            Mode::Legacy => "granted",
+            Mode::Accepted => "accepted_preparation",
+            Mode::Inputs => "prepared_phase_inputs",
+            Mode::LostExecutionReply => "phase_history_only",
+            Mode::Execution | Mode::Host | Mode::Terminal | Mode::Output => "granted_phase_execution",
+        }
+    }
+
     fn uses_phase(self) -> bool {
         !matches!(self, Mode::Legacy)
     }
@@ -224,6 +234,51 @@ async fn diagnose_worker_history(
     );
 }
 
+async fn record_worker_inventory(
+    case: &Case,
+    identity: &aq_admission::transport::WorkerIdentity,
+    inventory_qualification: Option<&ArtifactRef>,
+    mode: Mode,
+) {
+    if mode.executes_phase() {
+        phase::record_current_inventory(case, identity, inventory_qualification.unwrap()).await;
+        phase::record_operator_availability(case).await;
+    } else {
+        // A new fixture observation for the real process's newly created boot.
+        // No offer/selection exists yet and no sealed observation is retimed.
+        let mut snapshot = case.env.input.node.clone();
+        snapshot.target = aq_selection::ExecutionTarget::Worker {
+            node_id: identity.node_id,
+            boot_id: identity.boot_id,
+        };
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        snapshot.revision += 1;
+        snapshot.observed_at_ms = now;
+        snapshot.expires_at_ms = now + 30000;
+        for c in &mut snapshot.credential_bindings {
+            c.observed_at_ms = now;
+            c.expires_at_ms = now + 30000;
+        }
+        sqlx::query("UPDATE intelligence_node_snapshots SET boot_id=$2,sequence=1,revision=revision+1,snapshot=$3 WHERE node_id=$1")
+            .bind(identity.node_id).bind(identity.boot_id).bind(json!(snapshot)).execute(&case.env.env.pool).await.unwrap();
+    }
+}
+
+fn verify_lost_execution_reply(http_statuses: &HttpStatuses) {
+    let statuses = http_statuses.lock().unwrap();
+    for (path, expected) in [
+        ("/v1/worker/profiled-v2/prepare", 503),
+        ("/v1/worker/profiled-v2/history", 200),
+    ] {
+        let seen: Vec<_> = statuses
+            .iter()
+            .filter(|(p, _, _)| p == path)
+            .map(|(_, status, _)| *status)
+            .collect();
+        assert_eq!(seen, vec![expected], "exactly one request to {path}");
+    }
+}
+
 async fn run_worker(mode: Mode) {
     let use_phase = mode.uses_phase();
     let execute_phase = mode.executes_phase();
@@ -382,29 +437,7 @@ async fn run_worker(mode: Mode) {
     let identity: aq_admission::transport::WorkerIdentity =
         serde_json::from_value(ready["identity"].clone()).unwrap();
     assert_eq!(identity.node_id, case.env.env.node);
-    if execute_phase {
-        phase::record_current_inventory(case, &identity, inventory_qualification.as_ref().unwrap())
-            .await;
-        phase::record_operator_availability(case).await;
-    } else {
-        // A new fixture observation for the real process's newly created boot.
-        // No offer/selection exists yet and no sealed observation is retimed.
-        let mut snapshot = case.env.input.node.clone();
-        snapshot.target = aq_selection::ExecutionTarget::Worker {
-            node_id: identity.node_id,
-            boot_id: identity.boot_id,
-        };
-        let now = chrono::Utc::now().timestamp_millis() as u64;
-        snapshot.revision += 1;
-        snapshot.observed_at_ms = now;
-        snapshot.expires_at_ms = now + 30000;
-        for c in &mut snapshot.credential_bindings {
-            c.observed_at_ms = now;
-            c.expires_at_ms = now + 30000;
-        }
-        sqlx::query("UPDATE intelligence_node_snapshots SET boot_id=$2,sequence=1,revision=revision+1,snapshot=$3 WHERE node_id=$1")
-            .bind(identity.node_id).bind(identity.boot_id).bind(json!(snapshot)).execute(&case.env.env.pool).await.unwrap();
-    }
+    record_worker_inventory(case, &identity, inventory_qualification.as_ref(), mode).await;
     input.write_all(b"{\"continue\":true}\n").await.unwrap();
     let mut result = read_frame(&mut output).await;
     if relay_output && result["phase"] == "prepared_inputs_awaiting_synthetic_assessment" {
@@ -431,17 +464,7 @@ async fn run_worker(mode: Mode) {
     } else {
         None
     };
-    let expected_phase = if history_loss {
-        "phase_history_only"
-    } else if execute_phase {
-        "granted_phase_execution"
-    } else if mode.prepares_inputs() {
-        "prepared_phase_inputs"
-    } else if use_phase {
-        "accepted_preparation"
-    } else {
-        "granted"
-    };
+    let expected_phase = mode.expected_phase();
     if result["phase"] != expected_phase {
         if execute_phase {
             phase::diagnostics(case).await;
@@ -455,18 +478,7 @@ async fn run_worker(mode: Mode) {
         http_statuses.lock().unwrap()
     );
     if history_loss {
-        let statuses = http_statuses.lock().unwrap();
-        for (path, expected) in [
-            ("/v1/worker/profiled-v2/prepare", 503),
-            ("/v1/worker/profiled-v2/history", 200),
-        ] {
-            let seen: Vec<_> = statuses
-                .iter()
-                .filter(|(p, _, _)| p == path)
-                .map(|(_, status, _)| *status)
-                .collect();
-            assert_eq!(seen, vec![expected], "exactly one request to {path}");
-        }
+        verify_lost_execution_reply(&http_statuses);
     }
     if use_phase {
         phase::verify(case, &worker_root, &identity, &result).await;
