@@ -1,4 +1,6 @@
 //! dashboard-actions-1 request, operation and outcome types.
+pub mod playbooks;
+pub mod receipts;
 use super::{Envelope, Scope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,71 @@ pub struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<ActivationCounts>,
 }
+impl Operation {
+    /// Apply a bounded, internally consistent domain outcome to the admitted receipt.
+    pub fn with_outcome(
+        &self,
+        outcome: Outcome,
+        timestamp: String,
+        valid_reason: impl Fn(&str) -> bool,
+    ) -> Option<Self> {
+        let mut completed = self.clone();
+        if outcome.receipt_refs.len() <= 100
+            && outcome.affected_entities.len() <= 100
+            && outcome
+                .receipt_refs
+                .iter()
+                .chain(&outcome.affected_entities)
+                .all(EntityRef::valid)
+            && (outcome.disposition == Disposition::Confirmed
+                || (outcome.receipt_refs.is_empty() && outcome.affected_entities.is_empty()))
+            && (outcome.current_versions.is_empty()
+                || (outcome.disposition == Disposition::Conflict
+                    && outcome.current_versions.len() <= 32
+                    && outcome
+                        .current_versions
+                        .iter()
+                        .all(|(k, v)| safe(k, 128) && revision(v))))
+            && outcome
+                .reason
+                .is_none_or(|r| outcome.disposition == Disposition::Rejected && valid_reason(r))
+            && outcome.activation.is_none_or(|counts| {
+                outcome.disposition == Disposition::Confirmed
+                    && counts.activated as usize == outcome.affected_entities.len()
+            })
+        {
+            completed.disposition = outcome.disposition;
+            completed.receipt_refs = outcome.receipt_refs;
+            completed.affected_entities = outcome.affected_entities;
+            completed.current_versions = outcome.current_versions;
+            completed.reason = outcome.reason.map(str::to_owned);
+            completed.activation = outcome.activation;
+        } else {
+            completed.disposition = Disposition::Unknown;
+        }
+        if completed.disposition == self.disposition
+            && completed.receipt_refs == self.receipt_refs
+            && completed.affected_entities == self.affected_entities
+            && completed.current_versions == self.current_versions
+            && completed.reason == self.reason
+            && completed.activation == self.activation
+        {
+            return None;
+        }
+        completed.recovery = match completed.disposition {
+            Disposition::Pending | Disposition::Unknown => Recovery::LookupOriginal,
+            Disposition::Conflict | Disposition::Rejected => Recovery::RefreshAndReview,
+            Disposition::Confirmed => Recovery::None,
+        };
+        completed.updated_at = timestamp.max(self.updated_at.clone());
+        if serde_json::to_vec(&completed).map_or(true, |v| v.len() > 60000) {
+            completed = self.clone();
+            completed.disposition = Disposition::Unknown;
+        }
+        Some(completed)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum ActionVersion {
     #[serde(rename = "dashboard-actions-1")]
@@ -120,17 +187,25 @@ pub enum RequestError {
     TooLarge,
 }
 impl ActionRequest {
-    pub fn check(&self, max_bytes: usize) -> Result<(), RequestError> {
-        if self.operation_id.is_nil()
-            || !valid_kind(&self.kind)
-            || !self.subject.valid()
-            || self.expected_versions.len() > 32
-            || self
+    fn valid_identity(&self) -> bool {
+        !self.operation_id.is_nil() && valid_kind(&self.kind) && self.subject.valid()
+    }
+    fn valid_versions(&self) -> bool {
+        self.expected_versions.len() <= 32
+            && self
                 .expected_versions
                 .iter()
-                .any(|(k, v)| !safe(k, 128) || !revision(v))
-            || self.reason.as_deref().is_some_and(|v| !safe(v, 1024))
-        {
+                .all(|(key, value)| safe(key, 128) && revision(value))
+    }
+    fn valid_fields(&self) -> bool {
+        let valid_reason = self
+            .reason
+            .as_deref()
+            .is_none_or(|reason| safe(reason, 1024));
+        self.valid_identity() && self.valid_versions() && valid_reason
+    }
+    pub fn check(&self, max_bytes: usize) -> Result<(), RequestError> {
+        if !self.valid_fields() {
             return Err(RequestError::Invalid);
         }
         let len = serde_json::to_vec(self)
@@ -165,6 +240,12 @@ pub struct Outcome {
     pub activation: Option<ActivationCounts>,
 }
 impl Outcome {
+    pub fn pending() -> Self {
+        Self {
+            disposition: Disposition::Pending,
+            ..Self::unknown()
+        }
+    }
     pub fn unknown() -> Self {
         Self {
             disposition: Disposition::Unknown,
@@ -178,11 +259,8 @@ impl Outcome {
     pub fn conflict(current_versions: BTreeMap<String, String>) -> Self {
         Self {
             disposition: Disposition::Conflict,
-            receipt_refs: vec![],
-            affected_entities: vec![],
             current_versions,
-            reason: None,
-            activation: None,
+            ..Self::unknown()
         }
     }
     /// A definite refusal that changed nothing, with its reason code.
@@ -198,9 +276,7 @@ impl Outcome {
             disposition: Disposition::Confirmed,
             receipt_refs,
             affected_entities,
-            current_versions: BTreeMap::new(),
-            reason: None,
-            activation: None,
+            ..Self::unknown()
         }
     }
 }

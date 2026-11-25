@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 /// The prefix a task branch lives under, in central aq-git and on the forge.
 pub const TASK_BRANCH_PREFIX: &str = "refs/heads/aq/";
+/// Spec 0017 §6.2: the namespace of the attempts' try refs, never published.
+pub const TRY_PREFIX: &str = "refs/heads/aq-try/";
 
 /// A commit retained under a handle by `repo.retain_ref`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +101,15 @@ pub trait GitPort: Send + Sync {
         reference: &str,
         expected_head: Option<&str>,
     ) -> Result<RefDeletion, GitFailure>;
+    /// Deletes `reference` in the central pool only, under the lease
+    /// `expected_head`, for when the remote branch moved past it by a refresh.
+    async fn delete_central_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure>;
 }
 
 /// A hex object id as aq-git writes it: 40 or 64 lowercase hex digits.
@@ -129,8 +140,7 @@ impl SocketGit {
 
     async fn call(
         &self,
-        operation: Uuid,
-        name: &str,
+        (operation, name): (Uuid, &str),
         repo: &GitTarget,
         params: Value,
     ) -> Result<Value, GitFailure> {
@@ -184,14 +194,39 @@ impl SocketGit {
         reference: &str,
     ) -> Result<Option<String>, GitFailure> {
         let params = json!({"ref": reference});
-        let result = self.call(Uuid::new_v4(), "ref.show", repo, params).await?;
+        let result = self
+            .call((Uuid::new_v4(), "ref.show"), repo, params)
+            .await?;
         let oid = &result["oid"];
-        if result["ref"] != reference || !(oid.is_null() || oid["algorithm"] == "sha1") {
+        let typed = oid.is_null() || oid["algorithm"] == "sha1";
+        if result["ref"] != reference || !typed {
             return Err(GitFailure::protocol());
         }
         match oid["hex"].as_str() {
             None if oid.is_null() => Ok(None),
             Some(hex) if object_id(hex) => Ok(Some(hex.to_owned())),
+            _ => Err(GitFailure::protocol()),
+        }
+    }
+
+    /// Spec 0017 §6.2: deletes an attempt's try ref (`refs/heads/aq-try/…`)
+    /// from the central repository only (`ref.delete` with `remote: false`);
+    /// an absent ref is already deleted. Never touches GitHub.
+    pub async fn delete_try_ref(
+        &self,
+        repo: &GitTarget,
+        reference: &str,
+    ) -> Result<RefDeletion, GitFailure> {
+        if !reference.starts_with(TRY_PREFIX) {
+            return Err(GitFailure::protocol());
+        }
+        let params = json!({"ref": reference, "remote": false, "expected_old": null});
+        let result = self
+            .call((Uuid::new_v4(), "ref.delete"), repo, params)
+            .await?;
+        match result["outcome"].as_str() {
+            Some("deleted") => Ok(RefDeletion::Deleted),
+            Some("already_absent") => Ok(RefDeletion::AlreadyAbsent),
             _ => Err(GitFailure::protocol()),
         }
     }
@@ -215,6 +250,45 @@ fn task_ref(reference: &str) -> Result<&str, GitFailure> {
     })
 }
 
+impl RefPublication {
+    fn from_reply(
+        result: &Value,
+        reference: &str,
+        old: &Value,
+        expected_source: Option<&str>,
+    ) -> Result<Self, GitFailure> {
+        let head = match result["outcome"].as_str() {
+            Some("applied") if result["target"] == reference && &result["old"] == old => {
+                sha1_hex(&result["new"])?
+            }
+            Some("already_present") => sha1_hex(&result["observed_target"])?,
+            Some("rejected") if result["reason"] == "target_moved" => {
+                let observed = sha1_hex(&result["observed_target"]).ok();
+                match observed {
+                    Some(head) if expected_source == Some(head.as_str()) => head,
+                    _ => return Ok(RefPublication::Moved),
+                }
+            }
+            Some("rejected") => {
+                return Err(GitFailure {
+                    code: "rejected".into(),
+                    message: result["reason"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(256)
+                        .collect(),
+                    transient: false,
+                });
+            }
+            _ => return Err(GitFailure::protocol()),
+        };
+        if expected_source.is_some_and(|expected| head != expected) {
+            return Err(GitFailure::protocol());
+        }
+        Ok(RefPublication::Published { head })
+    }
+}
 #[async_trait::async_trait]
 impl GitPort for SocketGit {
     async fn retain_ref(
@@ -232,8 +306,7 @@ impl GitPort for SocketGit {
         }
         let result = self
             .call(
-                operation,
-                "repo.retain_ref",
+                (operation, "repo.retain_ref"),
                 repo,
                 json!({"ref": reference}),
             )
@@ -269,7 +342,7 @@ impl GitPort for SocketGit {
         if let Some(source) = expected_source {
             params["expected_source"] = sha1(source)?;
         }
-        let result = match self.call(operation, "publish", repo, params).await {
+        let result = match self.call((operation, "publish"), repo, params).await {
             Ok(result) => result,
             Err(e) if e.code == "object_unavailable" => return Ok(RefPublication::NoRef),
             Err(e) if matches!(e.code.as_str(), "target_moved" | "source_moved") => {
@@ -277,32 +350,7 @@ impl GitPort for SocketGit {
             }
             Err(e) => return Err(e),
         };
-        let head = match result["outcome"].as_str() {
-            Some("applied") if result["target"] == reference && result["old"] == old => {
-                sha1_hex(&result["new"])?
-            }
-            Some("already_present") => sha1_hex(&result["observed_target"])?,
-            Some("rejected") if result["reason"] == "target_moved" => {
-                return Ok(RefPublication::Moved);
-            }
-            Some("rejected") => {
-                return Err(GitFailure {
-                    code: "rejected".into(),
-                    message: result["reason"]
-                        .as_str()
-                        .unwrap_or("")
-                        .chars()
-                        .take(256)
-                        .collect(),
-                    transient: false,
-                });
-            }
-            _ => return Err(GitFailure::protocol()),
-        };
-        if expected_source.is_some_and(|expected| head != expected) {
-            return Err(GitFailure::protocol());
-        }
-        Ok(RefPublication::Published { head })
+        RefPublication::from_reply(&result, reference, &old, expected_source)
     }
 
     async fn delete_ref(
@@ -311,6 +359,28 @@ impl GitPort for SocketGit {
         repo: &GitTarget,
         reference: &str,
         expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, true)
+            .await
+    }
+    async fn delete_central_ref(
+        &self,
+        operation: Uuid,
+        repo: &GitTarget,
+        reference: &str,
+        expected_head: Option<&str>,
+    ) -> Result<RefDeletion, GitFailure> {
+        self.delete((operation, repo), reference, expected_head, false)
+            .await
+    }
+}
+impl SocketGit {
+    async fn delete(
+        &self,
+        (operation, repo): (Uuid, &GitTarget),
+        reference: &str,
+        expected_head: Option<&str>,
+        remote: bool,
     ) -> Result<RefDeletion, GitFailure> {
         let reference = task_ref(reference)?;
         let lease = expected_head
@@ -323,10 +393,9 @@ impl GitPort for SocketGit {
             .transpose()?;
         let result = self
             .call(
-                operation,
-                "ref.delete",
+                (operation, "ref.delete"),
                 repo,
-                json!({"ref": reference, "remote": true, "expected_old": lease}),
+                json!({"ref": reference, "remote": remote, "expected_old": lease}),
             )
             .await?;
         match result["outcome"].as_str() {

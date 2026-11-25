@@ -2,13 +2,9 @@
 """Private, replayable development configuration and public-API seed."""
 import argparse
 import fcntl
-import hashlib
 import json
 import os
-import re
 from pathlib import Path
-import secrets
-import stat
 import subprocess
 import sys
 import tempfile
@@ -18,222 +14,11 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from migration_catalog import state_format
+from dev_vault import ROOT, WORKSPACE, has_url_parameters, intelligence_section, paths, prepare, private_file
 
-ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = "e0000000-0000-4000-8000-000000000001"
 PROJECT = "e0000000-0000-4000-8000-000000000002"
 REPOSITORY = "e0000000-0000-4000-8000-000000000003"
 TASK = "e0000000-0000-4000-8000-000000000004"
-
-
-def private_file(path, content):
-    """Create once, refusing unsafe retained files without printing their bytes."""
-    try:
-        metadata = path.lstat()
-        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
-                or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077
-                or metadata.st_size == 0):
-            raise ValueError("unsafe retained development settlement file") from None
-    except FileNotFoundError:
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".dev-settlement-", delete=False) as out:
-                temporary = Path(out.name)
-                out.write(content)
-                out.flush()
-                os.fsync(out.fileno())
-            os.link(temporary, path)
-        finally:
-            if temporary is not None:
-                temporary.unlink()
-
-
-def paths():
-    state = Path(os.environ.get("AQ_DEV_STATE_DIR", ROOT / "state.dev")).resolve()
-    secret = Path(os.environ.get("AQ_SECRETS_DIR", ROOT / "secrets.dev")).resolve()
-    vault = Path(os.environ.get("AQ_VAULT_DIR", state / "vault")).resolve()
-    return state, secret, vault
-
-
-def intelligence_section():
-    """Opt-in operator [intelligence] tables (MS1: a subscription-login
-    credential and its material store). Configuration only, never login bytes:
-    those enter through `aq-server import-login`."""
-    name = os.environ.get("AQ_DEV_INTELLIGENCE_FILE")
-    if not name:
-        return "", ""
-    import tomllib
-    path = Path(name)
-    try:
-        metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 2 * 1024 * 1024:
-            raise ValueError()
-        text = path.read_text()
-        tables = tomllib.loads(text)
-    except (OSError, ValueError, UnicodeDecodeError):
-        raise ValueError("AQ_DEV_INTELLIGENCE_FILE must be a small regular TOML file with only [intelligence] tables") from None
-    # MS1: optionally also the matching [profiled_execution] tables and the
-    # private result-media store the dashboard's Results view requires.
-    if "intelligence" not in tables or not set(tables) <= {"intelligence", "intelligence_preferences_file", "profiled_execution", "result_media", "provider_quota"}:
-        raise ValueError("AQ_DEV_INTELLIGENCE_FILE must contain only [intelligence] (and [profiled_execution], [result_media]) tables")
-    prefix = ""
-    if "intelligence_preferences_file" in tables:
-        path = tables["intelligence_preferences_file"]
-        if not isinstance(path, str) or not Path(path).is_absolute():
-            raise ValueError("intelligence_preferences_file must be an absolute metadata path")
-        text, count = re.subn(r'(?m)^intelligence_preferences_file\s*=.*(?:\n|$)', '', text)
-        if count != 1:
-            raise ValueError("Use a single-line intelligence_preferences_file assignment")
-        prefix = "intelligence_preferences_file = " + json.dumps(path) + "\n"
-    return prefix, "\n" + text if text.endswith("\n") else "\n" + text + "\n"
-
-
-def public_origin():
-    """The CSRF origin is the published admin URL (AQ_DEV_SERVER_URL), never
-    vault.example's 127.0.0.1:8080: a stack on another port would refuse every
-    browser write (QA 2026-11-06 section 1)."""
-    port = os.environ.get("AQ_DEV_ADMIN_PORT", "8080")
-    url = urllib.parse.urlsplit(os.environ.get("AQ_DEV_SERVER_URL") or f"http://127.0.0.1:{port}")
-    try:
-        url.port
-    except ValueError:
-        url = None
-    if (url is None or url.scheme not in ("http", "https") or not url.hostname or url.username
-            or url.password or url.query or url.fragment or url.path not in ("", "/")):
-        raise ValueError("AQ_DEV_SERVER_URL must be an http(s) origin such as http://127.0.0.1:28080")
-    return f"{url.scheme}://{url.netloc}"
-
-
-def origin_line(config):
-    lines = config.split("\n")
-    matches = [i for i, line in enumerate(lines) if line.startswith("public_origin = ")]
-    if len(matches) != 1:
-        raise ValueError("development vault needs exactly one [server] public_origin")
-    return lines, matches[0]
-
-
-def with_origin(config, origin):
-    lines, index = origin_line(config)
-    lines[index] = f'public_origin = "{origin}"'
-    return "\n".join(lines)
-
-
-def prepare():
-    state, secret, vault = paths()
-    for directory in (state, secret, vault,
-                      state / "updater-spool/requests", state / "updater-spool/status"):
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        directory.chmod(0o700)
-    # Only disposable, non-secret test repositories are mounted here. The
-    # private state parent still excludes other host users.
-    (state / "fixture").mkdir(exist_ok=True, mode=0o755)
-    (state / "fixture").chmod(0o755)
-    for name, mode in (("postgres_password", 0o644), ("graph_database_password", 0o644), ("graph_token", 0o600)):
-        path = secret / name
-        try:
-            with path.open("x") as out:
-                out.write(secrets.token_hex(32))
-        except FileExistsError:
-            if path.is_symlink() or not path.is_file() or path.stat().st_size < 32:
-                raise ValueError("invalid existing development credential file")
-        path.chmod(mode)
-    private_file(secret / "playbook_database_password", secrets.token_hex(32).encode())
-    private_file(secret / "playbook_engine_keys", json.dumps(dict(active_key_id="dev-engine-1",
-        keys={"dev-engine-1": secrets.token_hex(32)})).encode())
-    private_file(secret / "playbook_bridge_key", secrets.token_bytes(32))
-    private_file(secret / "terminal_protection_key", secrets.token_bytes(32))
-    origin = public_origin()
-    target = vault / "config.toml"
-    if target.exists() and os.environ.get("AQ_DEV_REPLACE_OPERATOR_SECTION") != "1":
-        # A replay keeps the stack's first origin (smoke stacks publish
-        # ephemeral ports only after `up`); explicit replacement applies a new one.
-        lines, index = origin_line(target.read_text())
-        origin = lines[index].removeprefix("public_origin = ").strip('"')
-    config = with_origin((ROOT / "vault.example/config.toml").read_text(), origin)
-    config += '''
-[agent_access]
-graph_url = "http://aq-graph:8741"
-graph_token_file = "/run/aq-dev/graph_token"
-mutation_actor_id = "dev-service"
-[source_retention]
-staging_root = "/var/lib/aq/source-staging"
-git_root = "/var/lib/aq/git"
-git_socket = "/run/aq-git/central.sock"
-[terminals.protection]
-active_key_id = "dev-terminal-1"
-[[terminals.protection.keys]]
-id = "dev-terminal-1"
-file = "/run/aq-dev/terminal_protection_key"
-'''
-    generated = config
-    root_options, operator_tables = intelligence_section()
-    config = root_options + config + operator_tables
-    if target.exists() and target.read_text() != config:
-        # MS1: an operator may replace only the appended operator section of an
-        # existing vault (revisioned [intelligence]/[profiled_execution]); every
-        # generated table must be byte-identical.
-        # The origin follows the published URL, so an older vault with the
-        # template origin is updated here too, in both copies.
-        previous = target.read_text()
-        if not (os.environ.get("AQ_DEV_REPLACE_OPERATOR_SECTION") == "1"
-                and re.sub(r'(?m)^intelligence_preferences_file\s*=.*(?:\n|$)', '', with_origin(previous, origin)).startswith(generated)):
-            raise ValueError("development vault differs from generated configuration; preserve it and use a new AQ_DEV_STATE_DIR")
-        # The settlement config is config.toml plus [playbooks]: carry it over.
-        playbooks = vault / "playbooks.toml"
-        if playbooks.exists():
-            retained = playbooks.read_text()
-            if not retained.startswith(previous):
-                raise ValueError("retained settlement configuration differs; use a fresh development stack")
-            playbooks.write_text(config + retained[len(previous):])
-    target.write_text(config)
-    internal = internal_config(state)
-    return dict(**internal, AQ_STATE_FORMAT=str(state_format(ROOT)), AQ_DEV_STATE_DIR=str(state),
-                AQ_VAULT_DIR=str(vault), AQ_SECRETS_DIR=str(secret),
-                AQ_UPDATER_SPOOL=str(state / "updater-spool"), AQ_DEV_UID=str(os.getuid()),
-                AQ_DEV_GID=str(os.getgid()), AQ_DEV_GRAPH_WORKSPACE=WORKSPACE,
-                AQ_SERVER_IMAGE=os.environ.get("AQ_SERVER_IMAGE", "agent-q-server:dev"))
-
-
-def internal_config(state):
-    """Opt-in internal work host config (docs/operations/internal-work.md).
-
-    Written to <state>/internal/internal.json (0600) only when
-    AQ_DEV_INTERNAL_DATABASE_URL and at least one harness are given by
-    AQ_DEV_INTERNAL_{CODEX,CLAUDE}_NATIVE and _LOGIN (absolute paths; the native
-    executable is hashed here). Returns {} and writes nothing otherwise.
-
-    The file is owned by the invoking developer, mode 0600, and holds the
-    database URL (a credential): do not commit or share it. The host refuses a
-    config file (and login files) not owned by the uid it runs as, which is
-    root in the container, so make a root-owned copy before mounting it
-    (`chown root:root`, `chmod 0600`; see docs/operations/internal-work.md).
-    """
-    url = os.environ.get("AQ_DEV_INTERNAL_DATABASE_URL")
-    config = dict(database_url=url, homes="/internal/homes", scratch="/internal/scratch",
-                  poll_ms=int(os.environ.get("AQ_DEV_INTERNAL_POLL_MS", "200")))
-    # Container paths of compose.workers.yaml; the host-side inputs are mounted there.
-    mounts = dict(codex=("/opt/codex/codex", "/logins/codex/"), claude=("/opt/claude/claude", "/logins/claude/"))
-    for name, (native_target, login_dir) in mounts.items():
-        native = os.environ.get(f"AQ_DEV_INTERNAL_{name.upper()}_NATIVE")
-        login = os.environ.get(f"AQ_DEV_INTERNAL_{name.upper()}_LOGIN")
-        if native and login:
-            config[name] = dict(native=native_target,
-                                native_digest=hashlib.sha256(Path(native).read_bytes()).hexdigest(),
-                                secret_file=login_dir + Path(login).name)
-    if not url or not ("codex" in config or "claude" in config):
-        return {}
-    directory = state / "internal"
-    directory.mkdir(exist_ok=True, mode=0o700)
-    directory.chmod(0o700)
-    # Replaced on every prepare: the digests follow the supplied executables.
-    target = directory / "internal.json"
-    temporary = directory / ".internal.json.new"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as out:
-        json.dump(config, out, sort_keys=True)
-    os.replace(temporary, target)
-    return dict(AQ_INTERNAL_CONFIG_DIR=str(directory))
 
 
 def compose(env, *args, capture=True, input=None, timeout=None):
@@ -258,18 +43,45 @@ def enable_settlement():
 
 def enable_settlement_locked(env):
     state, _, vault = paths()
+    server = os.environ.get("AQ_DEV_SERVER_URL", "http://127.0.0.1:8080")
+    owner = settlement_owner(state, server)
+    pins = settlement_pins(env, state, owner)
+    write_settlement(vault, pins)
+    # Stop gracefully before acquiring the retained engine owner on a new process.
+    compose(env, "stop", "server")
+    compose(env, "run", "--rm", "--no-deps", "dev-state-init")
+    compose(env, "up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "server")
+    status = http(server + "/api/playbooks/status")
+    if status["namespace"]["namespace_id"] != pins["namespace_id"]:
+        raise ValueError("settlement owner did not activate the retained namespace")
+    return dict(namespace_id=pins["namespace_id"], grant_id=pins["grant_id"],
+                expires_at_ms=pins["expires_at_ms"])
+
+
+def settlement_owner(state, server):
     receipt = state / "seed.json"
     if not receipt.exists() or json.loads(receipt.read_text()).get("project_id") != PROJECT:
         raise ValueError("settlement requires a completed development seed")
-    server = os.environ.get("AQ_DEV_SERVER_URL", "http://127.0.0.1:8080")
     users = http(server + "/api/users")
     owners = [user for user in users if user["email"] == "owner@localhost" and user["role"] == "owner"]
     if len(owners) != 1:
         raise ValueError("settlement requires the current development owner")
     owner_id = http(server + "/api/v1/bootstrap")["data"]["principal"]["id"]
+    require_seed_project(server)
+    return owner_id
+
+
+def require_seed_project(server):
     project = http(server + "/api/projects/" + PROJECT)
-    if not project or project["binding"]["graph_workspace_id"] != WORKSPACE or not project["binding"]["enabled"]:
+    if not project or not active_seed_binding(project["binding"]):
         raise ValueError("settlement project differs from the development seed")
+
+
+def active_seed_binding(binding):
+    return binding["graph_workspace_id"] == WORKSPACE and binding["enabled"]
+
+
+def settlement_pins(env, state, owner_id):
     # Discover the actual socket UID; do not assume the image's postgres UID.
     socket_uid = int(compose(env, "exec", "-T", "postgres", "stat", "-c", "%u",
         "/run/aq-postgresql/.s.PGSQL.5432").strip())
@@ -280,11 +92,23 @@ def enable_settlement_locked(env):
     pins = json.loads(pins_path.read_text())
     if pins["owner_user_id"] != owner_id or pins["socket_owner_uid"] != socket_uid:
         raise ValueError("retained settlement owner/socket differs; use a fresh development stack")
+    return pins
+
+
+def write_settlement(vault, pins):
     artifact = (ROOT / "scripts/dev-playbook-artifact.json").read_bytes()
     private_file(vault / "playbook-artifact.json", artifact)
     if (vault / "playbook-artifact.json").read_bytes() != artifact:
         raise ValueError("retained settlement artifact differs; use a fresh development stack")
-    config = (vault / "config.toml").read_text() + f'''
+    config = settlement_config(vault, pins)
+    private_file(vault / "playbooks.toml", config.encode())
+    if (vault / "playbooks.toml").read_text() != config:
+        raise ValueError("retained settlement configuration differs; use a fresh development stack")
+
+
+def settlement_config(vault, pins):
+    socket_uid = pins["socket_owner_uid"]
+    return (vault / "config.toml").read_text() + f'''
 [playbooks]
 enabled = true
 profile = "human_review_v2"
@@ -319,18 +143,6 @@ workspace_id = "{WORKSPACE}"
 project_id = "{PROJECT}"
 task_id = "{TASK}"
 '''
-    private_file(vault / "playbooks.toml", config.encode())
-    if (vault / "playbooks.toml").read_text() != config:
-        raise ValueError("retained settlement configuration differs; use a fresh development stack")
-    # Stop gracefully before acquiring the retained engine owner on a new process.
-    compose(env, "stop", "server")
-    compose(env, "run", "--rm", "--no-deps", "dev-state-init")
-    compose(env, "up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "server")
-    status = http(server + "/api/playbooks/status")
-    if status["namespace"]["namespace_id"] != pins["namespace_id"]:
-        raise ValueError("settlement owner did not activate the retained namespace")
-    return dict(namespace_id=pins["namespace_id"], grant_id=pins["grant_id"],
-                expires_at_ms=pins["expires_at_ms"])
 
 
 def designation(local_fixture=False):
@@ -338,21 +150,44 @@ def designation(local_fixture=False):
     if any(not os.environ.get(key) for key in keys):
         raise ValueError("seed requires explicit DEV_SCRATCH_REPO_URL, DEV_SCRATCH_BASE_BRANCH and DEV_SCRATCH_CREDENTIAL_REF (use 'none' for a public repository); no scratch repository is designated by default")
     url, branch, credential = (os.environ[key] for key in keys)
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.username or parsed.password or parsed.query or parsed.fragment or any(c.isspace() for c in url):
-        raise ValueError("DEV_SCRATCH_REPO_URL must not contain credentials, query, fragment or whitespace")
-    if not (parsed.scheme == "https" and parsed.hostname == "github.com" and len(parsed.path.strip("/").split("/")) == 2):
-        # MS1 D1: a writable local bare remote inside the aq-git volume.
-        local_remote = os.environ.get("DEV_SCRATCH_LOCAL_REMOTE") == "1" and url.startswith("/var/lib/aq/remotes/")
-        if local_remote and not parsed.scheme and ".." not in url:
-            local_fixture = True
-        elif not (local_fixture and url.startswith("/fixture/") and not parsed.scheme):
-            raise ValueError("DEV_SCRATCH_REPO_URL must designate an HTTPS GitHub repository")
+    local_fixture = scratch_location(url, local_fixture)
+    check_scratch_profile(branch, credential)
+    return dict(url=url, base_branch=branch, credential_ref=credential, local_fixture=local_fixture)
+
+
+def check_scratch_profile(branch, credential):
     if subprocess.run(["git", "check-ref-format", "refs/heads/" + branch], capture_output=True).returncode:
         raise ValueError("invalid DEV_SCRATCH_BASE_BRANCH")
     if credential != "none":
         raise ValueError("pinned aq-git does not enable named credential profiles; DEV_SCRATCH_CREDENTIAL_REF must explicitly be 'none' for a public scratch repository")
-    return dict(url=url, base_branch=branch, credential_ref=credential, local_fixture=local_fixture)
+
+
+def scratch_location(url, local_fixture):
+    parsed = urllib.parse.urlsplit(url)
+    if dirty_repository_url(url, parsed):
+        raise ValueError("DEV_SCRATCH_REPO_URL must not contain credentials, query, fragment or whitespace")
+    if is_github_repository(parsed):
+        return local_fixture
+    if not parsed.scheme and allowed_local_path(url, local_fixture):
+        return True
+    raise ValueError("DEV_SCRATCH_REPO_URL must designate an HTTPS GitHub repository")
+
+
+def dirty_repository_url(url, parsed):
+    return has_url_parameters(parsed) or any(c.isspace() for c in url)
+
+
+def is_github_repository(parsed):
+    return (parsed.scheme, parsed.hostname, len(parsed.path.strip("/").split("/"))) == ("https", "github.com", 2)
+
+
+def allowed_local_path(url, local_fixture):
+    return local_scratch_remote(url) or (local_fixture and url.startswith("/fixture/"))
+
+
+def local_scratch_remote(url):
+    return (os.environ.get("DEV_SCRATCH_LOCAL_REMOTE") == "1"
+            and url.startswith("/var/lib/aq/remotes/") and ".." not in url)
 
 
 def http(url, body=None, token=None):
@@ -384,11 +219,16 @@ def git_request(state, operation, params=None, mutation=None):
                       "--input", "-", "--json", "request", input=json.dumps(request) + "\n", timeout=15)
     except subprocess.TimeoutExpired:
         raise RuntimeError("aq-git request timed out; replay the same seed operation") from None
+    return git_response(raw, request)
+
+
+def git_response(raw, request):
     if len(raw.encode()) > 65536 or not raw.endswith("\n"):
         raise RuntimeError("invalid bounded aq-git response")
     response = json.loads(raw)
-    if response.get("request_id") != request["request_id"] or response.get("protocol_version") != 1 or response.get("ok") is not True:
-        raise RuntimeError("aq-git refused " + operation)
+    identity = (response.get("request_id"), response.get("protocol_version"))
+    if identity != (request["request_id"], 1) or response.get("ok") is not True:
+        raise RuntimeError("aq-git refused " + request["operation"])
     return response["result"]
 
 
@@ -402,11 +242,7 @@ def seed(local_fixture=False):
 
 
 def verify_worker_credential(record, node_id, worker_url):
-    if (not isinstance(record, dict) or record.get("node_id") != node_id
-            or not isinstance(record.get("credential"), str)
-            or not record["credential"].startswith("aqn_")
-            or not isinstance(record.get("heartbeat_interval_secs"), int)
-            or record["heartbeat_interval_secs"] <= 0):
+    if not matches_worker_record(record, node_id):
         raise ValueError("saved worker credential is incomplete or belongs to another node; existing identities are preserved")
     nonce = uuid.uuid4().hex
     try:
@@ -415,6 +251,15 @@ def verify_worker_credential(record, node_id, worker_url):
         raise ValueError("saved worker credential could not be authenticated; existing identities are preserved") from None
     if not isinstance(reply, dict) or reply.get("nonce") != nonce:
         raise ValueError("worker credential probe response was not correlated; existing identities are preserved")
+
+
+def matches_worker_record(record, node_id):
+    if not isinstance(record, dict) or record.get("node_id") != node_id:
+        return False
+    token = record.get("credential")
+    interval = record.get("heartbeat_interval_secs")
+    return (isinstance(token, str) and token.startswith("aqn_")
+            and isinstance(interval, int) and interval > 0)
 
 
 def save_worker_credential(path, record):
@@ -447,40 +292,69 @@ def seed_locked(choice, local_fixture):
     graph = os.environ.get("AQ_DEV_GRAPH_URL", "http://127.0.0.1:8741")
     server = os.environ.get("AQ_DEV_SERVER_URL", "http://127.0.0.1:8080")
     worker_url = os.environ.get("AQ_DEV_WORKER_URL", "http://127.0.0.1:8081")
+    node_id = seed_worker(server, worker_url, secret)
+    seed_graph_task(graph, secret)
+    register_seed_repository(state, choice, local_fixture)
+    seed_project(server, node_id)
+    result = dict(designation=choice, project_id=PROJECT, task_id=TASK, workspace_id=WORKSPACE,
+                  repository_id=REPOSITORY, node_id=node_id)
+    receipt.write_text(json.dumps(result, sort_keys=True) + "\n")
+    return result
+
+
+def seed_worker(server, worker_url, secret):
     workers = [worker for worker in http(server + "/api/workers") if worker["name"] == "e0-local-development"]
     if len(workers) > 1 or any(worker["status"] == "revoked" for worker in workers):
         raise ValueError("seed worker identity is ambiguous or revoked; existing identities are preserved")
     credential_file = secret / "dev_worker.json"
     if workers:
         node_id = workers[0]["id"]
-        try:
-            if credential_file.is_symlink() or not credential_file.is_file():
-                raise ValueError()
-            worker = json.loads(credential_file.read_text())
-        except (ValueError, OSError):
-            raise ValueError("saved worker credential is missing or invalid; existing identities are preserved; recover the credential or use a new state, secrets and Compose project") from None
+        worker = read_worker_credential(credential_file)
         verify_worker_credential(worker, node_id, worker_url)
-    else:
-        if credential_file.exists() or credential_file.is_symlink():
-            raise ValueError("saved worker credential has no matching worker; existing identities are preserved; use a new state, secrets and Compose project")
-        enrollment = http(server + "/api/enrollments", {})
-        worker = http(worker_url + "/v1/worker/enroll", dict(code=enrollment["code"],
-            name="e0-local-development", worker_version="e0-seed", protocol_version=1))
-        node_id = worker["node_id"]
-        verify_worker_credential(worker, node_id, worker_url)
-        save_worker_credential(credential_file, worker)
+        return node_id
+    return enroll_worker(server, worker_url, credential_file)
+
+
+def enroll_worker(server, worker_url, credential_file):
+    if credential_file.exists() or credential_file.is_symlink():
+        raise ValueError("saved worker credential has no matching worker; existing identities are preserved; use a new state, secrets and Compose project")
+    enrollment = http(server + "/api/enrollments", {})
+    worker = http(worker_url + "/v1/worker/enroll", dict(code=enrollment["code"],
+        name="e0-local-development", worker_version="e0-seed", protocol_version=1))
+    node_id = worker["node_id"]
+    verify_worker_credential(worker, node_id, worker_url)
+    save_worker_credential(credential_file, worker)
+    return node_id
+
+
+def read_worker_credential(credential_file):
+    try:
+        if credential_file.is_symlink() or not credential_file.is_file():
+            raise ValueError()
+        return json.loads(credential_file.read_text())
+    except (ValueError, OSError):
+        raise ValueError("saved worker credential is missing or invalid; existing identities are preserved; recover the credential or use a new state, secrets and Compose project") from None
+
+
+def seed_graph_task(graph, secret):
     token = (secret / "graph_token").read_text().strip()
     workspace = graph + "/v1/workspaces/" + WORKSPACE
     if http(workspace + "/nodes/" + TASK, token=token) is None:
         http(workspace + "/mutations", dict(idempotency_key="e0-development-task-v1", reason="E0 local development seed",
              operations=[dict(op="create_node", id=TASK, kind="task", title="Local development scratch task",
                               body="Use only the owner-designated scratch repository.", task_state="active")]), token)
+
+
+def register_seed_repository(state, choice, local_fixture):
     # Stable operation ID makes response-loss replay safe at the Git authority.
     git_request(state, "repo.register", dict(binding=dict(identity="e0-development", mode="central",
         remote_url=choice["url"], allow_file_transport=local_fixture,
         allowed_refs=["refs/heads/" + choice["base_branch"]],
         allowed_targets=["refs/heads/" + choice["base_branch"]])),
         mutation="e0000000-0000-4000-8000-000000000006")
+
+
+def seed_project(server, node_id):
     # Roles and profiles need no seeding: the server installs its default documents at start.
     current = http(server + "/api/projects/" + PROJECT)
     if current is None:
@@ -492,12 +366,8 @@ def seed_locked(choice, local_fixture):
             context=[], ceilings=dict(permissions=[dict(operation="task.read", scope_reference="project:example")],
                 context_bytes=8192, wall_time_ms=60000, memory_bytes=268435456, cpu_millis=60000, process_limit=8,
                 cost_limit_microunits=None, currency=None, require_hard_cost_enforcement=False))
-        current = http(server + "/api/projects/" + PROJECT,
+        http(server + "/api/projects/" + PROJECT,
             dict(operation_id="e0000000-0000-4000-8000-000000000008", expected_revision=0, binding=binding))
-    result = dict(designation=choice, project_id=PROJECT, task_id=TASK, workspace_id=WORKSPACE,
-                  repository_id=REPOSITORY, node_id=node_id)
-    receipt.write_text(json.dumps(result, sort_keys=True) + "\n")
-    return result
 
 
 def main():
@@ -506,34 +376,43 @@ def main():
     parser.add_argument("--local-fixture", action="store_true", help="accept only a /fixture/ path owned by the disposable smoke test")
     args, remaining = parser.parse_known_args()
     try:
-        if args.command == "seed":
-            result = seed(args.local_fixture)
-            result["settlement"] = enable_settlement()
-        elif args.command == "settlement":
-            result = enable_settlement()
-        else:
-            result = prepare()
-            if args.command == "up":
-                candidate = json.loads((ROOT / "vendor/worker-candidate.json").read_text())
-                result.update(AQ_WORKER_SOURCE_REVISION=candidate["source_revision"], AQ_WORKER_ARCHIVE_SHA256=candidate["archive_sha256"], AQ_WORKER_VERSION=candidate["version"])
-                builds = []
-                for variable, service in (("AQ_SERVER_IMAGE", "server"), ("AQ_DEV_GRAPH_IMAGE", "aq-graph")):
-                    if not os.environ.get(variable):
-                        builds.append(service)
-                if builds:
-                    compose(result, "build", *builds, capture=False)
-                compose(result, "up", "--no-build", *remaining, capture=False)
-                return
-            if args.command == "down":
-                compose(result, "down", *remaining, capture=False)
-                return
-            if args.command == "readiness":
-                compose(result, "exec", "-T", "server", "aq-server", "dependency-readiness", "--vault", "/vault", capture=False)
-                return
-        print(json.dumps(result, sort_keys=True))
+        result = run_command(args, remaining)
+        if result is not None:
+            print(json.dumps(result, sort_keys=True))
     except (ValueError, RuntimeError, OSError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
+
+
+def run_command(args, remaining):
+    if args.command == "seed":
+        result = seed(args.local_fixture)
+        result["settlement"] = enable_settlement()
+        return result
+    if args.command == "settlement":
+        return enable_settlement()
+    environment = prepare()
+    if args.command == "up":
+        start_stack(environment, remaining)
+    elif args.command == "down":
+        compose(environment, "down", *remaining, capture=False)
+    elif args.command == "readiness":
+        compose(environment, "exec", "-T", "server", "aq-server", "dependency-readiness", "--vault", "/vault", capture=False)
+    else:
+        return environment
+    return None
+
+
+def start_stack(environment, remaining):
+    candidate = json.loads((ROOT / "vendor/worker-candidate.json").read_text())
+    environment.update(AQ_WORKER_SOURCE_REVISION=candidate["source_revision"], AQ_WORKER_ARCHIVE_SHA256=candidate["archive_sha256"], AQ_WORKER_VERSION=candidate["version"])
+    builds = []
+    for variable, service in (("AQ_SERVER_IMAGE", "server"), ("AQ_DEV_GRAPH_IMAGE", "aq-graph")):
+        if not os.environ.get(variable):
+            builds.append(service)
+    if builds:
+        compose(environment, "build", *builds, capture=False)
+    compose(environment, "up", "--no-build", *remaining, capture=False)
 
 
 if __name__ == "__main__":

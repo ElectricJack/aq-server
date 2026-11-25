@@ -47,30 +47,13 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     let f = fixture().await;
     insert(&f).await;
     let app = aq_server::build_admin_router(f.state.clone());
-    let (status, b) = read(&app, "/api/v1/bootstrap", "owner@localhost").await;
-    assert_eq!(status, StatusCode::OK, "{b}");
-    assert_eq!(b["api_version"], "dashboard-read-1");
-    fixture_response("bootstrap", &b);
-    assert!(b["data"]["product"]["dashboard_digest"].is_null());
-    for c in b["data"]["capabilities"].as_array().unwrap() {
-        assert_eq!(c["version"], "1");
-    }
+    assert_bootstrap(&app).await;
     let (status, list) = read(&app, "/api/v1/sessions?limit=1", "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(list["data"]["items"].as_array().unwrap().len(), 1);
     fixture_response("sessions", &list);
     let row = &list["data"]["items"][0];
-    // No observation source was enrolled for this attempt: unknown, with the
-    // reason, and no invented times.
-    assert_eq!(row["observation"]["state"], "unknown");
-    assert_eq!(row["observation"]["reason"], "no_observation_source");
-    assert!(row["observation"].get("last_observation_at").is_none());
-    assert!(row["observation"].get("last_progress_at").is_none());
-    // QA RA-16: an unknown observation made now is not already stale.
-    assert!(
-        row["observation"]["fresh_until"].as_str() > row["observation"]["observed_at"].as_str()
-    );
-    assert_eq!(list["data"]["total"], json!({"value":1,"accuracy":"exact"}));
+    assert_unobserved_list(&list, row);
     let id = row["id"].as_str().unwrap();
     let (status, detail) = read(&app, &format!("/api/v1/sessions/{id}"), "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{detail}");
@@ -120,16 +103,42 @@ async fn live_subset_bootstrap_and_exact_session_scope_are_truthful() {
     ] {
         assert!(!serialized.contains(secret));
     }
-    let (status, p) = read(&app, "/api/v1/projects", "owner@localhost").await;
+    assert_project_overview(&app).await;
+}
+async fn assert_bootstrap(app: &Router) {
+    let (status, b) = read(app, "/api/v1/bootstrap", "owner@localhost").await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    assert_eq!(b["api_version"], "dashboard-read-1");
+    fixture_response("bootstrap", &b);
+    assert!(b["data"]["product"]["dashboard_digest"].is_null());
+    for c in b["data"]["capabilities"].as_array().unwrap() {
+        assert_eq!(c["version"], "1");
+    }
+}
+fn assert_unobserved_list(list: &Value, row: &Value) {
+    // No observation source was enrolled for this attempt: unknown, with the
+    // reason, and no invented times.
+    assert_eq!(row["observation"]["state"], "unknown");
+    assert_eq!(row["observation"]["reason"], "no_observation_source");
+    assert!(row["observation"].get("last_observation_at").is_none());
+    assert!(row["observation"].get("last_progress_at").is_none());
+    // QA RA-16: an unknown observation made now is not already stale.
+    assert!(
+        row["observation"]["fresh_until"].as_str() > row["observation"]["observed_at"].as_str()
+    );
+    assert_eq!(list["data"]["total"], json!({"value":1,"accuracy":"exact"}));
+}
+async fn assert_project_overview(app: &Router) {
+    let (status, p) = read(app, "/api/v1/projects", "owner@localhost").await;
     assert_eq!(status, StatusCode::OK, "{p}");
     fixture_response("projects", &p);
     assert_eq!(p["data"]["items"].as_array().unwrap().len(), 1);
-    let (_, o) = read(&app, "/api/v1/overview", "owner@localhost").await;
+    let (_, o) = read(app, "/api/v1/overview", "owner@localhost").await;
     assert_eq!(o["data"]["counts"]["running"]["value"], 0);
     assert_eq!(o["data"]["counts"]["running"]["accuracy"], "exact");
     fixture_response("overview", &o);
     assert_eq!(
-        read(&app, "/api/v1/sessions?limit=101", "owner@localhost")
+        read(app, "/api/v1/sessions?limit=101", "owner@localhost")
             .await
             .0,
         StatusCode::UNPROCESSABLE_ENTITY
@@ -380,35 +389,8 @@ async fn session_lifecycle_reports_are_historical_acl_scoped_and_never_live_obse
         list["data"]["items"][0]["lifecycle"],
         after["data"]["lifecycle"]
     );
-    // Lightweight warmed sample, not a benchmark/scale acceptance claim.
-    let mut warm_ms = Vec::new();
-    for _ in 0..5 {
-        let t = std::time::Instant::now();
-        let (status, _) = read(&app, &path, "owner@localhost").await;
-        assert_eq!(status, StatusCode::OK);
-        warm_ms.push(t.elapsed().as_secs_f64() * 1000.0);
-    }
-    let query = "SELECT e.state->'offer' AS offer,s.request_bytes AS started_request,s.request_digest AS started_digest,s.receipt_bytes AS started_receipt,z.request_bytes AS stopped_request,z.request_digest AS stopped_digest,z.receipt_bytes AS stopped_receipt FROM execution_attempts e LEFT JOIN profiled_started_receipts s USING(attempt_id) LEFT JOIN profiled_stopped_receipts z USING(attempt_id) WHERE e.attempt_id=$1";
-    assert!(include_str!("../../src/dashboard_api/service.rs").contains(query));
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {query}"))
-        .bind(q.binding.attempt_id)
-        .fetch_one(&f.db.pool().await)
-        .await
-        .unwrap();
-    eprintln!(
-        "dashboard lifecycle tiny fixture sample: {}",
-        json!({"sessions":1,"warmed_detail_ms":warm_ms,"new_projection_roundtrips":0,"existing_list_still_per_session":true,"plan":plan})
-    );
-    let serialized = serde_json::to_string(&after).unwrap();
-    for excluded in [
-        "request_bytes",
-        "proof_bytes",
-        "kernel_wait_echild",
-        "guardian",
-        "credential_hash",
-    ] {
-        assert!(!serialized.contains(excluded));
-    }
+    sample_lifecycle_projection(&app, &path, &f, q.binding.attempt_id).await;
+    assert_receipt_fields_are_private(&after);
     let pool = f.db.pool().await;
     let actor = Uuid::new_v4();
     let email = "lifecycle-viewer@localhost";
@@ -421,6 +403,46 @@ async fn session_lifecycle_reports_are_historical_acl_scoped_and_never_live_obse
     assert_eq!(visible["data"]["lifecycle"], after["data"]["lifecycle"]);
     f.time.store((NOW + 3000) as i64, Ordering::SeqCst);
     assert_eq!(read(&app, &path, email).await.0, StatusCode::FORBIDDEN);
+}
+
+fn assert_receipt_fields_are_private(response: &Value) {
+    let serialized = serde_json::to_string(response).unwrap();
+    for excluded in [
+        "request_bytes",
+        "proof_bytes",
+        "kernel_wait_echild",
+        "guardian",
+        "credential_hash",
+    ] {
+        assert!(!serialized.contains(excluded));
+    }
+}
+
+async fn sample_lifecycle_projection(
+    app: &Router,
+    path: &str,
+    f: &common::profiled::Fixture,
+    attempt: Uuid,
+) {
+    // Lightweight warmed sample, not a benchmark/scale acceptance claim.
+    let mut warm_ms = Vec::new();
+    for _ in 0..5 {
+        let t = std::time::Instant::now();
+        let (status, _) = read(app, path, "owner@localhost").await;
+        assert_eq!(status, StatusCode::OK);
+        warm_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let query = "SELECT e.state->'offer' AS offer,s.request_bytes AS started_request,s.request_digest AS started_digest,s.receipt_bytes AS started_receipt,z.request_bytes AS stopped_request,z.request_digest AS stopped_digest,z.receipt_bytes AS stopped_receipt FROM execution_attempts e LEFT JOIN profiled_started_receipts s USING(attempt_id) LEFT JOIN profiled_stopped_receipts z USING(attempt_id) WHERE e.attempt_id=$1";
+    assert!(include_str!("../../src/dashboard_api/session/profile.rs").contains(query));
+    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {query}"))
+        .bind(attempt)
+        .fetch_one(&f.db.pool().await)
+        .await
+        .unwrap();
+    eprintln!(
+        "dashboard lifecycle tiny fixture sample: {}",
+        json!({"sessions":1,"warmed_detail_ms":warm_ms,"new_projection_roundtrips":0,"existing_list_still_per_session":true,"plan":plan})
+    );
 }
 
 #[tokio::test]

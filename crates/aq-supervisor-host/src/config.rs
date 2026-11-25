@@ -36,7 +36,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swarm_profile: Option<serde_json::Value>,
 }
-pub fn protected_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn protected_open(path: &Path, limit: u64) -> Result<std::fs::File> {
     ensure!(
         path.is_absolute() && path.canonicalize()? == path,
         "protected path rejected"
@@ -54,6 +54,11 @@ pub fn protected_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
             && m.len() <= limit,
         "protected file rejected"
     );
+    Ok(f)
+}
+
+pub fn protected_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let f = protected_open(path, limit)?;
     let mut b = Vec::new();
     f.take(limit + 1).read_to_end(&mut b)?;
     ensure!(b.len() as u64 <= limit, "protected input bound");

@@ -79,9 +79,7 @@ def test_the_config_entry_is_valid_toml_in_both_spellings():
     assert bind.source_selection(None, None, "b" * 40) == dict(kind="immutable", object=dict(format="sha1", hex="b" * 40))
 
 
-def test_a_dry_run_reads_only_and_an_unregistered_project_is_refused(monkeypatch):
-    calls, shown = [], []
-
+def recording_server(calls):
     def http(url, body=None):
         calls.append((url, body))
         if url.endswith("/api/projects/" + PROJECT):
@@ -92,13 +90,25 @@ def test_a_dry_run_reads_only_and_an_unregistered_project_is_refused(monkeypatch
             return dict(fields=EXECUTION, problem=None)
         return dict(items=[], next_cursor=None, execution={})
 
+    return http
+
+
+def test_a_dry_run_reads_only(monkeypatch):
+    calls, shown = [], []
+
+
     git = []
-    monkeypatch.setattr(bind, "http", http)
+    monkeypatch.setattr(bind, "http", recording_server(calls))
     monkeypatch.setattr(bind, "git_request", lambda *a, **k: git.append((a, k)) or {})
     assert bind.run(bind.arguments([PROJECT, "--server", "http://server"]), out=shown.append) == 0
     assert all(body is None for _, body in calls)
-    assert [a[3] for a, k in git] == ["repo.show"] and not any(k.get("mutation") for _, k in git)
-    assert any("would be saved" in line for line in shown) and any("would sync" in line for line in shown)
+    assert [a[3] for a, k in git] == ["repo.show"]
+    assert not any(k.get("mutation") for _, k in git)
+    assert any("would be saved" in line for line in shown)
+    assert any("would sync" in line for line in shown)
+
+
+def test_an_unregistered_project_is_refused(monkeypatch):
     monkeypatch.setattr(bind, "http", lambda url, body=None: None)
     with pytest.raises(bind.Refused, match="no binding record"):
-        bind.run(bind.arguments([PROJECT, "--server", "http://server"]), out=shown.append)
+        bind.run(bind.arguments([PROJECT, "--server", "http://server"]), out=print)

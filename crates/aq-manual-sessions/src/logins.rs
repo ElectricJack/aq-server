@@ -32,6 +32,13 @@ struct Request {
     operation_id: Uuid,
     providers: Vec<String>,
 }
+impl Request {
+    fn matches(&self, row: &sqlx::postgres::PgRow, node: Uuid, actor: Uuid) -> bool {
+        row.get::<Uuid, _>("node_id") == node
+            && row.get::<Uuid, _>("actor_id") == actor
+            && row.get::<Vec<String>, _>("providers") == self.providers
+    }
+}
 pub(super) async fn live(conn: &mut sqlx::PgConnection, node: Uuid) -> Result<()> {
     let current: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1 AND revoked_at IS NULL)")
@@ -42,10 +49,13 @@ pub(super) async fn live(conn: &mut sqlx::PgConnection, node: Uuid) -> Result<()
         || !aq_machine_control::enrolled(&mut *conn, node)
             .await
             .map_err(management::storage)?
-        || aq_machine_control::management::capacity(conn, node)
-            .await
-            .map_err(management::storage)?
-            .removed
+    {
+        return Err(Error::enrolled_worker_required());
+    }
+    if aq_machine_control::management::capacity(conn, node)
+        .await
+        .map_err(management::storage)?
+        .removed
     {
         return Err(Error::enrolled_worker_required());
     }
@@ -80,10 +90,7 @@ async fn request(
     .fetch_optional(&mut *tx)
     .await?
     {
-        if row.get::<Uuid, _>("node_id") != node
-            || row.get::<Uuid, _>("actor_id") != actor
-            || row.get::<Vec<String>, _>("providers") != req.providers
-        {
+        if !req.matches(&row, node, actor) {
             return Err(conflict(
                 "Operation was used for different providers or worker",
             ));
@@ -122,23 +129,33 @@ async fn poll(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    let mut body = json!({"generation":null,"logins":[]});
-    if row.get::<String, _>("status") == "pending" && req.applied.is_none() {
-        let material = s
-            .login_materials
-            .as_ref()
-            .ok_or_else(|| conflict("Server logins are unavailable"))?;
-        let logins = match material(headers, row.get("providers")).await {
-            Ok(logins) => logins,
-            Err(error) => {
-                if error.0 != StatusCode::CONFLICT {
-                    sqlx::query("UPDATE worker_login_deliveries SET status='failed' WHERE node_id=$1 AND generation=$2")
-                        .bind(node).bind(row.get::<Option<Uuid>,_>("generation")).execute(&s.pool).await?;
-                }
-                return Err(error);
-            }
-        };
-        body = json!({"generation":row.get::<Option<Uuid>,_>("generation"),"logins":logins});
-    }
+    let body = if row.get::<String, _>("status") == "pending" && req.applied.is_none() {
+        pending_material(&s, headers, node, &row).await?
+    } else {
+        json!({"generation":null,"logins":[]})
+    };
     Ok(([("cache-control", "no-store")], Json(body)).into_response())
+}
+
+async fn pending_material(
+    s: &Service,
+    headers: HeaderMap,
+    node: Uuid,
+    row: &sqlx::postgres::PgRow,
+) -> Result<Value> {
+    let material = s
+        .login_materials
+        .as_ref()
+        .ok_or_else(|| conflict("Server logins are unavailable"))?;
+    let logins = match material(headers, row.get("providers")).await {
+        Ok(logins) => logins,
+        Err(error) => {
+            if error.0 != StatusCode::CONFLICT {
+                sqlx::query("UPDATE worker_login_deliveries SET status='failed' WHERE node_id=$1 AND generation=$2")
+                        .bind(node).bind(row.get::<Option<Uuid>,_>("generation")).execute(&s.pool).await?;
+            }
+            return Err(error);
+        }
+    };
+    Ok(json!({"generation":row.get::<Option<Uuid>,_>("generation"),"logins":logins}))
 }

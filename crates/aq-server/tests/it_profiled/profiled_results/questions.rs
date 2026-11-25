@@ -21,8 +21,7 @@ async fn ask(env: ReviewEnv, operation: Uuid) -> (Asked, serde_json::Value) {
         &env.f.state,
         env.f.node.node_id,
         env.report.binding.attempt_id,
-        operation,
-        "Which database should the migration target?",
+        questions::Submission::new(operation, "Which database should the migration target?"),
     )
     .await
     .unwrap();
@@ -42,8 +41,19 @@ async fn question_answer_resumes_waiting_attempt() {
     let env = Box::pin(review_env(1)).await;
     let operation = Uuid::new_v4();
     let (q, asked) = ask(env, operation).await;
+
+    let pool = q.env.f.db.pool().await;
+    verify_question_replay(&q, operation, asked, &pool).await;
+    verify_answer_replay(&q).await;
+    verify_wait_wakes_once(&q, &pool).await;
+}
+async fn verify_question_replay(
+    q: &Asked,
+    operation: Uuid,
+    asked: serde_json::Value,
+    pool: &sqlx::PgPool,
+) {
     let f = &q.env.f;
-    let pool = f.db.pool().await;
     assert_eq!(asked["kind"], "question");
     assert_eq!(asked["state"], "pending");
     assert_eq!(asked["decision_revision"], "1");
@@ -55,8 +65,7 @@ async fn question_answer_resumes_waiting_attempt() {
         &f.state,
         q.node(),
         q.attempt(),
-        operation,
-        "Which database should the migration target?",
+        questions::Submission::new(operation, "Which database should the migration target?"),
     )
     .await
     .unwrap();
@@ -65,51 +74,67 @@ async fn question_answer_resumes_waiting_attempt() {
         &f.state,
         q.node(),
         q.attempt(),
-        operation,
-        "Something else?",
+        questions::Submission::new(operation, "Something else?"),
     )
     .await
     .unwrap_err();
     assert_eq!(changed.0, "id_conflict");
     let decisions: i64 = sqlx::query_scalar("SELECT count(*) FROM question_decisions")
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
     assert_eq!(decisions, 1);
     let phase: String = sqlx::query_scalar("SELECT phase FROM agent_waits WHERE wait_id=$1")
         .bind(q.wait_id)
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
     assert_eq!(phase, "pending");
-
+}
+async fn verify_answer_replay(q: &Asked) {
+    let f = &q.env.f;
     // A stale revision changes nothing; the exact revision answers once.
     let answer = Uuid::new_v4();
-    let stale = questions::answer(&f.state, f.actor, q.decision_id, 2, answer, "Postgres")
-        .await
-        .unwrap_err();
+    let stale = questions::answer(
+        &f.state,
+        f.actor,
+        questions::DecisionRevision::new(q.decision_id, 2),
+        questions::Submission::new(answer, "Postgres"),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(stale.0, "stale_revision");
-    let receipt = questions::answer(&f.state, f.actor, q.decision_id, 1, answer, "Postgres")
-        .await
-        .unwrap();
+    let receipt = questions::answer(
+        &f.state,
+        f.actor,
+        questions::DecisionRevision::new(q.decision_id, 1),
+        questions::Submission::new(answer, "Postgres"),
+    )
+    .await
+    .unwrap();
     assert_eq!(receipt["decision_revision"], "2");
     assert_eq!(receipt["delivery"], json!({"kind":"wait"}));
-    let again = questions::answer(&f.state, f.actor, q.decision_id, 1, answer, "Postgres")
-        .await
-        .unwrap();
+    let again = questions::answer(
+        &f.state,
+        f.actor,
+        questions::DecisionRevision::new(q.decision_id, 1),
+        questions::Submission::new(answer, "Postgres"),
+    )
+    .await
+    .unwrap();
     assert_eq!(again, receipt);
     let second = questions::answer(
         &f.state,
         f.actor,
-        q.decision_id,
-        2,
-        Uuid::new_v4(),
-        "SQLite",
+        questions::DecisionRevision::new(q.decision_id, 2),
+        questions::Submission::new(Uuid::new_v4(), "SQLite"),
     )
     .await
     .unwrap_err();
     assert_eq!(second.0, "id_conflict");
-
+}
+async fn verify_wait_wakes_once(q: &Asked, pool: &sqlx::PgPool) {
+    let f = &q.env.f;
     // Duplicate reconciliation records exactly one outcome and one intent.
     f.time.store((NOW + 61_000) as i64, Ordering::SeqCst);
     waits::reconcile_due(&f.state, 64).await.unwrap();
@@ -118,14 +143,14 @@ async fn question_answer_resumes_waiting_attempt() {
     let (outcomes, kind): (i64, Option<String>) =
         sqlx::query_as("SELECT count(*),max(kind) FROM agent_wait_outcomes WHERE wait_id=$1")
             .bind(q.wait_id)
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap();
     assert_eq!((outcomes, kind.as_deref()), (1, Some("satisfied")));
     let intents: Vec<String> =
         sqlx::query_scalar("SELECT state FROM agent_wait_resume_intents WHERE wait_id=$1")
             .bind(q.wait_id)
-            .fetch_all(&pool)
+            .fetch_all(pool)
             .await
             .unwrap();
     assert_eq!(intents, ["ready"]);
@@ -138,7 +163,7 @@ async fn question_answer_resumes_waiting_attempt() {
     // A live waiting attempt is woken by the wait, never by mail.
     let mail: i64 = sqlx::query_scalar("SELECT count(*) FROM mailbox_messages WHERE thread_id=$1")
         .bind(q.decision_id)
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
     assert_eq!(mail, 0);
@@ -163,10 +188,8 @@ async fn question_after_attempt_ended_routes_to_continuation() {
     let receipt = questions::answer(
         &f.state,
         f.actor,
-        q.decision_id,
-        1,
-        Uuid::new_v4(),
-        "Use Postgres 17",
+        questions::DecisionRevision::new(q.decision_id, 1),
+        questions::Submission::new(Uuid::new_v4(), "Use Postgres 17"),
     )
     .await
     .unwrap();

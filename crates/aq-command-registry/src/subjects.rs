@@ -59,33 +59,32 @@ const fn rule(
     }
 }
 
+const VERSION: &str = "expected_version";
+const TASK: SubjectRule = rule("task", Id::Param("task_id"), Some((VERSION, "task")));
+const RECORD: SubjectRule = rule(
+    "knowledge",
+    Id::Param("node_id"),
+    Some((VERSION, "knowledge")),
+);
+const BINDING: SubjectRule = rule(
+    "playbook_binding",
+    Id::Payload("binding"),
+    Some((VERSION, "playbook_binding")),
+);
+const MACHINE: SubjectRule = rule("machine", Id::Payload("machine"), None);
+const SESSION: SubjectRule = rule(
+    "session",
+    Id::Param("session_id"),
+    Some(("expected_generation", "session")),
+);
+const COMMENT: SubjectRule = rule(
+    "task_comment",
+    Id::Param("comment_id"),
+    Some(("expected_revision", "task_comment")),
+);
+
 /// The subject rule of an action kind.
 pub fn subject(kind: &str) -> Option<SubjectRule> {
-    const VERSION: &str = "expected_version";
-    let task = rule("task", Id::Param("task_id"), Some((VERSION, "task")));
-    let record = rule(
-        "knowledge",
-        Id::Param("node_id"),
-        Some((VERSION, "knowledge")),
-    );
-    let binding = rule(
-        "playbook_binding",
-        Id::Payload("binding"),
-        Some((VERSION, "playbook_binding")),
-    );
-    let machine = rule("machine", Id::Payload("machine"), None);
-    let session = rule(
-        "session",
-        Id::Param("session_id"),
-        Some(("expected_generation", "session")),
-    );
-    let comment = rule(
-        "task_comment",
-        Id::Param("comment_id"),
-        Some(("expected_revision", "task_comment")),
-    );
-    // A result action checks its thread or assessment version, not the result's.
-    let result = |id, key| rule("result", id, Some((VERSION, key)));
     Some(match kind {
         "epic.retirement.register" => rule("task", Id::Payload("epic_id"), Some((VERSION, "task"))),
         // agent_access/human/graph_actions/retirement.rs: the registration record
@@ -112,9 +111,9 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
         | "task.route.set"
         | "task.route.clear"
         | "task.dependency.add"
-        | "task.dependency.remove" => task,
+        | "task.dependency.remove" => TASK,
         "knowledge.correct" | "knowledge.verify" | "knowledge.retire" | "knowledge.restore" => {
-            record
+            RECORD
         }
         "knowledge.author" => rule(
             "project",
@@ -135,7 +134,15 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
         ),
         // agent_access/human/comments.rs::target
         "task.comment.add" => rule("task", Id::Param("task_id"), None),
-        "task.comment.edit" | "task.comment.delete" => comment,
+        "task.comment.edit" | "task.comment.delete" => COMMENT,
+        _ => return operation_subject(kind),
+    })
+}
+
+fn operation_subject(kind: &str) -> Option<SubjectRule> {
+    // A result action checks its thread or assessment version, not the result's.
+    let result = |id, key| rule("result", id, Some((VERSION, key)));
+    Some(match kind {
         // results_feedback/actions.rs (ENTITY and VERSION_KEY); store.rs::subject
         "result.follow" => result(Id::Param("result_id"), "result"),
         "result.comment" => result(Id::Payload("result_id"), "result"),
@@ -159,7 +166,7 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
             Some(("expected_revision", "decision")),
         ),
         // agent_access/messaging/session_action.rs; global/writes/action.rs
-        "session.message.send" | "session.nudge" => session,
+        "session.message.send" | "session.nudge" => SESSION,
         "supervisor.message.send" => rule(
             "conversation",
             Id::Param("conversation_id"),
@@ -168,10 +175,10 @@ pub fn subject(kind: &str) -> Option<SubjectRule> {
         // playbooks/actions.rs
         "playbook.run.cancel" => rule("playbook_run", Id::Payload("run_id"), None),
         "playbook.run.start" | "playbook.activation.activate" | "playbook.activation.rollback" => {
-            binding
+            BINDING
         }
         // machine_actions.rs::bound; intelligence/availability_action.rs
-        "worker.start" | "worker.stop" | "worker.drain" | "worker.revoke" => machine,
+        "worker.start" | "worker.stop" | "worker.drain" | "worker.revoke" => MACHINE,
         "swarm.availability.set" => rule("swarm", Id::Fixed("owner-availability"), None),
         _ => return None,
     })

@@ -45,6 +45,7 @@ pub(crate) async fn current_inventory_locked(
     q.matches_runtime(&runtime)?;
     if current.request.runtime != runtime.runtime
         || current.request.runtime_qualification != runtime.qualification
+        || snapshot.backend_kind != runtime.backend_kind
     {
         return Err(changed());
     }

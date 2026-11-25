@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub use api_backend::{ApiBackend, ApiEndpoint, InternalWorkConfig};
-pub use resolve::{Resolved, resolve};
+pub use resolve::{ObservedAt, Resolved, resolve};
 pub use store::Row;
 
 /// Largest `Request::instructions`, in bytes.
@@ -77,11 +77,8 @@ pub fn candidate_budget_ms(
     candidate_count: usize,
 ) -> i64 {
     let remaining = deadline_at_ms.saturating_sub(claimed_at_ms);
-    let count = i64::try_from(candidate_count).unwrap_or(i64::MAX);
-    let left = count.saturating_sub(i64::from(candidate_index)).max(1);
-    remaining
-        .min(MIN_CANDIDATE_BUDGET_MS.max(remaining / left))
-        .max(0)
+    let share = remaining / candidates_left(candidate_index, candidate_count);
+    remaining.min(share.max(MIN_CANDIDATE_BUDGET_MS)).max(0)
 }
 
 /// [`candidate_budget_ms`] for agent work: the time left to the task
@@ -94,13 +91,20 @@ pub fn agent_candidate_budget_ms(
     candidate_index: u32,
     candidate_count: usize,
 ) -> i64 {
+    let later = candidates_left(candidate_index, candidate_count) - 1;
+    let reserve = later.saturating_mul(AGENT_FALLBACK_RESERVE_MS);
     let remaining = deadline_at_ms.saturating_sub(claimed_at_ms);
-    let count = i64::try_from(candidate_count).unwrap_or(i64::MAX);
-    let later = count.saturating_sub(i64::from(candidate_index) + 1).max(0);
-    let reserved = later.saturating_mul(AGENT_FALLBACK_RESERVE_MS);
-    remaining
-        .min(AGENT_FALLBACK_RESERVE_MS.max(remaining.saturating_sub(reserved)))
-        .max(0)
+    let available = remaining
+        .saturating_sub(reserve)
+        .max(AGENT_FALLBACK_RESERVE_MS);
+    available.min(remaining).max(0)
+}
+
+fn candidates_left(index: u32, count: usize) -> i64 {
+    i64::try_from(count)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(i64::from(index))
+        .max(1)
 }
 
 /// How long after the claim a runner stops a candidate with `budget_ms` and
@@ -246,16 +250,19 @@ impl AgentWork {
         if bytes > AGENT_FILES_BYTES {
             return Err(invalid("agent files exceed 4 MiB"));
         }
-        for path in self.files.keys() {
-            let in_tmp = path.split('/').next() == Some(AGENT_TMP);
-            if !workspace_path(path) || path == AGENT_OUTCOME || in_tmp {
-                return Err(invalid("agent file paths must be relative workspace paths"));
-            }
-            // A file cannot also be the directory of another.
-            let mut ancestors = path.match_indices('/').map(|(at, _)| &path[..at]);
-            if ancestors.any(|dir| self.files.contains_key(dir)) {
-                return Err(invalid("an agent file path is also a directory"));
-            }
+        self.files
+            .keys()
+            .try_for_each(|path| self.validate_path(path))
+    }
+
+    fn validate_path(&self, path: &str) -> Result<()> {
+        let reserved = path == AGENT_OUTCOME || path.split('/').next() == Some(AGENT_TMP);
+        if reserved || !workspace_path(path) {
+            return Err(invalid("agent file paths must be relative workspace paths"));
+        }
+        let mut ancestors = path.match_indices('/').map(|(at, _)| &path[..at]);
+        if ancestors.any(|dir| self.files.contains_key(dir)) {
+            return Err(invalid("an agent file path is also a directory"));
         }
         Ok(())
     }

@@ -29,6 +29,24 @@ fn examples() -> Value {
         dispatch: dispatch.clone(),
     };
     let transition = state.transition(&event, admitted).unwrap();
+    let (successor, history) = successor_examples(&plan);
+    validate_successor_history(&successor, 1, &history).unwrap();
+    let examples = BTreeMap::from([
+        ("plan", Document::Plan(plan)),
+        ("permit", Document::Permit(permit)),
+        ("dispatch", Document::Dispatch(dispatch)),
+        ("prepared_state", Document::State(state)),
+        ("commit_start_event", Document::Event(event)),
+        ("start_transition", Document::Transition(transition)),
+        ("successor_plan", Document::Plan(successor)),
+        ("successor_history", Document::History(history)),
+    ]);
+    for value in examples.values() {
+        decode(&encode(value).unwrap()).unwrap();
+    }
+    serde_json::to_value(examples).unwrap()
+}
+fn successor_examples(plan: &CentralPlan) -> (CentralPlan, MailHistoryFence) {
     let mut successor = plan.clone();
     successor.generation = 2;
     successor.session = SessionIdentity::Central {
@@ -72,21 +90,7 @@ fn examples() -> Value {
             })
             .collect(),
     };
-    validate_successor_history(&successor, 1, &history).unwrap();
-    let examples = BTreeMap::from([
-        ("plan", Document::Plan(plan)),
-        ("permit", Document::Permit(permit)),
-        ("dispatch", Document::Dispatch(dispatch)),
-        ("prepared_state", Document::State(state)),
-        ("commit_start_event", Document::Event(event)),
-        ("start_transition", Document::Transition(transition)),
-        ("successor_plan", Document::Plan(successor)),
-        ("successor_history", Document::History(history)),
-    ]);
-    for value in examples.values() {
-        decode(&encode(value).unwrap()).unwrap();
-    }
-    serde_json::to_value(examples).unwrap()
+    (successor, history)
 }
 fn main() {
     let path = std::path::PathBuf::from(std::env::args().nth(1).expect("artifact output path"));

@@ -134,7 +134,7 @@ async fn save_manual(
     Path(id): Path<Uuid>,
     Json(snapshot): Json<Snapshot>,
 ) -> Result<Json<Value>> {
-    save(s, headers, id, snapshot, Subject::Manual).await
+    save(s, headers, (Subject::Manual, id), snapshot).await
 }
 
 async fn save_attempt(
@@ -143,49 +143,19 @@ async fn save_attempt(
     Path(id): Path<Uuid>,
     Json(snapshot): Json<Snapshot>,
 ) -> Result<Json<Value>> {
-    save(s, headers, id, snapshot, Subject::Attempt).await
+    save(s, headers, (Subject::Attempt, id), snapshot).await
 }
 
 async fn save(
     s: Service,
     headers: HeaderMap,
-    id: Uuid,
+    (subject, id): (Subject, Uuid),
     snapshot: Snapshot,
-    subject: Subject,
 ) -> Result<Json<Value>> {
     let node = (s.node)(headers.clone()).await?;
-    if snapshot.messages.is_empty()
-        || snapshot.messages.len() > 1000
-        || snapshot.messages.iter().any(|m| {
-            m.text.trim().is_empty()
-                || m.text
-                    .chars()
-                    .any(|c| c.is_control() && c != '\n' && c != '\t')
-        })
-    {
-        return Err(bad("Invalid conversation snapshot"));
-    }
-    let snapshot =
-        serde_json::to_value(snapshot).map_err(|_| bad("Invalid conversation snapshot"))?;
+    let snapshot = snapshot.into_value()?;
     let mut tx = s.pool.begin().await?;
-    // Match the profiled lifecycle's node-before-attempt lock order.
-    if matches!(subject, Subject::Attempt)
-        && sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
-        )
-        .bind(node)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_none()
-    {
-        return Err(Error::enrolled_worker_required());
-    }
-    let session: Option<Uuid> = sqlx::query_scalar(subject.lock_query())
-        .bind(id)
-        .bind(node)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let session = session.ok_or_else(Error::enrolled_worker_required)?;
+    let session = subject.lock_session(&mut tx, id, node).await?;
     if (s.node)(headers).await? != node {
         return Err(Error::enrolled_worker_required());
     }
@@ -199,25 +169,81 @@ async fn save(
     {
         return Err(conflict("The attempt has no confirmed stop"));
     }
-    let (insert, compare) = subject.storage_queries();
-    let inserted = sqlx::query(insert)
-        .bind(id)
-        .bind(&snapshot)
-        .execute(&mut *tx)
-        .await?;
-    if inserted.rows_affected() == 0 {
-        let identical: bool = sqlx::query_scalar(compare)
-            .bind(id)
-            .bind(&snapshot)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !identical {
-            return Err(conflict("A different conversation is already retained"));
-        }
-    }
+    subject.store_snapshot(&mut tx, id, snapshot).await?;
     tx.commit().await?;
     Ok(Json(match subject {
         Subject::Manual => json!({"session_id":session}),
         Subject::Attempt => json!({"session_id":session,"attempt_id":id}),
     }))
+}
+
+impl Snapshot {
+    fn into_value(self) -> Result<Value> {
+        let valid =
+            (1..=1000).contains(&self.messages.len()) && self.messages.iter().all(Message::valid);
+        if !valid {
+            return Err(bad("Invalid conversation snapshot"));
+        }
+        serde_json::to_value(self).map_err(|_| bad("Invalid conversation snapshot"))
+    }
+}
+impl Message {
+    fn valid(&self) -> bool {
+        !self.text.trim().is_empty()
+            && self
+                .text
+                .chars()
+                .all(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+    }
+}
+impl Subject {
+    async fn lock_session(
+        self,
+        conn: &mut sqlx::PgConnection,
+        id: Uuid,
+        node: Uuid,
+    ) -> Result<Uuid> {
+        // Match the profiled lifecycle's node-before-attempt lock order.
+        if matches!(self, Subject::Attempt)
+            && sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM nodes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE",
+            )
+            .bind(node)
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_none()
+        {
+            return Err(Error::enrolled_worker_required());
+        }
+        let session: Option<Uuid> = sqlx::query_scalar(self.lock_query())
+            .bind(id)
+            .bind(node)
+            .fetch_optional(&mut *conn)
+            .await?;
+        session.ok_or_else(Error::enrolled_worker_required)
+    }
+    async fn store_snapshot(
+        self,
+        conn: &mut sqlx::PgConnection,
+        id: Uuid,
+        snapshot: Value,
+    ) -> Result<()> {
+        let (insert, compare) = self.storage_queries();
+        let inserted = sqlx::query(insert)
+            .bind(id)
+            .bind(&snapshot)
+            .execute(&mut *conn)
+            .await?;
+        if inserted.rows_affected() == 0 {
+            let identical: bool = sqlx::query_scalar(compare)
+                .bind(id)
+                .bind(&snapshot)
+                .fetch_one(&mut *conn)
+                .await?;
+            if !identical {
+                return Err(conflict("A different conversation is already retained"));
+            }
+        }
+        Ok(())
+    }
 }

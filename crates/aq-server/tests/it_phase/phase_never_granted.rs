@@ -11,6 +11,13 @@ fn expire(f: &mut terminal::Prepared) {
 }
 #[tokio::test]
 async fn actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence_proof() {
+    use aq_admission::{
+        Digest,
+        control::{CurrentPhase, ReconcileEntry},
+        transport::{JournalEvidence, Reconcile, ReconcileAttempt},
+    };
+    use aq_server::profiled_execution::reconciliation::reconcile;
+
     let mut f = Box::pin(terminal::prepared_terminal()).await;
     let attempt = f.prepared.original.binding.attempt_id;
     let node = f.q.original.identity.node_id;
@@ -21,6 +28,34 @@ async fn actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence
             .unwrap()
             .is_none()
     );
+    let prepare = &f.prepared.original;
+    let request = Reconcile {
+        schema_version: 1,
+        operation_id: uuid::Uuid::new_v4(),
+        identity: prepare.identity.clone(),
+        after_attempt: None,
+        limit: 1,
+        attempts: vec![ReconcileAttempt {
+            binding: prepare.binding.clone(),
+            guardian_id: prepare.guardian_id,
+            launch_id: prepare.launch_id,
+            last_grant_id: None,
+            journal: JournalEvidence::Recorded {
+                revision: prepare.journal_revision,
+                digest: prepare.journal_digest.clone(),
+            },
+        }],
+    };
+    let auth = terminal::auth(&f).await;
+    let read = async |f: &terminal::Prepared| {
+        reconcile(&f.c.env.env.state, &auth, &request, uuid::Uuid::new_v4())
+            .await
+            .unwrap()
+    };
+    assert!(matches!(
+        read(&f).await.attempts.as_slice(),
+        [ReconcileEntry::Refused { .. }]
+    ));
     expire(&mut f);
     let first = no_grant::close_expired(&f.c.env.env.state, node, attempt)
         .await
@@ -30,6 +65,16 @@ async fn actual_refresh_accepted_without_grant_expires_and_replays_fixed_absence
     assert_eq!(first.proof.reason, "preparation_expired");
     assert_eq!(first.proof.applicable_deadline_ms, f.a.lease.expires_at_ms);
     assert_eq!(first.proof.binding, f.prepared.original.binding);
+    let page = read(&f).await;
+    let [ReconcileEntry::Current { authority }] = page.attempts.as_slice() else {
+        panic!("the worker could not recover its retained closure: {page:?}");
+    };
+    assert_eq!(authority.binding, f.prepared.original.binding);
+    assert_eq!(authority.versions.grant_revision, 0);
+    assert!(
+        matches!(&authority.phase, CurrentPhase::NeverGranted { closure }
+        if closure.digest == Digest::of(&first.bytes))
+    );
     let replay = no_grant::close_expired(&f.c.env.env.state, node, attempt)
         .await
         .unwrap()

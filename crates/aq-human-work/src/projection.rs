@@ -78,70 +78,101 @@ pub fn node(raw: &Value, kind: &str) -> Option<Value> {
     Some(Value::Object(output))
 }
 
+pub struct Neighborhood {
+    pub id: Uuid,
+    pub parent: Value,
+    pub limit: u16,
+}
+
 /// Project the bounded Work neighborhood with the caller’s public node policy.
 pub fn neighborhood(
     raw: &Value,
-    id: Uuid,
-    parent: Value,
-    limit: u16,
+    view: Neighborhood,
     project: impl Fn(&Value) -> Option<Value>,
 ) -> Option<Value> {
     let root = project(&raw["node"])?;
     let upstream_truncated = raw["truncated"].as_bool()?;
-    let mut truncated = upstream_truncated;
-    let mut nodes = vec![root];
-    let mut ids = BTreeSet::from([id.to_string()]);
-    let mut hidden = BTreeSet::new();
-    let mut hidden_tasks = buckets();
-    let mut hidden_other = 0u64;
-    for value in raw["nodes"].as_array()? {
-        let vid = value["id"].as_str()?.to_owned();
-        if ids.contains(&vid) || hidden.contains(&vid) {
-            continue;
-        }
-        if value["kind"] != "task" || value["deleted"] != false {
-            truncated = true;
-            hidden.insert(vid);
-            hidden_other += 1;
-            continue;
-        }
-        if nodes.len() > usize::from(limit) {
-            truncated = true;
-            hidden.insert(vid);
-            count(&mut hidden_tasks, &value["task_state"]);
-            continue;
-        }
-        let n = project(value)?;
-        ids.insert(vid);
-        nodes.push(n)
+    let mut nodes = VisibleNodes::new(root, view.id);
+    for node in raw["nodes"].as_array()? {
+        nodes.consider(node, view.limit, &project)?;
     }
-    let mut edges = Vec::new();
-    let mut hidden_edges = 0u64;
-    for edge in raw["edges"].as_array()? {
-        if edges.len() >= 256
-            || edge["deleted"] != false
-            || !ids.contains(edge["source"].as_str()?)
-            || !ids.contains(edge["target"].as_str()?)
-        {
-            truncated = true;
-            hidden_edges += 1;
-            continue;
-        }
-        edges.push(crate::edge(edge)?);
-    }
-    let hidden_task_count: u64 = hidden_tasks.values().filter_map(Value::as_u64).sum();
-    let shown = (nodes.len() - 1) as u64;
-    let expansion = if hidden_task_count > 0 && u64::from(limit) < 63 {
-        json!({"limit": (shown + hidden_task_count).min(63).to_string()})
+    let (edges, hidden_edges) = nodes.edges(raw["edges"].as_array()?)?;
+    let hidden_tasks: u64 = nodes.hidden_tasks.values().filter_map(Value::as_u64).sum();
+    let shown = (nodes.shown.len() - 1) as u64;
+    let expansion = if hidden_tasks > 0 && view.limit < 63 {
+        json!({"limit": (shown + hidden_tasks).min(63).to_string()})
     } else {
         Value::Null
     };
+    let truncated = upstream_truncated || !nodes.hidden.is_empty() || hidden_edges > 0;
     Some(
-        json!({"root_id":id,"parent":parent,"nodes":nodes,"edges":edges,"truncated":truncated,
-            "omitted":{"tasks":hidden_task_count.to_string(),
-                "tasks_by_state":decimal(hidden_tasks),
-                "other_nodes":hidden_other.to_string(),"edges":hidden_edges.to_string(),
-                "exact":!upstream_truncated},
-            "expansion":expansion}),
+        json!({"root_id":view.id,"parent":view.parent,"nodes":nodes.shown,"edges":edges,"truncated":truncated,
+        "omitted":{"tasks":hidden_tasks.to_string(),"tasks_by_state":decimal(nodes.hidden_tasks),
+            "other_nodes":nodes.hidden_other.to_string(),"edges":hidden_edges.to_string(),"exact":!upstream_truncated},
+        "expansion":expansion}),
     )
+}
+
+struct VisibleNodes {
+    shown: Vec<Value>,
+    ids: BTreeSet<String>,
+    hidden: BTreeSet<String>,
+    hidden_tasks: serde_json::Map<String, Value>,
+    hidden_other: u64,
+}
+
+impl VisibleNodes {
+    fn new(root: Value, id: Uuid) -> Self {
+        Self {
+            shown: vec![root],
+            ids: BTreeSet::from([id.to_string()]),
+            hidden: BTreeSet::new(),
+            hidden_tasks: buckets(),
+            hidden_other: 0,
+        }
+    }
+
+    fn consider(
+        &mut self,
+        node: &Value,
+        limit: u16,
+        project: &impl Fn(&Value) -> Option<Value>,
+    ) -> Option<()> {
+        let id = node["id"].as_str()?;
+        if self.ids.contains(id) || self.hidden.contains(id) {
+            return Some(());
+        }
+        if node["kind"] != "task" || node["deleted"] != false {
+            self.hidden_other += 1;
+        } else if self.shown.len() > usize::from(limit) {
+            count(&mut self.hidden_tasks, &node["task_state"]);
+        } else {
+            self.shown.push(project(node)?);
+            self.ids.insert(id.to_owned());
+            return Some(());
+        }
+        self.hidden.insert(id.to_owned());
+        Some(())
+    }
+
+    fn edges(&self, raw: &[Value]) -> Option<(Vec<Value>, u64)> {
+        let mut shown = Vec::new();
+        for edge in raw {
+            if shown.len() >= 256 {
+                break;
+            }
+            if edge["deleted"] == false && self.contains_endpoints(edge)? {
+                shown.push(crate::edge(edge)?);
+            }
+        }
+        let hidden = (raw.len() - shown.len()) as u64;
+        Some((shown, hidden))
+    }
+
+    fn contains_endpoints(&self, edge: &Value) -> Option<bool> {
+        Some(
+            self.ids.contains(edge["source"].as_str()?)
+                && self.ids.contains(edge["target"].as_str()?),
+        )
+    }
 }
