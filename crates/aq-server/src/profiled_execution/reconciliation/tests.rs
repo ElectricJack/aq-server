@@ -1,6 +1,10 @@
 use super::*;
 use crate::execution::profiled::{Effects, Retention};
-use aq_admission::transport::{JournalEvidence, JournalUnavailable, WorkerIdentity};
+use aq_admission::{
+    ArtifactRef, Digest, Text,
+    control::CurrentPhase,
+    transport::{JournalEvidence, JournalUnavailable, WorkerIdentity},
+};
 use std::collections::BTreeMap;
 
 fn offered() -> Snapshot {
@@ -49,46 +53,63 @@ fn offered() -> Snapshot {
 }
 
 #[test]
-fn offer_expiry_is_exclusive_and_revocation_precedes_cancellation_and_recovery() {
-    let mut snapshot = offered();
+fn offer_expiry_is_exclusive() {
     assert!(matches!(
-        snapshot.phase(999, true).unwrap(),
-        CurrentPhase::Offered { .. }
+        offered().render(999, true).unwrap().phase,
+        CurrentPhase::Offered {
+            expires_at_ms: 1000
+        }
     ));
     assert!(matches!(
-        snapshot.phase(1000, true).unwrap(),
+        offered().render(1000, true).unwrap().phase,
         CurrentPhase::StopRequired {
             reason: FailureCode::Expired,
             ..
         }
     ));
-    snapshot.hot.revoked = true;
-    snapshot.hot.cancellation_id = Some(Uuid::new_v4());
-    assert!(matches!(
-        snapshot.phase(1000, false).unwrap(),
-        CurrentPhase::StopRequired {
-            reason: FailureCode::CredentialRevoked,
-            ..
-        }
-    ));
-    snapshot.hot.revoked = false;
-    assert!(matches!(
-        snapshot.phase(1000, false).unwrap(),
-        CurrentPhase::StopRequired {
-            reason: FailureCode::Cancelled,
-            ..
-        }
-    ));
-    snapshot.hot.cancellation_id = None;
-    assert!(matches!(
-        snapshot.phase(999, false).unwrap(),
-        CurrentPhase::StopRequired {
-            reason: FailureCode::RecoveryRequired,
-            ..
-        }
-    ));
+}
+
+#[test]
+fn revocation_precedes_cancellation_and_recovery() {
+    for (time, revoked, cancelled, expected) in [
+        (1000, true, true, "credential_revoked"),
+        (1000, false, true, "cancelled"),
+        (999, false, false, "recovery_required"),
+    ] {
+        let mut snapshot = offered();
+        snapshot.hot.revoked = revoked;
+        snapshot.hot.cancellation_id = cancelled.then(Uuid::new_v4);
+        let CurrentPhase::StopRequired { reason, .. } = snapshot.render(time, false).unwrap().phase
+        else {
+            panic!("expected stop required for {expected:?}");
+        };
+        assert_eq!(serde_json::to_value(reason).unwrap(), expected);
+    }
+}
+
+#[test]
+fn released_history_requires_terminal_evidence_and_supplies_no_live_authority() {
+    let mut snapshot = offered();
     snapshot.holds_task = false;
-    assert!(snapshot.phase(999, true).is_err());
+    assert!(snapshot.render(999, true).is_none());
+
+    let mut snapshot = offered();
+    snapshot.holds_task = false;
+    let release = ArtifactRef {
+        id: Text::new(format!(
+            "{}{}",
+            aq_machine_control::lapse::RECEIPT,
+            snapshot.binding.attempt_id
+        ))
+        .unwrap(),
+        version: Text::new("1").unwrap(),
+        digest: Digest::of(b"retained release evidence"),
+    };
+    snapshot.terminal = Some(release.clone());
+    assert!(matches!(
+        snapshot.render(999, true).unwrap().phase,
+        CurrentPhase::Released { release: actual } if actual == release
+    ));
 }
 
 #[test]
