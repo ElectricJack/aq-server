@@ -452,7 +452,7 @@ async fn assert_hold_pagination(app: &Router, project: Uuid, tasks: [Uuid; 2]) {
     let next = format!("{page}&cursor={cursor}");
     let (status, second) = read(app, &next, Some(OWNER)).await;
     assert_eq!(status, StatusCode::OK, "{second}");
-    let mut actual = [first, second].map(|v| {
+    let mut actual = [&first, &second].map(|v| {
         v["data"]["holds"]["rows"][0]["task_id"]
             .as_str()
             .unwrap()
