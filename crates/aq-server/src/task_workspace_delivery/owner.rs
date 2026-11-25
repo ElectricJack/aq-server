@@ -254,15 +254,18 @@ async fn plan(
         ));
     }
     if require_live {
-        let holds_task: bool =
-            sqlx::query_scalar("SELECT holds_task FROM execution_attempts WHERE attempt_id=$1")
-                .bind(result.report.binding.attempt_id)
-                .fetch_one(&mut **tx)
-                .await
-                .map_err(crate::error::db)?;
-        if !holds_task {
+        let active: bool = sqlx::query_scalar(
+            "SELECT a.holds_task AND hot.state->>'revoked'='false' AND hot.state->>'cancellation_id' IS NULL
+             FROM execution_attempts a JOIN profiled_authority_hot hot USING (attempt_id)
+             WHERE a.attempt_id=$1",
+        )
+        .bind(result.report.binding.attempt_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(crate::error::db)?;
+        if !active {
             return Err(conflict(
-                "another attempt can now change the task workspaces",
+                "the result no longer has active task delivery authority",
             ));
         }
     }
