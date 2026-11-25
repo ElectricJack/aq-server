@@ -59,6 +59,14 @@ async fn validate_composed(
             .ok_or_else(corrupt)?;
         row["body"]["body"] = serde_json::Value::String(body.into());
     }
+    if supported >= 178 {
+        // The completion clock trigger observes the guarded transition.
+        // Attest both its exact definition and its function body.
+        let clock: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("settlement39_performance_catalog.json"))
+                .map_err(|_| corrupt())?;
+        expected.as_array_mut().ok_or_else(corrupt)?.extend(clock);
+    }
     let mut actual: serde_json::Value =
         sqlx::query_scalar(include_str!("settlement39_catalog.sql"))
             .fetch_one(&mut **tx)
