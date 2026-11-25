@@ -1,0 +1,66 @@
+//! Owner-authorized replacement after AQ Git definitively refused publication.
+use super::*;
+
+pub(crate) const REASON: &str = "branch_publication_rejected";
+
+pub(super) async fn evidence(
+    tx: &mut Transaction<'_, Postgres>,
+    result: &results::RecordedResult,
+    owner_operation: Uuid,
+) -> Result<Option<Value>> {
+    let task = result.spec.task.task_id;
+    let attempt = result.report.binding.attempt_id;
+    let report = result.report.report_id;
+    if !aq_machine_control::owner_retry::authorized(tx, owner_operation, task, attempt)
+        .await
+        .map_err(db)?
+    {
+        return Ok(None);
+    }
+    // The report owner's attempt lock also fences delivery host prepare/step.
+    // A generic unreachable receipt can still have pushed. Only the explicit
+    // remote rejection is conclusive, and only if every publication agrees.
+    let refusal: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT o.operation_id,p.head
+         FROM delivery_pushed_results p JOIN profiled_result_reports r USING(report_id,attempt_id)
+         JOIN owner_task_retry_intents i ON i.operation_id=$4 AND i.predecessor=p.attempt_id
+         JOIN dashboard_operations d ON d.operation_id=i.operation_id
+         JOIN playbook_host_operations o ON o.subject_id=$1::uuid::text AND o.command_name='branch.publish'
+           AND o.request#>>'{result_ready,result_id}'=p.report_id::text
+           AND o.request#>>'{result_ready,attempt_id}'=p.attempt_id::text
+           AND o.request#>>'{result_ready,project_id}'=i.project_id::text
+           AND o.request#>>'{result_ready,task_id}'=i.task_id::text
+           AND o.request->>'result_head'=p.head
+         WHERE p.report_id=$2 AND p.attempt_id=$3 AND i.task_id=$1 AND i.released_at IS NULL
+           AND d.disposition IN ('pending','unknown')
+           AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='success'
+           AND o.status='refused' AND o.completed_at_ms IS NOT NULL
+           AND o.output->>'reason'='unreachable' AND o.request->>'answer_note'='remote_rejected'
+           AND NOT EXISTS(SELECT 1 FROM delivery_decisions x WHERE x.result_id=$2)
+           AND NOT EXISTS(SELECT 1 FROM playbook_host_operations x WHERE x.subject_id=o.subject_id
+             AND x.request#>>'{result_ready,result_id}'=p.report_id::text
+             AND (x.status='running' OR x.command_name IN ('pull_request.open','pull_request.merge')
+               OR (x.command_name='branch.publish' AND (x.status<>'refused' OR x.completed_at_ms IS NULL
+                 OR x.output->>'reason' IS DISTINCT FROM 'unreachable'
+                 OR x.request->>'answer_note' IS DISTINCT FROM 'remote_rejected'))))
+           AND NOT EXISTS(SELECT 1 FROM playbook_effects x
+             WHERE x.receipt->>'result_id'=p.report_id::text AND x.status='pending')
+         ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1",
+    )
+    .bind(task)
+    .bind(report)
+    .bind(attempt)
+    .bind(owner_operation)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?;
+    Ok(refusal.map(|(publication, head)| {
+        json!({
+            "decided_by": "owner_publication_retry",
+            "owner_operation_id": owner_operation,
+            "publication_operation_id": publication,
+            "head": head,
+            "report": result.receipt_artifact,
+        })
+    }))
+}
