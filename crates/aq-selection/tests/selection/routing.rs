@@ -295,3 +295,44 @@ fn a_first_provider_without_an_installed_composition_still_bounds_fallback_under
             .contains(&"fallback_not_permitted".into())
     );
 }
+
+#[test]
+fn capacity_refusal_respects_the_profiles_unavailable_fallback_policy() {
+    let (catalog, mut input) = fixture();
+    input.route = route(|r| r.providers = vec!["fixture-a".into(), "fixture-b".into()]);
+    let capacity =
+        std::collections::BTreeMap::from([("fixture-a".into(), "swarm_concurrency_limit_reached")]);
+
+    let permitted = select_for_offer_with_capacity(&catalog.launch(), &input, &capacity).unwrap();
+    assert_eq!(permitted.resolved.unwrap().choice.provider, "fixture-b");
+
+    let mut strict = policy();
+    strict
+        .fallback_on
+        .retain(|reason| *reason != FallbackReason::Unavailable);
+    let catalog = change_policy(&catalog, strict, &mut input);
+    assert_eq!(
+        select(&catalog, &input)
+            .unwrap()
+            .resolved
+            .unwrap()
+            .choice
+            .provider,
+        "fixture-a"
+    );
+    let refused = select_for_offer_with_capacity(&catalog.launch(), &input, &capacity).unwrap();
+    assert!(refused.resolved.is_none(), "{refused:?}");
+    assert_eq!(refused.traces[0].state, CandidateState::Unavailable);
+    assert!(
+        refused.traces[0]
+            .reason_codes
+            .iter()
+            .any(|reason| reason == "swarm_concurrency_limit_reached")
+    );
+    assert!(
+        refused
+            .reason_codes
+            .iter()
+            .any(|reason| reason == "no_permitted_fallback")
+    );
+}
