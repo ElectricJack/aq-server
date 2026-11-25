@@ -112,6 +112,7 @@ struct Attempt {
     expected: bool,
     intended_model: Option<String>,
     state: Option<String>,
+    assignment_generation: Option<i64>,
 }
 
 impl Attempt {
@@ -217,6 +218,7 @@ async fn load(
                 expected: row.try_get("expected")?,
                 intended_model: row.try_get("intended_model")?,
                 state: row.try_get("attempt_status")?,
+                assignment_generation: row.try_get("assignment_generation")?,
                 ..Attempt::default()
             },
         );
@@ -309,8 +311,17 @@ pub(super) async fn task(
     if report.attempts.is_empty() && first_route.is_none() {
         return Ok(Value::Null);
     }
-    let attempts: Vec<_> = report.attempts.iter().map(|(id, attempt)| json!({
-        "attempt_id": id, "status": status(&attempt.totals, (attempt.expected && !attempt.complete()) || attempt.models.len() > MAX_MODELS),
+    let mut ordered_attempts: Vec<_> = report.attempts.iter().collect();
+    ordered_attempts.sort_by_key(|(id, attempt)| {
+        (
+            attempt.assignment_generation.is_none(),
+            attempt.assignment_generation,
+            **id,
+        )
+    });
+    let attempts: Vec<_> = ordered_attempts.into_iter().map(|(id, attempt)| json!({
+        "attempt_id": id, "assignment_generation": attempt.assignment_generation,
+        "status": status(&attempt.totals, (attempt.expected && !attempt.complete()) || attempt.models.len() > MAX_MODELS),
         "attempt_status": attempt.state, "intended_model": attempt.intended_model,
         "models": model_rows(&attempt.models), "costs": cost_rows(&attempt.totals.costs),
         "unresolved_events": attempt.unresolved,
