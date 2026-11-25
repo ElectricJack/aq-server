@@ -135,6 +135,17 @@ pub(super) async fn publish(
         m.bindings.graph_id,
         m.bindings.task_id,
     );
+    #[cfg(feature = "project_environments")]
+    {
+        use crate::agent_access::human::graph_actions::needs;
+        let version = i64::try_from(built.spec.task.version).map_err(|_| refused())?;
+        if aq_machine_control::task_needs::blocks_observation(&mut tx, (project, task, version))
+            .await
+            .map_err(db)?
+        {
+            return Ok(Outcome::WorkspaceBlocked(needs::PENDING));
+        }
+    }
     let scope = crate::task_workspace_resume::scope(&mut tx, project, task).await?;
     if let Some(reason) = scope.blocker(true) {
         return Ok(Outcome::WorkspaceBlocked(reason));

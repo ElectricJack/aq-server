@@ -690,3 +690,75 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
     assert_eq!(evidence["head"], json!(head));
     assert_eq!(env.writes.load(Ordering::SeqCst), 0);
 }
+
+#[cfg(feature = "project_environments")]
+#[tokio::test]
+async fn successor_needs_requires_an_exact_quiescent_predecessor() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let h = RetryHistory::new().await;
+    let env = &h.env;
+    let project = env.f.selection.lineage.project_id;
+    let version = env.expected_version.to_string();
+    let publication = Uuid::new_v4();
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
+        .bind(publication).bind(h.namespace).bind(publication.to_string())
+        .bind(h.task.to_string()).bind(json!({"result_ready":{"task_id":h.task,"project_id":project,"attempt_id":h.attempt,"result_id":h.result},"result_head":"4".repeat(40)}))
+        .bind(NOW as i64).execute(&h.pool).await.unwrap();
+
+    let set_needs = || async {
+        let id = Uuid::new_v4();
+        let action = json!({"operation_id":id,"kind":"task.needs.set",
+            "subject":{"type":"task","id":h.task,"revision":version},"expected_versions":{"task":version},
+            "payload":{"operation_id":id,"project_id":project,"expected_version":version,"needs":["terminal-test"]}});
+        let response = aq_server::build_admin_router(env.f.state.clone())
+            .oneshot(
+                axum::http::Request::post("/api/v1/actions")
+                    .header("x-aq-dev-email", "owner@localhost")
+                    .header("x-aq-request", "1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(action.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
+            .unwrap()
+    };
+
+    let uncertain = set_needs().await;
+    assert_eq!(uncertain["data"]["disposition"], "rejected", "{uncertain}");
+    sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb WHERE operation_id=$1")
+        .bind(publication).execute(&h.pool).await.unwrap();
+
+    let running = h.record("branch.publish", "running", h.result).await;
+    let blocked = set_needs().await;
+    assert_eq!(blocked["data"]["disposition"], "rejected", "{blocked}");
+    sqlx::query("DELETE FROM playbook_host_operations WHERE operation_id=$1")
+        .bind(running).execute(&h.pool).await.unwrap();
+
+    let accepted = set_needs().await;
+    assert_eq!(accepted["data"]["disposition"], "confirmed", "{accepted}");
+    let raw: Vec<u8> = sqlx::query_scalar(
+        "SELECT i.body FROM dashboard_graph_intents i JOIN dashboard_operations d USING(operation_id)
+         WHERE d.kind='task.needs.set' AND d.disposition='confirmed'",
+    )
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let patch: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(patch["operations"][0]["expected_version"], env.expected_version);
+    assert_eq!(patch["operations"][0]["patch"]["metadata"]["aq:needs"], json!(["terminal-test"]));
+    assert!(env.holds_task().await);
+    let mut db = h.pool.acquire().await.unwrap();
+    let observed = env.expected_version as i64;
+    for (revision, blocks) in [(observed, true), (observed + 1, false)] {
+        assert_eq!(
+            aq_machine_control::task_needs::blocks_observation(&mut db, (project, h.task, revision))
+                .await
+                .unwrap(),
+            blocks
+        );
+    }
+}
