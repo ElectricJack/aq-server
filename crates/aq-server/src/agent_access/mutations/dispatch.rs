@@ -74,24 +74,34 @@ fn draft_default(operation: Option<&str>, field: &str, value: &Value) -> bool {
 }
 
 fn receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
-    let workspace = &request["binding"]["workspace_id"];
     if mapped["class"] == "draft_create" {
-        if !contract::upstream_valid("Draft", raw)
-            || raw["workspace_id"] != *workspace
-            || raw["actor_id"] != mapped["service"]["actor"]
-            || raw["status"] != "draft"
-            || !draft_operations_match(&mapped["payload"]["operations"], &raw["operations"])
-            || raw["name"] != mapped["payload"]["name"]
-            || !raw["result"].is_null()
-            || !raw["applied_at"].is_null()
-            || raw["reason"] != request["reason"]
-        {
-            return Err(Error("overloaded"));
-        }
-        return Ok(
-            json!({"kind":"graph_draft","workspace_id":workspace,"draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"])? ,"applied":false,"task_completion":false}),
-        );
+        draft_receipt(request, mapped, raw)
+    } else {
+        mutation_receipt(request, mapped, raw)
     }
+}
+
+fn draft_receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
+    let workspace = &request["binding"]["workspace_id"];
+    if !contract::upstream_valid("Draft", raw)
+        || raw["workspace_id"] != *workspace
+        || raw["actor_id"] != mapped["service"]["actor"]
+        || raw["status"] != "draft"
+        || !draft_operations_match(&mapped["payload"]["operations"], &raw["operations"])
+        || raw["name"] != mapped["payload"]["name"]
+        || !raw["result"].is_null()
+        || !raw["applied_at"].is_null()
+        || raw["reason"] != request["reason"]
+    {
+        return Err(Error("overloaded"));
+    }
+    Ok(
+        json!({"kind":"graph_draft","workspace_id":workspace,"draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"])? ,"applied":false,"task_completion":false}),
+    )
+}
+
+fn mutation_receipt(request: &Value, mapped: &Value, raw: &Value) -> Result<Value> {
+    let workspace = &request["binding"]["workspace_id"];
     if !contract::upstream_valid("MutationResult", raw) {
         return Err(Error("overloaded"));
     }
@@ -429,6 +439,118 @@ pub(super) async fn recoverable_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draft_receipt_requires_the_exact_unapplied_intent() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/native-draft-normalization.json"
+        ))
+        .unwrap();
+        let raw = &fixture["response"];
+        let request = json!({
+            "binding":{"workspace_id":raw["workspace_id"]},
+            "reason":raw["reason"],
+        });
+        let mapped = json!({
+            "class":"draft_create",
+            "service":{"actor":raw["actor_id"]},
+            "payload":{"name":raw["name"],"operations":fixture["expected_operations"]},
+        });
+        assert_eq!(
+            receipt(&request, &mapped, raw).unwrap(),
+            json!({
+                "kind":"graph_draft","workspace_id":raw["workspace_id"],
+                "draft_id":raw["id"],"proposal_digest":digest(&mapped["payload"]).unwrap(),
+                "applied":false,"task_completion":false,
+            })
+        );
+        for (field, value) in [
+            ("id", Value::Null),
+            ("workspace_id", json!(Uuid::nil())),
+            ("actor_id", json!("another-actor")),
+            ("status", json!("applied")),
+            ("operations", json!([])),
+            ("name", json!("another-name")),
+            ("result", json!({"change_set_id":Uuid::nil(),"results":[]})),
+            ("applied_at", json!("2026-10-31T07:05:53Z")),
+            ("reason", json!("another-reason")),
+        ] {
+            let mut changed = raw.clone();
+            changed[field] = value;
+            assert_eq!(
+                receipt(&request, &mapped, &changed).unwrap_err().0,
+                "overloaded",
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_receipt_preserves_subjects_versions_and_result_correspondence() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/agent-access/v1/fixtures/qualified-graph.json"
+        ))
+        .unwrap();
+        let raw = &fixture["mutation_receipt"];
+        let node = &raw["results"][0];
+        let edge = &raw["results"][1];
+        let request = json!({
+            "binding":{"workspace_id":node["workspace_id"]},
+            "commands":[
+                {"kind":"create_finding","id":node["id"]},
+                {"kind":"add_relationship","id":edge["id"],"source":node["id"]},
+            ],
+        });
+        let mapped = json!({
+            "class":"mutate",
+            "service":{"actor":node["created_by"]},
+            "payload":{"operations":[
+                {"op":"create_node","id":node["id"],"kind":node["kind"]},
+                {"op":"add_edge","id":edge["id"]},
+            ]},
+        });
+        assert_eq!(
+            receipt(&request, &mapped, raw).unwrap(),
+            json!({
+                "kind":"graph_mutation","workspace_id":node["workspace_id"],
+                "change_set_id":raw["change_set_id"],
+                "versions":[
+                    {"kind":"edge","id":edge["id"],"version":"1","content_revision":null},
+                    {"kind":"node","id":node["id"],"version":"1","content_revision":"1"},
+                ],
+                "affected_record_ids":[node["id"]],"task_completion":false,
+            })
+        );
+        for (field, value) in [
+            ("id", json!(Uuid::nil())),
+            ("workspace_id", json!(Uuid::nil())),
+            ("kind", json!("task")),
+            ("created_by", json!("another-actor")),
+            ("version", json!(0)),
+            ("content_revision", json!(0)),
+        ] {
+            let mut changed = raw.clone();
+            changed["results"][0][field] = value;
+            assert_eq!(
+                receipt(&request, &mapped, &changed).unwrap_err().0,
+                "overloaded",
+                "{field}"
+            );
+        }
+        let mut reordered = raw.clone();
+        reordered["results"].as_array_mut().unwrap().swap(0, 1);
+        assert_eq!(
+            receipt(&request, &mapped, &reordered).unwrap_err().0,
+            "overloaded"
+        );
+        let mut incomplete = raw.clone();
+        incomplete["results"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            receipt(&request, &mapped, &incomplete).unwrap_err().0,
+            "overloaded"
+        );
+    }
+
     #[test]
     fn draft_normalization_preserves_explicit_fields_and_order() {
         let expected = json!([
