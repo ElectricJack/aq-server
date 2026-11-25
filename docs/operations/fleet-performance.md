@@ -19,3 +19,5 @@ The sampler records one UTC minute per machine and one fleet demand reading. Sev
 To disable capture on the next server startup, set `AQ_PERFORMANCE_SAMPLING=off` for occupancy and `AQ_PERFORMANCE_SCHEDULING_DIAGNOSTICS=0` for scheduler observations. Reads remain available for retained observations. The page contains no prompt or transcript bodies.
 
 The server migration is state format 178. Before upgrading an existing server, follow the installation's normal database backup and format-compatibility procedure. Roll out the server before the dashboard. Switching off collection is a forward change that preserves task history. A server that only understands format 177 requires a compatible database for rollback. Operators should account for writes made after a backup before considering restoration.
+
+AQ Graph schema 10 supplies the optional first-ready clock for newly created tasks. Downstream deployments using an earlier Graph image still receive outcome counts, and the report labels missing timing coverage. The first verified Graph revision is `e48ec2b3273750a79ae1cd3c24e6bac57d954b2c`. Back up the Graph database independently before upgrading it.
