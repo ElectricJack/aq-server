@@ -5,60 +5,19 @@ fn corrupt() -> StoreError {
     StoreError::Corrupt("settlement39 schema, bounds or retained owner joins inconsistent".into())
 }
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    validate_composed(tx, false, false, 39).await
+    validate_composed(tx, 39).await
 }
 pub(super) async fn validate_phase_absence(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    validate_composed(tx, true, false, 40).await
+    validate_composed(tx, 40).await
 }
 pub(super) async fn validate_compute_reuse(
     tx: &mut Transaction<'_, Postgres>,
     supported: u32,
 ) -> Result<()> {
-    validate_composed(tx, true, true, supported).await
+    validate_composed(tx, supported).await
 }
-async fn validate_composed(
-    tx: &mut Transaction<'_, Postgres>,
-    phase_absence: bool,
-    compute_reuse: bool,
-    supported: u32,
-) -> Result<()> {
-    let mut expected: serde_json::Value =
-        serde_json::from_str(include_str!("settlement39_catalog.json")).map_err(|_| corrupt())?;
-    if expected.as_array().is_none_or(Vec::is_empty) {
-        return Err(corrupt());
-    }
-    if phase_absence {
-        let row = expected
-            .as_array_mut()
-            .ok_or_else(corrupt)?
-            .iter_mut()
-            .find(|row| row["kind"] == "function" && row["name"] == "settlement_claim_guard")
-            .ok_or_else(corrupt)?;
-        row["body"]["body"] = serde_json::Value::String(
-            super::never_granted40::function_body("settlement_claim_guard")?.into(),
-        );
-    }
-    if compute_reuse {
-        let row = expected
-            .as_array_mut()
-            .ok_or_else(corrupt)?
-            .iter_mut()
-            .find(|row| row["kind"] == "function" && row["name"] == "profiled_result_origin_valid")
-            .ok_or_else(corrupt)?;
-        let ids = super::compute41::contract_ids(supported, "profiled_result_origin_valid");
-        let old = || super::compute41::function_body("profiled_result_origin_valid");
-        row["body"]["body"] = ids.map_or_else(old, Ok)?.into();
-    }
-    // Format 50 widens both claim guards for replacement releases only.
-    for (name, body) in super::replacement52::guard_overrides(supported)? {
-        let row = expected
-            .as_array_mut()
-            .ok_or_else(corrupt)?
-            .iter_mut()
-            .find(|row| row["kind"] == "function" && row["name"] == name)
-            .ok_or_else(corrupt)?;
-        row["body"]["body"] = serde_json::Value::String(body.into());
-    }
+async fn validate_composed(tx: &mut Transaction<'_, Postgres>, supported: u32) -> Result<()> {
+    let mut expected = expected_catalog(supported)?;
     let mut actual: serde_json::Value =
         sqlx::query_scalar(include_str!("settlement39_catalog.sql"))
             .fetch_one(&mut **tx)
@@ -106,4 +65,84 @@ async fn validate_composed(
         }
     }
     Ok(())
+}
+
+fn expected_catalog(supported: u32) -> Result<serde_json::Value> {
+    let mut expected: serde_json::Value =
+        serde_json::from_str(include_str!("settlement39_catalog.json")).map_err(|_| corrupt())?;
+    if expected.as_array().is_none_or(Vec::is_empty) {
+        return Err(corrupt());
+    }
+    if supported >= 40 {
+        replace_function(
+            &mut expected,
+            "settlement_claim_guard",
+            super::never_granted40::function_body("settlement_claim_guard")?,
+        )?;
+    }
+    if supported >= 41 {
+        let name = "profiled_result_origin_valid";
+        let body = super::compute41::contract_ids(supported, name)
+            .map_or_else(|| super::compute41::function_body(name), Ok)?;
+        replace_function(&mut expected, name, body)?;
+    }
+    // Format 50 widens both claim guards for replacement releases only.
+    for (name, body) in super::replacement52::guard_overrides(supported)? {
+        replace_function(&mut expected, name, body)?;
+    }
+    Ok(expected)
+}
+
+fn replace_function(catalog: &mut serde_json::Value, name: &str, body: &str) -> Result<()> {
+    let row = catalog
+        .as_array_mut()
+        .ok_or_else(corrupt)?
+        .iter_mut()
+        .find(|row| row["kind"] == "function" && row["name"] == name)
+        .ok_or_else(corrupt)?;
+    row["body"]["body"] = body.into();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_overrides_follow_frozen_migration_boundaries() {
+        for name in ["settlement_claim_guard", "profiled_result_origin_valid"] {
+            let mut expected = None;
+            for (version, sql) in super::super::MIGRATIONS {
+                if let Some(body) = aq_profiled_state::sql_function_body(sql, name) {
+                    expected = Some(body);
+                }
+                if *version < 39 {
+                    continue;
+                }
+                let catalog = expected_catalog(*version as u32).unwrap();
+                let row = catalog
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["kind"] == "function" && row["name"] == name)
+                    .unwrap();
+                assert_eq!(
+                    row["body"]["body"].as_str(),
+                    expected,
+                    "{name} at {version}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_catalog_function_is_corrupt() {
+        let mut catalog = serde_json::json!([{"kind":"table","name":"missing"}]);
+        let before = catalog.clone();
+        assert!(matches!(
+            replace_function(&mut catalog, "missing", "body"),
+            Err(StoreError::Corrupt(_))
+        ));
+        assert_eq!(catalog, before);
+    }
 }
