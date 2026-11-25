@@ -148,13 +148,7 @@ async fn seed_failed_attempt(f: &Fixture, at_ms: i64) {
         .execute(&mut *tx)
         .await
         .unwrap();
-    let value: serde_json::Value =
-        sqlx::query_scalar("SELECT state FROM profiled_authority_hot WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
-    let mut state: HotState = serde_json::from_value(value).unwrap();
+    let mut state = HotState::from_compat(&f.profiled).unwrap();
     let stopped = artifact("synthetic-stop", b"stop");
     let retained = artifact("synthetic-retained", b"retained");
     let quiescent = artifact("synthetic-effects", b"effects");
@@ -168,12 +162,15 @@ async fn seed_failed_attempt(f: &Fixture, at_ms: i64) {
     state.effects = Effects::Quiescent {
         receipt: quiescent.clone(),
     };
-    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
-        .bind(attempt)
-        .bind(json!(state))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,
+         grant_revision) VALUES($1,$2,2,2,1)",
+    )
+    .bind(attempt)
+    .bind(json!(state))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO profiled_replacement_releases(attempt_id,task_id,reason,
          stop_receipt_digest,retained_source_receipt_digest,effect_reconciliation_receipt_digest,
