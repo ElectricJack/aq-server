@@ -90,10 +90,10 @@ async fn node_revoked(
     policy: Policy,
     rows: Rows,
 ) -> Result<bool> {
-    let sql = rows.sql(
-        "SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1",
-        "FOR UPDATE",
-    );
+    // Terminal policies only sample it; the attempt row orders them, not the node row.
+    let terminal = matches!(policy, Policy::TerminalActive | Policy::TerminalHistorical);
+    let lock = if terminal { "" } else { "FOR UPDATE" };
+    let sql = rows.sql("SELECT revoked_at IS NOT NULL FROM nodes WHERE id=$1", lock);
     let revoked: Option<bool> = sqlx::query_scalar(&sql)
         .bind(node)
         .fetch_optional(tx)

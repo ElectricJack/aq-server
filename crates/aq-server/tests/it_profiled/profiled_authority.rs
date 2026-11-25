@@ -426,6 +426,7 @@ async fn authority_expiry_is_sampled_after_an_observed_node_lock_wait() {
     let worker_pool = pool.clone();
     let state = f.state.clone();
     let expected = f.profiled.offer.binding.session.clone();
+    let expected_terminal = expected.clone();
     let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
     let waiting = tokio::spawn(async move {
         let mut tx = worker_pool.begin().await.unwrap();
@@ -434,32 +435,39 @@ async fn authority_expiry_is_sampled_after_an_observed_node_lock_wait() {
             .await
             .unwrap();
         pid_tx.send(pid).unwrap();
-        let result =
-            authority::load_locked(&state, &mut tx, &expected, Policy::TerminalActive).await;
+        // Graph authority still takes the node row; terminal policies only sample it.
+        let result = authority::load_locked(&state, &mut tx, &expected, Policy::GraphActive).await;
         tx.rollback().await.unwrap();
         result
     });
     let pid = pid_rx.await.unwrap();
     let observer = f.db.pool().await;
-    let mut blocked = false;
-    for _ in 0..100 {
-        let lock: bool = sqlx::query_scalar(
-            "SELECT COALESCE(wait_event_type='Lock',false) FROM pg_stat_activity WHERE pid=$1",
-        )
+    // The load waits on the held row until it is released, so this ends without a deadline.
+    let waiting_sql =
+        "SELECT COALESCE(wait_event_type='Lock',false) FROM pg_stat_activity WHERE pid=$1";
+    while !sqlx::query_scalar::<_, bool>(waiting_sql)
         .bind(pid)
         .fetch_one(&observer)
         .await
-        .unwrap();
-        if lock {
-            blocked = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        .unwrap()
+    {
+        tokio::task::yield_now().await;
     }
-    assert!(
-        blocked,
-        "actual node lock wait must be observed before clock advance"
-    );
+    // A terminal load beside it does not wait on the node row at all.
+    let mut terminal = observer.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout='1s'")
+        .execute(&mut *terminal)
+        .await
+        .unwrap();
+    authority::load_locked(
+        &f.state,
+        &mut terminal,
+        &expected_terminal,
+        Policy::TerminalActive,
+    )
+    .await
+    .unwrap();
+    terminal.rollback().await.unwrap();
     f.time.store((NOW + 5000) as i64, Ordering::SeqCst);
     held.rollback().await.unwrap();
     assert!(matches!(
