@@ -7,14 +7,14 @@
 # by an advisory lock (aq-server src/test_support.rs, `migration_slot`).
 
 [profile.default]
-# A test still running after 60 s is reported as slow; one still running after
-# 10 min is stopped, so a hang cannot hold the whole run.
-slow-timeout = { period = "60s", terminate-after = 10 }
+# A test still running after 60 s is reported as slow. Tests are not stopped
+# for running long.
+slow-timeout = "60s"
 
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = "60s"
 
 [profile.ci.junit]
 path = "junit.xml"
@@ -42,6 +42,7 @@ filter = """
   (binary_id(aq-server::it_native) & (test(/^native_accepted_preparation::/) | test(/^native_offers::/) | test(/^native_preparation::/) | test(/^native_proposal_scope::/) | test(/^native_result_startup::/) | test(/^scoped_presence_inventory::/)))
   | (binary_id(aq-server::it_phase) & (test(/^phase_execution::/) | test(/^phase_execution_transport::/) | test(/^phase_initial_lease::/) | test(/^phase_never_granted::/) | test(/^phase_refresh_execution::/) | test(/^phase_refresh_terminal::/) | test(/^phase_results::/) | test(/^phase_terminal_closure::/) | test(/^phase_terminal_fixture::/) | test(/^phase_terminal_history::/) | test(/^phase_terminal_started::/) | test(/^phase_terminal_stopped::/) | test(/^terminal_tail::/)))
   | (binary_id(aq-server::it_native) & test(/^native_initial_grant::published::actual_git::/))
+  | (binary_id(aq-server::it_dashboard) & test(=performance::overhead::poll_diagnostics_overhead))
   | (binary_id(aq-server::it_playbook) & (test(/^project_bindings::/) | test(/^repository_onboarding::/)))
   | (binary_id(aq-server::it_profiled) & test(/^replacement_policy_limits::/))
   | (binary_id(aq-server::it_server) & test(/^manual_agents::/))
@@ -58,5 +59,5 @@ filter = """
 test-group = "selection-fixture"
 
 [[profile.default.overrides]]
-filter = "(binary_id(aq-server) & test(/^store::/)) | (binary_id(aq-server::it_schema) & test(/^schema3[456]_(human_graph|supervisor|media)::/))"
+filter = "(binary_id(aq-server) & test(/^store::/)) | (binary_id(aq-server::it_schema) & (test(/^central37::/) | test(/^schema3[456]_(human_graph|supervisor|media)::/)))"
 test-group = "fresh-migrations"

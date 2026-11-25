@@ -402,3 +402,70 @@ async fn assert_control_upload(app: &axum::Router, request: axum::http::Request<
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn node_signed_uploads_and_registration_skip_the_node_row_and_append_each_frame_once() {
+    use aq_terminal_relay::api::{OutputReply, ViewQuery};
+    let (mut f, _dir, r) = running().await;
+    let node = authenticated(&f).await;
+    // The node's heartbeat holds its row the whole time (UPDATE nodes SET last_seen_at).
+    let mut heartbeat = f.db.pool().await.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(node.id())
+        .execute(&mut *heartbeat)
+        .await
+        .unwrap();
+    register(&f, &r).await;
+    let sibling = super::dispatch::sibling_terminal(&mut f, &r).await;
+    let mut uploads = vec![];
+    for terminal in [&r, &sibling] {
+        let subscription = watch(&f, terminal, f.actor, 10_000).await;
+        let mut upload = empty_upload(terminal, 0);
+        upload.snapshots = vec![retained_snapshot(terminal)];
+        upload.frames = vec![output_frame(terminal, &[1])];
+        uploads.push((terminal, subscription, upload));
+    }
+    let sent = uploads
+        .iter()
+        .map(|(_, _, u)| aq_server::terminal::peer::upload(&f.state, &node, u));
+    for result in futures_util::future::join_all(sent).await {
+        result.unwrap();
+    }
+    // The same terminal again: a replayed upload, then the next frame.
+    let (_, subscription, mut upload) = uploads.remove(0);
+    aq_server::terminal::peer::upload(&f.state, &node, &upload)
+        .await
+        .unwrap();
+    upload.snapshots.clear();
+    upload.frames = vec![aq_session_protocol::OutputFrame {
+        sequence: 2,
+        ..output_frame(&r, &[2])
+    }];
+    aq_server::terminal::peer::upload(&f.state, &node, &upload)
+        .await
+        .unwrap();
+    heartbeat.rollback().await.unwrap();
+    let query = ViewQuery {
+        subscription_id: subscription,
+        after_sequence: 0,
+    };
+    let reply = service::output(&f.state, f.actor, r.terminal.terminal_id, &query);
+    let OutputReply::Ready { frames, .. } = reply.await.unwrap() else {
+        panic!()
+    };
+    let appended: Vec<_> = frames
+        .iter()
+        .map(|x| (x.sequence, x.bytes.clone()))
+        .collect();
+    assert_eq!(appended, [(1, vec![1]), (2, vec![2])]);
+    // A node revoked after it authenticated is refused.
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(node.id())
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
+    assert!(matches!(
+        aq_server::terminal::peer::upload(&f.state, &node, &upload).await,
+        Err(aq_server::error::AppError::CredentialRevoked)
+    ));
+}

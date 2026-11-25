@@ -40,7 +40,16 @@ async fn actual_pinned_graph_fixture_cas_receipts_context_and_owned_cleanup() ->
         "actual service runtime config"
     );
     let key = Uuid::new_v4().to_string();
-    let body = json!({"idempotency_key":key,"reason":"Graph-only CAS component smoke, not B2/C settlement","operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"completed"}}]});
+    let body = json!({
+        "idempotency_key": key,
+        "reason": "Graph-only CAS component smoke, not B2/C settlement",
+        "operations": [{
+            "op": "update_node",
+            "id": task.task_id,
+            "expected_version": task.version,
+            "patch": {"task_state": "completed"},
+        }],
+    });
     let (status, receipt) = fixture.mutation(body.clone()).await?;
     ensure!(
         status.as_u16() == 200,
@@ -58,7 +67,16 @@ async fn actual_pinned_graph_fixture_cas_receipts_context_and_owned_cleanup() ->
         status.as_u16() == 200 && replayed == receipt,
         "exact Graph mutation receipt replay"
     );
-    let (status,_)=fixture.mutation(json!({"idempotency_key":Uuid::new_v4().to_string(),"operations":[{"op":"update_node","id":task.task_id,"expected_version":task.version,"patch":{"task_state":"active"}}]})).await?;
+    let stale = json!({
+        "idempotency_key": Uuid::new_v4().to_string(),
+        "operations": [{
+            "op": "update_node",
+            "id": task.task_id,
+            "expected_version": task.version,
+            "patch": {"task_state": "active"},
+        }],
+    });
+    let (status, _) = fixture.mutation(stale).await?;
     ensure!(status.as_u16() == 409, "stale task CAS must conflict");
     let actual = fixture.task().await?;
     ensure!(
@@ -75,7 +93,14 @@ async fn actual_pinned_graph_fixture_cas_receipts_context_and_owned_cleanup() ->
             && cleanup.directory_removed,
         "explicit graceful owned cleanup required"
     );
-    let evidence = json!({"scope":"actual pinned Graph component only; no GATE04 harness/settlement/admission claim","before":before,"creation_receipt":created,"completion_receipt":receipt,"after":after,"cleanup":cleanup});
+    let evidence = json!({
+        "scope": "actual pinned Graph component only; no GATE04 harness/settlement/admission claim",
+        "before": before,
+        "creation_receipt": created,
+        "completion_receipt": receipt,
+        "after": after,
+        "cleanup": cleanup,
+    });
     if let Some(path) = std::env::var_os("AQ_GATE04_GRAPH_EVIDENCE") {
         let path = std::path::PathBuf::from(path);
         ensure!(!path.exists(), "fresh evidence path required");

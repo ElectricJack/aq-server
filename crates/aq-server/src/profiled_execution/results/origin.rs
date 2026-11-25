@@ -146,6 +146,30 @@ pub(super) async fn load_locked(
         }
     }
 }
+async fn require_legacy_row_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &PgRow,
+    node: Uuid,
+) -> Result<()> {
+    if row.get::<Uuid, _>("node_id") != node {
+        return Err(conflict());
+    }
+    match row.try_get::<String, _>("initial_authority_kind") {
+        Ok(kind) if kind == "legacy_prepare_v1" => (),
+        Err(sqlx::Error::ColumnNotFound(_)) => {
+            let version: String =
+                sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                    .fetch_one(&mut **tx)
+                    .await
+                    .map_err(db)?;
+            if version.parse::<u32>().map_err(|_| AppError::Internal)? >= 33 {
+                return Err(conflict());
+            }
+        }
+        _ => return Err(conflict()),
+    }
+    Ok(())
+}
 async fn legacy(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
@@ -166,24 +190,16 @@ async fn legacy(
             .map_err(db)?
             .ok_or_else(conflict)?;
     for row in [&start, &stop] {
-        if row.get::<Uuid, _>("node_id") != node {
-            return Err(conflict());
-        }
-        match row.try_get::<String, _>("initial_authority_kind") {
-            Ok(kind) if kind == "legacy_prepare_v1" => (),
-            Err(sqlx::Error::ColumnNotFound(_)) => {
-                let version: String =
-                    sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-                        .fetch_one(&mut **tx)
-                        .await
-                        .map_err(db)?;
-                if version.parse::<u32>().map_err(|_| AppError::Internal)? >= 33 {
-                    return Err(conflict());
-                }
-            }
-            _ => return Err(conflict()),
-        }
+        require_legacy_row_locked(tx, row, node).await?;
     }
+    let history = decode_legacy_history(&start, &stop, binding)?;
+    if recording {
+        require_recording_runtime_locked(tx, node, binding, &history.stop).await?;
+    }
+    Ok(history)
+}
+
+fn decode_legacy_history(start: &PgRow, stop: &PgRow, binding: &LaunchBinding) -> Result<Legacy> {
     let q: started::Request = started::decode_request(&start.get::<Vec<u8>, _>("request_bytes"))
         .map_err(|_| AppError::Internal)?;
     let a = started::decode_receipt(&start.get::<Vec<u8>, _>("receipt_bytes"), &q)
@@ -208,26 +224,33 @@ async fn legacy(
     {
         return Err(AppError::Internal);
     }
-    if recording {
-        let SessionIdentity::Remote { boot_id, .. } = binding.session else {
-            return Err(conflict());
-        };
-        let admitted = registration::admitted_runtime_locked(tx, node, boot_id).await?;
-        if admitted.request.runtime != stopped.runtime
-            || admitted.qualification != stopped.qualification
-            || !admitted
-                .request
-                .features
-                .contains(&Feature::HostStopEvidenceV1)
-            || !admitted
-                .request
-                .features
-                .contains(&Feature::DurableHostJournalV1)
-        {
-            return Err(conflict());
-        }
-    }
     Ok(Legacy { stop: stopped, ack })
+}
+
+async fn require_recording_runtime_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    binding: &LaunchBinding,
+    stopped: &stopped::Request,
+) -> Result<()> {
+    let SessionIdentity::Remote { boot_id, .. } = binding.session else {
+        return Err(conflict());
+    };
+    let admitted = registration::admitted_runtime_locked(tx, node, boot_id).await?;
+    if admitted.request.runtime != stopped.runtime
+        || admitted.qualification != stopped.qualification
+        || !admitted
+            .request
+            .features
+            .contains(&Feature::HostStopEvidenceV1)
+        || !admitted
+            .request
+            .features
+            .contains(&Feature::DurableHostJournalV1)
+    {
+        return Err(conflict());
+    }
+    Ok(())
 }
 mod frozen {
     use super::*;

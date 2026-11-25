@@ -33,6 +33,18 @@ async fn snapshot(case: &Case, project: Uuid, workspace: Uuid, task: Uuid, confi
     .unwrap();
 }
 
+async fn snapshot_confirmed_author(case: &Case) {
+    let lineage = &case.env.lineage;
+    snapshot(
+        case,
+        lineage.project_id,
+        lineage.workspace_id,
+        lineage.task_id,
+        true,
+    )
+    .await;
+}
+
 async fn poll(case: &Case, headers: &[&str]) -> Value {
     let mut req = axum::http::Request::post("/v1/worker/profiled/poll")
         .header(
@@ -83,18 +95,22 @@ async fn assert_no_attempt(case: &Case) {
     assert_eq!(attempts, 0);
 }
 
+async fn assert_unsupported_workers_receive_no_offer(case: &Case) {
+    for unsupported in [&[][..], &["2"], &[VERSION, VERSION]] {
+        let reply = poll(case, unsupported).await;
+        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&reply).unwrap()).unwrap()
+        else {
+            panic!("{reply}")
+        };
+        assert!(page.offers.is_empty());
+    }
+}
+
 #[tokio::test]
 async fn negotiated_author_is_sealed_and_replayed_from_the_attempt() {
     let mut case = setup().await;
     let lineage = &case.env.lineage;
-    snapshot(
-        &case,
-        lineage.project_id,
-        lineage.workspace_id,
-        lineage.task_id,
-        true,
-    )
-    .await;
+    snapshot_confirmed_author(&case).await;
     let reply = offer(&case, &[VERSION]).await;
     let PollReply::Poll(mut page) = serde_json::from_value(reply.clone()).unwrap();
     let delivered = page.offers.remove(0);
@@ -110,6 +126,10 @@ async fn negotiated_author_is_sealed_and_replayed_from_the_attempt() {
     .await
     .unwrap();
     assert_eq!(original["native_offer"]["git_author"], json!(author()));
+    assert_eq!(
+        original["native_offer"]["offered"]["clock"]["server_time_ms"],
+        delivered.native.offered.clock.server_time_ms
+    );
 
     // Perturb the upstream fixture on the isolated database. Any re-read
     // instead of replay would now drop the author.
@@ -118,14 +138,7 @@ async fn negotiated_author_is_sealed_and_replayed_from_the_attempt() {
         .execute(&case.env.env.pool)
         .await
         .unwrap();
-    for unsupported in [&[][..], &["2"], &[VERSION, VERSION]] {
-        let reply = poll(&case, unsupported).await;
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&reply).unwrap()).unwrap()
-        else {
-            panic!("{reply}")
-        };
-        assert!(page.offers.is_empty());
-    }
+    assert_unsupported_workers_receive_no_offer(&case).await;
     let reply = offer(&case, &[VERSION]).await;
     let PollReply::Poll(page) = serde_json::from_value(reply).unwrap();
     let replayed = &page.offers[0];
@@ -165,15 +178,7 @@ async fn legacy_offer_keeps_its_closed_shape_when_reoffered_to_new_worker() {
     };
     assert_eq!(page.offers.len(), 1);
     assert!(legacy["body"]["offers"][0].get("git_author").is_none());
-    let lineage = &case.env.lineage;
-    snapshot(
-        &case,
-        lineage.project_id,
-        lineage.workspace_id,
-        lineage.task_id,
-        true,
-    )
-    .await;
+    snapshot_confirmed_author(&case).await;
     let replay = offer(&case, &[VERSION]).await;
     assert!(replay["body"]["offers"][0].get("git_author").is_none());
     assert_eq!(
@@ -186,14 +191,7 @@ async fn legacy_offer_keeps_its_closed_shape_when_reoffered_to_new_worker() {
 async fn legacy_worker_leaves_attributed_task_available_for_capable_poll() {
     let case = setup().await;
     let lineage = &case.env.lineage;
-    snapshot(
-        &case,
-        lineage.project_id,
-        lineage.workspace_id,
-        lineage.task_id,
-        true,
-    )
-    .await;
+    snapshot_confirmed_author(&case).await;
     let reply = poll(&case, &[]).await;
     assert_eq!(reply["body"]["offers"], json!([]));
     assert_no_attempt(&case).await;
@@ -210,15 +208,7 @@ async fn legacy_worker_leaves_attributed_task_available_for_capable_poll() {
 #[tokio::test]
 async fn legacy_worker_can_take_unattributed_task_behind_attributed_task() {
     let case = setup().await;
-    let lineage = &case.env.lineage;
-    snapshot(
-        &case,
-        lineage.project_id,
-        lineage.workspace_id,
-        lineage.task_id,
-        true,
-    )
-    .await;
+    snapshot_confirmed_author(&case).await;
     case.mode.store(7, Ordering::SeqCst);
     let (status, reply) = poll_offered(&case).await;
     assert_eq!(status, 200, "{reply}");
@@ -241,7 +231,6 @@ async fn legacy_worker_can_take_unattributed_task_behind_attributed_task() {
 #[tokio::test]
 async fn publication_rechecks_author_confirmed_after_candidate_selection() {
     let case = setup().await;
-    let lineage = &case.env.lineage;
     case.mode.store(12, Ordering::SeqCst);
     let confirm = async {
         tokio::time::timeout(
@@ -252,14 +241,7 @@ async fn publication_rechecks_author_confirmed_after_candidate_selection() {
         .unwrap()
         .unwrap()
         .forget();
-        snapshot(
-            &case,
-            lineage.project_id,
-            lineage.workspace_id,
-            lineage.task_id,
-            true,
-        )
-        .await;
+        snapshot_confirmed_author(&case).await;
         case.mode.store(0, Ordering::SeqCst);
         case.observation_resume.add_permits(1);
     };
@@ -275,14 +257,7 @@ async fn publication_rechecks_author_confirmed_after_candidate_selection() {
 async fn malformed_legacy_author_leaves_a_valid_unauthored_offer() {
     let case = setup().await;
     let lineage = &case.env.lineage;
-    snapshot(
-        &case,
-        lineage.project_id,
-        lineage.workspace_id,
-        lineage.task_id,
-        true,
-    )
-    .await;
+    snapshot_confirmed_author(&case).await;
     sqlx::query("UPDATE task_git_authors SET name=$1,email=$2 WHERE task_id=$3")
         .bind("Old<Account@")
         .bind("Old<Account@@example.test")

@@ -164,6 +164,8 @@ def check_libraries(lines, budget, base, ref):
             error = check_line_target(name, count, line_target)
         else:
             limit = allowed(base_lines.get(name), ceiling, base_ratchets.get(name))
+            # An owner-granted allowance on main lets every pull request grow up to it.
+            limit = max(limit, budget.get("allowance", {}).get(name, 0))
             print(f"build-budget: {name} lib {count} lines (limit {limit}, ceiling {ceiling}, target {line_target})")
             error = ratchet_error(name, count, limit, ratchet_context)
         if error:

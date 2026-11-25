@@ -53,6 +53,37 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
     case.env.env.state.clock = Arc::new(move || {
         chrono::DateTime::from_timestamp_millis(at.load(Ordering::SeqCst)).unwrap()
     });
+    let artifacts = artifact_receipts(&case, &offer, &plan).await;
+    let materials = material_receipts(&plan);
+    let request = Prepare {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: accepted.identity,
+        binding: plan.binding.clone(),
+        reservation: plan.reservation.clone(),
+        guardian_id: plan.guardian_id,
+        launch_id: plan.launch_id,
+        journal_revision: accepted.journal_revision + 1,
+        journal_digest: Digest::of(b"synthetic durable Prepared intent"),
+        artifacts,
+        materials,
+    };
+    aq_admission::transport::TransportDocument::Prepare(request.clone())
+        .validate()
+        .unwrap();
+    Prepared {
+        case,
+        offer,
+        plan,
+        request,
+        clock,
+    }
+}
+async fn artifact_receipts(
+    case: &Case,
+    offer: &NativeOffer,
+    plan: &PreparationPlan,
+) -> Vec<ArtifactReceipt> {
     let mut artifacts = offer
         .offered
         .artifacts
@@ -93,8 +124,11 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
             digest,
         });
     }
-    let materials = plan
-        .materials
+    artifacts
+}
+
+fn material_receipts(plan: &PreparationPlan) -> Vec<MaterialReceipt> {
+    plan.materials
         .iter()
         .map(|l| MaterialReceipt {
             schema_version: 1,
@@ -111,31 +145,9 @@ async fn setup_from(mut case: Case, offer: NativeOffer) -> Prepared {
             },
             received_at_ms: plan.clock.server_time_ms,
         })
-        .collect();
-    let request = Prepare {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: accepted.identity,
-        binding: plan.binding.clone(),
-        reservation: plan.reservation.clone(),
-        guardian_id: plan.guardian_id,
-        launch_id: plan.launch_id,
-        journal_revision: accepted.journal_revision + 1,
-        journal_digest: Digest::of(b"synthetic durable Prepared intent"),
-        artifacts,
-        materials,
-    };
-    aq_admission::transport::TransportDocument::Prepare(request.clone())
-        .validate()
-        .unwrap();
-    Prepared {
-        case,
-        offer,
-        plan,
-        request,
-        clock,
-    }
+        .collect()
 }
+
 pub async fn grant(c: &Prepared) -> Result<InitialGrantDelivery, aq_server::error::AppError> {
     initial_grant::prepare(
         &c.case.env.env.state,

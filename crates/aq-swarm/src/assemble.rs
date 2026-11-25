@@ -144,6 +144,19 @@ struct Built<'a> {
     node: SwarmNode,
 }
 
+/// Server-held machine identities take precedence over worker report labels.
+pub fn machine_key(
+    node: Uuid,
+    held_key: Option<&str>,
+    reported_key: Option<&str>,
+    held: &BTreeSet<&str>,
+) -> String {
+    held_key
+        .or_else(|| reported_key.filter(|key| !key.is_empty() && !held.contains(key)))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("node:{node}"))
+}
+
 pub fn assemble(input: SwarmInput) -> Result<Swarm, TimeError> {
     let held = input
         .extras

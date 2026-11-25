@@ -291,38 +291,13 @@ async fn enqueue_domain(
         result.reason = Some("conversation_revision_changed".into());
     } else if attached.is_none() {
         result.reason = Some("attachment_unavailable".into());
+    } else if let Some(cursor) =
+        append_owner_message(&mut tx, &request, id, &sender, &payload, at).await?
+    {
+        result.state = "queued".into();
+        result.cursor = Some(cursor.to_string());
     } else {
-        let appended = append(
-            &mut tx,
-            Mail {
-                message_id: request.message_id,
-                thread_id: id,
-                recipient: recipient(id),
-                mailbox_key: key(id)?,
-                body: &request.body,
-            },
-            &sender,
-            &payload,
-            at,
-        )
-        .await;
-        match appended {
-            Ok(cursor) => {
-                if !request.context.is_empty() {
-                    sqlx::query("INSERT INTO global_supervisor_message_context(message_id,refs) VALUES($1,$2)")
-                        .bind(request.message_id)
-                        .bind(json!(request.context))
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(db)?;
-                }
-                super::attachments::bind(&mut tx, &request.attachments, request.message_id).await?;
-                result.state = "queued".into();
-                result.cursor = Some(cursor.to_string());
-            }
-            Err(e) if e.0 == "id_conflict" => result.reason = Some("message_id_conflict".into()),
-            Err(_) => return Err(unavailable()),
-        }
+        result.reason = Some("message_id_conflict".into());
     }
     receipt(
         &mut tx,
@@ -335,6 +310,45 @@ async fn enqueue_domain(
     .map_err(|_| unavailable())?;
     tx.commit().await.map_err(db)?;
     Ok(result)
+}
+/// Append and bind context/files together; an occupied message id is a retained refusal.
+async fn append_owner_message(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &Create,
+    id: Uuid,
+    sender: &Value,
+    payload: &str,
+    at: u64,
+) -> Result<Option<i64>> {
+    let cursor = match append(
+        tx,
+        Mail {
+            message_id: request.message_id,
+            thread_id: id,
+            recipient: recipient(id),
+            mailbox_key: key(id)?,
+            body: &request.body,
+        },
+        sender,
+        payload,
+        at,
+    )
+    .await
+    {
+        Ok(cursor) => cursor,
+        Err(e) if e.0 == "id_conflict" => return Ok(None),
+        Err(_) => return Err(unavailable()),
+    };
+    if !request.context.is_empty() {
+        sqlx::query("INSERT INTO global_supervisor_message_context(message_id,refs) VALUES($1,$2)")
+            .bind(request.message_id)
+            .bind(json!(request.context))
+            .execute(&mut **tx)
+            .await
+            .map_err(db)?;
+    }
+    super::attachments::bind(tx, &request.attachments, request.message_id).await?;
+    Ok(Some(cursor))
 }
 /// Spec 0012 §8: AQ itself tells a supervisor, through the same mailbox
 /// append and retained-capacity charge as an owner's message, so the next

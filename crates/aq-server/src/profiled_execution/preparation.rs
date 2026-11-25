@@ -266,39 +266,16 @@ pub async fn accept(
         before.source.fact(),
     )
     .await?;
-    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
-    let selection = before.selection.clone();
-    let backend_kind = before.backend_kind;
-    let binding = request.acceptance.binding.clone();
-    let head = super::login_refresh::newest_source(
-        &state.store.pool,
-        &registry,
-        &selection.choice.credential_profile,
-        selection.credential_revision,
+    let lease = issue_material(
+        state,
+        &before.selection,
+        &request.acceptance.binding,
+        lease_id,
+        issued,
+        expiry,
+        before.backend_kind,
     )
     .await?;
-    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
-    let permit = permit.ok_or_else(|| refused())?;
-    let lease = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            material::issue_for_selection_from(
-                &registry,
-                &selection,
-                &binding,
-                lease_id,
-                issued,
-                expiry,
-                backend_kind,
-                head.as_ref(),
-            )
-        }),
-    )
-    .await
-    .map_err(|_| refused())?
-    .map_err(|_| AppError::Internal)?
-    .map_err(|_| refused())?;
     let mut tx = begin(state).await?;
     let after = locked(state, &mut tx, auth, request).await?;
     if before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()? {
@@ -351,6 +328,48 @@ pub async fn accept(
     reply.validate_for(request, nonce).map_err(|_| refused())?;
     tx.commit().await.map_err(db)?;
     Ok(reply)
+}
+async fn issue_material(
+    state: &AppState,
+    selection: &aq_selection::ResolvedSelection,
+    binding: &LaunchBinding,
+    lease_id: Uuid,
+    issued: u64,
+    expiry: u64,
+    backend_kind: Option<aq_selection::BackendKind>,
+) -> Result<MaterialLease, AppError> {
+    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
+    let selection = selection.clone();
+    let binding = binding.clone();
+    let head = super::login_refresh::newest_source(
+        &state.store.pool,
+        &registry,
+        &selection.choice.credential_profile,
+        selection.credential_revision,
+    )
+    .await?;
+    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
+    let permit = permit.ok_or_else(|| refused())?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            material::issue_for_selection_from(
+                &registry,
+                &selection,
+                &binding,
+                lease_id,
+                issued,
+                expiry,
+                backend_kind,
+                head.as_ref(),
+            )
+        }),
+    )
+    .await
+    .map_err(|_| refused())?
+    .map_err(|_| AppError::Internal)?
+    .map_err(|_| refused())
 }
 fn same_material(a: &MaterialLease, b: &MaterialLease) -> bool {
     a.lease_id == b.lease_id
@@ -405,39 +424,7 @@ async fn admit(
     };
     plan.validate().map_err(|_| refused())?;
     let response = TransportDocument::PreparationPlan(plan.clone());
-    // Charge exactly the same JSONB text representation as retained rows.
-    let lease_value = serde_json::to_value(&lease).map_err(|_| AppError::Internal)?;
-    let response_value = serde_json::to_value(&response).map_err(|_| AppError::Internal)?;
-    let (lease_bytes, response_bytes): (i32, i32) =
-        sqlx::query_as("SELECT octet_length($1::jsonb::text),octet_length($2::jsonb::text)")
-            .bind(&lease_value)
-            .bind(&response_value)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(db)?;
-    let lease_bytes = u64::try_from(lease_bytes).map_err(|_| refused())?;
-    let response_bytes = u64::try_from(response_bytes).map_err(|_| refused())?;
-    if lease_bytes > 8192 || response_bytes > 16384 {
-        return Err(refused());
-    }
-    let quota = retained_quota_locked(tx, auth.id()).await?;
-    let incoming = lease_bytes
-        .checked_add(response_bytes)
-        .ok_or_else(|| refused())?;
-    if quota.0 >= 4096
-        || quota.1 >= 256
-        || u64::try_from(quota.2)
-            .ok()
-            .and_then(|n| n.checked_add(incoming))
-            .is_none_or(|n| n > 67108864)
-        || u64::try_from(quota.3)
-            .ok()
-            .and_then(|n| n.checked_add(incoming))
-            .is_none_or(|n| n > 4194304)
-        || now(state)? >= expiry
-    {
-        return Err(refused());
-    }
+    require_admission_capacity_locked(state, tx, auth.id(), &lease, &response, expiry).await?;
 
     super::closure::history::for_attempt_locked(tx, &request.acceptance.binding).await?;
     hot.status = Status::Preparing;
@@ -469,6 +456,51 @@ async fn admit(
     .await?;
     sqlx::query("INSERT INTO profiled_execution_receipts(node_id,operation_id,kind,request_digest,response) VALUES($1,$2,'accept',$3,$4)").bind(auth.id()).bind(request.operation_id).bind(aq_selection::digest(request).map_err(|_|AppError::Internal)?.as_str()).bind(serde_json::to_value(response).map_err(|_|AppError::Internal)?).execute(&mut **tx).await.map_err(db)?;
     Ok(plan)
+}
+
+async fn require_admission_capacity_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    lease: &MaterialLease,
+    response: &TransportDocument,
+    expiry: u64,
+) -> Result<(), AppError> {
+    // Charge exactly the same JSONB text representation as retained rows.
+    let lease_value = serde_json::to_value(lease).map_err(|_| AppError::Internal)?;
+    let response_value = serde_json::to_value(response).map_err(|_| AppError::Internal)?;
+    let (lease_bytes, response_bytes): (i32, i32) =
+        sqlx::query_as("SELECT octet_length($1::jsonb::text),octet_length($2::jsonb::text)")
+            .bind(&lease_value)
+            .bind(&response_value)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    let lease_bytes = u64::try_from(lease_bytes).map_err(|_| refused())?;
+    let response_bytes = u64::try_from(response_bytes).map_err(|_| refused())?;
+    if lease_bytes > 8192 || response_bytes > 16384 {
+        return Err(refused());
+    }
+    let quota = retained_quota_locked(tx, node).await?;
+    let incoming = lease_bytes
+        .checked_add(response_bytes)
+        .ok_or_else(|| refused())?;
+    if quota.0 >= 4096
+        || quota.1 >= 256
+        || u64::try_from(quota.2)
+            .ok()
+            .and_then(|n| n.checked_add(incoming))
+            .is_none_or(|n| n > 67108864)
+        || u64::try_from(quota.3)
+            .ok()
+            .and_then(|n| n.checked_add(incoming))
+            .is_none_or(|n| n > 4194304)
+        || now(state)? >= expiry
+    {
+        return Err(refused());
+    }
+
+    Ok(())
 }
 
 /// Shared actual retained JSONB text budget for Accept and initial Grant.

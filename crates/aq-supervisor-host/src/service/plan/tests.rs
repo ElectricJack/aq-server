@@ -31,6 +31,7 @@ fn full_access_instructions_describe_the_toolchain_setup_task() {
         project: None,
         label: "Global supervisor".into(),
         role: None,
+        recheck: None,
     };
     let text = instructions(&config, &control, "codex");
     #[cfg(feature = "project_environments")]
@@ -92,6 +93,7 @@ fn a_project_supervisor_uses_the_saved_role_text_and_keeps_the_tool_manual() {
         project: Some(project),
         label: "Example".into(),
         role: Some("Keep {label} ({project}) moving; mail {conversation}.".into()),
+        recheck: None,
     };
     let manual = [
         ATTACHMENTS,
@@ -191,6 +193,7 @@ fn check_assembled_plan(harness: &str, provider: &str, reasoning: &str, adapter:
         project: None,
         label: "Global supervisor".into(),
         role: None,
+        recheck: Some("System note: recheck dispatch\n".into()),
     };
     let (native, secret, digest) = if harness == "claude" {
         assert!(selection(&config, &control.profile).unwrap().is_none());
@@ -260,6 +263,7 @@ fn check_assembled_plan(harness: &str, provider: &str, reasoning: &str, adapter:
         Digest::of(b"snapshot")
     );
     let prompt = &candidate.subscription.as_ref().unwrap().instructions;
+    assert!(prompt.starts_with("System note: recheck dispatch\n"));
     assert!(prompt.contains(ATTACHMENTS));
     assert_eq!(prompt.contains("mcp__aq__aq_command"), harness == "claude");
     assert_eq!(
