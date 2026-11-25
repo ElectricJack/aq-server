@@ -148,6 +148,12 @@ impl Service {
         // First dispatch is cancellation/project/review fenced. Once possible,
         // retries reconcile the SAME admitted effect even after cancellation.
         if count == 0 {
+            #[cfg(feature = "delivery_playbook")]
+            if !crate::task_workspace_delivery::gate(&self.state, &mut tx, &r, true).await? {
+                return Err(crate::error::AppError::Conflict(
+                    "workspace delivery evidence is incomplete".into(),
+                ));
+            }
             self.fence_first_dispatch_locked(
                 &mut tx,
                 &r,

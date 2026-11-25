@@ -61,6 +61,33 @@ impl DeliveryOps for ServerDelivery {
         self.commands.get_or_init(init).await.clone()
     }
 
+    async fn merge_readiness(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+    ) -> Result<delivery_runs::MergeReadiness> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(delivery_runs::MergeReadiness::Proceed);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::merge_readiness(&self.state, tx, &result)
+            .await
+            .map_err(|_| Error::Unknown)
+    }
+
     async fn pull_request_text(&self, workspace: Uuid, task: Uuid) -> Result<(String, String)> {
         let node = match &self.state.agent_access {
             Some(runtime) => crate::agent_access::settlement_node(runtime, workspace, task)
