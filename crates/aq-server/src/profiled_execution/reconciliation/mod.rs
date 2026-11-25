@@ -13,13 +13,11 @@ use crate::{
 };
 pub use api::routes;
 use aq_admission::{
-    ArtifactRef, Digest, LaunchBinding, SessionIdentity,
-    control::{
-        CurrentAuthority, CurrentPhase, FailureCode, LaunchOwner, ReconcileEntry, ReconcilePage,
-        Versions,
-    },
-    transport::{PreparationPlan, Reconcile, ReconcileAttempt, TransportDocument},
+    LaunchBinding, SessionIdentity,
+    control::{FailureCode, ReconcileEntry, ReconcilePage, Versions},
+    transport::{Reconcile, ReconcileAttempt, TransportDocument},
 };
+use aq_profiled_state::reconciliation::{Snapshot, lapsed_release};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 fn invalid() -> AppError {
@@ -33,104 +31,6 @@ fn now(state: &AppState) -> Result<u64, AppError> {
         .ok()
         .filter(|v| *v > 0)
         .ok_or_else(invalid)
-}
-fn owner(hot: &HotState) -> Option<LaunchOwner> {
-    hot.owner.as_ref().map(|o| LaunchOwner {
-        reservation_id: o.reservation_id,
-        guardian_id: o.guardian_id,
-        launch_id: o.launch_id,
-    })
-}
-struct Snapshot {
-    binding: LaunchBinding,
-    versions: Versions,
-    hot: HotState,
-    holds_task: bool,
-    offer_expiry: u64,
-    preparation: Option<(PreparationPlan, Digest)>,
-    started: Option<Uuid>,
-    terminal: Option<ArtifactRef>,
-}
-impl Snapshot {
-    fn stop(&self, reason: FailureCode) -> CurrentPhase {
-        CurrentPhase::StopRequired {
-            owner: owner(&self.hot),
-            last_grant_id: self.hot.grant.as_ref().map(|g| g.grant_id),
-            execution_deadline_ms: self.hot.execution_deadline_ms,
-            reason,
-        }
-    }
-    fn render(self, now: u64, current_boot: bool) -> Result<CurrentAuthority, AppError> {
-        let phase = if self.hot.status == Status::NeverGranted {
-            CurrentPhase::NeverGranted {
-                closure: self.terminal.clone().ok_or_else(invalid)?,
-            }
-        } else if !self.holds_task {
-            // No qualified public release artifact exists for this first profile.
-            return Err(invalid());
-        } else if matches!(self.hot.stop, Stop::Stopped { .. }) {
-            CurrentPhase::Stopped {
-                owner: owner(&self.hot).ok_or_else(invalid)?,
-                grant_id: self.hot.grant.as_ref().ok_or_else(invalid)?.grant_id,
-                stopped_receipt: self.terminal.clone().ok_or_else(invalid)?,
-            }
-        } else if self.hot.revoked {
-            self.stop(FailureCode::CredentialRevoked)
-        } else if self.hot.cancellation_id.is_some() {
-            self.stop(FailureCode::Cancelled)
-        } else if !current_boot
-            || matches!(
-                self.hot.status,
-                Status::Unknown | Status::Cancelling | Status::Finished | Status::Declined
-            )
-        {
-            self.stop(FailureCode::RecoveryRequired)
-        } else {
-            match self.hot.status {
-                Status::Offered if self.offer_expiry > now => CurrentPhase::Offered {
-                    expires_at_ms: self.offer_expiry,
-                },
-                Status::Preparing => {
-                    let (plan, digest) = self.preparation.as_ref().ok_or_else(invalid)?;
-                    if plan.clock.expires_at_ms <= now {
-                        self.stop(FailureCode::Expired)
-                    } else {
-                        CurrentPhase::Preparing {
-                            owner: owner(&self.hot).ok_or_else(invalid)?,
-                            preparation_operation_id: plan.operation_id,
-                            preparation_digest: digest.clone(),
-                            expires_at_ms: plan.clock.expires_at_ms,
-                        }
-                    }
-                }
-                Status::Granted => {
-                    let grant = self.hot.grant.as_ref().ok_or_else(invalid)?;
-                    if grant.expires_at_ms <= now {
-                        self.stop(FailureCode::Expired)
-                    } else {
-                        CurrentPhase::Granted {
-                            owner: owner(&self.hot).ok_or_else(invalid)?,
-                            grant_id: grant.grant_id,
-                            expires_at_ms: grant.expires_at_ms,
-                            execution_deadline_ms: self
-                                .hot
-                                .execution_deadline_ms
-                                .ok_or_else(invalid)?,
-                            started_operation_id: self.started,
-                        }
-                    }
-                }
-                _ => self.stop(FailureCode::Expired),
-            }
-        };
-        let authority = CurrentAuthority {
-            binding: self.binding,
-            versions: self.versions,
-            phase,
-        };
-        authority.validate(now).map_err(|_| invalid())?;
-        Ok(authority)
-    }
 }
 fn scope(binding: &LaunchBinding, node: Uuid, boot: Uuid) -> bool {
     matches!(binding.session,SessionIdentity::Remote {node_id,boot_id,..} if node_id==node && boot_id==boot)
@@ -158,7 +58,6 @@ async fn snapshot(
     if session_id != row.get::<Uuid, _>("session_id") {
         return Err(invalid());
     }
-    super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
     let hot: HotState = serde_json::from_value(row.get("hot")).map_err(|_| invalid())?;
     hot.validate_against(&binding).map_err(|_| invalid())?;
     if let Some(expected) = expected
@@ -190,7 +89,23 @@ async fn snapshot(
     if (versions.grant_revision > 0) != hot.grant.is_some() {
         return Err(invalid());
     }
-    let holds_task = row.get("holds_task");
+    let holds_task: bool = row.get("holds_task");
+    let release = if !holds_task && expected.is_some() {
+        lapsed_release(
+            tx,
+            binding.attempt_id,
+            &hot,
+            aq_machine_control::lapse::RECEIPT,
+        )
+        .await
+        .map_err(db)?
+    } else {
+        None
+    };
+    // Exact terminal history cannot supply live launch authority for any profile.
+    if release.is_none() && (hot.status != Status::NeverGranted || expected.is_none()) {
+        super::initial_authority::require_legacy_origin_locked(tx, &binding).await?;
+    }
     let offer_expiry = row
         .get::<i64, _>("offer_expires_at_ms")
         .try_into()
@@ -200,13 +115,15 @@ async fn snapshot(
     } else {
         None
     };
-    let started = if hot.grant.is_some() {
+    let started = if holds_task && hot.grant.is_some() {
         receipts::started(tx, &binding, &hot).await?
     } else {
         None
     };
     let terminal = if hot.status == Status::NeverGranted {
         Some(receipts::never_granted(tx, &binding).await?)
+    } else if !holds_task {
+        release
     } else if matches!(hot.stop, Stop::Stopped { .. }) {
         Some(receipts::stopped(tx, &binding, &hot).await?)
     } else {
@@ -297,7 +214,7 @@ async fn read(
                 match snapshots
                     .remove(&id)
                     .and_then(|v| v.ok())
-                    .and_then(|s| s.render(time, current_boot).ok())
+                    .and_then(|s| s.render(time, current_boot))
                 {
                     Some(authority) => ReconcileEntry::Current {
                         authority: Box::new(authority),
@@ -311,7 +228,7 @@ async fn read(
         }
     } else {
         for (_, value) in snapshots {
-            if let Ok(authority) = value.and_then(|s| s.render(time, current_boot)) {
+            if let Some(authority) = value.ok().and_then(|s| s.render(time, current_boot)) {
                 attempts.push(ReconcileEntry::Current {
                     authority: Box::new(authority),
                 });

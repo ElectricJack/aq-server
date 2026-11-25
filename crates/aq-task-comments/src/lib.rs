@@ -19,7 +19,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+mod mutation;
+use mutation::Mutation;
 use sqlx::{PgPool, Row, postgres::PgRow};
 use uuid::Uuid;
 
@@ -176,11 +177,12 @@ impl Comment {
 /// Nonblank Markdown of at most [`MAX_BODY_BYTES`]; no control characters
 /// other than tab, line feed and carriage return.
 pub fn validate_body(body: &str) -> Result<()> {
-    if body.trim().is_empty()
-        || body.len() > MAX_BODY_BYTES
-        || body
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    if body.trim().is_empty() || body.len() > MAX_BODY_BYTES {
+        return Err(Error::Invalid);
+    }
+    if body
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
     {
         return Err(Error::Invalid);
     }
@@ -399,17 +401,15 @@ pub async fn apply<C: Command>(
         Some(v) => Some(revision(v).ok_or(Error::Invalid)?),
         None => None,
     };
-    mutate(
-        pool,
-        C::KIND,
-        cmd.operation_id(),
-        cmd.project_id(),
+    Mutation {
+        kind: C::KIND,
+        operation_id: cmd.operation_id(),
+        project_id: cmd.project_id(),
         target,
-        actor,
         expected,
-        cmd.body(),
-        now,
-    )
+        body: cmd.body(),
+    }
+    .apply(pool, actor, now)
     .await
 }
 /// Add a comment to `thread` (the agent route). The comment ID is the operation ID.
@@ -421,47 +421,9 @@ pub async fn add(
     body: &str,
     now: DateTime<Utc>,
 ) -> Result<Applied> {
-    mutate(
-        pool,
-        ADD,
-        operation_id,
-        thread.project_id,
-        thread.task_id,
-        author,
-        None,
-        Some(body),
-        now,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn mutate(
-    pool: &PgPool,
-    kind: &str,
-    operation_id: Uuid,
-    project_id: Uuid,
-    target: Uuid,
-    actor: &Author,
-    expected: Option<i64>,
-    body: Option<&str>,
-    now: DateTime<Utc>,
-) -> Result<Applied> {
-    let mut tx = pool.begin().await?;
-    let applied = mutate_in_tx(
-        &mut tx,
-        kind,
-        operation_id,
-        project_id,
-        target,
-        actor,
-        expected,
-        body,
-        now,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(applied)
+    Mutation::add(operation_id, thread, body)
+        .apply(pool, author, now)
+        .await
 }
 
 /// Add a comment as part of a caller's database transaction.
@@ -473,139 +435,9 @@ pub async fn add_in_tx(
     body: &str,
     now: DateTime<Utc>,
 ) -> Result<Applied> {
-    mutate_in_tx(
-        tx,
-        ADD,
-        operation_id,
-        thread.project_id,
-        thread.task_id,
-        author,
-        None,
-        Some(body),
-        now,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn mutate_in_tx(
-    tx: &mut sqlx::PgConnection,
-    kind: &str,
-    operation_id: Uuid,
-    project_id: Uuid,
-    target: Uuid,
-    actor: &Author,
-    expected: Option<i64>,
-    body: Option<&str>,
-    now: DateTime<Utc>,
-) -> Result<Applied> {
-    if [operation_id, project_id, target].iter().any(Uuid::is_nil) {
-        return Err(Error::Invalid);
-    }
-    if let Some(body) = body {
-        validate_body(body)?;
-    }
-    let add = kind == ADD;
-    if add != expected.is_none() || (kind == DELETE) != body.is_none() {
-        return Err(Error::Invalid);
-    }
-    // Postgres keeps microseconds; store what is read back.
-    let now = DateTime::from_timestamp_micros(now.timestamp_micros()).ok_or(Error::Invalid)?;
-    let comment_id = if add { operation_id } else { target };
-    let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
-        kind, project_id, target, expected, body
-    ]))?));
-    let actor_value = serde_json::to_value(actor)?;
-    // The operation row serializes concurrent replays of one operation ID.
-    let fresh = sqlx::query("INSERT INTO task_comment_operations(operation_id,kind,comment_id,actor,fingerprint,revision,created_at) VALUES($1,$2,$3,$4,$5,0,$6) ON CONFLICT DO NOTHING")
-        .bind(operation_id)
-        .bind(kind)
-        .bind(comment_id)
-        .bind(&actor_value)
-        .bind(&fingerprint)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-        == 1;
-    if !fresh {
-        let row = sqlx::query("SELECT kind,actor,fingerprint,revision FROM task_comment_operations WHERE operation_id=$1")
-            .bind(operation_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        if row.try_get::<String, _>("kind")? != kind
-            || row.try_get::<Value, _>("actor")? != actor_value
-            || row.try_get::<String, _>("fingerprint")? != fingerprint
-        {
-            return Err(Error::IdConflict);
-        }
-        let comment = read(&mut *tx, comment_id)
-            .await?
-            .ok_or(Error::Unavailable)?;
-        return Ok(Applied {
-            comment,
-            revision: row.try_get("revision")?,
-        });
-    }
-    let revision: i64 = if add {
-        sqlx::query("INSERT INTO task_comments(comment_id,project_id,task_id,author_kind,author_ref,body,created_at,revision) VALUES($1,$2,$3,$4,$5,$6,$7,1)")
-            .bind(comment_id)
-            .bind(project_id)
-            .bind(target)
-            .bind(actor.kind())
-            .bind(&actor_value)
-            .bind(body)
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::Database(d) if d.is_unique_violation() => Error::IdConflict,
-                _ => Error::Unavailable,
-            })?;
-        1
-    } else {
-        let row = sqlx::query("SELECT project_id,author_ref,deleted_at,revision FROM task_comments WHERE comment_id=$1 FOR UPDATE")
-            .bind(comment_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(Error::NotFound)?;
-        if row.try_get::<Uuid, _>("project_id")? != project_id {
-            return Err(Error::NotFound);
-        }
-        if row.try_get::<Value, _>("author_ref")? != actor_value {
-            return Err(Error::NotAuthor);
-        }
-        if row
-            .try_get::<Option<DateTime<Utc>>, _>("deleted_at")?
-            .is_some()
-        {
-            return Err(Error::Deleted);
-        }
-        let current: i64 = row.try_get("revision")?;
-        if Some(current) != expected {
-            return Err(Error::Conflict(current));
-        }
-        let sql = if kind == DELETE {
-            "UPDATE task_comments SET body=NULL,deleted_at=$2,revision=revision+1 WHERE comment_id=$1 RETURNING revision"
-        } else {
-            "UPDATE task_comments SET body=$3,edited_at=$2,revision=revision+1 WHERE comment_id=$1 RETURNING revision"
-        };
-        sqlx::query_scalar(sql)
-            .bind(comment_id)
-            .bind(now)
-            .bind(body)
-            .fetch_one(&mut *tx)
-            .await?
-    };
-    sqlx::query("UPDATE task_comment_operations SET revision=$2 WHERE operation_id=$1")
-        .bind(operation_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    let comment = read(&mut *tx, comment_id)
-        .await?
-        .ok_or(Error::Unavailable)?;
-    Ok(Applied { comment, revision })
+    Mutation::add(operation_id, thread, body)
+        .apply_in_tx(tx, author, now)
+        .await
 }
 
 /// Opaque agent page cursor. The agent's task comes from its credential, so
@@ -694,17 +526,15 @@ pub async fn agent_change(
     if ![EDIT, DELETE].contains(&kind) || (kind == DELETE) != b.body.is_none() {
         return Err("invalid_request");
     }
-    let applied = mutate(
-        pool,
+    let applied = Mutation {
         kind,
-        b.operation_id,
+        operation_id: b.operation_id,
         project_id,
-        b.comment_id,
-        author,
-        Some(expected),
-        b.body.as_deref(),
-        now,
-    )
+        target: b.comment_id,
+        expected: Some(expected),
+        body: b.body.as_deref(),
+    }
+    .apply(pool, author, now)
     .await
     .map_err(Error::code)?;
     Ok(

@@ -1,0 +1,108 @@
+{
+  "name": "nothing_fits_holds",
+  "situation": "No environment the project allows provides what the task needs, so the task is left for the owner",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-24",
+        "revision": 3
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-24@3",
+          "subject": {
+            "id": "task-24",
+            "revision": 3
+          },
+          "facts": {
+            "kind": "",
+            "title": "Train the ranking model",
+            "description": "Needs a GPU.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "gpu"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              },
+              {
+                "id": "rust-web",
+                "provides": [
+                  "rust",
+                  "git",
+                  "node"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "work.unroutable": [
+      {
+        "outcome": "recorded",
+        "output": {
+          "reference": "unroutable-1",
+          "subject": {
+            "id": "task-24",
+            "revision": 3
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "unroutable",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-24",
+            "revision": 3
+          }
+        }
+      },
+      {
+        "command": "work.unroutable",
+        "input": {
+          "subject": {
+            "id": "task-24",
+            "revision": 3
+          },
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "No environment the project allows provides everything the task needs."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

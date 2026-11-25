@@ -16,194 +16,8 @@ pub fn valid(name: &str, value: &Value) -> bool {
         .get(name)
         .is_some_and(|definition| check(schema(), definition, value))
 }
-/// Validator for trusted embedded schemas only; not a general JSON Schema engine.
-/// Supports the vocabulary in the versioned AQ and retained upstream contracts.
-pub fn check(root: &Value, s: &Value, v: &Value) -> bool {
-    if let Some(r) = s["$ref"].as_str() {
-        return r
-            .strip_prefix('#')
-            .and_then(|p| root.pointer(p))
-            .is_some_and(|s| check(root, s, v));
-    }
-    if let Some(c) = s.get("const")
-        && c != v
-    {
-        return false;
-    }
-    if let Some(es) = s["enum"].as_array()
-        && !es.contains(v)
-    {
-        return false;
-    }
-    if let Some(n) = s.get("not")
-        && check(root, n, v)
-    {
-        return false;
-    }
-    for key in ["anyOf", "oneOf", "allOf"] {
-        if let Some(branches) = s[key].as_array() {
-            let count = branches.iter().filter(|b| check(root, b, v)).count();
-            if match key {
-                "anyOf" => count == 0,
-                "oneOf" => count != 1,
-                _ => count != branches.len(),
-            } {
-                return false;
-            }
-        }
-    }
-    if let Some(cond) = s.get("if") {
-        let branch = if check(root, cond, v) { "then" } else { "else" };
-        if let Some(b) = s.get(branch)
-            && !check(root, b, v)
-        {
-            return false;
-        }
-    }
-    if let Some(t) = s["type"].as_str()
-        && !match t {
-            "object" => v.is_object(),
-            "array" => v.is_array(),
-            "string" => v.is_string(),
-            "integer" => v.as_i64().is_some() || v.as_u64().is_some(),
-            "boolean" => v.is_boolean(),
-            "null" => v.is_null(),
-            _ => false,
-        }
-    {
-        return false;
-    }
-    if let Some(obj) = v.as_object() {
-        if s["minProperties"]
-            .as_u64()
-            .is_some_and(|n| obj.len() < n as usize)
-        {
-            return false;
-        }
-        if let Some(required) = s["required"].as_array()
-            && required
-                .iter()
-                .any(|k| !obj.contains_key(k.as_str().unwrap_or("")))
-        {
-            return false;
-        }
-        for (k, val) in obj {
-            if let Some(prop) = s["properties"].get(k) {
-                if !check(root, prop, val) {
-                    return false;
-                }
-            } else if s["additionalProperties"] == false {
-                return false;
-            }
-        }
-    }
-    if let Some(a) = v.as_array() {
-        if let Some(item) = s.get("contains")
-            && !a.iter().any(|v| check(root, item, v))
-        {
-            return false;
-        }
-        if s["minItems"].as_u64().is_some_and(|n| a.len() < n as usize)
-            || s["maxItems"].as_u64().is_some_and(|n| a.len() > n as usize)
-        {
-            return false;
-        }
-        if s["uniqueItems"] == true && a.iter().enumerate().any(|(i, x)| a[..i].contains(x)) {
-            return false;
-        }
-        if let Some(item) = s.get("items")
-            && a.iter().any(|v| !check(root, item, v))
-        {
-            return false;
-        }
-    }
-    if let Some(t) = v.as_str() {
-        let n = t.chars().count();
-        if s["minLength"].as_u64().is_some_and(|m| n < m as usize)
-            || s["maxLength"].as_u64().is_some_and(|m| n > m as usize)
-            || s["x-utf8-maxBytes"]
-                .as_u64()
-                .is_some_and(|m| t.len() > m as usize)
-        {
-            return false;
-        }
-        if s["x-int64-token"] == true
-            && !(t.parse::<i64>().is_ok_and(|i| i > 0)
-                && !t.starts_with('0')
-                && t.bytes().all(|b| b.is_ascii_digit()))
-        {
-            return false;
-        }
-        if let Some(p) = s["pattern"].as_str()
-            && !match p {
-                "^https?://" => t.starts_with("https://") || t.starts_with("http://"),
-                "^([0-9a-f]{40}|[0-9a-f]{64})$" => {
-                    matches!(t.len(), 40 | 64)
-                        && t.bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                }
-                "\\S" => t.chars().any(|c| !c.is_whitespace()),
-                "^sha256:[0-9a-f]{64}$" => t.strip_prefix("sha256:").is_some_and(|hex| {
-                    hex.len() == 64
-                        && hex
-                            .bytes()
-                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-                }),
-                "^[0-9a-f]{64}$" => {
-                    t.len() == 64
-                        && t.bytes()
-                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-                }
-                "^[0-9a-f-]{36}$" => {
-                    t.len() == 36
-                        && t.bytes()
-                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c) || c == b'-')
-                }
-                "^[1-9][0-9]{0,18}$" => {
-                    !t.starts_with('0')
-                        && (1..=19).contains(&t.len())
-                        && t.bytes().all(|c| c.is_ascii_digit())
-                }
-                // Conversation reply cursor `A.R`, and a history cursor that is
-                // either an owner cursor `N` or a reply cursor `A.R`.
-                "^[1-9][0-9]{0,18}\\.[1-9][0-9]{0,18}$" => t
-                    .split_once('.')
-                    .is_some_and(|(a, r)| positive_token(a) && positive_token(r)),
-                "^[1-9][0-9]{0,18}(\\.[1-9][0-9]{0,18})?$" => match t.split_once('.') {
-                    Some((a, r)) => positive_token(a) && positive_token(r),
-                    None => positive_token(t),
-                },
-                "^(0|[1-9][0-9]{0,18})$" => {
-                    t == "0"
-                        || (!t.starts_with('0')
-                            && (1..=19).contains(&t.len())
-                            && t.bytes().all(|c| c.is_ascii_digit()))
-                }
-                _ => false,
-            }
-        {
-            return false;
-        }
-        if s["format"] == "uuid" && !uuid::Uuid::parse_str(t).is_ok_and(|u| u.to_string() == t) {
-            return false;
-        }
-        if s["format"] == "date-time" && chrono::DateTime::parse_from_rfc3339(t).is_err() {
-            return false;
-        }
-    }
-    if let Some(n) = v.as_u64() {
-        if s["minimum"].as_u64().is_some_and(|m| n < m)
-            || s["maximum"].as_u64().is_some_and(|m| n > m)
-        {
-            return false;
-        }
-    } else if let Some(n) = v.as_i64()
-        && s["minimum"].as_i64().is_some_and(|m| n < m)
-    {
-        return false;
-    }
-    true
-}
+mod schema_validation;
+pub use schema_validation::check;
 
 /// Reject duplicate keys and nonintegral JSON numbers before canonical hashing.
 pub struct StrictValue(pub Value);
@@ -344,17 +158,24 @@ pub struct Context(Value);
 impl Context {
     pub fn new(value: Value, expected: &Binding) -> Result<Self, InvalidContract> {
         expected.validate()?;
-        if !valid("ContextResponse", &value)
-            || serde_json::from_value::<Binding>(value["binding"].clone())
-                .map_err(|_| InvalidContract)?
-                != *expected
-            || digest(&value["profile"])? != expected.profile_digest
+        if !valid("ContextResponse", &value) {
+            return Err(InvalidContract);
+        }
+        let binding: Binding =
+            serde_json::from_value(value["binding"].clone()).map_err(|_| InvalidContract)?;
+        if binding != *expected {
+            return Err(InvalidContract);
+        }
+        if digest(&value["profile"])? != expected.profile_digest
             || digest(&value["context"])? != expected.context_digest
-            || canonical(&value)?.len() as u64
-                > value["profile"]["max_response_bytes"]
-                    .as_u64()
-                    .ok_or(InvalidContract)?
         {
+            return Err(InvalidContract);
+        }
+        let size = canonical(&value)?.len() as u64;
+        let limit = value["profile"]["max_response_bytes"]
+            .as_u64()
+            .ok_or(InvalidContract)?;
+        if size > limit {
             return Err(InvalidContract);
         }
         Ok(Self(value))
@@ -362,11 +183,6 @@ impl Context {
     pub fn value(&self) -> &Value {
         &self.0
     }
-}
-
-/// `^[1-9][0-9]{0,18}$`.
-fn positive_token(t: &str) -> bool {
-    !t.starts_with('0') && (1..=19).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]

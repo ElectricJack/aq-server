@@ -50,6 +50,10 @@ where
             "/api/internal-work/runs/{id}/resolve",
             post(resolve::<S, O, E>),
         )
+        .route(
+            "/api/projects/{id}/escalations",
+            post(escalate_decision::<S, O, E>),
+        )
         .layer(DefaultBodyLimit::max(64 * 1024))
 }
 async fn read<S: AsRef<PgPool>, O, E: From<Error>>(
@@ -119,6 +123,39 @@ async fn escalate<S: Host, O, E: From<Error>>(
         .map_err(|_| Error::Invalid("Invalid internal run escalation".into()))?;
     s.service()?.escalate_to_owner(id, &diagnosis).await?;
     Ok(Json(runs::read(s.as_ref(), id).await?))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Decision {
+    task_id: Option<Uuid>,
+    decision_needed: String,
+}
+/// `supervisor.escalate`: the project is the path's, so a project supervisor
+/// reaches only its own through the owner bridge.
+async fn escalate_decision<S: Host, O, E: From<Error>>(
+    State(s): State<S>,
+    _: O,
+    Path(project): Path<Uuid>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, E> {
+    let invalid = || {
+        Error::Invalid("Give decision_needed (1 to 4096 characters) and an optional task_id".into())
+    };
+    let Decision {
+        task_id,
+        decision_needed,
+    } = serde_json::from_value(body).map_err(|_| invalid())?;
+    let decision = decision_needed.trim();
+    if decision.is_empty() || decision.chars().count() > 4096 || decision.contains('\0') {
+        return Err(invalid().into());
+    }
+    let message = s
+        .service()?
+        .escalate_decision(project, task_id, decision)
+        .await?;
+    Ok(Json(
+        serde_json::json!({"disposition":"confirmed","message_id":message}),
+    ))
 }
 async fn resolve<S: Host, O, E: From<Error>>(
     State(s): State<S>,

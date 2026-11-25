@@ -76,73 +76,79 @@ fn manifest(agent: &str, level: &str, model: &str) -> Value {
     })
 }
 
-#[tokio::test]
-async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_history() {
-    let number: u32 = MIGRATION
-        .rsplit_once("SET value='")
-        .and_then(|(_, tail)| tail.split('\'').next())
-        .and_then(|n| n.parse().ok())
-        .unwrap();
-    let db = TestDb::create().await;
-    let pool = db.pool().await;
-    migrate_profile(&pool, number - 1).await.unwrap();
+struct HistoricalAttempts {
+    old_attempt: Uuid,
+    supervisor: Uuid,
+    renamed_supervisor: Uuid,
+    stopped_supervisor: Uuid,
+}
+
+async fn seed_principals(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let (owner, node, project) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     sqlx::query(
         "INSERT INTO users(id,email,role,created_at) VALUES($1,'roles@localhost','owner',now())",
     )
     .bind(owner)
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
     sqlx::query("INSERT INTO nodes(id,name,credential_hash,worker_version,protocol_version,enrolled_at) VALUES($1,'roles-node',$2,'0.3.3',2,now())")
         .bind(node)
         .bind("c".repeat(64))
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
+    (owner, node, project)
+}
+
+async fn seed_catalog(pool: &PgPool, owner: Uuid, node: Uuid) {
     // The old catalog, its environment pins, a measurement and the structure.
     let digest = "a".repeat(64);
     sqlx::query("INSERT INTO profile_catalog_artifacts(digest,artifact,created_by,created_at_ms) VALUES($1,'{}',$2,1)")
         .bind(&digest)
         .bind(owner)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("UPDATE profile_catalog_registry SET revision=1,active_digest=$1")
         .bind(&digest)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("INSERT INTO profile_catalog_environment_templates(catalog_digest,environment,template_digest) VALUES($1,'confined-worktree',$1)")
         .bind(&digest)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("INSERT INTO context_qualification_renewals(renderer_digest,base_renderer_digest,fact,observed_at_ms,expires_at_ms,node_id,submission,created_at) VALUES($1,$1,'{}',1,2,$2,'{}',now())")
         .bind(&digest)
         .bind(node)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("UPDATE intelligence_structure SET revision=4,document=jsonb_set(document,'{routing_markdown}',to_jsonb($1::text))")
         .bind("# Routing\nReviews go to deep-high.\n")
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
+}
+
+async fn seed_bindings(pool: &PgPool, owner: Uuid, project: Uuid) -> Value {
+    let digest = "a".repeat(64);
     // A binding with the old fields, in each place a read returns it.
     let binding = old_binding(project);
     let record = json!({"revision": 2, "binding": binding, "validated_at_ms": 5, "validation": {}});
     sqlx::query("INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,2,$2,5,'{}')")
         .bind(project)
         .bind(&binding)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("INSERT INTO project_execution_binding_history(project_id,revision,record,actor_id,created_at_ms) VALUES($1,2,$2,$3,5)")
         .bind(project)
         .bind(&record)
         .bind(owner)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     sqlx::query("INSERT INTO project_execution_operations(actor_id,operation_id,payload_digest,response) VALUES($1,$2,$3,$4)")
@@ -150,9 +156,13 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
         .bind(Uuid::new_v4())
         .bind(&digest)
         .bind(json!({"operation_id": Uuid::new_v4(), "record": record, "disposition": "bound"}))
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
+    binding
+}
+
+async fn seed_inventory(pool: &PgPool, node: Uuid) {
     // A node inventory that lists the models of a harness.
     let snapshot = json!({"revision": 1, "harnesses": [
         {"harness": "claude", "cli_version": "1", "models": [{"provider": "anthropic", "model": "m"}]},
@@ -161,9 +171,13 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
         .bind(node)
         .bind(Uuid::new_v4())
         .bind(&snapshot)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
+}
+
+async fn seed_attempt_history(pool: &PgPool, owner: Uuid, node: Uuid) -> HistoricalAttempts {
+    let digest = "a".repeat(64);
     // Attempt history: rows the foreign keys and seals of earlier formats
     // guard are written as a restore would write them.
     let old_attempt = Uuid::new_v4();
@@ -231,6 +245,29 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
             .await
             .unwrap();
     }
+    let attempts = HistoricalAttempts {
+        old_attempt,
+        supervisor,
+        renamed_supervisor,
+        stopped_supervisor,
+    };
+    seed_supervisors(&mut tx, owner, &digest, &attempts).await;
+    tx.commit().await.unwrap();
+    attempts
+}
+
+async fn seed_supervisors(
+    connection: &mut sqlx::PgConnection,
+    owner: Uuid,
+    digest: &str,
+    attempts: &HistoricalAttempts,
+) {
+    let HistoricalAttempts {
+        supervisor,
+        renamed_supervisor,
+        stopped_supervisor,
+        ..
+    } = *attempts;
     // Supervisors with a choice from the old catalog: two switched on (one
     // on a renamed class), one switched off.
     for (id, enabled, profile_id) in [
@@ -247,11 +284,129 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
                 "reasoning": "medium", "reasoning_configuration_reference": "codex:medium",
                 "options": {"service_tier": "fast"}}))
             .bind(owner)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await
             .unwrap();
     }
-    tx.commit().await.unwrap();
+}
+
+async fn assert_bindings_migrated(pool: &PgPool, binding: &Value) {
+    // Bindings: the removed fields are gone, the defaults are set, the rest
+    // is kept, and each stored copy is a binding the server reads.
+    let mut expected = binding.clone();
+    for removed in [
+        "catalog_digest",
+        "allowed_agent_profiles",
+        "allowed_intelligence_profiles",
+        "allowed_execution_profiles",
+    ] {
+        expected.as_object_mut().unwrap().remove(removed);
+    }
+    expected["default_role"] = json!("developer");
+    expected["default_intelligence"] = json!("standard-high");
+    let copies: Vec<Value> = sqlx::query_scalar(
+        "SELECT binding FROM project_execution_bindings
+         UNION ALL SELECT record->'binding' FROM project_execution_binding_history
+         UNION ALL SELECT response#>'{record,binding}' FROM project_execution_operations",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(copies.len(), 3);
+    for copy in copies {
+        assert_eq!(copy, expected);
+        let read: ProjectBinding = serde_json::from_value(copy).unwrap();
+        assert_eq!(read.default_role, "developer");
+        assert_eq!(read.default_intelligence, "standard-high");
+        assert_eq!(read.ceilings.wall_time_ms, 3_600_000);
+        assert_eq!(read.allowed_environments, ["confined-worktree"]);
+    }
+}
+
+async fn assert_attempt_summary(pool: &PgPool, old_attempt: Uuid) {
+    // What the old attempt ran with comes from its launch manifest; its
+    // snapshot digest is null and nothing is pinned. An attempt whose
+    // manifest lacks a value, and one with no launch, get no summary.
+    let mut conn = pool.acquire().await.unwrap();
+    let summary = aq_role_settings::attempts::ran_with(&mut conn, old_attempt)
+        .await
+        .unwrap()
+        .expect("a summary for the old attempt");
+    assert_eq!(
+        serde_json::to_value(&summary).unwrap(),
+        json!({"role": "aq-server-implementer", "level": "deep-high", "provider": "anthropic",
+            "model": "claude-old", "reasoning": "high", "harness": "claude",
+            "execution_profile": "confined-development", "snapshot_digest": null})
+    );
+    drop(conn);
+    let summaries: Vec<Uuid> = sqlx::query_scalar("SELECT attempt_id FROM attempt_ran_with")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(summaries, [old_attempt]);
+    let pins: i64 = sqlx::query_scalar("SELECT count(*) FROM role_snapshot_pins")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(pins, 0);
+}
+
+async fn assert_inventory_migrated(pool: &PgPool) {
+    // The node inventory keeps everything but the model lists.
+    let stored: Value = sqlx::query_scalar("SELECT snapshot FROM intelligence_node_snapshots")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        stored,
+        json!({"revision": 1, "harnesses": [
+            {"harness": "claude", "cli_version": "1"}, {"harness": "codex", "cli_version": "2"}]})
+    );
+}
+
+async fn assert_supervisors_migrated(pool: &PgPool, attempts: &HistoricalAttempts) {
+    let HistoricalAttempts {
+        supervisor,
+        renamed_supervisor,
+        stopped_supervisor,
+        ..
+    } = *attempts;
+    // Supervisors are carried: `enabled` and the revision as they were, the
+    // choice as a level id and its candidate, with no snapshot digest.
+    for (id, enabled, level) in [
+        (supervisor, true, "standard-medium"),
+        (renamed_supervisor, true, "simple-low"),
+        (stopped_supervisor, false, "deep-high"),
+    ] {
+        let control: (bool, Option<Value>, i64) = sqlx::query_as(
+            "SELECT enabled,profile,revision FROM supervisor_controls WHERE conversation_id=$1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let carried = json!({"profile_id": level, "candidate_id": "openai:gpt-6.1-sol:medium",
+            "name": "Standard · Medium", "provider": "openai", "model": "gpt-6.1-sol",
+            "reasoning": "medium", "harness": "codex"});
+        assert_eq!(control, (enabled, Some(carried), 3));
+    }
+}
+
+#[tokio::test]
+async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_history() {
+    let number: u32 = MIGRATION
+        .rsplit_once("SET value='")
+        .and_then(|(_, tail)| tail.split('\'').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap();
+    let db = TestDb::create().await;
+    let pool = db.pool().await;
+    migrate_profile(&pool, number - 1).await.unwrap();
+    let (owner, node, project) = seed_principals(&pool).await;
+    seed_catalog(&pool, owner, node).await;
+    let binding = seed_bindings(&pool, owner, project).await;
+    seed_inventory(&pool, node).await;
+    let attempts = seed_attempt_history(&pool, owner, node).await;
     let mut before = Vec::new();
     for table in HISTORY {
         before.push(rows(&pool, table).await);
@@ -276,90 +431,10 @@ async fn the_roles_migration_removes_the_catalog_and_keeps_bindings_and_attempt_
     assert_eq!(markdown, "# Routing\nReviews go to deep-high.\n");
     assert_eq!(revision, 1);
     assert_eq!(aq_role_settings::settings(&pool).await.unwrap().revision, 1);
-    // Bindings: the removed fields are gone, the defaults are set, the rest
-    // is kept, and each stored copy is a binding the server reads.
-    let mut expected = binding.clone();
-    for removed in [
-        "catalog_digest",
-        "allowed_agent_profiles",
-        "allowed_intelligence_profiles",
-        "allowed_execution_profiles",
-    ] {
-        expected.as_object_mut().unwrap().remove(removed);
-    }
-    expected["default_role"] = json!("developer");
-    expected["default_intelligence"] = json!("standard-high");
-    let copies: Vec<Value> = sqlx::query_scalar(
-        "SELECT binding FROM project_execution_bindings
-         UNION ALL SELECT record->'binding' FROM project_execution_binding_history
-         UNION ALL SELECT response#>'{record,binding}' FROM project_execution_operations",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(copies.len(), 3);
-    for copy in copies {
-        assert_eq!(copy, expected);
-        let read: ProjectBinding = serde_json::from_value(copy).unwrap();
-        assert_eq!(read.default_role, "developer");
-        assert_eq!(read.default_intelligence, "standard-high");
-        assert_eq!(read.ceilings.wall_time_ms, 3_600_000);
-        assert_eq!(read.allowed_environments, ["confined-worktree"]);
-    }
-    // What the old attempt ran with comes from its launch manifest; its
-    // snapshot digest is null and nothing is pinned. An attempt whose
-    // manifest lacks a value, and one with no launch, get no summary.
-    let mut conn = pool.acquire().await.unwrap();
-    let summary = aq_role_settings::attempts::ran_with(&mut conn, old_attempt)
-        .await
-        .unwrap()
-        .expect("a summary for the old attempt");
-    assert_eq!(
-        serde_json::to_value(&summary).unwrap(),
-        json!({"role": "aq-server-implementer", "level": "deep-high", "provider": "anthropic",
-            "model": "claude-old", "reasoning": "high", "harness": "claude",
-            "execution_profile": "confined-development", "snapshot_digest": null})
-    );
-    drop(conn);
-    let summaries: Vec<Uuid> = sqlx::query_scalar("SELECT attempt_id FROM attempt_ran_with")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    assert_eq!(summaries, [old_attempt]);
-    let pins: i64 = sqlx::query_scalar("SELECT count(*) FROM role_snapshot_pins")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(pins, 0);
-    // The node inventory keeps everything but the model lists.
-    let stored: Value = sqlx::query_scalar("SELECT snapshot FROM intelligence_node_snapshots")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        stored,
-        json!({"revision": 1, "harnesses": [
-            {"harness": "claude", "cli_version": "1"}, {"harness": "codex", "cli_version": "2"}]})
-    );
-    // Supervisors are carried: `enabled` and the revision as they were, the
-    // choice as a level id and its candidate, with no snapshot digest.
-    for (id, enabled, level) in [
-        (supervisor, true, "standard-medium"),
-        (renamed_supervisor, true, "simple-low"),
-        (stopped_supervisor, false, "deep-high"),
-    ] {
-        let control: (bool, Option<Value>, i64) = sqlx::query_as(
-            "SELECT enabled,profile,revision FROM supervisor_controls WHERE conversation_id=$1",
-        )
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let carried = json!({"profile_id": level, "candidate_id": "openai:gpt-6.1-sol:medium",
-            "name": "Standard · Medium", "provider": "openai", "model": "gpt-6.1-sol",
-            "reasoning": "medium", "harness": "codex"});
-        assert_eq!(control, (enabled, Some(carried), 3));
-    }
+    assert_bindings_migrated(&pool, &binding).await;
+    assert_attempt_summary(&pool, attempts.old_attempt).await;
+    assert_inventory_migrated(&pool).await;
+    assert_supervisors_migrated(&pool, &attempts).await;
     // The swarm's occupancy count reads the old attempts without an error.
     let mut conn = pool.acquire().await.unwrap();
     aq_swarm_settings::admission::counts(&mut conn)

@@ -1,9 +1,11 @@
 //! Fixed public graph observations for future scheduling. These reads never
 //! claim a task, reserve capacity, mutate graph state or grant execution.
+mod first_ready;
 pub(super) mod parse;
 use super::{Runtime, contract};
 use aq_admission::TaskRevision;
 pub use aq_profiled_state::native_offer::{GraphReadStamp, ReadyPage, ReadyTask, TaskContext};
+use aq_profiled_state::native_offer::{bounded_cursor, graph_ready_page, graph_task_revision};
 use serde_json::Value;
 use uuid::Uuid;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -22,38 +24,34 @@ pub enum SchedulingReadError {
     StaleTask,
 }
 type Result<T> = std::result::Result<T, SchedulingReadError>;
-fn bounded_cursor(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
-}
 fn now() -> Result<u64> {
     chrono::Utc::now()
         .timestamp_millis()
         .try_into()
         .map_err(|_| SchedulingReadError::Unavailable)
 }
-fn node_revision(node: &Value, workspace: Uuid) -> Result<TaskRevision> {
-    let task_id = node["id"]
-        .as_str()
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or(SchedulingReadError::InvalidResponse)?;
-    if node["workspace_id"] != workspace.to_string() || node["kind"] != "task" {
+fn observed_now(clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync)) -> Result<u64> {
+    u64::try_from(clock().timestamp_millis())
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or(SchedulingReadError::Unavailable)
+}
+
+// Validate the wire schema before decoding its scheduling fields.
+fn ready_page(
+    workspace: Uuid,
+    limit: u16,
+    cursor: Option<&str>,
+    value: Value,
+    stamp: GraphReadStamp,
+) -> Result<ReadyPage> {
+    if !contract::upstream_valid("NodePage", &value) {
         return Err(SchedulingReadError::InvalidResponse);
     }
-    let revision = TaskRevision {
-        workspace_id: workspace,
-        task_id,
-        version: node["version"]
-            .as_u64()
-            .ok_or(SchedulingReadError::InvalidResponse)?,
-        content_revision: node["content_revision"]
-            .as_u64()
-            .ok_or(SchedulingReadError::InvalidResponse)?,
-    };
-    revision
-        .validate()
-        .map_err(|_| SchedulingReadError::InvalidResponse)?;
-    Ok(revision)
+    graph_ready_page(workspace, limit, cursor, &value, stamp)
+        .map_err(|_| SchedulingReadError::InvalidResponse)
 }
+
 impl Runtime {
     async fn scheduling_get_clock(
         &self,
@@ -61,9 +59,10 @@ impl Runtime {
         query: &[(String, String)],
         max_bytes: usize,
         clock: &(dyn Fn() -> Result<u64> + Sync),
+        include_first_ready: bool,
     ) -> Result<(Value, GraphReadStamp, Vec<u8>)> {
         let requested = clock()?;
-        let mut response = self
+        let request = self
             .client
             .get(
                 self.url
@@ -72,7 +71,13 @@ impl Runtime {
             )
             .bearer_auth(&self.token)
             .header("X-AQ-Graph-API-Version", "1")
-            .query(query)
+            .query(query);
+        let request = if include_first_ready {
+            request.header("X-AQ-Graph-First-Ready", "1")
+        } else {
+            request
+        };
+        let mut response = request
             .send()
             .await
             .map_err(|_| SchedulingReadError::Unavailable)?;
@@ -137,7 +142,7 @@ impl Runtime {
         limit: u16,
         cursor: Option<&str>,
     ) -> Result<ReadyPage> {
-        self.scheduling_ready_clock(workspace, limit, cursor, &now)
+        self.scheduling_ready_clock(workspace, limit, cursor, &now, None)
             .await
     }
     /// Trusted daemon clock around a genuinely new ready request/body receive,
@@ -150,14 +155,61 @@ impl Runtime {
         cursor: Option<&str>,
         clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
     ) -> Result<ReadyPage> {
-        let observed_now = || {
-            u64::try_from(clock().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(SchedulingReadError::Unavailable)
-        };
-        self.scheduling_ready_clock(workspace, limit, cursor, &observed_now)
+        let observed_now = || observed_now(clock);
+        self.scheduling_ready_clock(workspace, limit, cursor, &observed_now, None)
             .await
+    }
+
+    pub(crate) async fn scheduling_ready_for_project(
+        &self,
+        binding: &crate::project_bindings::domain::ProjectBinding,
+        limit: u16,
+        cursor: Option<&str>,
+        clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
+        pool: &sqlx::PgPool,
+    ) -> Result<ReadyPage> {
+        let observed_now = || observed_now(clock);
+        self.scheduling_ready_clock(
+            binding.graph_workspace_id,
+            limit,
+            cursor,
+            &observed_now,
+            Some((pool, binding.project_id)),
+        )
+        .await
+    }
+
+    pub(crate) async fn scheduling_task_ready_current(
+        &self,
+        task: &TaskRevision,
+        clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
+    ) -> Result<ReadyPage> {
+        let workspace = task.workspace_id;
+        let id = task.task_id;
+        let observed_now = || observed_now(clock);
+        let (value, stamp, _) = match self
+            .scheduling_get_clock(
+                &format!("/v1/workspaces/{workspace}/ready/{id}"),
+                &[],
+                1_048_576,
+                &observed_now,
+                false,
+            )
+            .await
+        {
+            // Older Graph deployments only serve the bounded list endpoint.
+            Err(SchedulingReadError::NotFound) => {
+                return self
+                    .scheduling_ready_current(workspace, 8, None, clock)
+                    .await;
+            }
+            answer => answer?,
+        };
+        let ready = ready_page(workspace, 1, None, value, stamp)?;
+        if ready.next_cursor.is_some() || ready.items.iter().any(|r| r.revision.task_id != id) {
+            return Err(SchedulingReadError::InvalidResponse);
+        }
+        Ok(ready)
     }
     async fn scheduling_ready_clock(
         &self,
@@ -165,6 +217,7 @@ impl Runtime {
         limit: u16,
         cursor: Option<&str>,
         clock: &(dyn Fn() -> Result<u64> + Sync),
+        project: Option<(&sqlx::PgPool, Uuid)>,
     ) -> Result<ReadyPage> {
         if workspace.is_nil()
             || !(1..=64).contains(&limit)
@@ -176,52 +229,23 @@ impl Runtime {
         if let Some(cursor) = cursor {
             query.push(("cursor".into(), cursor.into()));
         }
-        let (value, stamp, _bytes) = self
+        let (mut value, stamp, _bytes) = self
             .scheduling_get_clock(
                 &format!("/v1/workspaces/{workspace}/ready"),
                 &query,
                 1_048_576,
                 clock,
+                project.is_some(),
             )
             .await?;
-        if !contract::upstream_valid("NodePage", &value) {
-            return Err(SchedulingReadError::InvalidResponse);
+        let evidence = project
+            .map(|_| first_ready::take(&mut value, stamp.received_at_ms))
+            .unwrap_or_default();
+        let page = ready_page(workspace, limit, cursor, value, stamp)?;
+        if let Some((pool, project_id)) = project {
+            first_ready::enqueue(pool, project_id, workspace, evidence);
         }
-        let raw = value["items"]
-            .as_array()
-            .ok_or(SchedulingReadError::InvalidResponse)?;
-        if raw.len() > limit as usize {
-            return Err(SchedulingReadError::InvalidResponse);
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        let mut items = Vec::new();
-        for node in raw {
-            let revision = node_revision(node, workspace)?;
-            if node["task_state"] != "active"
-                || node["retired"] != false
-                || node["deleted"] != false
-                || !ids.insert(revision.task_id)
-            {
-                return Err(SchedulingReadError::InvalidResponse);
-            }
-            items.push(ReadyTask {
-                revision,
-                node: node.clone(),
-            });
-        }
-        let next_cursor = value["next_cursor"].as_str().map(str::to_owned);
-        if next_cursor
-            .as_ref()
-            .is_some_and(|c| !bounded_cursor(c) || Some(c.as_str()) == cursor)
-        {
-            return Err(SchedulingReadError::InvalidResponse);
-        }
-        Ok(ReadyPage {
-            workspace_id: workspace,
-            items,
-            next_cursor,
-            stamp,
-        })
+        Ok(page)
     }
     pub async fn scheduling_context(
         &self,
@@ -243,12 +267,7 @@ impl Runtime {
         max_bytes: u32,
         clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
     ) -> Result<TaskContext> {
-        let observed_now = || {
-            u64::try_from(clock().timestamp_millis())
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or(SchedulingReadError::Unavailable)
-        };
+        let observed_now = || observed_now(clock);
         self.scheduling_context_clock(expected, depth, limit, max_bytes, &observed_now)
             .await
     }
@@ -281,12 +300,14 @@ impl Runtime {
                 &query,
                 max_bytes as usize,
                 clock,
+                false,
             )
             .await?;
         if !contract::upstream_valid("Context", &value) {
             return Err(SchedulingReadError::InvalidResponse);
         }
-        let revision = node_revision(&value["node"], expected.workspace_id)?;
+        let revision = graph_task_revision(&value["node"], expected.workspace_id)
+            .map_err(|_| SchedulingReadError::InvalidResponse)?;
         if revision != *expected
             || value["node"]["task_state"] != "active"
             || value["node"]["retired"] != false

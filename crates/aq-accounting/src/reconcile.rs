@@ -98,30 +98,41 @@ impl Fact {
             &self.semantic_digest,
         ))
     }
+    fn has_digest_mismatch(&self) -> Result<bool> {
+        Ok(self.semantic_digest
+            != semantic(
+                &self.usage,
+                &self.layout,
+                &self.complete_accounting_evidence,
+            )?
+            || self.fact_digest != self.digest()?)
+    }
+    pub(crate) fn source_incomplete(&self) -> bool {
+        self.complete_accounting_evidence.is_none()
+            || !matches!(
+                self.usage.completeness,
+                wire::Completeness::ReportedComplete
+            )
+    }
     pub fn validate(&self) -> Result<()> {
         self.event.validate()?;
         self.usage.validate()?;
         wire::artifact(&self.policy)?;
         self.layout.check_counters(&self.usage.counters)?;
         self.layout.check_counters(&self.contribution)?;
-        if self.lineage.is_nil()
-            || self.priority == 0
-            || self.semantic_digest
-                != semantic(
-                    &self.usage,
-                    &self.layout,
-                    &self.complete_accounting_evidence,
-                )?
-            || self.fact_digest != self.digest()?
-        {
+        if self.lineage.is_nil() || self.priority == 0 {
             return Err(Error::Invalid);
         }
-        if let Some(rate) = &self.pricing_reference {
-            wire::artifact(rate)?;
+        if self.has_digest_mismatch()? {
+            return Err(Error::Invalid);
         }
-        if let Some(evidence) = &self.complete_accounting_evidence {
-            wire::artifact(evidence)?;
-        }
+        self.pricing_reference
+            .iter()
+            .chain(&self.complete_accounting_evidence)
+            .try_for_each(wire::artifact)?;
+        self.validate_contribution()
+    }
+    fn validate_contribution(&self) -> Result<()> {
         match (&self.usage.basis, &self.baseline) {
             (CounterBasis::PerCall, None) => {
                 if self.contribution != self.usage.counters {
@@ -231,33 +242,7 @@ pub fn decide(record: &wire::ObservationRecord, context: Context<'_>) -> Result<
     let ObservationKind::Usage { usage } = &record.body.kind else {
         return Err(Error::Invalid);
     };
-    if usage.call.provider != context.policy.provider {
-        return Err(Error::Unsupported);
-    }
-    let category_policy = match &usage.category_semantics {
-        CategorySemantics::DeclaredDisjoint { policy }
-        | CategorySemantics::MayOverlap { policy } => policy,
-    };
-    let parser = context
-        .policy
-        .parsers
-        .iter()
-        .find(|p| p.parser == record.body.provenance.parser)
-        .ok_or(Error::Unsupported)?;
-    if category_policy != &parser.category_claim {
-        return Err(Error::Unsupported);
-    }
-    let priority = parser.priority;
-    if matches!(
-        usage.category_semantics,
-        CategorySemantics::DeclaredDisjoint { .. }
-    ) && (context.policy.layout.input_includes_cache_read
-        || context.policy.layout.input_includes_cache_write
-        || context.policy.layout.output_includes_reasoning)
-    {
-        return Err(Error::Conflict);
-    }
-    context.policy.layout.check_counters(&usage.counters)?;
+    let parser = context.policy.verify_usage(record, usage)?;
     let key = key(record, context.policy)?;
     let source = crate::hash(&(
         record.body.provenance.source_id,
@@ -269,40 +254,173 @@ pub fn decide(record: &wire::ObservationRecord, context: Context<'_>) -> Result<
         &context.policy.layout,
         &parser.complete_accounting_evidence,
     )?;
-    if let Some(current) = context.current {
-        current.validate()?;
-        if current.key != key {
-            return Err(Error::Invalid);
+    let incoming = Incoming {
+        usage,
+        key,
+        parser,
+        source,
+        semantic_digest,
+    };
+    context.validate_heads(&incoming.key)?;
+    if let Some(reason) = incoming.correction_refusal(&context) {
+        return Ok(Decision::Unresolved { reason });
+    }
+    if let Some(decision) = context
+        .current
+        .and_then(|current| incoming.compare(current, &context))
+    {
+        return Ok(decision);
+    }
+    incoming.append(record, context)
+}
+
+impl Context<'_> {
+    fn validate_heads(&self, key: &wire::Digest) -> Result<()> {
+        for head in self.current.into_iter().chain(self.correction_target) {
+            head.validate()?;
+            if &head.key != key {
+                return Err(Error::Invalid);
+            }
+        }
+        Ok(())
+    }
+    fn baseline_for(&self, usage: &wire::Usage) -> Option<Baseline> {
+        if matches!(usage.basis, CounterBasis::PerCall) {
+            return None;
+        }
+        match self.current {
+            Some(current) => current.baseline.clone(),
+            None => self.baseline.cloned(),
         }
     }
-    if let Some(target) = context.correction_target {
-        target.validate()?;
-        if target.key != key {
-            return Err(Error::Invalid);
+}
+impl Policy {
+    fn verify_usage(
+        &self,
+        record: &wire::ObservationRecord,
+        usage: &wire::Usage,
+    ) -> Result<&ParserAuthority> {
+        if usage.call.provider != self.provider {
+            return Err(Error::Unsupported);
         }
+        let category_policy = match &usage.category_semantics {
+            CategorySemantics::DeclaredDisjoint { policy }
+            | CategorySemantics::MayOverlap { policy } => policy,
+        };
+        let parser = self
+            .parsers
+            .iter()
+            .find(|p| p.parser == record.body.provenance.parser)
+            .ok_or(Error::Unsupported)?;
+        if category_policy != &parser.category_claim {
+            return Err(Error::Unsupported);
+        }
+        if matches!(
+            usage.category_semantics,
+            CategorySemantics::DeclaredDisjoint { .. }
+        ) && self.layout.has_overlap()
+        {
+            return Err(Error::Conflict);
+        }
+        self.layout.check_counters(&usage.counters)?;
+        Ok(parser)
     }
-    let unresolved = |reason| Ok(Decision::Unresolved { reason });
-    if let Some(old) = &usage.correction_of {
-        let Some(target) = context.correction_target.filter(|t| &t.event == old) else {
-            return unresolved(UnresolvedReason::UnknownCorrection);
+}
+impl Layout {
+    fn has_overlap(&self) -> bool {
+        self.input_includes_cache_read
+            || self.input_includes_cache_write
+            || self.output_includes_reasoning
+    }
+}
+struct Incoming<'a> {
+    key: wire::Digest,
+    parser: &'a ParserAuthority,
+    usage: &'a wire::Usage,
+    source: wire::Digest,
+    semantic_digest: wire::Digest,
+}
+impl Incoming<'_> {
+    fn append(self, record: &wire::ObservationRecord, context: Context<'_>) -> Result<Decision> {
+        let usage = self.usage;
+        let unresolved = |reason| Ok(Decision::Unresolved { reason });
+        let baseline = context.baseline_for(usage);
+        let contribution = match &usage.basis {
+            CounterBasis::PerCall => usage.counters.clone(),
+            CounterBasis::Cumulative { .. } => {
+                let Some(baseline) = &baseline else {
+                    return unresolved(UnresolvedReason::MissingBaseline);
+                };
+                wire::artifact(&baseline.reference)?;
+                if baseline.counter_key != self.key {
+                    return Err(Error::Invalid);
+                }
+                match subtract(&usage.counters, &baseline.counters) {
+                    Ok(c) => c,
+                    Err(Error::Conflict) => return unresolved(UnresolvedReason::CounterReset),
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+        context.policy.layout.check_counters(&contribution)?;
+        let pricing_reference = match context.current {
+            Some(current) => current.pricing_reference.clone(),
+            None => context.pricing_reference.cloned(),
+        };
+        let mut fact = Fact {
+            key: self.key,
+            lineage: context.lineage,
+            event: wire::EventRef {
+                event_id: record.event_id,
+                digest: record.body_digest.clone(),
+            },
+            source: self.source,
+            priority: self.parser.priority,
+            complete_accounting_evidence: self.parser.complete_accounting_evidence.clone(),
+            policy: context.policy.reference.clone(),
+            layout: context.policy.layout.clone(),
+            pricing_reference,
+            usage: usage.clone(),
+            baseline,
+            contribution,
+            semantic_digest: self.semantic_digest,
+            fact_digest: wire::Digest::of(b"unsealed"),
+        };
+        fact.fact_digest = fact.digest()?;
+        fact.validate()?;
+        Ok(Decision::Append {
+            fact: Box::new(fact),
+            supersedes: context.current.map(|v| v.event.clone()),
+            previous_contribution: context.current.map(|v| v.contribution.clone()),
+        })
+    }
+
+    fn correction_refusal(&self, context: &Context<'_>) -> Option<UnresolvedReason> {
+        let old = self.usage.correction_of.as_ref()?;
+        let Some(target) = context
+            .correction_target
+            .filter(|target| &target.event == old)
+        else {
+            return Some(UnresolvedReason::UnknownCorrection);
         };
         if target.lineage != context.lineage {
-            return unresolved(UnresolvedReason::ForeignLineageCorrection);
+            return Some(UnresolvedReason::ForeignLineageCorrection);
         }
-        if let Some(current) = context.current {
-            if current.event != target.event && current.source == source {
-                return unresolved(UnresolvedReason::StaleCorrection);
+        match context.current {
+            None => Some(UnresolvedReason::UnknownCorrection),
+            Some(current) if current.event != target.event && current.source == self.source => {
+                Some(UnresolvedReason::StaleCorrection)
             }
-        } else {
-            return unresolved(UnresolvedReason::UnknownCorrection);
+            _ => None,
         }
     }
-    if let Some(current) = context.current {
+    fn compare(&self, current: &Fact, context: &Context<'_>) -> Option<Decision> {
+        let unresolved = |reason| Some(Decision::Unresolved { reason });
+        let no_charge = |reason| Some(Decision::NoCharge { reason });
+        let identical = current.semantic_digest == self.semantic_digest;
         if current.lineage != context.lineage {
-            return if current.semantic_digest == semantic_digest {
-                Ok(Decision::NoCharge {
-                    reason: NoChargeReason::ImportedHistory,
-                })
+            return if identical {
+                no_charge(NoChargeReason::ImportedHistory)
             } else {
                 unresolved(UnresolvedReason::ForeignLineageCorrection)
             };
@@ -310,87 +428,31 @@ pub fn decide(record: &wire::ObservationRecord, context: Context<'_>) -> Result<
         if current.layout != context.policy.layout {
             return unresolved(UnresolvedReason::AttributionChanged);
         }
-        if priority < current.priority {
-            return Ok(Decision::NoCharge {
-                reason: NoChargeReason::LowerPrecedence,
-            });
+        if self.parser.priority < current.priority {
+            return no_charge(NoChargeReason::LowerPrecedence);
         }
-        if current.semantic_digest == semantic_digest && priority == current.priority {
-            return Ok(Decision::NoCharge {
-                reason: NoChargeReason::Identical,
-            });
+        if identical && self.parser.priority == current.priority {
+            return no_charge(NoChargeReason::Identical);
         }
-        if matches!(usage.basis, CounterBasis::Cumulative { .. }) {
-            if current.source != source || current.usage.call.model != usage.call.model {
-                return unresolved(UnresolvedReason::AttributionChanged);
-            }
-            if usage.correction_of.is_none()
-                && subtract(&usage.counters, &current.usage.counters).is_err()
-            {
-                return unresolved(UnresolvedReason::CounterReset);
-            }
-        } else if priority == current.priority
-            && usage.correction_of.is_none()
-            && current.semantic_digest != semantic_digest
-        {
-            return unresolved(UnresolvedReason::ConflictingCall);
-        }
+        self.usage_conflict(current, identical)
+            .map(|reason| Decision::Unresolved { reason })
     }
-    let baseline = if matches!(usage.basis, CounterBasis::Cumulative { .. }) {
-        if let Some(current) = context.current {
-            current.baseline.clone()
-        } else {
-            context.baseline.cloned()
+    fn usage_conflict(&self, current: &Fact, identical: bool) -> Option<UnresolvedReason> {
+        let usage = self.usage;
+        if matches!(usage.basis, CounterBasis::Cumulative { .. }) {
+            return self.cumulative_conflict(current);
         }
-    } else {
-        None
-    };
-    let contribution = match &usage.basis {
-        CounterBasis::PerCall => usage.counters.clone(),
-        CounterBasis::Cumulative { .. } => {
-            let Some(baseline) = &baseline else {
-                return unresolved(UnresolvedReason::MissingBaseline);
-            };
-            wire::artifact(&baseline.reference)?;
-            if baseline.counter_key != key {
-                return Err(Error::Invalid);
-            }
-            match subtract(&usage.counters, &baseline.counters) {
-                Ok(c) => c,
-                Err(Error::Conflict) => return unresolved(UnresolvedReason::CounterReset),
-                Err(e) => return Err(e),
-            }
+        let same_priority = self.parser.priority == current.priority;
+        (same_priority && usage.correction_of.is_none() && !identical)
+            .then_some(UnresolvedReason::ConflictingCall)
+    }
+    fn cumulative_conflict(&self, current: &Fact) -> Option<UnresolvedReason> {
+        let usage = self.usage;
+        if current.source != self.source || current.usage.call.model != usage.call.model {
+            return Some(UnresolvedReason::AttributionChanged);
         }
-    };
-    context.policy.layout.check_counters(&contribution)?;
-    let pricing_reference = match context.current {
-        Some(current) => current.pricing_reference.clone(),
-        None => context.pricing_reference.cloned(),
-    };
-    let mut fact = Fact {
-        key,
-        lineage: context.lineage,
-        event: wire::EventRef {
-            event_id: record.event_id,
-            digest: record.body_digest.clone(),
-        },
-        source,
-        priority,
-        complete_accounting_evidence: parser.complete_accounting_evidence.clone(),
-        policy: context.policy.reference.clone(),
-        layout: context.policy.layout.clone(),
-        pricing_reference,
-        usage: (**usage).clone(),
-        baseline,
-        contribution,
-        semantic_digest,
-        fact_digest: wire::Digest::of(b"unsealed"),
-    };
-    fact.fact_digest = fact.digest()?;
-    fact.validate()?;
-    Ok(Decision::Append {
-        fact: Box::new(fact),
-        supersedes: context.current.map(|v| v.event.clone()),
-        previous_contribution: context.current.map(|v| v.contribution.clone()),
-    })
+        let reset = usage.correction_of.is_none()
+            && subtract(&usage.counters, &current.usage.counters).is_err();
+        reset.then_some(UnresolvedReason::CounterReset)
+    }
 }

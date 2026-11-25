@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import NamedTuple
 from urllib.error import URLError
 from urllib.request import urlopen
 from uuid import uuid4
@@ -244,11 +245,30 @@ def scratch_build(directory, source, expected, *flags):
     assert result.stdout.strip() == expected
 
 
-def scenario(scratch, directory):
-    graph = scratch.graph
-    owner = Retirement(graph, APPROVER)
-    spec_a = registration(graph, "A", {SERVICE: "feature_a"})
-    spec_b = registration(graph, "B", {SERVICE: "feature_b"})
+def merge(repo, number, head):
+    return {
+        "kind": "merge",
+        "approval_revision": 2,
+        "repository": repo,
+        "pull_request": f"https://example.test/{repo}/pull/{number}",
+        "sha": head,
+        "evidence": proof(f"merge receipt {repo}/{number}"),
+    }
+
+
+def ordinary(repo, head, passed):
+    return {
+        "kind": "ordinary",
+        "approval_revision": 2,
+        "repository": repo,
+        "sha": head,
+        "passed": passed,
+        "flag_absent": passed,
+        "evidence": proof(f"ordinary test {repo}"),
+    }
+
+
+def verify_feature_combinations(directory):
     initial = """fn main() {
         println!("{}{}", cfg!(feature = "feature_a") as u8,
                         cfg!(feature = "feature_b") as u8);
@@ -261,6 +281,75 @@ def scenario(scratch, directory):
     ):
         scratch_build(directory, initial, expected, *flags)
 
+
+def verify_adoption(graph, owner):
+    # Match the staged Epic 0 shape on disposable Graph. The existing IDs
+    # and existing prerequisite survive adoption and stay blocked.
+    old_gate, old_cleanup = str(uuid4()), str(uuid4())
+    mutate(
+        graph,
+        create(old_gate, "task", "Existing approval"),
+        create(old_cleanup, "task", "Existing cleanup"),
+        {
+            "op": "add_edge",
+            "edge_type": "blocks",
+            "source": old_gate,
+            "target": old_cleanup,
+        },
+    )
+    adopted = registration(
+        graph,
+        "adoption",
+        {SERVICE: "legacy_flag"},
+        adopt={"approval": old_gate, "cleanup": old_cleanup},
+    )
+    adopted_id = owner.register(adopted)["registration"]
+    state = owner.status(adopted_id)
+    assert (state["approval"], state["cleanup"]) == (old_gate, old_cleanup)
+    assert graph.node(old_cleanup)["metadata"][META]["registration"] == adopted_id
+    assert ready(graph, old_cleanup) == set()
+
+
+def verify_client_repair(owner, registration_id, directory, heads):
+    broken_client_sha, client_sha = heads
+    broken_merge = merge(CLIENT, 3, broken_client_sha)
+    broken_merge_receipt = owner.evidence(registration_id, broken_merge)
+    broken_client = """#[cfg(feature = "FEATURE_CLIENT_A")]
+    fn removed_feature() -> u8 { 1 }
+    fn main() { println!("{}", removed_feature()); }"""
+    scratch_build(directory, broken_client, None)
+    broken_build = ordinary(CLIENT, broken_client_sha, False)
+    broken_build_receipt = owner.evidence(registration_id, broken_build)
+    rejected("ordinary build or flag removal check failed", lambda: owner.close(registration_id))
+    client_repair = merge(CLIENT, 4, client_sha)
+    rejected("must supersede", lambda: owner.evidence(registration_id, client_repair))
+    client_repair["supersedes_merge"] = owner.status(registration_id)["merge_receipts"][CLIENT]
+    rejected(
+        "must have a different SHA",
+        lambda: owner.evidence(registration_id, {**client_repair, "sha": broken_client_sha}),
+    )
+    repaired_merge_receipt = owner.evidence(registration_id, client_repair)
+    rejected(
+        "must supersede",
+        lambda: owner.evidence(registration_id, {**client_repair, "sha": "7" * 40}),
+    )
+    assert owner.evidence(registration_id, broken_merge) == broken_merge_receipt
+    assert owner.evidence(registration_id, broken_build) == broken_build_receipt
+    assert owner.evidence(registration_id, client_repair) == repaired_merge_receipt
+    rejected("ordinary build evidence pending", lambda: owner.close(registration_id))
+
+
+class RegisteredEpics(NamedTuple):
+    primary: str
+    secondary: str
+    primary_status: dict
+    secondary_cleanup: str
+    registration_receipt: dict
+
+
+def verify_registration(scratch, directory, owner, specs):
+    graph = scratch.graph
+    spec_a, spec_b = specs
     a, first = owner.register_record(spec_a)
     assert owner.status(a)["status"] == "Registration pending"
     assert graph.node(owner.status(a)["cleanup"], missing=True) is None
@@ -283,7 +372,13 @@ def scenario(scratch, directory):
             status["cleanup"],
             status["closure_gate"],
         }
+    return RegisteredEpics(a, b, status_a, cleanup_b, registered_a)
 
+
+def verify_owner_approval(scratch, owner, epics):
+    graph = scratch.graph
+    a, status_a = epics.primary, epics.primary_status
+    cleanup_a, cleanup_b = status_a["cleanup"], epics.secondary_cleanup
     rejected_revisions = {SERVICE: "1" * 40, CLIENT: "2" * 40}
     request_changes = decision(1, "request_changes", rejected_revisions)
     assert owner.decide(a, request_changes) == owner.decide(a, request_changes)
@@ -330,29 +425,35 @@ def scenario(scratch, directory):
         lambda: owner.amend(a, {"repositories": {"Acme/extra": "feature_a"}}),
     )
     assert ready(graph, cleanup_a, cleanup_b) == {cleanup_a}
+    return writer, vetted
 
-    def merge(repo, number, head):
-        return {
-            "kind": "merge",
-            "approval_revision": 2,
-            "repository": repo,
-            "pull_request": f"https://example.test/{repo}/pull/{number}",
-            "sha": head,
-            "evidence": proof(f"merge receipt {repo}/{number}"),
-        }
 
-    def ordinary(repo, head, passed):
-        return {
-            "kind": "ordinary",
-            "approval_revision": 2,
-            "repository": repo,
-            "sha": head,
-            "passed": passed,
-            "flag_absent": passed,
-            "evidence": proof(f"ordinary test {repo}"),
-        }
+def verify_integrated_build(owner, registration_id, builds, vetted):
+    integrated = {
+        "kind": "integrated",
+        "approval_revision": 2,
+        "passed": False,
+        "revisions": {repo: build["sha"] for repo, build in builds.items()},
+        "builds": {repo: build["evidence"] for repo, build in builds.items()},
+        "evidence": proof("integrated check before repair"),
+    }
+    rejected(
+        "cleanup merge SHAs",
+        lambda: owner.evidence(registration_id, {**integrated, "revisions": vetted}),
+    )
+    owner.evidence(registration_id, integrated)
+    rejected("Integrated acceptance failed", lambda: owner.close(registration_id))
+    owner.evidence(
+        registration_id,
+        {
+            **integrated,
+            "passed": True,
+            "evidence": proof("integrated check after repair"),
+        },
+    )
 
-    service_sha, broken_client_sha, client_sha = "4" * 40, "5" * 40, "6" * 40
+
+def verify_service_build(owner, registration_id, directory, service_sha):
     service_after = (
         """fn main() { println!("1{}", cfg!(feature = "feature_b") as u8); }"""
     )
@@ -360,10 +461,41 @@ def scenario(scratch, directory):
     scratch_build(directory, service_after, "10")
     scratch_build(directory, service_after, "11", "feature_b")
     service_merge = merge(SERVICE, 1, service_sha)
-    recorded = owner.evidence(a, service_merge)
+    recorded = owner.evidence(registration_id, service_merge)
     service_build = ordinary(SERVICE, service_sha, True)
-    owner.evidence(a, service_build)
-    rejected(f"{CLIENT}: cleanup merge pending", lambda: owner.close(a))
+    owner.evidence(registration_id, service_build)
+    rejected(f"{CLIENT}: cleanup merge pending", lambda: owner.close(registration_id))
+    return service_merge, recorded, service_build
+
+
+def verify_sibling_gate(graph, writer, epic, close):
+    sibling = str(uuid4())
+    mutate(
+        graph,
+        create(sibling, "task", "Other required epic work", task_state="active"),
+        {
+            "op": "add_edge",
+            "edge_type": "parent-child",
+            "source": epic,
+            "target": sibling,
+        },
+    )
+    rejected(f"Epic task {sibling} is still open", lambda: close())
+    mutate(writer, patch(graph.node(sibling), task_state="completed"))
+
+
+def scenario(scratch, directory):
+    graph = scratch.graph
+    owner = Retirement(graph, APPROVER)
+    spec_a = registration(graph, "A", {SERVICE: "feature_a"})
+    spec_b = registration(graph, "B", {SERVICE: "feature_b"})
+    verify_feature_combinations(directory)
+    epics = verify_registration(scratch, directory, owner, (spec_a, spec_b))
+    writer, vetted = verify_owner_approval(scratch, owner, epics)
+    a, b, status_a = epics.primary, epics.secondary, epics.primary_status
+    cleanup_a, cleanup_b = status_a["cleanup"], epics.secondary_cleanup
+    service_sha, broken_client_sha, client_sha = "4" * 40, "5" * 40, "6" * 40
+    service_merge, recorded, service_build = verify_service_build(owner, a, directory, service_sha)
 
     # Normal task settlement can complete the cleanup, but the protected
     # closure gate keeps the epic open until the independent evidence arrives.
@@ -384,111 +516,29 @@ def scenario(scratch, directory):
         "must match", lambda: owner.evidence(a, ordinary(CLIENT, client_sha, False))
     )
 
-    broken_merge = merge(CLIENT, 3, broken_client_sha)
-    broken_merge_receipt = owner.evidence(a, broken_merge)
-    broken_client = """#[cfg(feature = "FEATURE_CLIENT_A")]
-    fn removed_feature() -> u8 { 1 }
-    fn main() { println!("{}", removed_feature()); }"""
-    scratch_build(directory, broken_client, None)
-    broken_build = ordinary(CLIENT, broken_client_sha, False)
-    broken_build_receipt = owner.evidence(a, broken_build)
-    rejected("ordinary build or flag removal check failed", lambda: owner.close(a))
-    client_repair = merge(CLIENT, 4, client_sha)
-    rejected("must supersede", lambda: owner.evidence(a, client_repair))
-    client_repair["supersedes_merge"] = owner.status(a)["merge_receipts"][CLIENT]
-    rejected(
-        "must have a different SHA",
-        lambda: owner.evidence(a, {**client_repair, "sha": broken_client_sha}),
-    )
-    repaired_merge_receipt = owner.evidence(a, client_repair)
-    rejected(
-        "must supersede",
-        lambda: owner.evidence(a, {**client_repair, "sha": "7" * 40}),
-    )
-    assert owner.evidence(a, broken_merge) == broken_merge_receipt
-    assert owner.evidence(a, broken_build) == broken_build_receipt
-    assert owner.evidence(a, client_repair) == repaired_merge_receipt
-    rejected("ordinary build evidence pending", lambda: owner.close(a))
+    verify_client_repair(owner, a, directory, (broken_client_sha, client_sha))
+
     client_build = ordinary(CLIENT, client_sha, True)
     client_after = 'fn main() { println!("1"); }'
     assert "FEATURE_CLIENT_A" not in client_after
     scratch_build(directory, client_after, "1")
     owner.evidence(a, client_build)
-    integrated = {
-        "kind": "integrated",
-        "approval_revision": 2,
-        "passed": False,
-        "revisions": {SERVICE: service_sha, CLIENT: client_sha},
-        "builds": {
-            SERVICE: service_build["evidence"],
-            CLIENT: client_build["evidence"],
-        },
-        "evidence": proof("integrated check before repair"),
-    }
-    rejected(
-        "cleanup merge SHAs",
-        lambda: owner.evidence(a, {**integrated, "revisions": vetted}),
-    )
-    owner.evidence(a, integrated)
-    rejected("Integrated acceptance failed", lambda: owner.close(a))
-    owner.evidence(
-        a,
-        {
-            **integrated,
-            "passed": True,
-            "evidence": proof("integrated check after repair"),
-        },
-    )
+    verify_integrated_build(owner, a, {SERVICE: service_build, CLIENT: client_build}, vetted)
 
-    sibling = str(uuid4())
-    mutate(
-        graph,
-        create(sibling, "task", "Other required epic work", task_state="active"),
-        {
-            "op": "add_edge",
-            "edge_type": "parent-child",
-            "source": spec_a["epic_id"],
-            "target": sibling,
-        },
-    )
-    rejected(f"Epic task {sibling} is still open", lambda: owner.close(a))
-    mutate(writer, patch(graph.node(sibling), task_state="completed"))
+    verify_sibling_gate(graph, writer, spec_a["epic_id"], lambda: owner.close(a))
     closed = owner.close(a)
     scratch.restart()
     assert owner.close(a) == closed
     assert owner.evidence(a, service_merge) == recorded
-    assert owner.register(spec_a) == registered_a
+    assert owner.register(spec_a) == epics.registration_receipt
     assert owner.status(a)["status"] == "Retired"
     assert graph.node(spec_a["epic_id"])["task_state"] == "completed"
     assert owner.status(b)["status"] == "Approval pending"
     assert graph.node(cleanup_b)["task_state"] == "draft"
     assert ready(graph, cleanup_a, cleanup_b) == set()
 
-    # Match the staged Epic 0 shape on disposable Graph. The existing IDs
-    # and existing prerequisite survive adoption and stay blocked.
-    old_gate, old_cleanup = str(uuid4()), str(uuid4())
-    mutate(
-        graph,
-        create(old_gate, "task", "Existing approval"),
-        create(old_cleanup, "task", "Existing cleanup"),
-        {
-            "op": "add_edge",
-            "edge_type": "blocks",
-            "source": old_gate,
-            "target": old_cleanup,
-        },
-    )
-    adopted = registration(
-        graph,
-        "adoption",
-        {SERVICE: "legacy_flag"},
-        adopt={"approval": old_gate, "cleanup": old_cleanup},
-    )
-    adopted_id = owner.register(adopted)["registration"]
-    state = owner.status(adopted_id)
-    assert (state["approval"], state["cleanup"]) == (old_gate, old_cleanup)
-    assert graph.node(old_cleanup)["metadata"][META]["registration"] == adopted_id
-    assert ready(graph, old_cleanup) == set()
+    verify_adoption(graph, owner)
+
     print(
         "PASS: two independent epics, atomic owner release, closure evidence, restart replay and blocked adoption"
     )

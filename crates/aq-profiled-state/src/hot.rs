@@ -60,75 +60,72 @@ impl HotState {
         {
             return Err("hot state version or byte bound");
         }
-        if self.preparation_operation_id.is_some_and(|id| id.is_nil())
-            || self.cancellation_id.is_some_and(|id| id.is_nil())
-            || self.execution_deadline_ms == Some(0)
-            || self.owner.as_ref().is_some_and(|owner| {
-                owner.guardian_id.is_nil()
-                    || owner.launch_id.is_nil()
-                    || owner.reservation_id.is_nil()
-            })
-        {
+        self.validate_identity()?;
+        self.validate_grant(binding)?;
+        self.validate_status()?;
+        self.validate_receipts()
+    }
+    fn validate_identity(&self) -> Result<(), &'static str> {
+        let nil_operation = [self.preparation_operation_id, self.cancellation_id]
+            .into_iter()
+            .flatten()
+            .any(|id| id.is_nil());
+        let invalid_owner = self.owner.as_ref().is_some_and(LaunchOwner::has_nil_id);
+        let invalid_identity = nil_operation || invalid_owner;
+        if invalid_identity || self.execution_deadline_ms == Some(0) {
             return Err("hot identity or deadline");
         }
-        if let Some(grant) = &self.grant {
-            grant.validate().map_err(|_| "hot grant")?;
-            if &grant.binding != binding
-                || self.owner.is_none()
-                || self
-                    .execution_deadline_ms
-                    .is_none_or(|deadline| grant.expires_at_ms > deadline)
-            {
-                return Err("hot grant scope or ceiling");
+        Ok(())
+    }
+    fn validate_grant(&self, binding: &LaunchBinding) -> Result<(), &'static str> {
+        let Some(grant) = &self.grant else {
+            return Ok(());
+        };
+        grant.validate().map_err(|_| "hot grant")?;
+        let has_ceiling = self
+            .execution_deadline_ms
+            .is_some_and(|deadline| grant.expires_at_ms <= deadline);
+        let bound_to_owner = self.owner.is_some() && &grant.binding == binding;
+        if !bound_to_owner || !has_ceiling {
+            return Err("hot grant scope or ceiling");
+        }
+        Ok(())
+    }
+    fn validate_status(&self) -> Result<(), &'static str> {
+        match self.status {
+            Status::Granted if !self.has_live_owner_grant() => {
+                Err("granted hot state needs actual grant and owner")
             }
+            Status::NeverGranted if !self.has_no_grant_or_stop() => {
+                Err("never-granted is not physical stop proof")
+            }
+            _ if !self.owner_matches_status() => Err("inconsistent hot status and host owner"),
+            _ => Ok(()),
         }
-        if self.status == Status::Granted
-            && (self.grant.is_none()
-                || self.owner.is_none()
-                || self.revoked
-                || self.cancellation_id.is_some()
-                || self.stop.known_stopped())
-        {
-            return Err("granted hot state needs actual grant and owner");
+    }
+    fn has_live_owner_grant(&self) -> bool {
+        let cancelled = self.revoked || self.cancellation_id.is_some();
+        self.owner.is_some() && self.grant.is_some() && !cancelled && !self.stop.known_stopped()
+    }
+    fn has_no_grant_or_stop(&self) -> bool {
+        self.grant.is_none() && matches!(self.stop, Stop::Unknown)
+    }
+    fn owner_matches_status(&self) -> bool {
+        let has_owner = self.owner.is_some();
+        let stopped = self.stop.known_stopped();
+        match self.status {
+            Status::Offered => !has_owner && self.has_no_grant_or_stop(),
+            Status::Preparing => has_owner && self.has_no_grant_or_stop(),
+            Status::Finished => has_owner && stopped,
+            Status::Declined => has_owner && stopped && self.grant.is_none(),
+            _ => !stopped || has_owner,
         }
-        if self.status == Status::NeverGranted
-            && (self.grant.is_some() || !matches!(self.stop, Stop::Unknown))
-        {
-            return Err("never-granted is not physical stop proof");
-        }
-        if (self.status == Status::Offered
-            && (self.owner.is_some()
-                || self.grant.is_some()
-                || !matches!(self.stop, Stop::Unknown)))
-            || (self.status == Status::Preparing
-                && (self.owner.is_none()
-                    || self.grant.is_some()
-                    || !matches!(self.stop, Stop::Unknown)))
-            || (matches!(self.status, Status::Finished | Status::Declined)
-                && !self.stop.known_stopped())
-            || (self.status == Status::Declined && self.grant.is_some())
-            || (self.stop.known_stopped()
-                && (self.owner.is_none()
-                    || matches!(
-                        self.status,
-                        Status::Offered | Status::Preparing | Status::Granted
-                    )))
-        {
-            return Err("inconsistent hot status and host owner");
-        }
+    }
+    fn validate_receipts(&self) -> Result<(), &'static str> {
         for reference in [
-            match &self.stop {
-                Stop::NotStarted { receipt } | Stop::Stopped { receipt } => Some(receipt),
-                _ => None,
-            },
-            match &self.retention {
-                Retention::Retained { receipt } => Some(receipt),
-                _ => None,
-            },
-            match &self.effects {
-                Effects::Quiescent { receipt } => Some(receipt),
-                _ => None,
-            },
+            self.stop.receipt(),
+            self.retention.receipt(),
+            self.effects.receipt(),
         ]
         .into_iter()
         .flatten()
@@ -160,5 +157,13 @@ impl HotState {
                 Retention::NotRequired | Retention::Retained { .. }
             )
             && matches!(self.effects, Effects::Quiescent { .. })
+    }
+}
+
+impl LaunchOwner {
+    fn has_nil_id(&self) -> bool {
+        [self.guardian_id, self.launch_id, self.reservation_id]
+            .into_iter()
+            .any(|id| id.is_nil())
     }
 }

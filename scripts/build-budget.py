@@ -27,7 +27,6 @@ origin/main), the ceilings alone are checked.
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -49,15 +48,16 @@ def metadata(root=ROOT):
 def lib_lines(package):
     """Lines of .rs source under the lib target's directory, excluding other targets."""
     targets = package["targets"]
-    lib = next((t for t in targets if "lib" in t["kind"] or "proc-macro" in t["kind"]), None)
+    library_kinds = {"lib", "proc-macro"}
+    lib = next((t for t in targets if not library_kinds.isdisjoint(t["kind"])), None)
     if lib is None:
         return None
     src = Path(lib["src_path"]).parent
     others = {Path(t["src_path"]) for t in targets if t is not lib}
-    excluded_dirs = [src / "bin"]
+    binaries = src / "bin"
     total = 0
     for path in sorted(src.rglob("*.rs")):
-        if path in others or any(d in path.parents for d in excluded_dirs):
+        if path in others or binaries in path.parents:
             continue
         with open(path, "rb") as handle:
             total += sum(1 for _ in handle)
@@ -68,14 +68,7 @@ def measure(root=ROOT):
     meta = metadata(root)
     members = set(meta["workspace_members"])
     packages = [p for p in meta["packages"] if p["id"] in members]
-    test_binaries = sum(1 for p in packages for t in p["targets"] if "test" in t["kind"])
-    unbuilt = []
-    for package in packages:
-        tests = Path(package["manifest_path"]).parent / "tests"
-        targets = {Path(t["src_path"]).resolve() for t in package["targets"] if "test" in t["kind"]}
-        for path in sorted([*tests.glob("*.rs"), *tests.glob("*/main.rs")]):
-            if path.resolve() not in targets:
-                unbuilt.append(str(path.relative_to(root)))
+    test_binaries, unbuilt = measure_tests(packages, root)
     lines = {}
     for package in packages:
         count = lib_lines(package)
@@ -84,21 +77,40 @@ def measure(root=ROOT):
     return test_binaries, lines, unbuilt
 
 
+def measure_tests(packages, root):
+    count = 0
+    unbuilt = []
+    for package in packages:
+        tests = Path(package["manifest_path"]).parent / "tests"
+        declared = [target for target in package["targets"] if "test" in target["kind"]]
+        target_paths = {Path(target["src_path"]).resolve() for target in declared}
+        count += len(declared)
+        candidates = sorted([*tests.glob("*.rs"), *tests.glob("*/main.rs")])
+        unbuilt.extend(str(path.relative_to(root)) for path in candidates
+                       if path.resolve() not in target_paths)
+    return count, unbuilt
+
+
 def base_state(ref):
     """(test binaries, lib lines, budget) of `ref`, or None when the ref is missing."""
-    if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-                      cwd=ROOT, capture_output=True).returncode != 0:
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if resolved.returncode != 0:
         return None
     with tempfile.TemporaryDirectory(prefix="build-budget-base-") as tmp:
         tree = Path(tmp) / "base"
-        subprocess.run(["git", "worktree", "add", "--detach", "--quiet", str(tree), ref],
-                       cwd=ROOT, check=True, capture_output=True)
-        try:
-            test_binaries, lines, _ = measure(tree)
-            budget = tomllib.loads((tree / BUDGET.name).read_text())
-        finally:
-            subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
-                           cwd=ROOT, capture_output=True)
+        tree.mkdir()
+        # Give the base its own index and checkout directory for Cargo metadata.
+        checkout = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"),
+                        GIT_WORK_TREE=str(tree))
+        subprocess.run(["git", "read-tree", resolved.stdout.strip()],
+                       cwd=ROOT, env=checkout, check=True, capture_output=True)
+        subprocess.run(["git", "checkout-index", "--all", f"--prefix={tree}/"],
+                       cwd=ROOT, env=checkout, check=True, capture_output=True)
+        test_binaries, lines, _ = measure(tree)
+        budget = tomllib.loads((tree / BUDGET.name).read_text())
     return test_binaries, lines, budget
 
 
@@ -111,29 +123,18 @@ def allowed(base_count, ceiling, base_ceiling):
     return base_count
 
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="origin/main", help="ref to compare with (default origin/main)")
     if "--update" in sys.argv[1:]:
         print("build-budget: --update is gone: the check compares with origin/main, so a lower count "
               "needs no edit of build-budget.toml. Run the script without arguments.", file=sys.stderr)
-        return 2
-    args = parser.parse_args()
+        return None
+    return parser.parse_args()
 
-    budget = tomllib.loads(BUDGET.read_text())
-    test_budget = budget["test_binaries"]["max"]
-    line_target = budget["lib_lines"]["target"]
-    ratchets = budget["lib_lines"].get("ratchet", {})
-    test_binaries, lines, unbuilt = measure()
-    base = base_state(args.base)
-    if base is None:
-        print(f"build-budget: no {args.base}; checking the ceilings only")
-        base_tests, base_lines, base_budget = None, {}, {}
-    else:
-        base_tests, base_lines, base_budget = base
-        print(f"build-budget: comparing with {args.base}")
-    base_ratchets = base_budget.get("lib_lines", {}).get("ratchet", {})
 
+def check_tests(test_binaries, unbuilt, test_budget, base):
+    base_tests, _, base_budget = base
     errors = []
     test_limit = allowed(base_tests, test_budget, base_budget.get("test_binaries", {}).get("max"))
     print(f"build-budget: integration test binaries {test_binaries} (limit {test_limit}, ceiling {test_budget})")
@@ -147,27 +148,64 @@ def main():
         errors.append(
             f"{path} is not a test target, so it is never built or run (the crate sets "
             "autotests = false). Make it a module of an existing tests/<group>/main.rs.")
+    return errors
 
+
+def check_libraries(lines, budget, base, ref):
+    _, base_lines, base_budget = base
+    line_target = budget["target"]
+    ratchets = budget.get("ratchet", {})
+    base_ratchets = base_budget.get("lib_lines", {}).get("ratchet", {})
+    ratchet_context = f"on {ref} (target {line_target})"
+    errors = []
     for name, count in sorted(lines.items(), key=lambda item: -item[1]):
-        if name in ratchets:
-            limit = allowed(base_lines.get(name) if base is not None else None,
-                            ratchets[name], base_ratchets.get(name))
-            print(f"build-budget: {name} lib {count} lines (limit {limit}, ceiling {ratchets[name]}, target {line_target})")
-            if count > limit:
-                errors.append(
-                    f"{name} lib is {count} lines, more than {limit} on {args.base} (target "
-                    f"{line_target}). Move code out of the crate (or delete some) rather than "
-                    "raising its ceiling.")
+        ceiling = ratchets.get(name)
+        if ceiling is None:
+            error = check_line_target(name, count, line_target)
         else:
-            if count > line_target * 3 // 4:
-                print(f"build-budget: {name} lib {count} lines (target {line_target})")
-            if count > line_target:
-                errors.append(
-                    f"{name} lib is {count} lines, above the {line_target}-line target. "
-                    "Split it into smaller crates.")
+            limit = allowed(base_lines.get(name), ceiling, base_ratchets.get(name))
+            # An owner-granted allowance on main lets every pull request grow up to it.
+            limit = max(limit, budget.get("allowance", {}).get(name, 0))
+            print(f"build-budget: {name} lib {count} lines (limit {limit}, ceiling {ceiling}, target {line_target})")
+            error = ratchet_error(name, count, limit, ratchet_context)
+        if error:
+            errors.append(error)
     for name in sorted(set(ratchets) - set(lines)):
         print(f"build-budget: note: ratchet for {name} names no workspace lib; remove it.")
+    return errors
 
+
+def check_line_target(name, count, target):
+    if count > target * 3 // 4:
+        print(f"build-budget: {name} lib {count} lines (target {target})")
+    if count > target:
+        return (f"{name} lib is {count} lines, above the {target}-line target. "
+                "Split it into smaller crates.")
+    return None
+
+
+def ratchet_error(name, count, limit, context):
+    if count <= limit:
+        return None
+    return (f"{name} lib is {count} lines, more than {limit} {context}. "
+            "Move code out of the crate (or delete some) rather than raising its ceiling.")
+
+
+def main():
+    args = parse_args()
+    if args is None:
+        return 2
+    budget = tomllib.loads(BUDGET.read_text())
+    test_binaries, lines, unbuilt = measure()
+    base = base_state(args.base)
+    if base is None:
+        print(f"build-budget: no {args.base}; checking the ceilings only")
+        base = (None, {}, {})
+    else:
+        print(f"build-budget: comparing with {args.base}")
+
+    errors = check_tests(test_binaries, unbuilt, budget["test_binaries"]["max"], base)
+    errors.extend(check_libraries(lines, budget["lib_lines"], base, args.base))
     for error in errors:
         print(f"::error::build-budget: {error}" if os.environ.get("GITHUB_ACTIONS")
               else f"build-budget: error: {error}", file=sys.stderr)

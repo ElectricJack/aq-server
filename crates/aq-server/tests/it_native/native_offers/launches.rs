@@ -4,7 +4,7 @@
 //! notes, task and reporting, in that order. No offer needs a context fact, a
 //! pin or a measurement. The actual mounted poll, selection and publication
 //! run; the produced offer is checked by the worker's own validators.
-use crate::common::native_offer::{Case, poll, poll_offered, post, setup};
+use crate::common::native_offer::{Case, assembled, poll, poll_offered, post, setup};
 use crate::common::roles;
 use aq_admission::{
     control::{ControlReply, decode_reply},
@@ -53,7 +53,7 @@ async fn offered(c: &Case) -> NativeOffer {
     native
 }
 /// The startup text the offer delivers: the retained bytes of its payload.
-async fn startup_text(c: &Case, native: &NativeOffer) -> String {
+pub(super) async fn startup_text(c: &Case, native: &NativeOffer) -> String {
     let body: Vec<u8> = sqlx::query_scalar(
         "SELECT body FROM admission_artifacts WHERE descriptor#>>'{artifact,digest}'=$1 AND body IS NOT NULL LIMIT 1",
     )
@@ -156,13 +156,7 @@ async fn an_offer_delivers_the_observation_catalog_entry_as_a_module() {
     assert_eq!(retained.bytes, body.len() as u64);
 }
 
-/// An unrouted task with no role: the project's default role on the
-/// project's default level, the startup text in the spec's order, and what
-/// the attempt ran with on its record.
-#[tokio::test]
-async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_default_level() {
-    let c = setup().await;
-    let native = offered(&c).await;
+async fn assert_default_offer(c: &Case, native: &NativeOffer) {
     let manifest = &native.offered.offer.manifest;
     let digest = c.env.snapshot.digest();
     // The unchanged wire: role, level and execution profile by document id,
@@ -184,12 +178,12 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     assert_eq!(manifest.harness.harness.as_str(), roles::HARNESS);
     // The role's operations within the project's ceilings.
     assert_eq!(
-        operations(&native),
+        operations(native),
         ["task.read", "knowledge.read", "source.write"]
     );
     // Platform text first, then the role and its rules, then the task; each
     // joined to the next by one blank line and nothing else.
-    let text = startup_text(&c, &native).await;
+    let text = startup_text(c, native).await;
     let role = c.env.snapshot.role("developer").unwrap();
     let platform = aq_profiles::roles::platform_text(roles::ENVIRONMENT);
     let head = format!(
@@ -226,6 +220,17 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
             "{id}"
         );
     }
+}
+
+/// An unrouted task with no role: the project's default role on the
+/// project's default level, the startup text in the spec's order, and what
+/// the attempt ran with on its record.
+#[tokio::test]
+async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_default_level() {
+    let c = setup().await;
+    let native = offered(&c).await;
+    assert_default_offer(&c, &native).await;
+    let digest = c.env.snapshot.digest();
     // Spec 0014 §7.1: the summary is on the attempt's record and its snapshot is pinned.
     let attempt = native.offered.offer.binding.attempt_id;
     let summary = ran_with(&c, attempt).await.expect("a summary");
@@ -292,6 +297,55 @@ async fn an_unrouted_task_with_no_role_runs_as_the_project_default_on_the_defaul
     drop(conn);
     assert_eq!(ran_with(&c, attempt).await, None);
     assert!(pins(&c, attempt).await.is_empty());
+}
+
+/// A slot too small for the assembled offer: the task's work read names the
+/// node and the short memory with both values; the same refusal again writes
+/// nothing, and a slot that fits gets the offer and removes the reason.
+#[tokio::test]
+async fn an_offer_needing_more_memory_than_a_slot_names_memory_and_both_values() {
+    let mut c = setup().await;
+    let (pool, task) = (c.env.env.pool.clone(), c.env.lineage.task_id);
+    let fits = c.request.available.memory_bytes;
+    c.request.available.memory_bytes = 1;
+    let (status, page) = poll(&c).await;
+    assembled(&c).await;
+    let work = super::holds::full_work(&c, task).await;
+    let reasons = work["readiness"]["reasons"].as_array().unwrap();
+    let reason = (reasons.iter())
+        .find(|r| r["code"] == "slot_resources_short")
+        .unwrap_or_else(|| panic!("{status} {page} {work}"));
+    assert_eq!(reason["node_id"], c.request.identity.node_id.to_string());
+    assert_eq!(reason["available"]["memory_bytes"], 1);
+    let required = reason["required"]["memory_bytes"].as_u64().unwrap();
+    assert!(required > 1, "{reason}");
+    let message = reason["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "memory {:.1} GiB ({required} bytes) needed",
+            required as f64 / 1073741824.0
+        )) && message.contains("0.0 GiB (1 bytes) available"),
+        "{message}"
+    );
+    let row = "SELECT refusal::text,recorded_at_ms FROM task_offer_refusals WHERE task_id=$1";
+    let recorded = || {
+        sqlx::query_as::<_, (String, i64)>(row)
+            .bind(task)
+            .fetch_one(&pool)
+    };
+    let first = recorded().await.unwrap();
+    c.request.operation_id = Uuid::new_v4();
+    poll(&c).await;
+    assembled(&c).await;
+    assert_eq!(recorded().await.unwrap(), first);
+    c.request.available.memory_bytes = fits;
+    c.request.operation_id = Uuid::new_v4();
+    offered(&c).await;
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM task_offer_refusals")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
 }
 
 /// Spec 0014 §6.1: a task whose startup text is over the execution profile's

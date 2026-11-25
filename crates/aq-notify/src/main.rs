@@ -72,31 +72,37 @@ fn request<T: DeserializeOwned>(path: PathBuf) -> Result<T, &'static str> {
     }
     serde_json::from_slice(&bytes).map_err(|_| "invalid typed request JSON")
 }
+impl Args {
+    fn client(&self) -> Result<Client, String> {
+        let auth = if let Some(path) = &self.cf_access_token_file {
+            Authentication::CfAccessTokenFile(path.clone())
+        } else {
+            #[cfg(feature = "loopback-development")]
+            {
+                Authentication::LoopbackDevelopmentEmail(
+                    self.dev_email.clone().ok_or("authentication required")?,
+                )
+            }
+            #[cfg(not(feature = "loopback-development"))]
+            {
+                return Err("--cf-access-token-file is required".into());
+            }
+        };
+        Client::new(
+            &self.origin,
+            auth,
+            Limits {
+                max_request_bytes: 16384,
+                max_response_bytes: 524288,
+                timeout: Duration::from_secs(12),
+            },
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
 async fn run(args: Args) -> Result<Value, String> {
-    let auth = if let Some(path) = args.cf_access_token_file {
-        Authentication::CfAccessTokenFile(path)
-    } else {
-        #[cfg(feature = "loopback-development")]
-        {
-            Authentication::LoopbackDevelopmentEmail(
-                args.dev_email.ok_or("authentication required")?,
-            )
-        }
-        #[cfg(not(feature = "loopback-development"))]
-        {
-            return Err("--cf-access-token-file is required".into());
-        }
-    };
-    let client = Client::new(
-        &args.origin,
-        auth,
-        Limits {
-            max_request_bytes: 16384,
-            max_response_bytes: 524288,
-            timeout: Duration::from_secs(12),
-        },
-    )
-    .map_err(|e| e.to_string())?;
+    let client = args.client()?;
     let response = match args.command {
         Command::Inbox {
             recipient,

@@ -28,7 +28,7 @@ use crate::{
     },
 };
 use aq_admission::{ArtifactRef, Digest, LaunchBinding, Text, granted_closure};
-use aq_machine_control::lapse;
+use aq_machine_control::{closed_launch, lapse};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
@@ -58,7 +58,13 @@ pub(crate) fn reference(id: String, value: &impl Serialize) -> Result<ArtifactRe
     })
 }
 
-pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement, AppError> {
+/// With an owner's `attest`ation (`aq_machine_control::closed_launch`) a closure that does not
+/// prove nonstart settles too, when every condition of it holds under these locks.
+pub async fn settle(
+    state: &AppState,
+    attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
+) -> Result<ClosureSettlement, AppError> {
     let mut tx = state.store.pool.begin().await.map_err(database)?;
     for sql in [
         "SET LOCAL lock_timeout='500ms'",
@@ -78,6 +84,9 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     // has expired (`aq_machine_control::lapse`).
     let binding = match &closure {
         Some(closure) => closure.get("binding"),
+        None if attest.is_some() => {
+            return Ok(ClosureSettlement::Held(closed_launch::NOT_HOST_STOPPED));
+        }
         None => match lapse::pending(&mut tx, attempt).await.map_err(mapped)? {
             Some((binding, _)) => binding,
             None => return Ok(ClosureSettlement::Unchanged),
@@ -120,8 +129,12 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
         if request.binding != binding {
             return Err(AppError::Internal);
         }
-        if !request.evidence.proves_never_started() {
-            return Ok(ClosureSettlement::Held("closure_does_not_prove_nonstart"));
+        if attest.is_some() || !request.evidence.proves_never_started() {
+            let now = (state.clock)().timestamp_millis();
+            let checked = closed_launch::check(&mut tx, attempt, attest, now).await;
+            if let Err(code) = checked.map_err(mapped)? {
+                return Ok(ClosureSettlement::Held(code));
+            }
         }
     } else {
         // Sampled under the locks Started and renewal take: both refuse an expired grant, so
@@ -137,12 +150,19 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
             return Ok(ClosureSettlement::Unchanged);
         }
     }
+<<<<<<< HEAD
     if execution_history_present_locked(&mut tx, attempt).await? {
         return Ok(ClosureSettlement::Held("closure_has_execution_history"));
     }
     // Effects: no AQ-mediated effect may exist at all for a never-started launch.
     if agent_effects_present(&mut tx, attempt).await? {
         return Ok(ClosureSettlement::Held("closure_effects_present"));
+=======
+    // Neither execution history nor any AQ-mediated effect may exist for a never-started launch.
+    let used = closed_launch::used(&mut tx, attempt).await;
+    if let Some(code) = used.map_err(mapped)? {
+        return Ok(ClosureSettlement::Held(code));
+>>>>>>> refs/remotes/central/main
     }
     let source_receipt = source_receipt_locked(&mut tx, attempt).await?;
     let (operation, stop_receipt) =
@@ -173,6 +193,7 @@ pub async fn settle(state: &AppState, attempt: Uuid) -> Result<ClosureSettlement
     Ok(ClosureSettlement::Settled)
 }
 
+<<<<<<< HEAD
 async fn execution_history_present_locked(
     tx: &mut Transaction<'_, Postgres>,
     attempt: Uuid,
@@ -268,6 +289,8 @@ pub(crate) async fn agent_effects_present(
     Ok(operations != 0 || mailed)
 }
 
+=======
+>>>>>>> refs/remotes/central/main
 /// Settles a closed launch, then releases its task claim through B4 when B4
 /// admits a replacement: the claim of a never-started attempt is what keeps
 /// its node from re-registering (the incarnation guard only accepts stopped
@@ -277,9 +300,10 @@ pub(crate) async fn agent_effects_present(
 pub async fn settle_and_release(
     state: &AppState,
     attempt: Uuid,
+    attest: Option<&closed_launch::Attestation>,
 ) -> Result<ClosureSettlement, AppError> {
     use crate::profiled_execution::replacement::{self, Assessment};
-    let settled = settle(state, attempt).await?;
+    let settled = settle(state, attempt, attest).await?;
     if matches!(settled, ClosureSettlement::Held(_)) {
         return Ok(settled);
     }

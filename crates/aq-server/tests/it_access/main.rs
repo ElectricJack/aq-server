@@ -10,6 +10,7 @@ mod common;
 
 mod agent_access;
 mod agent_commands;
+mod agent_launch;
 mod agent_route_grants;
 mod agent_task_comments;
 mod graph_mutations;
@@ -27,3 +28,5 @@ mod scheduling_reads;
 mod stall_ladder;
 mod worker_api;
 mod worker_auth_context;
+#[cfg(feature = "project_environments")]
+mod worker_environments;

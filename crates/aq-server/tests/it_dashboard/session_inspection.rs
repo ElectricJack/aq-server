@@ -31,6 +31,13 @@ async fn access(
     tx.commit().await.unwrap();
     result
 }
+async fn assert_forbidden(f: &common::profiled::Fixture, pool: &PgPool, actor: Uuid) {
+    assert!(matches!(
+        access(f, pool, actor).await,
+        Err(AppError::Forbidden(_))
+    ));
+}
+
 async fn viewer(pool: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,$2,'viewer',now())")
@@ -96,10 +103,7 @@ async fn current_roles_exact_session_revocation_expiry_and_deletion_are_rechecke
     let pool = f.db.pool().await;
     let who = viewer(&pool).await;
     assert!(access(&f, &pool, f.actor).await.unwrap().owner);
-    assert!(matches!(
-        access(&f, &pool, who).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, who).await;
     grant(&pool, &f.profiled.offer.binding.session, who, NOW + 1000).await;
     let allowed = access(&f, &pool, who).await.unwrap();
     assert!(!allowed.owner);
@@ -107,16 +111,10 @@ async fn current_roles_exact_session_revocation_expiry_and_deletion_are_rechecke
     assert_eq!(allowed.valid_until_ms, NOW + 1000);
     let key = session_access::session_key(&f.profiled.offer.binding.session).unwrap();
     sqlx::query("UPDATE session_inspection_acl SET can_inspect=FALSE,revision=revision+1 WHERE session_key=$1 AND principal_id=$2").bind(&key).bind(who).execute(&pool).await.unwrap();
-    assert!(matches!(
-        access(&f, &pool, who).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, who).await;
     sqlx::query("UPDATE session_inspection_acl SET can_inspect=TRUE,revision=revision+1 WHERE session_key=$1 AND principal_id=$2").bind(&key).bind(who).execute(&pool).await.unwrap();
     f.time.store((NOW + 1000) as i64, Ordering::SeqCst);
-    assert!(matches!(
-        access(&f, &pool, who).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, who).await;
     f.time.store(NOW as i64, Ordering::SeqCst);
     sqlx::query("DELETE FROM session_inspection_acl WHERE principal_id=$1")
         .bind(who)
@@ -134,20 +132,14 @@ async fn current_roles_exact_session_revocation_expiry_and_deletion_are_rechecke
         .execute(&pool)
         .await
         .unwrap();
-    assert!(matches!(
-        access(&f, &pool, who).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, who).await;
     grant(&pool, &f.profiled.offer.binding.session, who, NOW + 1000).await;
     sqlx::query("DELETE FROM users WHERE id=$1")
         .bind(who)
         .execute(&pool)
         .await
         .unwrap();
-    assert!(matches!(
-        access(&f, &pool, who).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, who).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM session_inspection_acl WHERE principal_id=$1"
@@ -163,10 +155,7 @@ async fn current_roles_exact_session_revocation_expiry_and_deletion_are_rechecke
         .execute(&pool)
         .await
         .unwrap();
-    assert!(matches!(
-        access(&f, &pool, f.actor).await,
-        Err(AppError::Forbidden(_))
-    ));
+    assert_forbidden(&f, &pool, f.actor).await;
 }
 #[tokio::test]
 async fn every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_authorize() {
@@ -197,10 +186,7 @@ async fn every_remote_tuple_field_is_in_scope_and_corrupt_acl_body_cannot_author
         }
         assert_ne!(key, session_access::session_key(&other).unwrap());
         grant(&pool, &other, who, NOW + 1000).await;
-        assert!(matches!(
-            access(&f, &pool, who).await,
-            Err(AppError::Forbidden(_))
-        ));
+        assert_forbidden(&f, &pool, who).await;
     }
     let mut foreign = exact.clone();
     if let SessionIdentity::Remote { session_id, .. } = &mut foreign {

@@ -28,7 +28,7 @@ impl InternalWork {
             let (pool, at_ms) = (notify_pool.clone(), notify_now() as u64);
             Box::pin(async move {
                 let sent = system_message(&pool, project, &body, at_ms).await;
-                sent.map(drop).map_err(|e| format!("{e:?}"))
+                sent.map_err(|e| format!("{e:?}"))
             })
         });
         let service = Service::new(pool, now, config, registry)?.notify_supervisor(notify);
