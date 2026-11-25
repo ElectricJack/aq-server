@@ -189,23 +189,27 @@ class Fleet:
                 raise ValueError('retained supervisor has unexpected durable mounts')
         return mounts
 
+    def login_mounts(self):
+        """Describe each login once for both creation and retained-container checks."""
+        yield '/login', 'volume', self.login_volume, True
+        if self.claude_dir:
+            yield CLAUDE_LOGIN, 'bind', str(self.claude_dir), False
+        else:
+            yield CLAUDE_LOGIN, 'volume', self.claude_volume, False
+
     def matches_deployment(self, record, mounts):
         if record['Image'] != self.image:
             return False
-        login = mounts.get('/login')
-        if self.login_volume is None:
-            if login is not None:
+        for target, kind, source, writable in self.login_mounts():
+            mount = mounts.get(target)
+            if source is None:
+                if mount is not None:
+                    return False
+                continue
+            key = 'Name' if kind == 'volume' else 'Source'
+            if not mount or (mount.get('Type'), mount.get(key), mount.get('RW')) != (kind, source, writable):
                 return False
-        elif login is None or login.get('Name') != self.login_volume or login.get('Type') != 'volume' or not login.get('RW'):
-            return False
-        claude = mounts.get(CLAUDE_LOGIN)
-        if self.claude_volume:
-            return (claude is not None and claude['Type'] == 'volume' and not claude['RW']
-                    and claude['Name'] == self.claude_volume)
-        if self.claude_dir is None:
-            return claude is None
-        return (claude is not None and claude['Type'] == 'bind' and not claude['RW']
-                and claude['Source'] == str(self.claude_dir))
+        return True
 
     def ensure(self, scope):
         name = self.scope_name(scope)
@@ -290,12 +294,12 @@ class Fleet:
                '--mount', 'type=volume,src=' + volume + ',dst=/state',
                '--mount', 'type=volume,src=' + name + '-workspace,dst=/workspace',
                '--log-opt', 'max-size=2m', '--log-opt', 'max-file=2']
-        if self.login_volume:
-            cmd.extend(['--mount', 'type=volume,src=' + self.login_volume + ',dst=/login'])
         if self.claude_dir or self.claude_volume:
             self.validate_claude_login()
-            mount = f'type=volume,src={self.claude_volume}' if self.claude_volume else f'type=bind,src={self.claude_dir}'
-            cmd.extend(['--mount', f'{mount},dst={CLAUDE_LOGIN},readonly'])
+        for target, kind, source, writable in self.login_mounts():
+            if source is not None:
+                mount = f'type={kind},src={source},dst={target}'
+                cmd.extend(['--mount', mount if writable else mount + ',readonly'])
         run(cmd + [self.image, 'serve', '/state/service.json'])
         self.initialize(name, scope, self.container(name))
         print('Created supervisor: ' + scope, flush=True)
