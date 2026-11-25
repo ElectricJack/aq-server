@@ -11,9 +11,10 @@ pub(super) async fn evidence(
     let task = result.spec.task.task_id;
     let attempt = result.report.binding.attempt_id;
     let report = result.report.report_id;
-    if !aq_machine_control::owner_retry::authorized(tx, owner_operation, task, attempt)
-        .await
-        .map_err(db)?
+    if !result.report.pending_effect_ids.is_empty()
+        || !aq_machine_control::owner_retry::authorized(tx, owner_operation, task, attempt)
+            .await
+            .map_err(db)?
     {
         return Ok(None);
     }
