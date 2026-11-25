@@ -11,6 +11,48 @@ pub(super) struct WaitEnv {
     pub(super) binding: wire::Binding,
 }
 impl WaitEnv {
+    async fn approve_decision(&self) {
+        let f = &self.env.f;
+        Box::pin(self.env.service.resolve(
+            f.actor,
+            &aq_review_protocol::ResolveRequest {
+                schema_version: 1,
+                operation_id: Uuid::new_v4(),
+                decision_id: self.decision_id,
+                expected_decision_revision: 1,
+                choice: aq_review_protocol::Choice::Approve,
+                comment: Some("Synthetic".into()),
+            },
+        ))
+        .await
+        .unwrap();
+    }
+    async fn inspect_outcome(&self, wait: &wire::RegisteredWait) -> wire::WaitOutcome {
+        let inspect = wire::Request::seal(
+            Uuid::new_v4(),
+            wire::Command::Inspect(wire::InspectRequest {
+                scope: self.scope.clone(),
+                target: wire::InspectTarget::Wait {
+                    wait: wait.wait.clone(),
+                },
+                page: wire::PageRequest {
+                    limit: 1,
+                    cursor: None,
+                },
+            }),
+        )
+        .unwrap();
+        let page = waits::inspect(&self.env.f.state, self.node(), self.attempt(), &inspect)
+            .await
+            .unwrap();
+        let wire::ResponseBody::Inspection(page) = page.body else {
+            panic!("expected inspection page");
+        };
+        let [wire::InspectionItem::Wait(view)] = page.items.as_slice() else {
+            panic!("expected one wait view");
+        };
+        view.outcome.clone().expect("recorded outcome")
+    }
     pub(super) fn node(&self) -> Uuid {
         self.env.f.node.node_id
     }
@@ -173,19 +215,7 @@ async fn wait_on_decision_wakes_once_after_resolution() {
         .unwrap();
     assert_eq!(phase, "pending");
 
-    Box::pin(w.env.service.resolve(
-        f.actor,
-        &aq_review_protocol::ResolveRequest {
-            schema_version: 1,
-            operation_id: Uuid::new_v4(),
-            decision_id: w.decision_id,
-            expected_decision_revision: 1,
-            choice: aq_review_protocol::Choice::Approve,
-            comment: Some("Synthetic".into()),
-        },
-    ))
-    .await
-    .unwrap();
+    w.approve_decision().await;
     f.time.store((NOW + 61_000) as i64, Ordering::SeqCst);
     // Duplicate reconciliation records exactly one outcome and one intent.
     waits::reconcile_due(&f.state, 64).await.unwrap();
@@ -206,30 +236,7 @@ async fn wait_on_decision_wakes_once_after_resolution() {
             .unwrap();
     assert_eq!(intents, ["ready"]);
 
-    let inspect = wire::Request::seal(
-        Uuid::new_v4(),
-        wire::Command::Inspect(wire::InspectRequest {
-            scope: w.scope.clone(),
-            target: wire::InspectTarget::Wait {
-                wait: wait.wait.clone(),
-            },
-            page: wire::PageRequest {
-                limit: 1,
-                cursor: None,
-            },
-        }),
-    )
-    .unwrap();
-    let page = waits::inspect(&f.state, w.node(), w.attempt(), &inspect)
-        .await
-        .unwrap();
-    let wire::ResponseBody::Inspection(page) = page.body else {
-        panic!("expected inspection page");
-    };
-    let [wire::InspectionItem::Wait(view)] = page.items.as_slice() else {
-        panic!("expected one wait view");
-    };
-    let outcome = view.outcome.clone().expect("recorded outcome");
+    let outcome = w.inspect_outcome(&wait).await;
     assert_eq!(outcome.kind, wire::WaitOutcomeKind::Satisfied);
 
     let ack = |admission_id: Uuid, generation: u64| {
@@ -514,19 +521,7 @@ mod hibernation {
 
         // Resolve the wait so its resume intent is ready.
         let f = &w.env.f;
-        Box::pin(w.env.service.resolve(
-            f.actor,
-            &aq_review_protocol::ResolveRequest {
-                schema_version: 1,
-                operation_id: Uuid::new_v4(),
-                decision_id: w.decision_id,
-                expected_decision_revision: 1,
-                choice: aq_review_protocol::Choice::Approve,
-                comment: Some("Synthetic".into()),
-            },
-        ))
-        .await
-        .unwrap();
+        w.approve_decision().await;
         f.time.store((NOW + 61_000) as i64, Ordering::SeqCst);
         waits::reconcile_due(&f.state, 64).await.unwrap();
 
