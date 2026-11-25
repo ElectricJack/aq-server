@@ -1,7 +1,7 @@
 use super::*;
 use aq_delivery::{
     offer_source::read,
-    source_checks::{Repository, commit_matches, resolve_ref},
+    source_checks::{Repository, commit_matches, resolve_ref, retention_holds},
 };
 
 pub(super) async fn select(
@@ -17,7 +17,7 @@ pub(super) async fn select(
         .bind(home).bind(task).bind(target_id).bind(revision as i64).fetch_optional(&s.store.pool).await.map_err(db)?;
     let commit = match previous {
         Some(oid) => oid,
-        None => configured_head(s, target).await?,
+        None => configured_head(s, target, task).await?,
     };
     let pin = SourcePin {
         project_id: target_id,
@@ -30,14 +30,22 @@ pub(super) async fn select(
     pin.validate(target).map_err(conflict)?;
     Ok(pin)
 }
-async fn configured_head(s: &AppState, target: &ProjectRecord) -> Result<String> {
-    let missing = || conflict("workspace target configured source is unavailable");
-    let cfg = s.config.profiled_execution.as_ref().ok_or_else(missing)?;
+fn unavailable() -> AppError {
+    conflict("workspace target configured source is unavailable")
+}
+
+async fn configured_head(s: &AppState, target: &ProjectRecord, task: Uuid) -> Result<String> {
+    let cfg = s
+        .config
+        .profiled_execution
+        .as_ref()
+        .ok_or_else(unavailable)?;
+    let project = target.binding.project_id;
     let policy = cfg
-        .project_policy_record(target.binding.project_id)
-        .map_err(|_| missing())?;
+        .project_policy_record(project)
+        .map_err(|_| unavailable())?;
     if !policy.enabled {
-        return Err(missing());
+        return Err(unavailable());
     }
     let repo = Repository {
         id: target.binding.repository_id,
@@ -46,29 +54,76 @@ async fn configured_head(s: &AppState, target: &ProjectRecord) -> Result<String>
     let socket = &s
         .source_retention
         .as_ref()
-        .ok_or_else(missing)?
+        .ok_or_else(unavailable)?
         .config
         .git_socket;
-    let oid = match policy.source {
-        aq_admission::SourceSelection::Immutable { object } => object.hex,
+    let (oid, handle) = match policy.source {
+        aq_admission::SourceSelection::Immutable { object } => {
+            (object.hex, policy.retention_handle)
+        }
         aq_admission::SourceSelection::NamedRef { reference } => {
-            let observation = read(
+            named_head(
+                s,
                 socket,
                 repo,
-                "repo.observation",
-                json!({"refs":[reference.as_str()],"max_age_ms":30000}),
-            )
-            .await
-            .map_err(|_| missing())?;
-            resolve_ref(
-                &observation,
+                project,
+                task,
                 reference.as_str(),
-                repo.generation,
-                (s.clock)().timestamp_millis().max(0) as u64,
+                policy.retention_handle,
             )
-            .ok_or_else(missing)?
+            .await?
         }
     };
+    verify(socket, repo, &oid, handle).await?;
+    Ok(oid)
+}
+
+async fn named_head(
+    s: &AppState,
+    socket: &std::path::Path,
+    repo: Repository,
+    project: Uuid,
+    _task: Uuid,
+    reference: &str,
+    configured_handle: Uuid,
+) -> Result<(String, Uuid)> {
+    let now = || (s.clock)().timestamp_millis().max(0) as u64;
+    #[cfg(feature = "delivery_playbook")]
+    if crate::profiled_execution::delivery_enrolled(s, project, _task) {
+        use aq_delivery::main_sync::{MainFollower, Scope};
+        let scope = Scope::new(project, repo.id, repo.generation, reference);
+        let current = MainFollower::new(&s.store.pool, socket, now)
+            .current(&scope)
+            .await
+            .map_err(|_| unavailable())?;
+        return Ok((current.head, current.retention_handle));
+    }
+    if let Some(published) = crate::profiled_execution::settlement::publication::current_head(
+        &s.store.pool,
+        project,
+        repo.id,
+        repo.generation,
+        reference,
+    )
+    .await
+    .map_err(|_| unavailable())?
+    {
+        return Ok((published.oid, published.retention_handle));
+    }
+    let observation = read(
+        socket,
+        repo,
+        "repo.observation",
+        json!({"refs":[reference],"max_age_ms":30000}),
+    )
+    .await
+    .map_err(|_| unavailable())?;
+    let oid =
+        resolve_ref(&observation, reference, repo.generation, now()).ok_or_else(unavailable)?;
+    Ok((oid, configured_handle))
+}
+
+async fn verify(socket: &std::path::Path, repo: Repository, oid: &str, handle: Uuid) -> Result<()> {
     let inspection = read(
         socket,
         repo,
@@ -76,9 +131,20 @@ async fn configured_head(s: &AppState, target: &ProjectRecord) -> Result<String>
         json!({"oid":{"algorithm":"sha1","hex":oid}}),
     )
     .await
-    .map_err(|_| missing())?;
-    if !commit_matches(&inspection, &oid) {
-        return Err(missing());
+    .map_err(|_| unavailable())?;
+    if !commit_matches(&inspection, oid) {
+        return Err(unavailable());
     }
-    Ok(oid)
+    let retention = read(
+        socket,
+        repo,
+        "retention.inspect",
+        json!({"handle_id":handle,"limit":1}),
+    )
+    .await
+    .map_err(|_| unavailable())?;
+    if !retention_holds(&retention, handle, repo, oid) {
+        return Err(unavailable());
+    }
+    Ok(())
 }
