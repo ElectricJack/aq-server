@@ -51,6 +51,75 @@ pub struct Saved {
     pub cases: Value,
 }
 
+const DOES_NOT_CHECK: &str = "The playbook the agent saved does not pass the server's check of it.";
+
+fn seal(draft: &Value, inputs: &Inputs) -> Result<Artifact, Refusal> {
+    let record = &inputs.record;
+    let catalog = request::catalog_for(record, &inputs.catalog).map_err(|e| {
+        Refusal::new(
+            "The server's own description of this source names a command or event it does not have.",
+            e.to_string(),
+        )
+    })?;
+    let ws = draft::Workspace {
+        markdown: inputs.markdown.clone(),
+        record: request::engine_record(record, &inputs.facts_version),
+        catalog: catalog.clone(),
+        facts: inputs.facts.clone(),
+        draft: draft.clone(),
+    };
+    let artifact =
+        draft::seal(&ws).map_err(|faults| Refusal::new(DOES_NOT_CHECK, first(&faults)))?;
+    artifact
+        .verify()
+        .map_err(|e| Refusal::new(DOES_NOT_CHECK, e.to_string()))?;
+    verify_contract(&artifact, &catalog, inputs)?;
+    Ok(artifact)
+}
+
+fn verify_contract(
+    artifact: &Artifact,
+    catalog: &Registry,
+    inputs: &Inputs,
+) -> Result<(), Refusal> {
+    let record = &inputs.record;
+    let content = &artifact.content;
+    let pinned = (content.registry.commands.iter())
+        .all(|(name, c)| catalog.commands.get(name) == Some(c))
+        && (content.registry.events.iter()).all(|(name, e)| catalog.events.get(name) == Some(e));
+    if !pinned {
+        return Err(Refusal::new(
+            DOES_NOT_CHECK,
+            "a contract is not the pinned catalog's",
+        ));
+    }
+    let identity_matches =
+        content.playbook.id == record.binding && content.source.header.id == record.binding;
+    let scope_matches = content.playbook.scope == record.scope && content.dependencies.is_empty();
+    if !identity_matches || !scope_matches {
+        return Err(Refusal::new(
+            DOES_NOT_CHECK,
+            "identity, scope or dependencies differ from the record",
+        ));
+    }
+    verify_capabilities(artifact, inputs)
+}
+
+fn verify_capabilities(artifact: &Artifact, inputs: &Inputs) -> Result<(), Refusal> {
+    let record = &inputs.record;
+    let needed = &artifact.content.playbook.required_capabilities;
+    let missing: Vec<&String> = (needed.iter())
+        .filter(|c| !record.capabilities.contains(*c) || !inputs.grant_capabilities.contains(*c))
+        .collect();
+    if !missing.is_empty() {
+        return Err(Refusal::new(
+            "The playbook the agent saved needs an ability this source has not been given.",
+            format!("capabilities not granted: {missing:?}"),
+        ));
+    }
+    Ok(())
+}
+
 fn first(faults: &[Diagnostic]) -> String {
     let texts: Vec<String> = (faults.iter().take(5))
         .map(|d| format!("{} at {}: {}", d.code, d.path, d.message))
@@ -66,56 +135,7 @@ pub fn check_saved(
     inputs: &Inputs,
     config: &Config,
 ) -> Result<Saved, Refusal> {
-    let record = &inputs.record;
-    let catalog = request::catalog_for(record, &inputs.catalog).map_err(|e| {
-        Refusal::new(
-            "The server's own description of this source names a command or event it does not have.",
-            e.to_string(),
-        )
-    })?;
-    let ws = draft::Workspace {
-        markdown: inputs.markdown.clone(),
-        record: request::engine_record(record, &inputs.facts_version),
-        catalog: catalog.clone(),
-        facts: inputs.facts.clone(),
-        draft: draft.clone(),
-    };
-    let does_not_check = "The playbook the agent saved does not pass the server's check of it.";
-    let artifact =
-        draft::seal(&ws).map_err(|faults| Refusal::new(does_not_check, first(&faults)))?;
-    artifact
-        .verify()
-        .map_err(|e| Refusal::new(does_not_check, e.to_string()))?;
-    let content = &artifact.content;
-    let pinned = (content.registry.commands.iter())
-        .all(|(name, c)| catalog.commands.get(name) == Some(c))
-        && (content.registry.events.iter()).all(|(name, e)| catalog.events.get(name) == Some(e));
-    if !pinned {
-        return Err(Refusal::new(
-            does_not_check,
-            "a contract is not the pinned catalog's",
-        ));
-    }
-    if content.playbook.id != record.binding
-        || content.source.header.id != record.binding
-        || content.playbook.scope != record.scope
-        || !content.dependencies.is_empty()
-    {
-        return Err(Refusal::new(
-            does_not_check,
-            "identity, scope or dependencies differ from the record",
-        ));
-    }
-    let needed = &content.playbook.required_capabilities;
-    let missing: Vec<&String> = (needed.iter())
-        .filter(|c| !record.capabilities.contains(*c) || !inputs.grant_capabilities.contains(*c))
-        .collect();
-    if !missing.is_empty() {
-        return Err(Refusal::new(
-            "The playbook the agent saved needs an ability this source has not been given.",
-            format!("capabilities not granted: {missing:?}"),
-        ));
-    }
+    let artifact = seal(draft, inputs)?;
     let reports = run_cases(&artifact, cases, config.case_transitions).map_err(|e| {
         Refusal::new(
             "The example situations saved with the playbook could not be run.",

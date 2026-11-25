@@ -80,42 +80,106 @@ pub struct Register {
     pub adopt: Adopt,
 }
 
+/// Authenticated owner, project binding and Graph mutation identity.
+#[derive(Clone, Copy)]
+pub struct Scope<'a> {
+    pub workspace: Uuid,
+    pub actor: Uuid,
+    pub project: Uuid,
+    pub service: &'a str,
+}
+
+struct AdoptedDraft {
+    version: u64,
+    metadata: serde_json::Map<String, Value>,
+}
+
+impl Adopt {
+    fn blocker(&self, edge: &Value) -> bool {
+        edge["edge_type"] == "blocks"
+            && edge["source"] == json!(self.approval)
+            && edge["target"] == json!(self.cleanup)
+    }
+    fn cleanup_has_parent(&self, epic: Uuid, approval: &Value, cleanup: &Value) -> Option<bool> {
+        let approval_edges = approval["edges"].as_array()?;
+        let cleanup_edges = cleanup["edges"].as_array()?;
+        let has_blocker = |edges: &[Value]| edges.iter().any(|e| self.blocker(e));
+        if !has_blocker(approval_edges) || !has_blocker(cleanup_edges) {
+            return None;
+        }
+        if approval_edges.iter().any(|e| {
+            matches!(e["edge_type"].as_str(), Some("blocks" | "parent-child")) && !self.blocker(e)
+        }) {
+            return None;
+        }
+        self.parent_edge(epic, cleanup_edges)
+    }
+    fn parent_edge(&self, epic: Uuid, cleanup_edges: &[Value]) -> Option<bool> {
+        let mut has_parent = false;
+        for edge in cleanup_edges
+            .iter()
+            .filter(|e| e["target"] == json!(self.cleanup))
+        {
+            match edge["edge_type"].as_str() {
+                Some("parent-child") if edge["source"] == json!(epic) => has_parent = true,
+                Some("parent-child") => return None,
+                Some("blocks") if !self.blocker(edge) => return None,
+                _ => (),
+            }
+        }
+        Some(has_parent)
+    }
+}
+fn part(s: &str) -> bool {
+    !matches!(s, "" | "." | "..")
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+fn repository(s: &str) -> bool {
+    s.len() <= 96
+        && s.split_once('/')
+            .is_some_and(|(owner, name)| part(owner) && part(name))
+}
+fn flag(s: &str) -> bool {
+    (1..=128).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+}
+fn is_draft(context: &Value, id: Uuid) -> bool {
+    let node = &context["node"];
+    context["truncated"] == false && node["id"] == json!(id) && node["task_state"] == "draft"
+}
 impl Register {
     pub fn valid(&self) -> bool {
+        let generation = self.generation > 0 && !self.ordinary_default;
+        let behavior = (1..=4096).contains(&self.permanent_behavior.len())
+            && !self.permanent_behavior.trim().is_empty()
+            && !self.permanent_behavior.contains('\0');
+        !self.operation_id.is_nil()
+            && generation
+            && self.valid_ids()
+            && behavior
+            && self.valid_repositories()
+    }
+
+    fn valid_ids(&self) -> bool {
         let ids = [
             self.project_id,
             self.epic_id,
             self.adopt.approval,
             self.adopt.cleanup,
         ];
-        !self.operation_id.is_nil()
-            && self.generation > 0
-            && !self.ordinary_default
-            && ids
-                .iter()
-                .enumerate()
-                .all(|(i, id)| !id.is_nil() && !ids[..i].contains(id))
-            && (1..=32).contains(&self.repositories.len())
-            && self.repositories.iter().all(|(repo, flag)| {
-                repo.len() <= 96
-                    && repo.split_once('/').is_some_and(|(owner, name)| {
-                        [owner, name].iter().all(|part| {
-                            !matches!(*part, "" | "." | "..")
-                                && part
-                                    .bytes()
-                                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-                        })
-                    })
-                    && (1..=128).contains(&flag.len())
-                    && flag
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-            })
-            && (1..=4096).contains(&self.permanent_behavior.len())
-            && !self.permanent_behavior.trim().is_empty()
-            && !self.permanent_behavior.contains('\0')
+        ids.iter()
+            .enumerate()
+            .all(|(i, id)| !id.is_nil() && !ids[..i].contains(id))
     }
-
+    fn valid_repositories(&self) -> bool {
+        (1..=32).contains(&self.repositories.len())
+            && self
+                .repositories
+                .iter()
+                .all(|(repo, f)| repository(repo) && flag(f))
+    }
     pub fn id(&self, workspace: Uuid) -> Uuid {
         Uuid::new_v5(
             &workspace,
@@ -127,69 +191,46 @@ impl Register {
         )
     }
 
+    fn draft(&self, at: Scope<'_>, context: &Value, id: Uuid) -> Option<AdoptedDraft> {
+        let node = &context["node"];
+        let metadata = node["metadata"].as_object()?;
+        let draft = is_draft(context, id);
+        let owner = metadata.get("aq:human_actor_id") == Some(&json!(at.actor))
+            && metadata.get("aq:project_id") == Some(&json!(self.project_id));
+        let original = node["verification"] == "unverified" && node["created_by"] == at.service;
+        let adoptable = draft && original && owner && !metadata.contains_key(META);
+        if !adoptable {
+            return None;
+        }
+        Some(AdoptedDraft {
+            version: node["version"].as_u64()?,
+            metadata: metadata.clone(),
+        })
+    }
+
     pub fn plan(
         &self,
-        workspace: Uuid,
-        actor: Uuid,
-        service: &str,
+        at: Scope<'_>,
         epic: &Value,
-        approval: &Value,
-        cleanup: &Value,
+        [approval, cleanup]: [&Value; 2],
     ) -> Option<Vec<Value>> {
-        let registration = self.id(workspace);
+        let open = matches!(epic["task_state"].as_str(), Some("draft" | "active"));
+        let project_epic = epic["id"] == json!(self.epic_id)
+            && epic["metadata"]["aq:project_id"] == json!(self.project_id);
+        if !open || !project_epic {
+            return None;
+        }
+        let has_parent = self
+            .adopt
+            .cleanup_has_parent(self.epic_id, approval, cleanup)?;
+        let approval_version = self.draft(at, approval, self.adopt.approval)?.version;
+        let AdoptedDraft {
+            version: cleanup_version,
+            metadata: mut cleanup_meta,
+        } = self.draft(at, cleanup, self.adopt.cleanup)?;
+        let actor = at.actor;
+        let registration = self.id(at.workspace);
         let closure = Uuid::new_v5(&registration, b"closure-gate");
-        if epic["id"] != json!(self.epic_id)
-            || epic["metadata"]["aq:project_id"] != json!(self.project_id)
-            || !matches!(epic["task_state"].as_str(), Some("draft" | "active"))
-        {
-            return None;
-        }
-        let approval_edges = approval["edges"].as_array()?;
-        let cleanup_edges = cleanup["edges"].as_array()?;
-        let blocker = |edge: &Value| {
-            edge["edge_type"] == "blocks"
-                && edge["source"] == json!(self.adopt.approval)
-                && edge["target"] == json!(self.adopt.cleanup)
-        };
-        if !approval_edges.iter().any(blocker)
-            || !cleanup_edges.iter().any(blocker)
-            || approval_edges.iter().any(|edge| {
-                matches!(edge["edge_type"].as_str(), Some("blocks" | "parent-child"))
-                    && !blocker(edge)
-            })
-        {
-            return None;
-        }
-        let mut has_parent = false;
-        for edge in cleanup_edges
-            .iter()
-            .filter(|edge| edge["target"] == json!(self.adopt.cleanup))
-        {
-            match edge["edge_type"].as_str() {
-                Some("parent-child") if edge["source"] == json!(self.epic_id) => has_parent = true,
-                Some("parent-child") => return None,
-                Some("blocks") if !blocker(edge) => return None,
-                _ => (),
-            }
-        }
-        let draft = |context: &Value, id: Uuid| {
-            let node = &context["node"];
-            let metadata = node["metadata"].as_object()?;
-            if context["truncated"] != false
-                || node["id"] != json!(id)
-                || node["task_state"] != "draft"
-                || node["verification"] != "unverified"
-                || node["created_by"] != service
-                || metadata.get("aq:human_actor_id") != Some(&json!(actor))
-                || metadata.get("aq:project_id") != Some(&json!(self.project_id))
-                || metadata.contains_key(META)
-            {
-                return None;
-            }
-            Some((node["version"].as_u64()?, metadata.clone()))
-        };
-        let (approval_version, _) = draft(approval, self.adopt.approval)?;
-        let (cleanup_version, mut cleanup_meta) = draft(cleanup, self.adopt.cleanup)?;
         cleanup_meta.insert(
             META.into(),
             json!({"registration":registration,"role":"cleanup"}),

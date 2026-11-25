@@ -142,22 +142,60 @@ fn check_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+impl Document {
+    fn profile_ids(&self) -> impl Iterator<Item = &String> {
+        self.default_profile_id
+            .iter()
+            .chain(self.overrides.values())
+    }
+
+    fn check_levels(&self, levels: &BTreeSet<String>) -> Result<()> {
+        if let Some(id) = self.profile_ids().find(|id| !levels.contains(*id)) {
+            return Err(invalid(&format!(
+                "Choose an Intelligence profile that exists: there is no level {id:?}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl SaveRequest {
+    fn expected(&self) -> Result<i64> {
+        let expected: i64 = self
+            .expected_revision
+            .parse()
+            .map_err(|_| invalid("Invalid settings revision"))?;
+        if !(0..i64::MAX).contains(&expected) || self.operation_id.is_nil() {
+            return Err(invalid("Invalid save identity or revision"));
+        }
+        self.document
+            .profile_ids()
+            .try_for_each(|id| check_id(id))?;
+        Ok(expected)
+    }
+}
+
+async fn prior_save(
+    tx: &mut sqlx::PgConnection,
+    actor: Uuid,
+    operation: Uuid,
+    digest: &str,
+) -> Result<Option<Value>> {
+    let previous = sqlx::query("SELECT payload_digest,response FROM internal_work_settings_operations WHERE actor_id=$1 AND operation_id=$2")
+        .bind(actor).bind(operation).fetch_optional(tx).await?;
+    previous
+        .map(|row| {
+            if row.get::<String, _>("payload_digest") == digest {
+                Ok(row.get("response"))
+            } else {
+                Err(conflict("Save identity was reused with different changes"))
+            }
+        })
+        .transpose()
+}
+
 pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value> {
-    let expected: i64 = req
-        .expected_revision
-        .parse()
-        .map_err(|_| invalid("Invalid settings revision"))?;
-    if expected < 0 || expected == i64::MAX || req.operation_id.is_nil() {
-        return Err(invalid("Invalid save identity or revision"));
-    }
-    for id in req
-        .document
-        .default_profile_id
-        .iter()
-        .chain(req.document.overrides.values())
-    {
-        check_id(id)?;
-    }
+    let expected = req.expected()?;
     let digest = aq_profiles::digest(&value(&req)?).map_err(|_| Error::Corrupt)?;
     // Read before the transaction: a level deleted after this check is
     // reported on read and its purpose falls back to the default.
@@ -174,12 +212,7 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
     )
     .fetch_one(&mut *tx)
     .await?;
-    if let Some(previous) = sqlx::query("SELECT payload_digest,response FROM internal_work_settings_operations WHERE actor_id=$1 AND operation_id=$2")
-        .bind(actor).bind(req.operation_id).fetch_optional(&mut *tx).await? {
-        if previous.get::<String, _>("payload_digest") != digest {
-            return Err(conflict("Save identity was reused with different changes"));
-        }
-        let response = previous.get("response");
+    if let Some(response) = prior_save(&mut tx, actor, req.operation_id, &digest).await? {
         tx.commit().await?;
         return Ok(response);
     }
@@ -188,18 +221,7 @@ pub async fn save(pool: &PgPool, actor: Uuid, req: SaveRequest) -> Result<Value>
             "Internal work settings changed. Your draft is preserved; reload before saving",
         ));
     }
-    for id in req
-        .document
-        .default_profile_id
-        .iter()
-        .chain(req.document.overrides.values())
-    {
-        if !ids.contains(id) {
-            return Err(invalid(&format!(
-                "Choose an Intelligence profile that exists: there is no level {id:?}"
-            )));
-        }
-    }
+    req.document.check_levels(&ids)?;
     let changed = req.document != decode(&row)?;
     let revision = if changed { expected + 1 } else { expected };
     sqlx::query("UPDATE internal_work_settings SET revision=$1,document=$2 WHERE singleton")

@@ -194,9 +194,9 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let node = f.node.node_id;
     // The level a manual session and the supervisor choose from: one
     // candidate per logged-in harness.
-    let level = |rows: &str| {
+    let level = |id: &str, rows: &str| {
         format!(
-            "---\nid: manual-model\nname: Standard\ndescription: Manual fixture level.\n---\n\
+            "---\nid: {id}\nname: Standard\ndescription: Manual fixture level.\n---\n\
              ## Candidates\n| provider | model | reasoning | harnesses |\n|---|---|---|---|\n{rows}"
         )
     };
@@ -215,7 +215,15 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(&format!("{claude_row}{codex_row}")),
+        &level("manual-model", &format!("{claude_row}{codex_row}")),
+    )
+    .await;
+    common::roles::save(
+        &pool,
+        f.actor,
+        Kind::Intelligence,
+        "default-codex",
+        &level("default-codex", "| openai | gpt-test | default | codex |\n"),
     )
     .await;
     let snapshot_digest = common::roles::active(&pool).await.digest().to_owned();
@@ -228,16 +236,52 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
     let worker = build_worker_router(f.state.clone());
     let (status, fleet) = call(&admin, "/api/supervisors", None, None, false).await;
     assert_eq!(status, StatusCode::OK, "{fleet}");
+    let profiles = fleet["profiles"].as_array().unwrap();
+    let offered: Vec<_> = profiles
+        .iter()
+        .filter(|p| p["profile_id"] == "manual-model")
+        .map(|p| p["candidate_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        offered,
+        ["anthropic:fixture-model:medium", "openai:gpt-test:high"]
+    );
+    assert!(profiles.iter().all(|p| p["profile_id"] != "default-codex"));
     let scopes = fleet["supervisors"].as_array().unwrap();
     let project_scope = scopes
         .iter()
         .find(|s| s["project_id"] == project.to_string())
         .unwrap();
     let conversation = project_scope["id"].as_str().unwrap();
-    assert_ne!(
-        conversation,
-        scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+    let global = scopes.iter().find(|s| s["project_id"].is_null()).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(conversation, global);
+    let global_uri = format!("/api/supervisors/{global}/control");
+    let unsupported = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"default-codex","candidate_id":"openai:gpt-test:default"}});
+    assert_eq!(
+        call(&admin, &global_uri, Some(unsupported), None, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
     );
+    let claude = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium"}});
+    let (status, saved) = call(&admin, &global_uri, Some(claude), None, true).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["profile"],
+        json!({"profile_id":"manual-model","candidate_id":"anthropic:fixture-model:medium","name":"Standard","provider":"anthropic","model":"fixture-model","reasoning":"medium","harness":"claude"})
+    );
+    let (_, updated) = call(&admin, "/api/supervisors", None, None, false).await;
+    let stored_global = updated["supervisors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == global)
+        .unwrap();
+    assert_eq!(stored_global["enabled"], true);
+    assert_eq!(stored_global["profile"], saved["profile"]);
+    assert!(stored_global.get("unavailable_reason").is_none());
     let uri = format!("/api/supervisors/{conversation}/control");
     let control = json!({"operation_id":Uuid::new_v4(),"expected_revision":0,"enabled":true,"intelligence_profile":{"profile_id":"manual-model","candidate_id":"openai:gpt-test:high"}});
     assert_eq!(
@@ -290,7 +334,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(claude_row),
+        &level("manual-model", claude_row),
     )
     .await;
     let unlisted = read().await;
@@ -314,7 +358,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(&format!("{claude_row}{codex_row}")),
+        &level("manual-model", &format!("{claude_row}{codex_row}")),
     )
     .await;
     assert!(read().await.get("unavailable_reason").is_none());
@@ -498,7 +542,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         f.actor,
         Kind::Intelligence,
         "manual-model",
-        &level(claude_row),
+        &level("manual-model", claude_row),
     )
     .await;
     assert_eq!(

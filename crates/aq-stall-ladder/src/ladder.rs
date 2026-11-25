@@ -219,6 +219,17 @@ pub fn step(
         }
         _ => {}
     }
+    observe_progress(&mut ep, evidence, now);
+    if let Some(explanation) = evidence.explanation {
+        let intent = explain(&mut ep, explanation, now);
+        return (ep, intent);
+    }
+    ep.incident_open = false;
+    let intent = quiet_step(&mut ep, evidence, policy, now);
+    (ep, intent)
+}
+
+fn observe_progress(ep: &mut Episode, evidence: &Evidence, now: u64) {
     // Progress opens a new interval; per-episode and lineage ceilings persist.
     if let Some(progress) = evidence.last_progress_ms
         && progress > ep.interval_started_ms
@@ -228,56 +239,72 @@ pub fn step(
         ep.incident_open = false;
         ep.enter(Rung::Observing, now);
     }
-    if let Some(explanation) = evidence.explanation {
-        ep.explained_through_ms = Some(now);
-        if explanation == Explanation::ObservationsUnavailable && !ep.incident_open {
-            ep.incident_open = true;
-            ep.incidents += 1;
-            let ordinal = ep.incidents;
-            return (ep, Some(Intent::MonitoringIncident { ordinal }));
-        }
-        return (ep, None);
+}
+
+fn explain(ep: &mut Episode, explanation: Explanation, now: u64) -> Option<Intent> {
+    ep.explained_through_ms = Some(now);
+    if explanation == Explanation::ObservationsUnavailable && !ep.incident_open {
+        ep.incident_open = true;
+        ep.incidents += 1;
+        let ordinal = ep.incidents;
+        return Some(Intent::MonitoringIncident { ordinal });
     }
-    ep.incident_open = false;
+    None
+}
+
+fn quiet_step(
+    ep: &mut Episode,
+    evidence: &Evidence,
+    policy: &ExecutionPolicy,
+    now: u64,
+) -> Option<Intent> {
     let quiet = now.saturating_sub(ep.quiet_since());
     if quiet < policy.evidence_window_ms {
         ep.enter(Rung::Observing, now);
-        return (ep, None);
+        return None;
     }
     if ep.rung == Rung::Observing {
         ep.enter(Rung::Suspected, now);
-        return (ep, None);
+        return None;
     }
     if ep.rung == Rung::Suspected && now - ep.rung_since_ms < policy.grace_ms {
-        return (ep, None);
+        return None;
     }
     if ep.rung == Rung::Notified {
         let intent = (now - ep.rung_since_ms >= policy.notify_grace_ms).then_some(Intent::Stop);
-        return (ep, intent);
+        return intent;
     }
+    nudge_or_notify(ep, evidence.input, policy, now)
+}
+
+fn nudge_or_notify(
+    ep: &mut Episode,
+    input: InputState,
+    policy: &ExecutionPolicy,
+    now: u64,
+) -> Option<Intent> {
     let escalate = ep.nudges >= policy.nudge_limit || ep.deferrals >= policy.max_deferrals;
     if !escalate {
         let due = ep.last_nudge_ms.is_none_or(|last| {
             let backoff = policy.nudge_backoff_ms << ep.nudges.saturating_sub(1).min(16);
             now - last >= backoff
         });
-        let intent = due.then(|| Intent::Nudge {
+        return due.then(|| Intent::Nudge {
             ordinal: ep.nudges + 1,
-            defer: evidence.input != InputState::Ready,
+            defer: input != InputState::Ready,
         });
-        return (ep, intent);
     }
     if ep
         .last_nudge_ms
         .is_some_and(|last| now - last < policy.nudge_backoff_ms)
     {
-        return (ep, None);
+        return None;
     }
     if ep.notified {
         ep.enter(Rung::Notified, now);
-        return (ep, None);
+        return None;
     }
-    (ep, Some(Intent::Notify))
+    Some(Intent::Notify)
 }
 
 fn stopping(

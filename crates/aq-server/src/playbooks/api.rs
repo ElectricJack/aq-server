@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
+mod artifacts;
+
 struct Budget {
     work: Semaphore,
     control: Semaphore,
@@ -59,15 +61,18 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
             "/api/playbooks/admissions/{id}/retry",
             post(retry_admission),
         )
-        .route("/api/playbooks/events/{id}/retry", post(retry_event))
-        .route("/api/playbooks/events/{id}/hold", post(retry_event))
+        .route(
+            "/api/playbooks/events/{id}/retry",
+            post(retry_event::<false>),
+        )
+        .route("/api/playbooks/events/{id}/hold", post(retry_event::<true>))
         .route("/api/playbooks/drive", post(drive))
         .route("/api/playbooks/recover", post(recover))
         .route("/api/playbooks/runs/{id}/cancel", post(cancel))
         .route("/api/playbooks/runs/{id}", get(inspect_run))
         .route("/api/playbooks/stop", post(stop))
         .layer(DefaultBodyLimit::max(65536))
-        .merge(artifact_routes())
+        .merge(artifacts::routes())
         .layer(Extension(driver.clone()))
         .layer(middleware::from_fn_with_state(
             Arc::new(Budget {
@@ -79,11 +84,11 @@ pub fn routes(driver: Arc<Driver>) -> Router<AppState> {
         // Inspection reads have their own queued gate, not the work budget.
         .merge(super::inspection::routes(driver))
 }
-fn owner(driver: &Driver, id: Uuid) -> Result<()> {
+fn owner(driver: &Driver, id: Uuid) -> Result<&Driver> {
     if driver.service.namespace.owner_user_id != id {
         return Err(Error::Forbidden);
     }
-    Ok(())
+    Ok(driver)
 }
 
 async fn decisions(
@@ -155,13 +160,6 @@ async fn answer_decision(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GrantRequest {
-    grant_id: Uuid,
-    scope: GrantScope,
-    expires_at_ms: i64,
-}
 async fn status(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
@@ -184,11 +182,17 @@ async fn binding(
 async fn grant(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
-    Json(r): Json<GrantRequest>,
+    Json(r): Json<grants::GrantRequest>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
     d.service
-        .grant(user.id, r.grant_id, r.scope, r.expires_at_ms)
+        .grant_for(
+            user.id,
+            r.grant_id,
+            r.scope,
+            r.expires_at_ms,
+            r.resume_delivery_operation_id,
+        )
         .await?;
     Ok(Json(
         json!({"grant_id":r.grant_id,"disposition":"retained"}),
@@ -200,8 +204,7 @@ async fn revoke(
     Path(id): Path<Uuid>,
     Json(_): Json<Empty>,
 ) -> Result<Json<Value>> {
-    owner(&d, user.id)?;
-    d.service.revoke(user.id, id).await?;
+    owner(&d, user.id)?.service.revoke(user.id, id).await?;
     Ok(Json(json!({"grant_id":id,"disposition":"revoked"})))
 }
 async fn prepare(
@@ -246,18 +249,16 @@ async fn retry_admission(
     }
     Ok(Json(status))
 }
-async fn retry_event(
+async fn retry_event<const HOLD: bool>(
     RequireOwner(user): RequireOwner,
     Extension(d): Extension<Arc<Driver>>,
     Path(id): Path<Uuid>,
-    uri: axum::http::Uri,
     Json(_): Json<Empty>,
 ) -> Result<Json<Value>> {
     owner(&d, user.id)?;
-    let hold = uri.path().ends_with("/hold");
-    d.service.retry_event(user.id, id, hold).await?;
+    d.service.retry_event(user.id, id, HOLD).await?;
     Ok(Json(
-        json!({"event_id":id,"disposition":if hold {"held"} else {"pending"}}),
+        json!({"event_id":id,"disposition":if HOLD {"held"} else {"pending"}}),
     ))
 }
 async fn drive(
@@ -282,8 +283,7 @@ async fn cancel(
     Path(id): Path<String>,
     Json(_): Json<Empty>,
 ) -> Result<impl IntoResponse> {
-    owner(&d, user.id)?;
-    d.cancel_run(id).await?;
+    owner(&d, user.id)?.cancel_run(id).await?;
     Ok(Json(json!({"disposition":"requested"})))
 }
 async fn stop(
@@ -332,6 +332,7 @@ async fn inspect_run(
     owner(&d, user.id)?;
     Ok(Json(d.inspect_run(id).await?))
 }
+<<<<<<< HEAD
 
 /// D9 artifact routes. Artifacts are sent as JSON and re-encoded canonically;
 /// the digest check then proves the bytes are the sealed, immutable artifact.
@@ -524,3 +525,5 @@ mod tests {
         }
     }
 }
+=======
+>>>>>>> refs/remotes/central/main

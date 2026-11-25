@@ -267,14 +267,9 @@ async fn locked(
         {
             return Err(refused());
         }
-        resolver::fence_for_grant_replay(
-            state,
-            tx,
-            &decision,
-            &request.binding,
-            grant.body.grant.grant_id,
-        )
-        .await?;
+        resolver::Reservation::grant_replay(&request.binding, grant.body.grant.grant_id)
+            .fence(state, tx, &decision)
+            .await?;
         view.active_at(now(state)?)?;
     } else {
         if hot.status != Status::Preparing

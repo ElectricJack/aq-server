@@ -79,17 +79,73 @@ class Stack:
             return [f"remote check not queued: {status} {json.dumps(value)[:200]}"]
         for _ in range(60):
             time.sleep(5)
-            jobs = self.get("/api/worker-diagnostics")
-            rows = jobs.get("items") or jobs.get("jobs") or jobs.get("data") or []
-            row = next((r for r in rows if r.get("id") == operation or r.get("operation_id") == operation), None)
-            if row and row.get("status") in ("completed", "failed"):
-                worker = (row.get("result") or {}).get("details", {}).get("worker", {})
-                head = {k: worker.get(k) for k in ("active", "version", "measurement", "missing")}
-                return [json.dumps(head)] + [line for line in worker.get("log", [])[-14:]]
+            row = completed_diagnostic(self.get("/api/worker-diagnostics"), operation)
+            if row:
+                return diagnostic_lines(row)
         return ["remote check did not answer in 5 minutes"]
 
 
-def main():
+def completed_diagnostic(jobs, operation):
+    rows = jobs.get("items") or jobs.get("jobs") or jobs.get("data") or []
+    row = next((item for item in rows if operation in (item.get("id"), item.get("operation_id"))), None)
+    if row and row.get("status") in ("completed", "failed"):
+        return row
+    return None
+
+
+def diagnostic_lines(row):
+    worker = (row.get("result") or {}).get("details", {}).get("worker", {})
+    head = {field: worker.get(field) for field in ("active", "version", "measurement", "missing")}
+    return [json.dumps(head), *worker.get("log", [])[-14:]]
+
+
+def runtime_state(work):
+    execution = work.get("execution") or {}
+    readiness = work.get("readiness") or {}
+    return (execution.get("status"), readiness.get("state")), execution.get("attempt_id"), readiness
+
+
+def result_for_task(feed, task):
+    items = (feed.get("data") or feed).get("items", [])
+    return next((item for item in items if item.get("result", {}).get("task_id") == task), None)
+
+
+def poll(fetch, complete, seconds, interval):
+    deadline = time.time() + seconds
+    while True:
+        value = fetch()
+        if complete(value):
+            return True, value
+        if time.time() > deadline:
+            return False, value
+        time.sleep(interval)
+
+
+class AttemptProgress:
+    def __init__(self):
+        self.state = None
+        self.attempts = set()
+
+    def observe(self, work):
+        now, attempt, readiness = runtime_state(work)
+        if attempt:
+            self.attempts.add(attempt)
+        if now != self.state:
+            reasons = [reason.get("code") for reason in readiness.get("reasons", [])]
+            say(f"execution={now[0]} readiness={now[1]} {reasons}")
+            self.state = now
+        status = now[0]
+        if status == "finished":
+            return True
+        if len(self.attempts) > 1 or status in ("failed", "cancelling", "cancelled"):
+            raise RuntimeError(f"the attempt did not finish (attempts so far: {len(self.attempts)}, status {status})")
+        return False
+
+
+def say(text):
+    print(f"{time.strftime('%H:%M:%S', time.gmtime())} {text}", flush=True)
+
+def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--api", default="http://127.0.0.1:28080")
     parser.add_argument("--machine", required=True, help="machine id from the Swarm page, e.g. desktop")
@@ -99,115 +155,136 @@ def main():
     parser.add_argument("--body", help="replace the task's instructions")
     parser.add_argument("--timeout", type=int, default=900, help="seconds to wait for the attempt to finish")
     parser.add_argument("--keep", action="store_true", help="do not cancel the task afterwards")
-    args = parser.parse_args()
-    stack = Stack(args.api)
+    return parser.parse_args()
 
+
+class Probe:
+    def __init__(self, stack, args):
+        self.stack = stack
+        self.args = args
+
+    def create_task(self, name, body):
+        revision = self.stack.get(f"/api/human/projects/{self.args.project}/tasks")["project"]["revision"]
+        created = self.stack.action("task.create", {"type": "project", "id": self.args.project, "revision": revision}, {
+            "expected_project_revision": revision, "title": f"Queued work check ({self.args.note}) on {self.args.machine}",
+            "body": body, "acceptance_criteria": f"{name} exists with that one line and nothing else changed.",
+            "labels": ["e2e"], "task_state": "active"}, {"project": revision})
+        return next(e["id"] for e in created["affected_entities"] if e["type"] == "task")
+
+    def await_route(self, task):
+        def routing():
+            return self.stack.work(self.args.project, task).get("routing") or {}
+
+        routed, state = poll(routing, self.check_route, 240, 4)
+        if not routed:
+            raise RuntimeError(f"not routed in 4 minutes: {json.dumps(state)[:200]}")
+
+    def check_route(self, state):
+        phase = state.get("state")
+        if phase == "unrouted" and state.get("unrouted"):
+            raise RuntimeError(f"left unrouted: {json.dumps(state)[:300]}")
+        if phase != "routed":
+            return False
+        route = state["route"]
+        say(f"routed: {route.get('class')} harnesses={route.get('harnesses')} prefer={route.get('prefer')}")
+        expected = self.args.expect_class
+        if expected and route.get("class") != expected:
+            raise RuntimeError(f"routed to {route.get('class')}, expected {expected}")
+        return True
+
+    def await_attempt(self, task):
+        progress = AttemptProgress()
+        finished, _ = poll(
+            lambda: self.stack.work(self.args.project, task),
+            progress.observe, self.args.timeout, 5,
+        )
+        if not finished:
+            raise RuntimeError(f"not finished in {self.args.timeout}s; last {progress.state}")
+
+    def await_result(self, task):
+        observed, found = poll(
+            lambda: result_for_task(self.stack.get("/api/v1/results"), task),
+            bool, 180, 5,
+        )
+        if not observed:
+            raise RuntimeError("the attempt finished but no result reached the server in 3 minutes")
+        revision = found.get("revision", {})
+        say(f"result: outcome={revision.get('process_outcome')} acceptance={found['assessment'].get('acceptance')}: {str(revision.get('summary'))[:600]}")
+        if revision.get("process_outcome") != "success":
+            raise RuntimeError("the result's process outcome is not success")
+
+    def diagnose(self):
+        try:
+            waiting = self.stack.get("/api/v1/swarm")["data"]["waiting"].get("reasons", [])
+            for reason in waiting:
+                say(f"  swarm: {reason.get('code')}: {reason.get('message')}")
+            say(f"  worker on {self.args.machine}:")
+            for line in self.stack.worker_log(self.args.machine):
+                print("    " + line[:700], flush=True)
+        except Exception as inner:  # noqa: BLE001
+            say(f"  (no worker log: {inner})")
+
+    def restore(self, task, others):
+        try:
+            if task and not self.args.keep:
+                version = self.stack.work(self.args.project, task)["version"]
+                self.stack.action("task.cancel", {"type": "task", "id": task, "revision": version},
+                             {"project_id": self.args.project, "expected_version": version}, {"task": version})
+        except Exception as error:  # noqa: BLE001
+            say(f"cleanup: task not cancelled: {error}")
+        for other in others:
+            try:
+                self.stack.set_machine(other, "worker.start")
+            except Exception as error:  # noqa: BLE001
+                say(f"cleanup: {other} not restarted: {error}")
+
+
+def task_definition(args):
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    name = f"notes/{args.note}-{args.machine}-{stamp}.md"
+    body = args.body or (f"In the repository, create the file {name} containing exactly one line: "
+                         f"Queued work check on {args.machine}, {stamp}. Do not change any other file and do not build anything.")
+    return name, body
+
+
+def main():
+    args = parse_args()
+    stack = Stack(args.api)
+    probe = Probe(stack, args)
     machines = stack.machines()
     if args.machine not in [m["id"] for m in machines]:
         print(f"no machine {args.machine}; have {[m['id'] for m in machines]}", file=sys.stderr)
         return 2
     routing = stack.get("/api/settings/routing")["enabled"]
     others = [m["id"] for m in machines if m["id"] != args.machine and m["control"]["desired"] == "running"]
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    name = f"notes/{args.note}-{args.machine}-{stamp}.md"
-    body = args.body or (f"In the repository, create the file {name} containing exactly one line: "
-                         f"Queued work check on {args.machine}, {stamp}. Do not change any other file and do not build anything.")
-    task, failed, step = None, None, "setup"
-
-    def say(text):
-        print(f"{time.strftime('%H:%M:%S', time.gmtime())} {text}", flush=True)
+    name, body = task_definition(args)
+    task, step = None, "setup"
 
     try:
         for other in others:
             stack.set_machine(other, "worker.drain")
         say(f"routing {'on' if routing else 'off'}; target {args.machine}; drained {others or 'nothing'}")
         step = "create"
-        revision = stack.get(f"/api/human/projects/{args.project}/tasks")["project"]["revision"]
-        created = stack.action("task.create", {"type": "project", "id": args.project, "revision": revision}, {
-            "expected_project_revision": revision, "title": f"Queued work check ({args.note}) on {args.machine}",
-            "body": body, "acceptance_criteria": f"{name} exists with that one line and nothing else changed.",
-            "labels": ["e2e"], "task_state": "active"}, {"project": revision})
-        task = next(e["id"] for e in created["affected_entities"] if e["type"] == "task")
+        task = probe.create_task(name, body)
         say(f"task {task}")
 
         if routing:
             step = "route"
-            deadline = time.time() + 240
-            while True:
-                state = stack.work(args.project, task).get("routing") or {}
-                if state.get("state") == "routed":
-                    route = state["route"]
-                    say(f"routed: {route.get('class')} harnesses={route.get('harnesses')} prefer={route.get('prefer')}")
-                    if args.expect_class and route.get("class") != args.expect_class:
-                        raise RuntimeError(f"routed to {route.get('class')}, expected {args.expect_class}")
-                    break
-                if state.get("state") == "unrouted" and state.get("unrouted"):
-                    raise RuntimeError(f"left unrouted: {json.dumps(state)[:300]}")
-                if time.time() > deadline:
-                    raise RuntimeError(f"not routed in 4 minutes: {json.dumps(state)[:200]}")
-                time.sleep(4)
+            probe.await_route(task)
 
         step = "run"
-        seen, deadline, attempts = None, time.time() + args.timeout, set()
-        while True:
-            work = stack.work(args.project, task)
-            execution, readiness = work.get("execution") or {}, work.get("readiness") or {}
-            now = (execution.get("status"), readiness.get("state"))
-            if execution.get("attempt_id"):
-                attempts.add(execution["attempt_id"])
-            if now != seen:
-                say(f"execution={now[0]} readiness={now[1]} {[r.get('code') for r in readiness.get('reasons', [])]}")
-                seen = now
-            if now[0] == "finished":
-                break
-            if len(attempts) > 1 or now[0] in ("failed", "cancelling", "cancelled"):
-                raise RuntimeError(f"the attempt did not finish (attempts so far: {len(attempts)}, status {now[0]})")
-            if time.time() > deadline:
-                raise RuntimeError(f"not finished in {args.timeout}s; last {now}")
-            time.sleep(5)
+        probe.await_attempt(task)
         # The worker uploads its result after it stops; cancelling before that refuses the upload.
         step = "result"
-        deadline = time.time() + 180
-        while True:
-            feed = stack.get("/api/v1/results")
-            items = (feed.get("data") or feed).get("items", [])
-            found = next((i for i in items if i.get("result", {}).get("task_id") == task), None)
-            if found:
-                revision = found.get("revision", {})
-                say(f"result: outcome={revision.get('process_outcome')} acceptance={found['assessment'].get('acceptance')}: {str(revision.get('summary'))[:600]}")
-                if revision.get("process_outcome") != "success":
-                    raise RuntimeError("the result's process outcome is not success")
-                break
-            if time.time() > deadline:
-                raise RuntimeError("the attempt finished but no result reached the server in 3 minutes")
-            time.sleep(5)
+        probe.await_result(task)
         say("PASSED: the task was placed, launched and finished with a result on " + args.machine)
     except Exception as error:  # noqa: BLE001 - every failure is reported the same way
-        failed = f"{step}: {error}"
-        say("FAILED at " + failed)
-        try:
-            waiting = stack.get("/api/v1/swarm")["data"]["waiting"].get("reasons", [])
-            for reason in waiting:
-                say(f"  swarm: {reason.get('code')}: {reason.get('message')}")
-            say(f"  worker on {args.machine}:")
-            for line in stack.worker_log(args.machine):
-                print("    " + line[:700], flush=True)
-        except Exception as inner:  # noqa: BLE001
-            say(f"  (no worker log: {inner})")
+        say(f"FAILED at {step}: {error}")
+        probe.diagnose()
+        return 1
     finally:
-        try:
-            if task and not args.keep:
-                version = stack.work(args.project, task)["version"]
-                stack.action("task.cancel", {"type": "task", "id": task, "revision": version},
-                             {"project_id": args.project, "expected_version": version}, {"task": version})
-        except Exception as error:  # noqa: BLE001
-            say(f"cleanup: task not cancelled: {error}")
-        for other in others:
-            try:
-                stack.set_machine(other, "worker.start")
-            except Exception as error:  # noqa: BLE001
-                say(f"cleanup: {other} not restarted: {error}")
-    return 1 if failed else 0
+        probe.restore(task, others)
+    return 0
 
 
 if __name__ == "__main__":

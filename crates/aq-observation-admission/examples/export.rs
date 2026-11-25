@@ -4,8 +4,7 @@ use uuid::Uuid;
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
-fn main() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts");
+fn fixture() -> serde_json::Value {
     let mut access = Access {
         node_id: id(1),
         boot_id: id(2),
@@ -22,7 +21,9 @@ fn main() {
             store_id: id(4),
         },
     };
-    let prepared = apply(None, None, &p, &access, Some(id(5))).unwrap().reply;
+    let prepared = apply(Retained::new(None, None), &p, &access, Some(id(5)))
+        .unwrap()
+        .reply;
     let a = Request {
         version: VERSION,
         operation_id: id(6),
@@ -31,9 +32,14 @@ fn main() {
             marker: prepared.current_owner.marker.clone(),
         },
     };
-    let active = apply(Some(&prepared.current_owner), None, &a, &access, None)
-        .unwrap()
-        .reply;
+    let active = apply(
+        Retained::new(Some(&prepared.current_owner), None),
+        &a,
+        &access,
+        None,
+    )
+    .unwrap()
+    .reply;
     access.boot_id = id(7);
     let b = Request {
         version: VERSION,
@@ -47,22 +53,29 @@ fn main() {
             next_sequence: 12,
         },
     };
-    let boot = apply(Some(&active.current_owner), None, &b, &access, None)
-        .unwrap()
-        .reply;
+    let boot = apply(
+        Retained::new(Some(&active.current_owner), None),
+        &b,
+        &access,
+        None,
+    )
+    .unwrap()
+    .reply;
     let replay = apply(
-        Some(&boot.current_owner),
-        Some(&prepared.receipt),
+        Retained::new(Some(&boot.current_owner), Some(&prepared.receipt)),
         &p,
         &access,
         None,
     )
     .unwrap()
     .reply;
-    let fixture = json!({"provenance":"synthetic contract fixture; no execution/source/harness authority","pairs":[{"request":p,"reply":prepared},{"request":a,"reply":active},{"request":b,"reply":boot},{"request":p,"reply":replay}],"status":Status{version:VERSION,node_id:id(1),admitted_node_boot_id:id(7),owner:Some(boot.current_owner),accepted_through:0}});
+    json!({"provenance":"synthetic contract fixture; no execution/source/harness authority","pairs":[{"request":p,"reply":prepared},{"request":a,"reply":active},{"request":b,"reply":boot},{"request":p,"reply":replay}],"status":Status{version:VERSION,node_id:id(1),admitted_node_boot_id:id(7),owner:Some(boot.current_owner),accepted_through:0}})
+}
+fn main() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts");
     std::fs::write(
         root.join("transport.fixture.json"),
-        format!("{}\n", serde_json::to_string_pretty(&fixture).unwrap()),
+        format!("{}\n", serde_json::to_string_pretty(&fixture()).unwrap()),
     )
     .unwrap();
     std::fs::write(

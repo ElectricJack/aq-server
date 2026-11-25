@@ -65,41 +65,23 @@ impl ObservationLimits {
     /// Whether a node with `sources` in use and `retained` bytes may enroll
     /// one more source of `bytes`; `Err` is the refusal the caller reports.
     pub fn admit_source(&self, sources: i64, retained: i64, bytes: i64) -> Result<(), String> {
-        admit(
+        Increase::new(sources, 1).admit(
             "sources",
             "max_sources_per_node",
-            sources,
-            1,
             self.max_sources_per_node,
         )?;
-        self.admit_bytes(retained, bytes)
+        self.admit_bytes(Increase::new(retained, bytes))
     }
-    /// Whether a node with `events` and `retained` bytes may record a batch
-    /// of `adding` events and `bytes`.
-    pub fn admit_events(
-        &self,
-        events: i64,
-        adding: i64,
-        retained: i64,
-        bytes: i64,
-    ) -> Result<(), String> {
-        admit(
-            "events",
-            "max_events_per_node",
-            events,
-            adding,
-            self.max_events_per_node,
-        )?;
-        self.admit_bytes(retained, bytes)
+    /// Check the node's new event count and retained bytes together.
+    pub fn admit_events(&self, events: Increase, bytes: Increase) -> Result<(), String> {
+        events.admit("events", "max_events_per_node", self.max_events_per_node)?;
+        self.admit_bytes(bytes)
     }
-    fn admit_bytes(&self, retained: i64, bytes: i64) -> Result<(), String> {
-        let limit = self.max_retained_bytes_per_node;
-        admit(
+    fn admit_bytes(&self, bytes: Increase) -> Result<(), String> {
+        bytes.admit(
             "retained bytes",
             "max_retained_bytes_per_node",
-            retained,
-            bytes,
-            limit,
+            self.max_retained_bytes_per_node,
         )
     }
     /// The refusal of a read that would summarize more calls than allowed.
@@ -111,16 +93,26 @@ impl ObservationLimits {
     }
 }
 /// The refusal names the use, the limit and the Setting that holds it.
-fn admit(what: &str, setting: &str, used: i64, adding: i64, limit: u64) -> Result<(), String> {
-    if used
-        .checked_add(adding)
-        .is_some_and(|total| u64::try_from(total).is_ok_and(|total| total <= limit))
-    {
-        return Ok(());
+pub struct Increase {
+    used: i64,
+    adding: i64,
+}
+impl Increase {
+    pub fn new(used: i64, adding: i64) -> Self {
+        Self { used, adding }
     }
-    Err(format!(
-        "node observation limit reached: {used} {what} in use and {adding} more would pass the limit of {limit} (Settings, observation-limits, {setting})"
-    ))
+    fn admit(self, what: &str, setting: &str, limit: u64) -> Result<(), String> {
+        let Self { used, adding } = self;
+        if used
+            .checked_add(adding)
+            .is_some_and(|total| u64::try_from(total).is_ok_and(|total| total <= limit))
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "node observation limit reached: {used} {what} in use and {adding} more would pass the limit of {limit} (Settings, observation-limits, {setting})"
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -160,7 +152,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(limits.admit_source(1, 90, 10), Ok(()));
-        assert_eq!(limits.admit_events(3, 1, 0, 100), Ok(()));
+        assert_eq!(
+            limits.admit_events(Increase::new(3, 1), Increase::new(0, 100)),
+            Ok(())
+        );
         for (refusal, parts) in [
             (
                 limits.admit_source(2, 0, 1),
@@ -175,11 +170,11 @@ mod tests {
                 ],
             ),
             (
-                limits.admit_events(4, 1, 0, 1),
+                limits.admit_events(Increase::new(4, 1), Increase::new(0, 1)),
                 ["4 events", "limit of 4", "max_events_per_node"],
             ),
             (
-                limits.admit_events(0, 1, i64::MAX, 1),
+                limits.admit_events(Increase::new(0, 1), Increase::new(i64::MAX, 1)),
                 [
                     "retained bytes",
                     "limit of 100",

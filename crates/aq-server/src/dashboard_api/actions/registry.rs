@@ -55,6 +55,27 @@ pub trait ActionKind: Send + Sync + 'static {
         payload: Self::Payload,
     ) -> Outcome;
 }
+/// A retired operation still has a scope to authorize even when its response has expired.
+pub(super) struct LookupTarget<'a> {
+    pub scope: &'a Scope,
+    pub operation: Option<&'a Operation>,
+}
+impl<'a> LookupTarget<'a> {
+    pub fn live(scope: &'a Scope, operation: &'a Operation) -> Self {
+        Self {
+            scope,
+            operation: Some(operation),
+        }
+    }
+}
+impl journal::Lookup {
+    pub(super) fn target(&self) -> LookupTarget<'_> {
+        LookupTarget {
+            scope: &self.scope,
+            operation: self.operation.as_ref(),
+        }
+    }
+}
 #[async_trait]
 pub(super) trait Adapter: Send + Sync {
     async fn authorize(
@@ -67,8 +88,7 @@ pub(super) trait Adapter: Send + Sync {
         &self,
         state: &AppState,
         user: &User,
-        scope: &Scope,
-        operation: Option<&Operation>,
+        target: LookupTarget<'_>,
     ) -> Result<(), ApiError>;
     async fn reconcile(
         &self,
@@ -95,10 +115,11 @@ impl<T: ActionKind> Adapter for Typed<T> {
         &self,
         state: &AppState,
         user: &User,
-        scope: &Scope,
-        operation: Option<&Operation>,
+        target: LookupTarget<'_>,
     ) -> Result<(), ApiError> {
-        self.0.authorize_lookup(state, user, scope, operation).await
+        self.0
+            .authorize_lookup(state, user, target.scope, target.operation)
+            .await
     }
     async fn reconcile(
         &self,
@@ -124,7 +145,8 @@ pub struct Registry {
 impl Registry {
     /// Payload must be a closed object schema and deny unknown fields in Serde.
     pub fn register<T: ActionKind>(&mut self, kind: T) -> Result<(), ApiError> {
-        if !valid_kind(T::KIND) || T::VERSION != 1 || self.adapters.contains_key(T::KIND) {
+        let supported = valid_kind(T::KIND) && T::VERSION == 1;
+        if !supported || self.adapters.contains_key(T::KIND) {
             return Err(ApiError::invalid());
         }
         self.register_schema::<T>()?;

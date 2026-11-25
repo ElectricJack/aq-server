@@ -21,9 +21,11 @@ pub(super) struct Page {
 }
 /// `GET .../tasks/{node}/comments?cursor&limit`: newest first, 50 by default.
 pub(super) async fn read(
-    State(s): State<AppState>,
-    Extension(r): Extension<Arc<ReadRuntime>>,
-    RequireOwner(u): RequireOwner,
+    (State(s), Extension(r), RequireOwner(u)): (
+        State<AppState>,
+        Extension<Arc<ReadRuntime>>,
+        RequireOwner,
+    ),
     Path((p, id)): Path<(Uuid, Uuid)>,
     q: std::result::Result<Query<Page>, axum::extract::rejection::QueryRejection>,
 ) -> Result<Json<Envelope>> {
@@ -62,10 +64,11 @@ pub(super) async fn read(
         .await
         .map_err(|_| unavailable())?;
     let next = match next {
-        Some(seq) => Some(
-            r.cursors
-                .encode_for(&b, &seq.to_string(), stamp(&s), CURSOR_TTL_MS)?,
-        ),
+        Some(seq) => Some(r.cursors.encode_for(
+            &b,
+            &seq.to_string(),
+            cursor::validity(stamp(&s), CURSOR_TTL_MS)?,
+        )?),
         None => None,
     };
     let items: Vec<Value> = items.iter().map(|c| c.view(Some(actor))).collect();
@@ -95,22 +98,28 @@ pub(crate) fn schemas(r: &mut Registry) {
 /// `{type:"task_comment",id,revision}` with `expected_versions.task_comment`.
 fn target<C: Command>(request: &ActionRequest, c: &C) -> std::result::Result<Uuid, ApiError> {
     let body = c.body().map_or(Ok(()), comments::validate_body);
-    if request.operation_id != c.operation_id() || c.project_id().is_nil() || body.is_err() {
+    let matches = request.operation_id == c.operation_id() && !c.project_id().is_nil();
+    if !matches || body.is_err() {
         return Err(ApiError::invalid());
     }
     let Some(expected) = c.expected_revision() else {
-        let s = &request.subject;
-        return match s.id.parse::<Uuid>() {
-            Ok(id) if s.entity_type == "task" && s.revision.is_none() && !id.is_nil() => request
-                .expected_versions
-                .is_empty()
-                .then_some(id)
-                .ok_or_else(ApiError::invalid),
-            _ => Err(ApiError::invalid()),
-        };
+        return added_task(request);
     };
     comments::revision(expected).ok_or_else(ApiError::invalid)?;
     existing::subject(request, ENTITY, ENTITY, expected)
+}
+fn added_task(request: &ActionRequest) -> std::result::Result<Uuid, ApiError> {
+    let subject = &request.subject;
+    let unversioned = subject.revision.is_none() && request.expected_versions.is_empty();
+    if subject.entity_type != "task" || !unversioned {
+        return Err(ApiError::invalid());
+    }
+    subject
+        .id
+        .parse::<Uuid>()
+        .ok()
+        .filter(|id| !id.is_nil())
+        .ok_or_else(ApiError::invalid)
 }
 fn store(_: Error) -> ApiError {
     ApiError::unavailable()

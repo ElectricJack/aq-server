@@ -39,6 +39,16 @@ async fn graph(State(peer): State<Peer>, uri: Uri, headers: HeaderMap) -> Respon
     );
     assert_eq!(headers["X-AQ-Graph-API-Version"], "1");
     let mode = peer.mode.load(Ordering::SeqCst);
+    let mut value = route_document(&uri, mode);
+    if mode == 9 {
+        value["nodes"] = json!([node(id(99))]);
+    }
+    if (12..=17).contains(&mode) {
+        apply_edge_fixture(&mut value, mode);
+    }
+    graph_response(value, mode)
+}
+fn route_document(uri: &Uri, mode: u8) -> Value {
     let mut root = node(if mode == 1 { id(99) } else { id(1) });
     if mode == 2 {
         root["version"] = 2.into();
@@ -48,7 +58,7 @@ async fn graph(State(peer): State<Peer>, uri: Uri, headers: HeaderMap) -> Respon
     }
     let url = reqwest::Url::parse(&format!("http://fixture{uri}")).unwrap();
     let query: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
-    let mut value = if uri.path().ends_with("/ready") {
+    if uri.path().ends_with("/ready") {
         assert_eq!(uri.path(), format!("/v1/workspaces/{}/ready", id(1)));
         assert_eq!(query["limit"], "1");
         json!({"items":if mode==5{vec![root.clone(),root]}else{vec![root]},"next_cursor":if mode==10{Some("same-page")}else{None}})
@@ -62,46 +72,45 @@ async fn graph(State(peer): State<Peer>, uri: Uri, headers: HeaderMap) -> Respon
         assert!(["8", "2"].contains(&query["limit"].as_str()));
         assert!(["4096", "16384"].contains(&query["max_bytes"].as_str()));
         json!({"node":root,"nodes":[],"edges":[],"pinned_revisions":[],"truncated":mode==3})
-    };
-    if mode == 9 {
-        value["nodes"] = json!([node(id(99))]);
     }
-    if (12..=17).contains(&mode) {
-        let mut neighbor = node(id(1));
-        neighbor["id"] = json!(id(3));
-        let edge = json!({"id":id(4),"workspace_id":id(1),"source":id(2),"target":id(3),"edge_type":"blocks","source_revision":null,"target_revision":null,"version":1,"deleted":false,"created_at":"2026-01-01T00:00:00Z","description":null});
-        value["nodes"] = json!([neighbor.clone()]);
-        value["edges"] = json!([edge.clone()]);
-        if mode == 12 {
-            let mut second = neighbor.clone();
-            second["id"] = json!(id(5));
-            value["nodes"] = json!([neighbor.clone(), second]);
-        }
-        if mode == 13 {
-            value["edges"] = json!(
-                (0..9)
-                    .map(|n| {
-                        let mut e = edge.clone();
-                        e["id"] = json!(id(100 + n));
-                        e
-                    })
-                    .collect::<Vec<_>>()
-            );
-        }
-        if mode == 14 {
-            value["edges"] = json!([edge.clone(), edge]);
-        }
-        if mode == 15 {
-            value["nodes"] = json!([]);
-        }
-        if mode == 16 {
-            value["edges"][0]["target_revision"] = 1.into();
-        }
-        if mode == 17 {
-            value["edges"][0]["target_revision"] = 1.into();
-            value["pinned_revisions"] = json!([neighbor]);
-        }
+}
+fn apply_edge_fixture(value: &mut Value, mode: u8) {
+    let mut neighbor = node(id(1));
+    neighbor["id"] = json!(id(3));
+    let edge = json!({"id":id(4),"workspace_id":id(1),"source":id(2),"target":id(3),"edge_type":"blocks","source_revision":null,"target_revision":null,"version":1,"deleted":false,"created_at":"2026-01-01T00:00:00Z","description":null});
+    value["nodes"] = json!([neighbor.clone()]);
+    value["edges"] = json!([edge.clone()]);
+    if mode == 12 {
+        let mut second = neighbor.clone();
+        second["id"] = json!(id(5));
+        value["nodes"] = json!([neighbor.clone(), second]);
     }
+    if mode == 13 {
+        value["edges"] = json!(
+            (0..9)
+                .map(|n| {
+                    let mut e = edge.clone();
+                    e["id"] = json!(id(100 + n));
+                    e
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+    if mode == 14 {
+        value["edges"] = json!([edge.clone(), edge]);
+    }
+    if mode == 15 {
+        value["nodes"] = json!([]);
+    }
+    if mode == 16 {
+        value["edges"][0]["target_revision"] = 1.into();
+    }
+    if mode == 17 {
+        value["edges"][0]["target_revision"] = 1.into();
+        value["pinned_revisions"] = json!([neighbor]);
+    }
+}
+fn graph_response(value: Value, mode: u8) -> Response {
     let raw = if mode == 6 {
         value
             .to_string()

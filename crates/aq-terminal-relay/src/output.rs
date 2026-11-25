@@ -152,10 +152,10 @@ impl Replay {
                 Err(Error::Conflict)
             };
         }
-        if self.snapshot_ids.len() >= 1024
-            || s.state.len() > self.limit
-            || s.through_sequence == u64::MAX
-        {
+        if self.snapshot_ids.len() >= 1024 || s.state.len() > self.limit {
+            return Err(Error::Capacity);
+        }
+        if s.through_sequence == u64::MAX {
             return Err(Error::Capacity);
         }
         if self
@@ -216,6 +216,10 @@ impl Replay {
             return Err(Error::Stale);
         }
         ledger.authorize_watch(a, subscription, now)?;
+        Ok(self.view_after(after, now))
+    }
+
+    fn view_after(&self, after: u64, now: u64) -> View {
         let barrier = self
             .snapshot
             .as_ref()
@@ -226,7 +230,7 @@ impl Replay {
             .filter(|g| g.last_missing > barrier)
             .cloned()
             .collect();
-        Ok(View {
+        View {
             snapshot: self.snapshot.clone(),
             frames: self
                 .frames
@@ -238,7 +242,7 @@ impl Replay {
             gaps,
             age_ms: now.saturating_sub(self.observed_at_ms),
             disconnected: self.disconnected,
-        })
+        }
     }
     pub fn retained_bytes(&self) -> usize {
         self.bytes + self.snapshot.as_ref().map_or(0, |s| s.state.len())
@@ -246,48 +250,56 @@ impl Replay {
 }
 /// Pure reservation model. Actual executors/HTTP/pools need integration tests.
 pub struct Capacity {
-    terminal: usize,
-    execution: usize,
-    terminal_limit: usize,
-    execution_limit: usize,
+    terminal: Slots,
+    execution: Slots,
+}
+
+struct Slots {
+    used: usize,
+    limit: usize,
+}
+
+impl Slots {
+    fn new(limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(Error::Invalid);
+        }
+        Ok(Self { used: 0, limit })
+    }
 }
 #[derive(Clone, Copy)]
 pub enum Class {
     Terminal,
     Execution,
 }
+
 impl Capacity {
     pub fn new(terminal_limit: usize, execution_limit: usize) -> Result<Self> {
-        if terminal_limit == 0 || execution_limit == 0 {
-            return Err(Error::Invalid);
-        }
         Ok(Self {
-            terminal: 0,
-            execution: 0,
-            terminal_limit,
-            execution_limit,
+            terminal: Slots::new(terminal_limit)?,
+            execution: Slots::new(execution_limit)?,
         })
     }
-    pub fn acquire(&mut self, class: Class) -> Result<()> {
-        let (used, limit) = match class {
-            Class::Terminal => (&mut self.terminal, self.terminal_limit),
-            Class::Execution => (&mut self.execution, self.execution_limit),
-        };
-        if *used >= limit {
-            return Err(Error::Capacity);
-        }
-        *used += 1;
-        Ok(())
-    }
-    pub fn release(&mut self, class: Class) -> Result<()> {
-        let used = match class {
+
+    fn slots(&mut self, class: Class) -> &mut Slots {
+        match class {
             Class::Terminal => &mut self.terminal,
             Class::Execution => &mut self.execution,
-        };
-        if *used == 0 {
-            return Err(Error::Transition);
         }
-        *used -= 1;
+    }
+
+    pub fn acquire(&mut self, class: Class) -> Result<()> {
+        let slots = self.slots(class);
+        if slots.used >= slots.limit {
+            return Err(Error::Capacity);
+        }
+        slots.used += 1;
+        Ok(())
+    }
+
+    pub fn release(&mut self, class: Class) -> Result<()> {
+        let slots = self.slots(class);
+        slots.used = slots.used.checked_sub(1).ok_or(Error::Transition)?;
         Ok(())
     }
 }

@@ -62,8 +62,8 @@ pub async fn invoke(
             let validated = produced
                 .into_iter()
                 .enumerate()
-                .map(|(index, event)| {
-                    let envelope = plugin.event(&intent.id, index, event, now)?;
+                .map(|produced| {
+                    let envelope = plugin.event(&intent.id, produced, now)?;
                     // The outbox caps the complete protected envelope at 64 KiB.
                     (canonical_bytes(&envelope).ok()?.len() <= 65_536).then_some(envelope)
                 })
