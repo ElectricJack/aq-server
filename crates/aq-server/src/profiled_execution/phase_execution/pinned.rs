@@ -10,7 +10,7 @@ use crate::{
     profiled_execution::{artifacts, registration, source_exports},
     worker_api::AuthenticatedNode,
 };
-use aq_admission::{control::Versions, transport::ArtifactReceipt};
+use aq_admission::{RetainedArtifact, control::Versions, transport::ArtifactReceipt};
 use aq_profiled_state::phase_execution as support;
 use sqlx::Row;
 use uuid::Uuid;
@@ -399,49 +399,87 @@ async fn load_artifacts_locked(
     spec: &aq_admission::execution_spec::ProfiledExecutionSpec,
     offer: &aq_admission::startup::NativeOffer,
     source: &source_exports::LinkedExport,
-    mut ceiling: u64,
+    ceiling: u64,
 ) -> Result<(Option<serde_json::Value>, u64), AppError> {
-    let mut expected = Vec::new();
-    let mut context = None;
-    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127").bind(q.original.binding.attempt_id).fetch_all(&mut **tx).await.map_err(db)?;
+    let mut pinned = PinnedArtifacts {
+        receipts: Vec::new(),
+        context: None,
+        ceiling,
+    };
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT artifact_id FROM profiled_launch_artifacts WHERE attempt_id=$1 ORDER BY artifact_id LIMIT 127",
+    )
+    .bind(q.original.binding.attempt_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(db)?;
     if ids.len() != offer.offered.artifacts.len() || ids.len() > 126 {
         return Err(refused());
     }
     let time = now(state)?;
     for id in ids {
         let a = artifacts::load_locked(tx, id).await?;
-        if a.project_id != source.token().request().project_id
-            || !offer
-                .offered
-                .artifacts
+        pinned.include(
+            a,
+            &offer.offered.artifacts,
+            source.token().request().project_id,
+            &spec.task_context,
+            time,
+        )?;
+    }
+    pinned.receipts.extend(
+        support::source_artifact_receipts(source.manifest()).map_err(history::helper_error)?,
+    );
+    support::require_artifact_receipts(&pinned.receipts, &q.original.artifacts)
+        .map_err(history::helper_error)?;
+    if time >= pinned.ceiling {
+        return Err(refused());
+    }
+    Ok((pinned.context, pinned.ceiling))
+}
+
+// Collect only this project's exact offered artifacts, retaining the earliest
+// expiry and at most one task context. SQL reads stay ordered in the loader.
+struct PinnedArtifacts {
+    receipts: Vec<ArtifactReceipt>,
+    context: Option<serde_json::Value>,
+    ceiling: u64,
+}
+
+impl PinnedArtifacts {
+    fn include(
+        &mut self,
+        artifact: artifacts::Retained,
+        offered: &[RetainedArtifact],
+        project: Uuid,
+        task_context: &ArtifactRef,
+        time: u64,
+    ) -> Result<(), AppError> {
+        if artifact.project_id != project
+            || !offered
                 .iter()
-                .any(|d| same(d, &a.descriptor).unwrap_or(false))
+                .any(|d| same(d, &artifact.descriptor).unwrap_or(false))
         {
             return Err(refused());
         }
-        a.descriptor.verify(&a.bytes, time).map_err(|_| refused())?;
-        ceiling = ceiling.min(a.descriptor.retain_until_ms);
-        if a.descriptor.artifact == spec.task_context {
-            if context.is_some() {
+        artifact
+            .descriptor
+            .verify(&artifact.bytes, time)
+            .map_err(|_| refused())?;
+        self.ceiling = self.ceiling.min(artifact.descriptor.retain_until_ms);
+        if artifact.descriptor.artifact == *task_context {
+            if self.context.is_some() {
                 return Err(refused());
             }
-            context = Some(serde_json::from_slice(&a.bytes).map_err(|_| refused())?);
+            self.context = Some(serde_json::from_slice(&artifact.bytes).map_err(|_| refused())?);
         }
-        expected.push(ArtifactReceipt {
-            artifact: a.descriptor.artifact.clone(),
-            bytes: a.bytes.len() as u64,
-            digest: a.descriptor.artifact.digest,
+        self.receipts.push(ArtifactReceipt {
+            artifact: artifact.descriptor.artifact.clone(),
+            bytes: artifact.bytes.len() as u64,
+            digest: artifact.descriptor.artifact.digest,
         });
+        Ok(())
     }
-    expected.extend(
-        support::source_artifact_receipts(source.manifest()).map_err(history::helper_error)?,
-    );
-    support::require_artifact_receipts(&expected, &q.original.artifacts)
-        .map_err(history::helper_error)?;
-    if time >= ceiling {
-        return Err(refused());
-    }
-    Ok((context, ceiling))
 }
 
 fn require_supported_budget(
@@ -469,4 +507,138 @@ fn require_supported_budget(
         return Err(refused());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+    use aq_admission::{ArtifactKind, Text};
+
+    fn retained(bytes: &[u8]) -> artifacts::Retained {
+        let reference = ArtifactRef {
+            id: Text::new("test/context").unwrap(),
+            version: Text::new("1").unwrap(),
+            digest: Digest::of(bytes),
+        };
+        artifacts::Retained {
+            artifact_id: Uuid::new_v4(),
+            project_id: Uuid::new_v4(),
+            owner: artifacts::OwnerKind::GraphSnapshot,
+            descriptor: RetainedArtifact {
+                artifact: reference,
+                kind: ArtifactKind::Context,
+                bytes: bytes.len() as u64,
+                retention_receipt: ArtifactRef {
+                    id: Text::new("test/retention").unwrap(),
+                    version: Text::new("1").unwrap(),
+                    digest: Digest::of(b"retention"),
+                },
+                retained_at_ms: 10,
+                retain_until_ms: 100,
+            },
+            receipt: Vec::new(),
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn pins(ceiling: u64) -> PinnedArtifacts {
+        PinnedArtifacts {
+            receipts: Vec::new(),
+            context: None,
+            ceiling,
+        }
+    }
+
+    #[test]
+    fn pins_exact_receipts_context_and_earliest_retention() {
+        let context = retained(b"{}");
+        let project = context.project_id;
+        let task_context = context.descriptor.artifact.clone();
+        let mut other = retained(b"opaque non-context bytes");
+        other.project_id = project;
+        other.descriptor.artifact.id = Text::new("test/other").unwrap();
+        other.descriptor.retain_until_ms = 50;
+        let offered = [context.descriptor.clone(), other.descriptor.clone()];
+        let mut pinned = pins(90);
+        pinned
+            .include(context, &offered, project, &task_context, 10)
+            .unwrap();
+        assert_eq!(pinned.ceiling, 90);
+        pinned
+            .include(other, &offered, project, &task_context, 49)
+            .unwrap();
+        assert_eq!(pinned.ceiling, 50);
+        assert_eq!(pinned.context, Some(serde_json::json!({})));
+        assert_eq!(pinned.receipts.len(), 2);
+        for (receipt, descriptor) in pinned.receipts.iter().zip(offered) {
+            assert_eq!(receipt.artifact, descriptor.artifact);
+            assert_eq!(receipt.digest, descriptor.artifact.digest);
+            assert_eq!(receipt.bytes, descriptor.bytes);
+        }
+    }
+
+    #[test]
+    fn refuses_foreign_unoffered_changed_or_expired_artifacts() {
+        for case in 0..5 {
+            let mut artifact = retained(b"{}");
+            let offered = [artifact.descriptor.clone()];
+            let mut project = artifact.project_id;
+            let task_context = artifact.descriptor.artifact.clone();
+            let mut time = 20;
+            match case {
+                0 => project = Uuid::new_v4(),
+                1 => artifact.descriptor.retain_until_ms = 101,
+                2 => artifact.bytes = b"[]".to_vec(),
+                3 => time = 9,
+                4 => time = 100,
+                _ => unreachable!(),
+            }
+            let mut pinned = pins(200);
+            assert!(
+                pinned
+                    .include(artifact, &offered, project, &task_context, time)
+                    .is_err(),
+                "case {case}"
+            );
+            assert!(pinned.receipts.is_empty());
+            assert!(pinned.context.is_none());
+        }
+    }
+
+    #[test]
+    fn null_context_still_counts_as_a_context_and_cannot_repeat() {
+        let mut pinned = pins(200);
+        let mut context = retained(b"null");
+        let project = context.project_id;
+        let task_context = context.descriptor.artifact.clone();
+        let offered = [context.descriptor.clone()];
+        pinned
+            .include(context, &offered, project, &task_context, 20)
+            .unwrap();
+        context = retained(b"null");
+        context.project_id = project;
+        assert!(
+            pinned
+                .include(context, &offered, project, &task_context, 20)
+                .is_err()
+        );
+        assert_eq!(pinned.context, Some(serde_json::Value::Null));
+        assert_eq!(pinned.receipts.len(), 1);
+    }
+
+    #[test]
+    fn context_requires_json_even_when_its_bytes_match_the_offer() {
+        let mut pinned = pins(200);
+        let context = retained(b"not JSON");
+        let project = context.project_id;
+        let task_context = context.descriptor.artifact.clone();
+        let offered = [context.descriptor.clone()];
+        assert!(
+            pinned
+                .include(context, &offered, project, &task_context, 20)
+                .is_err()
+        );
+        assert!(pinned.context.is_none());
+        assert!(pinned.receipts.is_empty());
+    }
 }
