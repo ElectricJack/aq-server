@@ -12,6 +12,7 @@ use sqlx::PgPool;
 use std::sync::atomic::Ordering;
 use tower::ServiceExt;
 use uuid::Uuid;
+mod usage;
 
 const MINUTE: i64 = 60_000;
 const READY: i64 = 10 * 24 * 60 * MINUTE + 9 * 60 * MINUTE;
