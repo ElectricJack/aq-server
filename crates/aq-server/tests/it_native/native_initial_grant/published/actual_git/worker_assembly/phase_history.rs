@@ -33,27 +33,30 @@ pub(super) async fn verify(
     snapshot: &Value,
     hot: &Value,
 ) {
-    let q: wire::HistoryRequest =
+    let history_request: wire::HistoryRequest =
         serde_json::from_value(result["history_request"].clone()).unwrap();
-    let r: wire::HistoryReceipt =
+    let history_receipt: wire::HistoryReceipt =
         serde_json::from_value(result["history_receipt"].clone()).unwrap();
-    r.validate_for(&q).unwrap();
+    history_receipt.validate_for(&history_request).unwrap();
     let prepare: phase_wire::PrepareRequest =
         serde_json::from_value(result["prepare_request"].clone()).unwrap();
-    assert_eq!(q.binding, prepare.original.binding);
-    assert_eq!(q.prepare_operation_id, prepare.original.operation_id);
+    assert_eq!(history_request.binding, prepare.original.binding);
     assert_eq!(
-        q.accepted_receipt_digest,
+        history_request.prepare_operation_id,
+        prepare.original.operation_id
+    );
+    assert_eq!(
+        history_request.accepted_receipt_digest,
         accepted.receipt.digest().unwrap()
     );
     let row = sqlx::query("SELECT receipt_bytes,receipt_digest FROM profiled_phase_execution_grants WHERE attempt_id=$1")
-        .bind(q.binding.attempt_id).fetch_one(&case.env.env.pool).await.unwrap();
+        .bind(history_request.binding.attempt_id).fetch_one(&case.env.env.pool).await.unwrap();
     let execution: phase_wire::ExecutionReceipt =
         serde_json::from_slice(&row.get::<Vec<u8>, _>("receipt_bytes")).unwrap();
     execution
         .validate_for(&prepare, &accepted.receipt, acceptance, proposal)
         .unwrap();
-    let identity = r.identity.as_ref().unwrap();
+    let identity = history_receipt.identity.as_ref().unwrap();
     assert_eq!(
         identity.origin.execution_receipt_digest,
         execution.digest().unwrap()
@@ -68,8 +71,20 @@ pub(super) async fn verify(
         prepare.original.journal_revision
     );
     assert_eq!(identity.prepared.digest, prepare.original.journal_digest);
+    verify_prepared_worker_state(result, snapshot, hot, history_request.binding.attempt_id);
+    eprintln!(
+        "actual withheld execution reply: server Granted, worker Prepared only, exact historical identity, no host"
+    );
+}
+
+fn verify_prepared_worker_state(
+    result: &Value,
+    snapshot: &Value,
+    hot: &Value,
+    attempt_id: uuid::Uuid,
+) {
     assert_eq!(hot["status"], "granted");
-    let attempt = &snapshot["state"]["attempts"][q.binding.attempt_id.to_string()];
+    let attempt = &snapshot["state"]["attempts"][attempt_id.to_string()];
     assert!(attempt[phase::EXECUTION].is_null() && attempt["native_host"].is_null());
     assert_eq!(result["history_revision"], result["prepared_revision"]);
     assert_eq!(snapshot["state"]["revision"], result["prepared_revision"]);
@@ -86,7 +101,4 @@ pub(super) async fn verify(
             "historical lookup must not fabricate {absent}"
         );
     }
-    eprintln!(
-        "actual withheld execution reply: server Granted, worker Prepared only, exact historical identity, no host"
-    );
 }

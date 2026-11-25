@@ -66,7 +66,14 @@ impl Sweep {
             let Some(t) = target(attempt, &binding) else {
                 continue;
             };
-            match engine::tick(&state.store.pool, &ports, &t, policy, now).await {
+            match engine::tick(
+                &state.store.pool,
+                &ports,
+                &t,
+                engine::Tick::new(policy, now),
+            )
+            .await
+            {
                 Ok(_) => stepped += 1,
                 Err(error) => {
                     tracing::warn!(%attempt, ?error, "stall ladder tick failed; intent stays pending")

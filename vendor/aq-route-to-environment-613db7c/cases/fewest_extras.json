@@ -1,0 +1,138 @@
+{
+  "name": "fewest_extras",
+  "situation": "The default environment lacks a need, and two environments provide it; the one with fewer extras is chosen",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-22",
+        "revision": 1
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-22@2",
+          "subject": {
+            "id": "task-22",
+            "revision": 2
+          },
+          "facts": {
+            "kind": "",
+            "title": "Show a chart on the dashboard",
+            "description": "Draw the chart with the web toolkit.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 0,
+            "route": "none",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "rust",
+              "node"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              },
+              {
+                "id": "everything",
+                "provides": [
+                  "rust",
+                  "node",
+                  "git",
+                  "python",
+                  "java"
+                ]
+              },
+              {
+                "id": "rust-node",
+                "provides": [
+                  "rust",
+                  "node",
+                  "git"
+                ]
+              },
+              {
+                "id": "rust-node-docs",
+                "provides": [
+                  "rust",
+                  "node",
+                  "git",
+                  "docs"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "work.route": [
+      {
+        "outcome": "routed",
+        "output": {
+          "reference": "route-1",
+          "subject": {
+            "id": "task-22",
+            "revision": 2
+          },
+          "harnesses": [],
+          "providers": [],
+          "prefer": []
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "routed",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-22",
+            "revision": 1
+          }
+        }
+      },
+      {
+        "command": "work.route",
+        "input": {
+          "subject": {
+            "id": "task-22",
+            "revision": 2
+          },
+          "level": "standard-high",
+          "harnesses": [],
+          "providers": [],
+          "prefer": [],
+          "hold": false,
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "The default environment lacks something the task needs, so the allowed environment with the fewest extra capabilities is used."
+            }
+          ],
+          "classification": null,
+          "environment": "rust-node"
+        }
+      }
+    ]
+  }
+}

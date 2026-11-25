@@ -13,6 +13,15 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::sync::{Arc, atomic::Ordering};
 use uuid::Uuid;
+
+pub(super) async fn load_fixture_authority(
+    f: &common::profiled::Fixture,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    policy: Policy,
+) -> Result<authority::AuthorityView, AuthorityError> {
+    authority::load_locked(&f.state, tx, &f.profiled.offer.binding.session, policy).await
+}
+
 #[tokio::test]
 async fn common_task_claim_and_legacy_decoders_cannot_cross_profiled_kind() {
     let f = fixture().await;
@@ -118,14 +127,9 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
     let attempt = insert(&f).await;
     let pool = f.db.pool().await;
     let mut tx = pool.begin().await.unwrap();
-    let first = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let first = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     assert_eq!(first.kind, Kind::ProfiledV1);
     assert_eq!(
         first.grant_id,
@@ -141,14 +145,9 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let renewed = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalActive,
-    )
-    .await
-    .unwrap();
+    let renewed = load_fixture_authority(&f, &mut tx, Policy::TerminalActive)
+        .await
+        .unwrap();
     assert_eq!(renewed.authority_revision, first.authority_revision);
     assert!(renewed.record_revision > first.record_revision);
     assert!(renewed.grant_revision > first.grant_revision);
@@ -163,13 +162,7 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Unsupported)
     ));
     tx.rollback().await.unwrap();
@@ -182,13 +175,7 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
     f.time.store((NOW + 10_000) as i64, Ordering::SeqCst);
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Expired)
     ));
     tx.rollback().await.unwrap();
@@ -213,25 +200,14 @@ async fn shared_view_fences_exact_seal_identity_live_time_and_revision_semantics
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
     assert!(matches!(
-        authority::load_locked(
-            &f.state,
-            &mut tx,
-            &f.profiled.offer.binding.session,
-            Policy::TerminalActive
-        )
-        .await,
+        load_fixture_authority(&f, &mut tx, Policy::TerminalActive).await,
         Err(AuthorityError::Revoked)
     ));
     tx.rollback().await.unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let historical = authority::load_locked(
-        &f.state,
-        &mut tx,
-        &f.profiled.offer.binding.session,
-        Policy::TerminalHistorical,
-    )
-    .await
-    .unwrap();
+    let historical = load_fixture_authority(&f, &mut tx, Policy::TerminalHistorical)
+        .await
+        .unwrap();
     assert!(historical.authority_revision > renewed.authority_revision);
     tx.rollback().await.unwrap();
 }
@@ -283,35 +259,8 @@ async fn migration_freezes_common_identity_profiled_boot_generation_deadline_and
     assert_eq!(row.get::<String, _>("kind"), "profiled_v1");
     assert_eq!(row.get::<Value, _>("state"), json!(f.profiled));
 }
-#[tokio::test]
-async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuses_foreign_spec() {
-    use aq_server::source_retention::{Runtime, SourceRetentionConfig};
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-    let mut f = fixture().await;
-    let attempt = insert(&f).await;
-    let dir = tempfile::tempdir().unwrap();
-    f.state.source_retention = Some(Arc::new(
-        Runtime::new(SourceRetentionConfig {
-            keep_per_task: 2,
-            max_age: 30 * 86400,
-            staging_root: dir.path().join("staging"),
-            git_root: dir.path().join("git"),
-            git_socket: dir.path().join("git.sock"),
-            max_staging_bytes: 2 * 1024 * 1024,
-            max_bundle_bytes: 4096,
-            bulk_concurrency: 2,
-            incomplete_ttl_secs: 1,
-            git_deadline_ms: 30_000,
-        })
-        .unwrap(),
-    ));
-    let app = aq_server::build_worker_router(f.state.clone());
-    let manifest = aq_worker_protocol::TransferManifest {
+fn checkpoint_manifest(f: &common::profiled::Fixture) -> aq_worker_protocol::TransferManifest {
+    aq_worker_protocol::TransferManifest {
         transfer_id: Uuid::new_v4(),
         role: aq_worker_protocol::SourceRole::Checkpoint,
         checkpoint: ObjectId {
@@ -344,7 +293,38 @@ async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuse
         bundle_digest: None,
         manifest_bytes: 128,
         bundle_bytes: 0,
+    }
+}
+
+#[tokio::test]
+async fn actual_profiled_source_adapter_accepts_scoped_late_retention_and_refuses_foreign_spec() {
+    use aq_server::source_retention::{Runtime, SourceRetentionConfig};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
     };
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let mut f = fixture().await;
+    let attempt = insert(&f).await;
+    let dir = tempfile::tempdir().unwrap();
+    f.state.source_retention = Some(Arc::new(
+        Runtime::new(SourceRetentionConfig {
+            keep_per_task: 2,
+            max_age: 30 * 86400,
+            staging_root: dir.path().join("staging"),
+            git_root: dir.path().join("git"),
+            git_socket: dir.path().join("git.sock"),
+            max_staging_bytes: 2 * 1024 * 1024,
+            max_bundle_bytes: 4096,
+            bulk_concurrency: 2,
+            incomplete_ttl_secs: 1,
+            git_deadline_ms: 30_000,
+        })
+        .unwrap(),
+    ));
+    let app = aq_server::build_worker_router(f.state.clone());
+    let manifest = checkpoint_manifest(&f);
     let body = json!({"identity":f.node,"operation_id":Uuid::new_v4(),"manifest":manifest});
     let call = |body: Value| {
         let app = app.clone();
@@ -426,6 +406,7 @@ async fn authority_expiry_is_sampled_after_an_observed_node_lock_wait() {
     let worker_pool = pool.clone();
     let state = f.state.clone();
     let expected = f.profiled.offer.binding.session.clone();
+    let expected_terminal = expected.clone();
     let (pid_tx, pid_rx) = tokio::sync::oneshot::channel();
     let waiting = tokio::spawn(async move {
         let mut tx = worker_pool.begin().await.unwrap();
@@ -434,32 +415,39 @@ async fn authority_expiry_is_sampled_after_an_observed_node_lock_wait() {
             .await
             .unwrap();
         pid_tx.send(pid).unwrap();
-        let result =
-            authority::load_locked(&state, &mut tx, &expected, Policy::TerminalActive).await;
+        // Graph authority still takes the node row; terminal policies only sample it.
+        let result = authority::load_locked(&state, &mut tx, &expected, Policy::GraphActive).await;
         tx.rollback().await.unwrap();
         result
     });
     let pid = pid_rx.await.unwrap();
     let observer = f.db.pool().await;
-    let mut blocked = false;
-    for _ in 0..100 {
-        let lock: bool = sqlx::query_scalar(
-            "SELECT COALESCE(wait_event_type='Lock',false) FROM pg_stat_activity WHERE pid=$1",
-        )
+    // The load waits on the held row until it is released, so this ends without a deadline.
+    let waiting_sql =
+        "SELECT COALESCE(wait_event_type='Lock',false) FROM pg_stat_activity WHERE pid=$1";
+    while !sqlx::query_scalar::<_, bool>(waiting_sql)
         .bind(pid)
         .fetch_one(&observer)
         .await
-        .unwrap();
-        if lock {
-            blocked = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        .unwrap()
+    {
+        tokio::task::yield_now().await;
     }
-    assert!(
-        blocked,
-        "actual node lock wait must be observed before clock advance"
-    );
+    // A terminal load beside it does not wait on the node row at all.
+    let mut terminal = observer.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout='1s'")
+        .execute(&mut *terminal)
+        .await
+        .unwrap();
+    authority::load_locked(
+        &f.state,
+        &mut terminal,
+        &expected_terminal,
+        Policy::TerminalActive,
+    )
+    .await
+    .unwrap();
+    terminal.rollback().await.unwrap();
     f.time.store((NOW + 5000) as i64, Ordering::SeqCst);
     held.rollback().await.unwrap();
     assert!(matches!(

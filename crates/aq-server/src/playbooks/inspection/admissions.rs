@@ -42,7 +42,7 @@ impl Service {
         after: Option<String>,
         limit: usize,
     ) -> Result<Page<AdmissionView>> {
-        if actor != self.namespace.owner_user_id || limit == 0 || limit > 25 {
+        if actor != self.namespace.owner_user_id || !(1..=25).contains(&limit) {
             return Err(Error::Forbidden);
         }
         let after = after

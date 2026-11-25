@@ -155,12 +155,7 @@ pub fn content_valid(media_type: &str, bytes: &[u8]) -> bool {
         return false;
     }
     if TEXT.contains(&media_type) {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return false;
-        };
-        return !text.contains('\0')
-            && (media_type != "application/json"
-                || serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok());
+        return valid_text(media_type, bytes);
     }
     match media_type {
         // A truncated PDF has no end-of-file marker near its end.
@@ -178,58 +173,56 @@ pub fn content_valid(media_type: &str, bytes: &[u8]) -> bool {
         _ => false,
     }
 }
+fn valid_text(media_type: &str, bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    !text.contains('\0')
+        && (media_type != "application/json"
+            || serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok())
+}
+
 /// A DOCX is a ZIP whose central directory names `[Content_Types].xml` and
 /// `word/document.xml`. Entry data is not inflated.
 fn docx(bytes: &[u8]) -> bool {
-    let u16_at = |i: usize| {
-        bytes
-            .get(i..i + 2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
-    };
-    let u32_at = |i: usize| {
-        bytes
-            .get(i..i + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
-    };
-    if !bytes.starts_with(b"PK\x03\x04") || bytes.len() < 22 {
-        return false;
-    }
-    // The end-of-central-directory record ends with a comment of at most 64 KiB.
-    let floor = bytes.len().saturating_sub(22 + 0xffff);
-    let Some(end) = (floor..=bytes.len() - 22)
-        .rev()
-        .find(|&i| bytes[i..].starts_with(b"PK\x05\x06"))
-    else {
+    let Some((start, end, count)) = docx_directory(bytes) else {
         return false;
     };
-    let (Some(count), Some(size), Some(start)) =
-        (u16_at(end + 10), u32_at(end + 12), u32_at(end + 16))
-    else {
-        return false;
-    };
-    if start.checked_add(size).is_none_or(|e| e > end) {
-        return false;
-    }
     let (mut at, mut types, mut document) = (start, false, false);
     for _ in 0..count {
-        if !bytes
-            .get(at..)
-            .is_some_and(|b| b.starts_with(b"PK\x01\x02"))
-        {
-            return false;
-        }
-        let (Some(n), Some(x), Some(c)) = (u16_at(at + 28), u16_at(at + 30), u16_at(at + 32))
-        else {
-            return false;
-        };
-        let Some(name) = bytes.get(at + 46..at + 46 + n) else {
+        let Some((name, next)) = entry_name(bytes, at) else {
             return false;
         };
         types |= name == b"[Content_Types].xml";
         document |= name == b"word/document.xml";
-        at += 46 + n + x + c;
+        at = next;
     }
     at <= end && types && document
+}
+
+fn docx_directory(bytes: &[u8]) -> Option<(usize, usize, usize)> {
+    use crate::zip::{end_record, u16_at, u32_at};
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return None;
+    }
+    let end = end_record(bytes)?;
+    let count = u16_at(bytes, end + 10)?;
+    let size = u32_at(bytes, end + 12)?;
+    let start = u32_at(bytes, end + 16)?;
+    (start.checked_add(size)? <= end).then_some((start, end, count))
+}
+
+fn entry_name(bytes: &[u8], at: usize) -> Option<(&[u8], usize)> {
+    use crate::zip::u16_at;
+    let entry = bytes.get(at..)?;
+    if !entry.starts_with(b"PK\x01\x02") {
+        return None;
+    }
+    let name_len = u16_at(entry, 28)?;
+    let extra_len = u16_at(entry, 30)?;
+    let comment_len = u16_at(entry, 32)?;
+    let name = entry.get(46..46 + name_len)?;
+    Some((name, at + 46 + name_len + extra_len + comment_len))
 }
 
 /// An inert download of stored bytes whatever their declared type: the

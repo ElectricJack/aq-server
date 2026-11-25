@@ -102,10 +102,8 @@ impl AgentCaller {
             Some(t) => relation(state, own, t).await,
             None => Relation::Other,
         };
-        let holder = Holder {
-            project: self.ids.project_id,
-        };
-        aq_command_registry::authorize(spec, params, &self.grants, holder, own, rel)
+        let scope = aq_command_registry::AgentScope::for_attempt(self.ids, rel);
+        aq_command_registry::authorize(spec, params, &self.grants, scope)
     }
 }
 /// `task` relative to the attempt's task: a task an agent created under it
@@ -247,13 +245,13 @@ pub(super) async fn require(
         Some(t) => relation(state, ids.task_id, t).await,
         None => aq_agent_grants::Relation::Own,
     };
-    let (command, grant, target) = aq_agent_grants::route_grant(path, holder, rel)
+    let checked = aq_agent_grants::route_grant(path, holder, rel)
         .ok_or_else(|| Error("internal").respond(request_id))?;
-    let decision = aq_agent_grants::check(&p.grants, holder, command, grant, target);
+    let decision = aq_agent_grants::check(&p.grants, holder, checked);
     if DISPATCHED.try_with(|_| ()).is_err() {
         audit(
             state,
-            &AuditEntry::agent(ids, command, grant, target, &decision, request_id),
+            &AuditEntry::agent(ids, checked, &decision, request_id),
         )
         .await;
     }

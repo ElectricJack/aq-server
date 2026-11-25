@@ -10,7 +10,10 @@ installed. It preserves the level's candidate order and the execution profile's
 harness order; installed adapter variants have a canonical tie order. A
 candidate's stated reasoning effort is used as stated, or the candidate is
 unsupported on a harness that does not accept it. An execution profile names one
-credential profile per harness. Every fallback reason needs policy permission.
+credential profile per harness. Queued task provider and harness preferences order
+the candidates. Placement checks each candidate's own eligibility and may switch
+providers at the same level when the preferred pool is full. A later poll checks
+current capacity again.
 Unknown availability requires explicit permission and independently present,
 authorized credentials; unknown never means missing credentials.
 
@@ -56,8 +59,8 @@ or `kind = "subscription-login"`; kind is metadata only. Their optional
 which backends are enabled. An explicit empty list denies every backend.
 `CapabilitySnapshot.backend_kind` is a trusted eligibility input. Narrowed
 allowlists deny missing identity with `credential_backend_unknown`; known denied
-backends produce `credential_backend_not_allowed`. Both are `PolicyDenied` and
-obey the configured fallback policy. Default snapshots keep their historical
+backends produce `credential_backend_not_allowed`. Both are `PolicyDenied`
+for the affected candidate. Placement continues to other eligible candidates. Default snapshots keep their historical
 serialized form. Existing server producers supply unknown until C4 connects
 authenticated advertisements; restricted profiles therefore fail closed there.
 The material provisioning and issuance helpers require the same explicit input.

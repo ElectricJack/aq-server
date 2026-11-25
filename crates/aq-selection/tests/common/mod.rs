@@ -87,14 +87,6 @@ impl Fx {
 pub fn select(fx: &Fx, input: &SelectionInputs) -> aq_selection::Result<SelectionOutcome> {
     select_for_offer(&fx.launch(), input)
 }
-fn candidate(provider: &str, model: &str, reasoning: &str, harness: &str) -> Candidate {
-    Candidate {
-        provider: provider.into(),
-        model: model.into(),
-        reasoning: reasoning.into(),
-        harnesses: vec![harness.into()],
-    }
-}
 pub fn installed(harness: &str) -> InstalledHarness {
     InstalledHarness {
         harness: harness.into(),
@@ -124,8 +116,8 @@ pub fn prepared(harness: &str) -> PreparedLaunch {
         startup_limit_bytes: 8192,
     }
 }
-pub fn fixture() -> (Fx, SelectionInputs) {
-    let fx = Fx {
+fn profiles() -> Fx {
+    Fx {
         role: Role {
             id: "developer".into(),
             name: "Developer".into(),
@@ -141,8 +133,18 @@ pub fn fixture() -> (Fx, SelectionInputs) {
             name: "Standard, high".into(),
             description: "Ordinary work.".into(),
             candidates: vec![
-                candidate("fixture-a", "model-a", "high", "codex"),
-                candidate("fixture-b", "model-b", "default", "opencode"),
+                Candidate {
+                    provider: "fixture-a".into(),
+                    model: "model-a".into(),
+                    reasoning: "high".into(),
+                    harnesses: vec!["codex".into()],
+                },
+                Candidate {
+                    provider: "fixture-b".into(),
+                    model: "model-b".into(),
+                    reasoning: "default".into(),
+                    harnesses: vec!["opencode".into()],
+                },
             ],
             selection: Default::default(),
         },
@@ -167,17 +169,11 @@ pub fn fixture() -> (Fx, SelectionInputs) {
             },
         },
         policy: policy(),
-    };
-    let lineage = TaskLineage {
-        project_id: Uuid::from_u128(1),
-        workspace_id: Uuid::from_u128(2),
-        task_id: Uuid::from_u128(3),
-    };
-    let target = ExecutionTarget::Worker {
-        node_id: Uuid::from_u128(4),
-        boot_id: Uuid::from_u128(5),
-    };
-    let credentials: Vec<_> = [("a", "fixture-a"), ("b", "fixture-b")]
+    }
+}
+
+fn credentials() -> Vec<AuthorizedCredential> {
+    [("a", "fixture-a"), ("b", "fixture-b")]
         .iter()
         .map(|(suffix, provider)| AuthorizedCredential {
             profile: artifact(&format!("account-{suffix}")),
@@ -190,11 +186,17 @@ pub fn fixture() -> (Fx, SelectionInputs) {
             material_owner: None,
             allowed_backends: aq_selection::default_allowed_backends(),
         })
-        .collect();
-    let node = CapabilitySnapshot {
+        .collect()
+}
+
+fn installation(
+    target: ExecutionTarget,
+    credentials: &[AuthorizedCredential],
+) -> CapabilitySnapshot {
+    CapabilitySnapshot {
         backend_kind: None,
         material_delivery: None,
-        target: target.clone(),
+        target,
         revision: 1,
         observed_at_ms: 1000,
         expires_at_ms: 20000,
@@ -210,8 +212,11 @@ pub fn fixture() -> (Fx, SelectionInputs) {
                 expires_at_ms: 20000,
             })
             .collect(),
-    };
-    let observations = credentials
+    }
+}
+
+fn observations(credentials: &[AuthorizedCredential]) -> Vec<AvailabilityObservation> {
+    credentials
         .iter()
         .enumerate()
         .map(|(index, c)| AvailabilityObservation {
@@ -235,7 +240,23 @@ pub fn fixture() -> (Fx, SelectionInputs) {
             expires_at_ms: 10000,
             cooldown_until_ms: 0,
         })
-        .collect();
+        .collect()
+}
+
+pub fn fixture() -> (Fx, SelectionInputs) {
+    let fx = profiles();
+    let lineage = TaskLineage {
+        project_id: Uuid::from_u128(1),
+        workspace_id: Uuid::from_u128(2),
+        task_id: Uuid::from_u128(3),
+    };
+    let target = ExecutionTarget::Worker {
+        node_id: Uuid::from_u128(4),
+        boot_id: Uuid::from_u128(5),
+    };
+    let credentials = credentials();
+    let node = installation(target.clone(), &credentials);
+    let observations = observations(&credentials);
     let input = SelectionInputs {
         project: ProjectSnapshot {
             lineage: lineage.clone(),

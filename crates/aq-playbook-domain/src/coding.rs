@@ -157,34 +157,7 @@ impl CodingPolicy {
     /// Builds for a grant holding `granted`; refuses a policy whose artifacts
     /// need a capability outside it.
     pub fn build_for(&self, granted: &BTreeSet<String>) -> Result<CodingArtifacts, CodingError> {
-        let family = |f: &str| f.trim().to_ascii_lowercase();
-        if family(&self.implementer_family).is_empty() || family(&self.reviewer_family).is_empty() {
-            return Err(CodingError::Invalid("model family required".into()));
-        }
-        if family(&self.implementer_family) == family(&self.reviewer_family) {
-            return Err(CodingError::SameFamily);
-        }
-        if self.max_repairs > MAX_REPAIRS || self.checks.len() > 32 {
-            return Err(CodingError::Invalid("budget exceeds bound".into()));
-        }
-        let ids: BTreeSet<_> = self.checks.iter().map(|c| &c.id).collect();
-        if ids.len() != self.checks.len() {
-            return Err(CodingError::Invalid("duplicate check id".into()));
-        }
-        if let Some(d) = &self.human_decision {
-            if !granted.contains(DECISION_CAPABILITY) {
-                return Err(CodingError::NotGranted(DECISION_CAPABILITY.into()));
-            }
-            let blank = |s: &str| s.trim().is_empty() || s.len() > TEXT;
-            if blank(&d.question)
-                || d.responders.is_empty()
-                || d.responders.len() > 100
-                || d.responders.iter().any(|r| blank(r))
-                || d.responders.iter().collect::<BTreeSet<_>>().len() != d.responders.len()
-            {
-                return Err(CodingError::Invalid("human decision".into()));
-            }
-        }
+        self.validate(granted)?;
         let b = Builder::new();
         let work = b.work()?;
         let check = b.check()?;
@@ -192,7 +165,11 @@ impl CodingPolicy {
             Some(_) => Some(b.decision()?),
             None => None,
         };
-        let attempt = b.attempt(self, &work, &check, decision.as_ref())?;
+        let children: Vec<_> = [&work, &check]
+            .into_iter()
+            .chain(decision.as_ref())
+            .collect();
+        let attempt = b.attempt(self, &children)?;
         let root = b.root(self, &attempt)?;
         if let Some(missing) = root
             .content
@@ -210,6 +187,33 @@ impl CodingPolicy {
             attempt,
             root,
         })
+    }
+
+    fn validate(&self, granted: &BTreeSet<String>) -> Result<(), CodingError> {
+        self.validate_families()?;
+        if self.max_repairs > MAX_REPAIRS || self.checks.len() > 32 {
+            return Err(CodingError::Invalid("budget exceeds bound".into()));
+        }
+        let ids: BTreeSet<_> = self.checks.iter().map(|check| &check.id).collect();
+        if ids.len() != self.checks.len() {
+            return Err(CodingError::Invalid("duplicate check id".into()));
+        }
+        if let Some(decision) = &self.human_decision {
+            decision.validate(granted)?;
+        }
+        Ok(())
+    }
+
+    fn validate_families(&self) -> Result<(), CodingError> {
+        let implementer = self.implementer_family.trim().to_ascii_lowercase();
+        let reviewer = self.reviewer_family.trim().to_ascii_lowercase();
+        if implementer.is_empty() || reviewer.is_empty() {
+            return Err(CodingError::Invalid("model family required".into()));
+        }
+        if implementer == reviewer {
+            return Err(CodingError::SameFamily);
+        }
+        Ok(())
     }
 
     /// Root entry input for one coding run.
@@ -244,812 +248,38 @@ impl CodingPolicy {
     }
 }
 
-fn lit(v: Value) -> Expr {
-    Expr::literal(v)
-}
-fn r(root: &str, path: &[&str]) -> Expr {
-    Expr::Ref {
-        root: root.into(),
-        path: path.iter().map(|s| (*s).into()).collect(),
-    }
-}
-fn fields(items: &[(&str, Expr)]) -> Expr {
-    Expr::Object {
-        fields: items.iter().cloned().map(|(k, v)| (k.into(), v)).collect(),
-    }
-}
-fn eq(left: Expr, right: &str) -> Expr {
-    Expr::Eq {
-        left: Box::new(left),
-        right: Box::new(lit(json!(right))),
-    }
-}
-fn edges(op: Operation, edges: &[(&str, &str)]) -> Step {
-    Step {
-        op,
-        edges: edges
-            .iter()
-            .map(|(a, b)| ((*a).into(), (*b).into()))
-            .collect(),
-        on_error: Some("failure".into()),
-    }
-}
-fn decide(predicate: Expr, yes: &str, no: &str) -> Step {
-    edges(
-        Operation::Decide { predicate },
-        &[("true", yes), ("false", no), ("unknown", "failure")],
-    )
-}
-fn ret(outcome: &str, output: Expr) -> Step {
-    Step {
-        op: Operation::Return {
-            outcome: outcome.into(),
-            output,
-        },
-        edges: BTreeMap::new(),
-        on_error: None,
-    }
-}
-/// `{reference, subject}` projected from a bound result.
-fn result_of(root: &str, prefix: &[&str]) -> Expr {
-    let at = |leaf: &str| {
-        let mut p = prefix.to_vec();
-        p.push(leaf);
-        r(root, &p)
-    };
-    fields(&[("reference", at("reference")), ("subject", at("subject"))])
-}
-fn call(dependency: &str, input: Expr, bind: &str, outcomes: &[(&str, &str)]) -> Step {
-    edges(
-        Operation::Call {
-            dependency: dependency.into(),
-            entry: "main".into(),
-            input,
-            mode: CallMode::Wait,
-            bind: bind.into(),
-        },
-        outcomes,
-    )
-}
-
-struct Builder {
-    registry: Registry,
-}
-impl Builder {
-    fn new() -> Self {
-        Self {
-            registry: CatalogProfile::Host8.registry(),
+impl HumanDecision {
+    fn validate(&self, granted: &BTreeSet<String>) -> Result<(), CodingError> {
+        if !granted.contains(DECISION_CAPABILITY) {
+            return Err(CodingError::NotGranted(DECISION_CAPABILITY.into()));
         }
-    }
-    fn command(&self, name: &str) -> Result<&CommandContract, CodingError> {
-        self.registry
-            .commands
-            .get(name)
-            .ok_or_else(|| CodingError::Invalid(format!("Host8 lacks {name}")))
-    }
-    fn input_field(&self, command: &str, field: &str) -> Result<Schema, CodingError> {
-        match &self.command(command)?.input {
-            Schema::Object { properties, .. } => properties
-                .get(field)
-                .cloned()
-                .ok_or_else(|| CodingError::Invalid(format!("{command} lacks {field}"))),
-            _ => Err(CodingError::Invalid(format!("{command} input"))),
+        if !Self::valid_text(&self.question) || !self.valid_responders() {
+            return Err(CodingError::Invalid("human decision".into()));
         }
-    }
-    fn subject(&self) -> Result<Schema, CodingError> {
-        self.input_field("work.ensure", "subject")
-    }
-    /// `{reference, subject}`: the uniform child success output.
-    fn result(&self) -> Result<Schema, CodingError> {
-        Ok(Schema::object(BTreeMap::from([
-            ("reference".into(), Schema::string(TEXT)),
-            ("subject".into(), self.subject()?),
-        ])))
-    }
-    fn reference_only() -> Schema {
-        Schema::object(BTreeMap::from([("reference".into(), Schema::string(TEXT))]))
-    }
-    /// Escalation is an empty object so a Call bind stays an object union.
-    fn escalated() -> Schema {
-        Schema::object(BTreeMap::new())
-    }
-    fn invoke(
-        &self,
-        name: &str,
-        input: Expr,
-        bind: &str,
-        success: &[(&str, &str)],
-    ) -> Result<Step, CodingError> {
-        let c = self.command(name)?;
-        let fingerprint = c
-            .fingerprint()
-            .map_err(|e| CodingError::Invalid(e.to_string()))?;
-        let mut s = edges(
-            Operation::Invoke {
-                command: ContractRef {
-                    name: name.into(),
-                    fingerprint,
-                },
-                input,
-                bind: bind.into(),
-                retry: None,
-            },
-            &[],
-        );
-        for outcome in c.outcomes.keys() {
-            s.edges.insert(outcome.clone(), "failure".into());
-        }
-        for (a, b) in success {
-            s.edges.insert((*a).into(), (*b).into());
-        }
-        Ok(s)
-    }
-    fn event(&self, name: &str) -> Result<ContractRef, CodingError> {
-        let e = self
-            .registry
-            .events
-            .get(name)
-            .ok_or_else(|| CodingError::Invalid(format!("Host8 lacks {name}")))?;
-        Ok(ContractRef {
-            name: name.into(),
-            fingerprint: e
-                .fingerprint()
-                .map_err(|e| CodingError::Invalid(e.to_string()))?,
-        })
-    }
-    fn wait(
-        &self,
-        event: &str,
-        handle: &str,
-        ms: u64,
-        bind: &str,
-        next: &str,
-    ) -> Result<Step, CodingError> {
-        Ok(edges(
-            Operation::Wait {
-                event: Some(self.event(event)?),
-                correlation: BTreeMap::from([("operation".into(), r(handle, &["handle"]))]),
-                minimum_revision: Some(lit(json!(0))),
-                deadline_ms: ms,
-                bind: bind.into(),
-            },
-            &[("received", next), ("timeout", "failure")],
-        ))
+        Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn seal(
-        &self,
-        id: &str,
-        purpose: &str,
-        input: Schema,
-        outcomes: BTreeMap<String, Schema>,
-        start: &str,
-        mut steps: BTreeMap<String, Step>,
-        children: &[&Artifact],
-        escalated: Expr,
-    ) -> Result<Artifact, CodingError> {
-        let mut commands = BTreeSet::new();
-        let mut events = BTreeSet::new();
-        for step in steps.values() {
-            match &step.op {
-                Operation::Invoke { command, .. } => {
-                    commands.insert(command.name.clone());
-                }
-                Operation::Wait { event: Some(e), .. } => {
-                    events.insert(e.name.clone());
-                }
-                _ => {}
-            }
+    fn valid_text(value: &str) -> bool {
+        !value.trim().is_empty() && value.len() <= TEXT
+    }
+
+    fn valid_responders(&self) -> bool {
+        if !(1..=100).contains(&self.responders.len()) {
+            return false;
         }
-        // One identity filler, the authoring tools' own: the contracts the
-        // steps name, each asynchronous command's reconciliation command and
-        // completion event, and the abilities those commands need.
-        let (registry, needed) =
-            retain_registry(&self.registry, &commands, &events).map_err(CodingError::Invalid)?;
-        steps.insert("failure".into(), ret("escalated", escalated));
-        let required_capabilities = (needed.into_iter())
-            .chain(
-                children
-                    .iter()
-                    .flat_map(|c| c.content.playbook.required_capabilities.clone()),
-            )
-            .collect();
-        let dependencies = children
-            .iter()
-            .map(|a| {
-                let binding = a.content.playbook.id.clone();
-                (
-                    binding.clone(),
-                    CallableDependency {
-                        binding,
-                        selection: DependencySelection::Exact,
-                        artifact: a.digest.clone(),
-                        interfaces: a.content.playbook.entries.clone(),
-                        capabilities: a.content.playbook.required_capabilities.clone(),
-                        scope: "project".into(),
-                        dependencies: a
-                            .content
-                            .dependencies
-                            .values()
-                            .flat_map(|d| {
-                                std::iter::once(d.artifact.clone()).chain(d.dependencies.clone())
-                            })
-                            .collect(),
-                    },
-                )
-            })
-            .collect();
-        let source = format!("{COMPILER}\n{id}\n{purpose}\n");
-        let a = Artifact::seal(ArtifactContent {
-            format_version: 1,
-            compiler: COMPILER.into(),
-            source: SourceBinding {
-                digest: hash_bytes(source.as_bytes()),
-                header: SourceHeader {
-                    format_version: 1,
-                    id: id.into(),
-                    scope: "project".into(),
-                    interfaces: BTreeSet::from(["main".into()]),
-                    definitions: BTreeSet::new(),
-                },
-            },
-            playbook: Playbook {
-                id: id.into(),
-                purpose: purpose.into(),
-                scope: "project".into(),
-                entries: BTreeMap::from([(
-                    "main".into(),
-                    EntryPoint {
-                        input,
-                        outcomes,
-                        start: start.into(),
-                    },
-                )]),
-                steps,
-                triggers: vec![],
-                limits: Limits::default(),
-                required_capabilities,
-            },
-            registry,
-            dependencies,
-            definitions: BTreeMap::new(),
-            source_map: BTreeMap::new(),
-        })
-        .map_err(|e| CodingError::Invalid(e.to_string()))?;
-        a.verify()
-            .map_err(|e| CodingError::Invalid(format!("{id}: {e}")))?;
-        Ok(a)
-    }
-
-    fn work(&self) -> Result<Artifact, CodingError> {
-        let outcomes = BTreeMap::from([
-            ("accepted".into(), self.result()?),
-            ("rejected".into(), self.result()?),
-            ("escalated".into(), Self::escalated()),
-        ]);
-        let steps = BTreeMap::from([
-            (
-                "request".into(),
-                self.invoke(
-                    "work.ensure",
-                    r("input", &[]),
-                    "work",
-                    &[("completed", "assess"), ("accepted", "await")],
-                )?,
-            ),
-            (
-                "assess".into(),
-                decide(
-                    eq(r("work", &["disposition"]), "accepted"),
-                    "accepted",
-                    "rejected",
-                ),
-            ),
-            ("accepted".into(), ret("accepted", result_of("work", &[]))),
-            ("rejected".into(), ret("rejected", result_of("work", &[]))),
-            (
-                "await".into(),
-                self.wait(
-                    "aq.operation.updated",
-                    "work",
-                    WORK_WAIT_MS,
-                    "completion",
-                    "completed",
-                )?,
-            ),
-            (
-                "completed".into(),
-                decide(
-                    eq(r("completion", &["outcome"]), "completed"),
-                    "assess_event",
-                    "failure",
-                ),
-            ),
-            (
-                "assess_event".into(),
-                decide(
-                    eq(r("completion", &["output", "disposition"]), "accepted"),
-                    "accepted_event",
-                    "rejected_event",
-                ),
-            ),
-            (
-                "accepted_event".into(),
-                ret("accepted", result_of("completion", &["output"])),
-            ),
-            (
-                "rejected_event".into(),
-                ret("rejected", result_of("completion", &["output"])),
-            ),
-        ]);
-        self.seal(
-            WORK,
-            "Ensure one work item and converge its sync or async completion",
-            self.command("work.ensure")?.input.clone(),
-            outcomes,
-            "request",
-            steps,
-            &[],
-            fields(&[]),
-        )
-    }
-
-    fn check(&self) -> Result<Artifact, CodingError> {
-        let outcomes = BTreeMap::from([
-            ("passed".into(), self.result()?),
-            ("failed".into(), self.result()?),
-            ("escalated".into(), Self::escalated()),
-        ]);
-        let steps = BTreeMap::from([
-            (
-                "request".into(),
-                self.invoke(
-                    "check.request",
-                    r("input", &[]),
-                    "check",
-                    &[
-                        ("passed", "passed"),
-                        ("failed", "failed"),
-                        ("accepted", "await"),
-                    ],
-                )?,
-            ),
-            ("passed".into(), ret("passed", result_of("check", &[]))),
-            ("failed".into(), ret("failed", result_of("check", &[]))),
-            (
-                "await".into(),
-                self.wait(
-                    "aq.check.receipted",
-                    "check",
-                    CHECK_WAIT_MS,
-                    "receipt",
-                    "assess",
-                )?,
-            ),
-            (
-                "assess".into(),
-                decide(
-                    eq(r("receipt", &["outcome"]), "passed"),
-                    "passed_event",
-                    "assess_failed",
-                ),
-            ),
-            (
-                "assess_failed".into(),
-                decide(
-                    eq(r("receipt", &["outcome"]), "failed"),
-                    "failed_event",
-                    "failure",
-                ),
-            ),
-            (
-                "passed_event".into(),
-                ret("passed", result_of("receipt", &["output"])),
-            ),
-            (
-                "failed_event".into(),
-                ret("failed", result_of("receipt", &["output"])),
-            ),
-        ]);
-        self.seal(
-            CHECK,
-            "Request one required check and converge its sync or async receipt",
-            self.command("check.request")?.input.clone(),
-            outcomes,
-            "request",
-            steps,
-            &[],
-            fields(&[]),
-        )
-    }
-
-    fn decision(&self) -> Result<Artifact, CodingError> {
-        let outcomes = BTreeMap::from([
-            ("approved".into(), self.result()?),
-            ("rejected".into(), self.result()?),
-            ("escalated".into(), Self::escalated()),
-        ]);
-        // refused / expired / cancelled are not a human verdict: escalate.
-        let steps = BTreeMap::from([
-            (
-                "request".into(),
-                self.invoke(
-                    "decision.request",
-                    r("input", &[]),
-                    "decision",
-                    &[
-                        ("approved", "approved"),
-                        ("rejected", "rejected"),
-                        ("accepted", "await"),
-                    ],
-                )?,
-            ),
-            (
-                "approved".into(),
-                ret("approved", result_of("decision", &[])),
-            ),
-            (
-                "rejected".into(),
-                ret("rejected", result_of("decision", &[])),
-            ),
-            (
-                "await".into(),
-                self.wait(
-                    "aq.decision.completed",
-                    "decision",
-                    DECISION_WAIT_MS,
-                    "completion",
-                    "assess",
-                )?,
-            ),
-            (
-                "assess".into(),
-                decide(
-                    eq(r("completion", &["outcome"]), "approved"),
-                    "approved_event",
-                    "assess_rejected",
-                ),
-            ),
-            (
-                "assess_rejected".into(),
-                decide(
-                    eq(r("completion", &["outcome"]), "rejected"),
-                    "rejected_event",
-                    "failure",
-                ),
-            ),
-            (
-                "approved_event".into(),
-                ret("approved", result_of("completion", &["output"])),
-            ),
-            (
-                "rejected_event".into(),
-                ret("rejected", result_of("completion", &["output"])),
-            ),
-        ]);
-        self.seal(
-            DECISION,
-            "Request one human decision and converge its sync or async completion",
-            self.command("decision.request")?.input.clone(),
-            outcomes,
-            "request",
-            steps,
-            &[],
-            fields(&[]),
-        )
-    }
-
-    fn expiry(&self) -> Result<Schema, CodingError> {
-        self.input_field("decision.request", "expires_at_ms")
-    }
-
-    fn attempt_input(&self, policy: &CodingPolicy) -> Result<Schema, CodingError> {
-        let mut properties = BTreeMap::from([
-            ("work".into(), self.command("work.ensure")?.input.clone()),
-            ("base".into(), self.subject()?),
-            ("destination".into(), self.subject()?),
-            (
-                "source".into(),
-                self.input_field("check.request", "source")?,
-            ),
-            ("review_key".into(), Schema::string(TEXT)),
-            ("visibility".into(), Schema::string(TEXT)),
-        ]);
-        if policy.human_decision.is_some() {
-            properties.insert("decision_expires_at_ms".into(), self.expiry()?);
-        }
-        Ok(Schema::object(properties))
-    }
-
-    fn attempt(
-        &self,
-        policy: &CodingPolicy,
-        work: &Artifact,
-        check: &Artifact,
-        decision: Option<&Artifact>,
-    ) -> Result<Artifact, CodingError> {
-        let rework = |bind: &str| ret("rework", fields(&[("reference", r(bind, &["reference"]))]));
-        let mut steps = BTreeMap::from([
-            (
-                "work".into(),
-                call(
-                    WORK,
-                    r("input", &["work"]),
-                    "work",
-                    &[
-                        ("accepted", "prepare"),
-                        ("rejected", "rework_work"),
-                        ("escalated", "failure"),
-                    ],
-                ),
-            ),
-            ("rework_work".into(), rework("work")),
-        ]);
-        let first = if policy.checks.is_empty() {
-            "review".to_string()
-        } else {
-            "check_0".to_string()
-        };
-        steps.insert(
-            "prepare".into(),
-            self.invoke(
-                "candidate.prepare",
-                fields(&[
-                    ("base", r("input", &["base"])),
-                    (
-                        "sources",
-                        Expr::Array {
-                            items: vec![r("work", &["subject"])],
-                        },
-                    ),
-                ]),
-                "candidate",
-                &[("prepared", &first), ("conflict", "rework_prepare")],
-            )?,
-        );
-        steps.insert("rework_prepare".into(), rework("candidate"));
-        let candidate_revision = || r("candidate", &["subject", "revision"]);
-        let mut evidence = vec![];
-        for (i, c) in policy.checks.iter().enumerate() {
-            let bind = format!("check_{i}");
-            let next = if i + 1 == policy.checks.len() {
-                "review".to_string()
-            } else {
-                format!("check_{}", i + 1)
-            };
-            let failed = format!("rework_check_{i}");
-            steps.insert(
-                bind.clone(),
-                call(
-                    CHECK,
-                    fields(&[
-                        (
-                            "check",
-                            lit(json!({"id": c.id, "validator": {"id": c.validator_id,
-                                "version": c.validator_version, "digest": c.validator_digest}})),
-                        ),
-                        // The source the host prepared (2.1.0 output), not a caller input.
-                        ("source", r("candidate", &["source"])),
-                        ("subject", r("candidate", &["subject"])),
-                    ]),
-                    &bind,
-                    &[
-                        ("passed", &next),
-                        ("failed", &failed),
-                        ("escalated", "failure"),
-                    ],
-                ),
-            );
-            steps.insert(failed, rework(&bind));
-            evidence.push(fields(&[
-                ("id", r(&bind, &["reference"])),
-                ("revision", candidate_revision()),
-            ]));
-        }
-        steps.insert(
-            "review".into(),
-            call(
-                WORK,
-                fields(&[
-                    ("kind", lit(json!("review"))),
-                    ("subject", r("candidate", &["subject"])),
-                    ("context", lit(json!(policy.review_context()))),
-                    ("lifetime", lit(json!("owned"))),
-                    ("logical_key", r("input", &["review_key"])),
-                    ("visibility", r("input", &["visibility"])),
-                ]),
-                "review",
-                &[
-                    (
-                        "accepted",
-                        if decision.is_some() {
-                            "decision"
-                        } else {
-                            "publish"
-                        },
-                    ),
-                    ("rejected", "rework_review"),
-                    ("escalated", "failure"),
-                ],
-            ),
-        );
-        steps.insert("rework_review".into(), rework("review"));
-        evidence.push(fields(&[
-            ("id", r("review", &["reference"])),
-            ("revision", candidate_revision()),
-        ]));
-        if let Some(d) = &policy.human_decision {
-            // The human decision follows, and never replaces, the review.
-            steps.insert(
-                "decision".into(),
-                call(
-                    DECISION,
-                    fields(&[
-                        ("question", lit(json!(d.question))),
-                        ("choices", lit(json!(DECISION_CHOICES))),
-                        ("responders", lit(json!(d.responders))),
-                        ("subject", r("candidate", &["subject"])),
-                        ("expires_at_ms", r("input", &["decision_expires_at_ms"])),
-                    ]),
-                    "decision",
-                    &[
-                        ("approved", "publish"),
-                        ("rejected", "rework_decision"),
-                        ("escalated", "failure"),
-                    ],
-                ),
-            );
-            steps.insert("rework_decision".into(), rework("decision"));
-            evidence.push(fields(&[
-                ("id", r("decision", &["reference"])),
-                ("revision", candidate_revision()),
-            ]));
-        }
-        steps.insert(
-            "publish".into(),
-            self.invoke(
-                "candidate.publish",
-                fields(&[
-                    ("candidate", r("candidate", &["subject"])),
-                    ("destination", r("input", &["destination"])),
-                    ("evidence", Expr::Array { items: evidence }),
-                ]),
-                "publication",
-                &[("published", "published"), ("conflict", "rework_publish")],
-            )?,
-        );
-        steps.insert(
-            "published".into(),
-            ret("published", result_of("publication", &[])),
-        );
-        steps.insert("rework_publish".into(), rework("publication"));
-        let outcomes = BTreeMap::from([
-            ("published".into(), self.result()?),
-            ("rework".into(), Self::reference_only()),
-            ("escalated".into(), Self::escalated()),
-        ]);
-        self.seal(
-            ATTEMPT,
-            "One coding attempt: work, prepare, checks, cross-family review, publish",
-            self.attempt_input(policy)?,
-            outcomes,
-            "work",
-            steps,
-            &std::iter::once(work)
-                .chain(Some(check))
-                .chain(decision)
-                .collect::<Vec<_>>(),
-            fields(&[]),
-        )
-    }
-
-    fn root(&self, policy: &CodingPolicy, attempt: &Artifact) -> Result<Artifact, CodingError> {
-        let key = Schema::object(BTreeMap::from([
-            ("work".into(), Schema::string(TEXT)),
-            ("review".into(), Schema::string(TEXT)),
-        ]));
-        let keys = (0..=policy.max_repairs)
-            .map(|i| (format!("a{i}"), key.clone()))
-            .collect();
-        let mut input = BTreeMap::from([
-            ("subject".into(), self.subject()?),
-            ("context".into(), Schema::string(TEXT)),
-            ("base".into(), self.subject()?),
-            ("destination".into(), self.subject()?),
-            (
-                "source".into(),
-                self.input_field("check.request", "source")?,
-            ),
-            ("visibility".into(), Schema::string(TEXT)),
-            ("keys".into(), Schema::object(keys)),
-        ]);
-        if policy.human_decision.is_some() {
-            input.insert("decision_expires_at_ms".into(), self.expiry()?);
-        }
-        let input = Schema::object(input);
-        let mut steps = BTreeMap::new();
-        for i in 0..=policy.max_repairs {
-            let bind = format!("attempt_{i}");
-            let a = format!("a{i}");
-            let (kind, context) = if i == 0 {
-                ("implementation", r("input", &["context"]))
-            } else {
-                // Repair carries the previous attempt's failing evidence.
-                ("repair", r(&format!("attempt_{}", i - 1), &["reference"]))
-            };
-            let next = if i == policy.max_repairs {
-                "exhausted".to_string()
-            } else {
-                format!("attempt_{}", i + 1)
-            };
-            let published = format!("published_{i}");
-            steps.insert(
-                bind.clone(),
-                call(
-                    ATTEMPT,
-                    fields(
-                        &[
-                            (
-                                "work",
-                                fields(&[
-                                    ("kind", lit(json!(kind))),
-                                    ("subject", r("input", &["subject"])),
-                                    ("context", context),
-                                    ("lifetime", lit(json!("owned"))),
-                                    ("logical_key", r("input", &["keys", &a, "work"])),
-                                    ("visibility", r("input", &["visibility"])),
-                                ]),
-                            ),
-                            ("base", r("input", &["base"])),
-                            ("destination", r("input", &["destination"])),
-                            ("source", r("input", &["source"])),
-                            ("review_key", r("input", &["keys", &a, "review"])),
-                            ("visibility", r("input", &["visibility"])),
-                        ]
-                        .into_iter()
-                        .chain(policy.human_decision.as_ref().map(|_| {
-                            (
-                                "decision_expires_at_ms",
-                                r("input", &["decision_expires_at_ms"]),
-                            )
-                        }))
-                        .collect::<Vec<_>>(),
-                    ),
-                    &bind,
-                    &[
-                        ("published", &published),
-                        ("rework", &next),
-                        ("escalated", "failure"),
-                    ],
-                ),
-            );
-            steps.insert(published, ret("published", result_of(&bind, &[])));
-        }
-        let last = format!("attempt_{}", policy.max_repairs);
-        steps.insert(
-            "exhausted".into(),
-            ret(
-                "exhausted",
-                fields(&[("reference", r(&last, &["reference"]))]),
-            ),
-        );
-        let outcomes = BTreeMap::from([
-            ("published".into(), self.result()?),
-            ("exhausted".into(), Self::reference_only()),
-            ("escalated".into(), Schema::Null),
-        ]);
-        self.seal(
-            ROOT,
-            "Default coding policy: implement, check, cross-family review, publish, repair",
-            input,
-            outcomes,
-            "attempt_0",
-            steps,
-            &[attempt],
-            lit(Value::Null),
-        )
+        let distinct = self.responders.iter().collect::<BTreeSet<_>>();
+        distinct.len() == self.responders.len()
+            && self.responders.iter().all(|r| Self::valid_text(r))
     }
 }
 
+mod attempt;
+mod builder;
+mod children;
+mod expressions;
 pub mod pilots;
+mod root;
+mod sealing;
+use builder::{Builder, CompletionWait};
+use expressions::*;
+use sealing::ArtifactDraft;

@@ -222,6 +222,12 @@ recorded a result, and no playbook decision (§6.2 `work.complete`,
 This is also what fixes the held-settlement fault: nothing is decided once and
 then forgotten.
 
+A `publish_conflict` hold keeps its original result and claim. On the delivery
+interval the host checks the exact forge branch against the retained result
+and the publication lease. If the branch already contains the exact result
+head or the lease is usable again, the host announces the same result. The
+delivery playbook owns the next decision and its normal checks still apply.
+
 Payload: `{task_id, project_id, attempt_id, result_id, version}`. Everything
 else is read through `work.read`.
 

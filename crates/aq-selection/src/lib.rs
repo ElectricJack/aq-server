@@ -14,9 +14,11 @@ pub use route::{RouteRefusal, route_refusal};
 pub mod context_budget;
 mod select;
 mod validate;
+/// The harness entries one node snapshot may hold (selection input bound).
+pub const MAX_NODE_HARNESSES: usize = 16;
 pub use aq_session_protocol::{ArtifactRef, Digest, Scope, Text, Validate};
 pub use domain::*;
-pub use select::{OFFER_SELECTION_TTL_MS, select_for_offer};
+pub use select::{OFFER_SELECTION_TTL_MS, select_for_offer, select_for_offer_with_capacity};
 use serde::Serialize;
 #[derive(Debug, thiserror::Error)]
 pub enum SelectionError {

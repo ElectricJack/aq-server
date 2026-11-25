@@ -191,55 +191,42 @@ pub(super) fn render((at, reply): Position) -> String {
         format!("{at}.{reply}")
     }
 }
-pub(super) async fn history(
-    Extension(service): Extension<Arc<Service>>,
-    RequireOwner(user): RequireOwner,
-    Path(id): Path<Uuid>,
-    Query(page): Query<Page>,
-) -> Result<Json<History>> {
-    if id.is_nil() || page.before.is_some() && page.after.is_some() {
-        return Err(invalid());
+impl Page {
+    fn bounds(&self, id: Uuid) -> Result<(u8, bool, Position)> {
+        if id.is_nil() || self.before.is_some() && self.after.is_some() {
+            return Err(invalid());
+        }
+        let limit = self.limit.unwrap_or(16);
+        if !(1..=16).contains(&limit) {
+            return Err(invalid());
+        }
+        let before = self
+            .before
+            .as_deref()
+            .map(|s| position(s, false))
+            .transpose()?;
+        let after = self
+            .after
+            .as_deref()
+            .map(|s| position(s, true))
+            .transpose()?;
+        let bound = after.or(before).unwrap_or((i64::MAX, i64::MAX));
+        Ok((limit, after.is_some(), bound))
     }
-    let limit = page.limit.unwrap_or(16);
-    if !(1..=16).contains(&limit) {
-        return Err(invalid());
-    }
-    let before = page
-        .before
-        .as_deref()
-        .map(|s| position(s, false))
-        .transpose()?;
-    let after = page
-        .after
-        .as_deref()
-        .map(|s| position(s, true))
-        .transpose()?;
-    let forward = after.is_some();
-    // Before the transaction: the pool is two connections wide.
-    let runtime = live_runtime(&service.pool, id).await;
-    let mut tx = service.tx().await?;
-    owner(&mut tx, &user).await?;
-    let conversation = definition(&mut tx, Some(id), false).await?;
+}
+async fn history_items(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    bound: Position,
+    through: i64,
+    limit: u8,
+    forward: bool,
+) -> Result<Vec<(Position, Item)>> {
     let mailbox = key(id)?;
     let replies_key = digest(&reply::reply_recipient(id)).map_err(|_| unavailable())?;
-    let next: Option<i64> =
-        sqlx::query_scalar("SELECT next_cursor FROM mailbox_heads WHERE mailbox_key=$1")
-            .bind(&mailbox)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db)?;
-    let through = next
-        .unwrap_or(1)
-        .checked_sub(1)
-        .filter(|v| *v >= 0)
-        .ok_or_else(unavailable)?;
     // Exclusive bound in the merged order; both streams are filtered by the
     // same row comparison so a page boundary may fall between any two items.
-    let (anchor, at) = match (after, before) {
-        (Some(a), _) => a,
-        (None, Some(b)) => b,
-        (None, None) => (i64::MAX, i64::MAX),
-    };
+    let (anchor, at) = bound;
     // Owner mail only: agent-sent supervisor mail (bold-stone-51) is not yet
     // rendered to humans; it reaches the supervisor through dispatch.
     let (human_sql, reply_sql) = if forward {
@@ -261,48 +248,104 @@ pub(super) async fn history(
         .bind(at)
         .bind(through)
         .bind(fetch)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await
         .map_err(db)?
         .into_iter()
-        .map(|row| message(row, id).map(|m| m.cursor.parse().map(|c| ((c, 0), m))))
-        .collect::<Result<std::result::Result<Vec<(Position, Message)>, _>>>()?
-        .map_err(|_| unavailable())?;
+        .map(|row| {
+            let position = (row.get("cursor"), 0);
+            message(row, id).map(|m| (position, m))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let replies = sqlx::query(reply_sql)
         .bind(&replies_key)
         .bind(anchor)
         .bind(at)
         .bind(through)
         .bind(fetch)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await
         .map_err(db)?
         .into_iter()
         .map(|row| reply(row, id))
         .collect::<Result<Vec<_>>>()?;
     // Merge both streams (each already in page order) into page order.
-    let mut humans = humans.into_iter().peekable();
-    let mut replies = replies.into_iter().peekable();
-    let mut merged: Vec<(Position, Item)> = Vec::new();
-    loop {
-        let human_first = match (humans.peek(), replies.peek()) {
+    let mut humans = humans
+        .into_iter()
+        .map(|(p, m)| (p, Item::Human(m)))
+        .peekable();
+    let mut replies = replies
+        .into_iter()
+        .map(|(p, r)| (p, Item::Supervisor(r)))
+        .peekable();
+    let mut merged = Vec::new();
+    while merged.len() <= usize::from(limit) {
+        let next = match (humans.peek(), replies.peek()) {
             (None, None) => break,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (Some(h), Some(r)) => (h.0 < r.0) == forward,
+            (Some(_), None) => humans.next(),
+            (None, Some(_)) => replies.next(),
+            (Some(h), Some(r)) if (h.0 < r.0) == forward => humans.next(),
+            _ => replies.next(),
         };
-        merged.push(
-            if human_first {
-                humans.next().map(|(p, m)| (p, Item::Human(m)))
-            } else {
-                replies.next().map(|(p, r)| (p, Item::Supervisor(r)))
-            }
-            .ok_or_else(unavailable)?,
-        );
-        if merged.len() > usize::from(limit) {
-            break;
-        }
+        merged.push(next.ok_or_else(unavailable)?);
     }
+    Ok(merged)
+}
+impl History {
+    fn page(
+        &mut self,
+        merged: Vec<(Position, Item)>,
+        limit: u8,
+        forward: bool,
+    ) -> Result<Vec<(Position, Item)>> {
+        let mut bytes = serde_json::to_vec(self).map_err(|_| unavailable())?.len() + 256;
+        let mut page = Vec::new();
+        for (at, item) in merged {
+            if page.len() >= usize::from(limit) {
+                self.has_more = true;
+                break;
+            }
+            let size = serde_json::to_vec(&item).map_err(|_| unavailable())?.len() + 1;
+            if bytes.checked_add(size).is_none_or(|n| n > PAGE_BYTES) {
+                self.has_more = true;
+                break;
+            }
+            bytes += size;
+            page.push((at, item));
+        }
+        if self.has_more {
+            self.next_cursor = Some(render(page.last().ok_or_else(unavailable)?.0));
+        }
+        if !forward {
+            page.reverse();
+        }
+        Ok(page)
+    }
+}
+pub(super) async fn history(
+    Extension(service): Extension<Arc<Service>>,
+    RequireOwner(user): RequireOwner,
+    Path(id): Path<Uuid>,
+    Query(page): Query<Page>,
+) -> Result<Json<History>> {
+    let (limit, forward, bound) = page.bounds(id)?;
+    // Before the transaction: the pool is two connections wide.
+    let runtime = live_runtime(&service.pool, id).await;
+    let mut tx = service.tx().await?;
+    owner(&mut tx, &user).await?;
+    let conversation = definition(&mut tx, Some(id), false).await?;
+    let next: Option<i64> =
+        sqlx::query_scalar("SELECT next_cursor FROM mailbox_heads WHERE mailbox_key=$1")
+            .bind(key(id)?)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+    let through = next
+        .unwrap_or(1)
+        .checked_sub(1)
+        .filter(|v| *v >= 0)
+        .ok_or_else(unavailable)?;
+    let merged = history_items(&mut tx, id, bound, through, limit, forward).await?;
     let mut result = History {
         contract: CONTRACT,
         conversation,
@@ -313,30 +356,7 @@ pub(super) async fn history(
         next_cursor: None,
         has_more: false,
     };
-    let mut bytes = serde_json::to_vec(&result)
-        .map_err(|_| unavailable())?
-        .len()
-        + 256;
-    let mut page: Vec<(Position, Item)> = Vec::new();
-    for (at, item) in merged {
-        if page.len() >= usize::from(limit) {
-            result.has_more = true;
-            break;
-        }
-        let size = serde_json::to_vec(&item).map_err(|_| unavailable())?.len() + 1;
-        if bytes.checked_add(size).is_none_or(|n| n > PAGE_BYTES) {
-            result.has_more = true;
-            break;
-        }
-        bytes += size;
-        page.push((at, item));
-    }
-    if result.has_more {
-        result.next_cursor = Some(render(page.last().ok_or_else(unavailable)?.0));
-    }
-    if !forward {
-        page.reverse();
-    }
+    let mut page = result.page(merged, limit, forward)?;
     let ids: Vec<Uuid> = page
         .iter()
         .filter_map(|(_, item)| match item {

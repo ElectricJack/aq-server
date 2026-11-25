@@ -526,6 +526,47 @@ fn inventory_clocks(
         ..Default::default()
     }
 }
+async fn validate_registration(
+    state: &AppState,
+    pool: &sqlx::PgPool,
+    node: Uuid,
+    prepared: &Prepared,
+    identity: &WorkerIdentity,
+) -> Result<()> {
+    let execution: Value = sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(pool)
+        .await?;
+    let registration: NativeRegistration = serde_json::from_value(execution["native"].clone())?;
+    TransportDocument::Register(registration.request.clone()).validate()?;
+    ensure!(
+        execution["identity"] == json!(identity)
+            && &registration.request.identity == identity
+            && registration.request.runtime == prepared.runtime
+            && registration.qualification == prepared.qualification
+            && registration.semantic_digest
+                == aq_server::profiled_execution::registration::semantic_digest(
+                    &registration.request
+                )
+                .map_err(|_| anyhow::anyhow!("registration semantic digest"))?,
+        "actual exact native registration"
+    );
+    let config = state
+        .config
+        .profiled_execution
+        .as_ref()
+        .context("actual runtime config")?;
+    ensure!(
+        config
+            .qualified(&registration.request)
+            .map_err(anyhow::Error::msg)?
+            .qualification
+            == prepared.qualification,
+        "current configured native qualification"
+    );
+    Ok(())
+}
+
 impl Assessor {
     /// Call BEFORE starting the worker, heartbeat, inventory or admission clock.
     /// Only actual immutable local image files are retained; no mutable owner
@@ -634,38 +675,7 @@ impl Assessor {
                 ..Default::default()
             },
         )?;
-        let execution: Value =
-            sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
-                .bind(node)
-                .fetch_one(pool)
-                .await?;
-        let registration: NativeRegistration = serde_json::from_value(execution["native"].clone())?;
-        TransportDocument::Register(registration.request.clone()).validate()?;
-        ensure!(
-            execution["identity"] == json!(identity)
-                && registration.request.identity == identity
-                && registration.request.runtime == prepared.runtime
-                && registration.qualification == prepared.qualification
-                && registration.semantic_digest
-                    == aq_server::profiled_execution::registration::semantic_digest(
-                        &registration.request
-                    )
-                    .map_err(|_| anyhow::anyhow!("registration semantic digest"))?,
-            "actual exact native registration"
-        );
-        let config = state
-            .config
-            .profiled_execution
-            .as_ref()
-            .context("actual runtime config")?;
-        ensure!(
-            config
-                .qualified(&registration.request)
-                .map_err(anyhow::Error::msg)?
-                .qualification
-                == prepared.qualification,
-            "current configured native qualification"
-        );
+        validate_registration(state, pool, node, prepared, &identity).await?;
         let registry = state
             .config
             .intelligence

@@ -1,12 +1,15 @@
 //! Managed supplemental-media owner and explicitly mounted human adapter.
 //! No default mount, AppState owner cycle, worker grant or execution authority.
+mod admission;
 pub mod api;
 mod body;
 mod cleanup;
 pub use aq_result_media::config;
 mod db;
 mod files;
+mod generation;
 mod processing;
+mod reads;
 pub mod runtime;
 
 use crate::{AppState, store::User};
@@ -65,6 +68,12 @@ pub struct Admission {
     pub created: bool,
     pub status: media::UploadStatus,
 }
+
+enum OperationLock {
+    Read(Uuid),
+    Change(Uuid),
+}
+
 #[cfg(any(test, feature = "test-support"))]
 pub type TestHook = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 impl Owner {
@@ -93,94 +102,11 @@ impl Owner {
             limits: media::Limits::default(),
         })
     }
-    /// Exact original bytes are retained before any physical write. Reusing an
-    /// operation with a different actor, target, revision or byte spelling fails.
-    pub async fn reserve(
-        &self,
-        actor: &User,
-        report: Uuid,
-        revision: &str,
-        raw: &[u8],
-    ) -> Result<media::UploadStatus> {
-        Ok(self.admit(actor, report, revision, raw).await?.status)
-    }
-    pub async fn admit(
-        &self,
-        actor: &User,
-        report: Uuid,
-        revision: &str,
-        raw: &[u8],
-    ) -> Result<Admission> {
-        let request = media::UploadCreate::decode(raw).map_err(|_| Error::Invalid)?;
-        request
-            .validate_with_limits(&self.limits)
-            .map_err(|_| Error::Invalid)?;
-        let revision = media::ReportRevision::parse(revision).map_err(|_| Error::Invalid)?;
-        self.root.check()?;
-        let mut tx = db::transaction(&self.state).await?;
-        // Serialize all admissions before result locks; trigger accounting uses
-        // exactly this order too, never a result->budget inversion.
-        db::budgets(&mut tx, None).await?;
-        db::principal(&mut tx, actor).await?;
-        let binding = db::binding(&self.state, &mut tx, report, &revision).await?;
-        db::budgets(&mut tx, Some(binding.project_id.as_uuid())).await?;
-        let id = request.operation_id.as_uuid();
-        if let Some(old) = db::load_optional(&mut tx, id).await? {
-            old.original(actor)?;
-            if old.raw != raw || old.binding != binding {
-                return Err(Error::Conflict);
-            }
-            tx.commit().await.map_err(sql)?;
-            return Ok(Admission {
-                created: false,
-                status: self.status(actor, id).await?,
-            });
-        }
-        let at = now(&self.state)?;
-        let upload = at
-            .checked_add(self.limits.upload_ttl_ms)
-            .filter(|v| *v <= media::MAX_SAFE_MILLIS)
-            .ok_or(Error::Invalid)?;
-        let retain = at
-            .checked_add(self.limits.retention_ms)
-            .filter(|v| *v <= media::MAX_SAFE_MILLIS)
-            .ok_or(Error::Invalid)?;
-        let count:i64=sqlx::query_scalar("SELECT count(*) FROM result_media_intents WHERE report_id=$1 AND report_revision=$2 AND state IN ('reserved','received','finalizing','retained')")
-            .bind(report).bind(revision.as_str()).fetch_one(&mut *tx).await.map_err(sql)?;
-        if count >= i64::from(self.limits.max_result_artifacts) {
-            return Err(Error::Capacity);
-        }
-        db::capacity(&mut tx, binding.project_id.as_uuid()).await?;
-        if let Some(poster) = request.poster_artifact_id {
-            // A clip names a live retained image on this same revision.
-            let poster = db::load_optional(&mut tx, poster.as_uuid())
-                .await?
-                .ok_or(Error::Invalid)?;
-            let image = poster.receipt.as_ref().is_some_and(|r| {
-                r.rendering_policy == media::RenderingPolicy::Rgba8SrgbV1 && at < r.retain_until_ms
-            });
-            if !image
-                || poster.binding != binding
-                || poster.storage != self.root.id
-                || poster.withheld
-                || poster.cleanup != "none"
-            {
-                return Err(Error::Invalid);
-            }
-        }
-        sqlx::query("INSERT INTO result_media_intents(operation_id,actor_id,actor_identity,report_id,report_revision,project_id,report_binding,storage_id,rendering_policy,admission_limits,request_bytes,request_digest,input_digest,input_bytes,filename,capture,state,created_at_ms,upload_expires_at_ms,retain_until_ms,transition_at_ms,reserved_bytes,file_generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$19,$9,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$16,10485760,$1)")
-            .bind(id).bind(actor.id).bind(db::key(actor)?).bind(report).bind(revision.as_str()).bind(binding.project_id.as_uuid()).bind(json(&binding)?).bind(self.root.id).bind(json(&self.limits)?).bind(raw).bind(media::Digest::of(raw).as_str()).bind(request.input_digest.as_str()).bind(request.input_bytes as i64).bind(&request.filename).bind(json(&request.capture)?).bind(at as i64).bind(upload as i64).bind(retain as i64).bind(request.media.policy().as_str()).execute(&mut *tx).await.map_err(sql)?;
-        self.root.check()?;
-        db::principal(&mut tx, actor).await?;
-        tx.commit().await.map_err(sql)?;
-        Ok(Admission {
-            created: true,
-            status: self.status(actor, id).await?,
-        })
-    }
     pub async fn status(&self, actor: &User, id: Uuid) -> Result<media::UploadStatus> {
         let mut tx = db::transaction(&self.state).await?;
-        let row = self.lock_operation(&mut tx, actor, id, false).await?;
+        let row = self
+            .lock_operation(&mut tx, actor, OperationLock::Read(id))
+            .await?;
         let mut status = row.status(now(&self.state)?)?;
         let withheld = row.withheld;
         tx.commit().await.map_err(sql)?;
@@ -193,11 +119,11 @@ impl Owner {
                     .map_err(|_| Error::Storage)?;
         }
         let mut tx = db::transaction(&self.state).await?;
-        let current = self.lock_operation(&mut tx, actor, id, false).await?;
-        if current.receipt != row.receipt
-            || current.state != row.state
-            || current.withheld != withheld
-        {
+        let current = self
+            .lock_operation(&mut tx, actor, OperationLock::Read(id))
+            .await?;
+        let observed = (&row.receipt, row.state, withheld);
+        if (&current.receipt, current.state, current.withheld) != observed {
             return Err(Error::Conflict);
         }
         status.validate().map_err(|_| Error::Owner)?;
@@ -209,9 +135,12 @@ impl Owner {
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         actor: &User,
-        id: Uuid,
-        write_budget: bool,
+        operation: OperationLock,
     ) -> Result<db::Intent> {
+        let (id, write_budget) = match operation {
+            OperationLock::Read(id) => (id, false),
+            OperationLock::Change(id) => (id, true),
+        };
         if write_budget {
             db::budgets(tx, None).await?;
         }

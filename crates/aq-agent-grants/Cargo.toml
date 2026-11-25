@@ -7,6 +7,8 @@ description = "Agent grant vocabulary, scopes, scope checks and the structured r
 
 [features]
 store = ["dep:sqlx"]
+# Spec 0017: `environment.try` is grantable. Off by default.
+project_environments = []
 
 [dependencies]
 serde.workspace = true

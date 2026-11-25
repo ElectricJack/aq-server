@@ -56,24 +56,7 @@ async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::E
     let rows=sqlx::query("SELECT d.decision#>>'{inputs,project,intelligence_profile}' AS profile, s.selection->'choice' AS choice, d.decision#>>'{inputs,project,role_snapshot_digest}' IS NOT NULL AS launched FROM execution_attempts a JOIN nodes n ON n.id=a.node_id LEFT JOIN intelligence_attempt_selections s USING(attempt_id) LEFT JOIN profiled_launches l USING(attempt_id) LEFT JOIN intelligence_decisions d USING(decision_id) WHERE a.kind='profiled_v1' AND a.holds_task AND n.revoked_at IS NULL AND NOT profiled_compute_stopped_valid(a.attempt_id,a.node_id) AND NOT EXISTS(SELECT 1 FROM lost_attempt_releases lost JOIN profiled_authority_hot h USING(attempt_id) WHERE lost.attempt_id=a.attempt_id AND lost.node_id=a.node_id AND h.state->>'status'='finished' AND h.state->'stop'=jsonb_build_object('kind','stopped','receipt',jsonb_build_object('id','aq.lost-attempt-release/'||a.attempt_id::TEXT,'version','1','digest',lost.receipt_digest)))").fetch_all(&mut *conn).await?;
     let mut out = Vec::new();
     for row in rows {
-        let profile: Option<String> = row.get("profile");
-        let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
-        // A launch from a role snapshot names its level by id, and the choice
-        // names the provider. A decision recorded before roles and profiles
-        // names no role snapshot; its attempt is counted, unclassified, and
-        // nothing of its old catalog is read.
-        let launched: Option<bool> = row.get("launched");
-        let provider = text(&choice, "provider");
-        let cell = match (launched, profile, provider) {
-            (Some(true), Some(class), Some(provider)) => Cell {
-                provider: provider.into(),
-                intelligence_class: class,
-            },
-            _ => Cell {
-                provider: provider.unwrap_or("unknown").into(),
-                intelligence_class: "__unclassified".into(),
-            },
-        };
+        let cell = attempt_cell(&row);
         out.push((cell, false));
     }
     let manual: Vec<(Value, String, bool)> = sqlx::query_as(
@@ -104,6 +87,26 @@ async fn occupancy(conn: &mut PgConnection) -> Result<Vec<(Cell, bool)>, sqlx::E
         ));
     }
     Ok(out)
+}
+fn attempt_cell(row: &sqlx::postgres::PgRow) -> Cell {
+    let profile: Option<String> = row.get("profile");
+    let choice: Value = row.get::<Option<Value>, _>("choice").unwrap_or(Value::Null);
+    // A launch from a role snapshot names its level by id, and the choice
+    // names the provider. A decision recorded before roles and profiles
+    // names no role snapshot; its attempt is counted, unclassified, and
+    // nothing of its old catalog is read.
+    let launched: Option<bool> = row.get("launched");
+    let provider = text(&choice, "provider");
+    match (launched, profile, provider) {
+        (Some(true), Some(class), Some(provider)) => Cell {
+            provider: provider.into(),
+            intelligence_class: class,
+        },
+        _ => Cell {
+            provider: provider.unwrap_or("unknown").into(),
+            intelligence_class: "__unclassified".into(),
+        },
+    }
 }
 pub async fn counts(conn: &mut PgConnection) -> Result<Vec<Count>, sqlx::Error> {
     let now: i64 =
@@ -151,21 +154,120 @@ pub async fn check(
     conn: &mut PgConnection,
     cell: Option<&Cell>,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    if !available(conn).await? {
-        return Ok(None);
-    }
-    let settings = crate::lock(conn).await.map_err(|e| match e {
-        crate::Error::Database(e) => e,
-        _ => sqlx::Error::Protocol("invalid swarm settings".into()),
-    })?;
-    if !crate::providers::allows(conn, cell.map_or("", |c| c.provider.as_str())).await? {
-        return Ok(Some(if cell.is_some() {
-            PROVIDER_REMOVED
+    Ok(Capacity::load(conn)
+        .await?
+        .and_then(|snapshot| snapshot.reason(cell)))
+}
+
+/// A single locked view of all provider and class ceilings for a placement pass.
+pub(crate) struct Capacity {
+    settings: crate::Settings,
+    providers: Option<Value>,
+    // None means this installation has no configured concurrency limits.
+    active: Option<Vec<(Cell, bool)>>,
+}
+
+impl Capacity {
+    pub(crate) async fn load(conn: &mut PgConnection) -> Result<Option<Self>, sqlx::Error> {
+        if !available(conn).await? {
+            return Ok(None);
+        }
+        let settings = crate::lock(conn).await.map_err(|e| match e {
+            crate::Error::Database(e) => e,
+            _ => sqlx::Error::Protocol("invalid swarm settings".into()),
+        })?;
+        let providers = crate::providers::membership(conn).await?;
+        let active = if has_limits(&settings) {
+            // Publish a row version so SERIALIZABLE claimants retry after another wins.
+            sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
+                .execute(&mut *conn)
+                .await?;
+            Some(occupancy(conn).await?)
         } else {
-            UNCLASSIFIED
-        }));
+            None
+        };
+        Ok(Some(Self {
+            settings,
+            providers,
+            active,
+        }))
     }
-    let configured = settings.normal.is_some()
+
+    pub(crate) fn reason(&self, cell: Option<&Cell>) -> Option<&'static str> {
+        if !crate::providers::includes(
+            self.providers.as_ref(),
+            cell.map_or("", |c| c.provider.as_str()),
+        ) {
+            return Some(if cell.is_some() {
+                PROVIDER_REMOVED
+            } else {
+                UNCLASSIFIED
+            });
+        }
+        let active = self.active.as_ref()?;
+        let Some(cell) = cell else {
+            return Some(UNCLASSIFIED);
+        };
+        let Some((provider_limit, limit)) = configured_limits(&self.settings, cell) else {
+            return Some(UNCLASSIFIED);
+        };
+        capacity_block(active, cell, provider_limit, limit)
+    }
+}
+
+fn configured_limits(
+    settings: &crate::Settings,
+    cell: &Cell,
+) -> Option<(Option<u32>, Option<u32>)> {
+    let provider_limit = settings
+        .limits
+        .provider_limits
+        .iter()
+        .find(|p| p.provider == cell.provider)
+        .and_then(|p| p.limit);
+    let limit = crate::effective_limit(settings, &cell.provider, &cell.intelligence_class);
+    let explicit_cell =
+        settings.limits.cell_limits.iter().any(|c| {
+            c.provider == cell.provider && c.intelligence_class == cell.intelligence_class
+        });
+    // A complete matrix still refuses a class it does not name. Sparse independent
+    // controls leave every other class unlimited.
+    let missing_from_matrix = settings.normal.is_some() && !explicit_cell;
+    if limit.is_none() && missing_from_matrix {
+        return None;
+    }
+    Some((provider_limit, limit))
+}
+fn capacity_block(
+    active: &[(Cell, bool)],
+    cell: &Cell,
+    provider_limit: Option<u32>,
+    limit: Option<u32>,
+) -> Option<&'static str> {
+    let provider_running = |c: &Cell, waiting: bool| {
+        !waiting && (c.provider == cell.provider || c.provider == "unknown")
+    };
+    if provider_limit.is_some_and(|limit| {
+        active
+            .iter()
+            .filter(|(c, w)| provider_running(c, *w))
+            .count()
+            >= limit as usize
+    }) {
+        return Some(CEILING);
+    }
+    let limit = limit?;
+    if active
+        .iter()
+        .any(|(c, w)| provider_running(c, *w) && c.intelligence_class == "__unclassified")
+    {
+        return Some(UNCLASSIFIED);
+    }
+    let running = active.iter().filter(|(c, w)| !w && c == cell).count();
+    (running >= limit as usize).then_some(CEILING)
+}
+fn has_limits(settings: &crate::Settings) -> bool {
+    settings.normal.is_some()
         || settings
             .limits
             .provider_limits
@@ -175,56 +277,7 @@ pub async fn check(
             .limits
             .cell_limits
             .iter()
-            .any(|c| c.limit.is_some());
-    if !configured {
-        return Ok(None);
-    }
-    // Publish a row version so SERIALIZABLE claimants retry after another wins.
-    sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
-        .execute(&mut *conn)
-        .await?;
-    let Some(cell) = cell else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let provider_limit = settings
-        .limits
-        .provider_limits
-        .iter()
-        .find(|p| p.provider == cell.provider)
-        .and_then(|p| p.limit);
-    let limit = crate::effective_limit(&settings, &cell.provider, &cell.intelligence_class);
-    let explicit_cell =
-        settings.limits.cell_limits.iter().any(|c| {
-            c.provider == cell.provider && c.intelligence_class == cell.intelligence_class
-        });
-    // A complete matrix still refuses a class it does not name. Sparse independent
-    // controls leave every other class unlimited.
-    if limit.is_none() && settings.normal.is_some() && !explicit_cell {
-        return Ok(Some(UNCLASSIFIED));
-    }
-    let active = occupancy(conn).await?;
-    if let Some(limit) = provider_limit {
-        let n = active
-            .iter()
-            .filter(|(c, w)| !w && (c.provider == cell.provider || c.provider == "unknown"))
-            .count();
-        if n >= limit as usize {
-            return Ok(Some(CEILING));
-        }
-    }
-    if let Some(limit) = limit {
-        if active.iter().any(|(c, w)| {
-            !w && (c.provider == cell.provider || c.provider == "unknown")
-                && c.intelligence_class == "__unclassified"
-        }) {
-            return Ok(Some(UNCLASSIFIED));
-        }
-        let n = active.iter().filter(|(c, w)| !w && c == cell).count();
-        if n >= limit as usize {
-            return Ok(Some(CEILING));
-        }
-    }
-    Ok(None)
+            .any(|c| c.limit.is_some())
 }
 /// Selection-only observation: routing has already chosen its requirement
 /// class. Capacity refuses that choice and never asks the router to downgrade.
@@ -234,10 +287,21 @@ pub async fn observe(
     cell: Option<&Cell>,
     now: i64,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    let reason = check(conn, cell).await?;
-    if !available(conn).await? {
-        return Ok(reason);
-    }
+    let Some(capacity) = Capacity::load(conn).await? else {
+        return Ok(None);
+    };
+    let reason = capacity.reason(cell);
+    record_wait(conn, task, cell, now, reason).await?;
+    Ok(reason)
+}
+
+pub(crate) async fn record_wait(
+    conn: &mut PgConnection,
+    task: Uuid,
+    cell: Option<&Cell>,
+    now: i64,
+    reason: Option<&'static str>,
+) -> Result<(), sqlx::Error> {
     // Observations are a short-lived projection, including tasks cancelled or
     // removed from the graph since their last poll. Reclaim expired rows on
     // writes; read-only settings snapshots never mutate or wait for cleanup.
@@ -249,7 +313,7 @@ pub async fn observe(
     } else {
         clear_waiting(conn, task).await?;
     }
-    Ok(reason)
+    Ok(())
 }
 /// The scheduler refreshes a refused task's observation until it can admit the task.
 pub async fn show_task_wait(
