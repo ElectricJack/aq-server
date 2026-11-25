@@ -188,7 +188,7 @@ async fn branch_publish_reports_a_lost_lease_a_missing_branch_and_an_unreachable
         ("refused", json!({"reason":"unreachable"}))
     );
     let c = publish(Some(&sha('3'))).await;
-    assert!(c.diagnostic.is_none());
+    assert_eq!(c.diagnostic, Some("git_error"));
     assert_eq!(
         (c.outcome, c.output),
         ("refused", json!({"reason": "unreachable"}))
@@ -211,4 +211,62 @@ async fn aq_git_is_never_asked_to_publish_or_delete_outside_the_task_prefix() {
         assert_eq!(deleted.unwrap_err().code, "invalid_ref", "{reference}");
     }
     assert!(git.operations().is_empty());
+}
+
+#[tokio::test]
+async fn a_publish_without_a_publication_recovers_the_exact_result_the_forge_already_has() {
+    // aq-git answers: the lease moved, the remote refused, the call failed.
+    let git = FakeGit::start(|r| match r["params"]["expected_old"]["hex"].as_str() {
+        Some(old) if old == "0".repeat(40) => {
+            json!({"error": {"code": "target_moved", "message": "moved"}})
+        }
+        Some(old) if old == sha('4') => json!({"outcome":"rejected","reason":"remote_rejected"}),
+        _ => json!({"error": {"code": "remote_unreachable", "message": "x"}}),
+    });
+    let (delivery, mock) = delivery(&git).await;
+    let reference = task_branch(TASK);
+    let at = |head| json!([{"ref": reference, "object":{"type":"commit","sha":sha(head)}}]);
+    let publish = async |old: Option<&str>| {
+        done(
+            delivery
+                .branch_publish(
+                    TaskOperation::new(Uuid::new_v4(), &target(), TASK),
+                    old,
+                    Some(&sha('a')),
+                )
+                .await,
+        )
+    };
+    // Each refusal that is not a publication observes the forge once.
+    for old in [None, Some(sha('4')), Some(sha('3'))] {
+        mock.reply(200, vec![], at('a'));
+        let c = publish(old.as_deref()).await;
+        assert_eq!(
+            (c.outcome, c.output),
+            ("published", json!({"head": sha('a')})),
+            "{old:?}"
+        );
+    }
+    // The branch is elsewhere, absent or unobservable: the original answer stands.
+    mock.reply(200, vec![], at('b'));
+    mock.reply(200, vec![], json!([]));
+    let moved = publish(None).await;
+    assert_eq!((moved.outcome, moved.output), ("conflict", json!({})));
+    let rejected = publish(Some(&sha('4'))).await;
+    assert_eq!(rejected.outcome, "refused");
+    assert_eq!(rejected.diagnostic, Some("remote_rejected"));
+    let unobserved = publish(Some(&sha('3'))).await;
+    assert_eq!(unobserved.diagnostic, Some("git_error"));
+    assert_eq!(
+        delivery.observe_task_branch(&target(), TASK).await,
+        Err(()),
+        "no scripted reply is an unobservable forge"
+    );
+    mock.reply(200, vec![], at('c'));
+    assert_eq!(
+        delivery.observe_task_branch(&target(), TASK).await,
+        Ok(Some(sha('c')))
+    );
+    // Recovering a receipt never pushes again: one aq-git publish per operation.
+    assert_eq!(git.operations().len(), 6);
 }
