@@ -225,7 +225,7 @@ def main():
             server = subprocess.Popen((
                 args.test_binary.resolve(), "terminal_store::pilot::browser_pilot",
                 "--exact", "--ignored", "--nocapture",
-            ), env={
+            ), start_new_session=True, env={
                 **os.environ, **graph, **workspace, "DATABASE_URL": url,
                 "AQ_TERMINAL_PILOT_DIR": str(directory),
                 "AQ_TERMINAL_PILOT_DASHBOARD_DIR": str(args.dist.resolve(strict=True)),
