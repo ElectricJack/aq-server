@@ -747,7 +747,13 @@ fn owner_mutation_schemas_require_their_path_parameters() {
 
 #[cfg(feature = "supervisor_full_access")]
 #[test]
-fn every_owner_command_has_a_supervisor_route() {
+fn owner_commands_follow_the_supervisor_route_policy() {
+    let unbridged = [
+        "project.workspace.decide",
+        "project.workspace.requests",
+        "task.workspace.request",
+        "task.workspace.show",
+    ];
     let kept = [
         "whoami",
         "operation.show",
@@ -772,6 +778,12 @@ fn every_owner_command_has_a_supervisor_route() {
         let Some(owner) = c.owner.filter(|o| o.body != Body::Local) else {
             continue;
         };
+        // Workspace requests and decisions cross project boundaries. The
+        // supervisor owner bridge only establishes its home project actor.
+        if unbridged.contains(&c.name) {
+            assert!(c.supervisor.is_none(), "{}", c.name);
+            continue;
+        }
         let supervisor = c.supervisor.unwrap_or_else(|| panic!("{}", c.name));
         if kept.contains(&c.name) {
             assert!(!supervisor.path.starts_with(OWNER_PREFIX), "{}", c.name);
