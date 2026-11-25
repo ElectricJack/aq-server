@@ -45,6 +45,7 @@ fn initial_control(project: Option<Uuid>) -> Control {
         project,
         label: "Supervisor fixture".into(),
         role: None,
+        recheck: None,
     }
 }
 

@@ -134,7 +134,10 @@ pub(super) fn assemble(
     turn: dispatch::Turn,
     selection: &Selection<'_>,
 ) -> Result<Config> {
-    let instructions = instructions(config, control, selection.harness);
+    let mut instructions = instructions(config, control, selection.harness);
+    if let Some(note) = &control.recheck {
+        instructions.insert_str(0, note);
+    }
     let context = PlanContext {
         config,
         control,

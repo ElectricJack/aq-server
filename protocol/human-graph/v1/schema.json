@@ -2111,7 +2111,7 @@
         "additionalProperties": false
       },
       "HumanOfferRefusalReason": {
-        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. With spec 0017's project_environments feature: `environment_missing_capability`, no allowed environment provides every label of the task's `aq:needs` (`missing` names those `environment` lacks); `no_node_has_environment`, no node's inventory lists the environment the task was placed in. Recorded by the offer path and removed when a later offer of the task composes.",
+        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. With spec 0017's project_environments feature: `environment_missing_capability`, no allowed environment provides every label of the task's `aq:needs` (`missing` names those `environment` lacks); `no_node_has_environment`, no node's inventory lists the environment the task was placed in. `slot_resources_short`: the offer needs more cpu, memory or disk (`required`) than one slot of node `node_id` provides (`available`); kept until an offer of the task is published. Recorded by the offer path and removed when a later offer of the task composes.",
         "oneOf": [
           {
             "type": "object",
@@ -2162,8 +2162,31 @@
             },
             "required": ["code", "environment", "message", "recorded_at_ms"],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["slot_resources_short"] },
+              "node_id": { "type": "string", "format": "uuid" },
+              "required": { "$ref": "#/components/schemas/HumanSlotResources" },
+              "available": { "$ref": "#/components/schemas/HumanSlotResources" },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "node_id", "required", "available", "message", "recorded_at_ms"],
+            "additionalProperties": false
           }
         ]
+      },
+      "HumanSlotResources": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": { "type": "integer", "minimum": 0 },
+          "memory_bytes": { "type": "integer", "minimum": 0 },
+          "disk_bytes": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["cpu_millis", "memory_bytes", "disk_bytes"],
+        "additionalProperties": false
       }
     }
   }

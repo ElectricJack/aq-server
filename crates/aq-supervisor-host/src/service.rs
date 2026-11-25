@@ -82,6 +82,8 @@ struct Control {
     label: String,
     /// The owner's saved role text for a project supervisor, read at the start of its turn.
     role: Option<String>,
+    /// A note for a turn after one that ended without a reply, set at its start.
+    recheck: Option<String>,
 }
 type Host = Supervisor<InstalledAuthority, NativeAdapter>;
 type NativePaths<'a> = (&'a Path, &'a Digest, &'a Path);
@@ -159,6 +161,7 @@ async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
         project: r.get("project_id"),
         label: r.get("label"),
         role: None,
+        recheck: None,
     })
 }
 async fn user(pool: &PgPool, control: &Control) -> Result<User> {
