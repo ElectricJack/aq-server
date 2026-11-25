@@ -53,6 +53,7 @@ jobs:
         run: |
           python3 scripts/check-dashboard-candidate.py
           python3 scripts/test-dashboard-candidate.py
+          node --test scripts/test-dashboard-terminal.mjs
       - name: Verify the pinned playbook source closure
         run: python3 scripts/check-playbook-source.py
       - name: Verify the pinned independent lifecycle contract

@@ -58,6 +58,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && mkdir -p /out \
     && cp "target/$CARGO_PROFILE/aq-server" /out/
 
+# Build the locally repaired dashboard from the unchanged verified release.
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS dashboard-build
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY Dockerfile /build/Dockerfile
+COPY scripts/check-dashboard-candidate.py scripts/patch-dashboard-terminal.py /build/scripts/
+COPY vendor/dashboard-candidate.json vendor/aq-dashboard-v0.1.5.tar.gz.release.json vendor/aq-dashboard-v0.1.5.tar.gz.sha256 /build/vendor/
+COPY vendor/aq-dashboard-v0.1.5.tar.gz /build/vendor/aq-dashboard-v0.1.5.tar.gz
+COPY vendor/dashboard-terminal-fix /build/vendor/dashboard-terminal-fix
+RUN mkdir /dashboard && python3 scripts/check-dashboard-candidate.py --extract /dashboard
+
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 libexpat1 libssl3 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
@@ -84,11 +95,7 @@ COPY --from=git-build /opt/aq-git-runtime /opt/aq-git-runtime
 RUN ln -s /opt/aq-git-runtime/bin/git /usr/bin/git
 COPY vendor/git-candidate.json /usr/share/agent-q/git-candidate.json
 ENV PATH="/opt/aq-git-runtime/bin:${PATH}"
-COPY vendor/aq-dashboard-v0.1.5.tar.gz /tmp/dashboard.tar.gz
-RUN echo '47fc5692f5941aaeca45830511b8f1f3d672997ee62b9712e71aa7994f35d365  /tmp/dashboard.tar.gz' | sha256sum -c - \
-    && mkdir -p /usr/share/agent-q/dashboard \
-    && tar -xzf /tmp/dashboard.tar.gz -C /usr/share/agent-q/dashboard \
-    && rm /tmp/dashboard.tar.gz
+COPY --from=dashboard-build /dashboard /usr/share/agent-q/dashboard
 COPY vendor/dashboard-candidate.json /usr/share/agent-q/dashboard-candidate.json
 ENV AQ_DASHBOARD_DIR=/usr/share/agent-q/dashboard
 ENV AQ_VAULT_DIR=/vault

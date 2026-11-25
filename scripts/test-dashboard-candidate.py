@@ -25,6 +25,9 @@ class DashboardCandidateTests(unittest.TestCase):
         for name in ("dashboard-candidate.json", self.archive, self.archive + ".sha256", self.archive + ".release.json"):
             shutil.copyfile(CHECK.ROOT / "vendor" / name, self.root / "vendor" / name)
         shutil.copyfile(CHECK.ROOT / "Dockerfile", self.root / "Dockerfile")
+        (self.root / "scripts").mkdir()
+        shutil.copyfile(CHECK.ROOT / "scripts/patch-dashboard-terminal.py", self.root / "scripts/patch-dashboard-terminal.py")
+        shutil.copytree(CHECK.ROOT / "vendor/dashboard-terminal-fix", self.root / "vendor/dashboard-terminal-fix")
 
     def save_pin(self):
         vendor = self.root / "vendor"
@@ -60,6 +63,40 @@ class DashboardCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "empty real directory"):
             CHECK.extract(files, target)
 
+    def test_local_patch_has_truthful_provenance_and_fresh_cache_names(self):
+        pin, files = CHECK.verify(self.root)
+        manifest = json.loads(files["dashboard-manifest.json"])
+        self.assertEqual(manifest["source"], dict(revision=self.pin["source_revision"], dirty=True, official=False))
+        self.assertNotEqual(pin["dashboard_digest"], self.pin["dashboard_digest"])
+        for name, data in files.items():
+            if name != "dashboard-manifest.json":
+                self.assertEqual(manifest["files"][name], dict(sha256=CHECK.sha256(data), bytes=len(data)))
+        original = CHECK.read_archive(self.root / "vendor" / self.archive)
+        old_names = {name for name in original if name.endswith((".js", ".css"))}
+        self.assertTrue(old_names.isdisjoint(files))
+        for name, data in files.items():
+            if name.endswith((".js", ".css", ".html")):
+                for old in old_names:
+                    self.assertNotIn(old.removeprefix("assets/").encode(), data)
+        # A second build must produce identical names and integrity metadata.
+        self.assertEqual(CHECK.verify(self.root)[1], files)
+
+    def test_patch_source_changes_invalidate_cache_namespace(self):
+        before = CHECK.verify(self.root)[1]
+        source = self.root / "vendor/dashboard-terminal-fix/manual-client.js"
+        source.write_text(source.read_text() + "\n// changed local repair\n")
+        after = CHECK.verify(self.root)[1]
+        self.assertTrue({n for n in before if n.endswith(".js")}.isdisjoint(after))
+
+    def test_patch_fails_closed_when_a_bundle_anchor_changes(self):
+        spec = importlib.util.spec_from_file_location("terminal_patch", self.root / "scripts/patch-dashboard-terminal.py")
+        patch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(patch)
+        files = CHECK.read_archive(self.root / "vendor" / self.archive)
+        files[patch.ASSET] = files[patch.ASSET].replace(b"function de(e,t=", b"function changed(e,t=")
+        with self.assertRaises(ValueError):
+            patch.apply(files, self.root)
+
     def test_corrupted_archive_and_sidecar_refuse(self):
         archive = self.root / "vendor" / self.archive
         archive.write_bytes(archive.read_bytes() + b"corruption")
@@ -78,7 +115,7 @@ class DashboardCandidateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsafe archive|regular file|duplicate archive"):
                     CHECK.verify(self.root)
 
-    def test_manifest_digest_and_image_checksum_drift_refuse(self):
+    def test_manifest_digest_and_image_wiring_drift_refuse(self):
         self.pin["dashboard_digest"] = "sha256:" + "0" * 64
         self.save_pin()
         with self.assertRaisesRegex(ValueError, "manifest SHA256 mismatch"):
@@ -86,7 +123,7 @@ class DashboardCandidateTests(unittest.TestCase):
         self.pin = json.loads((CHECK.ROOT / "vendor/dashboard-candidate.json").read_bytes())
         self.save_pin()
         docker = self.root / "Dockerfile"
-        docker.write_text(docker.read_text().replace(self.pin["archive_sha256"], "0" * 64))
+        docker.write_text(docker.read_text().replace("COPY --from=dashboard-build /dashboard", "COPY --from=unverified /dashboard"))
         with self.assertRaisesRegex(ValueError, "Docker server stage"):
             CHECK.verify(self.root)
 
