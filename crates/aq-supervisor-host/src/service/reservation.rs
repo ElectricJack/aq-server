@@ -223,7 +223,7 @@ impl Service<'_> {
         let dispatch = previous.run.plan().dispatch_id;
         let stage = match decision {
             Recovery::ReplyRecorded => return Ok(()),
-            Recovery::RetryUnstarted | Recovery::OwnerRestart => {
+            Recovery::RetryUnstarted | Recovery::OwnerRestart | Recovery::OwnerRecheck => {
                 let confirmed = self.release(user, ctl, actor, reservation_id).await?;
                 let stage = if !confirmed {
                     format!(
@@ -232,6 +232,10 @@ impl Service<'_> {
                 } else if decision == Recovery::RetryUnstarted {
                     "Retrying retained messages after verifying the previous turn did not start"
                         .into()
+                } else if decision == Recovery::OwnerRecheck {
+                    format!(
+                        "Retrying retained messages after the supervisor was stopped and started; the new turn re-checks what dispatch {dispatch} changed"
+                    )
                 } else {
                     "Retrying retained messages after the supervisor was stopped and started".into()
                 };
@@ -248,7 +252,7 @@ impl Service<'_> {
                 return self.report("waiting", &stage, Some(previous)).await;
             }
             Recovery::OutcomeUnconfirmed => format!(
-                "Dispatch {dispatch} may have changed tasks before ending without a reply. Inspect its actions. Its original messages are still held."
+                "Dispatch {dispatch} ended without a reply and may have changed tasks. Its original messages are still held. Stop and start this supervisor to continue; it will be told to re-check what the unfinished turn changed."
             ),
         };
         self.report("failed", &stage, Some(previous)).await
@@ -316,6 +320,11 @@ impl Service<'_> {
         };
         let mut ctl = ctl.clone();
         ctl.profile["snapshot_digest"] = serde_json::json!(digest);
+        let prior = aq_supervisor_control::authority::sessions(pool)
+            .inspect(ctl.actor)
+            .await?;
+        let limit = config.automatic_turn_retries;
+        ctl.recheck = retry::recheck_note(pool, prior.as_ref(), limit).await?;
         if ctl.project.is_some() {
             // An unreadable document leaves the compiled role text in place.
             let role =

@@ -38,17 +38,9 @@ pub async fn authenticate(
     )
     .await
 }
-pub(super) async fn current_peer(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    node: &AuthenticatedNode,
-    peer: &Peer,
-) -> Result<()> {
-    require_owner(state, tx).await?;
-    peer_rows(tx, node, peer, Rows::Lock).await
-}
-/// `current_peer` without its owner check; `Rows::Snapshot` is for a `begin_read` snapshot.
-async fn peer_rows(
+/// The peer's node, credential and boot are current; `begin` already checked the owner.
+/// `Rows::Snapshot` reads a node-signed request's node row unlocked (uploads, registration).
+pub(super) async fn peer_rows(
     tx: &mut Transaction<'_, Postgres>,
     node: &AuthenticatedNode,
     peer: &Peer,
@@ -63,8 +55,10 @@ async fn peer_rows(
         return Err(AppError::Forbidden("terminal peer mismatch".into()));
     }
     match rows {
-        Rows::Lock => crate::worker_api::lock_current_node(tx, node).await?,
-        Rows::Snapshot => crate::worker_api::snapshot_current_node(tx, node).await?,
+        Rows::Snapshot if node.delegated().is_none() => {
+            crate::worker_api::snapshot_current_node(tx, node).await?
+        }
+        _ => crate::worker_api::lock_current_node(tx, node).await?,
     };
     let current: Option<Uuid> = sqlx::query_scalar(
         "SELECT (state->'identity'->>'boot_id')::uuid FROM execution_nodes WHERE node_id=$1",
@@ -94,7 +88,7 @@ pub async fn poll(
         .poll_channel(node.id(), node.permitted_attempt())?;
     if r.hold_ms > 0 {
         let mut tx = super::persistence::begin(&state).await?;
-        current_peer(&state, &mut tx, node, &r.peer).await?;
+        peer_rows(&mut tx, node, &r.peer, Rows::Lock).await?;
         let work:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM terminal_subscriptions w JOIN terminal_sessions s ON s.terminal_id=w.terminal_id WHERE w.node_id=$1 AND s.boot_id=$3 AND ($4::uuid IS NULL OR s.attempt_id=$4) AND w.expires_at_ms>$2) OR EXISTS(SELECT 1 FROM terminal_outbox o JOIN terminal_sessions s ON s.terminal_id=o.terminal_id WHERE s.node_id=$1 AND s.boot_id=$3 AND ($4::uuid IS NULL OR s.attempt_id=$4) AND o.kind='fence' AND o.controller_generation=s.controller_generation AND(o.expires_at_ms>$2 OR(o.expires_at_ms IS NULL AND NOT o.acknowledged)))").bind(node.id()).bind(dbtime(now(&state))?).bind(remote_boot(&r.peer)?).bind(node.permitted_attempt()).fetch_one(&mut *tx).await.map_err(|_|AppError::Internal)?;
         tx.commit().await.map_err(|_| AppError::Internal)?;
         if !work {
@@ -142,7 +136,7 @@ async fn begin_peer(
         return Ok((tx, Rows::Snapshot));
     }
     let mut tx = super::persistence::begin(state).await?;
-    current_peer(state, &mut tx, node, &r.peer).await?;
+    peer_rows(&mut tx, node, &r.peer, Rows::Lock).await?;
     Ok((tx, Rows::Lock))
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,7 +161,7 @@ async fn poll_once_after_recovery(
     r: &draft::RelayPoll,
 ) -> Result<draft::Envelope> {
     let mut tx = super::persistence::begin(state).await?;
-    current_peer(state, &mut tx, node, &r.peer).await?;
+    peer_rows(&mut tx, node, &r.peer, Rows::Lock).await?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
     Ok(draft::Envelope {
         version: 1,

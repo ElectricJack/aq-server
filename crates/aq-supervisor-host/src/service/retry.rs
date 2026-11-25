@@ -8,6 +8,8 @@ pub(super) enum Recovery {
     ReplyRecorded,
     RetryUnstarted,
     OwnerRestart,
+    /// The owner restarted after a turn that started and ended without a reply.
+    OwnerRecheck,
     RetryLimit,
     EvidenceUnavailable,
     OutcomeUnconfirmed,
@@ -23,6 +25,8 @@ impl Recovery {
     ) -> Self {
         if replied {
             Self::ReplyRecorded
+        } else if !never_started && owner_restarted {
+            Self::OwnerRecheck
         } else if !never_started {
             Self::OutcomeUnconfirmed
         } else if owner_restarted {
@@ -80,6 +84,25 @@ pub(super) async fn recovery(
         attempts,
         limit,
     ))
+}
+
+/// The system note for a new turn whose previous turn started and ended
+/// without a reply: the owner restarted to move on, so its messages come again.
+pub(super) async fn recheck_note(
+    pool: &PgPool,
+    prior: Option<&Snapshot>,
+    limit: u8,
+) -> Result<Option<String>> {
+    let Some(prior) = prior else {
+        return Ok(None);
+    };
+    if recovery(pool, prior, false, limit).await? != Recovery::OutcomeUnconfirmed {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "System note: your previous turn (dispatch {}) ended without a reply and may already have changed tasks. Its messages follow again. Before acting on them, check the current state of everything they concern, and do not repeat an action whose effect you find already recorded.\n",
+        prior.run.plan().dispatch_id
+    )))
 }
 
 /// Count the most-dispatched message in the failed turn, including that turn.
@@ -145,7 +168,7 @@ mod tests {
         );
         assert_eq!(
             Recovery::classify(false, true, false, 2, 1),
-            Recovery::OutcomeUnconfirmed,
+            Recovery::OwnerRecheck,
         );
         assert_eq!(
             Recovery::classify(false, true, true, 2, 1),
@@ -265,23 +288,36 @@ mod tests {
         );
         let handed_off = stopped_turn(&examples, true);
         assert_eq!(handed_off.run.plan().dispatch_id, first_dispatch);
-        for owner_restarted in [false, true] {
-            assert_eq!(
-                recovery(&pool, &handed_off, owner_restarted, 1)
-                    .await
-                    .unwrap(),
-                Recovery::OutcomeUnconfirmed,
-            );
+        assert_eq!(
+            recovery(&pool, &handed_off, false, 1).await.unwrap(),
+            Recovery::OutcomeUnconfirmed,
+        );
+        assert_eq!(
+            recovery(&pool, &handed_off, true, 1).await.unwrap(),
+            Recovery::OwnerRecheck,
+        );
+        let note = recheck_note(&pool, Some(&handed_off), 1).await.unwrap();
+        assert!(note.unwrap().contains(&format!(
+            "previous turn (dispatch {first_dispatch}) ended without a reply"
+        )));
+        for unaffected in [None, Some(&stopped)] {
+            assert_eq!(recheck_note(&pool, unaffected, 1).await.unwrap(), None);
         }
         sqlx::query("INSERT INTO central_supervisor_replies VALUES ($1)")
             .bind(first_dispatch)
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            recovery(&pool, &handed_off, false, 1).await.unwrap(),
-            Recovery::ReplyRecorded,
-        );
+        for owner_restarted in [false, true] {
+            assert_eq!(
+                recovery(&pool, &handed_off, owner_restarted, 1)
+                    .await
+                    .unwrap(),
+                Recovery::ReplyRecorded,
+            );
+        }
+        let note = recheck_note(&pool, Some(&handed_off), 1).await.unwrap();
+        assert_eq!(note, None);
     }
 
     fn stopped_turn(examples: &Value, completed_handoff: bool) -> Snapshot {
