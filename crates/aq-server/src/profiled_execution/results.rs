@@ -178,60 +178,23 @@ async fn record_only(
     {
         return Err(conflict());
     }
-    let launch = sqlx::query(
-        "SELECT execution_spec,launch_manifest FROM profiled_launches WHERE attempt_id=$1",
-    )
-    .bind(binding.attempt_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(db)?;
-    let spec = aq_admission::execution_spec::decode_profiled_spec(&canonical(
-        &launch.get::<serde_json::Value, _>("execution_spec"),
-    )?)
-    .map_err(|_| conflict())?;
-    let manifest: aq_session_protocol::LaunchManifest =
-        serde_json::from_value(launch.get("launch_manifest")).map_err(|_| AppError::Internal)?;
-    if spec.outcome_artifact != manifest.bindings.outcome {
-        return Err(conflict());
-    }
-    let artifact_id:Uuid=sqlx::query_scalar("SELECT a.artifact_id FROM admission_artifacts a JOIN profiled_launch_artifacts l USING(artifact_id) WHERE l.attempt_id=$1 AND a.owner_kind='outcome' AND a.owner_key=$2 AND a.descriptor->'artifact'=$3 ORDER BY a.artifact_id LIMIT 1")
-        .bind(binding.attempt_id).bind(view.project_id.to_string()).bind(serde_json::to_value(&spec.outcome_artifact).map_err(|_|AppError::Internal)?)
-        .fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(conflict)?;
-    let outcome = artifacts::load_locked(&mut tx, artifact_id).await?;
-    if outcome.owner != artifacts::OwnerKind::Outcome
-        || outcome.project_id != view.project_id
-        || outcome.descriptor.kind != ArtifactKind::Outcome
-        || outcome.descriptor.artifact != spec.outcome_artifact
-    {
-        return Err(conflict());
-    }
-    let definition = aq_admission::outcome::decode(&outcome.bytes).map_err(|_| conflict())?;
-    definition.validate_against(&spec).map_err(|_| conflict())?;
+    let (artifact_id, spec) = load_outcome_locked(&mut tx, binding, view.project_id).await?;
     let existing=sqlx::query("SELECT * FROM profiled_result_reports WHERE report_id=$1 OR(node_id=$2 AND operation_id=$3)")
         .bind(report.report_id).bind(node_id).bind(report.operation_id).fetch_all(&mut *tx).await.map_err(db)?;
     if !existing.is_empty() {
         if existing.len() != 1 {
             return Err(conflict());
         }
-        let old = &existing[0];
-        if old.get::<Uuid, _>("report_id") != report.report_id
-            || old.get::<Uuid, _>("attempt_id") != binding.attempt_id
-            || old.get::<Uuid, _>("node_id") != node_id
-            || old.get::<Uuid, _>("operation_id") != report.operation_id
-            || old.get::<Vec<u8>, _>("report_bytes") != bytes
-            || old.get::<String, _>("report_digest") != digest.as_str()
-        {
-            return Err(conflict());
-        }
-        origin_pin.require_row(&mut tx, old).await?;
-        let receipt =
-            result_record::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), report)
-                .map_err(|_| AppError::Internal)?;
-        if receipt.expected_outcome != spec.outcome_artifact
-            || receipt.stopped_receipt != stopped.artifact().map_err(|_| AppError::Internal)?
-        {
-            return Err(AppError::Internal);
-        }
+        let receipt = replay_locked(
+            &mut tx,
+            &existing[0],
+            report,
+            &bytes,
+            &digest,
+            &terminal,
+            &spec.outcome_artifact,
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         return Ok(receipt);
     }
@@ -245,17 +208,7 @@ async fn record_only(
     if retry_chosen || report.supersedes != head {
         return Err(conflict());
     }
-    let (count,used):(i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(report_bytes)),0)::BIGINT FROM profiled_result_reports WHERE attempt_id=$1")
-        .bind(binding.attempt_id).fetch_one(&mut *tx).await.map_err(db)?;
-    if count >= 64
-        || used
-            .checked_add(bytes.len() as i64)
-            .is_none_or(|n| n > 4_194_304)
-    {
-        return Err(AppError::PayloadTooLarge(
-            "result report retention quota exhausted".into(),
-        ));
-    }
+    require_report_capacity_locked(&mut tx, binding.attempt_id, bytes.len()).await?;
     let now = u64::try_from((state.clock)().timestamp_millis()).map_err(|_| conflict())?;
     let receipt = Receipt {
         schema_version: 1,
@@ -309,6 +262,96 @@ async fn record_only(
     .map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(receipt)
+}
+async fn replay_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    old: &sqlx::postgres::PgRow,
+    report: &ResultReport,
+    bytes: &[u8],
+    digest: &aq_admission::Digest,
+    terminal: &origin::ResultOrigin,
+    expected_outcome: &aq_admission::ArtifactRef,
+) -> Result<Receipt, AppError> {
+    let binding = &report.binding;
+    let SessionIdentity::Remote { node_id, .. } = binding.session else {
+        return Err(conflict());
+    };
+    if old.get::<Uuid, _>("report_id") != report.report_id
+        || old.get::<Uuid, _>("attempt_id") != binding.attempt_id
+        || old.get::<Uuid, _>("node_id") != node_id
+        || old.get::<Uuid, _>("operation_id") != report.operation_id
+        || old.get::<Vec<u8>, _>("report_bytes") != bytes
+        || old.get::<String, _>("report_digest") != digest.as_str()
+    {
+        return Err(conflict());
+    }
+    terminal.pin().require_row(tx, old).await?;
+    let receipt = result_record::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), report)
+        .map_err(|_| AppError::Internal)?;
+    if receipt.expected_outcome != *expected_outcome
+        || receipt.stopped_receipt
+            != terminal
+                .stopped_receipt()
+                .artifact()
+                .map_err(|_| AppError::Internal)?
+    {
+        return Err(AppError::Internal);
+    }
+    Ok(receipt)
+}
+async fn require_report_capacity_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    attempt: Uuid,
+    incoming: usize,
+) -> Result<(), AppError> {
+    let (count,used):(i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(report_bytes)),0)::BIGINT FROM profiled_result_reports WHERE attempt_id=$1")
+        .bind(attempt).fetch_one(&mut **tx).await.map_err(db)?;
+    if count >= 64
+        || used
+            .checked_add(incoming as i64)
+            .is_none_or(|n| n > 4_194_304)
+    {
+        return Err(AppError::PayloadTooLarge(
+            "result report retention quota exhausted".into(),
+        ));
+    }
+    Ok(())
+}
+async fn load_outcome_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    binding: &aq_admission::LaunchBinding,
+    project: Uuid,
+) -> Result<(Uuid, aq_admission::execution_spec::ProfiledExecutionSpec), AppError> {
+    let launch = sqlx::query(
+        "SELECT execution_spec,launch_manifest FROM profiled_launches WHERE attempt_id=$1",
+    )
+    .bind(binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db)?;
+    let spec = aq_admission::execution_spec::decode_profiled_spec(&canonical(
+        &launch.get::<serde_json::Value, _>("execution_spec"),
+    )?)
+    .map_err(|_| conflict())?;
+    let manifest: aq_session_protocol::LaunchManifest =
+        serde_json::from_value(launch.get("launch_manifest")).map_err(|_| AppError::Internal)?;
+    if spec.outcome_artifact != manifest.bindings.outcome {
+        return Err(conflict());
+    }
+    let artifact_id:Uuid=sqlx::query_scalar("SELECT a.artifact_id FROM admission_artifacts a JOIN profiled_launch_artifacts l USING(artifact_id) WHERE l.attempt_id=$1 AND a.owner_kind='outcome' AND a.owner_key=$2 AND a.descriptor->'artifact'=$3 ORDER BY a.artifact_id LIMIT 1")
+        .bind(binding.attempt_id).bind(project.to_string()).bind(serde_json::to_value(&spec.outcome_artifact).map_err(|_|AppError::Internal)?)
+        .fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(conflict)?;
+    let outcome = artifacts::load_locked(tx, artifact_id).await?;
+    if outcome.owner != artifacts::OwnerKind::Outcome
+        || outcome.project_id != project
+        || outcome.descriptor.kind != ArtifactKind::Outcome
+        || outcome.descriptor.artifact != spec.outcome_artifact
+    {
+        return Err(conflict());
+    }
+    let definition = aq_admission::outcome::decode(&outcome.bytes).map_err(|_| conflict())?;
+    definition.validate_against(&spec).map_err(|_| conflict())?;
+    Ok((artifact_id, spec))
 }
 /// Validated retained owner facts, never an eligibility or current execution
 /// permit. Callers authenticate/project-scope independently and keep this same

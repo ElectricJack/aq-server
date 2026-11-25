@@ -148,37 +148,14 @@ impl Service {
         // First dispatch is cancellation/project/review fenced. Once possible,
         // retries reconcile the SAME admitted effect even after cancellation.
         if count == 0 {
-            let v = crate::execution::authority::load_locked(
-                &self.state,
+            self.fence_first_dispatch_locked(
                 &mut tx,
-                &r.report.binding.session,
-                crate::execution::authority::Policy::IdentityOnly,
-            )
-            .await?;
-            if v.revoked || v.cancellation_id.is_some() || !v.holds_task || !v.stopped {
-                return Err(conflict());
-            }
-            let source = crate::source_retention::load_confirmed_locked(
-                &mut tx,
-                peek.get("source_operation_id"),
                 &r,
+                &e,
+                peek.get("source_operation_id"),
+                observation.as_ref(),
             )
             .await?;
-            observation
-                .as_ref()
-                .ok_or_else(unavailable)?
-                .verify_locked(&self.state, &mut tx, &r, &source)
-                .await?;
-            let decision: Uuid = sqlx::query_scalar(
-                "SELECT decision_id FROM profiled_settlement_evaluations WHERE operation_id=$1",
-            )
-            .bind(e.operation_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db)?;
-            self.reviews
-                .combined_completion_in_tx(&mut tx, decision)
-                .await?;
         }
         let time = now(&self.state)?;
         if time < row.get::<i64, _>("created_at_ms")
@@ -208,8 +185,22 @@ impl Service {
             crate::agent_access::settlement_post(rt, workspace, payload),
         )
         .await;
+        let response = outcome.ok().and_then(std::result::Result::ok);
+        self.reconcile_completion(&actor, &e, r.report.report_id, operation, lease, response)
+            .await
+    }
+
+    async fn reconcile_completion(
+        &self,
+        actor: &ActorPin,
+        e: &EvaluationReceipt,
+        report_id: Uuid,
+        operation: Uuid,
+        lease: Uuid,
+        response: Option<(axum::http::StatusCode, Value)>,
+    ) -> Result<CompletionStatus> {
         let mut tx = self.tx().await?;
-        let fresh = results::load_locked(&self.state, &mut tx, r.report.report_id).await?;
+        let fresh = results::load_locked(&self.state, &mut tx, report_id).await?;
         let ledger = effects::inspect_aq_effects_locked(&self.state, &mut tx, &fresh).await?;
         if fresh.receipt_artifact != e.report
             || !fresh.is_current_report_head
@@ -236,7 +227,7 @@ impl Service {
             .map_err(db)?;
         let mut next = "possible";
         let mut receipt = None;
-        if let Ok(Ok((http, raw))) = outcome {
+        if let Some((http, raw)) = response {
             if http.is_success() {
                 if let Ok(r) = confirmed(&raw, &current) {
                     next = "confirmed";
@@ -259,6 +250,41 @@ impl Service {
         let s = status(&row)?;
         tx.commit().await.map_err(db)?;
         Ok(s)
+    }
+
+    async fn fence_first_dispatch_locked(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        r: &results::RecordedResult,
+        e: &EvaluationReceipt,
+        source_operation: Uuid,
+        observation: Option<&super::applicability::Observation>,
+    ) -> Result<()> {
+        let v = crate::execution::authority::load_locked(
+            &self.state,
+            tx,
+            &r.report.binding.session,
+            crate::execution::authority::Policy::IdentityOnly,
+        )
+        .await?;
+        if v.revoked || v.cancellation_id.is_some() || !v.holds_task || !v.stopped {
+            return Err(conflict());
+        }
+        let source =
+            crate::source_retention::load_confirmed_locked(tx, source_operation, r).await?;
+        observation
+            .ok_or_else(unavailable)?
+            .verify_locked(&self.state, tx, r, &source)
+            .await?;
+        let decision: Uuid = sqlx::query_scalar(
+            "SELECT decision_id FROM profiled_settlement_evaluations WHERE operation_id=$1",
+        )
+        .bind(e.operation_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+        self.reviews.combined_completion_in_tx(tx, decision).await?;
+        Ok(())
     }
 
     /// Preserve the immutable launch fields and project the owner-verified hot
