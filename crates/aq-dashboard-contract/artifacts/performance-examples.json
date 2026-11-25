@@ -410,6 +410,7 @@
         "attempts": [
           {
             "attempt_id": "00000000-0000-0000-0000-000000000301",
+            "assignment_generation": 4,
             "status": "observed",
             "attempt_status": "failed",
             "intended_model": "codex-mini",
@@ -447,6 +448,7 @@
           },
           {
             "attempt_id": "00000000-0000-0000-0000-000000000302",
+            "assignment_generation": null,
             "status": "partial",
             "attempt_status": "completed",
             "intended_model": "claude-sonnet",
