@@ -7805,7 +7805,7 @@
           }
         }
       },
-      "summary": "Route a task to a class, optionally limited to harnesses and providers",
+      "summary": "Route a task to a class with optional ordered harness and provider preferences",
       "target": {
         "rule": "subject"
       }

@@ -129,17 +129,17 @@ fn filtered_route() -> Route {
 }
 
 #[test]
-fn offered_routes_keep_the_requested_order_hold_and_classification() {
+fn offered_routes_keep_order_and_classification_with_legacy_hold_as_preference() {
     let route = filtered_route();
     assert_eq!(
         (route.harnesses, route.providers, route.prefer),
         (
             vec!["claude".to_string()],
             vec!["anthropic".to_string()],
-            vec!["claude".to_string()]
+            vec!["claude".to_string(), "codex".to_string()]
         )
     );
-    assert_eq!(route.provider_intent, ProviderIntent::Pinned);
+    assert_eq!(route.provider_intent, ProviderIntent::Any);
     assert_eq!(route.judgment.unwrap()["labels"], json!(["low"]));
 }
 
@@ -148,27 +148,36 @@ fn routed_output_reports_only_selected_names_and_the_current_task_revision() {
     let out = routed_output("t", 3, &filtered_route());
     assert_eq!(
         out,
-        json!({"harnesses": ["claude"], "providers": ["anthropic"], "prefer": ["claude"],
+        json!({"harnesses": ["claude"], "providers": ["anthropic"], "prefer": ["claude", "codex"],
             "reference": "t@3", "subject": {"id": "t", "revision": 3}})
     );
 }
 
 #[test]
-fn a_level_or_list_with_nothing_offered_is_not_offered() {
+fn an_unoffered_level_refuses_but_an_unoffered_preference_does_not() {
     let from = Provenance::default();
     for refused in [
-        input("complex-high", &[], &[]),          // no profile at the level
-        input("deep-high", &[], &[]),             // a profile that lists nothing
-        input("standard-high", &["cursor"], &[]), // nothing left of the harnesses
-        input("standard-high", &[], &["google"]), // nothing left of the providers
-        input("standard-high", &["claude"], &["openai"]), // each offered, never together
+        input("complex-high", &[], &[]), // no profile at the level
+        input("deep-high", &[], &[]),    // a profile that lists nothing
     ] {
-        assert_eq!(
-            route_from_input(&refused, &options(), from),
-            None,
-            "{refused}"
-        );
+        assert_eq!(route_from_input(&refused, &options(), from), None);
     }
+    let route = route_from_input(
+        &input("standard-high", &["cursor"], &["google"]),
+        &options(),
+        from,
+    )
+    .unwrap();
+    assert!(route.harnesses.is_empty());
+    assert!(route.providers.is_empty());
+    let route = route_from_input(
+        &input("standard-high", &["claude"], &["openai"]),
+        &options(),
+        from,
+    )
+    .unwrap();
+    assert_eq!(route.harnesses, ["claude"]);
+    assert_eq!(route.providers, ["openai"]);
     assert_ne!(
         options_digest(&options()),
         options_digest(&Options::default())

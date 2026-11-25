@@ -2,7 +2,7 @@
 //! task work read and the route history.
 use super::{enabled, history};
 use crate::{AppState, authz::RequireOwner, error::AppError};
-use aq_routing::{CompactRoute, Placement};
+use aq_routing::{CompactRoute, Placement, ProviderIntent, Route};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -69,7 +69,7 @@ async fn routes(
 ) -> Result<Json<Value>, AppError> {
     let items = history(&state.store.pool, task).await?;
     let items: Vec<Value> = (items.iter())
-        .map(|r| json!({"sequence":r.sequence,"at_ms":r.at_ms,"route":r.route}))
+        .map(|r| json!({"sequence":r.sequence,"at_ms":r.at_ms,"route":r.route.as_ref().map(history_route)}))
         .collect();
     let mut body = json!({"items":items});
     // Why routing left the task without a route, while that holds.
@@ -79,9 +79,21 @@ async fn routes(
     Ok(Json(body))
 }
 
+fn history_route(route: &Route) -> Value {
+    let mut view = json!(route);
+    view["provider_intent"] = json!(ProviderIntent::Any);
+    view["prefer_providers"] = json!(route.providers);
+    view["prefer_harnesses"] = json!(aq_routing::preferred_harnesses(
+        &route.prefer,
+        &route.harnesses
+    ));
+    view
+}
+
 fn compact(route: &CompactRoute) -> Value {
     json!({"class":route.c,"harnesses":route.h,"providers":route.p,"prefer":route.pf,
-        "lane":route.l,"provider_intent":route.i,"source":route.s,"policy_digest":route.d})
+        "prefer_providers":route.p,"prefer_harnesses":route.preferred_harnesses(),
+        "lane":route.l,"provider_intent":ProviderIntent::Any,"source":route.s,"policy_digest":route.d})
 }
 
 /// The `routing` object of the work read for `node` (a task of `record`'s project whose

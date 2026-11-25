@@ -1077,7 +1077,19 @@ async fn offers(
         {
             tracing::warn!(%stage, %error, "offer staging cleanup deferred until expiry");
         }
-        let offer = offer?;
+        // Another slot can take the last provider reservation after selection.
+        // The publication transaction rolled back. Keep polling other tasks and
+        // reconsider this task with fresh capacity on a later poll.
+        let offer = match offer {
+            Err(AppError::Conflict(reason))
+                if aq_swarm_settings::admission::is_wait_reason(&reason) =>
+            {
+                diagnostics.record(Some(task.task_id), "admission_wait");
+                skipped.insert(task.task_id);
+                continue;
+            }
+            result => result?,
+        };
         aq_machine_control::recent::forget(auth.id()).await;
         let offer = match offer {
             publication::Outcome::Published(offer) => *offer,

@@ -197,6 +197,8 @@ pub struct CompactRoute {
 /// `providers` means no restriction.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteLimits {
+    // Retained decision format. Queued routes treat these lists as preferences,
+    // including when a historical decision's pinned flag was true.
     pub harnesses: Vec<String>,
     pub providers: Vec<String>,
     pub prefer: Vec<String>,
@@ -213,7 +215,7 @@ impl Route {
             p: self.providers.clone(),
             pf: self.prefer.clone(),
             l: self.lane.clone(),
-            i: self.provider_intent,
+            i: ProviderIntent::Any,
             d: self
                 .policy_digest
                 .as_ref()
@@ -239,6 +241,17 @@ impl Route {
     }
 }
 
+/// Reuse the stored order when presenting effective queued-route preferences.
+pub fn preferred_harnesses(prefer: &[String], harnesses: &[String]) -> Vec<String> {
+    let mut ordered = Vec::new();
+    for name in prefer.iter().chain(harnesses) {
+        if !ordered.contains(name) {
+            ordered.push(name.clone());
+        }
+    }
+    ordered
+}
+
 impl CompactRoute {
     fn predates_attempt(&self, ended_attempts: u64) -> bool {
         self.s == Source::Router && self.a < ended_attempts
@@ -257,12 +270,17 @@ impl CompactRoute {
         }
     }
 
+    /// Explicit harness preferences precede the historical harness list.
+    pub fn preferred_harnesses(&self) -> Vec<String> {
+        preferred_harnesses(&self.pf, &self.h)
+    }
+
     pub fn limits(&self) -> RouteLimits {
         RouteLimits {
             harnesses: self.h.clone(),
             providers: self.p.clone(),
             prefer: self.pf.clone(),
-            pinned: self.i == ProviderIntent::Pinned,
+            pinned: false,
         }
     }
 }
@@ -423,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_route_fits_2048_bytes_and_refuses_an_oversized_allowlist() {
+    fn compact_route_fits_2048_bytes_and_refuses_oversized_preferences() {
         // The longest environment id catalog 2.5.0's `work.route` takes.
         let mut routed = route();
         routed.environment = Some("x".repeat(128));
@@ -433,11 +451,25 @@ mod tests {
         assert_eq!(compact.n, 7);
         assert!(serde_json::to_vec(&compact).unwrap().len() <= 2048);
         let limits = compact.limits();
-        assert!(limits.pinned);
+        assert!(!limits.pinned);
+        assert_eq!(compact.i, ProviderIntent::Any);
         assert_eq!(limits.harnesses, vec!["codex".to_string()]);
         let mut big = route();
         big.providers = (0..200).map(|i| format!("provider-number-{i}")).collect();
         assert!(matches!(big.compact(1), Err(Error::TooLarge { .. })));
+    }
+
+    #[test]
+    fn legacy_pinned_metadata_retains_order_for_preferences() {
+        let mut compact = route().compact(1).unwrap();
+        compact.i = ProviderIntent::Pinned;
+        compact.h = vec!["claude".into(), "codex".into()];
+        compact.pf = vec!["codex".into()];
+        compact.p = vec!["openai".into(), "anthropic".into()];
+        let snapshot = compact.limits();
+        assert!(!snapshot.pinned);
+        assert_eq!(snapshot.providers, ["openai", "anthropic"]);
+        assert_eq!(compact.preferred_harnesses(), ["codex", "claude"]);
     }
 
     #[test]

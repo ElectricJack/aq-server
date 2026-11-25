@@ -85,7 +85,7 @@ fn task_and_worker_summary(kind: &str) -> Option<&'static str> {
         }
         "task.route.clear" => "Remove a task's owner route so routing decides its class again",
         "task.route.set" => {
-            "Route a task to a class, optionally limited to harnesses and providers"
+            "Route a task to a class with optional ordered harness and provider preferences"
         }
         "thread.resolve" => {
             "Resolve a result comment thread, naming the follow-up revision and a reason"
