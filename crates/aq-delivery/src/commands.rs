@@ -13,8 +13,8 @@
 //! the same operation. Time is a parameter (`now_ms`), never read here.
 mod checks;
 mod run;
+use checks::Refresh;
 pub use checks::{CheckRequest, Refreshed};
-use checks::{REFRESHES, Refresh};
 pub use run::FrozenCommand;
 mod git;
 mod host;
