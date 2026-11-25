@@ -287,7 +287,7 @@ async fn read_plan(db: &mut PgConnection, plan: &Plan) -> Result<Value, AppError
     )
 }
 
-fn source(plan: &Plan, project: Uuid, head: &str) -> Result<&Source, AppError> {
+fn source<'a>(plan: &'a Plan, project: Uuid, head: &str) -> Result<&'a Source, AppError> {
     plan.sources
         .get(&project)
         .filter(|s| s.changed && s.head == head)
