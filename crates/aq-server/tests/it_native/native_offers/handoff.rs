@@ -463,6 +463,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
 }
 
+#[cfg(feature = "delivery_playbook")]
 #[tokio::test]
 async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
     use axum::body::Body;
@@ -514,7 +515,7 @@ async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
         serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
             .unwrap()
     };
-    assert_eq!(poll().await["offers"], json!([]));
+    assert_eq!(poll().await["body"]["offers"], json!([]));
     native_offer::assembled(&c).await;
     sqlx::query("UPDATE task_workspace_sources SET state='approved' WHERE task_id=$1")
         .bind(task)
@@ -525,10 +526,17 @@ async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
 
     let mut body = poll().await;
     native_offer::assembled(&c).await;
-    if body["offers"] == json!([]) {
+    if body["body"]["offers"] == json!([]) {
         body = poll().await;
     }
-    let offer = sole_offer(&body);
+    assert_eq!(body["body"]["offers"][0]["workspace_required"], true);
+    let decoded = aq_profiled_state::git_author::decode_poll_reply(
+        &serde_json::to_vec(&body).unwrap(),
+        &c.request,
+    )
+    .unwrap();
+    assert!(decoded.offers[0].workspace_required);
+    let offer = decoded.offers[0].native.clone();
     let attempt = offer.offered.offer.binding.attempt_id;
     let frozen: Value =
         sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")

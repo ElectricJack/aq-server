@@ -173,7 +173,11 @@ pub(super) async fn publish(
     let mut native = built.native.clone();
     native.offered.clock =
         aq_admission::transport::DeliveryClock::new(time, built.deadline).map_err(|_| refused())?;
-    let delivery = OfferDelivery { native, git_author };
+    let delivery = OfferDelivery {
+        native,
+        git_author,
+        workspace_required: scope.requires_workspace(),
+    };
     let original = StoredOffer {
         schema_version: 1,
         read_provenance: built.read_provenance.clone(),

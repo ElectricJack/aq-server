@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 pub(crate) const HEADER: &str = "aq-workspace-expansion";
 pub(crate) const VERSION: &str = "1";
+pub(crate) const SERVER_UNSUPPORTED: &str = "workspace_expansion_server_unsupported";
 pub(crate) const UNSUPPORTED: &str = "workspace_expansion_worker_unsupported";
 pub(crate) const CHANGED: &str = "workspace_expansion_offer_scope_changed";
 pub(crate) const REQUESTED: &str = "workspace_expansion_requested";
@@ -30,7 +31,9 @@ pub(crate) struct Scope {
 impl Scope {
     pub(crate) fn blocker(&self, capable: bool) -> Option<&'static str> {
         self.blocker.or_else(|| {
-            if self.requires_workspace && !capable {
+            if self.requires_workspace && !cfg!(feature = "delivery_playbook") {
+                Some(SERVER_UNSUPPORTED)
+            } else if self.requires_workspace && !capable {
                 Some(UNSUPPORTED)
             } else if !cfg!(feature = "project_environments") && self.has_services() {
                 Some("workspace_expansion_service_capability_unavailable")
@@ -38,6 +41,10 @@ impl Scope {
                 None
             }
         })
+    }
+
+    pub(crate) fn requires_workspace(&self) -> bool {
+        self.requires_workspace
     }
 
     fn has_services(&self) -> bool {
@@ -133,6 +140,10 @@ pub(crate) async fn work_reason(
         "workspace_expansion_binding_stale" => (
             "A requested repository binding changed. Ask its project owner to approve a current pin.",
             "workspace_binding_reapproved",
+        ),
+        SERVER_UNSUPPORTED => (
+            "Workspace requirements need an AQ server built with workspace Git routes.",
+            "workspace_server_support_enabled",
         ),
         CHECKPOINT => (
             "AQ is waiting for the current attempt to save its work and stop before resuming with the expanded workspace.",

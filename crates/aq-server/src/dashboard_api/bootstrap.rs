@@ -187,8 +187,19 @@ impl CapabilitySources<'_> {
             capability("dashboard.overview", true, ""),
             capability(
                 "tasks.workspace.resources",
-                a.owner,
-                "Task workspace resources require an owner account",
+                a.owner
+                    && cfg!(all(
+                        feature = "delivery_playbook",
+                        feature = "project_environments"
+                    )),
+                if cfg!(all(
+                    feature = "delivery_playbook",
+                    feature = "project_environments"
+                )) {
+                    "Task workspace resources require an owner account"
+                } else {
+                    "Task workspace resources require workspace Git and project environment support"
+                },
             ),
             capability(
                 "tasks.route.preferences",

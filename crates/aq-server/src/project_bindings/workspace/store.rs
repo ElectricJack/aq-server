@@ -99,7 +99,7 @@ pub(super) async fn decision(
         Resolution::Denied => "denied",
     };
     let result=sqlx::query("UPDATE task_workspace_sources SET state=$7,approved_by=$8 WHERE home_project_id=$1 AND task_id=$2 AND target_project_id=$3
-        AND project_revision=$4 AND commit_oid=$5 AND access=$6 AND (state='pending' OR (state=$7 AND approved_by=$8))")
+        AND project_revision=$4 AND commit_oid=$5 AND access=$6 AND (state='pending' OR (state='denied' AND $7='approved') OR (state=$7 AND approved_by=$8))")
         .bind(home).bind(task).bind(target).bind(action.project_revision).bind(&action.commit_oid)
         .bind(permission(action.access)).bind(state).bind(actor).execute(&mut **tx).await.map_err(db)?;
     if result.rows_affected() != 1 {
@@ -115,8 +115,8 @@ async fn sources(
     pending: bool,
 ) -> Result<Vec<Value>> {
     sqlx::query_scalar("SELECT to_jsonb(w) FROM task_workspace_sources w WHERE ($1::uuid IS NULL OR home_project_id=$1)
-        AND ($2::uuid IS NULL OR task_id=$2) AND ($3::uuid IS NULL OR target_project_id=$3) AND (NOT $4 OR state='pending')
-        ORDER BY home_project_id,task_id,target_project_id LIMIT 257")
+        AND ($2::uuid IS NULL OR task_id=$2) AND ($3::uuid IS NULL OR target_project_id=$3) AND (NOT $4 OR state IN ('pending','denied'))
+        ORDER BY CASE WHEN $4 AND state='pending' THEN 0 ELSE 1 END,home_project_id,task_id,target_project_id LIMIT 257")
         .bind(home).bind(task).bind(target).bind(pending).fetch_all(&s.store.pool).await.map_err(db)
 }
 pub(super) async fn inbox(s: &AppState, target: Uuid) -> Result<Value> {

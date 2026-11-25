@@ -211,6 +211,20 @@ async fn select_all(
     task: Uuid,
     requested: &[Requirement],
 ) -> Result<Vec<Selected>> {
+    if !requested.is_empty() && !cfg!(feature = "delivery_playbook") {
+        return Err(AppError::Maintenance(
+            "Task workspace requests require an AQ server built with delivery_playbook for workspace Git routes".into(),
+        ));
+    }
+    if !cfg!(feature = "project_environments")
+        && requested
+            .iter()
+            .any(|r| matches!(r, Requirement::Service { .. }))
+    {
+        return Err(AppError::Maintenance(
+            "Task workspace services require an AQ server built with project_environments".into(),
+        ));
+    }
     let mut requirements = Vec::with_capacity(requested.len());
     let mut repositories = std::collections::BTreeSet::new();
     for requirement in requested {
