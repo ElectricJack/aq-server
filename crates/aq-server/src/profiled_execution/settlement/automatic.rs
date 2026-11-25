@@ -312,7 +312,6 @@ async fn replacement_facts(
     Ok(facts)
 }
 
-<<<<<<< HEAD
 async fn retain_replacement_source_locked(
     tx: &mut Transaction<'_, Postgres>,
     r: &results::RecordedResult,
@@ -385,8 +384,6 @@ async fn settle_replacement_effects_locked(
 
 /// Reworked attempts that still hold their task without both replacement
 /// facts, in report order after `after`. Bounded; the cursor is disposable.
-=======
->>>>>>> refs/remotes/central/main
 pub async fn reworked_without_facts(
     state: &AppState,
     after: Option<Uuid>,
@@ -560,23 +557,7 @@ async fn dispatch(
     let time = now(state)?;
     match outcome {
         Ok(Ok((http, raw))) if http.is_success() => {
-<<<<<<< HEAD
             confirm_dispatch_locked(&mut tx, report_id, &current, &raw, time).await?;
-=======
-            if let Ok(receipt) = completion::confirmed(&raw, &current) {
-                let receipt =
-                    serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
-                graph_completion::confirm(
-                    &mut tx,
-                    report_id,
-                    current.get("attempt_id"),
-                    time,
-                    receipt,
-                )
-                .await
-                .map_err(db)?;
-            }
->>>>>>> refs/remotes/central/main
         }
         Ok(Ok((http, _))) if http == axum::http::StatusCode::CONFLICT => {
             let reason = if lookup {
@@ -618,15 +599,9 @@ async fn confirm_dispatch_locked(
     if let Ok(receipt) = completion::confirmed(raw, current) {
         let receipt =
             serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
-        sqlx::query("UPDATE profiled_auto_settlements SET disposition='confirmed',reason=NULL,receipt=$2,updated_at_ms=$3 WHERE report_id=$1")
-            .bind(report_id).bind(receipt).bind(time).execute(&mut **tx).await.map_err(db)?;
-        sqlx::query(
-            "UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1 AND holds_task",
-        )
-        .bind(current.get::<Uuid, _>("attempt_id"))
-        .execute(&mut **tx)
-        .await
-        .map_err(db)?;
+        graph_completion::confirm(tx, report_id, current.get("attempt_id"), time, receipt)
+            .await
+            .map_err(db)?;
     }
     Ok(())
 }

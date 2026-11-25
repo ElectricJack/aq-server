@@ -266,7 +266,6 @@ pub async fn accept(
         before.source.fact(),
     )
     .await?;
-<<<<<<< HEAD
     let lease = issue_material(
         state,
         &before.selection,
@@ -274,43 +273,9 @@ pub async fn accept(
         lease_id,
         issued,
         expiry,
+        before.backend_kind,
     )
     .await?;
-=======
-    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
-    let selection = before.selection.clone();
-    let backend_kind = before.backend_kind;
-    let binding = request.acceptance.binding.clone();
-    let head = super::login_refresh::newest_source(
-        &state.store.pool,
-        &registry,
-        &selection.choice.credential_profile,
-        selection.credential_revision,
-    )
-    .await?;
-    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
-    let permit = permit.ok_or_else(|| refused())?;
-    let lease = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            material::issue_for_selection_from(
-                &registry,
-                &selection,
-                &binding,
-                lease_id,
-                issued,
-                expiry,
-                backend_kind,
-                head.as_ref(),
-            )
-        }),
-    )
-    .await
-    .map_err(|_| refused())?
-    .map_err(|_| AppError::Internal)?
-    .map_err(|_| refused())?;
->>>>>>> refs/remotes/central/main
     let mut tx = begin(state).await?;
     let after = locked(state, &mut tx, auth, request).await?;
     if before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()? {
@@ -371,6 +336,7 @@ async fn issue_material(
     lease_id: Uuid,
     issued: u64,
     expiry: u64,
+    backend_kind: Option<aq_selection::BackendKind>,
 ) -> Result<MaterialLease, AppError> {
     let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
     let selection = selection.clone();
@@ -395,7 +361,7 @@ async fn issue_material(
                 lease_id,
                 issued,
                 expiry,
-                None,
+                backend_kind,
                 head.as_ref(),
             )
         }),
