@@ -54,9 +54,12 @@ async fn save_structure(pool: &sqlx::PgPool, markdown: &str) {
         .unwrap();
     let (_, revision) = aq_role_settings::routing_document(pool).await.unwrap();
     let id = uuid::Uuid::new_v4();
-    aq_role_settings::save_routing_document(pool, actor, markdown, revision, id, 1)
-        .await
-        .unwrap();
+    aq_role_settings::save_routing_document(
+        aq_role_settings::Writer::new(pool, actor, 1).edit(revision, id),
+        markdown,
+    )
+    .await
+    .unwrap();
 }
 
 /// Answers every field `medium` (or its first choice) and no flag.

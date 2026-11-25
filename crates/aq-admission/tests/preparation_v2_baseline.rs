@@ -38,9 +38,29 @@ fn observed() -> Value {
         )
         .unwrap();
     let mut errors = Vec::new();
-    let mut record = |name: String, result: aq_admission::Result<()>| {
-        errors.push(json!({"case":name,"error":result.unwrap_err().to_string()}));
-    };
+    proposal_errors(&c, &mut errors);
+    accepted_errors(&c, &mut errors);
+    prepare_errors(&c, &mut errors);
+    confirmation_errors(&c, &mut errors);
+    execution_errors(&c, &mut errors);
+    let mut wire = documents(&c);
+    wire.push(Document::AcceptedDelivery(Box::new(accepted_delivery)));
+    for d in &wire {
+        decode(&canonical(d)).unwrap();
+    }
+    json!({"schema":schema(),"contract":{"artifact":contract_artifact().unwrap(),"manifest":contract_manifest().unwrap()},
+        "documents":wire,"digests":{"proposal":c.proposal.digest().unwrap(),"accept":c.accept.digest().unwrap(),
+        "accepted":c.accepted.digest().unwrap(),"prepare":c.prepare.digest().unwrap(),
+        "confirmation":c.execution.confirmation.digest().unwrap(),"execution":c.execution.digest().unwrap()},
+        "fact_digests":c.execution.confirmation.facts.iter().map(|f|OwnerFact::record_digest(&f.body).unwrap()).collect::<Vec<_>>(),
+        "samples":{"accepted":{"deadline_ns":accepted_time.deadline_ns(),"hard_deadline_ns":accepted_time.hard_deadline_ns()},
+        "execution":{"deadline_ns":execution_time.deadline_ns(),"hard_deadline_ns":execution_time.hard_deadline_ns()}},
+        "errors":errors})
+}
+fn record(errors: &mut Vec<Value>, name: String, result: aq_admission::Result<()>) {
+    errors.push(json!({"case":name,"error":result.unwrap_err().to_string()}));
+}
+fn proposal_errors(c: &Case, errors: &mut Vec<Value>) {
     for mode in 0..4 {
         let mut p = c.proposal.clone();
         match mode {
@@ -51,8 +71,10 @@ fn observed() -> Value {
             2 => p.negotiation.features.push(p.negotiation.features[0]),
             _ => p.choice.selection_digest = Digest::of(b"foreign selection"),
         }
-        record(format!("proposal-{mode}"), p.validate());
+        record(errors, format!("proposal-{mode}"), p.validate());
     }
+}
+fn accepted_errors(c: &Case, errors: &mut Vec<Value>) {
     for mode in 0..5 {
         let mut a = c.accepted.clone();
         match mode {
@@ -63,10 +85,13 @@ fn observed() -> Value {
             _ => a.lease.expires_at_ms = 100001,
         }
         record(
+            errors,
             format!("accepted-{mode}"),
             a.validate_for(&c.accept, &c.proposal),
         );
     }
+}
+fn prepare_errors(c: &Case, errors: &mut Vec<Value>) {
     for mode in 0..4 {
         let mut q = c.prepare.clone();
         match mode {
@@ -78,10 +103,46 @@ fn observed() -> Value {
             _ => q.expected_preparation_revision += 1,
         }
         record(
+            errors,
             format!("prepare-{mode}"),
             q.validate_for(&c.accepted, &c.accept, &c.proposal),
         );
     }
+}
+fn mutate_fact(confirmation: &mut FreshConfirmation, mode: u32) {
+    let kind = match mode {
+        5..=7 => FactKind::Availability,
+        8 => FactKind::Principal,
+        9 => FactKind::Inventory,
+        10 => FactKind::Budget,
+        11 => FactKind::Context,
+        _ => FactKind::Registry,
+    };
+    let fact = confirmation
+        .facts
+        .iter_mut()
+        .find(|x| x.body.value.kind() == kind)
+        .unwrap();
+    match &mut fact.body.value {
+        FactValue::Availability { state, .. } => {
+            *state = match mode {
+                5 => AvailabilityState::Unknown,
+                6 => AvailabilityState::Cooldown,
+                _ => AvailabilityState::Unavailable,
+            }
+        }
+        FactValue::Principal { principal, .. } => *principal = reference("foreign-principal"),
+        FactValue::Inventory { harness, .. } => {
+            harness.cli_version = Text::new("different").unwrap()
+        }
+        FactValue::Budget { elapsed_ms, .. } => *elapsed_ms = None,
+        FactValue::Context { task, .. } => task.version += 1,
+        FactValue::Registry { registry, .. } => registry.version = Text::new("2").unwrap(),
+        _ => unreachable!(),
+    }
+    resign(fact);
+}
+fn confirmation_errors(c: &Case, errors: &mut Vec<Value>) {
     for mode in 0..13 {
         let mut f = c.execution.confirmation.clone();
         match mode {
@@ -99,48 +160,17 @@ fn observed() -> Value {
                 resign(&mut f.facts[0]);
             }
             _ => {
-                let kind = match mode {
-                    5..=7 => FactKind::Availability,
-                    8 => FactKind::Principal,
-                    9 => FactKind::Inventory,
-                    10 => FactKind::Budget,
-                    11 => FactKind::Context,
-                    _ => FactKind::Registry,
-                };
-                let fact = f
-                    .facts
-                    .iter_mut()
-                    .find(|x| x.body.value.kind() == kind)
-                    .unwrap();
-                match &mut fact.body.value {
-                    FactValue::Availability { state, .. } => {
-                        *state = match mode {
-                            5 => AvailabilityState::Unknown,
-                            6 => AvailabilityState::Cooldown,
-                            _ => AvailabilityState::Unavailable,
-                        }
-                    }
-                    FactValue::Principal { principal, .. } => {
-                        *principal = reference("foreign-principal")
-                    }
-                    FactValue::Inventory { harness, .. } => {
-                        harness.cli_version = Text::new("different").unwrap()
-                    }
-                    FactValue::Budget { elapsed_ms, .. } => *elapsed_ms = None,
-                    FactValue::Context { task, .. } => task.version += 1,
-                    FactValue::Registry { registry, .. } => {
-                        registry.version = Text::new("2").unwrap()
-                    }
-                    _ => unreachable!(),
-                }
-                resign(fact);
+                mutate_fact(&mut f, mode);
             }
         }
         record(
+            errors,
             format!("confirmation-{mode}"),
             f.validate_for(&c.prepare, &c.accepted, &c.accept, &c.proposal),
         );
     }
+}
+fn execution_errors(c: &Case, errors: &mut Vec<Value>) {
     for mode in 0..3 {
         let mut x = c.execution.clone();
         match mode {
@@ -149,23 +179,11 @@ fn observed() -> Value {
             _ => x.request_digest = Digest::of(b"other request"),
         }
         record(
+            errors,
             format!("execution-{mode}"),
             x.validate_for(&c.prepare, &c.accepted, &c.accept, &c.proposal),
         );
     }
-    let mut wire = documents(&c);
-    wire.push(Document::AcceptedDelivery(Box::new(accepted_delivery)));
-    for d in &wire {
-        decode(&canonical(d)).unwrap();
-    }
-    json!({"schema":schema(),"contract":{"artifact":contract_artifact().unwrap(),"manifest":contract_manifest().unwrap()},
-        "documents":wire,"digests":{"proposal":c.proposal.digest().unwrap(),"accept":c.accept.digest().unwrap(),
-        "accepted":c.accepted.digest().unwrap(),"prepare":c.prepare.digest().unwrap(),
-        "confirmation":c.execution.confirmation.digest().unwrap(),"execution":c.execution.digest().unwrap()},
-        "fact_digests":c.execution.confirmation.facts.iter().map(|f|OwnerFact::record_digest(&f.body).unwrap()).collect::<Vec<_>>(),
-        "samples":{"accepted":{"deadline_ns":accepted_time.deadline_ns(),"hard_deadline_ns":accepted_time.hard_deadline_ns()},
-        "execution":{"deadline_ns":execution_time.deadline_ns(),"hard_deadline_ns":execution_time.hard_deadline_ns()}},
-        "errors":errors})
 }
 #[test]
 fn untouched_019_phase_wire_schema_pins_clocks_and_errors_stay_exact() {

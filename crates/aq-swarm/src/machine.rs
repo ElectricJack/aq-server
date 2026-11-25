@@ -45,12 +45,9 @@ pub struct MachineReport {
     pub disk_free_bytes: Option<u64>,
 }
 
-impl MachineReport {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.schema_version != 1 {
-            return Err("schema_version");
-        }
-        if let Some(key) = &self.machine.key {
+impl MachineIdentity {
+    fn validate(&self) -> Result<(), &'static str> {
+        if let Some(key) = &self.key {
             let ok = (1..=63).contains(&key.len())
                 && key
                     .bytes()
@@ -60,11 +57,21 @@ impl MachineReport {
                 return Err("key");
             }
         }
-        if let Some(label) = &self.machine.label
-            && (!(1..=64).contains(&label.chars().count()) || label.chars().any(char::is_control))
-        {
+        if self.label.as_ref().is_some_and(|label| !valid_label(label)) {
             return Err("label");
         }
+        Ok(())
+    }
+}
+fn valid_label(label: &str) -> bool {
+    (1..=64).contains(&label.chars().count()) && !label.chars().any(char::is_control)
+}
+impl MachineReport {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 {
+            return Err("schema_version");
+        }
+        self.machine.validate()?;
         if !(1..=4096).contains(&self.logical_cpus) {
             return Err("logical_cpus");
         }

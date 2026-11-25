@@ -4,6 +4,7 @@
 //! Graph are tested with a recorded result in
 //! `it_profiled::profiled_results::auto_settlement56::playbook`.
 use super::{D, delivery};
+use aq_playbook_host::runner::Intent;
 use aq_server::playbooks::{
     domain::{Error, delivery_decisions::Settled},
     host_adapters::HostResult,
@@ -16,16 +17,30 @@ type Decision = (String, Option<String>, Option<String>, Option<bool>);
 fn decide(task: Uuid, result: Uuid) -> Value {
     json!({"task": task.to_string(), "result_id": result.to_string()})
 }
-fn back(task: Uuid, result: Uuid, reason: &str, detail: Option<&str>, update: bool) -> Value {
-    let mut input = json!({"task": task.to_string(), "result_id": result.to_string(),
-        "reason": reason, "update_from_main": update});
-    if let Some(detail) = detail {
-        input["detail"] = json!(detail);
-    }
-    input
+/// A `work.return` input without a detail that does not update from main.
+fn back(task: Uuid, result: Uuid, reason: &str) -> Value {
+    json!({"task": task.to_string(), "result_id": result.to_string(),
+        "reason": reason, "update_from_main": false})
 }
 fn hold(task: Uuid, result: Uuid, reason: &str) -> Value {
     json!({"task": task.to_string(), "result_id": result.to_string(), "reason": reason})
+}
+fn notice(project: Uuid, identity: &str, text: &str) -> Value {
+    json!({"project": project.to_string(), "identity": identity, "text": text})
+}
+/// `intent` dispatched by the event run `run` instead of a synthetic one.
+fn in_run(mut intent: Intent, run: &str) -> Intent {
+    intent.run = run.into();
+    intent
+}
+/// The recorded decision of a returned result.
+fn returned_for(reason: &str, detail: Option<&str>, update: bool) -> Decision {
+    let detail = detail.map(Into::into);
+    ("returned".into(), Some(reason.into()), detail, Some(update))
+}
+/// The recorded decision of a held result.
+fn held_for(reason: &str) -> Decision {
+    ("held".into(), Some(reason.into()), None, None)
 }
 fn refused(reason: &str) -> HostResult {
     HostResult {
@@ -197,13 +212,454 @@ async fn a_lost_settlement_answer_leaves_work_complete_pending_until_a_replay() 
     assert_eq!(h.decision(p.result_id).await.unwrap().0, "completed");
 }
 
+async fn publication_driver(h: &D) -> aq_server::playbooks::driver::Driver {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbook_host::{Error, postgres_client as pg, postgres_storage as store, protected};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    let (_task, _) = h.stopped(h.scope.project_id, "success");
+    // The harness namespace is Host10 (catalog 2.3.0) with or without spec
+    // 0017. With environments the built-in record pins 2.5.0, and this
+    // namespace refuses to install the publication artifact sealed on it.
+    let mut source = builtin::delivery();
+    source.commands.retain(|c| !c.starts_with("environment."));
+    source.events.retain(|e| !e.starts_with("aq.environment."));
+    let catalog = request::catalog_2_3().unwrap();
+    let retained = draft::retain_registry(&catalog, &source.commands, &source.events);
+    source.capabilities = retained.unwrap().1;
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("branch.publish");
+    step["op"]["input"]["fields"] = json!({
+        "task":{"op":"ref","root":"input","path":["task"]}
+    });
+    step["edges"] = json!({"published":"delivered", "accepted":"delivered", "conflict":"failed", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Publish the retained result.".into(),
+        record: request::engine_record(&source, "delivery-publication-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let driver = Driver::start(h.service.clone(), Default::default(), move || {
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    })
+    .await
+    .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    driver
+}
+
+#[tokio::test]
+async fn the_driver_recovers_the_original_publication_after_a_lost_acceptance() {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
+    driver.test_lose_next_host_reply("branch.publish");
+    let pool = h.pool().await;
+    let records = || {
+        sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT operation_id,status FROM playbook_effects WHERE command_name='branch.publish'",
+        )
+        .fetch_all(&pool)
+    };
+    let mut original = Vec::new();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        original = records().await.unwrap();
+        if !original.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].1, "accepted");
+    // Advancing the driver's normal quanta is enough. An explicit recovery
+    // request must not be necessary to retrieve the host's admission.
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(records().await.unwrap(), original);
+    assert_eq!(sqlx::query_scalar::<_,i64>(
+        "SELECT count(*) FROM playbook_host_operations WHERE operation_id=$1 AND command_name='branch.publish'",
+    ).bind(original[0].0).fetch_one(&pool).await.unwrap(), 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_publication_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("branch.publish", "playbook_host_operations").await;
+}
+
+#[tokio::test]
+async fn an_expired_unadmitted_read_releases_its_result_for_a_fresh_run() {
+    expired_unadmitted_delivery("work.read", "playbook_effects").await;
+}
+
+async fn expired_unadmitted_delivery(command: &str, table: &str) {
+    let h = delivery(false).await;
+    let driver = publication_driver(&h).await;
+    let pool = h.pool().await;
+    let interrupt = format!(
+        "CREATE FUNCTION interrupt_delivery_admission() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.command_name='{command}' THEN RAISE EXCEPTION 'interrupted admission'; END IF;
+         RETURN NEW; END $$;
+         CREATE TRIGGER interrupt_delivery_admission BEFORE INSERT ON {table}
+         FOR EACH ROW EXECUTE FUNCTION interrupt_delivery_admission();"
+    );
+    sqlx::raw_sql(&interrupt).execute(&pool).await.unwrap();
+    let mut blocked = None;
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        let runs = driver
+            .inspect_runs(h.f.actor, Default::default())
+            .await
+            .unwrap();
+        blocked = runs.items.into_iter().find(|r| r.status == "blocked");
+        if blocked.is_some() {
+            break;
+        }
+    }
+    let blocked = blocked.expect("the engine recorded the interrupted admission");
+    let detail = driver
+        .inspect_run_timeline(h.f.actor, blocked.id.clone(), Default::default())
+        .await
+        .unwrap();
+    let original = detail
+        .effects
+        .items
+        .into_iter()
+        .find(|e| e.command == command)
+        .unwrap();
+    let deadline = original.deadline_at_ms.unwrap();
+    assert_eq!(original.status, "unknown");
+    let status = || {
+        sqlx::query_scalar::<_, String>("SELECT status FROM playbook_effects WHERE intent_id=$1")
+            .bind(&original.id)
+            .fetch_optional(&pool)
+    };
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "admission rolled back atomically"
+    );
+
+    sqlx::query(&format!(
+        "DROP TRIGGER interrupt_delivery_admission ON {table}"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert!(h.clock() < deadline);
+    assert_eq!(
+        status().await.unwrap(),
+        None,
+        "a live deadline is kept open"
+    );
+
+    h.later((deadline - h.clock()).max(120_000) + 1);
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(status().await.unwrap().as_deref(), Some("expired"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM playbook_host_operations WHERE intent_id=$1",
+        )
+        .bind(&original.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(DISTINCT run_id) FROM playbook_effects WHERE command_name=$1 AND status<>'expired'",
+        )
+        .bind(command)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "only the fresh run admitted the interrupted command"
+    );
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id == blocked.id && r.status == "cancelled")
+    );
+    assert!(
+        runs.items
+            .iter()
+            .any(|r| r.id != blocked.id && r.status == "completed")
+    );
+    driver.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_driver_resumes_an_admitted_return_after_restart_and_deadline() {
+    use aq_playbook_authoring::{builtin, request};
+    use aq_playbooks_compiler::draft;
+    use aq_server::playbooks::driver::Driver;
+    use std::{collections::BTreeMap, time::Duration};
+
+    let h = delivery(false).await;
+    h.service.retire_runtime(&h.runtime).await.unwrap();
+    h.answers(Settled::Pending);
+    let (task, pending) = h.stopped(h.scope.project_id, "failed");
+    let source = builtin::delivery();
+    let catalog = request::pinned_catalog(&source).unwrap();
+    let mut draft_value: Value = serde_json::from_str(include_str!(
+        "../../fixtures/delivery_reads_the_task.draft.json"
+    ))
+    .unwrap();
+    let step = &mut draft_value["steps"]["hold"];
+    step["op"]["command"] = json!("work.return");
+    step["op"]["input"]["fields"]["update_from_main"] = json!({"op":"literal","value":false});
+    step["edges"] = json!({"returned":"delivered", "refused":"failed"});
+    let artifact = draft::seal(&draft::Workspace {
+        markdown: "Return an already stopped result to the queue.".into(),
+        record: request::engine_record(&source, "delivery-replay"),
+        catalog: request::catalog_for(&source, &catalog).unwrap(),
+        facts: BTreeMap::new(),
+        draft: serde_json::from_value(draft_value).unwrap(),
+    })
+    .unwrap();
+    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    url.set_path(h.f.db.options().get_database().unwrap());
+    let factory = move || {
+        use aq_playbook_host::{
+            Error, postgres_client as pg, postgres_storage as store, protected,
+        };
+        let config: pg::Config = url.as_str().parse().unwrap();
+        let client = config.connect(pg::NoTls).map_err(|_| Error::Unknown)?;
+        let keys =
+            store::ProtectionKeyring::new("test", BTreeMap::from([("test".into(), [9; 32])]))
+                .unwrap();
+        protected::storage(
+            client,
+            keys,
+            Duration::from_secs(5),
+            Duration::from_millis(500),
+        )
+    };
+    let driver = Driver::start(h.service.clone(), Default::default(), factory.clone())
+        .await
+        .unwrap();
+    driver.install(artifact.clone()).await.unwrap();
+    driver
+        .activate(source.binding, artifact.digest, h.grant, 1)
+        .await
+        .unwrap();
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if !h.settled().is_empty() {
+            break;
+        }
+    }
+    let pool = h.pool().await;
+    let retained = || {
+        sqlx::query_as::<_, (String, Uuid, String)>(
+        "SELECT intent_id,operation_id,status FROM playbook_effects WHERE command_name='work.return'",
+    ).fetch_one(&pool)
+    };
+    let (intent, operation, status) = retained().await.unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(h.decision(pending.result_id).await, None);
+    driver.stop().await.unwrap();
+
+    h.later(15_000);
+    h.answers(Settled::Returned);
+    let driver = Driver::start(h.service.clone(), Default::default(), factory)
+        .await
+        .unwrap();
+    driver.recover().await.unwrap();
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        retained().await.unwrap(),
+        (intent, operation, "returned".into())
+    );
+    assert_eq!(h.decision(pending.result_id).await.unwrap().0, "returned");
+    let returns: i64 =
+        sqlx::query_scalar("SELECT returns::bigint FROM delivery_tasks WHERE task_id=$1")
+            .bind(task)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(returns, 1);
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 1);
+    assert_eq!(runs.items[0].status, "completed");
+    assert_eq!(h.settled(), vec![("policy".into(), pending.result_id); 2]);
+
+    // A final receipt also survives losing the answer before the engine sees it.
+    let (_, lost) = h.stopped(h.scope.project_id, "failed");
+    driver.test_lose_next_host_reply("work.return");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.decision(lost.result_id).await.is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.decision(lost.result_id).await.unwrap().0, "returned");
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    let runs = driver
+        .inspect_runs(h.f.actor, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(runs.items.len(), 2);
+    assert!(runs.items.iter().all(|run| run.status == "completed"));
+    assert_eq!(h.settled().len(), 3);
+
+    // An admitted decision can wait for authority. It must never run on a revoked grant.
+    h.answers(Settled::Pending);
+    let (_, revoked) = h.stopped(h.scope.project_id, "failed");
+    for _ in 0..20 {
+        driver.quantum().await.unwrap();
+        if h.settled()
+            .iter()
+            .any(|(_, result)| *result == revoked.result_id)
+        {
+            break;
+        }
+    }
+    assert_eq!(h.settled().len(), 4);
+    h.service.revoke(h.f.actor, h.grant).await.unwrap();
+    h.answers(Settled::Returned);
+    h.later(15_000);
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.settled().len(), 4);
+    assert_eq!(h.decision(revoked.result_id).await, None);
+
+    h.service
+        .grant(
+            h.f.actor,
+            Uuid::new_v4(),
+            h.scope.clone(),
+            h.clock() + 60_000,
+        )
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "a general grant cannot resume a pending effect"
+    );
+
+    let operation: Uuid = sqlx::query_scalar(
+        "SELECT operation_id FROM playbook_effects WHERE status='pending' AND receipt->>'result_id'=$1",
+    )
+    .bind(revoked.result_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    use tower::ServiceExt;
+    let driver = std::sync::Arc::new(driver);
+    let app = aq_server::build_admin_router_with_playbooks(h.f.state.clone(), Some(driver.clone()));
+    let approve =
+        |grant: Uuid, op: Uuid| {
+            app.clone().oneshot(
+            axum::http::Request::post("/api/playbooks/grants")
+                .header("x-aq-request", "1")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({
+                    "grant_id": grant, "scope": h.scope, "expires_at_ms": h.clock() + 60_000,
+                    "resume_delivery_operation_id": op
+                }).to_string()))
+                .unwrap(),
+        )
+        };
+    let grant = Uuid::new_v4();
+    assert_eq!(approve(grant, Uuid::new_v4()).await.unwrap().status(), 404);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    assert_eq!(approve(grant, operation).await.unwrap().status(), 200);
+    h.service.revoke(h.f.actor, grant).await.unwrap();
+    for _ in 0..4 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(
+        h.settled().len(),
+        4,
+        "revoking the renewed grant fences the effect"
+    );
+
+    assert_eq!(
+        approve(Uuid::new_v4(), operation).await.unwrap().status(),
+        200
+    );
+    for _ in 0..8 {
+        driver.quantum().await.unwrap();
+    }
+    assert_eq!(h.decision(revoked.result_id).await.unwrap().0, "returned");
+    assert_eq!(h.settled().len(), 5);
+    let (after, original): (String, Uuid) =
+        sqlx::query_as("SELECT status,grant_id FROM playbook_effects WHERE operation_id=$1")
+            .bind(operation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((after.as_str(), original), ("returned", h.grant));
+    driver.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     let h = delivery(false).await;
     h.answers(Settled::Returned);
     let (task, first) = h.stopped(h.scope.project_id, "success");
     assert_eq!(h.returns(task).await, 0);
-    let input = back(task, first.result_id, "checks_failed", Some("unit"), false);
+    let mut input = back(task, first.result_id, "checks_failed");
+    input["detail"] = json!("unit");
     let sent = h.run("return-1", "work.return", input.clone()).await;
     assert_eq!(sent, empty("returned"));
     assert_eq!(
@@ -213,16 +669,7 @@ async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     assert_eq!(h.returns(task).await, 1);
     // What the next attempt is told: the reason, the detail and whether to update from main.
     let decided = h.decision(first.result_id).await.unwrap();
-    let want = ("returned", Some("checks_failed"), Some("unit"), Some(false));
-    assert_eq!(
-        (
-            decided.0.as_str(),
-            decided.1.as_deref(),
-            decided.2.as_deref(),
-            decided.3
-        ),
-        want
-    );
+    assert_eq!(decided, returned_for("checks_failed", Some("unit"), false));
     // A replay, and another run's return of the same result, count nothing more.
     assert_eq!(h.run("return-1", "work.return", input.clone()).await, sent);
     assert_eq!(h.run("return-2", "work.return", input).await, sent);
@@ -233,30 +680,19 @@ async fn work_return_sends_the_task_back_and_counts_each_result_once() {
     assert_eq!(late.await, refused("stale_result"));
     // The next attempt's result goes back on a conflict, updated from main.
     let next = h.next_result(task);
-    let conflict = back(task, next, "merge_conflict", None, true);
+    let mut conflict = back(task, next, "merge_conflict");
+    conflict["update_from_main"] = json!(true);
     let sent = h.run("return-3", "work.return", conflict).await;
     assert_eq!(sent, empty("returned"));
     assert_eq!(h.returns(task).await, 2);
     let decided = h.decision(next).await.unwrap();
-    assert_eq!(
-        decided,
-        (
-            "returned".into(),
-            Some("merge_conflict".into()),
-            None,
-            Some(true)
-        )
-    );
+    assert_eq!(decided, returned_for("merge_conflict", None, true));
     // A fenced or stale return changes nothing and counts nothing.
     let third = h.next_result(task);
     h.answers(Settled::Stale);
-    let fenced = h.run(
-        "return-4",
-        "work.return",
-        back(task, third, "policy", None, false),
-    );
+    let fenced = h.run("return-4", "work.return", back(task, third, "policy"));
     assert_eq!(fenced.await, refused("stale_result"));
-    let stale = back(task, next, "policy", None, false);
+    let stale = back(task, next, "policy");
     assert_eq!(
         h.run("return-5", "work.return", stale).await,
         refused("stale_result")
@@ -280,10 +716,7 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
     // Holding settles nothing and tells nobody; the result is not announced again.
     assert!(h.settled().is_empty());
     let decided = h.decision(p.result_id).await.unwrap();
-    assert_eq!(
-        decided,
-        ("held".into(), Some("returns_exhausted".into()), None, None)
-    );
+    assert_eq!(decided, held_for("returns_exhausted"));
     h.later(10_000_000);
     assert_eq!(h.asked().await, 0);
     // A second hold keeps the first.
@@ -292,7 +725,7 @@ async fn work_hold_holds_a_result_until_a_later_decision() {
     assert_eq!(h.decision(p.result_id).await, Some(decided));
     // A later decision ends the hold.
     h.answers(Settled::Returned);
-    let input = back(task, p.result_id, "policy", None, false);
+    let input = back(task, p.result_id, "policy");
     assert_eq!(
         h.run("return", "work.return", input).await,
         empty("returned")
@@ -328,20 +761,11 @@ async fn a_stale_hold_and_its_notification_cannot_act_on_a_same_head_replacement
     let h = delivery(false).await;
     let (task, original) = h.stopped(h.scope.project_id, "success");
     let run = h.event_run(task).await;
-    let mut hold_intent = h.intent(
-        "event-hold",
-        "work.hold",
-        hold(task, original.result_id, "policy"),
-    );
-    hold_intent.run.clone_from(&run);
-    let mut notice = h.intent(
-        "event-notice",
-        "supervisor.notify",
-        json!({
-            "project": original.project_id, "identity": original.result_id, "text": "stale hold",
-        }),
-    );
-    notice.run = run;
+    let identity = original.result_id.to_string();
+    let input = hold(task, original.result_id, "policy");
+    let hold_intent = in_run(h.intent("event-hold", "work.hold", input), &run);
+    let input = notice(original.project_id, &identity, "stale hold");
+    let notice = in_run(h.intent("event-notice", "supervisor.notify", input), &run);
     assert!(matches!(h.try_run(&notice).await, Err(Error::Conflict)));
     assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
 
@@ -356,16 +780,16 @@ async fn held_result_notice_identifies_the_work_that_needs_attention() {
     let h = delivery(false).await;
     let (task, original) = h.stopped(h.scope.project_id, "failed");
     let run = h.event_run(task).await;
-    let mut hold_intent = h.intent(
-        "hold",
-        "work.hold",
-        hold(task, original.result_id, "policy"),
-    );
-    hold_intent.run.clone_from(&run);
+    let input = hold(task, original.result_id, "policy");
+    let hold_intent = in_run(h.intent("hold", "work.hold", input), &run);
     assert_eq!(h.try_run(&hold_intent).await.unwrap(), empty("held"));
-    let mut notice = h.intent("notify", "supervisor.notify",
-        json!({"project":original.project_id, "identity":original.result_id, "text":"Delivery requires attention."}));
-    notice.run = run;
+    let identity = original.result_id.to_string();
+    let input = notice(
+        original.project_id,
+        &identity,
+        "Delivery requires attention.",
+    );
+    let notice = in_run(h.intent("notify", "supervisor.notify", input), &run);
     assert_eq!(h.try_run(&notice).await.unwrap(), empty("sent"));
     let body: String = sqlx::query_scalar("SELECT m.body FROM mailbox_messages m JOIN delivery_notifications n USING(message_id) WHERE n.project_id=$1")
         .bind(original.project_id).fetch_one(&h.pool().await).await.unwrap();
@@ -388,13 +812,12 @@ async fn held_result_notice_identifies_the_work_that_needs_attention() {
 #[tokio::test]
 async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let h = delivery(false).await;
-    let notify = |project: Uuid, identity: &str, text: &str| json!({"project": project.to_string(), "identity": identity, "text": text});
     let own = h.scope.project_id;
     let text = format!("Held after three returns ({})", Uuid::new_v4());
     let sent = h.run(
         "notify-1",
         "supervisor.notify",
-        notify(own, "result-1", &text),
+        notice(own, "result-1", &text),
     );
     assert_eq!(sent.await, empty("sent"));
     assert_eq!(h.messages(&text).await, 1);
@@ -402,7 +825,7 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let replay = h.run(
         "notify-1",
         "supervisor.notify",
-        notify(own, "result-1", &text),
+        notice(own, "result-1", &text),
     );
     assert_eq!(replay.await, empty("sent"));
     // Another call with the same identity, whatever its text, sends nothing.
@@ -410,7 +833,7 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let duplicate = h.run(
         "notify-2",
         "supervisor.notify",
-        notify(own, "result-1", &other),
+        notice(own, "result-1", &other),
     );
     assert_eq!(duplicate.await, empty("duplicate"));
     assert_eq!((h.messages(&text).await, h.messages(&other).await), (1, 0));
@@ -418,12 +841,12 @@ async fn supervisor_notify_tells_the_projects_supervisor_once_per_identity() {
     let next = h.run(
         "notify-3",
         "supervisor.notify",
-        notify(own, "result-2", &text),
+        notice(own, "result-2", &text),
     );
     assert_eq!(next.await, empty("sent"));
     assert_eq!(h.messages(&text).await, 2);
     // Another project is not this namespace's to address.
-    let foreign = notify(h.other_project, "result-1", &text);
+    let foreign = notice(h.other_project, "result-1", &text);
     let intent = h.intent("notify-4", "supervisor.notify", foreign);
     assert!(matches!(h.try_run(&intent).await, Err(Error::Forbidden)));
     assert_eq!(h.messages(&text).await, 2);
@@ -434,13 +857,13 @@ async fn supervisor_notify_is_once_per_identity_in_each_project() {
     let h = delivery(true).await;
     let text = format!("Held ({})", Uuid::new_v4());
     for (id, project) in [("own", h.scope.project_id), ("other", h.other_project)] {
-        let input = json!({"project": project.to_string(), "identity": "result-1", "text": text});
+        let input = notice(project, "result-1", &text);
         let sent = h.run(id, "supervisor.notify", input).await;
         assert_eq!(sent, empty("sent"));
     }
     assert_eq!(h.messages(&text).await, 2);
     // A project the server does not run is refused even with installation routing.
-    let input = json!({"project": Uuid::new_v4().to_string(), "identity": "x", "text": text});
+    let input = notice(Uuid::new_v4(), "x", &text);
     let intent = h.intent("unbound", "supervisor.notify", input);
     assert!(matches!(h.try_run(&intent).await, Err(Error::Forbidden)));
 }

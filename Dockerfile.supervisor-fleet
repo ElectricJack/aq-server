@@ -1,0 +1,9 @@
+# Build from a digest-pinned supervisor image with the qualified Codex closure if enabled.
+# The isolated build context contains only the trusted Claude native executable.
+ARG SUPERVISOR_BASE_IMAGE
+FROM ${SUPERVISOR_BASE_IMAGE}
+ARG CLAUDE_NATIVE_SHA256
+COPY --chown=0:0 --chmod=0555 claude /opt/claude/claude
+RUN --network=none printf '%s\n' "$CLAUDE_NATIVE_SHA256" | grep -Eq '^[a-f0-9]{64}$' \
+    && printf '%s  %s\n' "$CLAUDE_NATIVE_SHA256" /opt/claude/claude | sha256sum -c - \
+    && /opt/claude/claude --version | grep -Fx '2.1.318 (Claude Code)'

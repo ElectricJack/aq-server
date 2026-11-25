@@ -7,13 +7,30 @@ fn holds(list: &[Permission], p: &Permission) -> bool {
     list.iter()
         .any(|q| q.operation == p.operation && q.scope_reference == p.scope_reference)
 }
+/// The scope-qualified operations requested by a role.
+pub struct RequestedPermissions(Vec<Permission>);
+
+impl RequestedPermissions {
+    pub fn into_permissions(self) -> Vec<Permission> {
+        self.0
+    }
+
+    /// Preserve role order while enforcing both permission ceilings.
+    pub fn effective(&self, ceilings: &[Permission], caller: &[Permission]) -> Vec<Permission> {
+        self.0
+            .iter()
+            .filter(|permission| holds(ceilings, permission) && holds(caller, permission))
+            .cloned()
+            .collect()
+    }
+}
 /// What the role asks for before any ceiling: each operation it lists, once,
-/// in the role's order, with the scope [`effective_permissions`] gives it.
+/// in the role's order, scoped to its project, repository or attempt.
 pub fn requested_permissions(
     role: &Role,
     project_id: Uuid,
     repository_id: Uuid,
-) -> Vec<Permission> {
+) -> RequestedPermissions {
     let mut out: Vec<Permission> = Vec::new();
     for operation in &role.operations {
         let scope_reference = if operation.starts_with("source.") {
@@ -31,23 +48,5 @@ pub fn requested_permissions(
             out.push(permission);
         }
     }
-    out
-}
-/// Each operation the role lists, scoped to the task's project
-/// (`project:<id>`), for `source.*` to the project's repository
-/// (`repository:<id>`), or for `wait.*` to the attempt itself
-/// (`attempt:self`), kept only when both the project's `ceilings` and the
-/// `caller`'s authority hold exactly that permission. The role's order is
-/// kept and a repeated operation appears once.
-pub fn effective_permissions(
-    role: &Role,
-    project_id: Uuid,
-    repository_id: Uuid,
-    ceilings: &[Permission],
-    caller: &[Permission],
-) -> Vec<Permission> {
-    requested_permissions(role, project_id, repository_id)
-        .into_iter()
-        .filter(|permission| holds(ceilings, permission) && holds(caller, permission))
-        .collect()
+    RequestedPermissions(out)
 }

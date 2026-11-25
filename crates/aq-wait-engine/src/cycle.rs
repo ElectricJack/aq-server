@@ -15,6 +15,37 @@ pub struct KnownGraph {
     pub external_unknown: bool,
 }
 impl KnownGraph {
+    pub(super) fn assess(
+        &self,
+        registration: &wire::WaitRegistration,
+    ) -> Result<wire::CycleAssessment> {
+        let owner = DependencyKey::Task {
+            project: registration.binding.project_id,
+            task: registration.binding.task_id,
+        };
+        let dependencies: Vec<_> = registration
+            .predicate
+            .members()
+            .iter()
+            .filter_map(|member| match member.condition {
+                wire::Condition::Task { task_id, .. } => Some(DependencyKey::Task {
+                    project: registration.binding.project_id,
+                    task: task_id,
+                }),
+                wire::Condition::Dependency {
+                    depends_on_task_id, ..
+                } => Some(DependencyKey::Task {
+                    project: registration.binding.project_id,
+                    task: depends_on_task_id,
+                }),
+                wire::Condition::WaitOutcome { ref wait } => {
+                    Some(DependencyKey::Wait { wait: wait.wait_id })
+                }
+                _ => None,
+            })
+            .collect();
+        self.check(&owner, &dependencies)
+    }
     /// Outside storage serializes this bounded known-component proof with the
     /// registration write. This helper cannot fence a concurrent remote graph.
     pub fn check(
@@ -42,14 +73,7 @@ impl KnownGraph {
             .chain(std::iter::once(owner))
             .chain(added.iter())
         {
-            match key {
-                DependencyKey::Task { project, task } => {
-                    wire::uuid(*project)?;
-                    wire::uuid(*task)?;
-                    require(*project == self.scope.project_id)?;
-                }
-                DependencyKey::Wait { wait } => wire::uuid(*wait)?,
-            }
+            key.validate_scope(&self.scope)?;
         }
         let mut adjacency: BTreeMap<&DependencyKey, Vec<&DependencyKey>> = BTreeMap::new();
         let mut nodes = BTreeSet::new();
@@ -59,31 +83,12 @@ impl KnownGraph {
             adjacency.entry(a).or_default().push(b);
         }
         nodes.insert(owner);
-        for b in added {
-            nodes.insert(b);
-        }
+        nodes.extend(added);
         if nodes.len() > 1024 {
             return Err(Error::Capacity);
         }
         for start in added {
-            let mut visited = BTreeSet::new();
-            let mut pending = vec![(start, 0)];
-            while let Some((node, depth)) = pending.pop() {
-                if node == owner {
-                    return Err(Error::Cycle);
-                }
-                if depth > 64 {
-                    return Err(Error::Capacity);
-                }
-                if !visited.insert(node) {
-                    continue;
-                }
-                if let Some(next) = adjacency.get(node) {
-                    for n in next {
-                        pending.push((*n, depth + 1));
-                    }
-                }
-            }
+            check_path(&adjacency, start, owner)?;
         }
         Ok(if self.external_unknown {
             wire::CycleAssessment::ExternalUnknown {
@@ -95,4 +100,41 @@ impl KnownGraph {
             }
         })
     }
+}
+
+impl DependencyKey {
+    fn validate_scope(&self, scope: &wire::Scope) -> Result<()> {
+        match self {
+            DependencyKey::Task { project, task } => {
+                wire::uuid(*project)?;
+                wire::uuid(*task)?;
+                require(*project == scope.project_id)?;
+            }
+            DependencyKey::Wait { wait } => wire::uuid(*wait)?,
+        }
+        Ok(())
+    }
+}
+fn check_path(
+    adjacency: &BTreeMap<&DependencyKey, Vec<&DependencyKey>>,
+    start: &DependencyKey,
+    owner: &DependencyKey,
+) -> Result<()> {
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![(start, 0)];
+    while let Some((node, depth)) = pending.pop() {
+        if node == owner {
+            return Err(Error::Cycle);
+        }
+        if depth > 64 {
+            return Err(Error::Capacity);
+        }
+        if !visited.insert(node) {
+            continue;
+        }
+        if let Some(next) = adjacency.get(node) {
+            pending.extend(next.iter().map(|next| (*next, depth + 1)));
+        }
+    }
+    Ok(())
 }

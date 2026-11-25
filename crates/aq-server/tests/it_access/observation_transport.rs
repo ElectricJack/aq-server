@@ -356,29 +356,17 @@ async fn foreign_identity_revocation_and_prior_history_refuse_without_allocating
 }
 #[tokio::test]
 async fn http_transport_admission_uses_current_node_credentials_and_bounded_private_documents() {
-    use axum::{
-        body::Body,
-        http::{Request as HttpRequest, StatusCode},
-    };
+    use axum::http::StatusCode;
     use tower::ServiceExt;
     let f = setup().await;
     let r = prepare(&f);
     let bytes = serde_json::to_vec(&r).unwrap();
     let router = aq_server::build_worker_router(f.state.clone());
-    let req = |credential: &str, bytes: Vec<u8>| {
-        HttpRequest::builder()
-            .method("POST")
-            .uri("/v1/worker/observations/transport")
-            .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {credential}"))
-            .body(Body::from(bytes))
-            .unwrap()
-    };
     for credential in ["aqn_wrong", "aqa_agent-credential"] {
         assert_eq!(
             router
                 .clone()
-                .oneshot(req(credential, bytes.clone()))
+                .oneshot(transport_request(credential, bytes.clone()))
                 .await
                 .unwrap()
                 .status(),
@@ -387,7 +375,7 @@ async fn http_transport_admission_uses_current_node_credentials_and_bounded_priv
     }
     let reply = router
         .clone()
-        .oneshot(req(&f.credential, bytes.clone()))
+        .oneshot(transport_request(&f.credential, bytes.clone()))
         .await
         .unwrap();
     assert_eq!(reply.status(), StatusCode::OK);
@@ -399,7 +387,7 @@ async fn http_transport_admission_uses_current_node_credentials_and_bounded_priv
     assert_eq!(
         router
             .clone()
-            .oneshot(req(&f.credential, vec![b' '; 16385]))
+            .oneshot(transport_request(&f.credential, vec![b' '; 16385]))
             .await
             .unwrap()
             .status(),
@@ -410,17 +398,29 @@ async fn http_transport_admission_uses_current_node_credentials_and_bounded_priv
     assert_eq!(
         router
             .clone()
-            .oneshot(req(&f.credential, serde_json::to_vec(&foreign).unwrap()))
+            .oneshot(transport_request(
+                &f.credential,
+                serde_json::to_vec(&foreign).unwrap()
+            ))
             .await
             .unwrap()
             .status(),
         StatusCode::FORBIDDEN
     );
+    verify_status_document(router, &f.credential).await;
+    assert_eq!(rows(&f).await, (1, 1));
+}
+async fn verify_status_document(router: axum::Router, credential: &str) {
+    use axum::{
+        body::Body,
+        http::{Request as HttpRequest, StatusCode},
+    };
+    use tower::ServiceExt;
     let status = router
         .oneshot(
             HttpRequest::builder()
                 .uri("/v1/worker/observations/transport")
-                .header("authorization", format!("Bearer {}", f.credential))
+                .header("authorization", format!("Bearer {}", credential))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -431,7 +431,16 @@ async fn http_transport_admission_uses_current_node_credentials_and_bounded_priv
         .await
         .unwrap();
     aq_observation_admission::decode_status(&body).unwrap();
-    assert_eq!(rows(&f).await, (1, 1));
+}
+fn transport_request(credential: &str, bytes: Vec<u8>) -> axum::http::Request<axum::body::Body> {
+    use axum::{body::Body, http::Request as HttpRequest};
+    HttpRequest::builder()
+        .method("POST")
+        .uri("/v1/worker/observations/transport")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {credential}"))
+        .body(Body::from(bytes))
+        .unwrap()
 }
 #[tokio::test]
 async fn stale_authenticated_context_cannot_allocate_or_activate_store() {

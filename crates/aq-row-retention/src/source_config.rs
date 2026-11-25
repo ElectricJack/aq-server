@@ -48,31 +48,16 @@ fn default_git_deadline_ms() -> u64 {
 }
 impl SourceRetentionConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        let paths = [&self.staging_root, &self.git_root, &self.git_socket];
         anyhow::ensure!(
-            self.staging_root.is_absolute()
-                && self.git_root.is_absolute()
-                && self.git_socket.is_absolute(),
+            paths.iter().all(|path| path.is_absolute()),
             "source retention paths must be absolute"
         );
         anyhow::ensure!(
-            self.max_age > 0
-                && self.max_age <= i64::MAX as u64 / 1000
-                && self.bulk_concurrency > 0
-                && self.bulk_concurrency <= 64
-                && self.max_staging_bytes <= i64::MAX as u64
-                && self.staging_root != Path::new("/")
-                && self.git_root != Path::new("/")
-                && !self.git_root.starts_with(&self.staging_root)
-                && !self.staging_root.starts_with(&self.git_root)
-                && self.max_bundle_bytes > 0
-                && self.max_bundle_bytes <= 1024 * 1024 * 1024
-                && self.max_staging_bytes > 0
-                && self.incomplete_ttl_secs > 0
-                && self.incomplete_ttl_secs <= 365 * 86400
-                && (1_000..=300_000).contains(&self.git_deadline_ms),
+            self.valid_limits() && self.separate_storage_roots(),
             "invalid source retention limits"
         );
-        for p in [&self.staging_root, &self.git_root, &self.git_socket] {
+        for p in paths {
             anyhow::ensure!(
                 !p.components()
                     .any(|c| matches!(c, std::path::Component::ParentDir)),
@@ -80,5 +65,21 @@ impl SourceRetentionConfig {
             );
         }
         Ok(())
+    }
+
+    fn valid_limits(&self) -> bool {
+        (1..=i64::MAX as u64 / 1000).contains(&self.max_age)
+            && (1..=64).contains(&self.bulk_concurrency)
+            && (1..=i64::MAX as u64).contains(&self.max_staging_bytes)
+            && (1..=1024 * 1024 * 1024).contains(&self.max_bundle_bytes)
+            && (1..=365 * 86400).contains(&self.incomplete_ttl_secs)
+            && (1_000..=300_000).contains(&self.git_deadline_ms)
+    }
+
+    fn separate_storage_roots(&self) -> bool {
+        self.staging_root != Path::new("/")
+            && self.git_root != Path::new("/")
+            && !self.git_root.starts_with(&self.staging_root)
+            && !self.staging_root.starts_with(&self.git_root)
     }
 }

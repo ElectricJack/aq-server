@@ -7,11 +7,12 @@ description = "Pure project policy and admission snapshots (project bindings, ce
 
 [features]
 # Spec 0017 (sandbox environments per project and per task), off by default.
-project_environments = ["aq-profiles/project_environments"]
+project_environments = ["aq-profiles/project_environments", "aq-selection/project_environments"]
 
 [dependencies]
 aq-delivery = { path = "../aq-delivery" }
 aq-profiles = { path = "../aq-profiles", version = "=0.1.2" }
+aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

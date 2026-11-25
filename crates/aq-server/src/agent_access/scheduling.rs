@@ -4,6 +4,7 @@ pub(super) mod parse;
 use super::{Runtime, contract};
 use aq_admission::TaskRevision;
 pub use aq_profiled_state::native_offer::{GraphReadStamp, ReadyPage, ReadyTask, TaskContext};
+use aq_profiled_state::native_offer::{bounded_cursor, graph_ready_page, graph_task_revision};
 use serde_json::Value;
 use uuid::Uuid;
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -22,38 +23,27 @@ pub enum SchedulingReadError {
     StaleTask,
 }
 type Result<T> = std::result::Result<T, SchedulingReadError>;
-fn bounded_cursor(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
-}
 fn now() -> Result<u64> {
     chrono::Utc::now()
         .timestamp_millis()
         .try_into()
         .map_err(|_| SchedulingReadError::Unavailable)
 }
-fn node_revision(node: &Value, workspace: Uuid) -> Result<TaskRevision> {
-    let task_id = node["id"]
-        .as_str()
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or(SchedulingReadError::InvalidResponse)?;
-    if node["workspace_id"] != workspace.to_string() || node["kind"] != "task" {
+// Validate the wire schema before decoding its scheduling fields.
+fn ready_page(
+    workspace: Uuid,
+    limit: u16,
+    cursor: Option<&str>,
+    value: Value,
+    stamp: GraphReadStamp,
+) -> Result<ReadyPage> {
+    if !contract::upstream_valid("NodePage", &value) {
         return Err(SchedulingReadError::InvalidResponse);
     }
-    let revision = TaskRevision {
-        workspace_id: workspace,
-        task_id,
-        version: node["version"]
-            .as_u64()
-            .ok_or(SchedulingReadError::InvalidResponse)?,
-        content_revision: node["content_revision"]
-            .as_u64()
-            .ok_or(SchedulingReadError::InvalidResponse)?,
-    };
-    revision
-        .validate()
-        .map_err(|_| SchedulingReadError::InvalidResponse)?;
-    Ok(revision)
+    graph_ready_page(workspace, limit, cursor, &value, stamp)
+        .map_err(|_| SchedulingReadError::InvalidResponse)
 }
+
 impl Runtime {
     async fn scheduling_get_clock(
         &self,
@@ -159,6 +149,43 @@ impl Runtime {
         self.scheduling_ready_clock(workspace, limit, cursor, &observed_now)
             .await
     }
+
+    pub(crate) async fn scheduling_task_ready_current(
+        &self,
+        task: &TaskRevision,
+        clock: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
+    ) -> Result<ReadyPage> {
+        let workspace = task.workspace_id;
+        let id = task.task_id;
+        let observed_now = || {
+            u64::try_from(clock().timestamp_millis())
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or(SchedulingReadError::Unavailable)
+        };
+        let (value, stamp, _) = match self
+            .scheduling_get_clock(
+                &format!("/v1/workspaces/{workspace}/ready/{id}"),
+                &[],
+                1_048_576,
+                &observed_now,
+            )
+            .await
+        {
+            // Older Graph deployments only serve the bounded list endpoint.
+            Err(SchedulingReadError::NotFound) => {
+                return self
+                    .scheduling_ready_current(workspace, 8, None, clock)
+                    .await;
+            }
+            answer => answer?,
+        };
+        let ready = ready_page(workspace, 1, None, value, stamp)?;
+        if ready.next_cursor.is_some() || ready.items.iter().any(|r| r.revision.task_id != id) {
+            return Err(SchedulingReadError::InvalidResponse);
+        }
+        Ok(ready)
+    }
     async fn scheduling_ready_clock(
         &self,
         workspace: Uuid,
@@ -184,44 +211,7 @@ impl Runtime {
                 clock,
             )
             .await?;
-        if !contract::upstream_valid("NodePage", &value) {
-            return Err(SchedulingReadError::InvalidResponse);
-        }
-        let raw = value["items"]
-            .as_array()
-            .ok_or(SchedulingReadError::InvalidResponse)?;
-        if raw.len() > limit as usize {
-            return Err(SchedulingReadError::InvalidResponse);
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        let mut items = Vec::new();
-        for node in raw {
-            let revision = node_revision(node, workspace)?;
-            if node["task_state"] != "active"
-                || node["retired"] != false
-                || node["deleted"] != false
-                || !ids.insert(revision.task_id)
-            {
-                return Err(SchedulingReadError::InvalidResponse);
-            }
-            items.push(ReadyTask {
-                revision,
-                node: node.clone(),
-            });
-        }
-        let next_cursor = value["next_cursor"].as_str().map(str::to_owned);
-        if next_cursor
-            .as_ref()
-            .is_some_and(|c| !bounded_cursor(c) || Some(c.as_str()) == cursor)
-        {
-            return Err(SchedulingReadError::InvalidResponse);
-        }
-        Ok(ReadyPage {
-            workspace_id: workspace,
-            items,
-            next_cursor,
-            stamp,
-        })
+        ready_page(workspace, limit, cursor, value, stamp)
     }
     pub async fn scheduling_context(
         &self,
@@ -286,7 +276,8 @@ impl Runtime {
         if !contract::upstream_valid("Context", &value) {
             return Err(SchedulingReadError::InvalidResponse);
         }
-        let revision = node_revision(&value["node"], expected.workspace_id)?;
+        let revision = graph_task_revision(&value["node"], expected.workspace_id)
+            .map_err(|_| SchedulingReadError::InvalidResponse)?;
         if revision != *expected
             || value["node"]["task_state"] != "active"
             || value["node"]["retired"] != false

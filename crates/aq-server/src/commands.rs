@@ -50,6 +50,19 @@ pub(crate) enum Caller {
     Agent(grants::AgentCaller),
 }
 impl Caller {
+    fn audit_identity(&self) -> aq_agent_grants::AuditCaller {
+        let (kind, id, ids) = match self {
+            Caller::Owner(u) => ("owner", u.id, None),
+            Caller::Viewer(u) => ("viewer", u.id, None),
+            Caller::Supervisor(p) => ("supervisor", p.session_id, None),
+            Caller::Agent(a) => ("agent", a.ids.attempt_id, Some(a.ids)),
+        };
+        aq_agent_grants::AuditCaller {
+            kind,
+            id,
+            attempt: ids,
+        }
+    }
     fn principal(&self) -> Option<Principal> {
         match self {
             Self::Owner(_) => Some(Principal::Owner),
@@ -222,6 +235,17 @@ async fn invoke(
         }
     };
     let principal = c.principal();
+    let operation_id = request.operation_id;
+    let record = async |target: Option<&aq_agent_grants::Target>, decision: &Decision| {
+        let checked = aq_agent_grants::AuditDecision {
+            command: spec.name,
+            grant: spec.grant,
+            target,
+            decision,
+        };
+        let entry = AuditEntry::caller(c.audit_identity(), checked, operation_id, request_id);
+        grants::audit(&state, &entry).await;
+    };
     let Some(route) = principal.and_then(|p| spec.route(p)) else {
         let code = if matches!(c, Caller::Agent(_)) && spec.owner_only() {
             RefusalCode::OwnerOnly
@@ -233,16 +257,7 @@ async fn invoke(
             spec.name,
             "This command has no route for this principal.",
         );
-        audit(
-            &state,
-            &c,
-            spec,
-            None,
-            &Decision::Deny(r.clone()),
-            request.operation_id,
-            request_id,
-        )
-        .await;
+        record(None, &Decision::Deny(r.clone())).await;
         return refuse(r, request_id);
     };
     let mut request = request;
@@ -268,16 +283,7 @@ async fn invoke(
     let binding = match &c {
         Caller::Agent(a) => {
             let checked = a.authorize(&state, spec, &mut request.params).await;
-            audit(
-                &state,
-                &c,
-                spec,
-                Some(&checked.1),
-                &checked.0,
-                request.operation_id,
-                request_id,
-            )
-            .await;
+            record(Some(&checked.1), &checked.0).await;
             if let Decision::Deny(r) = checked.0 {
                 return refuse(r, request_id);
             }
@@ -288,16 +294,7 @@ async fn invoke(
                 "owner",
                 aq_agent_grants::Scope::ProjectSelf,
             ));
-            audit(
-                &state,
-                &c,
-                spec,
-                None,
-                &allow,
-                request.operation_id,
-                request_id,
-            )
-            .await;
+            record(None, &allow).await;
             None
         }
     };
@@ -309,7 +306,11 @@ async fn invoke(
         )
             .into_response();
     }
-    let f = match registry::forward(spec, route, &request, binding.as_ref(), request_id) {
+    let agent = binding.as_ref().map(|binding| registry::AgentRequest {
+        binding,
+        request_id,
+    });
+    let f = match spec.forward(route, &request, agent) {
         Ok(f) => f,
         Err(e) => return error(RefusalCode::InvalidRequest, spec.name, e.0, request_id),
     };
@@ -374,35 +375,6 @@ async fn checked(r: Response, spec: &registry::CommandSpec, request_id: Uuid) ->
         _ => Response::from_parts(parts, Body::from(bytes)),
     }
 }
-async fn audit(
-    state: &AppState,
-    c: &Caller,
-    spec: &registry::CommandSpec,
-    target: Option<&aq_agent_grants::Target>,
-    decision: &Decision,
-    operation_id: Option<Uuid>,
-    request_id: Uuid,
-) {
-    let (kind, id, ids) = match c {
-        Caller::Owner(u) => ("owner", u.id, None),
-        Caller::Viewer(u) => ("viewer", u.id, None),
-        Caller::Supervisor(p) => ("supervisor", p.session_id, None),
-        Caller::Agent(a) => ("agent", a.ids.attempt_id, Some(a.ids)),
-    };
-    let e = AuditEntry::caller(
-        kind,
-        id,
-        ids,
-        spec.name,
-        spec.grant,
-        target,
-        decision,
-        operation_id,
-        request_id,
-    );
-    grants::audit(state, &e).await;
-}
-
 /// The commands an agent holding `grants` may run (`aq commands`).
 pub(crate) fn agent_commands(grants: &aq_agent_grants::GrantSet) -> Vec<String> {
     registry().agent_commands(grants)

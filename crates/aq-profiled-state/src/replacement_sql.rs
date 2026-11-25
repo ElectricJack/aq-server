@@ -12,8 +12,10 @@ macro_rules! priors {
     };
     ($exempt:literal, $forgiven:literal, $fresh:literal) => {
         concat!("SELECT a.attempt_id,a.holds_task,h.state AS hot,", $exempt, " AS exempt,", $forgiven, " AS forgiven,\
+ (SELECT (convert_from(rr.receipt_bytes,'UTF8')::jsonb->>'recorded_at_ms')::BIGINT FROM profiled_result_heads rh JOIN profiled_result_reports rr ON (rr.attempt_id,rr.report_id)=(rh.attempt_id,rh.report_id) WHERE rh.attempt_id=a.attempt_id AND ",
+ aq_machine_control::platform_interruption_sql!("rr.report_bytes"), ") AS platform_interrupted_at_ms,\
  (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT AS offered_at_ms,\
- EXISTS(SELECT 1 FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id) AS released,\
+ (SELECT r.recorded_at_ms FROM profiled_replacement_releases r WHERE r.attempt_id=a.attempt_id) AS released_at_ms,\
  EXISTS(SELECT 1 FROM profiled_settlement_evaluations e WHERE e.attempt_id=a.attempt_id AND e.disposition='accepted') AS accepted,\
  EXISTS(SELECT 1 FROM profiled_settlement_evaluations e WHERE e.attempt_id=a.attempt_id AND e.disposition='rejected') AS rejected,\
  EXISTS(SELECT 1 FROM profiled_settlement_evaluations e WHERE e.attempt_id=a.attempt_id AND e.disposition='needs_reconciliation') AS needs_reconciliation,\
@@ -28,20 +30,19 @@ pub const PRIORS: &str = priors!(
     "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop'))"
 );
 pub const PRIORS_PRE_101: &str = priors!("FALSE");
-/// From migration 102: a lost attempt released after a reboot is not charged (D2 ruling C),
-/// nor is a granted attempt that never started (`aq_machine_control::lapse`).
+/// From migration 102: a lost attempt released after a reboot can be uncharged (D2 ruling C).
 pub const PRIORS_102: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)"
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)"
 );
 /// From migration 151: the owner's override of a budget hold starts the budget again.
 pub const PRIORS_151: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)",
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)"
 );
 /// From migration 157: an owner's fresh start (`aq_machine_control::fresh`) leaves the attempts
 /// it released out of the history, so the task's next attempt is a first attempt.
 pub const PRIORS_157: &str = priors!(
-    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged) OR COALESCE(h.state#>>'{stop,receipt,id}'='aq.granted-never-started/'||a.attempt_id::TEXT,FALSE)",
+    "EXISTS(SELECT 1 FROM attempt_handoffs x WHERE x.attempt_id=a.attempt_id AND x.reason IN ('owner_stop','service_stop')) OR EXISTS(SELECT 1 FROM lost_attempt_releases l WHERE l.attempt_id=a.attempt_id AND NOT l.charged)",
     "COALESCE((l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT<=(SELECT max(o.recorded_at_ms) FROM task_limit_overrides o WHERE o.task_id=a.task_id),FALSE)",
     " AND NOT EXISTS(SELECT 1 FROM task_fresh_starts f WHERE f.attempt_id=a.attempt_id)"
 );
@@ -52,13 +53,15 @@ fn decode(
     use sqlx::Row;
     let hot: crate::hot::HotState = serde_json::from_value(row.get("hot"))
         .map_err(|_| aq_machine_control::Error::Invalid("hot state"))?;
+    let released_at_ms = row.get::<Option<i64>, _>("released_at_ms");
     Ok(crate::replacement::Prior {
         attempt_id: row.get("attempt_id"),
         offered_at_ms: row
             .get::<Option<i64>, _>("offered_at_ms")
             .and_then(|v| u64::try_from(v).ok()),
         holds_task: row.get("holds_task"),
-        released: row.get("released"),
+        released: released_at_ms.is_some(),
+        released_at_ms: released_at_ms.and_then(|ms| u64::try_from(ms).ok()),
         status: hot.status,
         execution_deadline_ms: hot.execution_deadline_ms,
         stop: hot.stop,
@@ -70,6 +73,9 @@ fn decode(
         cancelled_settled: row.get("cancelled"),
         completion: row.get("completion"),
         exempt: row.get("exempt"),
+        platform_interrupted_at_ms: row
+            .get::<Option<i64>, _>("platform_interrupted_at_ms")
+            .and_then(|ms| u64::try_from(ms).ok()),
         forgiven: row.get("forgiven"),
     })
 }
@@ -87,6 +93,16 @@ pub async fn load(
     };
     let rows = sqlx::query(sql).bind(task).fetch_all(conn).await?;
     rows.into_iter().map(decode).collect()
+}
+
+/// Loads started-attempt owner facts only when the history matches the central count.
+pub async fn load_complete(
+    conn: &mut sqlx::PgConnection,
+    task: uuid::Uuid,
+    started: u32,
+) -> Result<Option<Vec<crate::replacement::Prior>>, aq_machine_control::Error> {
+    let priors = load(conn, task).await?;
+    Ok((priors.len() == started as usize).then_some(priors))
 }
 
 /// First `state_format_version` carrying `profiled_auto_settlements` (migration 59, D3).
@@ -135,6 +151,37 @@ pub async fn delivery_unpublished(
         .await?)
 }
 
+/// The limit hold an owner request overrides (`task.retry`, `task.dependency.add` with
+/// `resume_held`): the assessment's refusal, else the task's recorded hold.
+pub async fn limit_hold(
+    pool: &sqlx::PgPool,
+    (project, task): (uuid::Uuid, uuid::Uuid),
+    assessment: &crate::replacement::Assessment,
+) -> Result<Option<&'static str>, aq_machine_control::Error> {
+    use aq_machine_control::holds::{budget_code, current};
+    Ok(match assessment {
+        crate::replacement::Assessment::Blocked(code) => budget_code(code),
+        _ => current(pool, project, task)
+            .await?
+            .and_then(|h| budget_code(&h.reason)),
+    })
+}
+/// The limit hold `task.dependency.add` with `resume_held` overrides once its edge is added, or
+/// why it is refused: a hold no retry overrides (`assessment`'s), or none.
+pub async fn resumable(
+    pool: &sqlx::PgPool,
+    at: (uuid::Uuid, uuid::Uuid),
+    assessment: &crate::replacement::Assessment,
+) -> Result<Result<&'static str, &'static str>, aq_machine_control::Error> {
+    Ok(
+        match (limit_hold(pool, at, assessment).await?, assessment) {
+            (Some(code), _) => Ok(code),
+            (None, crate::replacement::Assessment::Blocked(code)) => Err(code),
+            (None, _) => Err("task_not_held"),
+        },
+    )
+}
+
 /// The project revision pinned by an attempt's linked source export request.
 pub async fn predecessor_project_revision<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -181,6 +228,7 @@ pub async fn inspect(
         serde_json::json!({"released": p.released, "accepted": p.accepted, "rejected": p.rejected,
             "needs_reconciliation": p.needs_reconciliation, "cancelled_settled": p.cancelled_settled,
             "completion": p.completion, "exempt": p.exempt, "forgiven": p.forgiven,
+            "proven_nonstart": p.proven_nonstart(),
             "blockers": crate::replacement::blockers(p, now)})
     });
     Ok(Some(serde_json::json!({
@@ -192,6 +240,64 @@ pub async fn inspect(
     })))
 }
 
+/// Binding fields that only decide where a task may run, not the source, repository, policy,
+/// environments, graph or limits it runs with.
+pub const PLACEMENT_FIELDS: [&str; 3] = [
+    "allowed_node_ids",
+    "allow_enrolled_nodes",
+    "allowed_worker_groups",
+];
+
+/// Whether the binding `attempt`'s source export pinned is the project's binding at
+/// `project_revision` apart from [`PLACEMENT_FIELDS`], however many revisions lie between.
+/// False without an export, or without the pinned revision's binding history record.
+pub async fn pinned_binding_current<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    attempt: uuid::Uuid,
+    project_revision: u64,
+) -> Result<bool, aq_machine_control::Error> {
+    let revision = i64::try_from(project_revision)
+        .map_err(|_| aq_machine_control::Error::Invalid("project revision"))?;
+    let current: Option<Option<bool>> = sqlx::query_scalar(
+        "SELECT p.revision=$2 OR (SELECT (h.record->'binding') - $3::text[] = b.binding - $3::text[] FROM project_execution_binding_history h JOIN project_execution_bindings b USING(project_id) WHERE h.project_id=e.project_id AND h.revision=p.revision AND b.revision=$2) FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id), LATERAL (SELECT (convert_from(e.request_bytes,'UTF8')::jsonb->>'project_revision')::BIGINT AS revision) p WHERE x.attempt_id=$1",
+    )
+    .bind(attempt)
+    .bind(revision)
+    .bind(&PLACEMENT_FIELDS[..])
+    .fetch_optional(executor)
+    .await?;
+    Ok(current.flatten().unwrap_or(false))
+}
+
+/// Whether `export` re-pins `predecessor`'s retained source to a later binding revision that
+/// differs only in placement: the same commit, repository and generation, held by the
+/// predecessor's export ([`pinned_binding_current`]).
+pub async fn repins_retained(
+    conn: &mut sqlx::PgConnection,
+    predecessor: uuid::Uuid,
+    export: &crate::source_export::Request,
+) -> Result<bool, aq_machine_control::Error> {
+    let bytes: Option<Vec<u8>> = sqlx::query_scalar("SELECT e.request_bytes FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1")
+        .bind(predecessor).fetch_optional(&mut *conn).await?;
+    let Some(bytes) = bytes else {
+        return Ok(false);
+    };
+    let retained: crate::source_export::Request = serde_json::from_slice(&bytes)
+        .map_err(|_| aq_machine_control::Error::Invalid("source export request"))?;
+    let scope = |r: &crate::source_export::Request| {
+        (
+            r.project_id,
+            r.repository_id,
+            r.binding_generation,
+            r.logical_identity.clone(),
+            r.base.clone(),
+        )
+    };
+    let same = export.source_retention_handle == retained.operation_id
+        && scope(export) == scope(&retained);
+    Ok(same && pinned_binding_current(conn, predecessor, export.project_revision).await?)
+}
+
 use crate::replacement::Assessment;
 pub async fn fence_revision<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -201,9 +307,7 @@ pub async fn fence_revision<'e>(
     let Some(replacement) = assessment.replacement() else {
         return Ok(assessment);
     };
-    let pinned = predecessor_project_revision(executor, replacement.predecessor);
-    let pinned = pinned.await?;
-    if pinned != Some(project_revision) {
+    if !pinned_binding_current(executor, replacement.predecessor, project_revision).await? {
         return Ok(Assessment::Blocked("replacement_project_revision_changed"));
     }
     Ok(assessment)

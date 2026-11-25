@@ -1,5 +1,7 @@
 //! Disposable, fenced byte streams. Closing an attach never stops its agent.
 use super::*;
+mod browser;
+mod worker;
 use aq_session_protocol::{MAX_INPUT_BYTES, complete_terminal_input};
 use axum::{
     Router,
@@ -80,40 +82,28 @@ pub(super) async fn worker(
     Ok(ws
         .max_message_size(131072)
         .max_frame_size(131072)
-        .on_upgrade(move |socket| worker_socket(s, headers, id, node, relay.id, rx, socket)))
+        .on_upgrade(move |socket| {
+            worker::Worker {
+                service: s,
+                headers,
+                session: id,
+                node,
+                relay_id: relay.id,
+            }
+            .run(rx, socket)
+        }))
 }
 pub(super) async fn browser(
     State(s): State<Service>,
     headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Query(a): Query<Attach>,
+    (Path(id), Query(a)): (Path<Uuid>, Query<Attach>),
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
-    if !s.origin.as_ref().is_some_and(|(expected, dev)| {
-        headers.get("origin").is_some_and(|v| {
-            aq_human_http::origin_allowed(expected.trim_end_matches('/'), v.as_bytes(), *dev)
-        })
-    }) {
-        return Err(Error(
-            StatusCode::FORBIDDEN,
-            "Terminal origin is not allowed",
-        ));
-    }
+    origin(&s, &headers)?;
     let actor = (s.owner)(headers.clone()).await?;
     valid_id(a.client_id)?;
     let fixed = s.subject == Subject::Attempt;
-    if a.read_only && !fixed {
-        return Err(conflict("Invalid viewer mode"));
-    }
-    let mut attach = json!({"kind":"attach","generation":a.generation});
-    match (fixed, a.columns, a.rows) {
-        (true, None, None) => attach["read_only"] = json!(a.read_only),
-        (false, Some(c), Some(r)) if dimensions(c, r) => {
-            attach["columns"] = json!(c);
-            attach["rows"] = json!(r);
-        }
-        _ => return Err(conflict("Invalid viewer dimensions")),
-    }
+    let mut attach = a.message(fixed)?;
     if !terminal_subject(&s, id).await?.1 {
         return Err(conflict("The terminal is not ready"));
     }
@@ -146,26 +136,50 @@ pub(super) async fn browser(
         .max_message_size(8192)
         .max_frame_size(8192)
         .on_upgrade(move |socket| {
-            browser_socket(
-                Browser {
-                    s,
-                    headers,
-                    id,
-                    actor,
-                    a,
-                    connection,
-                    relay,
-                },
-                rx,
-                socket,
-            )
+            Browser {
+                s,
+                headers,
+                id,
+                actor,
+                a,
+                connection,
+                relay,
+            }
+            .run(rx, socket)
         }))
 }
-fn controls(screen: &terminal::Screen, actor: Uuid, a: &Attach) -> bool {
-    screen.generation == a.generation
-        && screen.controller.is_some_and(|(client, owner, until)| {
-            client == a.client_id && owner == actor && until > now()
+fn origin(s: &Service, headers: &HeaderMap) -> Result<()> {
+    if !s.origin.as_ref().is_some_and(|(expected, dev)| {
+        headers.get("origin").is_some_and(|v| {
+            aq_human_http::origin_allowed(expected.trim_end_matches('/'), v.as_bytes(), *dev)
         })
+    }) {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "Terminal origin is not allowed",
+        ));
+    }
+    Ok(())
+}
+impl Attach {
+    fn message(&self, fixed: bool) -> Result<Value> {
+        if self.read_only && !fixed {
+            return Err(conflict("Invalid viewer mode"));
+        }
+        let mut attach = json!({"kind":"attach","generation":self.generation});
+        match (fixed, self.columns, self.rows) {
+            (true, None, None) => attach["read_only"] = json!(self.read_only),
+            (false, Some(c), Some(r)) if dimensions(c, r) => {
+                attach["columns"] = json!(c);
+                attach["rows"] = json!(r);
+            }
+            _ => return Err(conflict("Invalid viewer dimensions")),
+        }
+        Ok(attach)
+    }
+}
+fn controls(screen: &terminal::Screen, actor: Uuid, a: &Attach) -> bool {
+    screen.generation == a.generation && screen.controls(a.client_id, actor)
 }
 async fn permitted(s: &Service, id: Uuid) -> bool {
     if s.subject != Subject::Manual {
@@ -173,39 +187,12 @@ async fn permitted(s: &Service, id: Uuid) -> bool {
     }
     session(s,id).await.is_ok_and(|v|terminal::live(&v)) && sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM manual_agent_sessions m JOIN project_execution_bindings p ON p.project_id=m.project_id WHERE m.id=$1 AND p.binding->>'enabled'='true')").bind(id).fetch_one(&s.pool).await.unwrap_or(false)
 }
-async fn worker_socket(
-    s: Service,
-    headers: HeaderMap,
-    id: Uuid,
-    node: Uuid,
-    relay_id: Uuid,
-    mut rx: mpsc::Receiver<Value>,
-    socket: WebSocket,
-) {
-    let (mut sink, mut source) = socket.split();
-    let mut tick = tokio::time::interval(Duration::from_secs(2));
-    tick.tick().await;
-    loop {
-        tokio::select! {
-         command=rx.recv()=>{let Some(c)=command else{break};if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Text(c.to_string().into()))).await,Ok(Ok(()))){break;}}
-         frame=source.next()=>{let Some(Ok(frame))=frame else{break};let mut rt=s.runtime.0.lock().await;let Some(screen)=rt.get_mut(&id) else{break};if screen.relay.as_ref().is_none_or(|r|r.id!=relay_id){break;}
-          let Some(v)=screen.viewer.as_ref().filter(|v|v.generation==screen.generation&&screen.controller.is_some_and(|(_,_,until)|until>now())) else{continue};
-          let output=match frame{
-           Message::Binary(bytes) if bytes.len()>16 && bytes.len()<=16400 && bytes[..16]==*v.connection.as_bytes()=>Some(Message::Binary(bytes.slice(16..))),
-           Message::Text(text) => ready(&text, v.connection, s.subject == Subject::Attempt),
-           Message::Close(_)=>break,_=>None};
-          if let Some(output)=output && v.tx.try_send(output).is_err(){let connection=v.connection;let generation=v.generation;screen.viewer=None;if let Some(relay)=&screen.relay{let _=relay.tx.try_send(json!({"kind":"detach","connection_id":connection,"generation":generation}));}}
-         }
-         _=tick.tick()=>{if (s.node)(headers.clone()).await.ok()!=Some(node)||!permitted(&s,id).await{break;}let rt=s.runtime.0.lock().await;if rt.get(&id).and_then(|s|s.relay.as_ref()).is_none_or(|r|r.id!=relay_id){break;}drop(rt);if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Ping(Vec::new().into()))).await,Ok(Ok(()))){break;}}
-        }
-    }
-    let mut rt = s.runtime.0.lock().await;
-    if let Some(screen) = rt.get_mut(&id)
-        && screen.relay.as_ref().is_some_and(|r| r.id == relay_id)
-    {
-        screen.relay = None;
-        screen.viewer = None;
-    }
+type SocketSink = futures_util::stream::SplitSink<WebSocket, Message>;
+async fn send(sink: &mut SocketSink, message: Message) -> bool {
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), sink.send(message)).await,
+        Ok(Ok(()))
+    )
 }
 fn ready(text: &str, connection: Uuid, fixed: bool) -> Option<Message> {
     let value: Value = serde_json::from_str(text).ok()?;
@@ -238,96 +225,6 @@ fn browser_control(text: &str, fixed: bool, read_only: bool) -> Option<(Value, u
             dimensions(c, r).then(|| (json!({"kind":"resize","columns":c,"rows":r}), 0))
         }
         _ => None,
-    }
-}
-
-async fn browser_socket(context: Browser, mut rx: mpsc::Receiver<Message>, socket: WebSocket) {
-    let Browser {
-        s,
-        headers,
-        id,
-        actor,
-        a,
-        connection,
-        relay,
-    } = context;
-    let (mut sink, mut source) = socket.split();
-    let mut tick = tokio::time::interval(Duration::from_secs(2));
-    let mut input_bytes = 0usize;
-    let fixed = s.subject == Subject::Attempt;
-    let mut painting = fixed;
-    loop {
-        tokio::select! {
-         output = rx.recv() => {
-            let Some(output) = output else { break };
-            if matches!(output, Message::Text(_)) {
-                painting = false;
-            }
-            if !matches!(tokio::time::timeout(Duration::from_secs(2), sink.send(output)).await, Ok(Ok(()))) {
-                break;
-            }
-         }
-         frame=source.next()=>{
-          let Some(Ok(frame))=frame else{break};
-          let (payload, charge) = match frame {
-            Message::Binary(bytes) if !a.read_only && !bytes.is_empty() && bytes.len() <= MAX_INPUT_BYTES
-                && (!fixed || complete_terminal_input(&bytes, false)) =>
-                (json!({"kind":"input","bytes":bytes.to_vec()}), bytes.len()),
-            Message::Text(text) => { let Some(command) = browser_control(&text, fixed, a.read_only) else { break }; command }
-            Message::Ping(_) | Message::Pong(_) => continue,
-            _ => break,
-          };
-          if payload["kind"] == "repaint" {
-            if painting { continue; }
-            painting = true;
-          } else if painting {
-            continue;
-          }
-          input_bytes += charge;
-          if input_bytes > 65536 { break; }
-          let rt=s.runtime.0.lock().await;let Some(screen)=rt.get(&id) else{break};if !controls(screen,actor,&a)||screen.viewer.as_ref().is_none_or(|v|v.connection!=connection)||screen.relay.as_ref().is_none_or(|r|r.id!=relay.id){break;}
-          let mut payload=payload;payload["connection_id"]=json!(connection);payload["generation"]=json!(a.generation);if relay.tx.try_send(payload).is_err(){break;}
-         }
-         _ = tick.tick() => {
-            input_bytes = 0;
-            if (s.owner)(headers.clone()).await.ok() != Some(actor) || !permitted(&s, id).await {
-                break;
-            }
-            let mut rt = s.runtime.0.lock().await;
-            let Some(screen) = rt.get_mut(&id) else { break };
-            if !controls(screen, actor, &a)
-                || screen.viewer.as_ref().is_none_or(|v| v.connection != connection)
-                || screen.relay.as_ref().is_none_or(|r| r.id != relay.id)
-            {
-                break;
-            }
-            screen.controller = Some((a.client_id, actor, now() + 15000));
-            drop(rt);
-            if !a.read_only {
-                attempt::controlled(&s, id, actor).await;
-            }
-            let ping = sink.send(Message::Ping(Vec::new().into()));
-            if !matches!(tokio::time::timeout(Duration::from_secs(2), ping).await, Ok(Ok(()))) {
-                break;
-            }
-         }
-        }
-    }
-    let mut rt = s.runtime.0.lock().await;
-    if let Some(screen) = rt.get_mut(&id)
-        && screen
-            .viewer
-            .as_ref()
-            .is_some_and(|v| v.connection == connection)
-    {
-        screen.viewer = None;
-        let _ = relay.tx.try_send(
-            json!({"kind":"detach","connection_id":connection,"generation":a.generation}),
-        );
-        drop(rt);
-        if !a.read_only {
-            attempt::released(&s, id).await;
-        }
     }
 }
 

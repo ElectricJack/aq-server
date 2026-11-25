@@ -1,0 +1,117 @@
+{
+  "name": "continuation_keeps_environment",
+  "situation": "The task was tried before, so the route leaves its environment out and the host keeps it",
+  "start": {
+    "kind": "event",
+    "event": "aq.work.route_needed",
+    "payload": {
+      "subject": {
+        "id": "task-26",
+        "revision": 5
+      }
+    }
+  },
+  "returns": {
+    "work.read": [
+      {
+        "outcome": "observed",
+        "output": {
+          "reference": "task-26@6",
+          "subject": {
+            "id": "task-26",
+            "revision": 6
+          },
+          "facts": {
+            "kind": "",
+            "title": "Add a CSV export",
+            "description": "Export the report as CSV.",
+            "origin": "owner",
+            "level_hint": "",
+            "charged_failures": 0,
+            "ended_attempts": 1,
+            "route": "none",
+            "outcome": "",
+            "changed": false,
+            "branch": "",
+            "head": "",
+            "base": "",
+            "main_head": "",
+            "returns": 0,
+            "pull_request": null,
+            "needs": [
+              "rust"
+            ],
+            "default_environment": "rust-base",
+            "environments": [
+              {
+                "id": "rust-base",
+                "provides": [
+                  "rust",
+                  "git"
+                ]
+              },
+              {
+                "id": "rust-web",
+                "provides": [
+                  "rust",
+                  "git",
+                  "node"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "work.route": [
+      {
+        "outcome": "routed",
+        "output": {
+          "reference": "route-1",
+          "subject": {
+            "id": "task-26",
+            "revision": 6
+          },
+          "harnesses": [],
+          "providers": [],
+          "prefer": []
+        }
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "routed",
+    "calls": [
+      {
+        "command": "work.read",
+        "input": {
+          "subject": {
+            "id": "task-26",
+            "revision": 5
+          }
+        }
+      },
+      {
+        "command": "work.route",
+        "input": {
+          "subject": {
+            "id": "task-26",
+            "revision": 6
+          },
+          "level": "standard-high",
+          "harnesses": [],
+          "providers": [],
+          "prefer": [],
+          "hold": false,
+          "reasons": [
+            {
+              "code": "policy",
+              "detail": "A retry or a continuation keeps the environment of the attempt it continues."
+            }
+          ],
+          "classification": null
+        }
+      }
+    ]
+  }
+}
