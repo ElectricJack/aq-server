@@ -28,3 +28,11 @@ In the target project's existing execution binding, add an entry under `ceilings
 Combine `workspace.share.read` with `workspace.share.request` to allow reads immediately and require approval for edits. AQ resolves the target's configured source and records its repository identity, binding generation, project revision, and commit. Changing the target's binding invalidates the old authority. A task ref and the target's delivery policy govern publication and review.
 
 The home checkout remains at `/aq/work`; sibling sources appear under `/aq/projects/<target-project-uuid>`. The agent works with source files. The worker handles Git credentials, transport and return of changed files. Use the sandbox-provided `DATABASE_URL` directly. On a development machine with PostgreSQL server tools installed, `scripts/with-test-db COMMAND [ARG ...]` runs a command against its own socket-only cluster and removes the cluster on exit.
+
+## Worker and environment setup
+
+Docker-local workers with node Git and a private state-directory mapping advertise workspace support when polling. The managed worker launcher derives that mapping from its own state bind. When using the Compose worker overlay, set `AQ_WORKER_DAEMON_STATE_ROOT` to the location where the dedicated sandbox daemon can read the worker's journal volume. That path must identify the same underlying directory mounted at `/state` in the worker container. A machine without that mapping can continue to run ordinary tasks.
+
+The server's Git transport currently comes with the `delivery_playbook` build feature. Enable `project_environments` for database-backed tasks. An approved environment that advertises `postgres` must have PostgreSQL server and client tools installed. The template builder checks those binaries, and the sandbox runs a SQL readiness query before starting the harness. Other toolchain requirements use the existing task `needs` and environment `provides` mechanism.
+
+For a local server and dashboard from separate checkouts, build the dashboard with `pnpm build` and use `compose.dashboard.yaml` with `AQ_DASHBOARD_BUNDLE` set to the absolute path of its `dist` directory.
