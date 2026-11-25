@@ -529,3 +529,131 @@ async fn the_sweep_reconciles_a_held_result_and_only_an_override_lets_it_be_repl
     assert!(env.holds_task().await);
     assert_eq!(env.writes.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn retry_reconciles_terminal_publication_refusal_after_restart() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let h = RetryHistory::new().await;
+    let env = &h.env;
+    let task = h.task;
+    let report = h.result;
+    let attempt = h.attempt;
+    settlement_owner39::initial_project(&env.f).await;
+    super::super::replacement::seed_native_offer_clock(&h.pool, attempt).await;
+    let project = env.f.selection.lineage.project_id;
+    let version = env.expected_version.to_string();
+    let original = Uuid::new_v4();
+    let publication = Uuid::new_v4();
+    let head = "4".repeat(40);
+    let provenance = json!({"result_ready":{"task_id":task,"project_id":project,"attempt_id":attempt,"result_id":report},"result_head":head});
+    sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
+        .bind(publication).bind(h.namespace).bind(publication.to_string())
+        .bind(task.to_string()).bind(provenance).bind(NOW as i64).execute(&h.pool).await.unwrap();
+
+    let query = json!({"operation_id":original,"kind":"task.retry",
+        "subject":{"type":"task","id":task,"revision":version},"expected_versions":{"task":version},
+        "payload":{"operation_id":original,"project_id":project,"expected_version":version}});
+    let response = aq_server::build_admin_router(env.f.state.clone())
+        .oneshot(
+            axum::http::Request::post("/api/v1/actions")
+                .header("x-aq-dev-email", "owner@localhost")
+                .header("x-aq-request", "1")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(query.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["data"]["disposition"], "pending", "{body}");
+    assert!(
+        env.holds_task().await,
+        "unreachable alone may have dispatched"
+    );
+
+    // The persisted authorisation survives process restart. AQ Git later gives
+    // an explicit remote rejection for this exact report and retained head.
+    sqlx::query("UPDATE playbook_host_operations SET request=request || '{\"answer_note\":\"remote_rejected\"}'::jsonb WHERE operation_id=$1")
+        .bind(publication).execute(&h.pool).await.unwrap();
+    let schedule = || {
+        sqlx::query("UPDATE owner_task_retry_intents SET next_check_at=to_timestamp(1) WHERE operation_id=$1")
+        .bind(original).execute(&h.pool)
+    };
+    sqlx::raw_sql(
+        "CREATE FUNCTION delay_owner_release() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'fixture interrupted owner release'; END $$;
+      CREATE TRIGGER delay_owner_release BEFORE INSERT ON profiled_replacement_releases
+      FOR EACH ROW EXECUTE FUNCTION delay_owner_release();",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    schedule().await.unwrap();
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let sweep = tokio::spawn(aq_server::profiled_execution::expiry::run(
+        env.f.state.clone(),
+        shutdown,
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        while !sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM profiled_auto_settlements WHERE report_id=$1 AND reason='branch_publication_rejected')")
+            .bind(report).fetch_one(&h.pool).await.unwrap() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }).await.expect("the original approval retains its publication proof");
+    use aq_playbook_domain::delivery_store::ResultPort;
+    let (port, origin, _) = h.notification();
+    let mut tx = h.pool.begin().await.unwrap();
+    assert!(
+        !port.lock_current(&mut tx, &origin).await.unwrap(),
+        "new or resumed delivery effects are fenced before release"
+    );
+    tx.rollback().await.unwrap();
+    use aq_server::profiled_execution::replacement;
+    let assessment = replacement::assess_task(&env.f.state, task, NOW + 1)
+        .await
+        .unwrap();
+    let replacement = assessment
+        .replacement()
+        .expect("proofs now allow the owner to release");
+    assert!(matches!(
+        replacement::release(&env.f.state, task, replacement).await,
+        Err(aq_server::error::AppError::Conflict(_))
+    ));
+    sqlx::query("DROP TRIGGER delay_owner_release ON profiled_replacement_releases")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    schedule().await.unwrap();
+    let check = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let disposition: String = sqlx::query_scalar(
+                "SELECT disposition FROM dashboard_operations WHERE operation_id=$1",
+            )
+            .bind(original)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+            if disposition == "confirmed" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    stop.send(true).unwrap();
+    sweep.await.unwrap();
+    check.expect("durable original retry confirms without another owner request");
+    assert!(!env.holds_task().await);
+    let (reason, evidence): (String, Value) = sqlx::query_as("SELECT reason,evidence FROM profiled_auto_settlements WHERE report_id=$1 AND disposition='rework_required'")
+        .bind(report).fetch_one(&h.pool).await.unwrap();
+    assert_eq!(reason, "branch_publication_rejected");
+    assert_eq!(evidence["owner_operation_id"], json!(original));
+    assert_eq!(evidence["publication_operation_id"], json!(publication));
+    assert_eq!(evidence["head"], json!(head));
+    assert_eq!(env.writes.load(Ordering::SeqCst), 0);
+}
