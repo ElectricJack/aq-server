@@ -30,7 +30,10 @@ async fn request(
     path: &str,
     actor: Option<&str>,
 ) -> (StatusCode, Value) {
-    let mut req = Request::builder().method(method).uri(path);
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-aq-request", "1");
     if let Some(actor) = actor {
         req = req.header("x-aq-dev-email", actor);
     }
@@ -120,7 +123,7 @@ async fn mounted_performance_requires_owner_and_validates_time_and_scope() {
     let status = request(&app, Method::POST, &format!("{BASE}/summary"), Some(OWNER))
         .await
         .0;
-    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let default = read(&app, &format!("{BASE}/summary"), Some(OWNER)).await;
     assert_eq!(default.0, StatusCode::OK, "{}", default.1);
     assert_eq!(default.1["data"]["cutoff_ms"], CUTOFF);
@@ -296,18 +299,30 @@ async fn reference_report_preserves_evidence_across_scope_cutoff_and_replay() {
     hidden
         .record_merge(&pool, Uuid::new_v4(), Uuid::new_v4())
         .await;
-    sqlx::query(
-        "INSERT INTO performance_task_first_ready(project_id,task_id,ready_at_ms)
-         VALUES($1,$2,$3)",
+    hidden
+        .record_completion(&pool, workspace, Uuid::new_v4())
+        .await;
+    for cohort_task in [&task, &hidden] {
+        record_first_ready(&pool, cohort_task).await;
+    }
+    record_definition(
+        &pool,
+        f.actor,
+        hidden.project,
+        json!({"kind":"confirmed_completion"}),
+        1,
+        READY - MINUTE,
     )
-    .bind(task.project)
-    .bind(task.task)
-    .bind(READY)
-    .execute(&pool)
-    .await
-    .unwrap();
+    .await;
 
     let app = aq_server::build_admin_router(f.state.clone());
+    let confirmed = success(&app, "summary", Some(hidden.project), CUTOFF).await;
+    assert_reference_outcomes(&confirmed["outcomes"], &hidden);
+    assert_eq!(confirmed["outcomes"]["delivery"]["delivered_tasks"], 1);
+    assert_eq!(
+        confirmed["outcomes"]["delivery"]["timing"]["median_ms"],
+        80 * MINUTE
+    );
     assert_machine_and_queue_evidence(&app, &pool, &task).await;
     let before_completion = success(&app, "summary", Some(task.project), COMPLETE - 1).await;
     assert_eq!(before_completion["outcomes"]["verified_merges"], 1);
@@ -348,6 +363,7 @@ async fn reference_report_preserves_evidence_across_scope_cutoff_and_replay() {
 
     let fleet = success(&app, "summary", None, CUTOFF).await;
     assert_eq!(fleet["outcomes"]["verified_merges"], 2);
+    assert_eq!(fleet["outcomes"]["confirmed_completions"], 2);
     let hidden_detail = format!("{BASE}/tasks/{}?project_id={}", hidden.task, task.project);
     let (status, body) = read(&app, &hidden_detail, Some(OWNER)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
@@ -376,6 +392,19 @@ async fn reference_report_preserves_evidence_across_scope_cutoff_and_replay() {
         MERGE + 45 * MINUTE
     );
     assert_hold_pagination(&app, task.project, [held.task, hidden.task]).await;
+}
+
+async fn record_first_ready(pool: &PgPool, task: &ReportTask) {
+    sqlx::query(
+        "INSERT INTO performance_task_first_ready(project_id,task_id,ready_at_ms)
+         VALUES($1,$2,$3)",
+    )
+    .bind(task.project)
+    .bind(task.task)
+    .bind(READY)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 fn assert_reference_outcomes(outcomes: &Value, task: &ReportTask) {
