@@ -41,3 +41,19 @@ account. Run a task that executes `psql "$DATABASE_URL" -c 'SELECT 1'` when
 qualifying a worker environment for PostgreSQL.
 
 For a local server and dashboard from separate checkouts, build the dashboard with `pnpm build` and use `compose.dashboard.yaml` with `AQ_DASHBOARD_BUNDLE` set to the absolute path of its `dist` directory.
+
+## Retained source and delivery
+
+A fresh worker can fetch a pinned commit after its branch moves. AQ first
+tries the normal Git checkout. When the commit is absent, AQ serves a retained
+bundle for that repository, binding generation and commit. Repeated downloads
+reuse the bundle. The source-retention settings `max_bundle_bytes` and
+`max_staging_bytes` bound the size of an export and the workspace bundle
+reservations. These bundles currently have no automatic eviction. Capacity
+exhaustion can delay tasks that need a new bundle.
+
+After an attempt returns changes, inspect the retained heads for the home
+project and its siblings. The owner can record a combined test run and verify
+delivery against each changed project's policy. See the
+[workspace delivery operations](../implementation/task-workspace-delivery.md)
+for request bodies and the conditions that allow the home task to complete.
