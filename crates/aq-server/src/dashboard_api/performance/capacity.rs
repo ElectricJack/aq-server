@@ -152,7 +152,7 @@ pub(super) async fn machines(pool: &PgPool, cutoff: i64) -> Result<Value> {
             .fold((0, 0), |(total, used), sample| {
                 (
                     total + sample.enabled_slots,
-                    used + sample.enabled_occupied_slots,
+                    used + sample.enabled_occupied_slots.min(sample.enabled_slots),
                 )
             });
         let detail = if samples.len() <= detail_left {

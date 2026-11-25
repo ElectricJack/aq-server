@@ -210,13 +210,16 @@ impl Machine {
         self.occupied_slots += i64::from(view.occupied);
         if state == "online" {
             self.enabled_slots += i64::from(view.total);
-            self.enabled_occupied_slots += i64::from(view.occupied);
+            self.enabled_occupied_slots += i64::from(view.occupied.min(view.total));
             self.free_slots += i64::from(view.idle);
         }
     }
 
     fn cap(&mut self, max: u32) {
         self.enabled_slots = self.enabled_slots.min(i64::from(max));
+        // Running attempts can outlive a lowered limit. Preserve their
+        // occupancy, but count at most the enabled capacity in utilization.
+        self.enabled_occupied_slots = self.enabled_occupied_slots.min(self.enabled_slots);
         self.free_slots = self
             .free_slots
             .min((self.enabled_slots - self.occupied_slots).max(0));
@@ -420,6 +423,27 @@ mod tests {
             rows[0] == ("first".into(), 1) || rows[0] == ("second".into(), 2),
             "{rows:?}",
         );
+    }
+
+    #[test]
+    fn lowered_slot_limits_preserve_running_occupancy_without_free_capacity() {
+        let mut machine = Machine::default();
+        machine.record(
+            "online",
+            slots::SlotView {
+                total: 2,
+                occupied: 3,
+                idle: 0,
+                blocked: vec![1, 2, 3],
+                all_blocked: false,
+            },
+        );
+        assert_eq!(machine.enabled_occupied_slots, 2);
+        machine.cap(1);
+        assert_eq!(machine.enabled_slots, 1);
+        assert_eq!(machine.enabled_occupied_slots, 1);
+        assert_eq!(machine.occupied_slots, 3);
+        assert_eq!(machine.free_slots, 0);
     }
 
     #[test]
