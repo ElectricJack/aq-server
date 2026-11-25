@@ -247,20 +247,73 @@ async fn require_new_sample_locked(
     if let Some(previous) =
         storage::latest_fact(tx, auth.id(), request.binding.attempt_id, request.lease_id).await?
     {
-        if previous.request.binding != request.binding
-            || previous.request.grant_id != request.grant_id
-            || request.sequence <= previous.request.sequence
-        {
-            return Err(changed());
-        }
-        if previous.request.observation.kernel_boot_id == request.observation.kernel_boot_id {
-            if request.observation.read_started_ns < previous.request.observation.read_completed_ns
-            {
-                return Err(changed());
-            }
-        } else if positive {
-            return Err(changed());
-        }
+        require_sample_order(&previous.request, request, positive)?;
     }
     Ok(())
+}
+
+fn require_sample_order(
+    previous: &PresenceReport,
+    request: &PresenceReport,
+    positive: bool,
+) -> Result<(), AppError> {
+    if previous.binding != request.binding
+        || previous.grant_id != request.grant_id
+        || request.sequence <= previous.sequence
+    {
+        return Err(changed());
+    }
+    if previous.observation.kernel_boot_id == request.observation.kernel_boot_id {
+        if request.observation.read_started_ns < previous.observation.read_completed_ns {
+            return Err(changed());
+        }
+    } else if positive {
+        return Err(changed());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn previous_report() -> PresenceReport {
+        serde_json::from_str(include_str!(
+            "../../../../aq-admission/artifacts/scoped-presence-report.fixture.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_sequence_cannot_hide_an_overlapping_observation() {
+        let previous = previous_report();
+        let mut next = previous.clone();
+        next.sequence += 1;
+        next.observation.read_started_ns = previous.observation.read_completed_ns - 1;
+        for positive in [false, true] {
+            assert!(require_sample_order(&previous, &next, positive).is_err());
+        }
+        next.observation.read_started_ns = previous.observation.read_completed_ns;
+        for positive in [false, true] {
+            assert!(require_sample_order(&previous, &next, positive).is_ok());
+            next.sequence = previous.sequence;
+            assert!(require_sample_order(&previous, &next, positive).is_err());
+            next.sequence += 1;
+        }
+    }
+
+    #[test]
+    fn a_kernel_reboot_allows_only_a_same_grant_negative_sample() {
+        let previous = previous_report();
+        let mut next = previous.clone();
+        next.sequence += 1;
+        next.observation.kernel_boot_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_ok());
+        assert!(require_sample_order(&previous, &next, true).is_err());
+        next.grant_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_err());
+        next.grant_id = previous.grant_id;
+        next.binding.attempt_id = uuid::Uuid::new_v4();
+        assert!(require_sample_order(&previous, &next, false).is_err());
+    }
 }

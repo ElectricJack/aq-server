@@ -62,42 +62,7 @@ async fn record_inner(
     {
         return Err(conflict());
     }
-    let started: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1)",
-    )
-    .bind(r.binding.attempt_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(database)?;
-    if started {
-        return Err(conflict());
-    }
-    let head = sqlx::query(
-        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(r.binding.attempt_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(database)?
-    .ok_or_else(conflict)?;
-    if head.get::<String, _>("phase") != "prepared"
-        || head.get::<i64, _>("revision") != loaded.prepared.revision as i64
-        || head.get::<String, _>("digest") != loaded.prepared.digest.as_str()
-    {
-        return Err(conflict());
-    }
-    // No phase renewal adapter is qualified. Any unexpected renewal is corruption,
-    // never a source from which to fabricate a later Prepared checkpoint.
-    if crate::profiled_execution::renewal::latest_renewal_revision_locked(
-        &mut tx,
-        node.id(),
-        &r.binding,
-    )
-    .await?
-    .is_some()
-    {
-        return Err(conflict());
-    }
+    require_prepared_journal_locked(&mut tx, node, &r.binding, &loaded).await?;
     let evidence = match &r.evidence {
         Evidence::Suppressed { .. } => "suppressed",
         Evidence::HostStopped { .. } => "host_stopped",
@@ -145,6 +110,47 @@ async fn record_inner(
     }
     tx.commit().await.map_err(database)?;
     Ok(ack)
+}
+
+async fn require_prepared_journal_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: &AuthenticatedNode,
+    binding: &aq_admission::LaunchBinding,
+    loaded: &common::Loaded,
+) -> Result<(), AppError> {
+    let started: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1)",
+    )
+    .bind(binding.attempt_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    if started {
+        return Err(conflict());
+    }
+    let head = sqlx::query(
+        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(binding.attempt_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(database)?
+    .ok_or_else(conflict)?;
+    if head.get::<String, _>("phase") != "prepared"
+        || head.get::<i64, _>("revision") != loaded.prepared.revision as i64
+        || head.get::<String, _>("digest") != loaded.prepared.digest.as_str()
+    {
+        return Err(conflict());
+    }
+    // No phase renewal adapter is qualified. Any unexpected renewal is corruption,
+    // never a source from which to fabricate a later Prepared checkpoint.
+    if crate::profiled_execution::renewal::latest_renewal_revision_locked(tx, node.id(), binding)
+        .await?
+        .is_some()
+    {
+        return Err(conflict());
+    }
+    Ok(())
 }
 
 fn replay(

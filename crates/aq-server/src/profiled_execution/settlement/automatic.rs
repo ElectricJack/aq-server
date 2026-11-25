@@ -432,18 +432,7 @@ async fn evaluate_locked(
 ) -> Result<(Verdict, Value)> {
     let g = facts::gather_locked(state, tx, r, false).await?;
     let v = &g.view;
-    let acceptance = if !r.is_current_report_head
-        || !outcome_acceptable(r.report.outcome)
-        || v.revoked
-        || v.cancellation_id.is_some()
-        || !v.holds_task
-    {
-        Acceptance::Refused
-    } else if !v.stopped {
-        Acceptance::NotStopped
-    } else {
-        Acceptance::Accepted
-    };
+    let acceptance = result_acceptance(r, v);
     let (source, lineage_unknown) = (&g.source, g.lineage_unknown);
     let unchanged = matches!(source, Some((_, _, false)));
     let conclusion = r.report.conclusion.as_str();
@@ -474,6 +463,24 @@ async fn evaluate_locked(
         "delivery": {"policy": delivery, "state": g.delivery_state},
     });
     Ok((verdict, evidence))
+}
+
+fn result_acceptance(
+    r: &results::RecordedResult,
+    v: &crate::execution::authority::AuthorityView,
+) -> Acceptance {
+    if !r.is_current_report_head
+        || !outcome_acceptable(r.report.outcome)
+        || v.revoked
+        || v.cancellation_id.is_some()
+        || !v.holds_task
+    {
+        Acceptance::Refused
+    } else if !v.stopped {
+        Acceptance::NotStopped
+    } else {
+        Acceptance::Accepted
+    }
 }
 
 async fn prepare_locked(
@@ -535,19 +542,7 @@ async fn dispatch(
     let time = now(state)?;
     match outcome {
         Ok(Ok((http, raw))) if http.is_success() => {
-            if let Ok(receipt) = completion::confirmed(&raw, &current) {
-                let receipt =
-                    serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
-                sqlx::query("UPDATE profiled_auto_settlements SET disposition='confirmed',reason=NULL,receipt=$2,updated_at_ms=$3 WHERE report_id=$1")
-                    .bind(report_id).bind(receipt).bind(time).execute(&mut *tx).await.map_err(db)?;
-                sqlx::query(
-                    "UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1 AND holds_task",
-                )
-                .bind(current.get::<Uuid, _>("attempt_id"))
-                .execute(&mut *tx)
-                .await
-                .map_err(db)?;
-            }
+            confirm_dispatch_locked(&mut tx, report_id, &current, &raw, time).await?;
         }
         Ok(Ok((http, _))) if http == axum::http::StatusCode::CONFLICT => {
             sqlx::query("UPDATE profiled_auto_settlements SET disposition='held',reason=$2,updated_at_ms=$3 WHERE report_id=$1")
@@ -562,6 +557,29 @@ async fn dispatch(
     let s = status(&row)?;
     tx.commit().await.map_err(db)?;
     Ok(s)
+}
+
+async fn confirm_dispatch_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    report_id: Uuid,
+    current: &sqlx::postgres::PgRow,
+    raw: &Value,
+    time: i64,
+) -> Result<()> {
+    if let Ok(receipt) = completion::confirmed(raw, current) {
+        let receipt =
+            serde_json::to_value(receipt).map_err(|_| crate::error::AppError::Internal)?;
+        sqlx::query("UPDATE profiled_auto_settlements SET disposition='confirmed',reason=NULL,receipt=$2,updated_at_ms=$3 WHERE report_id=$1")
+            .bind(report_id).bind(receipt).bind(time).execute(&mut **tx).await.map_err(db)?;
+        sqlx::query(
+            "UPDATE execution_attempts SET holds_task=false WHERE attempt_id=$1 AND holds_task",
+        )
+        .bind(current.get::<Uuid, _>("attempt_id"))
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+    }
+    Ok(())
 }
 
 /// Epic 0 (spec 0016 section 6.2): the locked prelude of a playbook's

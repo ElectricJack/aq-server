@@ -67,42 +67,7 @@ pub async fn fetch(
     if auth.id() != request.identity.node_id {
         return Err(AppError::Forbidden("material node mismatch".into()));
     }
-    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
-    // This first read is only a bounded candidate for private file I/O. It grants
-    // no delivery permission. All mutable owners are rechecked afterward.
-    let candidate: Value = sqlx::query_scalar(
-        "SELECT lease FROM admission_material_leases WHERE lease_id=$1 AND node_id=$2 AND boot_id=$3 AND admitted_attempt_id=$4 AND state='admitted'",
-    )
-    .bind(request.lease_id)
-    .bind(auth.id())
-    .bind(request.identity.boot_id)
-    .bind(request.binding.attempt_id)
-    .fetch_optional(&state.store.pool)
-    .await
-    .map_err(db)?
-    .ok_or_else(|| refused())?;
-    let lease: MaterialLease = serde_json::from_value(candidate).map_err(|_| refused())?;
-    lease.validate().map_err(|_| refused())?;
-    if lease.lease_id != request.lease_id || lease.binding != request.binding {
-        return Err(refused());
-    }
-    let permit = aq_machine_control::limits::MATERIAL_REQUESTS.enter();
-    let permit = permit.ok_or_else(|| refused())?;
-    let read_lease = lease.clone();
-    let node_id = auth.id();
-    let (source, version) =
-        super::login_refresh::lease_versioned(&state.store.pool, &registry, &lease).await?;
-    let bytes = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            material::read_for_lease_from(&registry, &read_lease, node_id, source.as_ref())
-        }),
-    )
-    .await
-    .map_err(|_| refused())?
-    .map_err(|_| AppError::Internal)?
-    .map_err(|_| refused())?;
+    let (lease, bytes, version) = read_candidate_material(state, auth, request).await?;
 
     let mut tx = state.store.pool.begin().await.map_err(db)?;
     sqlx::query("SET LOCAL lock_timeout='2s'")
@@ -238,6 +203,53 @@ pub async fn fetch(
         version,
         material: bytes,
     })
+}
+
+/// File I/O precedes the transaction; fetch rechecks every mutable owner
+/// before returning these candidate bytes to the caller.
+async fn read_candidate_material(
+    state: &AppState,
+    auth: &AuthenticatedNode,
+    request: &MaterialFetch,
+) -> Result<(MaterialLease, material::ProtectedMaterial, Option<i64>), AppError> {
+    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
+    // This first read is only a bounded candidate for private file I/O. It grants
+    // no delivery permission. All mutable owners are rechecked afterward.
+    let candidate: Value = sqlx::query_scalar(
+        "SELECT lease FROM admission_material_leases WHERE lease_id=$1 AND node_id=$2 AND boot_id=$3 AND admitted_attempt_id=$4 AND state='admitted'",
+    )
+    .bind(request.lease_id)
+    .bind(auth.id())
+    .bind(request.identity.boot_id)
+    .bind(request.binding.attempt_id)
+    .fetch_optional(&state.store.pool)
+    .await
+    .map_err(db)?
+    .ok_or_else(|| refused())?;
+    let lease: MaterialLease = serde_json::from_value(candidate).map_err(|_| refused())?;
+    lease.validate().map_err(|_| refused())?;
+    if lease.lease_id != request.lease_id || lease.binding != request.binding {
+        return Err(refused());
+    }
+    let permit = aq_machine_control::limits::MATERIAL_REQUESTS.enter();
+    let permit = permit.ok_or_else(|| refused())?;
+    let read_lease = lease.clone();
+    let node_id = auth.id();
+    let (source, version) =
+        super::login_refresh::lease_versioned(&state.store.pool, &registry, &lease).await?;
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            material::read_for_lease_from(&registry, &read_lease, node_id, source.as_ref())
+        }),
+    )
+    .await
+    .map_err(|_| refused())?
+    .map_err(|_| AppError::Internal)?
+    .map_err(|_| refused())?;
+
+    Ok((lease, bytes, version))
 }
 
 fn require_lease_row(

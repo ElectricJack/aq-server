@@ -238,6 +238,22 @@ pub fn evaluate_pilot(
     if !source_matches(result, source) {
         return plan(Disposition::Stale, Reason::SourceMismatch);
     }
+    evaluate_owner_evidence(result, source, evidence, policy)
+}
+
+fn evaluate_owner_evidence(
+    result: &RecordedResult,
+    source: &RecordedSourceConfirmation,
+    evidence: &Evidence<'_>,
+    policy: &PilotPolicy,
+) -> Result<EligibilityPlan, AppError> {
+    let plan = |disposition, reason| {
+        Ok(EligibilityPlan {
+            report_id: result.report.report_id,
+            disposition,
+            reason: Some(reason),
+        })
+    };
     let Some(review) = evidence.review else {
         return plan(Disposition::NeedsReconciliation, Reason::ReviewUnavailable);
     };
@@ -313,17 +329,7 @@ fn review_matches(
     source: &RecordedSourceConfirmation,
     policy: &PilotPolicy,
 ) -> Result<bool, AppError> {
-    if s.result.report_id != result.report.report_id
-        || s.result.report_digest != result.receipt.report_digest
-        || s.result.record_receipt != result.receipt_artifact
-        || s.result.stopped_receipt != result.receipt.stopped_receipt
-        || s.binding != result.report.binding
-        || s.validation_policy != policy.artifact
-        || s.expected_outcome != result.spec.outcome_artifact
-        || s.task_observation != result.spec.task_observation
-        || s.task_context != result.spec.task_context
-        || s.execution_spec != result.spec.artifact().map_err(|_| AppError::Internal)?
-    {
+    if !review_result_matches(s, result, policy)? {
         return Ok(false);
     }
     if !review_source_matches(&s.source, result, source)? {
@@ -340,6 +346,27 @@ fn review_matches(
         && s.task.workspace_id == result.spec.task.workspace_id
         && s.task.version == result.spec.task.version
         && s.task.content_revision == result.spec.task.content_revision)
+}
+
+fn review_result_matches(
+    s: &aq_review_protocol::ReviewSubject,
+    result: &RecordedResult,
+    policy: &PilotPolicy,
+) -> Result<bool, AppError> {
+    if s.result.report_id != result.report.report_id
+        || s.result.report_digest != result.receipt.report_digest
+        || s.result.record_receipt != result.receipt_artifact
+        || s.result.stopped_receipt != result.receipt.stopped_receipt
+        || s.binding != result.report.binding
+        || s.validation_policy != policy.artifact
+        || s.expected_outcome != result.spec.outcome_artifact
+        || s.task_observation != result.spec.task_observation
+        || s.task_context != result.spec.task_context
+        || s.execution_spec != result.spec.artifact().map_err(|_| AppError::Internal)?
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn review_source_matches(

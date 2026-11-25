@@ -56,35 +56,7 @@ async fn record_inner(
             return Err(conflict());
         }
         let r = &prior[0];
-        if r.get::<uuid::Uuid, _>("attempt_id") != binding.attempt_id
-            || r.get::<uuid::Uuid, _>("operation_id") != operation
-            || r.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
-            || r.get::<Option<String>, _>("initial_authority_receipt_digest")
-                .as_deref()
-                != Some(loaded.history.receipt_digest.as_str())
-            || r.get::<Option<String>, _>("phase_request_digest")
-                .as_deref()
-                != Some(digest.as_str())
-            || r.get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
-                .as_deref()
-                != Some(outer.as_slice())
-        {
-            return Err(conflict());
-        }
-        let bytes = r
-            .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
-            .ok_or_else(conflict)?;
-        let receipt = wire::decode_stopped_receipt(&bytes, q).map_err(|_| conflict())?;
-        let proof = canonical(&request.proof)?;
-        if canonical(&receipt)? != bytes
-            || r.get::<Vec<u8>, _>("request_bytes") != canonical(request)?
-            || r.get::<String, _>("request_digest") != inner_digest.as_str()
-            || r.get::<Vec<u8>, _>("receipt_bytes") != canonical(&receipt.original)?
-            || r.get::<Vec<u8>, _>("proof_bytes") != proof
-            || r.get::<String, _>("proof_digest") != Digest::of(&proof).as_str()
-        {
-            return Err(conflict());
-        }
+        let receipt = replay(r, q, &loaded, &digest, &outer, &inner_digest)?;
         if let Some(delegate) = node.delegated() {
             let current = &delegate.current;
             let context = crate::delegated_permits::runtime::context(&mut tx, current).await?;
@@ -179,6 +151,49 @@ async fn record_inner(
     .await?;
     tx.commit().await.map_err(database)?;
     Ok(ack)
+}
+
+fn replay(
+    r: &sqlx::postgres::PgRow,
+    q: &wire::StoppedRequest,
+    loaded: &common::Loaded,
+    digest: &Digest,
+    outer: &[u8],
+    inner_digest: &Digest,
+) -> Result<wire::StoppedReceipt, AppError> {
+    let request = &q.original;
+    let binding = &request.evidence.binding;
+    let operation = request.evidence.stop_operation_id;
+    if r.get::<uuid::Uuid, _>("attempt_id") != binding.attempt_id
+        || r.get::<uuid::Uuid, _>("operation_id") != operation
+        || r.get::<String, _>("initial_authority_kind") != "phase_execution_v2"
+        || r.get::<Option<String>, _>("initial_authority_receipt_digest")
+            .as_deref()
+            != Some(loaded.history.receipt_digest.as_str())
+        || r.get::<Option<String>, _>("phase_request_digest")
+            .as_deref()
+            != Some(digest.as_str())
+        || r.get::<Option<Vec<u8>>, _>("phase_envelope_bytes")
+            .as_deref()
+            != Some(outer)
+    {
+        return Err(conflict());
+    }
+    let bytes = r
+        .get::<Option<Vec<u8>>, _>("phase_ack_bytes")
+        .ok_or_else(conflict)?;
+    let receipt = wire::decode_stopped_receipt(&bytes, q).map_err(|_| conflict())?;
+    let proof = canonical(&request.proof)?;
+    if canonical(&receipt)? != bytes
+        || r.get::<Vec<u8>, _>("request_bytes") != canonical(request)?
+        || r.get::<String, _>("request_digest") != inner_digest.as_str()
+        || r.get::<Vec<u8>, _>("receipt_bytes") != canonical(&receipt.original)?
+        || r.get::<Vec<u8>, _>("proof_bytes") != proof
+        || r.get::<String, _>("proof_digest") != Digest::of(&proof).as_str()
+    {
+        return Err(conflict());
+    }
+    Ok(receipt)
 }
 
 async fn load_started_locked(

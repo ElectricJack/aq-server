@@ -192,6 +192,14 @@ async fn legacy(
     for row in [&start, &stop] {
         require_legacy_row_locked(tx, row, node).await?;
     }
+    let history = decode_legacy_history(&start, &stop, binding)?;
+    if recording {
+        require_recording_runtime_locked(tx, node, binding, &history.stop).await?;
+    }
+    Ok(history)
+}
+
+fn decode_legacy_history(start: &PgRow, stop: &PgRow, binding: &LaunchBinding) -> Result<Legacy> {
     let q: started::Request = started::decode_request(&start.get::<Vec<u8>, _>("request_bytes"))
         .map_err(|_| AppError::Internal)?;
     let a = started::decode_receipt(&start.get::<Vec<u8>, _>("receipt_bytes"), &q)
@@ -216,26 +224,33 @@ async fn legacy(
     {
         return Err(AppError::Internal);
     }
-    if recording {
-        let SessionIdentity::Remote { boot_id, .. } = binding.session else {
-            return Err(conflict());
-        };
-        let admitted = registration::admitted_runtime_locked(tx, node, boot_id).await?;
-        if admitted.request.runtime != stopped.runtime
-            || admitted.qualification != stopped.qualification
-            || !admitted
-                .request
-                .features
-                .contains(&Feature::HostStopEvidenceV1)
-            || !admitted
-                .request
-                .features
-                .contains(&Feature::DurableHostJournalV1)
-        {
-            return Err(conflict());
-        }
-    }
     Ok(Legacy { stop: stopped, ack })
+}
+
+async fn require_recording_runtime_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    binding: &LaunchBinding,
+    stopped: &stopped::Request,
+) -> Result<()> {
+    let SessionIdentity::Remote { boot_id, .. } = binding.session else {
+        return Err(conflict());
+    };
+    let admitted = registration::admitted_runtime_locked(tx, node, boot_id).await?;
+    if admitted.request.runtime != stopped.runtime
+        || admitted.qualification != stopped.qualification
+        || !admitted
+            .request
+            .features
+            .contains(&Feature::HostStopEvidenceV1)
+        || !admitted
+            .request
+            .features
+            .contains(&Feature::DurableHostJournalV1)
+    {
+        return Err(conflict());
+    }
+    Ok(())
 }
 mod frozen {
     use super::*;

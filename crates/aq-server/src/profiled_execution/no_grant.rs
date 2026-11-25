@@ -214,33 +214,30 @@ pub(crate) async fn close_locked(
         .fetch_optional(&mut **tx)
         .await
         .map_err(closure_error)?;
-    let result = row
-        .map(|row| {
-            let bytes: Vec<u8> = row.get("body_bytes");
-            let digest: String = row.get("body_digest");
-            let proof: ClosureProof =
-                serde_json::from_slice(&bytes).map_err(|_| AppError::Internal)?;
-            aq_session_protocol::Validate::validate(&proof.binding)
-                .map_err(|_| AppError::Internal)?;
-            let actual = Digest::of(&bytes);
-            if actual.as_str() != digest {
-                return Err(AppError::Internal);
-            }
-            proof.require_absence(attempt)?;
-            Ok(Closure {
-                artifact: ArtifactRef {
-                    id: Text::new(format!("aq.never-granted/{}", proof.closure_id))
-                        .map_err(|_| AppError::Internal)?,
-                    version: Text::new("1").map_err(|_| AppError::Internal)?,
-                    digest: actual,
-                },
-                proof,
-                bytes,
-                changed: row.get("changed"),
-            })
-        })
-        .transpose()?;
-    Ok(result)
+    row.map(|row| decode_closure(&row, attempt)).transpose()
+}
+
+fn decode_closure(row: &sqlx::postgres::PgRow, attempt: Uuid) -> Result<Closure, AppError> {
+    let bytes: Vec<u8> = row.get("body_bytes");
+    let digest: String = row.get("body_digest");
+    let proof: ClosureProof = serde_json::from_slice(&bytes).map_err(|_| AppError::Internal)?;
+    aq_session_protocol::Validate::validate(&proof.binding).map_err(|_| AppError::Internal)?;
+    let actual = Digest::of(&bytes);
+    if actual.as_str() != digest {
+        return Err(AppError::Internal);
+    }
+    proof.require_absence(attempt)?;
+    Ok(Closure {
+        artifact: ArtifactRef {
+            id: Text::new(format!("aq.never-granted/{}", proof.closure_id))
+                .map_err(|_| AppError::Internal)?,
+            version: Text::new("1").map_err(|_| AppError::Internal)?,
+            digest: actual,
+        },
+        proof,
+        bytes,
+        changed: row.get("changed"),
+    })
 }
 
 fn closure_error(error: sqlx::Error) -> AppError {

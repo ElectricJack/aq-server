@@ -185,25 +185,16 @@ async fn record_only(
         if existing.len() != 1 {
             return Err(conflict());
         }
-        let old = &existing[0];
-        if old.get::<Uuid, _>("report_id") != report.report_id
-            || old.get::<Uuid, _>("attempt_id") != binding.attempt_id
-            || old.get::<Uuid, _>("node_id") != node_id
-            || old.get::<Uuid, _>("operation_id") != report.operation_id
-            || old.get::<Vec<u8>, _>("report_bytes") != bytes
-            || old.get::<String, _>("report_digest") != digest.as_str()
-        {
-            return Err(conflict());
-        }
-        origin_pin.require_row(&mut tx, old).await?;
-        let receipt =
-            result_record::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), report)
-                .map_err(|_| AppError::Internal)?;
-        if receipt.expected_outcome != spec.outcome_artifact
-            || receipt.stopped_receipt != stopped.artifact().map_err(|_| AppError::Internal)?
-        {
-            return Err(AppError::Internal);
-        }
+        let receipt = replay_locked(
+            &mut tx,
+            &existing[0],
+            report,
+            &bytes,
+            &digest,
+            &terminal,
+            &spec.outcome_artifact,
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         return Ok(receipt);
     }
@@ -273,6 +264,42 @@ async fn record_only(
     .await
     .map_err(db)?;
     tx.commit().await.map_err(db)?;
+    Ok(receipt)
+}
+async fn replay_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    old: &sqlx::postgres::PgRow,
+    report: &ResultReport,
+    bytes: &[u8],
+    digest: &aq_admission::Digest,
+    terminal: &origin::ResultOrigin,
+    expected_outcome: &aq_admission::ArtifactRef,
+) -> Result<Receipt, AppError> {
+    let binding = &report.binding;
+    let SessionIdentity::Remote { node_id, .. } = binding.session else {
+        return Err(conflict());
+    };
+    if old.get::<Uuid, _>("report_id") != report.report_id
+        || old.get::<Uuid, _>("attempt_id") != binding.attempt_id
+        || old.get::<Uuid, _>("node_id") != node_id
+        || old.get::<Uuid, _>("operation_id") != report.operation_id
+        || old.get::<Vec<u8>, _>("report_bytes") != bytes
+        || old.get::<String, _>("report_digest") != digest.as_str()
+    {
+        return Err(conflict());
+    }
+    terminal.pin().require_row(tx, old).await?;
+    let receipt = result_record::decode_receipt(&old.get::<Vec<u8>, _>("receipt_bytes"), report)
+        .map_err(|_| AppError::Internal)?;
+    if receipt.expected_outcome != *expected_outcome
+        || receipt.stopped_receipt
+            != terminal
+                .stopped_receipt()
+                .artifact()
+                .map_err(|_| AppError::Internal)?
+    {
+        return Err(AppError::Internal);
+    }
     Ok(receipt)
 }
 async fn require_report_capacity_locked(

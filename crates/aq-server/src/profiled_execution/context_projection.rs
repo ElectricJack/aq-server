@@ -202,11 +202,6 @@ pub fn project(
         }
     }
     dependents.remove(&root);
-    let names_dependent =
-        |edge: &Value| -> Result<bool, Error> {
-            Ok(dependents.contains(&id(&edge["source"])?)
-                || dependents.contains(&id(&edge["target"])?))
-        };
     let mut nodes = vec![node(&raw["node"], workspace_id, project_id, permissions)?];
     let mut current = BTreeSet::from([observation.revision.task_id]);
     for record in extra {
@@ -232,36 +227,14 @@ pub fn project(
         record_ids.insert(key.0);
         pinned.push(node(record, workspace_id, project_id, permissions)?);
     }
-    let mut projected_edges = Vec::new();
-    let mut edge_ids = BTreeSet::new();
-    let mut edge_types = BTreeSet::new();
-    let mut expected_pins = BTreeSet::new();
-    for edge in edges {
-        if names_dependent(edge)? {
-            continue;
-        }
-        if id(&edge["workspace_id"])? != workspace_id
-            || edge["deleted"] != false
-            || !edge_ids.insert(id(&edge["id"])?)
-        {
-            return Err(Error::Invalid);
-        }
-        let value = project_edge(edge, &current, &mut expected_pins)?;
-        edge_types.insert(serde_json::to_string(&value["edge_type"]).map_err(|_| Error::Invalid)?);
-        projected_edges.push(value);
-    }
+    let ProjectedEdges {
+        records: mut projected_edges,
+        edge_types,
+        expected_pins,
+    } = project_edges(edges, workspace_id, &dependents, &current)?;
     if pin_ids != expected_pins {
         return Err(Error::Invalid);
     }
-    let sort_nodes = |records: &mut Vec<Value>| {
-        records.sort_by(|a, b| {
-            a["id"].as_str().cmp(&b["id"].as_str()).then_with(|| {
-                a["content_revision"]
-                    .as_str()
-                    .cmp(&b["content_revision"].as_str())
-            })
-        })
-    };
     sort_nodes(&mut nodes);
     sort_nodes(&mut pinned);
     projected_edges.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
@@ -303,6 +276,54 @@ pub fn project(
         source_response_digest: observation.digest.clone(),
         observed_at_ms: stamp.requested_at_ms,
         expires_at_ms: stamp.expires_at_ms,
+    })
+}
+
+struct ProjectedEdges {
+    records: Vec<Value>,
+    edge_types: BTreeSet<String>,
+    expected_pins: BTreeSet<(Uuid, String)>,
+}
+
+fn project_edges(
+    edges: &[Value],
+    workspace_id: Uuid,
+    dependents: &BTreeSet<Uuid>,
+    current: &BTreeSet<Uuid>,
+) -> Result<ProjectedEdges, Error> {
+    let mut records = Vec::new();
+    let mut edge_ids = BTreeSet::new();
+    let mut edge_types = BTreeSet::new();
+    let mut expected_pins = BTreeSet::new();
+    for edge in edges {
+        if dependents.contains(&id(&edge["source"])?) || dependents.contains(&id(&edge["target"])?)
+        {
+            continue;
+        }
+        if id(&edge["workspace_id"])? != workspace_id
+            || edge["deleted"] != false
+            || !edge_ids.insert(id(&edge["id"])?)
+        {
+            return Err(Error::Invalid);
+        }
+        let value = project_edge(edge, current, &mut expected_pins)?;
+        edge_types.insert(serde_json::to_string(&value["edge_type"]).map_err(|_| Error::Invalid)?);
+        records.push(value);
+    }
+    Ok(ProjectedEdges {
+        records,
+        edge_types,
+        expected_pins,
+    })
+}
+
+fn sort_nodes(records: &mut [Value]) {
+    records.sort_by(|a, b| {
+        a["id"].as_str().cmp(&b["id"].as_str()).then_with(|| {
+            a["content_revision"]
+                .as_str()
+                .cmp(&b["content_revision"].as_str())
+        })
     })
 }
 

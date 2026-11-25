@@ -232,8 +232,22 @@ impl Service {
             crate::agent_access::settlement_post(rt, workspace, payload),
         )
         .await;
+        let response = outcome.ok().and_then(std::result::Result::ok);
+        self.reconcile_completion(&actor, &e, r.report.report_id, operation, lease, response)
+            .await
+    }
+
+    async fn reconcile_completion(
+        &self,
+        actor: &ActorPin,
+        e: &EvaluationReceipt,
+        report_id: Uuid,
+        operation: Uuid,
+        lease: Uuid,
+        response: Option<(axum::http::StatusCode, Value)>,
+    ) -> Result<CompletionStatus> {
         let mut tx = self.tx().await?;
-        let fresh = results::load_locked(&self.state, &mut tx, r.report.report_id).await?;
+        let fresh = results::load_locked(&self.state, &mut tx, report_id).await?;
         let ledger = effects::inspect_aq_effects_locked(&self.state, &mut tx, &fresh).await?;
         if fresh.receipt_artifact != e.report
             || !fresh.is_current_report_head
@@ -260,7 +274,7 @@ impl Service {
             .map_err(db)?;
         let mut next = "possible";
         let mut receipt = None;
-        if let Ok(Ok((http, raw))) = outcome {
+        if let Some((http, raw)) = response {
             if http.is_success() {
                 if let Ok(r) = confirmed(&raw, &current) {
                     next = "confirmed";
