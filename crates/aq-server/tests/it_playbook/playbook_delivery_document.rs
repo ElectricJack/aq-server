@@ -127,6 +127,61 @@ fn delivery_artifact(delivery: &authoring::SourceRecord) -> aq_playbook_host::mo
     draft::seal(&workspace).unwrap_or_else(|faults| panic!("{faults:?}"))
 }
 
+async fn assert_delivery_authoring_request(pool: &sqlx::PgPool) {
+    let runs = authoring::in_flight(pool).await.unwrap();
+    assert_eq!(runs.len(), 1, "one authoring run for the delivery source");
+    let internal = runs[0].internal_task_id.unwrap();
+    let submitted = aq_internal_work::store::get(pool, internal)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        submitted.purpose,
+        aq_internal_work::Purpose::PlaybookCompilation
+    );
+    assert_eq!(submitted.request.affected.id, DELIVERY);
+    let files = submitted.request.agent.unwrap().files;
+    assert_eq!(files["source.md"], DOCUMENT);
+    let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
+    assert_eq!(record["id"], DELIVERY);
+    assert_eq!(record["binding"], DELIVERY_BINDING);
+    assert_eq!(record["events"], json!(["aq.work.result_ready"]));
+    let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
+    assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
+    for command in [
+        "work.complete",
+        "work.return",
+        "work.hold",
+        "branch.publish",
+    ] {
+        assert!(catalog["commands"].get(command).is_some(), "{command}");
+    }
+    assert!(catalog["events"].get("aq.work.result_ready").is_some());
+    assert!(files["CATALOG.md"].contains("aq.work.result_ready"));
+}
+
+async fn assert_result_held(driver: &Driver, pool: &sqlx::PgPool, task_id: Uuid, result_id: Uuid) {
+    let sql = "SELECT count(*) FROM delivery_decisions WHERE task_id=$1 AND result_id=$2 AND decision='held'";
+    let mut holds = 0_i64;
+    for _ in 0..300 {
+        driver.quantum().await.unwrap();
+        holds = sqlx::query_scalar(sql)
+            .bind(task_id)
+            .bind(result_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        if holds > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        holds > 0,
+        "the activated playbook held the original aq.work.result_ready report"
+    );
+}
+
 #[tokio::test]
 async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_receives_result_ready()
  {
@@ -210,36 +265,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     let app = aq_server::build_admin_router(state.clone());
     let (status, saved) = put(&app, DOCUMENT, 0).await;
     assert_eq!(status, 200, "{saved}");
-    let runs = authoring::in_flight(&pool).await.unwrap();
-    assert_eq!(runs.len(), 1, "one authoring run for the delivery source");
-    let internal = runs[0].internal_task_id.unwrap();
-    let submitted = aq_internal_work::store::get(&pool, internal)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        submitted.purpose,
-        aq_internal_work::Purpose::PlaybookCompilation
-    );
-    assert_eq!(submitted.request.affected.id, DELIVERY);
-    let files = submitted.request.agent.unwrap().files;
-    assert_eq!(files["source.md"], DOCUMENT);
-    let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
-    assert_eq!(record["id"], DELIVERY);
-    assert_eq!(record["binding"], DELIVERY_BINDING);
-    assert_eq!(record["events"], json!(["aq.work.result_ready"]));
-    let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
-    assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
-    for command in [
-        "work.complete",
-        "work.return",
-        "work.hold",
-        "branch.publish",
-    ] {
-        assert!(catalog["commands"].get(command).is_some(), "{command}");
-    }
-    assert!(catalog["events"].get("aq.work.result_ready").is_some());
-    assert!(files["CATALOG.md"].contains("aq.work.result_ready"));
+    assert_delivery_authoring_request(&pool).await;
     // Saving the same document again, or other settings, starts no second run.
     authoring::author_document(&state, &authoring::builtin::delivery()).await;
     assert_eq!(authoring::in_flight(&pool).await.unwrap().len(), 1);
@@ -270,24 +296,6 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
 
     // (4) The engine owns the event-to-run association. The effect can hold
     // only the report named by that event, after the fan-out receipt is bound.
-    let sql = "SELECT count(*) FROM delivery_decisions WHERE task_id=$1 AND result_id=$2 AND decision='held'";
-    let mut holds = 0_i64;
-    for _ in 0..300 {
-        driver.quantum().await.unwrap();
-        holds = sqlx::query_scalar(sql)
-            .bind(lineage.task_id)
-            .bind(pending.result_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        if holds > 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    assert!(
-        holds > 0,
-        "the activated playbook held the original aq.work.result_ready report"
-    );
+    assert_result_held(&driver, &pool, lineage.task_id, pending.result_id).await;
     driver.stop().await.unwrap();
 }

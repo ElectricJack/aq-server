@@ -174,20 +174,7 @@ impl Canary {
                 &self.container,
             ]));
             if health == "healthy" {
-                let address =
-                    command(docker(&self.directory).args(["port", &self.container, "8741/tcp"]));
-                assert!(address.starts_with("127.0.0.1:"));
-                reqwest::Client::builder()
-                    .no_proxy()
-                    .timeout(Duration::from_secs(5))
-                    .build()
-                    .unwrap()
-                    .get(format!("http://{address}/health/ready"))
-                    .send()
-                    .await
-                    .unwrap()
-                    .error_for_status()
-                    .unwrap();
+                self.assert_ready_endpoint().await;
                 // A fresh tick records the successful provider observation.
                 tick(&self.plugin, &self.directory);
                 return;
@@ -195,6 +182,22 @@ impl Canary {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         panic!("disposable Graph failed to reach readiness");
+    }
+
+    async fn assert_ready_endpoint(&self) {
+        let address = command(docker(&self.directory).args(["port", &self.container, "8741/tcp"]));
+        assert!(address.starts_with("127.0.0.1:"));
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/health/ready"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
     }
 
     async fn healthy(&self, run: &str, revision: &str, generation: u64, provider: &str) -> Value {
