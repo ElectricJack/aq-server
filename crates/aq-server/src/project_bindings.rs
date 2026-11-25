@@ -1,6 +1,7 @@
 //! Revisioned central project policy. Graph tasks and Git bindings remain external.
 pub use aq_project_policy as domain;
 mod external;
+pub(crate) mod workspace;
 use crate::{AppState, authz::RequireOwner, error::AppError};
 use axum::{
     Json, Router,
@@ -41,6 +42,7 @@ struct Page {
 }
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
+        .merge(workspace::owner_routes())
         .route("/api/projects", get(list))
         .route("/api/projects/{id}", get(inspect).post(put))
         .route("/api/projects/{id}/revisions/{revision}", get(history))

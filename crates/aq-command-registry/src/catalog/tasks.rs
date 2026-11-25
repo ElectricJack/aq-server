@@ -57,6 +57,21 @@ const fn graph_create() -> CommandSpec {
 }
 
 pub(super) const COMMANDS: &[CommandSpec] = &[
+    agent(
+        mutation(
+            "task.workspace.request",
+            op::WORKSPACE_REQUEST,
+            TargetRule::Own,
+            "Request a sibling project checkout or a private PostgreSQL service for this task; AQ retains its edits before relaunch",
+        ),
+        Route::post(
+            "/v1/agent/workspace/request",
+            Body::Params,
+            Params::Inline(
+                r#"{"type":"object","additionalProperties":false,"properties":{"target_project_id":{"type":"string","format":"uuid"},"access":{"enum":["read","write"]},"service":{"const":"postgres"}},"oneOf":[{"required":["target_project_id","access"],"not":{"required":["service"]}},{"required":["service"],"not":{"anyOf":[{"required":["target_project_id"]},{"required":["access"]}]}}]}"#,
+            ),
+        ),
+    ),
     task_create(),
     graph_create(),
     read("task.list", op::TASK_READ, P, "Tasks in a project").with_owner(Some(Route::get(
