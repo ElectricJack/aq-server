@@ -4,18 +4,36 @@
 
 AQ operators need to answer three questions from a single Performance page. How quickly does ready work reach the target branch in good condition? When delivery slows, which tasks, workers, or gates account for the delay? Does delegating to cheaper models reduce the total cost of delivering successful work?
 
-## Architecture decision
+## First release decision
 
-Use PostgreSQL and AQ’s existing accounting crate for task outcomes and costs. Use Prometheus for operational time series, recording rules and alert evaluation. Use Perses for the fleet charts. The AQ dashboard owns task and attempt drill-downs, permissions, and the scorecard. A downstream installation can enable the monitoring services locally. Execution and delivery continue if either monitoring service is unavailable.
+Ship a native AQ Performance page backed by bounded PostgreSQL reads and the existing dashboard components. The default deployment uses the same services as AQ today. Start with one weekly summary and a 24-hour machine view. Use these during a work cycle to identify the first improvement worth making.
 
-| Layer | Owns | Reuse |
-|---|---|---|
-| Workers and controllers | Timestamped observations of slot state, model usage, source identity and reporting gaps | Existing heartbeats, session observations and supervisor reports |
-| AQ server and PostgreSQL | Task timelines, eligibility, revisions, task cohorts, cost attribution and quality outcomes | Existing attempts, hold and review records, accounting projections and forge merge evidence |
-| Prometheus | Rates, occupancy history, duration histograms, alert rules and collector health | Apache-2.0. [Project and license](https://github.com/prometheus/prometheus) |
-| Perses | Fleet timelines and operational charts with version-controlled definitions | Apache-2.0. [Project and license](https://github.com/perses/perses) |
+| Operator question | First release |
+|---|---|
+| Is work reaching the target branch sooner and passing review? | Show verified merges in the last seven days, median and p90 first-ready-to-merge for those tasks, and the count with both timestamps. Show first-pass acceptance for adjudicated first submissions in the same reporting window, with the numerator, denominator and coverage. Link to the underlying tasks. |
+| What is stuck today? | List current holds, oldest first, with age from the original hold, reason, responsible party and next check where recorded. Include total held and the number past their scheduled check. |
+| Are both workers getting work? | Show one row per machine with occupied and available slots, online capacity and freshness. Plot occupancy alongside a single fleet-wide ready-task count. Highlight sampled stretches of at least ten minutes with zero occupied slots and ready work. Call these “idle while work was queued.” Establishing task eligibility requires separate scheduler evidence. |
+| What did the work consume? | Show recorded token categories and available costs by actual model for the reporting window, including failed attempts. Separate provider-reported and estimated amounts. Show reporting coverage, unattributed usage, and the linked attempts on a task so an operator can inspect a retry or escalation. |
 
-Use OpenTelemetry semantic conventions where they match an observed model call. Pin the convention version in the adapter. OTLP tracing can be added independently. Langfuse’s MIT core is a future option if operators need model-call inspection or evaluation datasets. Neither is a deployment prerequisite for the scorecard. [OpenTelemetry GenAI metrics](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/) · [Langfuse licensing](https://github.com/langfuse/langfuse)
+Reuse domain records for merges, decisions, holds and usage. Start with direct, indexed queries capped to the reporting window. Use existing historical worker observations if they can reproduce occupancy. Otherwise add one narrow PostgreSQL sample per machine per minute, plus one fleet ready count per minute. Key samples by identity and UTC minute so retries are idempotent. Keep seven days, prune in bounded batches, and collect independently of dashboard traffic. Two machines at that cadence add at most 30,240 rows per week including fleet counts. Leave gaps visible after missed samples, restart or stale heartbeats. Carry no prompt text, task lists or full heartbeat payloads in those rows.
+
+Apply the existing dashboard authorization to each query. Fleet-wide occupancy and totals require fleet access. Project readers see only authorized task and usage records. Label missing timestamps, model rates, review evidence and usage explicitly. Use the canonical accounting projection for revisions and pricing. The page is read-only and collection runs outside the admission path.
+
+### First release acceptance
+
+- Run the default deployment and open the page using AQ, its database and dashboard alone. Check the queries on representative data and compare admission latency with sampling enabled and disabled.
+- Reconcile a merged task and a returned submission to their receipts. Include a task missing its ready timestamp and show the reduced timing coverage.
+- Inspect a real hold across a reminder and confirm its age continues from the original start.
+- Inspect an interval on each machine, including a period with queued work. Simulate a missing heartbeat and confirm it produces a visible gap. A ready task that only one machine can run must never generate a claim of avoidable idle time on both machines.
+- Trace an attempt that escalated from a cheaper model. Reconcile reported usage across both attempts, retain missing prices as unknown, and verify that replaying usage leaves totals unchanged.
+
+## Subsequent design
+
+The remaining sections define the expanded measures and their acceptance criteria. Promote an item when a baseline review identifies a decision the first page cannot support. Start with native queries for that decision. Exact avoidable idle time, quality-adjusted cost per success, automated goals and cross-service tracing are follow-up capabilities.
+
+### Optional monitoring integration
+
+Operators who need historical alert rules, longer fleet retention or an existing observability integration can opt into a private Prometheus exporter and Perses dashboards. Keep installation, retention and credentials independent of the native page. Both consume the same metric definitions. Disabling the integration leaves the native scorecard available. [Prometheus](https://github.com/prometheus/prometheus) · [Perses](https://github.com/perses/perses)
 
 ## Measurement contract
 
@@ -74,11 +92,11 @@ A goal stores its owner, metric definition version, scope, baseline and comparis
 
 For example, a fleet goal could reduce avoidable idle slot-hours per 100 online slot-hours while holding first-pass acceptance steady. A routing goal could lower estimated cost per successful standard task while maintaining delivery rate, p90 latency and escaped-defect rate. Operators choose thresholds after the baseline. Goal evaluation is read-only. Any subsequent routing change follows the existing owner controls.
 
-## Delivery and acceptance
+## Follow-up delivery and acceptance
 
 1. **Establish accounting parity.** Inventory producers and run Claude, Codex, delegated, unknown-usage, cumulative-reset and duplicate-stream fixtures. Replay the same evidence twice and verify identical totals. Verify that a rate-card correction updates the affected cohort once.
-2. **Ship fleet and hold visibility.** Add bounded snapshot collection, private Prometheus export and the two-machine Perses view. Validate one real idle interval on each machine with scheduler evidence. Test one task eligible on two machines, two tasks sharing one remaining provider permit, an offline worker, a stale heartbeat and an owner pause. Verify that reminder traffic never resets the age of a real long-held task.
+2. **Ship fleet and hold visibility.** Extend the native snapshots with scheduler eligibility evidence. Offer the exporter and Perses charts separately to operators who need them. Validate one real idle interval on each machine with scheduler evidence. Test one task eligible on two machines, two tasks sharing one remaining provider permit, an offline worker, a stale heartbeat and an owner pause. Verify that reminder traffic never resets the age of a real long-held task.
 3. **Ship delivery and efficiency cohorts.** Reconcile a ready task through retries to its forge merge. Test a cancellation, a mechanical refresh, a multi-PR delivery, a late merge receipt and a linked revert on day 13. Trace a cheaper-model attempt followed by a delegated call and an escalation. The task should count once, cost should include all three contributions, and unknown spend should remain visible.
 4. **Enable goals after baseline review.** Verify that every headline value can be reproduced from its authorized drill-down. Check a low-volume cohort, incomplete pricing, a missed scrape and a monitor restart. Disable monitoring during an execution smoke test and verify task progress. Measure admission latency and database load against the same workload with monitoring off before enabling collection fleet-wide.
 
-Release the first dashboard when the two real machine intervals, long hold and escalated task reconcile to source evidence. Enable comparison goals after the first mature baseline. The proposal leaves numeric improvement targets and the production retention budget for owner review.
+Enable comparison goals after the first mature baseline. The proposal leaves numeric improvement targets and the production retention budget for owner review.
