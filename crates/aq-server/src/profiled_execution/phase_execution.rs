@@ -144,20 +144,6 @@ async fn replay_preflight(
 ) -> Result<Option<pinned::Pinned>, AppError> {
     Ok(None)
 }
-<<<<<<< HEAD
-
-async fn observe_ready(
-    state: &AppState,
-    graph: &crate::agent_access::Runtime,
-    workspace: uuid::Uuid,
-) -> Result<
-    crate::agent_access::scheduling::ReadyPage,
-    crate::agent_access::scheduling::SchedulingReadError,
-> {
-    graph
-        .scheduling_ready_current(workspace, 8, None, state.clock.as_ref())
-        .await
-}
 
 #[cfg(test)]
 mod tests {
@@ -187,5 +173,3 @@ mod tests {
         assert!(require_selected_registry(2, noncanonical.digest.as_str(), &noncanonical).is_err());
     }
 }
-=======
->>>>>>> refs/remotes/central/main

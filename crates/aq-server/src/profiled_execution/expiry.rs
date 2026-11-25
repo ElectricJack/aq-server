@@ -109,7 +109,6 @@ impl ClosureSweep {
 }
 const REWORK_SWEEP_EVERY: u32 = 15;
 
-<<<<<<< HEAD
 enum SweepOutcome {
     Stopped,
     Incomplete,
@@ -128,7 +127,8 @@ async fn run_sweep(
             _ => SweepOutcome::Incomplete,
         }
     }
-=======
+}
+
 /// Playbook completions are replayed through their grant and intent owner.
 /// Only default-policy Graph effects belong in this independent sweep.
 pub async fn check_graph_completion(
@@ -147,7 +147,6 @@ pub async fn check_graph_completion(
         super::settlement::settle_after_record(state, report).await?;
     }
     Ok(())
->>>>>>> refs/remotes/central/main
 }
 
 /// Central-only housekeeping. No new scheduler, external service, or worker
@@ -190,17 +189,6 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
             let _ = tokio::time::timeout(Duration::from_secs(4), terminations.tick(&state)).await;
         }
         if tick_count.is_multiple_of(REWORK_SWEEP_EVERY) {
-<<<<<<< HEAD
-            match run_sweep(&mut stop, rework.tick(&state)).await {
-                SweepOutcome::Stopped => return,
-                SweepOutcome::Complete(progress) => {
-                    tracing::debug!(
-                        inspected = progress.inspected,
-                        recorded = progress.closed,
-                        refused = progress.refused,
-                        "rework replacement-facts sweep"
-                    );
-=======
             tokio::select! {
                 biased;
                 _ = stop.wait_for(|value| *value) => return,
@@ -210,14 +198,15 @@ pub async fn run(state: AppState, mut stop: watch::Receiver<bool>) {
                     }
                 }
             }
-            tokio::select! {
-                biased;
-                _ = stop.wait_for(|value| *value) => return,
-                outcome = tokio::time::timeout(Duration::from_secs(4), rework.tick(&state)) => {
-                    if let Ok(Ok(progress)) = outcome {
-                        tracing::debug!(inspected=progress.inspected, recorded=progress.closed, refused=progress.refused, "rework replacement-facts sweep");
-                    }
->>>>>>> refs/remotes/central/main
+            match run_sweep(&mut stop, rework.tick(&state)).await {
+                SweepOutcome::Stopped => return,
+                SweepOutcome::Complete(progress) => {
+                    tracing::debug!(
+                        inspected = progress.inspected,
+                        recorded = progress.closed,
+                        refused = progress.refused,
+                        "rework replacement-facts sweep"
+                    );
                 }
                 SweepOutcome::Incomplete => {}
             }
