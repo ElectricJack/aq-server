@@ -18,6 +18,7 @@ mod frozen;
 mod logs;
 mod merges;
 mod recovery;
+mod refresh;
 mod repair;
 
 async fn open(delivery: &Delivery) -> Completion {

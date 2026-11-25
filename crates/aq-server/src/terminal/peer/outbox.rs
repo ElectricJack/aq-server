@@ -53,8 +53,7 @@ type Candidates = BTreeMap<Uuid, (TerminalIdentity, Vec<i64>)>;
 impl Poll<'_> {
     async fn candidates(&self) -> Result<(u64, Candidates)> {
         let (state, node, r, mode) = (self.state, self.node, self.request, self.mode);
-        let mut initial = super::persistence::begin(state).await?;
-        current_peer(state, &mut initial, node, &r.peer).await?;
+        let (mut initial, _) = begin_peer(state, node, r, mode).await?;
         // Filter before LIMIT and cursor calculation: unrelated control entries
         // cannot consume an output page or advance its transport watermark.
         let query = match mode {
@@ -107,11 +106,10 @@ impl Delivery<'_> {
         } = *self.poll;
         let t = self.terminal;
         crate::delegated_permits::runtime::require_session(node, &t.session)?;
-        let mut tx = super::persistence::begin(state).await?;
-        current_peer(state, &mut tx, node, &r.peer).await?;
-        let view =
-            authority::load_locked(state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
-        let active = active_locked(state, &mut tx, t).await?;
+        let (mut tx, rows) = begin_peer(state, node, r, mode).await?;
+        let historical = Policy::TerminalHistorical;
+        let view = authority::load(state, &mut tx, &t.session, historical, rows).await?;
+        let active = active(state, &mut tx, t, rows).await?;
         let decoded = self.decode(&mut tx, ids).await?;
         let mut scopes_by_actor = self.scopes(&mut tx, &view, &decoded).await?;
         let loaded = load(state, &mut tx, t, &view).await?;

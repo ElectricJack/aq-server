@@ -88,7 +88,7 @@ impl ClosureSweep {
         for attempt in attempts {
             self.after = Some(attempt);
             progress.inspected += 1;
-            match super::closure::settlement::settle_and_release(state, attempt).await {
+            match super::closure::settlement::settle_and_release(state, attempt, None).await {
                 Ok(super::closure::settlement::ClosureSettlement::Settled) => {
                     tracing::info!(%attempt, "closed launch settled: not started, source retained, effects quiescent");
                     progress.closed += 1

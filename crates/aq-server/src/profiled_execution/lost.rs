@@ -48,7 +48,8 @@ pub async fn release(
     let found = lost::check_locked(&mut tx, node.id(), request)
         .await
         .map_err(mc)?;
-    if closure::agent_effects_present(&mut tx, attempt).await? {
+    let effects = aq_machine_control::closed_launch::effects_present(&mut tx, attempt);
+    if effects.await.map_err(mc)? {
         return Err(refused(
             "lost_attempt_effects_present: an operator settles its effects",
         ));

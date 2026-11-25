@@ -113,7 +113,7 @@ async fn replacement_observes_retained_commit_without_resolving_moved_configured
     assert!(socket.starts_with(dir.path()));
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
     let peer = tokio::spawn(serve_retained_head(listener, request.clone()));
-    let observed = source::observe_retained(&f.state, &project, &policy, &request)
+    let observed = source::observe_retained(&f.state, &project, &policy, &request, None)
         .await
         .unwrap();
     peer.await.unwrap();
@@ -133,7 +133,7 @@ async fn replacement_observes_retained_commit_without_resolving_moved_configured
             _ => wrong.binding_generation += 1,
         }
         assert!(
-            source::observe_retained(&f.state, &project, &policy, &wrong)
+            source::observe_retained(&f.state, &project, &policy, &wrong, None)
                 .await
                 .is_err()
         );

@@ -6,8 +6,8 @@
 //! and the completion event). Nothing here decides anything about a result.
 use super::{
     Completion, Delivery, DeliveryTarget, FrozenCommand, GitTarget, MergeGuard,
-    PullRequestObserved, SocketGit, Step, TaskOperation, bounded_text, bounded_wait_ms,
-    merge_method, without_delivery, without_target,
+    PullRequestObserved, REFRESHES, Refreshed, SocketGit, Step, TaskOperation, bounded_text,
+    bounded_wait_ms, merge_method, without_delivery, without_target,
 };
 use crate::DeliveryError;
 use crate::github::{GitHubApp, GitHubAppConfig};
@@ -173,10 +173,12 @@ pub async fn frozen_request(
             if let Err(reason) = accepting.freeze_merge(&mut request, input, known.as_ref())? {
                 return Ok(Err(reason));
             }
+            request["pull_request_head"] = json!(accepted_head(pool, task, accepting.head).await?);
         }
         "pull_request.close" => {
             request["pull_request"] = json!(known.as_ref().map(number));
             request["result_head"] = json!(accepting.head);
+            request["pull_request_head"] = json!(accepted_head(pool, task, accepting.head).await?);
         }
         "pull_request.await_checks" => {
             request["pull_request"] = json!(known.as_ref().map(number));
@@ -207,6 +209,7 @@ impl Accepting<'_> {
         request["check_log_bytes"] = json!(self.check_log_bytes.unwrap_or(0));
         let wait = i64::try_from(bounded_wait_ms(asked, longest)).unwrap_or(i64::MAX);
         request["deadline_at_ms"] = json!(now_ms.saturating_add(wait));
+        request["longest_check_wait_ms"] = json!(longest);
         request["required"] = input["required"].clone();
         Ok(())
     }
@@ -245,16 +248,113 @@ pub struct DeliveryRuntime<'a> {
     pub service: Option<&'a Delivery>,
     pub target: Option<&'a DeliveryTarget>,
 }
-/// The forge lease recorded by a previous successful publication of this task.
+/// The forge lease recorded by a previous successful publication of this
+/// task: the head it published, or the head a recorded refresh moved it to.
 pub async fn published_head<'c>(
     db: impl sqlx::PgExecutor<'c>,
     task: Uuid,
 ) -> Result<Option<String>, sqlx::Error> {
-    Ok(sqlx::query_scalar("SELECT output->>'head' FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1 ORDER BY completed_at_ms DESC LIMIT 1")
-        .bind(task.to_string())
+    Ok(sqlx::query_scalar("SELECT COALESCE(r.merged_head,r.from_head,o.head) FROM (SELECT output->>'head' AS head FROM playbook_host_operations WHERE command_name='branch.publish' AND status='published' AND subject_id=$1::text ORDER BY completed_at_ms DESC LIMIT 1) o LEFT JOIN delivery_branch_refreshes r ON r.task_id=$1 AND r.result_head=o.head")
+        .bind(task)
         .fetch_optional(db)
         .await?
         .flatten())
+}
+
+/// The head the task's pull request is accepted at for result head `result`
+/// when a recorded refresh moved it (`None`: the result head itself). The
+/// wait step verifies each refreshed head with GitHub before it records it.
+pub async fn accepted_head<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    task: Option<Uuid>,
+    result: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT COALESCE(merged_head,from_head) FROM delivery_branch_refreshes WHERE task_id=$1 AND result_head=$2")
+        .bind(task)
+        .bind(result)
+        .fetch_optional(db)
+        .await
+}
+
+/// The request with the refresh recorded for its result head and, for a
+/// wait, whether it may ask for one now. A repository refreshes one pull
+/// request at a time, oldest queued first: another task's row holds the slot
+/// while its pull request is open, its checks have not failed and either its
+/// refresh or (queued earlier than this one) its last look is younger than
+/// `longest_check_wait_ms`. A pending refresh of this task waits for GitHub.
+/// After [`REFRESHES`] a behind head goes back to the playbook as a conflict.
+async fn with_refresh(
+    db: &mut PgConnection,
+    request: &Value,
+    target: &DeliveryTarget,
+    task: Uuid,
+    now_ms: i64,
+) -> Result<Value, DeliveryError> {
+    let mut request = request.clone();
+    let Some(result) = request["result_head"].as_str() else {
+        return Ok(request);
+    };
+    let longest = request["longest_check_wait_ms"].as_i64();
+    let since = now_ms.saturating_sub(longest.unwrap_or(0));
+    type Row = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i32,
+        bool,
+        bool,
+    );
+    let (from, base, merged, refreshes, pending, taken): Row = sqlx::query_as(
+        "SELECT r.from_head,r.base_head,r.merged_head,COALESCE(r.refreshes,0),
+         COALESCE(r.merged_head IS NULL AND r.requested_at_ms>$3,false),
+         EXISTS(SELECT 1 FROM delivery_branch_refreshes o JOIN delivery_pull_requests p ON p.task_id=o.task_id
+           WHERE o.repository_id=$4 AND o.task_id<>$1 AND p.state='open' AND p.checks_state<>'failed'
+           AND (o.requested_at_ms>$3 OR (o.seen_at_ms>$3
+             AND (o.queued_at_ms,o.task_id)<(COALESCE(r.queued_at_ms,$5),$1))))
+         FROM (SELECT $1::uuid AS task_id) t
+         LEFT JOIN delivery_branch_refreshes r ON r.task_id=t.task_id AND r.result_head=$2",
+    )
+    .bind(task)
+    .bind(result)
+    .bind(since)
+    .bind(target.git.repository_id)
+    .bind(now_ms)
+    .fetch_one(db)
+    .await?;
+    let allow = (refreshes < REFRESHES).then_some(!pending && !taken);
+    request["refresh"] = json!({
+        "from": from, "base": base, "merged": merged, "allow": longest.and(allow),
+    });
+    Ok(request)
+}
+
+/// Keeps what a wait did to its refresh: its place in the queue, a new
+/// request (this task's slot) or GitHub's merge commit of it, checked
+/// against its parents.
+async fn record_refresh(
+    db: &mut PgConnection,
+    frozen: FrozenCommand<'_>,
+    (project, task, target): (Uuid, Uuid, &DeliveryTarget),
+    refreshed: &Refreshed,
+    now_ms: i64,
+) -> Result<(), DeliveryError> {
+    let result = frozen.request["result_head"].as_str();
+    let repository = target.git.repository_id;
+    match refreshed {
+        Refreshed::Queued(head) => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,refreshes,queued_at_ms,seen_at_ms) VALUES($1,$2,$3,$4,$5,0,$6,$6) \
+             ON CONFLICT(task_id) DO UPDATE SET seen_at_ms=$6")
+            .bind(task).bind(project).bind(repository).bind(result).bind(head).bind(now_ms),
+        Refreshed::Requested { from, base } => sqlx::query("INSERT INTO delivery_branch_refreshes(task_id,project_id,repository_id,result_head,from_head,base_head,refreshes,queued_at_ms,seen_at_ms,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,1,$7,$7,$7) \
+             ON CONFLICT(task_id) DO UPDATE SET project_id=$2,repository_id=$3,result_head=$4,from_head=$5,base_head=$6,merged_head=NULL,seen_at_ms=$7,requested_at_ms=$7, \
+             queued_at_ms=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.queued_at_ms ELSE $7 END, \
+             refreshes=CASE WHEN delivery_branch_refreshes.result_head=$4 THEN delivery_branch_refreshes.refreshes+1 ELSE 1 END")
+            .bind(task).bind(project).bind(repository).bind(result).bind(from).bind(base).bind(now_ms),
+        Refreshed::Merged(head) => sqlx::query("UPDATE delivery_branch_refreshes SET merged_head=$3 WHERE task_id=$1 AND result_head=$2 AND merged_head IS NULL")
+            .bind(task).bind(result).bind(head),
+    }
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// Marks at most `limit` running operations of `commands` in one namespace
@@ -286,9 +386,12 @@ pub async fn due_operations(
 /// one completion, or `None` while it runs. `target` is where the project's
 /// work is delivered (`None`: no longer bound), `delivery` the commands
 /// (`None`: no forge or no central git configured). The pull request each
-/// step sees and the head a sync finds are recorded for `work.read`.
+/// step sees and the head a sync finds are recorded for `work.read`. `db` is
+/// the caller's transaction for this step: branch refreshes are decided and
+/// recorded in it under a per-repository lock.
 pub async fn run_step(
     pool: &PgPool,
+    db: &mut PgConnection,
     runtime: DeliveryRuntime<'_>,
     frozen: FrozenCommand<'_>,
     now_ms: i64,
@@ -319,14 +422,29 @@ pub async fn run_step(
         (_, None, _) => Some(without_target(command)),
         (_, Some(_), None) => without_delivery(command),
         (_, Some(target), Some(delivery)) => {
+            let refreshing = matches!(command, "pull_request.await_checks" | "branch.publish");
+            let with = match task.filter(|_| refreshing) {
+                Some(task) => {
+                    // Waits of one repository decide and record their refreshes one at a time.
+                    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+                        .bind(format!("aq.delivery.refresh/{}", target.git.repository_id))
+                        .execute(&mut *db)
+                        .await?;
+                    Some(with_refresh(db, request, target, task, now_ms).await?)
+                }
+                None => None,
+            };
             let run = delivery
                 .step(
-                    FrozenCommand::new(operation, command, request),
+                    FrozenCommand::new(operation, command, with.as_ref().unwrap_or(request)),
                     target,
                     now_ms,
                 )
                 .await
                 .ok_or(DeliveryError::InvalidInput("request"))?;
+            if let (Some(task), Some(refreshed)) = (task, &run.refreshed) {
+                record_refresh(db, frozen, (project, task, target), refreshed, now_ms).await?;
+            }
             if let (Some(task), Some(seen)) = (task, &run.observed) {
                 record_pull_request(pool, task, seen, now_ms).await?;
             }
@@ -341,6 +459,18 @@ pub async fn run_step(
     };
     if let (Some(task), Some(seen)) = (task, &completion.pull_request) {
         record_pull_request(pool, task, seen, now_ms).await?;
+    }
+    // A close or the publication of another head ends the branch's refresh.
+    // A merge keeps it, so that a replay still accepts the merged head;
+    // `work.complete` deletes it.
+    if let ("pull_request.close", "closed") | ("branch.publish", "published") =
+        (command, completion.outcome)
+    {
+        sqlx::query("DELETE FROM delivery_branch_refreshes WHERE task_id=$1 AND result_head IS DISTINCT FROM $2")
+            .bind(task)
+            .bind(completion.output["head"].as_str().filter(|_| command == "branch.publish"))
+            .execute(pool)
+            .await?;
     }
     if let Some(head) = completion.output["head"]
         .as_str()
@@ -385,6 +515,17 @@ struct MergeEvidence<'a> {
     sha: String,
 }
 impl MergeStep<'_> {
+    /// The result head and the pull request head the merge is pinned to.
+    fn heads(&self) -> Result<(&str, &str), DeliveryError> {
+        let request = self.frozen.request;
+        let result = request["expected_head_sha"]
+            .as_str()
+            .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?;
+        Ok((
+            result,
+            request["pull_request_head"].as_str().unwrap_or(result),
+        ))
+    }
     async fn run(
         &self,
         pool: &PgPool,
@@ -420,9 +561,7 @@ impl MergeStep<'_> {
                 .finish_merge(
                     TaskOperation::new(operation, target, self.task),
                     pr,
-                    request["expected_head_sha"]
-                        .as_str()
-                        .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?,
+                    self.heads()?,
                 )
                 .await,
         ))
@@ -474,16 +613,15 @@ impl MergeStep<'_> {
         let method = request["method"]
             .as_str()
             .ok_or(DeliveryError::InvalidInput("method"))?;
-        let head = request["expected_head_sha"]
-            .as_str()
-            .ok_or(DeliveryError::InvalidInput("expected_head_sha"))?;
+        let (head, pin) = self.heads()?;
         let sha = match delivery
             .merge_on_github(
                 target,
                 pr,
                 MergeGuard {
                     method: merge_method(method),
-                    expected_head: head,
+                    expected_head: pin,
+                    result_head: Some(head),
                 },
             )
             .await

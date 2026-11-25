@@ -6,8 +6,15 @@ pub const COVERAGE: &str = "recorded_legacy_native_only";
 pub const NATIVE_V2_COVERAGE: &str = "recorded_native_v2";
 #[derive(Clone, Copy, Debug, Deserialize, schemars::JsonSchema)]
 pub enum ReadProfile {
+    #[serde(rename = "recorded_legacy_native_only")]
+    RecordedLegacyNativeOnly,
     #[serde(rename = "recorded_native_v2")]
     RecordedNativeV2,
+}
+impl ReadProfile {
+    pub fn includes_native_v2(profile: Option<Self>) -> bool {
+        matches!(profile, Some(Self::RecordedNativeV2))
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -72,7 +79,7 @@ impl ResultMetadata {
         use aq_admission::transport::ProcessOutcome as Outcome;
         let (origin, report, receipt, spec) = recorded;
         Self {
-            origin: profile.map(|_| origin),
+            origin: ReadProfile::includes_native_v2(profile).then_some(origin),
             report_id: report.report_id,
             revision: receipt.report_digest.as_str().into(),
             project_id: spec.lifecycle.project_id,
@@ -111,7 +118,7 @@ impl ResultOrigin {
     /// Whether a page of `profile` covers this origin: the default page covers
     /// legacy reports only, and the v2 profile covers every origin.
     pub fn is_covered_by(self, profile: Option<ReadProfile>) -> bool {
-        profile.is_some() || self == Self::LegacyPrepareV1
+        ReadProfile::includes_native_v2(profile) || self == Self::LegacyPrepareV1
     }
 }
 impl ResultMetadata {
@@ -178,7 +185,12 @@ impl Collector {
         ResultPage {
             schema_version: 1,
             server_time_ms,
-            coverage: self.profile.map_or(COVERAGE, |_| NATIVE_V2_COVERAGE).into(),
+            coverage: if ReadProfile::includes_native_v2(self.profile) {
+                NATIVE_V2_COVERAGE
+            } else {
+                COVERAGE
+            }
+            .into(),
             items: self.items,
             next_after: self.last.filter(|_| more),
             incomplete: !self.unavailable.is_empty(),

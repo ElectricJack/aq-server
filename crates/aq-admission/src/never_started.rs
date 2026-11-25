@@ -1,6 +1,17 @@
 //! Whether a granted launch closure proves that its harness never started (moved out of the
 //! aq-server lib; `granted_closure.rs` itself is a pinned compatibility source).
 use crate::granted_closure::{Evidence, StoppedObservation};
+use crate::transport::{ProcessOutcome, ResultReport, StopReason};
+
+// Here and not in `transport.rs`, which is a pinned compatibility source.
+impl ResultReport {
+    /// A typed interruption on the authenticated, exact stopped receipt.
+    /// Claims and tool text do not establish this fact.
+    pub fn platform_interrupted(&self) -> bool {
+        matches!(self.outcome, ProcessOutcome::Failed)
+            && matches!(self.stop.reason, StopReason::GuardianFailure)
+    }
+}
 
 impl Evidence {
     /// Whether the worker's retained closure evidence shows that no harness pane

@@ -58,13 +58,18 @@ pub(crate) async fn granted_at(f: &Fixture, offered_at_ms: u64) -> (Uuid, PgPool
 
 /// Drives the granted attempt to a failed, stopped, retained, quiescent end.
 pub(crate) async fn fail(pool: &PgPool, attempt: Uuid, hot: &mut HotState) {
+    let stop = Stop::Stopped {
+        receipt: artifact("synthetic-stop-owner-receipt", b"synthetic-stop"),
+    };
+    finish_with_stop(pool, attempt, hot, stop).await;
+}
+
+pub(crate) async fn finish_with_stop(pool: &PgPool, attempt: Uuid, hot: &mut HotState, stop: Stop) {
     hot.status = Status::Cancelling;
     hot.revoked = true;
     set_hot(pool, attempt, hot).await;
     hot.status = Status::Finished;
-    hot.stop = Stop::Stopped {
-        receipt: artifact("synthetic-stop-owner-receipt", b"synthetic-stop"),
-    };
+    hot.stop = stop;
     hot.retention = Retention::Retained {
         receipt: artifact("synthetic-source-owner-receipt", b"synthetic-source"),
     };

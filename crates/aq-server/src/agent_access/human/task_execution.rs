@@ -8,7 +8,8 @@ use crate::dashboard_api::{
 };
 use crate::profiled_execution::replacement;
 use aq_human_work::TaskRetry as Retry;
-use aq_machine_control::owner_retry;
+use aq_machine_control::{holds, owner_retry};
+use aq_profiled_state::replacement_sql as sql;
 use async_trait::async_trait;
 
 pub(crate) struct TaskRetry(Arc<ReadRuntime>);
@@ -235,6 +236,63 @@ impl ActionKind for TaskRetry {
     }
 }
 
+/// `task.dependency.add` with `resume_held`: the subject's limit hold is checked before `edge`
+/// is added and overridden after it, under the operation's id, so the task is never neither held
+/// nor blocked. Its stopped attempt keeps the claim until the poll replaces it.
+pub(super) async fn resume_held(
+    (state, user, request): (&AppState, &User, &ActionRequest),
+    (record, workspace, task, blocker): (&ProjectRecord, Uuid, Uuid, Uuid),
+    edge: impl std::future::Future<Output = Result<Outcome>>,
+) -> Result<Outcome> {
+    let (project, pool) = (record.binding.project_id, &state.store.pool);
+    let a = replacement::assess_task_for_revision(state, task, now(state)?, record.revision);
+    let held = sql::resumable(pool, (project, task), &a.await?).await;
+    let code = match held.map_err(|_| AppError::Internal)? {
+        Ok(code) => code,
+        Err(code) => return Ok(Outcome::refused(code)),
+    };
+    let outcome = edge.await?;
+    if outcome.disposition != actions::Disposition::Confirmed {
+        return Ok(outcome);
+    }
+    let why = request.reason.as_deref().map(str::trim);
+    let why = why.filter(|r| !r.is_empty()).map(str::to_owned);
+    let why = why.unwrap_or_else(|| format!("waits on task {blocker}"));
+    let o = (request.operation_id, Uuid::nil(), why.as_str(), now(state)?);
+    let at = (project, workspace, task, record.revision);
+    let again = override_limit(state, user, o, at, code).await?;
+    Ok(again.blocked().map_or(outcome, Outcome::refused))
+}
+/// Records the override of the limit hold `code` ([`replacement::override_budget`]) and assesses
+/// the task again. It releases nothing: the stopped attempt keeps its claim until a replacement.
+pub(super) async fn override_limit(
+    state: &AppState,
+    user: &User,
+    (operation, attempt, reason, now): (Uuid, Uuid, &str, u64),
+    (project, workspace, task, revision): (Uuid, Uuid, Uuid, u64),
+    code: &'static str,
+) -> Result<replacement::Assessment> {
+    let lineage = aq_admission::transport::task_lineage_id(project, workspace, task);
+    let spent = match lineage {
+        Ok(l) => crate::observations::budget::lineage(state, l, None)
+            .await
+            .ok(),
+        Err(_) => None,
+    };
+    let spent = spent.flatten().and_then(|b| b.snapshot().spent_microunits);
+    let actor = (!user.email.is_empty()).then(|| user.email.clone());
+    let o = holds::Override {
+        operation_id: operation,
+        attempt_id: attempt,
+        hold_code: String::new(),
+        reason: reason.into(),
+        actor: actor.unwrap_or_else(|| format!("supervisor session {}", user.id)),
+        recorded_at_ms: i64::try_from(now).map_err(|_| AppError::Internal)?,
+        spent_microunits: spent.and_then(|s| i64::try_from(s).ok()),
+    };
+    replacement::override_budget(state, (project, task), code, o, revision).await
+}
+
 async fn execute(
     state: &AppState,
     runtime: &ReadRuntime,
@@ -276,7 +334,6 @@ async fn execute(
         }
         let owner_operation = anchor.as_ref().map(|_| p.operation_id);
         // B4 checks stop, source and effects for the same predecessor as the scheduler.
-        use aq_machine_control::holds;
         let now = now(state)?;
         let mut assessment =
             replacement::assess_task_for_revision(state, task, now, revision).await?;
@@ -311,36 +368,16 @@ async fn execute(
             )
             .await;
         }
-        let recorded = holds::current(&state.store.pool, p.project_id, task).await;
-        let recorded = recorded.map_err(|_| AppError::Internal)?;
-        let limit = match assessment {
-            replacement::Assessment::Blocked(code) => holds::budget_code(code),
-            _ => recorded.and_then(|h| holds::budget_code(&h.reason)),
-        };
+        let at = (p.project_id, task);
+        let limit = sql::limit_hold(&state.store.pool, at, &assessment).await;
+        let limit = limit.map_err(|_| AppError::Internal)?;
         if let Some(code) = limit {
             let reason = request.reason.as_deref().map(str::trim);
-            let lineage = aq_admission::transport::task_lineage_id(p.project_id, workspace, task);
-            let spent = match lineage {
-                Ok(l) => crate::observations::budget::lineage(state, l, None)
-                    .await
-                    .ok(),
-                Err(_) => None,
-            };
-            let spent = spent.flatten().and_then(|b| b.snapshot().spent_microunits);
-            let o = holds::Override {
-                operation_id: p.operation_id,
-                attempt_id: anchor
-                    .as_ref()
-                    .and_then(|a| a.predecessor)
-                    .unwrap_or_default(),
-                hold_code: String::new(),
-                reason: reason.filter(|r| !r.is_empty()).unwrap_or(NO_REASON).into(),
-                actor: user.email.clone(),
-                recorded_at_ms: i64::try_from(now).map_err(|_| AppError::Internal)?,
-                spent_microunits: spent.and_then(|s| i64::try_from(s).ok()),
-            };
-            let at = (p.project_id, task);
-            assessment = replacement::override_budget(state, at, code, o, revision).await?;
+            let reason = reason.filter(|r| !r.is_empty()).unwrap_or(NO_REASON);
+            let predecessor = anchor.as_ref().and_then(|a| a.predecessor);
+            let o = (p.operation_id, predecessor.unwrap_or_default(), reason, now);
+            let at = (p.project_id, workspace, task, revision);
+            assessment = override_limit(state, user, o, at, code).await?;
         }
         // Review M-5: a refusal names its reason code on the receipt (spec 0004 item 10).
         let r = match &assessment {

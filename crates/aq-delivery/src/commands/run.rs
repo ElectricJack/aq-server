@@ -42,13 +42,20 @@ impl<'a> FrozenCommand<'a> {
             })
     }
     async fn branch(self, delivery: &Delivery, target: &DeliveryTarget, task: Uuid) -> Step {
+        let result = self.text("result_head").unwrap_or_default();
+        let refresh = self.request.get("refresh").map(Refresh::from_request);
         if let Some(number) = self.number() {
             match delivery.github.pull_request(&target.github, number).await {
-                Ok(pr)
-                    if pr.state == PullRequestState::Merged
-                        && self.text("result_head") == Some(pr.head_sha.as_str()) =>
-                {
+                Ok(pr) if pr.state == PullRequestState::Merged && result == pr.head_sha => {
                     return Step::Done(Completion::new("published", json!({"head":pr.head_sha})));
+                }
+                // A refresh AQ made of this result counts as its publication: never push over it.
+                Ok(pr)
+                    if pr.state != PullRequestState::Closed
+                        && result != pr.head_sha
+                        && delivery.accepts(target, (result, refresh), &pr).await =>
+                {
+                    return Step::Done(Completion::new("published", json!({"head":result})));
                 }
                 Ok(pr) if pr.state == PullRequestState::Open => {}
                 Ok(_) => return Step::Done(Completion::refused("no_branch")),
@@ -68,9 +75,11 @@ impl<'a> FrozenCommand<'a> {
         let Some(pr) = self.number() else {
             return Some(Step::Done(Completion::refused("no_pull_request")));
         };
+        let result = self.text("expected_head_sha")?;
         let guard = MergeGuard {
             method,
-            expected_head: self.text("expected_head_sha")?,
+            expected_head: self.text("pull_request_head").unwrap_or(result),
+            result_head: Some(result),
         };
         Some(
             delivery
@@ -85,7 +94,10 @@ impl<'a> FrozenCommand<'a> {
                     .close_result(
                         TaskOperation::new(self.operation, target, task),
                         pr,
-                        self.text("result_head"),
+                        (
+                            self.text("result_head"),
+                            self.text("pull_request_head").or(self.text("result_head")),
+                        ),
                     )
                     .await
             }
@@ -112,6 +124,7 @@ impl<'a> FrozenCommand<'a> {
                 step: (now_ms >= deadline)
                     .then(|| Step::Done(Completion::new("timeout", json!({})))),
                 observed: None,
+                refreshed: None,
             });
         }
         let request = CheckRequest::new(
@@ -119,13 +132,15 @@ impl<'a> FrozenCommand<'a> {
             required.as_deref(),
             self.request["check_log_bytes"].as_u64().unwrap_or(0),
         )
-        .for_head(self.text("result_head"), frozen.is_some());
+        .for_head(self.text("result_head"), frozen.is_some())
+        .with_refresh(self.request.get("refresh").map(Refresh::from_request));
         let poll = delivery
             .await_checks_step(target, request, (now_ms, deadline))
             .await;
         Some(Run {
             step: poll.completion.map(Step::Done),
             observed: poll.observed,
+            refreshed: poll.refreshed,
         })
     }
 }
@@ -134,6 +149,7 @@ impl Run {
         Self {
             step: Some(step),
             observed: None,
+            refreshed: None,
         }
     }
 }

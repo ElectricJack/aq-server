@@ -85,6 +85,10 @@ pub(crate) trait GraphPayload:
     fn route_change(&self) -> Option<RouteChange> {
         None
     }
+    /// The blocker a held subject waits on instead (`task.dependency.add` with `resume_held`).
+    fn resume_held(&self) -> Option<Uuid> {
+        None
+    }
 }
 
 pub(crate) enum RouteChange {
@@ -142,21 +146,11 @@ mod adapter;
 mod knowledge;
 mod retirement;
 mod task_payloads;
-pub(super) use aq_human_work::{TaskEdit, TaskReprioritize};
+pub(super) use aq_human_work::{
+    DependencyAdd, DependencyRemove, TaskEdit, TaskReprioritize, TaskRoleSet, TaskRouteClear,
+    TaskRouteSet,
+};
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskRoleSet {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    /// The role the task names, stored as Graph metadata `aq:role`; it must
-    /// exist. Null or absent clears it: the project's default role applies.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 128))]
-    pub role: Option<String>,
-}
 /// Sets (or, with `None`, removes) one key of the task's Graph metadata. A
 /// metadata patch replaces the object, so every other key is kept.
 fn metadata_patch(c: &Current<'_>, key: &str, value: Option<Value>) -> ApiResult<Vec<Value>> {
@@ -185,56 +179,6 @@ pub(crate) struct TaskNeedsSet {
     /// `aq:needs`. Null, absent or empty clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<super::enqueue::Needs>,
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskRouteSet {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    /// `<parent>-<effort>`, for example `standard-high`.
-    #[schemars(regex(pattern = "^(simple|standard|complex|deep)-(low|medium|high|max)$"))]
-    pub class: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 16))]
-    pub harnesses: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 16))]
-    pub providers: Option<Vec<String>>,
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskRouteClear {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DependencyAdd {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    /// The task that must finish first: `blocker blocks subject`.
-    pub blocker_id: Uuid,
-}
-
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DependencyRemove {
-    pub operation_id: Uuid,
-    pub project_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub expected_version: String,
-    pub edge_id: Uuid,
-    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
-    pub edge_version: String,
 }
 
 pub(crate) struct GraphAction<P> {

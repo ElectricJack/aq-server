@@ -97,21 +97,25 @@ pub struct PgDelivery(pub PgPool);
 #[async_trait::async_trait]
 impl DeliveryPort for PgDelivery {
     async fn pending(&self, project: Option<Uuid>, limit: u32) -> Result<Vec<Pending>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(concat!(
             "SELECT a.task_id,(l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,\
              (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,a.attempt_id,h.report_id \
              FROM execution_attempts a \
              JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id \
              JOIN profiled_authority_hot ah ON ah.attempt_id=a.attempt_id \
              JOIN profiled_result_heads h ON h.attempt_id=a.attempt_id \
+             JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) \
              JOIN profiled_launches l ON l.attempt_id=a.attempt_id \
              LEFT JOIN delivery_tasks t ON t.task_id=a.task_id \
              WHERE a.kind='profiled_v1' AND a.holds_task AND ah.state#>>'{stop,kind}'='stopped' \
              AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')::uuid=$1) \
              AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id) \
+             AND NOT ",
+             aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+             " \
              ORDER BY GREATEST(COALESCE(t.emitted_at_ms,0),COALESCE(t.checked_at_ms,0)),h.report_id \
              LIMIT $2",
-        )
+        ))
         .bind(project)
         .bind(i64::from(limit))
         .fetch_all(&self.0)
@@ -187,9 +191,13 @@ impl DeliveryPort for PgDelivery {
         if held != Some(true) {
             return Ok(false);
         }
-        let current: Option<Uuid> = sqlx::query_scalar(
-            "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
-        )
+        let current: Option<Uuid> = sqlx::query_scalar(concat!(
+            "SELECT h.report_id FROM profiled_result_heads h ",
+            "JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) ",
+            "WHERE h.attempt_id=$1 AND NOT ",
+            aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+            " FOR UPDATE OF h",
+        ))
         .bind(event.attempt_id)
         .fetch_optional(db)
         .await?;
@@ -363,12 +371,57 @@ pub async fn observed(
             .await?
             .to_owned();
     }
+    if let Some(result) = latest.filter(|result| result.outcome == "failed")
+        && reported_agent_blocker(db, task, version, result).await?
+    {
+        facts.outcome = "agent_blocked".into();
+    }
     Ok(host10::read_output(task, version, &work, &facts))
 }
 
+/// The native worker writes the explicit Outcome field first, before any prose.
+/// This is an agent's declaration, with no authority to prove a grant or a wake.
+async fn reported_agent_blocker(
+    db: &mut PgConnection,
+    task: Uuid,
+    version: i64,
+    latest: &Latest,
+) -> Result<bool> {
+    let conclusion: Option<String> = sqlx::query_scalar(
+        "SELECT doc.report->>'conclusion'
+         FROM execution_attempts a
+         JOIN profiled_authority_hot ah USING(attempt_id)
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id)
+         CROSS JOIN LATERAL (SELECT convert_from(r.report_bytes,'UTF8')::jsonb AS report) doc
+         WHERE a.task_id=$1 AND a.attempt_id=$2 AND h.report_id=$3 AND a.holds_task
+           AND l.execution_spec#>>'{lifecycle,project_id}'=$4
+           AND (l.execution_spec#>>'{task,version}')::bigint=$5
+           AND r.result_origin_kind IN ('phase_execution_v2','phase_refresh_execution_v1')
+           AND ah.state#>>'{stop,kind}'='stopped' AND ah.state->'revoked'='false'::jsonb
+           AND ah.state->>'cancellation_id' IS NULL
+           AND doc.report->>'outcome'='failed' AND doc.report#>>'{stop,disposition,kind}'='stopped'
+           AND doc.report#>>'{stop,reason}' IN ('reconciliation','completed','failed')",
+    )
+    .bind(task)
+    .bind(latest.attempt_id)
+    .bind(latest.result_id)
+    .bind(latest.project_id.to_string())
+    .bind(version)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(conclusion.as_deref().is_some_and(explicit_blocker_field))
+}
+
+fn explicit_blocker_field(conclusion: &str) -> bool {
+    conclusion.split(';').next() == Some("Outcome: blocked")
+}
+
 /// The results to announce now: none unless an artifact is active on the
-/// delivery binding of the namespace. A held publication can rejoin delivery
-/// once its exact result or usable lease is verified on the forge.
+/// delivery binding of the namespace. A held result can rejoin delivery after
+/// the forge verifies that the original publication or check barrier cleared.
 pub async fn plan(
     db: &mut PgConnection,
     namespace: (Uuid, i64),
@@ -381,7 +434,7 @@ pub async fn plan(
     if !active(db, namespace).await? {
         return Ok(vec![]);
     }
-    let resumed = publish_conflict(db, operations, project, now_ms, repeat_ms).await?;
+    let resumed = recover_held_delivery(db, operations, project, now_ms, repeat_ms).await?;
     let mut ready = due(
         db,
         namespace,
@@ -409,7 +462,7 @@ pub async fn plan(
 }
 
 /// Recheck one held result per pass. Failed probes move behind other holds.
-async fn publish_conflict(
+async fn recover_held_delivery(
     db: &mut PgConnection,
     operations: &dyn DeliveryOps,
     project: Option<Uuid>,
@@ -417,7 +470,7 @@ async fn publish_conflict(
     repeat_ms: i64,
 ) -> Result<Option<Pending>> {
     let row = sqlx::query(
-        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,
+        "SELECT a.task_id,a.attempt_id,h.report_id,p.head,g.repository_id,d.reason,check_run.request,
          (l.execution_spec#>>'{lifecycle,project_id}')::uuid AS project_id,
          (l.execution_spec#>>'{task,workspace_id}')::uuid AS workspace_id,
          l.execution_spec#>>'{source,repository_binding_generation}' AS repository_generation
@@ -428,7 +481,29 @@ async fn publish_conflict(
          JOIN delivery_git_grants g ON g.attempt_id=a.attempt_id
          JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
          LEFT JOIN delivery_tasks t ON t.task_id=a.task_id
-         WHERE d.decision='held' AND d.reason='publish_conflict' AND a.holds_task
+         LEFT JOIN LATERAL (
+             SELECT o.request,o.status FROM playbook_host_operations o
+             JOIN profiled_result_reports r ON r.report_id=h.report_id AND r.attempt_id=a.attempt_id
+             JOIN delivery_pull_requests pr ON pr.task_id=a.task_id AND pr.state='open'
+             WHERE o.subject_id=a.task_id::text AND o.command_name='pull_request.await_checks'
+             AND o.status IN ('conflict','failed','passed') AND o.completed_at_ms<=d.decided_at_ms
+             AND ah.state->>'status'='finished' AND ah.state->'revoked'='false'::jsonb
+             AND o.request#>>'{result_ready,task_id}'=a.task_id::text
+             AND o.request#>>'{result_ready,project_id}'=l.execution_spec#>>'{lifecycle,project_id}'
+             AND o.request#>>'{result_ready,result_id}'=h.report_id::text
+             AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+             AND o.request->>'result_head'=p.head
+             AND o.request->>'pull_request'=pr.number::text
+             AND jsonb_typeof(o.request->'check_target')='object' AND o.request?'required'
+             AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='success'
+             ORDER BY o.completed_at_ms DESC,o.operation_id DESC LIMIT 1
+         ) check_run ON d.reason='returns_exhausted'
+         WHERE d.decision='held' AND a.holds_task
+         AND (d.reason='publish_conflict' OR (d.reason='returns_exhausted' AND check_run.status='failed'
+              AND NOT EXISTS(SELECT 1 FROM delivery_merge_evidence m WHERE m.attempt_id=a.attempt_id)
+              AND NOT EXISTS(SELECT 1 FROM playbook_host_operations m WHERE m.subject_id=a.task_id::text
+                  AND m.command_name='pull_request.merge' AND m.status NOT IN ('conflict','refused','not_mergeable')
+                  AND m.request#>>'{result_ready,result_id}'=h.report_id::text)))
          AND ah.state#>>'{stop,kind}'='stopped' AND p.head IS NOT NULL
          AND ($1::uuid IS NULL OR l.execution_spec#>>'{lifecycle,project_id}'=$1::uuid::text)
          AND GREATEST(d.decided_at_ms,COALESCE(t.checked_at_ms,0),COALESCE(t.emitted_at_ms,0))<=$2
@@ -444,9 +519,15 @@ async fn publish_conflict(
     let project = row.get("project_id");
     let repository: Uuid = row.get("repository_id");
     let generation: Option<&str> = row.get("repository_generation");
+    let reason: &str = row.get("reason");
+    let check_request: Option<Value> = row.get("request");
     sqlx::query("INSERT INTO delivery_tasks(task_id,checked_at_ms) VALUES($1,$2) ON CONFLICT(task_id) DO UPDATE SET checked_at_ms=$2")
         .bind(task).bind(now_ms).execute(&mut *db).await?;
     let old = aq_delivery::commands::published_head(&mut *db, task).await?;
+    let head: &str = row.get("head");
+    // A recorded refresh moved the pull request to a merge of this head and main.
+    let accepted = aq_delivery::commands::accepted_head(&mut *db, Some(task), head).await?;
+    let accepted = accepted.as_deref().unwrap_or(head);
     let verified = tokio::time::timeout(Duration::from_secs(2), async {
         let Some(target) = operations.target(project).await? else {
             return Ok(false);
@@ -459,9 +540,29 @@ async fn publish_conflict(
         let Some(commands) = operations.commands().await else {
             return Ok(false);
         };
+        if reason == "publish_conflict" {
+            return Ok(commands
+                .publish_lease_usable(&target, task, head, old.as_deref())
+                .await);
+        }
+        let Some(request) = check_request.filter(|request| {
+            old.as_deref() == Some(accepted)
+                && serde_json::to_value(&target)
+                    .is_ok_and(|target| request["check_target"] == target)
+        }) else {
+            return Ok(false);
+        };
+        let Some(pr) = request["pull_request"].as_u64() else {
+            return Ok(false);
+        };
+        let Ok(required) =
+            serde_json::from_value::<Option<Vec<String>>>(request["required"].clone())
+        else {
+            return Ok(false);
+        };
         Ok::<_, crate::Error>(
             commands
-                .publish_lease_usable(&target, task, row.get("head"), old.as_deref())
+                .held_checks_passed(&target, pr, accepted, required.as_deref())
                 .await,
         )
     })
@@ -500,6 +601,16 @@ pub async fn result_wait(
     .bind(attempt)
     .fetch_optional(db)
     .await?)
+}
+
+/// Whether an override recorded since the hold lets the task of `attempt` resume its held result
+/// (`aq_delivery::git_grant::held_gate`): the task then waits only for what Graph shows.
+pub async fn hold_overridden(db: &mut PgConnection, attempt: Uuid) -> Result<bool> {
+    let task = sqlx::query_scalar("SELECT task_id FROM execution_attempts WHERE attempt_id=$1")
+        .bind(attempt)
+        .fetch_one(&mut *db)
+        .await?;
+    Ok(aq_delivery::git_grant::held_gate(db, task).await?.is_none())
 }
 
 /// The still-pending delivery decision on the claim's exact result.
@@ -680,12 +791,21 @@ pub async fn held_pr_evidence(db: &mut PgConnection, result: Uuid) -> Result<Opt
 /// GitHub App when the check failed (`check_log_bytes`). Only the failure AQ
 /// recorded for this exact head counts; `None` without a log.
 pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT l.checks_log_tail FROM delivery_pushed_results p
-         JOIN profiled_result_heads h ON h.report_id=p.report_id
+    Ok(failed_check(db, result).await?.map(|(_, log)| log))
+}
+
+pub(crate) async fn failed_check(
+    db: &mut PgConnection,
+    result: Uuid,
+) -> Result<Option<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT p.head,l.checks_log_tail FROM delivery_pushed_results p
+         JOIN profiled_result_heads h ON h.report_id=p.report_id AND h.attempt_id=p.attempt_id
          JOIN execution_attempts a ON a.attempt_id=h.attempt_id
-         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed' AND l.checks_log_head=p.head
-         WHERE p.report_id=$1 AND EXISTS(
+         JOIN delivery_pull_requests l ON l.task_id=a.task_id AND l.checks_state='failed'
+         LEFT JOIN delivery_branch_refreshes r ON r.task_id=a.task_id AND r.result_head=p.head
+         WHERE p.report_id=$1 AND l.checks_log_tail IS NOT NULL
+           AND l.checks_log_head IN (p.head,COALESCE(r.merged_head,r.from_head)) AND EXISTS(
            SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
              AND o.command_name='pull_request.await_checks' AND o.status='failed'
              AND o.request#>>'{result_ready,result_id}'=p.report_id::text
@@ -694,8 +814,7 @@ pub async fn held_check_log(db: &mut PgConnection, result: Uuid) -> Result<Optio
     )
     .bind(result)
     .fetch_optional(db)
-    .await?
-    .flatten())
+    .await?)
 }
 
 /// The most bytes one message to a supervisor may carry.
@@ -833,16 +952,16 @@ async fn due(
     pending: Vec<Pending>,
     now_ms: i64,
     (repeat_ms, run_bound_ms): (i64, i64),
-    recovering_publish: bool,
+    recovering_hold: bool,
 ) -> Result<Vec<Due>> {
     if pending.is_empty() {
         return Ok(vec![]);
     }
     let results: Vec<Uuid> = pending.iter().map(|p| p.result_id).collect();
     let decided: Vec<Uuid> =
-        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND NOT ($2 AND decision='held' AND reason IS NOT DISTINCT FROM 'publish_conflict')")
+        sqlx::query_scalar("SELECT result_id FROM delivery_decisions WHERE result_id=ANY($1) AND ($2 IS FALSE OR decision<>'held' OR reason IS NULL OR reason NOT IN ('publish_conflict','returns_exhausted'))")
             .bind(&results)
-            .bind(recovering_publish)
+            .bind(recovering_hold)
             .fetch_all(&mut *db)
             .await?;
     let mut out = vec![];

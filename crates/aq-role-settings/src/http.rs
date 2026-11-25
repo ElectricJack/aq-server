@@ -10,6 +10,7 @@
 //! | `/profiles/snapshot` | the active digest and store revision | | |
 //! | `/routing-document` | the routing document: `{markdown, revision}` | replace | |
 //! | `/observation-limits` | the node observation limits: `{limits, revision}` | replace | |
+//! | `/supervisor-document` | the project supervisor's role text: `{markdown, revision}`; empty means the compiled text | replace | |
 //! | `/delivery-document` | the delivery document: `{markdown, revision}` (feature `delivery_playbook`) | replace | |
 //! | `/delivery-limits` | the delivery limits: `{limits, revision}` (feature `delivery_playbook`) | replace | |
 //!
@@ -57,6 +58,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(
         .route("/api/settings/profiles/limits", value.clone())
         .route("/api/settings/routing-document", value.clone())
         .route("/api/settings/observation-limits", value.clone())
+        .route("/api/settings/supervisor-document", value.clone())
         .route("/api/settings/profiles/snapshot", read);
     #[cfg(feature = "delivery_playbook")]
     let router = router
@@ -73,6 +75,7 @@ enum Target {
     Snapshot,
     RoutingDocument,
     ObservationLimits,
+    SupervisorDocument,
     #[cfg(feature = "delivery_playbook")]
     DeliveryDocument,
     #[cfg(feature = "delivery_playbook")]
@@ -92,6 +95,7 @@ fn target(path: &str) -> Result<Target> {
         ("selection-defaults", None) => Ok(Target::SelectionDefaults),
         ("routing-document", None) => Ok(Target::RoutingDocument),
         ("observation-limits", None) => Ok(Target::ObservationLimits),
+        ("supervisor-document", None) => Ok(Target::SupervisorDocument),
         #[cfg(feature = "delivery_playbook")]
         ("delivery-document", None) => Ok(Target::DeliveryDocument),
         #[cfg(feature = "delivery_playbook")]
@@ -156,9 +160,14 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
         },
         Target::SelectionDefaults => {
             let settings = store::settings(pool).await?;
+            let mut defaults =
+                serde_json::to_value(&settings.selection_defaults).map_err(|_| Error::Internal)?;
+            // A default-valued backoff can be absent in the stored document.
+            defaults["launch_retry_backoff"] =
+                json!(settings.selection_defaults.launch_retry_backoff);
             Ok(json!({
                 "revision": settings.selection_defaults_revision.to_string(),
-                "selection_defaults": settings.selection_defaults,
+                "selection_defaults": defaults,
             }))
         }
         Target::Limits => {
@@ -182,6 +191,11 @@ pub async fn read(pool: &PgPool, path: &str) -> Result<Value> {
         Target::ObservationLimits => {
             let (limits, revision) = store::observation_limits(&mut *pool.acquire().await?).await?;
             Ok(json!({"limits": limits, "revision": revision.to_string()}))
+        }
+        Target::SupervisorDocument => {
+            let (markdown, revision) =
+                store::supervisor_document(&mut *pool.acquire().await?).await?;
+            Ok(json!({"markdown": markdown, "revision": revision.to_string()}))
         }
         #[cfg(feature = "delivery_playbook")]
         Target::DeliveryDocument => {
@@ -233,6 +247,9 @@ pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result
             Change::Save { kind, id, markdown }
         }
         (Target::RoutingDocument, Some(markdown), None, None) => Change::RoutingDocument(markdown),
+        (Target::SupervisorDocument, Some(markdown), None, None) => {
+            Change::SupervisorDocument(markdown)
+        }
         (Target::ObservationLimits, None, None, Some(limits)) => {
             Change::ObservationLimits(serde_json::from_value(limits).map_err(|_| bad())?)
         }
@@ -241,9 +258,9 @@ pub async fn write(writer: crate::Writer<'_>, path: &str, body: Value) -> Result
             Change::DeliveryDocument(markdown)
         }
         #[cfg(feature = "delivery_playbook")]
-        (Target::DeliveryLimits, None, None, Some(limits)) => {
-            Change::DeliveryLimits(serde_json::from_value(limits).map_err(|_| bad())?)
-        }
+        (Target::DeliveryLimits, None, None, Some(limits)) => Change::DeliveryLimits(
+            crate::delivery::DeliveryLimitsChange::from_request(limits).map_err(|_| bad())?,
+        ),
         // A key the request does not state keeps its stored value (a client that does not
         // know a key cannot reset it); the merged whole is validated by the save.
         (Target::SelectionDefaults, None, Some(Value::Object(stated)), None) => {

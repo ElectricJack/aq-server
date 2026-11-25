@@ -49,6 +49,8 @@ pub mod namespace_store;
 pub mod playbook_view;
 pub mod plugin_effects;
 pub mod publication_evidence;
+#[cfg(feature = "delivery_playbook")]
+pub mod retry_check;
 pub mod review_domain;
 pub mod route_effect;
 pub mod route_store;
