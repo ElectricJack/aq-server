@@ -202,13 +202,19 @@ fn set_retry_generation(f: &mut Fixture) {
     let offer = &mut f.profiled.offer;
     let SessionIdentity::Remote {
         assignment_generation,
+        attempt_id,
         ..
     } = &mut offer.binding.session
     else {
         panic!("remote observation fixture");
     };
+    // Order differs from UUID order. Drill-down uses durable launch generation.
+    let retry_attempt = Uuid::from_u128(1);
+    *attempt_id = retry_attempt;
     *assignment_generation = 2;
+    offer.binding.attempt_id = retry_attempt;
     offer.binding.assignment_generation = 2;
+    offer.manifest.bindings.attempt_id = retry_attempt;
     offer.manifest.bindings.assignment_generation = 2;
     offer.manifest.bindings.session = offer.binding.session.clone();
     offer.binding.launch_manifest_digest = canonical_digest(&offer.manifest).unwrap();
@@ -389,16 +395,17 @@ async fn canonical_estimated_cost_replaces_corrected_call_after_restart() {
     assert_eq!(route["intended_model"], json!(f.selection.choice.model));
     let attempts = drill_down["usage"]["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 2);
-    let failed = attempts
-        .iter()
-        .find(|a| a["attempt_id"] == json!(source.binding.attempt_id))
-        .unwrap();
+    let failed = &attempts[0];
+    assert_eq!(failed["attempt_id"], json!(source.binding.attempt_id));
+    assert_eq!(failed["assignment_generation"], 1);
     assert_eq!(failed["attempt_status"], "finished");
     assert_eq!(failed["costs"][0]["microunits"], 170_000);
-    let retried = attempts
-        .iter()
-        .find(|a| a["attempt_id"] == json!(retry_source.binding.attempt_id))
-        .unwrap();
+    let retried = &attempts[1];
+    assert_eq!(
+        retried["attempt_id"],
+        json!(retry_source.binding.attempt_id)
+    );
+    assert_eq!(retried["assignment_generation"], 2);
     assert_eq!(retried["intended_model"], "escalated-model");
     assert_eq!(retried["costs"][0]["microunits"], 350_000);
 }

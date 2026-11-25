@@ -20,6 +20,7 @@ WITH scoped_events AS MATERIALIZED (
 SELECT a.attempt_id, sum(activity.unresolved)::bigint AS unresolved,
        bool_or(activity.expected) AS expected,
        s.selection#>>'{choice,model}' AS intended_model,
+       (l.launch_binding->>'assignment_generation')::bigint AS assignment_generation,
        head.state->>'status' AS attempt_status
 FROM activity
 JOIN execution_attempts a USING(attempt_id)
@@ -34,6 +35,7 @@ WHERE ($1::uuid IS NULL OR so.project_id=$1)
       (s.selection->>'selected_at_ms')::bigint,
       0
   )<=$4
-GROUP BY a.attempt_id, s.selection#>>'{choice,model}', head.state->>'status'
-ORDER BY a.attempt_id
+GROUP BY a.attempt_id, s.selection#>>'{choice,model}', assignment_generation, head.state->>'status'
+ORDER BY CASE WHEN $2::uuid IS NOT NULL THEN (l.launch_binding->>'assignment_generation')::bigint END ASC NULLS LAST,
+         a.attempt_id
 LIMIT $5;
