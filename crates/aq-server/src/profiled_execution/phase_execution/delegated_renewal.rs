@@ -98,40 +98,8 @@ pub async fn renew_delegated(
     let observed = observations::collect_continuing(state, &before.input).await?;
     let mut tx = begin(state).await?;
     let (mut after, replay) = load(state, &mut tx, auth, q).await?;
-    if !same(&before.history.proposal, &after.history.proposal)?
-        || !same(&before.history.receipt, &after.history.receipt)?
-        || before.qualification != after.qualification
-        || before.registration_id != after.registration_id
-        || before.input.source.fact().canonical_bytes()?
-            != after.input.source.fact().canonical_bytes()?
-    {
-        return Err(refused());
-    }
-    validate_registry_loads(&before, &after)?;
-    observed.validate_for(&after.input, now(state)?)?;
-    if observed.binding.project.revision != after.input.spec.project_revision
-        || observed.binding.node_id != auth.id()
-        || !same(
-            &observed.binding.project.binding,
-            &after.input.decision.project.project.binding,
-        )?
-    {
-        return Err(refused());
-    }
-    crate::project_bindings::fence_for_offer(state, &mut tx, &observed.binding).await?;
-    let current = current::fence_locked(
-        state,
-        &mut tx,
-        &current::Input {
-            proposal: &after.history.proposal,
-            selection: &after.input.selection,
-            decision: &after.input.decision,
-            policy: &after.policy,
-            material: &after.input.material,
-            registry_at_preflight: &before.registry_at_load,
-        },
-    )
-    .await?;
+    let current =
+        fence_observations_locked(state, &mut tx, auth, &before, &after, &observed).await?;
     let old = &auth.delegated().ok_or_else(|| refused())?.current;
     let previous_expiry = after
         .hot
@@ -181,6 +149,52 @@ pub async fn renew_delegated(
         )
     })?;
     Ok(reply)
+}
+
+// Revalidate the immutable inputs after external I/O, then fence the project
+// binding and current owning facts in the same transaction used for renewal.
+async fn fence_observations_locked(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    auth: &AuthenticatedNode,
+    before: &pinned::Pinned,
+    after: &pinned::Pinned,
+    observed: &observations::Observed,
+) -> Result<current::Current, AppError> {
+    if !same(&before.history.proposal, &after.history.proposal)?
+        || !same(&before.history.receipt, &after.history.receipt)?
+        || before.qualification != after.qualification
+        || before.registration_id != after.registration_id
+        || before.input.source.fact().canonical_bytes()?
+            != after.input.source.fact().canonical_bytes()?
+    {
+        return Err(refused());
+    }
+    validate_registry_loads(before, after)?;
+    observed.validate_for(&after.input, now(state)?)?;
+    if observed.binding.project.revision != after.input.spec.project_revision
+        || observed.binding.node_id != auth.id()
+        || !same(
+            &observed.binding.project.binding,
+            &after.input.decision.project.project.binding,
+        )?
+    {
+        return Err(refused());
+    }
+    crate::project_bindings::fence_for_offer(state, tx, &observed.binding).await?;
+    current::fence_locked(
+        state,
+        tx,
+        &current::Input {
+            proposal: &after.history.proposal,
+            selection: &after.input.selection,
+            decision: &after.input.decision,
+            policy: &after.policy,
+            material: &after.input.material,
+            registry_at_preflight: &before.registry_at_load,
+        },
+    )
+    .await
 }
 
 async fn extend_locked(
