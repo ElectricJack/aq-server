@@ -1,6 +1,6 @@
 {
   "git": {
-    "sha1": "4682e775ff7c536a16536f827475b167902663e0"
+    "sha1": "e0ef3e2bfc7746ee88760f3652ad9d5a3ca9ea14"
   },
   "path_in_vcs": "crates/aq-protocol"
 }
