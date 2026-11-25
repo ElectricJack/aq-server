@@ -21,7 +21,36 @@ async fn browser_pilot() {
     let worker = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", admin.local_addr().unwrap());
     let worker_address = worker.local_addr().unwrap();
-    let mut fixture = fixture().await;
+    let uuid_env = |key| std::env::var(key).unwrap().parse::<Uuid>().unwrap();
+    let project = uuid_env("AQ_TERMINAL_PILOT_HOME");
+    let workspace = uuid_env("AQ_TERMINAL_PILOT_WORKSPACE");
+    let task = uuid_env("AQ_TERMINAL_PILOT_TASK");
+    let baseline = fixture().await;
+    let mut fixture = common::profiled::fixture_on(
+        baseline.db.clone(),
+        Some((
+            baseline.actor,
+            aq_selection::TaskLineage {
+                project_id: project,
+                workspace_id: workspace,
+                task_id: task,
+            },
+        )),
+    )
+    .await;
+    let graph =
+        aq_server::agent_access::Runtime::new(&aq_server::agent_access::AgentAccessConfig {
+            graph_url: std::env::var("AQ_TERMINAL_PILOT_GRAPH_ORIGIN").unwrap(),
+            graph_token_file: PathBuf::from(
+                std::env::var_os("AQ_TERMINAL_PILOT_GRAPH_TOKEN").unwrap(),
+            ),
+            mutation_actor_id: Some("pilot-admin".into()),
+            credential_ttl_ms: 120_000,
+        })
+        .await
+        .unwrap();
+    graph.verify_workspace(workspace).await.unwrap();
+    fixture.state.agent_access = Some(Arc::new(graph));
     let offer = &mut fixture.profiled.offer;
     // The retained ticket concerns the live tmux path when finite input is off.
     offer.manifest.terminal.input_enabled = false;

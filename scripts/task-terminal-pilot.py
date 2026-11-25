@@ -10,9 +10,16 @@ import shlex
 import subprocess
 import tempfile
 import time
-from uuid import UUID
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+from uuid import UUID, uuid4
 
 from websockets.asyncio.client import connect
+
+HOME_PROJECT = "a22afccc-d61a-5f77-aef8-9fd73311c68a"
+RETAINED_TASK = "a3c72f06-d1a6-428e-bf67-b0f1c734a8c9"
+RETAINED_TITLE = "Fix black terminal when connecting to running task agents"
+GRAPH_IMAGE = "sha256:da747555d632db4b5d90e577e356443403f9a9c1f1d2bf0bf1e0fa2017f4c70c"
 
 
 def run(*command, **kwargs):
@@ -96,13 +103,18 @@ def await_peer(server, directory):
     raise RuntimeError(f"pilot test exited with code {server.returncode}")
 
 
-def start_database(name, password):
-    run("docker", "run", "--rm", "-d", "--name", name,
-        "-e", f"POSTGRES_PASSWORD={password}", "-p", "127.0.0.1::5432",
+def mapped_port(name, port):
+    return run("docker", "port", name, f"{port}/tcp",
+               capture_output=True, text=True).stdout.strip().rsplit(":", 1)[1]
+
+
+def start_database(name, password, network):
+    run("docker", "run", "--pull", "never", "--rm", "-d", "--name", name,
+        "--network", network,
+        "-e", "POSTGRES_PASSWORD", "-p", "127.0.0.1::5432",
         "postgres:17-bookworm", "-c", "max_locks_per_transaction=512",
-        stdout=subprocess.DEVNULL)
-    host_port = run("docker", "port", name, "5432/tcp",
-                    capture_output=True, text=True).stdout.strip().rsplit(":", 1)[1]
+        stdout=subprocess.DEVNULL, env={**os.environ, "POSTGRES_PASSWORD": password})
+    host_port = mapped_port(name, 5432)
     for _ in range(100):
         ready = subprocess.run(
             ("docker", "exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"),
@@ -112,6 +124,59 @@ def start_database(name, password):
             return f"postgresql://postgres:{password}@127.0.0.1:{host_port}/postgres"
         time.sleep(0.2)
     raise RuntimeError("disposable PostgreSQL did not become ready")
+
+
+def seed_graph(database, password, network, directory, image):
+    run("docker", "exec", "--user", "postgres", database, "createdb", "pilot_graph")
+    token = secrets.token_hex(32)
+    token_file = directory / "graph.token"
+    token_file.write_text(token + "\n")
+    workspace = str(uuid4())
+    graph = database + "-graph"
+    run("docker", "run", "--pull", "never", "--rm", "-d", "--name", graph,
+        "--network", network, "-p", "127.0.0.1::8741",
+        "-e", "DATABASE_URL",
+        "-e", "AQ_GRAPH_BIND=0.0.0.0:8741",
+        "-e", "AQ_GRAPH_POOL_SIZE=4",
+        "-e", f"AQ_GRAPH_BOOTSTRAP_WORKSPACE={workspace}",
+        "-e", "AQ_GRAPH_BOOTSTRAP_ACTOR=pilot-admin",
+        "-e", "AQ_GRAPH_BOOTSTRAP_TOKEN",
+        image, stdout=subprocess.DEVNULL, env={
+            **os.environ,
+            "DATABASE_URL": f"postgresql://postgres:{password}@{database}/pilot_graph",
+            "AQ_GRAPH_BOOTSTRAP_TOKEN": token,
+        })
+    origin = "http://127.0.0.1:" + mapped_port(graph, 8741)
+    for _ in range(120):
+        try:
+            with urlopen(origin + "/health/ready", timeout=1):
+                break
+        except (URLError, TimeoutError, ConnectionError):
+            time.sleep(0.25)
+    else:
+        raise RuntimeError("disposable Graph did not become ready")
+    request = Request(
+        f"{origin}/v1/workspaces/{workspace}/mutations",
+        data=json.dumps({
+            "idempotency_key": "terminal-pilot-original-task",
+            "operations": [{
+                "op": "create_node", "kind": "task", "id": RETAINED_TASK,
+                "title": RETAINED_TITLE, "task_state": "active",
+                "metadata": {"aq:project_id": HOME_PROJECT},
+            }],
+        }).encode(),
+        headers={"Authorization": "Bearer " + token,
+                 "Content-Type": "application/json", "X-AQ-Graph-API-Version": "1"},
+    )
+    with urlopen(request, timeout=5) as response:
+        assert response.status == 200
+    return {
+        "AQ_TERMINAL_PILOT_GRAPH_ORIGIN": origin,
+        "AQ_TERMINAL_PILOT_GRAPH_TOKEN": str(token_file),
+        "AQ_TERMINAL_PILOT_WORKSPACE": workspace,
+        "AQ_TERMINAL_PILOT_HOME": HOME_PROJECT,
+        "AQ_TERMINAL_PILOT_TASK": RETAINED_TASK,
+    }
 
 
 async def attach(peer, pane, directory):
@@ -128,6 +193,7 @@ def main():
     parser.add_argument("dist", type=Path)
     parser.add_argument("--test-binary", type=Path, required=True,
                         help="existing it_dashboard binary built from this worktree")
+    parser.add_argument("--graph-image", default=GRAPH_IMAGE)
     args = parser.parse_args()
     os.umask(0o077)
     database = "aq-terminal-pilot-" + secrets.token_hex(6)
@@ -137,8 +203,12 @@ def main():
         print(f"Private pilot directory {directory}", flush=True)
         server = pane = None
         try:
-            url = start_database(database, secrets.token_hex(24))
-            run("docker", "run", "--rm", "-d", "--name", shell_container,
+            run("docker", "network", "create", database,
+                stdout=subprocess.DEVNULL)
+            database_password = secrets.token_hex(24)
+            url = start_database(database, database_password, database)
+            graph = seed_graph(database, database_password, database, directory, args.graph_image)
+            run("docker", "run", "--pull", "never", "--rm", "-d", "--name", shell_container,
                 "--network", "none", "--entrypoint", "sleep",
                 "postgres:17-bookworm", "infinity", stdout=subprocess.DEVNULL)
             pane = Pane(directory, shell_container)
@@ -146,7 +216,7 @@ def main():
                 args.test_binary.resolve(), "terminal_store::pilot::browser_pilot",
                 "--exact", "--ignored", "--nocapture",
             ), env={
-                **os.environ, "DATABASE_URL": url,
+                **os.environ, **graph, "DATABASE_URL": url,
                 "AQ_TERMINAL_PILOT_DIR": str(directory),
                 "AQ_TERMINAL_PILOT_DASHBOARD_DIR": str(args.dist.resolve(strict=True)),
             })
@@ -163,7 +233,11 @@ def main():
                     server.wait()
             if pane is not None:
                 pane.close()
-            subprocess.run(("docker", "stop", "--time", "2", shell_container, database),
+            subprocess.run(
+                ("docker", "stop", "--time", "2", shell_container, database + "-graph", database),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
+            subprocess.run(("docker", "network", "rm", database),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
 
