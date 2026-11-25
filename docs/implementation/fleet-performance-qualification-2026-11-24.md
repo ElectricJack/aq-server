@@ -65,3 +65,11 @@ Write rates normalize tuple changes to the request interval after allowing the c
 Baseline p50 varied from 12.295 to 16.579 ms and p95 varied from 142.341 to 196.785 ms. With diagnostics enabled p50 was 10.014 to 11.345 ms and p95 was 116.088 to 141.798 ms. The four runs showed no latency increase.
 
 Two runs per setting screen for regressions. Builds were active on the same host throughout the measurement, so host variation could account for the lower enabled latencies or conceal a small regression.
+
+## Startup and release checks
+
+The first real-binary rehearsal caught a format-178 startup guard rejecting the completion clock. The released guard checks both the exact trigger and its function. An upgrade regression verifies that disabling or altering the clock is rejected.
+
+A restored database also exposed an existing mailbox check that PostgreSQL could evaluate repeatedly before joining on message identity. The revised startup query checks each relevant message once. On the restored format-177 database the query returned true in 5.3 seconds, where the previous startup had remained in that check beyond 115 seconds. Both queries rejected missing, malformed, unmatched and unrelated message references and a corrupted retained digest. Eleven focused mailbox and migration guard tests passed.
+
+Nineteen focused server tests passed across the library, schema, access and native-offer binaries. Three mounted Performance tests passed, covering authorization, evidence cutoffs, holds, fleet sampling, retry ordering and corrected model costs. The timed poll test ran separately in the four arms above. The dashboard passed 1,739 unit tests, its required full browser checks and focused desktop and phone accessibility tests.
