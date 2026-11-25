@@ -225,14 +225,22 @@ pub(crate) async fn gate(
     let Some(plan) = load(state, db, result).await? else {
         return Ok(true);
     };
-    if !plan.complete() || !check_passed(db, &plan).await? {
+    accepts_plan(db, &plan, human_home_review).await
+}
+
+async fn accepts_plan(
+    db: &mut PgConnection,
+    plan: &Plan,
+    human_home_review: bool,
+) -> Result<bool, AppError> {
+    if !plan.complete() || !check_passed(db, plan).await? {
         return Ok(false);
     }
     for source in plan.sources.values().filter(|s| s.changed) {
         if source.project_id == plan.home && human_home_review && source.target_ref.is_none() {
             continue;
         }
-        if !target_accepted(db, &plan, source).await? {
+        if !target_accepted(db, plan, source).await? {
             return Ok(false);
         }
     }
@@ -397,12 +405,20 @@ mod tests {
     #[tokio::test]
     async fn partial_retry_reuses_one_verified_merge_but_requires_new_integrated_checks() {
         let database = crate::test_support::TestDb::create().await;
-        let _store = database.store().await;
-        let pool = database.pool().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let prior = database.store_at_version(178).await;
         let owner = Uuid::new_v4();
+        let pool = database.pool().await;
         sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,'delivery@example.org','owner',now())")
-            .bind(owner).execute(&mut *conn).await.unwrap();
+            .bind(owner).execute(&pool).await.unwrap();
+        drop(prior);
+        let _store = database.store().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(version, crate::STATE_FORMAT_VERSION.to_string());
         let home = Uuid::new_v4();
         let sibling = Uuid::new_v4();
         let task = Uuid::new_v4();
@@ -436,6 +452,23 @@ mod tests {
         assert!(target_accepted(&mut conn, &plan, &first).await.unwrap());
         assert!(!target_accepted(&mut conn, &plan, &second).await.unwrap());
         assert!(check_passed(&mut conn, &plan).await.unwrap());
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
+
+        sqlx::query(
+            "INSERT INTO task_workspace_target_acceptance(operation_id,home_project_id,task_id,target_project_id,
+                project_revision,repository_id,binding_generation,result_head,target_ref,kind,evidence,actor_id,recorded_at_ms)
+             VALUES($1,$2,$3,$4,1,$5,2,$6,'refs/heads/main','verified_merge','PR 51',$7,1)",
+        ).bind(Uuid::new_v4()).bind(home).bind(task).bind(sibling).bind(second.repository_id)
+         .bind(&second.head).bind(owner).execute(&mut *conn).await.unwrap();
+        assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
+        let mut changed_policy = first.clone();
+        changed_policy.project_revision += 1;
+        assert!(
+            !target_accepted(&mut conn, &plan, &changed_policy)
+                .await
+                .unwrap()
+        );
+
         plan.sources.get_mut(&dependency).unwrap().head = "e".repeat(40);
         assert!(!check_passed(&mut conn, &plan).await.unwrap());
         plan.sources.get_mut(&dependency).unwrap().head = "d".repeat(40);
@@ -448,5 +481,6 @@ mod tests {
                 .unwrap()
         );
         assert!(!check_passed(&mut conn, &plan).await.unwrap());
+        assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
     }
 }
