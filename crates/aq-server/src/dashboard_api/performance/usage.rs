@@ -124,6 +124,7 @@ impl Attempt {
 
 struct Report {
     totals: Totals,
+    unassigned: Totals,
     models: Models,
     attempts: BTreeMap<Uuid, Attempt>,
     truncated: bool,
@@ -142,6 +143,11 @@ impl Report {
             "status": status(&self.totals, complete < expected || self.truncated || self.models.len() > MAX_MODELS),
             "models": model_rows(&self.models),
             "costs": cost_rows(&self.totals.costs),
+            "unassigned": {
+                "canonical_calls": self.unassigned.tokens.canonical_calls,
+                "priced_calls": self.unassigned.priced,
+                "costs": cost_rows(&self.unassigned.costs),
+            },
             "truncated": self.truncated || self.models.len() > MAX_MODELS,
             "window_basis": "first_canonical_receipt",
             "coverage": {
@@ -194,6 +200,7 @@ async fn load(
         .await?;
     let mut report = Report {
         totals: Totals::default(),
+        unassigned: Totals::default(),
         models: Models::new(),
         attempts: BTreeMap::new(),
         truncated: calls.len() > MAX_CALLS || attempts.len() > max_attempts,
@@ -223,6 +230,9 @@ async fn load(
             row.try_get("harness")?,
         );
         report.totals.include(&fact, &cost)?;
+        if row.try_get("unassigned")? {
+            report.unassigned.include(&fact, &cost)?;
+        }
         report
             .models
             .entry(key.clone())

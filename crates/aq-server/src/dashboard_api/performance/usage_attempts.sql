@@ -5,6 +5,7 @@ WITH evidence AS (
     FROM observation_events e
     WHERE e.recorded_at_ms BETWEEN $3 AND $4
       AND (e.decision->>'kind' IN ('append', 'unresolved') OR e.record#>>'{body,kind,kind}'='gap')
+      AND e.decision#>>'{supersedes,event_id}' IS NULL
     GROUP BY e.attempt_id
 ), activity AS (
     SELECT attempt_id, unresolved, true AS expected FROM evidence

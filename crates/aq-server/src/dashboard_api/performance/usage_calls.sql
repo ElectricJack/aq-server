@@ -2,7 +2,8 @@
 -- original owning attempt.
 WITH in_window AS (
     SELECT f.call_key, e.event_id, e.recorded_at_ms, e.sequence,
-           h.owner_attempt_id, s.selection#>>'{choice,harness}' AS harness
+           h.owner_attempt_id, so.project_id IS NULL AS unassigned,
+           s.selection#>>'{choice,harness}' AS harness
     FROM observation_events e
     JOIN observation_facts f USING(event_id)
     JOIN observation_call_heads h USING(call_key)
@@ -13,17 +14,11 @@ WITH in_window AS (
     WHERE e.recorded_at_ms BETWEEN $3 AND $4
       AND ($1::uuid IS NULL OR so.project_id=$1)
       AND ($2::uuid IS NULL OR a.task_id=$2)
-      AND NOT EXISTS (
-          SELECT 1 FROM observation_facts older
-          JOIN observation_events oe USING(event_id)
-          WHERE older.call_key=f.call_key
-            AND (oe.recorded_at_ms,oe.sequence,oe.event_id) <
-                (e.recorded_at_ms,e.sequence,e.event_id)
-      )
+      AND e.decision#>>'{supersedes,event_id}' IS NULL
     ORDER BY e.recorded_at_ms DESC,e.sequence DESC,e.event_id DESC
     LIMIT $5
 )
-SELECT w.owner_attempt_id, w.harness, latest.fact, latest.billing
+SELECT w.owner_attempt_id, w.unassigned, w.harness, latest.fact, latest.billing
 FROM in_window w
 CROSS JOIN LATERAL (
     SELECT f.fact, src.authority->'billing' AS billing
