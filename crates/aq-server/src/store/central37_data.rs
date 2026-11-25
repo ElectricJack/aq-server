@@ -4,10 +4,36 @@ use super::{Result, corrupt, function_body};
 use sqlx::{Postgres, Transaction};
 
 pub(super) async fn validate(tx: &mut Transaction<'_, Postgres>, version: u32) -> Result<()> {
-    let query = r#"SELECT
+    // Restrict the frozen source check to relevant IDs before evaluating it.
+    // A planner may otherwise evaluate the function for each message scanned
+    // inside the queued-operation anti join, before checking the message ID.
+    let query = r#"WITH
+      scoped_messages AS MATERIALIZED (
+        SELECT message_id FROM mailbox_messages
+        WHERE mailbox_key=central_global_mailbox_key() OR recipient->>'kind'='global_supervisor'
+      ),
+      queued_refs AS MATERIALIZED (
+        SELECT DISTINCT response->>'message_id' AS message_ref FROM mailbox_operations
+        WHERE response->>'contract'='human-supervisor-conversation-1' AND response->>'state'='queued'
+      ),
+      queued_links AS MATERIALIZED (
+        SELECT q.message_ref,m.message_id FROM queued_refs q
+        JOIN mailbox_messages m ON m.message_id::text=q.message_ref
+      ),
+      source_checks AS MATERIALIZED (
+        SELECT message_id,central_global_mail_source_valid(message_id) AS valid
+        FROM (
+          SELECT message_id FROM scoped_messages
+          UNION SELECT message_id FROM queued_links
+        ) candidates
+      )
+    SELECT
       (SELECT count(*)=1 AND bool_and(singleton AND revision=1 AND conversation_id<>'00000000-0000-0000-0000-000000000000'::uuid) FROM global_supervisor_conversation)
-      AND NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE (m.mailbox_key=central_global_mailbox_key() OR m.recipient->>'kind'='global_supervisor') AND NOT central_global_mail_source_valid(m.message_id))
-      AND NOT EXISTS(SELECT 1 FROM mailbox_operations o WHERE o.response->>'contract'='human-supervisor-conversation-1' AND o.response->>'state'='queued' AND NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE m.message_id::text=o.response->>'message_id' AND central_global_mail_source_valid(m.message_id)))
+      AND NOT EXISTS(SELECT 1 FROM scoped_messages m JOIN source_checks s USING(message_id) WHERE NOT s.valid)
+      AND NOT EXISTS(SELECT 1 FROM queued_refs q WHERE NOT EXISTS(
+        SELECT 1 FROM queued_links l JOIN source_checks s USING(message_id)
+        WHERE l.message_ref=q.message_ref AND s.valid
+      ))
       AND COALESCE((SELECT h.next_cursor=(SELECT COALESCE(max(m.cursor),0)+1 FROM mailbox_messages m WHERE m.mailbox_key=central_global_mailbox_key()) FROM mailbox_heads h WHERE h.mailbox_key=central_global_mailbox_key()),NOT EXISTS(SELECT 1 FROM mailbox_messages m WHERE m.mailbox_key=central_global_mailbox_key()))
       AND NOT EXISTS(SELECT 1 FROM central_supervisor_actors a WHERE NOT EXISTS(SELECT 1 FROM global_supervisor_conversation g WHERE g.conversation_id=a.conversation_id) OR NOT EXISTS(SELECT 1 FROM users u WHERE u.id=a.approved_by)
         OR (a.current_reservation IS NOT NULL AND NOT EXISTS(SELECT 1 FROM central_supervisor_reservations r WHERE r.actor_id=a.actor_id AND r.reservation_id=a.current_reservation)))

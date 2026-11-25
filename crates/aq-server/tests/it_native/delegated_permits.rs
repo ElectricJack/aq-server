@@ -49,27 +49,20 @@ fn permit_scope_refuses_foreign_attempt_and_expired_use() {
     record
         .authorize(&current, RunnerOperation::Observe, 2_000)
         .unwrap();
-    let mut foreign = current.clone();
-    foreign.binding.attempt_id = Uuid::new_v4();
-    assert!(
-        record
-            .authorize(&foreign, RunnerOperation::Observe, 2_000)
-            .is_err()
-    );
-    foreign = current.clone();
-    foreign.binding.node.boot_id = Uuid::new_v4();
-    assert!(
-        record
-            .authorize(&foreign, RunnerOperation::Observe, 2_000)
-            .is_err()
-    );
-    foreign = current.clone();
-    foreign.binding.grant_generation += 1;
-    assert!(
-        record
-            .authorize(&foreign, RunnerOperation::Observe, 2_000)
-            .is_err()
-    );
+    let mut foreign_attempt = current.clone();
+    foreign_attempt.binding.attempt_id = Uuid::new_v4();
+    let mut foreign_boot = current.clone();
+    foreign_boot.binding.node.boot_id = Uuid::new_v4();
+    let mut foreign_generation = current.clone();
+    foreign_generation.binding.grant_generation += 1;
+    for foreign in [foreign_attempt, foreign_boot, foreign_generation] {
+        assert!(
+            record
+                .authorize(&foreign, RunnerOperation::Observe, 2_000)
+                .is_err(),
+            "foreign context: {foreign:?}"
+        );
+    }
     for op in [
         RunnerOperation::Started,
         RunnerOperation::Renew,
