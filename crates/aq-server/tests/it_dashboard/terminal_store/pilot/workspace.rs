@@ -240,6 +240,12 @@ impl Workspace {
         let task = f.selection.lineage.task_id;
         let attempt = f.profiled.offer.binding.attempt_id;
         let pool = f.db.pool().await;
+        let state_format: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state_format, aq_server::STATE_FORMAT_VERSION.to_string());
         let empty: i64 = sqlx::query_scalar(
             "SELECT (SELECT count(*) FROM task_workspace_sources)
                   + (SELECT count(*) FROM task_workspace_services)",
@@ -324,7 +330,8 @@ impl Workspace {
         json!({"target_project_id":self.sibling,"repository_id":self.sibling_pin.repository,
                "home_repository_id":self.home_pin.repository,
                "pinned_commit":self.sibling_pin.commit,"checkpoint_intent":checkpoint,
-               "postgres_requested":true,"approval":"approved"})
+               "postgres_requested":true,"approval":"approved",
+               "store_state_format":state_format})
     }
 }
 
