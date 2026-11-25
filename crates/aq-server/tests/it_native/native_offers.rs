@@ -799,10 +799,9 @@ mod node_slots;
 async fn performance_first_route_uses_published_offer_clock() {
     let (case, offer) = common::native_offer::published().await;
     let attempt = offer.offered.offer.binding.attempt_id;
-    let published_at = offer.offered.clock.server_time_ms as i64;
     let pool = &case.env.env.pool;
-    let (task, project): (Uuid, Uuid) = sqlx::query_as(
-        "SELECT a.task_id, so.project_id FROM execution_attempts a
+    let (task, project, original): (Uuid, Uuid, Value) = sqlx::query_as(
+        "SELECT a.task_id, so.project_id, l.graph_task_observation FROM execution_attempts a
          JOIN profiled_launches l USING(attempt_id)
          JOIN admission_source_observations so ON so.observation_id=l.source_observation_id
          WHERE a.attempt_id=$1",
@@ -811,6 +810,9 @@ async fn performance_first_route_uses_published_offer_clock() {
     .fetch_one(pool)
     .await
     .unwrap();
+    let published_at = original["native_offer"]["offered"]["clock"]["server_time_ms"]
+        .as_i64()
+        .unwrap();
     let read = |cutoff: i64| {
         sqlx::query_scalar::<_, Value>(include_str!(
             "../../src/dashboard_api/performance/usage_route.sql"
