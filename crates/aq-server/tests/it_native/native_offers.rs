@@ -15,7 +15,7 @@ use uuid::Uuid;
 mod ancestry;
 #[cfg(feature = "project_environments")]
 #[path = "native_offers/environments.rs"]
-mod environments;
+pub(crate) mod environments;
 #[path = "native_offers/git_author.rs"]
 mod git_author;
 #[cfg(feature = "delivery_playbook")]
@@ -31,6 +31,8 @@ mod holds;
 mod launches;
 #[path = "native_offers/lost.rs"]
 mod lost;
+#[path = "native_offers/placement.rs"]
+mod placement;
 #[path = "native_offers/routed.rs"]
 mod routed;
 
@@ -108,6 +110,10 @@ async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without
     assert_eq!(
         original["native_offer"],
         serde_json::to_value(native).unwrap()
+    );
+    assert_eq!(
+        original["native_offer"]["offered"]["clock"]["server_time_ms"],
+        native.offered.clock.server_time_ms
     );
     let (status, replayed) = poll_offered(&c).await;
     assert_eq!(status, 200, "{replayed}");
@@ -309,10 +315,12 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
         &mut conn,
         "desk",
         aq_machine_control::DesiredState::Stopped,
-        1,
-        who,
-        Uuid::new_v4(),
-        now,
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: who,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
     )
     .await
     .unwrap();
@@ -330,10 +338,12 @@ async fn stopped_machine_gets_no_new_offer_but_keeps_cancellations() {
         &mut conn,
         "desk",
         aq_machine_control::DesiredState::Running,
-        2,
-        who,
-        Uuid::new_v4(),
-        now,
+        aq_machine_control::OwnerChange {
+            expected_generation: 2,
+            actor: who,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
     )
     .await
     .unwrap();
@@ -511,9 +521,19 @@ async fn stop_committed_after_the_gate_publishes_no_offer() {
             aq_machine_control::DesiredState::Stopped,
             (c.env.env.state.clock)(),
         );
-        aq_machine_control::set_desired(&mut conn, "desk", stopped, 1, owner, Uuid::new_v4(), now)
-            .await
-            .unwrap();
+        aq_machine_control::set_desired(
+            &mut conn,
+            "desk",
+            stopped,
+            aq_machine_control::OwnerChange {
+                expected_generation: 1,
+                actor: owner,
+                operation_id: Uuid::new_v4(),
+                now,
+            },
+        )
+        .await
+        .unwrap();
         c.observation_resume.add_permits(1);
     };
     let ((status, body), ()) = tokio::join!(poll(&c), stop);
@@ -630,9 +650,19 @@ async fn stop_open_during_the_poll_answers_an_empty_page() {
             aq_machine_control::DesiredState::Stopped,
             (c.env.env.state.clock)(),
         );
-        aq_machine_control::set_desired(&mut stop, "desk", stopped, 1, owner, Uuid::new_v4(), now)
-            .await
-            .unwrap();
+        aq_machine_control::set_desired(
+            &mut stop,
+            "desk",
+            stopped,
+            aq_machine_control::OwnerChange {
+                expected_generation: 1,
+                actor: owner,
+                operation_id: Uuid::new_v4(),
+                now,
+            },
+        )
+        .await
+        .unwrap();
         c.observation_resume.add_permits(1);
         let waiting = "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM nodes WHERE id=$1%')";
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -764,3 +794,37 @@ async fn swarm_zero_limit_waits_without_claiming_task_then_same_ready_task_is_ad
 
 #[path = "native_offers/node_slots.rs"]
 mod node_slots;
+
+#[tokio::test]
+async fn performance_first_route_uses_published_offer_clock() {
+    let (case, offer) = common::native_offer::published().await;
+    let attempt = offer.offered.offer.binding.attempt_id;
+    let pool = &case.env.env.pool;
+    let (task, project, original): (Uuid, Uuid, Value) = sqlx::query_as(
+        "SELECT a.task_id, so.project_id, l.graph_task_observation FROM execution_attempts a
+         JOIN profiled_launches l USING(attempt_id)
+         JOIN admission_source_observations so ON so.observation_id=l.source_observation_id
+         WHERE a.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let published_at = original["native_offer"]["offered"]["clock"]["server_time_ms"]
+        .as_i64()
+        .unwrap();
+    let read = |cutoff: i64| {
+        sqlx::query_scalar::<_, Value>(include_str!(
+            "../../src/dashboard_api/performance/usage_route.sql"
+        ))
+        .bind(task)
+        .bind(project)
+        .bind(cutoff)
+        .fetch_optional(pool)
+    };
+    assert_eq!(read(published_at - 1).await.unwrap(), None);
+    let route = read(published_at).await.unwrap().unwrap();
+    assert_eq!(route["attempt_id"], serde_json::json!(attempt));
+    assert_eq!(route["recorded_at_ms"], published_at);
+    assert_eq!(route["clock_basis"], "offer_publication");
+}

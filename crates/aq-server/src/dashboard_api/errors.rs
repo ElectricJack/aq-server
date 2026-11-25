@@ -174,10 +174,7 @@ pub async fn normalize_errors(mut req: Request, next: Next) -> Response {
     {
         return preserve_protocol_headers(&response, retained);
     }
-    if v1
-        && (response.status().is_client_error() || response.status().is_server_error())
-        && response.extensions().get::<Normalized>().is_none()
-    {
+    if v1 && needs_normalization(&response) {
         let mut error = ApiError::for_status(response.status());
         error.source = response
             .extensions()
@@ -188,6 +185,12 @@ pub async fn normalize_errors(mut req: Request, next: Next) -> Response {
         response
     }
 }
+fn needs_normalization(response: &Response) -> bool {
+    let status = response.status();
+    (status.is_client_error() || status.is_server_error())
+        && response.extensions().get::<Normalized>().is_none()
+}
+
 fn preserve_protocol_headers(original: &Response, mut normalized: Response) -> Response {
     for name in ["retry-after", "aq-terminal-server-time-ms", "cache-control"] {
         if let Some(value) = original.headers().get(name) {

@@ -1,20 +1,11 @@
 //! Dedicated post-execution Graph effect; never changes the frozen agent ledger.
 use super::{actor::ActorPin, effects, owner::*};
 use crate::{profiled_execution::results, store::User};
+pub use aq_profiled_state::graph_completion::CompletionReceipt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompletionReceipt {
-    pub workspace_id: Uuid,
-    pub task_id: Uuid,
-    pub change_set_id: Uuid,
-    pub version: u64,
-    pub content_revision: u64,
-    pub response_digest: String,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompletionStatus {
@@ -51,45 +42,7 @@ pub(super) fn confirmed(raw: &Value, row: &sqlx::postgres::PgRow) -> Result<Comp
     if !crate::agent_access::settlement_response_valid(raw) {
         return Err(unavailable());
     }
-    let nodes = raw["results"]
-        .as_array()
-        .filter(|v| v.len() == 1)
-        .ok_or_else(unavailable)?;
-    let node = &nodes[0];
-    let version = u64::try_from(row.get::<i64, _>("expected_version"))
-        .map_err(|_| unavailable())?
-        .checked_add(1)
-        .ok_or_else(unavailable)?;
-    let logical = u64::try_from(row.get::<i64, _>("expected_content_revision"))
-        .map_err(|_| unavailable())?
-        .checked_add(1)
-        .ok_or_else(unavailable)?;
-    let workspace: Uuid = row.get("workspace_id");
-    let task: Uuid = row.get("task_id");
-    if node["id"] != json!(task)
-        || node["workspace_id"] != json!(workspace)
-        || node["kind"] != "task"
-        || node["task_state"] != "completed"
-        || node["deleted"] != false
-        || node["retired"] != false
-        || node["version"] != json!(version)
-        || node["content_revision"] != json!(logical)
-    {
-        return Err(unavailable());
-    }
-    let change_set_id = raw["change_set_id"]
-        .as_str()
-        .and_then(|s| s.parse::<Uuid>().ok())
-        .filter(|id| !id.is_nil())
-        .ok_or_else(unavailable)?;
-    Ok(CompletionReceipt {
-        workspace_id: workspace,
-        task_id: task,
-        change_set_id,
-        version,
-        content_revision: logical,
-        response_digest: hash(raw)?,
-    })
+    aq_profiled_state::graph_completion::verified_receipt(raw, row).ok_or_else(unavailable)
 }
 impl Service {
     pub(super) async fn prepare_completion_locked(

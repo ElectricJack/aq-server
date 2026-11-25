@@ -1,24 +1,10 @@
 //! Sanitized, host-refreshed subscription metadata. Never reads login files.
 use super::*;
+mod reset;
+use reset::reset_credits;
 
 pub(super) fn read(source: &CodexSource, now: u64) -> Option<Collected> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
-        .open(source.snapshot_file.as_ref()?)
-        .ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.mode() & 0o022 != 0 || meta.len() > MAX_BYTES as u64 {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    file.take((MAX_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > MAX_BYTES {
-        return None;
-    }
-    let root: Value = serde_json::from_slice(&bytes).ok()?;
+    let root = read_snapshot(source.snapshot_file.as_ref()?)?;
     if root.get("schema_version")?.as_u64()? != 1 {
         return None;
     }
@@ -39,31 +25,7 @@ pub(super) fn read(source: &CodexSource, now: u64) -> Option<Collected> {
     if observed == 0 || observed > now.checked_add(5_000)? {
         return None;
     }
-    let values = account.get("windows")?.as_array()?;
-    if values.is_empty() || values.len() > 16 {
-        return None;
-    }
-    let mut ids = BTreeSet::new();
-    let mut windows = Vec::new();
-    for value in values {
-        let id = value.get("id")?.as_str()?;
-        let label = value.get("label")?.as_str()?;
-        if !valid_text(id, 128) || !valid_text(label, 128) || !ids.insert(id) {
-            return None;
-        }
-        let mut w = window(id.into(), label.into(), value, observed)?;
-        w.observation.source = match source.provider_id.as_str() {
-            "openai" => "codex_app_server_rate_limits",
-            "anthropic" if account["source"] == "claude_cli_usage_cache" => {
-                "claude_cli_usage_cache"
-            }
-            "anthropic" => "claude_sdk_usage",
-            _ => return None,
-        }
-        .into();
-        w.observation.fresh_until = time(observed.checked_add(120_000)?)?;
-        windows.push(w);
-    }
+    let windows = account_windows(account, &source.provider_id, observed)?;
     let reset_credits = Some(reset_credits(
         account.get("reset_credits"),
         observed,
@@ -76,133 +38,56 @@ pub(super) fn read(source: &CodexSource, now: u64) -> Option<Collected> {
     })
 }
 
-fn reset_credits(
-    value: Option<&Value>,
-    fallback_observed: u64,
-    now: u64,
-    provider: &str,
-) -> Option<ResetCredits> {
-    struct ParsedReset {
-        state: ResetCreditState,
-        available_count: Option<u32>,
-        grants: Option<Vec<ResetGrant>>,
-        observed: u64,
+fn read_snapshot(path: &std::path::Path) -> Option<Value> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    let safe_file = meta.is_file() && meta.mode() & 0o022 == 0;
+    if !safe_file || meta.len() > MAX_BYTES as u64 {
+        return None;
     }
-
-    fn count(value: &Value) -> Option<Option<u32>> {
-        if value.is_null() {
-            return Some(None);
-        }
-        let n = value.as_u64()?;
-        (n <= 1_000_000).then_some(Some(n as u32))
+    let mut bytes = Vec::new();
+    file.take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_BYTES {
+        return None;
     }
-    fn parse(value: &Value, now: u64) -> Option<ParsedReset> {
-        let state = match value.get("state")?.as_str()? {
-            "known" => ResetCreditState::Known,
-            "unknown" => ResetCreditState::Unknown,
-            "unavailable" => ResetCreditState::Unavailable,
-            _ => return None,
-        };
-        let available = count(value.get("available_count")?)?;
-        if matches!(state, ResetCreditState::Known) != available.is_some() {
+    serde_json::from_slice(&bytes).ok()
+}
+fn account_windows(account: &Value, provider: &str, observed: u64) -> Option<Vec<QuotaWindow>> {
+    let values = account.get("windows")?.as_array()?;
+    if values.is_empty() || values.len() > 16 {
+        return None;
+    }
+    let name = observation_source(account, provider)?;
+    let mut ids = BTreeSet::new();
+    let mut windows = Vec::new();
+    for value in values {
+        let id = value.get("id")?.as_str()?;
+        let label = value.get("label")?.as_str()?;
+        let valid_names = valid_text(id, 128) && valid_text(label, 128);
+        if !valid_names || !ids.insert(id) {
             return None;
         }
-        let parse_grants = || -> Option<Option<Vec<ResetGrant>>> {
-            let grants = match value.get("grants")? {
-                Value::Null => None,
-                Value::Array(values) if values.len() <= 100 => {
-                    let mut grants = Vec::new();
-                    for grant in values {
-                        let label = grant.get("label")?.as_str()?;
-                        if !valid_text(label, 120) {
-                            return None;
-                        }
-                        let remaining_count = count(grant.get("remaining_count")?)?;
-                        let expires_at = match grant.get("expires_at")? {
-                            Value::Null => None,
-                            Value::String(s) if s.len() <= 64 => {
-                                let date = DateTime::parse_from_rfc3339(s).ok()?;
-                                let normalized = date
-                                    .with_timezone(&Utc)
-                                    .to_rfc3339_opts(SecondsFormat::Millis, true);
-                                // Timestamp's wire schema requires a four-digit UTC year.
-                                if normalized.len() != 24 {
-                                    return None;
-                                }
-                                Some(Timestamp(normalized))
-                            }
-                            _ => return None,
-                        };
-                        let usable_now = match grant.get("usable_now")? {
-                            Value::Null => None,
-                            Value::Bool(b) => Some(*b),
-                            _ => return None,
-                        };
-                        let clears = grant.get("clears")?.as_array()?;
-                        if clears.len() > 16 {
-                            return None;
-                        }
-                        let clears = clears
-                            .iter()
-                            .map(|v| v.as_str().filter(|s| valid_text(s, 80)).map(str::to_owned))
-                            .collect::<Option<Vec<_>>>()?;
-                        grants.push(ResetGrant {
-                            label: label.into(),
-                            remaining_count,
-                            expires_at,
-                            usable_now,
-                            clears,
-                        });
-                    }
-                    Some(grants)
-                }
-                _ => return None,
-            };
-            Some(grants)
-        };
-        let grants = parse_grants().unwrap_or(None);
-        let observed = value.get("observed_at_ms")?.as_u64()?;
-        if observed == 0 || observed > now.checked_add(5_000)? {
-            return None;
-        }
-        Some(ParsedReset {
-            state,
-            available_count: available,
-            grants,
-            observed,
-        })
+        let mut w = window(id.into(), label.into(), value, observed)?;
+        w.observation.source = name.into();
+        w.observation.fresh_until = time(observed.checked_add(120_000)?)?;
+        windows.push(w);
     }
-    let parsed = value.and_then(|v| parse(v, now));
-    let has_reset_observation = parsed.is_some();
-    let ParsedReset {
-        state,
-        available_count,
-        grants,
-        observed,
-    } = parsed.unwrap_or(ParsedReset {
-        state: ResetCreditState::Unknown,
-        available_count: None,
-        grants: None,
-        observed: fallback_observed,
-    });
-    let known = matches!(state, ResetCreditState::Known);
-    let mut observation = observation(observed, known)?;
-    observation.source = match (provider, has_reset_observation) {
-        ("openai", true) => "codex_app_server_rate_limits",
-        // CLI cache supplies quota windows only; any retained reset block was
-        // observed independently through the SDK.
-        ("anthropic", true) => "claude_sdk_usage",
-        ("openai" | "anthropic", false) => "provider_quota_unknown",
+    Some(windows)
+}
+fn observation_source(account: &Value, provider: &str) -> Option<&'static str> {
+    let name = match provider {
+        "openai" => "codex_app_server_rate_limits",
+        "anthropic" if account["source"] == "claude_cli_usage_cache" => "claude_cli_usage_cache",
+        "anthropic" => "claude_sdk_usage",
         _ => return None,
-    }
-    .into();
-    observation.fresh_until = time(observed.checked_add(120_000)?)?;
-    Some(ResetCredits {
-        state,
-        available_count,
-        grants,
-        observation,
-    })
+    };
+    Some(name)
 }
 
 #[cfg(test)]

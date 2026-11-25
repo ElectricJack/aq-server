@@ -15,16 +15,23 @@ fn ended(outcome: &str, reference: &str, subject: &Value, reason: &str) -> HostR
     }
 }
 
+struct AssessmentJob {
+    provider: Option<Arc<dyn JudgmentProvider>>,
+    request: AssessRequest,
+    intent_id: String,
+    input: Value,
+}
+
 impl Service {
     pub(super) async fn judgment_assess(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let operation = self.operation(intent)?;
         match stage.ok_or(Error::Unknown)? {
             Stage::Retained(result) => {
@@ -44,7 +51,7 @@ impl Service {
         if let Some(reason) = host9::assess_refusal(input, max_deadline, max_tokens) {
             let refused = ended("refused", &reference, subject, reason);
             return self
-                .settle_fresh(tx, id, revision, intent, &identity, refused)
+                .settle_fresh(tx, command.retained(&identity), refused)
                 .await;
         }
         // The purpose is the one of the source this grant was made for.
@@ -67,12 +74,21 @@ impl Service {
         let deadline_at_ms = self.now()? + request.deadline_ms as i64;
         let record = json!({"subject": subject, "deadline_at_ms": deadline_at_ms});
         let accepted = self
-            .record_operation(tx, id, revision, intent, &identity, None, &record)
+            .record_operation(
+                tx,
+                command.retained(&identity),
+                OperationRequest::new(None, &record),
+            )
             .await?;
-        let (service, provider) = (self.clone(), ports.judgments.clone());
-        let (intent_id, input) = (intent.id.clone(), input.clone());
+        let service = self.clone();
+        let job = AssessmentJob {
+            provider: ports.judgments.clone(),
+            request,
+            intent_id: intent.id.clone(),
+            input: input.clone(),
+        };
         tokio::spawn(async move {
-            let _ = (service.run_assessment(provider, request, &intent_id, &input)).await;
+            let _ = service.run_assessment(job).await;
         });
         Ok(accepted)
     }
@@ -80,13 +96,13 @@ impl Service {
     /// Asks the provider, bounded by the budget deadline, and completes the
     /// operation. A completion that cannot be recorded leaves the operation
     /// running; it fails at its deadline.
-    async fn run_assessment(
-        &self,
-        provider: Option<Arc<dyn JudgmentProvider>>,
-        request: AssessRequest,
-        intent_id: &str,
-        input: &Value,
-    ) -> Result<HostResult> {
+    async fn run_assessment(&self, job: AssessmentJob) -> Result<HostResult> {
+        let AssessmentJob {
+            provider,
+            request,
+            intent_id,
+            input,
+        } = job;
         let (subject, reference) = (&input["subject"], format!("judgment:{}", request.operation));
         let reply = match &provider {
             Some(provider) => {
@@ -98,7 +114,7 @@ impl Service {
         };
         let assessed = reply.and_then(|reply| {
             let named = |name: &str, max| !name.is_empty() && name.len() <= max;
-            (host9::assess_answer(&reply.answer, input).ok())
+            (host9::assess_answer(&reply.answer, &input).ok())
                 .filter(|_| named(&reply.provider, 128) && named(&reply.model, 256))
                 .map(|answer| (reply, answer))
                 .ok_or("indeterminate")
@@ -124,9 +140,7 @@ impl Service {
             }
         };
         self.complete_operation(
-            request.operation,
-            "judgment.assess",
-            intent_id,
+            OperationKey::new(request.operation, "judgment.assess", &intent_id),
             result,
             None,
         )
@@ -159,8 +173,12 @@ impl Service {
                 &request["subject"],
                 "deadline_exceeded",
             );
-            self.complete_operation(*operation, "judgment.assess", intent_id, failed, None)
-                .await?;
+            self.complete_operation(
+                OperationKey::new(*operation, "judgment.assess", intent_id),
+                failed,
+                None,
+            )
+            .await?;
         }
         Ok(due.len())
     }

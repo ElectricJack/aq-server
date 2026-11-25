@@ -2336,6 +2336,11 @@
                 "project_id": {
                   "format": "uuid",
                   "type": "string"
+                },
+                "resume_held": {
+                  "default": false,
+                  "description": "Make the subject, held at a limit an owner retry overrides, wait for the blocker instead:\nafter the edge is added, the hold's override is recorded, and the task is replaced once\nthe blocker completes. A task without such a hold is refused and no edge is added.",
+                  "type": "boolean"
                 }
               },
               "required": [

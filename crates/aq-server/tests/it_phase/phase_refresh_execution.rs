@@ -342,9 +342,18 @@ async fn switched(f: &Prepared, on: Option<bool>) {
         .unwrap();
     let now = (f.c.env.env.state.clock)();
     let mut c = pool.acquire().await.unwrap();
-    aq_machine_control::set_owner_availability(&mut c, on, 1, owner, Uuid::new_v4(), now)
-        .await
-        .unwrap();
+    aq_machine_control::set_owner_availability(
+        &mut c,
+        on,
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: owner,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
+    )
+    .await
+    .unwrap();
 }
 async fn refused(f: &Prepared) -> bool {
     let auth = auth(&f.c).await;
@@ -460,9 +469,18 @@ async fn full_observation_table_refuses_cleanly_with_the_switch_on() {
         .unwrap();
     let now = (f.c.env.env.state.clock)();
     let mut c = pool.acquire().await.unwrap();
-    aq_machine_control::set_owner_availability(&mut c, true, 1, owner, Uuid::new_v4(), now)
-        .await
-        .unwrap();
+    aq_machine_control::set_owner_availability(
+        &mut c,
+        true,
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: owner,
+            operation_id: Uuid::new_v4(),
+            now,
+        },
+    )
+    .await
+    .unwrap();
     drop(c);
     assert!(refused(&f).await, "1,024 rows plus the attestation");
     fixture::assert_unissued(&f.c).await;

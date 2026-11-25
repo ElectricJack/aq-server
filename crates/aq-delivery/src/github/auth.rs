@@ -1,6 +1,6 @@
 //! GitHub App authentication: the App JWT (RS256) and installation access
 //! tokens limited to one repository, cached until shortly before they expire.
-use super::{Auth, GitHubApiError, GitHubClient, GitHubResult};
+use super::{ApiRequest, Auth, GitHubApiError, GitHubClient, GitHubResult};
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
@@ -118,10 +118,12 @@ pub(super) async fn mint(
     let body = serde_json::json!({ "repositories": [repository] });
     let response: AccessTokenResponse = client
         .send(
-            reqwest::Method::POST,
-            &format!("/app/installations/{installation_id}/access_tokens"),
+            ApiRequest::new(
+                reqwest::Method::POST,
+                &format!("/app/installations/{installation_id}/access_tokens"),
+            )
+            .json(&body),
             Auth::App(&jwt),
-            Some(&body),
         )
         .await?;
     if response.token.is_empty() {

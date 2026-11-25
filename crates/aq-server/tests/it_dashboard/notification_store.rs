@@ -129,7 +129,7 @@ async fn absent_route_preserves_dashboard_message_and_identical_logical_replay_n
     assert_eq!(e.counts().await, (1, 0, 2));
     let inbox = e
         .service
-        .inbox(e.recipient, e.recipient, 0, 1)
+        .inbox(e.recipient, e.recipient, (0, 1))
         .await
         .unwrap();
     assert_eq!(inbox.items.len(), 1);
@@ -263,7 +263,7 @@ async fn simultaneous_duplicate_enqueue_and_project_revocation_are_bounded() {
     );
     assert!(
         e.service
-            .inbox(e.recipient, e.recipient, 0, 64)
+            .inbox(e.recipient, e.recipient, (0, 64))
             .await
             .unwrap()
             .items
@@ -514,91 +514,12 @@ enabled=false
 }
 #[tokio::test]
 async fn actual_human_routes_enforce_csrf_current_roles_scope_and_machine_separation() {
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
     let e = Env::new(false).await;
     let state = e.state().await;
     let app = aq_server::build_admin_router(state.clone());
     let request = e.message();
-    let raw = serde_json::to_string(&request).unwrap();
-    let post = |email: &str, csrf: bool| {
-        let mut b = Request::post("/api/notifications")
-            .header("content-type", "application/json")
-            .header("x-aq-dev-email", email);
-        if csrf {
-            b = b
-                .header("x-aq-request", "1")
-                .header("origin", "https://aq.example");
-        }
-        b.body(Body::from(raw.clone())).unwrap()
-    };
-    assert_eq!(
-        app.clone()
-            .oneshot(post("notify-owner@localhost", false))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        app.clone()
-            .oneshot(post("recipient@localhost", true))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    let response = app
-        .clone()
-        .oneshot(post("notify-owner@localhost", true))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = serde_json::from_slice::<serde_json::Value>(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
-    assert_eq!(body["external_state"], "no_external_route");
-    let get = |path: String, email: &str| {
-        Request::get(path)
-            .header("x-aq-dev-email", email)
-            .body(Body::empty())
-            .unwrap()
-    };
-    assert_eq!(
-        app.clone()
-            .oneshot(get(
-                format!("/api/notifications/{}", request.message_id),
-                "recipient@localhost"
-            ))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        app.clone()
-            .oneshot(get(
-                format!("/api/notifications?recipient={}", e.owner),
-                "recipient@localhost"
-            ))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        aq_server::build_worker_router(state)
-            .oneshot(get("/api/notifications".into(), "notify-owner@localhost"))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
+    http::writes(&app, &request).await;
+    http::reads(app, state, e.owner, request.message_id).await;
     assert_eq!(
         aq_server::admission::classify("/api/notifications/retry"),
         aq_server::admission::Class::Notification
@@ -766,3 +687,5 @@ async fn late_provider_acceptance_cannot_be_written_by_a_fenced_dispatcher() {
     assert_eq!(view["deliveries"][0]["status"]["kind"], "delivery_unknown");
     peer.abort();
 }
+
+mod http;

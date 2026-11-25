@@ -201,14 +201,11 @@ async fn record_only(
     if !view.holds_task {
         return Err(conflict());
     }
-    let head: Option<Uuid> = sqlx::query_scalar(
-        "SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR UPDATE",
-    )
-    .bind(binding.attempt_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?;
-    if report.supersedes != head {
+    let (head, retry_chosen) =
+        aq_profiled_state::result_reads::correction_head(&mut tx, binding.attempt_id)
+            .await
+            .map_err(db)?;
+    if retry_chosen || report.supersedes != head {
         return Err(conflict());
     }
     require_report_capacity_locked(&mut tx, binding.attempt_id, bytes.len()).await?;

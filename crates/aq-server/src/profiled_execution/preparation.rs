@@ -38,6 +38,7 @@ pub(super) struct Locked {
     pub(super) selection: aq_selection::ResolvedSelection,
     pub(super) source: source_exports::LinkedExport,
     pub(super) offer_expiry: u64,
+    pub(super) backend_kind: Option<aq_selection::BackendKind>,
 }
 pub(super) async fn locked(
     state: &AppState,
@@ -151,6 +152,7 @@ pub(super) async fn locked(
         selection,
         source,
         offer_expiry,
+        backend_kind: current.backend_kind,
     })
 }
 async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>, AppError> {
@@ -264,6 +266,7 @@ pub async fn accept(
         before.source.fact(),
     )
     .await?;
+<<<<<<< HEAD
     let lease = issue_material(
         state,
         &before.selection,
@@ -273,6 +276,41 @@ pub async fn accept(
         expiry,
     )
     .await?;
+=======
+    let registry = state.config.intelligence.clone().ok_or_else(|| refused())?;
+    let selection = before.selection.clone();
+    let backend_kind = before.backend_kind;
+    let binding = request.acceptance.binding.clone();
+    let head = super::login_refresh::newest_source(
+        &state.store.pool,
+        &registry,
+        &selection.choice.credential_profile,
+        selection.credential_revision,
+    )
+    .await?;
+    let permit = aq_machine_control::limits::PREPARATION_MATERIAL.enter();
+    let permit = permit.ok_or_else(|| refused())?;
+    let lease = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            material::issue_for_selection_from(
+                &registry,
+                &selection,
+                &binding,
+                lease_id,
+                issued,
+                expiry,
+                backend_kind,
+                head.as_ref(),
+            )
+        }),
+    )
+    .await
+    .map_err(|_| refused())?
+    .map_err(|_| AppError::Internal)?
+    .map_err(|_| refused())?;
+>>>>>>> refs/remotes/central/main
     let mut tx = begin(state).await?;
     let after = locked(state, &mut tx, auth, request).await?;
     if before.source.fact().canonical_bytes()? != after.source.fact().canonical_bytes()? {

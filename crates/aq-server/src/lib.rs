@@ -7,6 +7,7 @@ pub mod config;
 pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod delegated_permits;
+mod scheduling_diagnostics;
 pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
@@ -324,6 +325,7 @@ pub fn build_admin_router_with_optional_owners(
         .merge(routing::settings_routes())
         .merge(internal_work::admin_routes())
         .merge(playbook_authoring::admin_routes())
+        .merge(dashboard_api::performance::settings_routes())
         .merge(swarm_settings::routes())
         .merge(role_settings::admin_routes())
         .merge(project_bindings::admin_routes())
@@ -391,6 +393,8 @@ fn build_worker_router_inner(
     };
     #[cfg(feature = "delivery_playbook")]
     let closure = closure.merge(profiled_execution::git_grant::routes(state.clone()));
+    #[cfg(feature = "project_environments")]
+    let closure = closure.merge(aq_environments::worker::routes(&state.config.projects));
     let router = Router::new()
         .merge(closure)
         .merge(worker_api::worker_routes(state.clone()))
@@ -465,7 +469,7 @@ pub async fn run_with_listeners(
     run_with_listeners_and_dashboard(state, admin, worker, shutdown, None).await
 }
 async fn run_with_listeners_and_dashboard(
-    state: AppState,
+    mut state: AppState,
     admin: tokio::net::TcpListener,
     worker: tokio::net::TcpListener,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -487,6 +491,8 @@ async fn run_with_listeners_and_dashboard(
         .install(notification_dispatcher)
         .await?;
     let (tx, rx) = tokio::sync::watch::channel(false);
+    state.store.scheduling_diagnostics = scheduling_diagnostics::start(&state.store.pool);
+    dashboard_api::performance::capacity::spawn(state.clone(), rx.clone());
     let media_runtime = match &state.config.result_media {
         Some(settings) => {
             Some(result_media::runtime::Runtime::start(state.clone(), settings).await?)
@@ -552,14 +558,11 @@ async fn run_with_listeners_and_dashboard(
     };
     let admin_app = match unopened {
         None => build(policy_slot.lock().await.as_ref()),
-        Some((config, failure)) => playbooks::runtime::open_later(
-            state.clone(),
-            config,
-            failure,
-            build,
-            policy_slot.clone(),
-            rx.clone(),
-        ),
+        Some(failed) => playbooks::runtime::DeferredMount {
+            slot: policy_slot.clone(),
+            stop: rx.clone(),
+        }
+        .open_later(state.clone(), failed, build),
     };
     let worker_app = build_worker_router_inner(state, None, Some(admin_app.clone()));
     let serving = tokio::try_join!(
