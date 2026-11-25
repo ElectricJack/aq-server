@@ -54,20 +54,22 @@ impl Scope {
     }
 
     #[cfg(feature = "project_environments")]
+    pub(crate) fn service_needs(&self) -> impl Iterator<Item = &str> {
+        self.evidence["services"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+    }
+
+    #[cfg(feature = "project_environments")]
     pub(crate) fn apply_service_needs(&self, metadata: &mut Value) {
         if !self.has_services() {
             return;
         }
         use aq_project_policy::environments::{NEEDS_KEY, needs};
         let mut labels = needs(metadata);
-        labels.extend(
-            self.evidence["services"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned),
-        );
+        labels.extend(self.service_needs().map(str::to_owned));
         labels.sort_unstable();
         labels.dedup();
         if !metadata.is_object() {

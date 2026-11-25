@@ -197,7 +197,8 @@ impl DeliveryPort for PgDelivery {
             "JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(h.attempt_id,h.report_id) ",
             "WHERE h.attempt_id=$1 AND NOT ",
             aq_machine_control::platform_interruption_sql!("r.report_bytes"),
-            " FOR UPDATE OF h",
+            " AND NOT EXISTS (SELECT 1 FROM profiled_auto_settlements s WHERE s.report_id=h.report_id ",
+            "AND s.disposition='rework_required' AND s.reason='branch_publication_rejected') FOR UPDATE OF h",
         ))
         .bind(event.attempt_id)
         .fetch_optional(db)
