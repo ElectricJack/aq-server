@@ -2,7 +2,7 @@
 
 **Design proposal for owner review · 24 November 2026**
 
-AQ operators need to answer three questions from a single Performance page. How quickly does ready work satisfy its delivery policy, and when do code changes reach their target branch? When delivery slows, which tasks, workers, or gates account for the delay? Does delegating to cheaper models reduce the total cost of delivering successful work?
+AQ operators need to answer three questions from a single Performance page. How quickly does ready work reach the outcome its project calls delivered, and when do code changes reach their target branch? When delivery slows, which tasks, workers, or gates account for the delay? Does delegating to cheaper models reduce the total cost of delivering successful work?
 
 ## First release decision
 
@@ -10,7 +10,7 @@ Ship a native AQ Performance page backed by bounded PostgreSQL reads and the exi
 
 | Operator question | First release |
 |---|---|
-| Is work reaching the target branch sooner and passing review? | Show distinct tasks with confirmed policy completion in the last seven days, median and p90 first-ready-to-completion, and timing coverage. Show verified merges and first-ready-to-merge separately for merge workflows. Show first-pass acceptance for adjudicated first submissions in the same reporting window, with the numerator, denominator and coverage. Link to the underlying tasks. |
+| Is work reaching the target branch sooner and passing review? | Show confirmed AQ task completions and verified merges independently, each with its own clock and coverage. Where a delivery definition is configured, show distinct tasks reaching that milestone in the last seven days and median and p90 time from first ready. Show first-pass acceptance for adjudicated first submissions in the same reporting window, with the numerator, denominator and coverage. Link to the underlying tasks. |
 | What is stuck today? | List current holds, oldest first, with age from the original hold, reason, responsible party and next check where recorded. Include total held and the number past their scheduled check. |
 | Are both workers getting work? | Show one row per machine with occupied and available slots, online capacity and freshness. Plot occupancy alongside a single fleet-wide ready-task count. Highlight sampled stretches of at least ten minutes with zero occupied slots and ready work. Call these “idle while work was queued.” Establishing task eligibility requires separate scheduler evidence. |
 | What did the work consume? | Show recorded token categories and available costs by actual model for the reporting window, including failed attempts. Separate provider-reported and estimated amounts. Show reporting coverage, unattributed usage, and the linked attempts on a task so an operator can inspect a retry or escalation. |
@@ -22,7 +22,7 @@ Apply the existing dashboard authorization to each query. Fleet-wide occupancy a
 ### First release acceptance
 
 - Run the default deployment and open the page using AQ, its database and dashboard alone. Check the queries on representative data and compare admission latency with sampling enabled and disabled.
-- Reconcile a merged task awaiting policy completion, a confirmed non-merge task, a returned submission and a replayed completion to their receipts. Include a task missing its ready timestamp and show the reduced timing coverage.
+- Run the page with no delivery playbooks and no delivery definition. Worker, hold and usage metrics must remain available. Using the same fixtures, select confirmed completion and then verified target-branch merge and verify the different counts and timestamps. Test a returned submission, a replayed receipt and an unsupported external milestone. Include a task missing its ready timestamp and show the reduced timing coverage.
 - Inspect a real hold across a reminder and confirm its age continues from the original start.
 - Inspect an interval on each machine, including a period with queued work. Simulate a missing heartbeat and confirm it produces a visible gap. A ready task that only one machine can run must never generate a claim of avoidable idle time on both machines.
 - Trace an attempt that escalated from a cheaper model. Reconcile reported usage across both attempts, retain missing prices as unknown, and verify that replaying usage leaves totals unchanged.
@@ -43,11 +43,20 @@ Use UTC, half-open intervals and an explicit report cutoff. Count each task once
 
 ### How AQ knows a task was delivered
 
-The delivery playbook decides when its policy is satisfied. The common reporting boundary is confirmed task completion. On the playbook path, `work.complete` names a result and the host reports `Completed` after validating the Graph completion receipt. The metrics reader resolves the committed completion to its task and accepted result. Use the recorded confirmation time for ready-to-completion and record first observation separately if that clock is unavailable. A submitted result, a finished playbook run, a pending command, a hold or a return contributes zero completions. Delivery can span multiple runs or attempts. Deduplicate replay by completion operation and count the task once. [Host decision contract](../../../crates/aq-playbook-domain/src/delivery_decisions.rs)
+AQ records independently observable facts. A task may have a submitted result, a confirmed AQ completion, a verified merge, or evidence of an external outcome. Each fact has its own identity and timestamp. The project can optionally select which fact means **delivered** for a work class. This reporting choice confers no authority to change task state or execute work.
 
-Keep merge evidence as an independent milestone. If the PR merges at 10:00 and a required verification step leads to confirmed task completion at 10:20, the two charts use 10:00 and 10:20 respectively. An accepted document can have a completion and no merge. Use verified forge time where available and label AQ observation time when used as a proxy.
+| Configuration | Evidence used for the delivery measure |
+|---|---|
+| AQ completion is the intended outcome | Use the durable confirmed completion linked to the task. One producer is a playbook calling `work.complete`, where the host validates the Graph receipt. Other paths producing confirmed AQ completion use the same criterion. [Host decision contract](../../../crates/aq-playbook-domain/src/delivery_decisions.rs) |
+| Merge to a designated branch is the outcome | Use verified task-linked forge evidence for the configured repository and target branch, including when a person or another system performed the merge. For multiple required changes, the definition must establish the required set before using its last merge. |
+| Deployment, publication or external acceptance is the outcome | Use a project-authorized, task-linked receipt for that specific milestone when an integration supplies one. Support for new receipt sources can follow demand. |
+| Delivery is outside AQ’s scope or has no configured definition | Show “Delivery not tracked” for that scope. Continue showing observed submissions, completions, merges, holds, usage and machine utilization under their own names. |
 
-Group completions by the policy and version that actually settled the task when that provenance is available. Keep unknown policy provenance visible. A custom playbook that ships an artifact externally and never confirms task completion has no measurable policy completion until it uses the existing completion boundary or supplies an explicitly mapped authoritative receipt. Show this as a coverage gap. First release requires no new metrics call in playbooks that already use confirmed completion.
+For the first release offer two built-in choices, **confirmed AQ completion** and **verified target-branch merge**, plus **not tracked** as the default. Use the existing read-only evidence sources. No playbook changes, custom expression language or generic external-event ingestion are required. If a project wants a deployment metric and AQ can only observe merges, show the merge measure and identify deployment evidence as unavailable.
+
+Record the selected definition and version with the ready cohort. An explicit historical reanalysis can use another definition and must label it. Group delivery comparisons and goals by compatible definition. Within a tracked scope, distinguish outstanding tasks from unknown outcomes caused by missing evidence. Show untracked tasks, unavailable evidence, and pending outcomes separately alongside the denominator. A tracked scope with healthy coverage and no deliveries can legitimately report zero.
+
+Use the verified milestone time where available, otherwise label first authoritative observation time as a proxy. Deduplicate receipts by source and stable operation or event identity and count each task once. If a PR merges at 10:00 and AQ confirms task completion at 10:20, both facts remain visible. The selected definition determines which clock drives delivery and cost per successful delivery.
 
 | Scorecard measure | Definition |
 |---|---|
@@ -58,7 +67,7 @@ Group completions by the policy and version that actually settled the task when 
 | Escaped defects | Share of delivered code tasks with a linked revert, rollback or confirmed corrective change within 14 days of merge. Count a task once and show severity separately. Report the mature sample, pending observation windows and coverage of defect linkage. A later commit touching the same file alone establishes no defect link. |
 | Efficiency | Total attributable model cost in a comparable ready cohort divided by successful deliveries in that cohort. Include failed, retried, escalated and abandoned work. See the cost policy below. |
 
-Group calendar deliveries by completion date and calendar merges by merge date. Show both separately from ready-cohort delivery rates. For example, a merge this Monday can increase this week’s merge count while its task remains in last week’s ready cohort. Dashboard tooltips identify the clock and denominator.
+Group calendar deliveries by the selected milestone date and calendar merges by merge date. Show both separately from ready-cohort delivery rates. For example, a merge this Monday can increase this week’s merge count while its task remains in last week’s ready cohort. Dashboard tooltips identify the clock and denominator.
 
 ## Waiting, holds and resource utilization
 
@@ -80,13 +89,13 @@ Associate each priced call once with the task lineage and consuming attempt or d
 
 For an amount in a single currency and cost basis, sum disjoint token quantities multiplied by their applicable rates, using the accounting crate’s rounding and pinned pricing rules. Display provider-reported amounts and API-equivalent or subscription-allocation estimates as separate series. Each comparison uses one basis throughout. Show usage coverage as attempts with complete usage divided by attempts expected to report, and pricing coverage as fully priced canonical calls divided by calls known to require pricing. List unresolved events and unsupported harnesses. Partial sums are lower bounds. Missing evidence never means free work.
 
-Use a fixed delivery horizon per work class for policy comparisons. Freeze the cohort at first ready, include all attributable costs through that horizon, then allow 14 days for the last eligible delivery’s defect window to mature. A success is an accepted delivery within the horizon with no confirmed attributable defect during its observation window. Report unresolved quality evidence and late deliveries separately. Publish a provisional view while outcomes mature. With zero successful tasks the ratio is undefined and spend remains visible. Alongside it show first-pass success on the cheaper model, escalation rate, spend before escalation, substantive human corrections and p90 delivery time.
+Use a fixed delivery horizon per work class for policy comparisons. Freeze the cohort at first ready, include all attributable costs through that horizon, then allow 14 days for the last eligible delivery’s defect window to mature. A success is a task meeting its configured delivery definition within the horizon with no confirmed attributable defect during its observation window. Report unresolved quality evidence and late deliveries separately. Publish a provisional view while outcomes mature. With zero successful tasks the ratio is undefined and spend remains visible. Alongside it show first-pass success on the cheaper model, escalation rate, spend before escalation, substantive human corrections and p90 delivery time.
 
 ## Data and access
 
 Start with the existing [usage contract](../../../crates/aq-observation-api/artifacts/usage.schema.json), [canonical usage projection](../../../crates/aq-accounting/src/projection.rs), [swarm contract](../../../crates/aq-dashboard-contract/src/swarm_contract.rs), [hold follow-ups](../../../crates/aq-server/migrations/0173_supervisor_hold_followups.sql) and [merge evidence](../../../crates/aq-server/migrations/0161_delivery_merge_evidence.sql). During implementation, audit source coverage for task-ready history, gate transitions, historic eligibility, parent-child usage links and confirmed defect links. Current-state reads alone cannot reconstruct elapsed intervals.
 
-A server-side reader projects committed domain records in bounded batches. Key contributions by source identity and revision, checkpoint atomically with projected updates, and recompute affected intervals and cohorts on corrections. Preserve event time and observed time. Include definition version, cutoff, last processed watermark, sample size, units and coverage in reports. Backfill only time ranges supported by retained evidence. Record the earliest reliable date by measure. Following a restart, resume at the checkpoint and tolerate replay.
+A server-side reader projects committed domain records in bounded batches. Key contributions by source identity and revision, checkpoint atomically with projected updates, and recompute affected intervals and cohorts on corrections. Preserve event time and observed time. Include delivery definition where applicable, metric definition version, cutoff, last processed watermark, sample size, units and coverage in reports. Backfill only time ranges supported by retained evidence. Record the earliest reliable date by measure. Following a restart, resume at the checkpoint and tolerate replay.
 
 Expose read-only scorecard, task timeline, machine timeline and cohort-member queries through the dashboard’s existing authorization boundary, with project scoping, range limits and pagination. Keep task, attempt, session and PR identifiers in those queries. Export bounded labels to Prometheus for machine, slot phase, work class, approved model aliases and reason categories. Project-specific readers use scoped AQ data; fleet-wide Perses panels and the private scrape endpoint require fleet access. Export numeric observations and enumerated reasons only. No prompt or transcript bodies are needed.
 
