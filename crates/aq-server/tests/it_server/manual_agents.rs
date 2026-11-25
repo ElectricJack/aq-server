@@ -1385,15 +1385,29 @@ async fn owner_requests_private_logins(
 }
 
 async fn login_delivery_enforces_placement_and_kind(f: &common::profiled::Fixture, admin: &Router) {
+    use aq_selection::{BackendKind, CredentialKind};
+
+    #[derive(Debug)]
+    enum Denial {
+        NodeNotAllowed,
+        NotSubscriptionLogin,
+        BackendNotAllowed,
+    }
+
     let uri = format!("/api/worker-logins/{}", f.node.node_id);
     // Placement and credential kind remain authoritative even for an owner-requested push.
-    for denial in 0..3 {
+    for denial in [
+        Denial::NodeNotAllowed,
+        Denial::NotSubscriptionLogin,
+        Denial::BackendNotAllowed,
+    ] {
         let mut blocked = (*f.state.config).clone();
         let mut registry = blocked.intelligence.as_ref().unwrap().config.clone();
+        let credential = &mut registry.credentials[0];
         match denial {
-            0 => registry.credentials[0].allowed_node_ids.clear(),
-            1 => registry.credentials[0].kind = aq_selection::CredentialKind::ApiKey,
-            _ => registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::Boat],
+            Denial::NodeNotAllowed => credential.allowed_node_ids.clear(),
+            Denial::NotSubscriptionLogin => credential.kind = CredentialKind::ApiKey,
+            Denial::BackendNotAllowed => credential.allowed_backends = vec![BackendKind::Boat],
         }
         blocked.intelligence = Some(Arc::new(registry.load().unwrap()));
         let mut state = f.state.clone();
@@ -1411,7 +1425,8 @@ async fn login_delivery_enforces_placement_and_kind(f: &common::profiled::Fixtur
             )
             .await
             .0,
-            StatusCode::UNPROCESSABLE_ENTITY
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "login delivery must reject {denial:?}"
         );
     }
 }
