@@ -5,7 +5,7 @@
 use super::facts;
 use super::{completion, owner::*};
 use crate::execution::authority::{self, Policy};
-use crate::{AppState, profiled_execution::results};
+use crate::{AppState, error::AppError, profiled_execution::results};
 #[cfg(feature = "delivery_playbook")]
 use aq_playbook_domain::delivery_decisions::Settled;
 use aq_profiled_state::default_policy::{self as policy, Acceptance, Delivery, Verdict};
@@ -15,7 +15,7 @@ use aq_profiled_state::graph_completion::{
 pub use aq_profiled_state::graph_completion::{AutoDisposition, AutoSettlement};
 pub use aq_profiled_state::result_reads::ReplacementFacts;
 use serde_json::{Value, json};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 const OWNER: &str = "aq.settlement-owner.auto.1";
@@ -35,7 +35,7 @@ pub(super) async fn begin(state: &AppState) -> Result<Transaction<'_, Postgres>>
 pub(crate) async fn settle_workspace_checkpoint_locked(
     connection: &mut PgConnection,
     receipt: &aq_admission::result_record::Receipt,
-) -> Result<bool, AppError> {
+) -> Result<bool> {
     let attempt = receipt.binding.attempt_id;
     if !crate::task_workspace_resume::checkpoint_required(connection, attempt).await? {
         return Ok(false);
