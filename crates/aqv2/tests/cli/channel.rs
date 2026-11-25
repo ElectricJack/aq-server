@@ -53,8 +53,8 @@ fn golden(name: &str) -> PathBuf {
 fn regenerate() -> bool {
     std::env::var_os("AQ_REGENERATE_GOLDEN").is_some()
 }
-fn check_golden(name: &str, actual: &str) {
-    let path = golden(name);
+fn check_golden(path: PathBuf, actual: &str) {
+    let name = path.file_name().unwrap().to_string_lossy();
     if regenerate() {
         std::fs::write(&path, actual).unwrap();
         return;
@@ -317,272 +317,9 @@ async fn a_command_unknown_to_this_binary_is_still_reachable() {
 
 // ---- typed subcommands: golden requests ----------------------------------
 
-const REQUEST: &str = "@REQUEST";
-fn channel_cases() -> Vec<Vec<String>> {
-    let c = |args: &[&str]| args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    vec![
-        c(&["whoami"]),
-        c(&["commands"]),
-        c(&["commands", "--all"]),
-        c(&["task", "show"]),
-        c(&["task", "show", OTHER_TASK]),
-        c(&["task", "children"]),
-        c(&[
-            "task",
-            "history",
-            "--param",
-            &format!("task_id={OTHER_TASK}"),
-        ]),
-        c(&[
-            "task",
-            "create",
-            "--title",
-            "Verify changelog links",
-            "--parent",
-            "self",
-        ]),
-        c(&[
-            "task",
-            "create",
-            "--title",
-            "Draft one",
-            "--body",
-            "Body",
-            "--acceptance-criteria",
-            "Done",
-            "--label",
-            "docs",
-            "--parent",
-            OTHER_TASK,
-            "--draft",
-            "--priority",
-            "50",
-        ]),
-        c(&["task", "create", "--title", "Unrelated top-level task"]),
-        c(&[
-            "task",
-            "graph",
-            "show",
-            "--param",
-            &format!("task_id={OTHER_TASK}"),
-        ]),
-        c(&["knowledge", "search", "release checklist"]),
-        c(&[
-            "knowledge",
-            "search",
-            "release",
-            "--kind",
-            "knowledge",
-            "--limit",
-            "5",
-            "--cursor",
-            "c1",
-        ]),
-        c(&["knowledge", "show", RECORD]),
-        c(&[
-            "knowledge",
-            "author",
-            "--title",
-            "Release checklist",
-            "--body",
-            "Run it.",
-            "--label",
-            "ops",
-            "--content-type",
-            "procedure",
-        ]),
-        c(&["comment", "add", "Found the checklist; following it."]),
-        c(&["comment", "list", "--limit", "10"]),
-        c(&["comment", "list", "--task", OTHER_TASK]),
-        c(&[
-            "comment",
-            "edit",
-            COMMENT,
-            "--body",
-            "Edited",
-            "--revision",
-            "2",
-        ]),
-        c(&["comment", "delete", COMMENT, "--revision", "3"]),
-        c(&[
-            "question",
-            "ask",
-            "Should the notes include the deprecated API?",
-        ]),
-        c(&["question", "show", DECISION]),
-        c(&["wait", "register", "--request", REQUEST]),
-        c(&["wait", "inspect", "--request", REQUEST]),
-        c(&["wait", "ack", "--request", REQUEST]),
-        c(&["wait", "list"]),
-        c(&["wait", "show", WAIT]),
-        c(&["message", "send", "Status: halfway"]),
-        c(&[
-            "message",
-            "send",
-            "Need a review",
-            "--to",
-            &format!("task:{OTHER_TASK}"),
-        ]),
-        c(&[
-            "message",
-            "send",
-            "Question for you",
-            "--to",
-            &format!("supervisor:{CONVERSATION}"),
-        ]),
-        c(&["message", "send", "Hello, supervisor", "--to", "supervisor"]),
-        c(&["message", "inbox", "--to", "session"]),
-        c(&["message", "inbox"]),
-        c(&["message", "body", MESSAGE]),
-        c(&["message", "ack", MESSAGE, "--read"]),
-        c(&["operation", "show", OPERATION]),
-        c(&["operations", "show", OPERATION]),
-        c(&[
-            "run",
-            "task.history",
-            "--param",
-            &format!("task_id={OTHER_TASK}"),
-        ]),
-        c(&[
-            "run",
-            "task.cancel",
-            "--subject",
-            &format!("task:{OTHER_TASK}:4"),
-            "--reason",
-            "duplicate",
-        ]),
-        c(&[
-            "conversation",
-            "messages",
-            "--conversation-id",
-            CONVERSATION,
-        ]),
-        c(&[
-            "conversation",
-            "messages",
-            "--conversation-id",
-            CONVERSATION,
-            "--limit",
-            "3",
-            "--before",
-            "12.2",
-        ]),
-    ]
-}
-fn owner_cases() -> Vec<Vec<String>> {
-    let c = |args: &[&str]| args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    vec![
-        c(&["whoami"]),
-        c(&["task", "show", OTHER_TASK, "--project", PROJECT]),
-        c(&[
-            "task",
-            "create",
-            "--title",
-            "Write launch notes",
-            "--project",
-            PROJECT,
-            "--expected-project-revision",
-            "3",
-            "--parent",
-            OTHER_TASK,
-            "--label",
-            "docs",
-        ]),
-        c(&["knowledge", "search", "deploy", "--kind", "knowledge"]),
-        c(&["knowledge", "show", RECORD, "--project", PROJECT]),
-        c(&[
-            "knowledge",
-            "author",
-            "--title",
-            "Deploy runbook",
-            "--body",
-            "Run the migration first.",
-            "--label",
-            "ops",
-            "--content-type",
-            "procedure",
-            "--project",
-            PROJECT,
-            "--expected-project-revision",
-            "1",
-        ]),
-        c(&[
-            "comment",
-            "add",
-            "Please also cover phones.",
-            "--task",
-            OTHER_TASK,
-            "--project",
-            PROJECT,
-        ]),
-        c(&[
-            "comment",
-            "list",
-            "--task",
-            OTHER_TASK,
-            "--project",
-            PROJECT,
-        ]),
-        c(&[
-            "comment",
-            "edit",
-            COMMENT,
-            "--body",
-            "Edited",
-            "--revision",
-            "1",
-            "--project",
-            PROJECT,
-        ]),
-        c(&[
-            "comment",
-            "delete",
-            COMMENT,
-            "--revision",
-            "2",
-            "--project",
-            PROJECT,
-        ]),
-        c(&["question", "show", DECISION]),
-        c(&[
-            "message",
-            "send",
-            "Hello",
-            "--to",
-            &format!("supervisor:{CONVERSATION}"),
-        ]),
-        c(&[
-            "run",
-            "task.cancel",
-            "--subject",
-            &format!("task:{OTHER_TASK}:4"),
-            "--param",
-            &format!("project_id={PROJECT}"),
-            "--param",
-            "expected_version=4",
-            "--reason",
-            "duplicate",
-        ]),
-        c(&[
-            "conversation",
-            "messages",
-            "--conversation-id",
-            CONVERSATION,
-            "--limit",
-            "16",
-            "--after",
-            "0",
-        ]),
-        c(&[
-            "conversation",
-            "messages",
-            "--conversation-id",
-            CONVERSATION,
-            "--before",
-            "7",
-        ]),
-    ]
-}
+#[path = "channel/cases.rs"]
+mod cases;
+use cases::REQUEST;
 /// Fresh UUIDs (minted by the CLI) become `<new-N>` in order of appearance,
 /// so the same minted ID in two places shows as the same placeholder.
 fn normalize(
@@ -628,7 +365,11 @@ fn fixed_ids() -> BTreeSet<String> {
     .map(|s| s.to_string())
     .collect()
 }
-fn record(mode: &str, args: &[String], seen: Vec<Seen>) -> Value {
+fn record(mode: aqv2::Mode, args: &[String], seen: Vec<Seen>) -> Value {
+    let mode = match mode {
+        aqv2::Mode::Owner => "owner",
+        aqv2::Mode::Channel => "channel",
+    };
     let fixed = fixed_ids();
     let mut minted = BTreeMap::new();
     let calls: Vec<Value> = seen
@@ -659,7 +400,7 @@ async fn typed_subcommands_build_the_golden_requests() {
     };
     let mut out = vec![];
     let mut fake = fake(default_reply).await;
-    for args in channel_cases() {
+    for args in cases::for_mode(aqv2::Mode::Channel) {
         let real = substitute(&args);
         let refs: Vec<&str> = real.iter().map(String::as_str).collect();
         fake.run(&refs)
@@ -669,9 +410,9 @@ async fn typed_subcommands_build_the_golden_requests() {
         for s in &seen {
             assert_no_credential(s);
         }
-        out.push(record("channel", &args, seen));
+        out.push(record(aqv2::Mode::Channel, &args, seen));
     }
-    for args in owner_cases() {
+    for args in cases::for_mode(aqv2::Mode::Owner) {
         let reply = json!({"api_version":1,"principal":"owner","ok":true});
         let mut srv = server(vec![(StatusCode::OK, reply)]).await;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -680,10 +421,10 @@ async fn typed_subcommands_build_the_golden_requests() {
             .unwrap_or_else(|e| panic!("{args:?}: {e}"));
         let s = srv.next().await;
         assert!(s.headers.contains_key("x-aq-dev-email"));
-        out.push(record("owner", &args, vec![s]));
+        out.push(record(aqv2::Mode::Owner, &args, vec![s]));
     }
     check_golden(
-        "typed.json",
+        golden("typed.json"),
         &(serde_json::to_string_pretty(&out).unwrap() + "\n"),
     );
 }
@@ -716,9 +457,19 @@ async fn own_session_and_supervisor_mailboxes_need_their_whoami_fields() {
         );
     }
 }
-#[tokio::test]
-async fn typed_subcommands_refuse_mode_mismatches_without_sending() {
-    let mut fake = fake(default_reply).await;
+async fn assert_invalid_channel_arguments(fake: &mut Fake, args: &[&str]) {
+    let err = fake.run(args).await.unwrap_err();
+    assert_eq!(err["code"], "invalid_arguments", "{args:?}");
+    assert_eq!(aqv2::exit_code(&err), 2);
+    assert!(
+        fake.drain()
+            .iter()
+            .all(|s| s.path == "/api/v1/commands/whoami"),
+        "{args:?}"
+    );
+}
+
+async fn reject_channel_arguments(fake: &mut Fake) {
     let session_with_id = format!("session:{SESSION}");
     for args in [
         vec!["comment", "add", "x", "--task", OTHER_TASK],
@@ -777,16 +528,11 @@ async fn typed_subcommands_refuse_mode_mismatches_without_sending() {
             "2",
         ],
     ] {
-        let err = fake.run(&args).await.unwrap_err();
-        assert_eq!(err["code"], "invalid_arguments", "{args:?}");
-        assert_eq!(aqv2::exit_code(&err), 2);
-        assert!(
-            fake.drain()
-                .iter()
-                .all(|s| s.path == "/api/v1/commands/whoami"),
-            "{args:?}"
-        );
+        assert_invalid_channel_arguments(fake, &args).await;
     }
+}
+
+async fn reject_owner_arguments() {
     let mut srv = server(vec![]).await;
     for args in [
         vec!["task", "show", "self", "--project", PROJECT],
@@ -811,6 +557,13 @@ async fn typed_subcommands_refuse_mode_mismatches_without_sending() {
         assert_eq!(err["code"], "invalid_arguments", "{args:?}");
     }
     assert!(srv.seen.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn typed_subcommands_refuse_mode_mismatches_without_sending() {
+    let mut fake = fake(default_reply).await;
+    reject_channel_arguments(&mut fake).await;
+    reject_owner_arguments().await;
     // Owner subcommands that need the admin listener are not sent through the channel.
     let err = fake.run(&["tasks", "list"]).await.unwrap_err();
     assert_eq!(err["code"], "unsupported");
@@ -960,7 +713,7 @@ fn human_renderings_match_golden() {
     text += &refusal(&fixture("refusal-grant-missing.json"));
     text += "\n";
     assert!(!text.contains('\u{1b}'));
-    check_golden("render.txt", &text);
+    check_golden(golden("render.txt"), &text);
 }
 
 /// `conversation messages` prints each message's cursor, author kind, time and
@@ -998,163 +751,8 @@ fn conversation_messages_print_cursor_author_time_and_body() {
     );
 }
 
-// ---- the binary: modes, names, exit codes ----------------------------------
-
-fn bin() -> std::process::Command {
-    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_aqv2"));
-    c.env_remove("AQ_CHANNEL");
-    c
-}
-#[tokio::test(flavor = "multi_thread")]
-async fn the_binary_talks_to_the_channel_named_by_aq_channel() {
-    let mut fake = fake(|method, path, body| match path {
-        "/api/v1/commands/task.create" => {
-            (StatusCode::FORBIDDEN, fixture("refusal-grant-missing.json"))
-        }
-        _ => default_reply(method, path, body),
-    })
-    .await;
-    let channel = format!("unix:{}", fake.socket.display());
-    let run = |args: Vec<&'static str>, channel: String| {
-        tokio::task::spawn_blocking(move || {
-            let mut c = bin();
-            c.env("AQ_CHANNEL", channel).args(args).output().unwrap()
-        })
-    };
-    let out = run(vec!["whoami"], channel.clone()).await.unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let text = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        text.contains("principal: agent") && text.contains(&format!("task       {TASK}")),
-        "{text}"
-    );
-    let out = run(vec!["--json", "whoami"], channel.clone())
-        .await
-        .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v, json!({"schema_version":1,"data":identity()}));
-
-    let out = run(
-        vec!["task", "create", "--title", "Unrelated top-level task"],
-        channel.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.status.code(), Some(14));
-    let err = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        err.contains("refused (grant_missing): task.create needs task.create.project"),
-        "{err}"
-    );
-    assert!(
-        err.contains("Use `aq question ask` to request it."),
-        "{err}"
-    );
-    assert!(
-        err.contains("held: task.create.subtask @ task:subtree (max_created_tasks=5, max_depth=2)"),
-        "{err}"
-    );
-    let out = run(
-        vec!["task", "create", "--title", "x", "--json"],
-        channel.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.status.code(), Some(14));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["error"]["code"], "grant_missing");
-    assert!(out.stderr.is_empty());
-
-    // Channel mode sends no credential, so a token file or origin is refused.
-    let out = run(
-        vec!["--cf-access-token-file", "/x", "whoami"],
-        channel.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let out = run(
-        vec!["--origin", "https://aq.example", "--json", "whoami"],
-        channel.clone(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    // A missing socket is a closed channel: nothing was sent.
-    let gone = format!("unix:{}/gone.sock", fake.socket.parent().unwrap().display());
-    let out = run(vec!["--json", "whoami"], gone).await.unwrap();
-    assert_eq!(out.status.code(), Some(13));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["error"]["code"], "channel_closed");
-    let out = run(vec!["--json", "whoami"], "tcp://127.0.0.1:1".into())
-        .await
-        .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["error"]["code"], "configuration_error");
-    // `--describe` reads the built-in catalog without a channel.
-    let out = run(
-        vec!["--json", "run", "task.create", "--describe"],
-        "unix:/nonexistent/aq.sock".into(),
-    )
-    .await
-    .unwrap();
-    assert!(out.status.success());
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["data"]["grant"], "task.create.subtask");
-    let seen = fake.drain();
-    assert!(
-        seen.iter()
-            .all(|s| !s.headers.contains_key("authorization"))
-    );
-}
-#[test]
-fn installed_as_aq_the_binary_names_itself_aq() {
-    let dir = tempfile::tempdir().unwrap();
-    let aq = dir.path().join("aq");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_aqv2"), &aq).unwrap();
-    let out = std::process::Command::new(&aq)
-        .env_remove("AQ_CHANNEL")
-        .arg("--help")
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let help = String::from_utf8(out.stdout).unwrap();
-    assert!(help.contains("Usage: aq [OPTIONS] <COMMAND>"), "{help}");
-    for group in [
-        "run",
-        "commands",
-        "whoami",
-        "task",
-        "knowledge",
-        "comment",
-        "question",
-        "wait",
-        "message",
-    ] {
-        assert!(help.contains(&format!("\n  {group} ")), "{group}");
-    }
-    let out = bin().arg("--help").output().unwrap();
-    assert!(
-        String::from_utf8(out.stdout)
-            .unwrap()
-            .contains("Usage: aqv2 [OPTIONS] <COMMAND>")
-    );
-    // Without a mode the error says how to choose one.
-    let out = std::process::Command::new(&aq)
-        .env_remove("AQ_CHANNEL")
-        .args(["--json", "whoami"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("AQ_CHANNEL")
-    );
-}
+#[path = "channel/binary.rs"]
+mod binary;
+#[cfg(feature = "project_environments")]
+#[path = "channel/environment_try.rs"]
+mod environment_try;

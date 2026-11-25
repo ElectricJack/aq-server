@@ -65,9 +65,7 @@ async fn actual_qualified_private_owner_records_provisionability_and_exact_repla
 async fn compatible_revisions_preserve_epoch_but_new_legacy_and_restore_create_barriers() {
     let c = setup().await;
     record(&c, &c.request).await;
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let mut next = next_inventory(&c.request);
     record(&c, &next).await;
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 2));
     let legacy = json!({"operation_id":Uuid::new_v4(),"boot_id":c.request.identity.boot_id,"sequence":4,"ttl_ms":30_000,"qualifications":c.request.qualifications,"credentials":[]});
@@ -158,6 +156,65 @@ async fn empty_inventory_derives_only_actual_authorized_backing_and_never_instal
     );
     assert_eq!(epoch(&c).await, (1, "scoped_v1".into(), 1));
 }
+#[tokio::test]
+async fn only_qualified_docker_runtime_offers_docker_only_credentials() {
+    let mut c = setup().await;
+    let mut config = (*c.c.env.env.state.config).clone();
+    let mut registry = config.intelligence.as_ref().unwrap().config.clone();
+    registry.revision += 1;
+    registry.credentials[0].allowed_backends = vec![aq_selection::BackendKind::DockerLocal];
+    config.intelligence = Some(std::sync::Arc::new(registry.load().unwrap()));
+    c.c.env.env.state.config = std::sync::Arc::new(config);
+    let app = aq_server::build_admin_router(c.c.env.env.state.clone());
+    assert_eq!(
+        common::selection::call(
+            &app,
+            "/api/intelligence/register",
+            Some(json!({})),
+            "owner@localhost",
+        )
+        .await
+        .0,
+        200
+    );
+    c.request.provisionable_only.clear();
+
+    for (sequence, backend, expected) in [
+        (2, None, 0),
+        (3, Some(aq_selection::BackendKind::Boat), 0),
+        (4, Some(aq_selection::BackendKind::DockerLocal), 1),
+    ] {
+        let mut config = (*c.c.env.env.state.config).clone();
+        let mut profile = (**config.profiled_execution.as_ref().unwrap()).clone();
+        profile.qualified_runtimes[0].backend_kind = backend;
+        profile.revision += 1;
+        config.profiled_execution = Some(std::sync::Arc::new(profile));
+        c.c.env.env.state.config = std::sync::Arc::new(config);
+        policies::install(&c.c.env.env.state).await.unwrap();
+        c.request.sequence = sequence;
+        c.request.operation_id = Uuid::new_v4();
+        record(&c, &c.request).await;
+
+        let snapshot: aq_selection::CapabilitySnapshot =
+            sqlx::query_scalar::<_, sqlx::types::Json<aq_selection::CapabilitySnapshot>>(
+                "SELECT snapshot FROM intelligence_node_snapshots WHERE node_id=$1",
+            )
+            .bind(c.request.identity.node_id)
+            .fetch_one(&c.c.env.env.pool)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(snapshot.backend_kind, backend);
+        let restricted_profile = &c.c.env.input.credentials[0].profile;
+        let restricted = snapshot
+            .credential_bindings
+            .iter()
+            .filter(|b| &b.credential_profile == restricted_profile)
+            .count();
+        assert_eq!(restricted, expected);
+    }
+}
+
 #[tokio::test]
 async fn qualification_change_then_restore_retains_barrier_and_exact_retry_cannot_reset_it() {
     let c = setup().await;
@@ -381,9 +438,7 @@ async fn snapshot_row_lock_timeout_is_retryable_not_internal() {
         .execute(&mut *holder)
         .await
         .unwrap();
-    let mut next = c.request.clone();
-    next.operation_id = Uuid::new_v4();
-    next.sequence += 1;
+    let next = next_inventory(&c.request);
     let error = inventory::record(&c.c.env.env.state, &auth(&c).await, &next)
         .await
         .unwrap_err();
@@ -443,21 +498,7 @@ async fn inventory_v2_node_lock_timeout_is_a_retryable_503() {
         .unwrap();
 }
 
-/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
-/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
-/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
-/// kept it while it waited on the attempt row, so inventory-v2's node lock
-/// timed out. Here a worker write holds the attempt row while the read loops.
-/// A locking reader (the old read's loader) still fails the write; the Swarm
-/// read takes no row lock, so every write records and every read answers.
-#[tokio::test]
-async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
-    let mut c = setup().await;
-    let (status, _, body) = post_inventory(&c, &c.request).await;
-    assert_eq!(status, 200, "{body}");
-    c.c.request.inventory_sequence = c.request.sequence;
-    // Poll may return an empty page after 750 ms while its assembly continues
-    // in the background. Wait for the actual offer before testing row locks.
+async fn wait_for_offer(c: &Case) {
     let mut last_body = Value::Null;
     let offered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -481,6 +522,24 @@ async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
         offered.is_ok(),
         "initial poll did not publish the fixture attempt: {last_body}"
     );
+}
+
+/// M1 (swarm phase 1 acceptance): with the dashboard open, an idle slot's
+/// inventory-v2 failed with a 500 about every 11 s. The Swarm read locked each
+/// holding attempt's node row (`FOR UPDATE`, through the authority loader) and
+/// kept it while it waited on the attempt row, so inventory-v2's node lock
+/// timed out. Here a worker write holds the attempt row while the read loops.
+/// A locking reader (the old read's loader) still fails the write; the Swarm
+/// read takes no row lock, so every write records and every read answers.
+#[tokio::test]
+async fn swarm_reads_never_block_inventory_v2_on_the_node_row() {
+    let mut c = setup().await;
+    let (status, _, body) = post_inventory(&c, &c.request).await;
+    assert_eq!(status, 200, "{body}");
+    c.c.request.inventory_sequence = c.request.sequence;
+    // Poll may return an empty page after 750 ms while its assembly continues
+    // in the background. Wait for the actual offer before testing row locks.
+    wait_for_offer(&c).await;
     let (state, pool) = (c.c.env.env.state.clone(), c.c.env.env.pool.clone());
     let node = c.request.identity.node_id;
     let attempt: Uuid = sqlx::query_scalar(

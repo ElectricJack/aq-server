@@ -98,10 +98,12 @@ async fn operator_rotation_refuses_renewal() {
     let version = login_refresh::operator_replace(
         &c.case.env.env.pool,
         &registry,
-        &lease.credential_profile,
-        lease.credential_revision,
-        Arc::new(zeroize::Zeroizing::new(b"operator replaced login".to_vec())),
-        1,
+        login_refresh::OperatorUpload {
+            profile: &lease.credential_profile,
+            revision: lease.credential_revision,
+            bytes: Arc::new(zeroize::Zeroizing::new(b"operator replaced login".to_vec())),
+            now_ms: 1,
+        },
     )
     .await
     .unwrap();

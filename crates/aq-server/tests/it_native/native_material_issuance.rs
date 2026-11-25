@@ -8,21 +8,20 @@ use aq_server::{
 use common::profiled::{NOW, fixture};
 use std::os::unix::fs::PermissionsExt;
 use uuid::Uuid;
-#[tokio::test]
-async fn selected_account_node_and_current_private_bytes_are_required() {
-    let f = fixture().await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("credential");
-    std::fs::write(&path, b"synthetic private material").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+fn material_config(
+    f: &common::profiled::Fixture,
+    path: &std::path::Path,
+    kind: aq_selection::CredentialKind,
+    allowed_backends: Vec<aq_selection::BackendKind>,
+) -> IntelligenceConfig {
     let choice = &f.selection.choice;
-    let registry = IntelligenceConfig {
+    IntelligenceConfig {
         accounting: Default::default(),
         material_store: None,
         revision: 1,
         credentials: vec![CredentialConfig {
-            kind: Default::default(),
-            allowed_backends: aq_selection::default_allowed_backends(),
+            kind,
+            allowed_backends,
             credential: aq_selection::AuthorizedCredential {
                 profile: choice.credential_profile.clone(),
                 provider: choice.provider.clone(),
@@ -36,11 +35,25 @@ async fn selected_account_node_and_current_private_bytes_are_required() {
             },
             allowed_node_ids: vec![f.node.node_id],
             allow_enrolled_nodes: false,
-            secret_file: Some(path.clone()),
+            secret_file: Some(path.to_path_buf()),
             delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
         }],
         qualified_harnesses: vec![],
     }
+}
+#[tokio::test]
+async fn selected_account_node_and_current_private_bytes_are_required() {
+    let f = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("credential");
+    std::fs::write(&path, b"synthetic private material").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let registry = material_config(
+        &f,
+        &path,
+        Default::default(),
+        aq_selection::default_allowed_backends(),
+    )
     .load()
     .unwrap();
     let lease = material::issue_for_selection(
@@ -113,34 +126,9 @@ async fn restricted_backend_cannot_issue_material_lease() {
     std::fs::write(&path, b"synthetic").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     for kind in [CredentialKind::ApiKey, CredentialKind::SubscriptionLogin] {
-        let choice = &f.selection.choice;
-        let registry = IntelligenceConfig {
-            accounting: Default::default(),
-            material_store: None,
-            revision: 1,
-            credentials: vec![CredentialConfig {
-                kind,
-                allowed_backends: vec![BackendKind::DockerLocal],
-                credential: aq_selection::AuthorizedCredential {
-                    profile: choice.credential_profile.clone(),
-                    provider: choice.provider.clone(),
-                    account_reference: choice.account_reference.clone(),
-                    endpoint_reference: choice.endpoint_reference.clone(),
-                    revision: f.selection.credential_revision,
-                    enabled: true,
-                    provisionable: false,
-                    material_owner: None,
-                    allowed_backends: aq_selection::default_allowed_backends(),
-                },
-                allowed_node_ids: vec![f.node.node_id],
-                allow_enrolled_nodes: false,
-                secret_file: Some(path.clone()),
-                delivery_mode: Some(MaterialDeliveryMode::ServerMaterialV1),
-            }],
-            qualified_harnesses: vec![],
-        }
-        .load()
-        .unwrap();
+        let registry = material_config(&f, &path, kind, vec![BackendKind::DockerLocal])
+            .load()
+            .unwrap();
         for backend in [
             None,
             Some(BackendKind::Boat),

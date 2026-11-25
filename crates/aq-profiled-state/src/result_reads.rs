@@ -1,6 +1,6 @@
 //! The SQL and query validation behind the owner and project result reads
 //! (`human_results`): bounded keyset discovery of recorded result reports.
-//! Reads only; each function runs inside the caller's read transaction.
+//! Authority and settlement helpers run inside the caller's transaction.
 use aq_admission::{
     LaunchBinding, SessionIdentity,
     execution_spec::ProfiledExecutionSpec,
@@ -54,16 +54,23 @@ pub async fn is_owner(conn: &mut PgConnection, actor: Uuid) -> sqlx::Result<bool
     Ok(role.as_deref() == Some("owner"))
 }
 
+pub struct ReportPage {
+    pub with_v2: bool,
+    pub project: Option<Uuid>,
+    pub after: Option<Uuid>,
+    pub limit: i64,
+}
+
 /// Report ids after `after` in UUID order (not chronological), at most
 /// `limit` of them, in `project` when given. Reports of a v2-accepted attempt
 /// are included only with `with_v2`.
-pub async fn page_ids(
-    conn: &mut PgConnection,
-    with_v2: bool,
-    project: Option<Uuid>,
-    after: Option<Uuid>,
-    limit: i64,
-) -> sqlx::Result<Vec<Uuid>> {
+pub async fn page_ids(conn: &mut PgConnection, page: ReportPage) -> sqlx::Result<Vec<Uuid>> {
+    let ReportPage {
+        with_v2,
+        project,
+        after,
+        limit,
+    } = page;
     sqlx::query_scalar("SELECT r.report_id FROM profiled_result_reports r JOIN profiled_launches l USING(attempt_id) WHERE ($4 OR NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=r.attempt_id)) AND ($1::uuid IS NULL OR (l.execution_spec#>>'{lifecycle,project_id}')=$1::text) AND ($2::uuid IS NULL OR r.report_id>$2) ORDER BY r.report_id LIMIT $3")
         .bind(project).bind(after).bind(limit).bind(with_v2)
         .fetch_all(conn).await
@@ -175,43 +182,166 @@ pub async fn read_report(conn: &mut PgConnection, report_id: Uuid) -> sqlx::Resu
     else {
         return Ok(None);
     };
-    let bytes: Vec<u8> = row.get("report_bytes");
-    let report = result_record::decode_report(&bytes).map_err(bad("report"))?;
-    let digest = result_record::report_digest(&report).map_err(bad("report"))?;
+    Stored::decode(row, report_id).map(Some)
+}
+impl Stored {
+    fn decode(row: PgRow, report_id: Uuid) -> sqlx::Result<Self> {
+        let bytes: Vec<u8> = row.get("report_bytes");
+        let report = result_record::decode_report(&bytes).map_err(bad("report"))?;
+        let node_id = validate_report_row(&row, &report, report_id, &bytes)?;
+        let receipt_bytes: Vec<u8> = row.get("receipt_bytes");
+        let receipt =
+            result_record::decode_receipt(&receipt_bytes, &report).map_err(bad("receipt"))?;
+        if canonical(&receipt).map_err(bad("receipt"))? != receipt_bytes {
+            return Err(invalid("receipt"));
+        }
+        Ok(Self {
+            row,
+            report,
+            receipt,
+            node_id,
+        })
+    }
+}
+fn validate_report_row(
+    row: &PgRow,
+    report: &ResultReport,
+    report_id: Uuid,
+    bytes: &[u8],
+) -> sqlx::Result<Uuid> {
+    let digest = result_record::report_digest(report).map_err(bad("report"))?;
     let SessionIdentity::Remote {
         node_id, boot_id, ..
     } = report.binding.session
     else {
         return Err(invalid("session"));
     };
-    if canonical(&report).map_err(bad("report"))? != bytes
-        || digest.as_str() != row.get::<String, _>("report_digest")
-        || report.report_id != report_id
-        || report.binding.attempt_id != row.get::<Uuid, _>("attempt_id")
-        || node_id != row.get::<Uuid, _>("node_id")
-        || report.operation_id != row.get::<Uuid, _>("operation_id")
-        || report.identity.node_id != node_id
-        || report.identity.boot_id != boot_id
-    {
+    let bytes_match = canonical(report).map_err(bad("report"))? == bytes
+        && digest.as_str() == row.get::<String, _>("report_digest");
+    if !bytes_match {
         return Err(invalid("report row"));
     }
-    let receipt_bytes: Vec<u8> = row.get("receipt_bytes");
-    let receipt = result_record::decode_receipt(&receipt_bytes, &report).map_err(bad("receipt"))?;
-    if canonical(&receipt).map_err(bad("receipt"))? != receipt_bytes {
-        return Err(invalid("receipt"));
+    let identity_matches = report.identity.node_id == node_id && report.identity.boot_id == boot_id;
+    if !(report_matches_row(report, row, report_id, node_id) && identity_matches) {
+        return Err(invalid("report row"));
     }
-    Ok(Some(Stored {
-        row,
-        report,
-        receipt,
-        node_id,
-    }))
+    Ok(node_id)
 }
 
+fn report_matches_row(report: &ResultReport, row: &PgRow, report_id: Uuid, node_id: Uuid) -> bool {
+    report.report_id == report_id
+        && report.binding.attempt_id == row.get::<Uuid, _>("attempt_id")
+        && node_id == row.get::<Uuid, _>("node_id")
+        && report.operation_id == row.get::<Uuid, _>("operation_id")
+}
 /// The attempt's current head report, holding its SHARE lock.
 pub async fn head_report(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result<Option<Uuid>> {
     sqlx::query_scalar("SELECT report_id FROM profiled_result_heads WHERE attempt_id=$1 FOR SHARE")
         .bind(attempt)
         .fetch_optional(conn)
         .await
+}
+
+/// Lock the current report. After a platform continuation is settled, a
+/// different report can no longer own delivery for that attempt.
+pub async fn correction_head(
+    db: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<(Option<Uuid>, bool)> {
+    sqlx::query_as(concat!(
+        "SELECT h.report_id, EXISTS(SELECT 1 FROM profiled_auto_settlements s \
+         JOIN profiled_result_reports r USING(report_id) WHERE s.report_id=h.report_id \
+         AND s.attempt_id=h.attempt_id AND s.disposition='rework_required' AND ",
+        aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+        ") FROM profiled_result_heads h WHERE h.attempt_id=$1 FOR UPDATE OF h",
+    ))
+    .bind(attempt)
+    .fetch_optional(db)
+    .await
+    .map(Option::unwrap_or_default)
+}
+
+/// What the policy actor could record for B4 after a final rework.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplacementFacts {
+    /// The attempt's hot state now records `retention = retained`.
+    pub source_retained: bool,
+    /// The attempt's hot state now records `effects = quiescent`.
+    pub effects_quiescent: bool,
+    /// This call wrote at least one of the two facts.
+    pub changed: bool,
+}
+
+/// Serializes settlement, result facts and automatic retry on one report.
+pub async fn lock_settlement(conn: &mut PgConnection, report: Uuid) -> sqlx::Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,56))")
+        .bind(format!("aq-auto-settlement:{report}"))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn lock_hot_state(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+) -> sqlx::Result<crate::hot::HotState> {
+    let state = sqlx::query_scalar(
+        "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
+    )
+    .bind(attempt)
+    .fetch_one(conn)
+    .await?;
+    serde_json::from_value(state).map_err(|e| sqlx::Error::Decode(e.into()))
+}
+
+pub async fn save_hot_state(
+    conn: &mut PgConnection,
+    attempt: Uuid,
+    state: &crate::hot::HotState,
+) -> sqlx::Result<()> {
+    let state = serde_json::to_value(state).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
+        .bind(attempt)
+        .bind(state)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn owner_settled(conn: &mut PgConnection, attempt: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM profiled_settlement_evaluations WHERE attempt_id=$1 AND disposition IN ('accepted','needs_reconciliation','stale')) OR EXISTS(SELECT 1 FROM profiled_task_completions WHERE attempt_id=$1)")
+        .bind(attempt).fetch_one(conn).await
+}
+
+/// Reworked attempts, results the delivery playbook held (their facts never release them, see
+/// `aq_delivery::git_grant::held_gate`) or verified platform interruptions awaiting settlement,
+/// in report order after `after`. The cursor carries no authority.
+pub async fn reworked_without_facts(
+    pool: &sqlx::PgPool,
+    after: Option<Uuid>,
+    limit: i64,
+) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar(concat!(
+        "SELECT r.report_id FROM profiled_result_heads rh \
+         JOIN profiled_result_reports r ON (r.attempt_id,r.report_id)=(rh.attempt_id,rh.report_id) \
+         JOIN execution_attempts a ON a.attempt_id=r.attempt_id \
+         JOIN profiled_authority_hot h ON h.attempt_id=a.attempt_id \
+         LEFT JOIN profiled_auto_settlements s ON s.report_id=r.report_id \
+         WHERE a.kind='profiled_v1' AND a.holds_task \
+         AND h.state#>>'{stop,kind}' IN ('stopped','not_started') \
+         AND ((s.disposition='rework_required' AND
+               (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent')) \
+              OR (s.disposition IS NULL AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL \
+                  AND (h.state#>>'{retention,kind}' IS DISTINCT FROM 'retained' OR h.state#>>'{effects,kind}' IS DISTINCT FROM 'quiescent') \
+                  AND EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=r.report_id AND d.task_id=a.task_id \
+                             AND d.decision='held' AND d.reason IN ('policy','returns_exhausted'))) \
+              OR ((s.disposition IS NULL OR (s.disposition='held' AND s.operation_id IS NULL)) AND ",
+         aq_machine_control::platform_interruption_sql!("r.report_bytes"),
+        " AND h.state->>'revoked'='false' AND h.state->>'cancellation_id' IS NULL)) \
+          AND ($1::UUID IS NULL OR r.report_id>$1) ORDER BY r.report_id LIMIT $2",
+    ))
+    .bind(after)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }

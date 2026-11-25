@@ -31,49 +31,47 @@ pub(crate) struct ReceiptIdentity<'a> {
 /// A borrowed immutable owner record, never a decoded wire authorization.
 /// Only the SQL-loaded history constructs this view. It has no Serde impl.
 pub(crate) struct InitialAuthorityView<'a> {
-    original: &'a InitialAuthorityHistory,
+    grant: &'a ProfiledGrant,
+    kind: ReceiptKind,
+    digest: &'a Digest,
 }
 impl InitialAuthorityHistory {
     pub(crate) fn view(&self) -> Result<InitialAuthorityView<'_>, AppError> {
-        if matches!(
-            self,
-            Self::AcceptedNoLaunch(_) | Self::AcceptedRefreshNoLaunch(_)
-        ) {
-            return Err(unsupported());
-        }
-        Ok(InitialAuthorityView { original: self })
+        let (grant, kind, digest) = match self {
+            Self::Legacy(h) => (
+                &h.body.grant,
+                ReceiptKind::LegacyPrepareV1,
+                &h.receipt_digest,
+            ),
+            Self::PhaseExecution(h) => (
+                &h.receipt.grant,
+                ReceiptKind::PhaseExecutionV2,
+                &h.receipt_digest,
+            ),
+            Self::PhaseRefreshExecution(h) => (
+                &h.receipt.grant,
+                ReceiptKind::PhaseRefreshExecutionV1,
+                &h.receipt_digest,
+            ),
+            Self::AcceptedNoLaunch(_) | Self::AcceptedRefreshNoLaunch(_) => {
+                return Err(unsupported());
+            }
+        };
+        Ok(InitialAuthorityView {
+            grant,
+            kind,
+            digest,
+        })
     }
 }
 impl InitialAuthorityView<'_> {
     pub(crate) fn grant(&self) -> &ProfiledGrant {
-        match self.original {
-            InitialAuthorityHistory::Legacy(h) => &h.body.grant,
-            InitialAuthorityHistory::PhaseExecution(h) => &h.receipt.grant,
-            InitialAuthorityHistory::PhaseRefreshExecution(h) => &h.receipt.grant,
-            InitialAuthorityHistory::AcceptedNoLaunch(_)
-            | InitialAuthorityHistory::AcceptedRefreshNoLaunch(_) => {
-                unreachable!("no-launch view cannot be constructed")
-            }
-        }
+        self.grant
     }
     pub(crate) fn identity(&self) -> ReceiptIdentity<'_> {
-        match self.original {
-            InitialAuthorityHistory::Legacy(h) => ReceiptIdentity {
-                kind: ReceiptKind::LegacyPrepareV1,
-                digest: &h.receipt_digest,
-            },
-            InitialAuthorityHistory::PhaseExecution(h) => ReceiptIdentity {
-                kind: ReceiptKind::PhaseExecutionV2,
-                digest: &h.receipt_digest,
-            },
-            InitialAuthorityHistory::PhaseRefreshExecution(h) => ReceiptIdentity {
-                kind: ReceiptKind::PhaseRefreshExecutionV1,
-                digest: &h.receipt_digest,
-            },
-            InitialAuthorityHistory::AcceptedNoLaunch(_)
-            | InitialAuthorityHistory::AcceptedRefreshNoLaunch(_) => {
-                unreachable!("no-launch view cannot be constructed")
-            }
+        ReceiptIdentity {
+            kind: self.kind,
+            digest: self.digest,
         }
     }
 }
@@ -107,46 +105,51 @@ pub(crate) async fn load_locked(
     binding: &LaunchBinding,
     grant_id: Uuid,
 ) -> Result<InitialAuthorityHistory, AppError> {
-    if has_accepted_origin_locked(tx, binding).await? {
-        if super::phase_profile::for_attempt_locked(tx, binding.attempt_id).await?
-            == Some(super::phase_profile::Profile::Refresh)
-        {
-            let history =
-                super::accepted_refresh::load_accepted_history_locked(tx, binding).await?;
-            if history.request.original.identity.node_id != node
-                || history.proposal.original.offered.offer.binding != *binding
-            {
-                return Err(unsupported());
-            }
-            if let Some(execution) = super::phase_refresh_execution::history::load_optional_locked(
-                tx, node, binding, grant_id,
-            )
-            .await?
-            {
-                return Ok(InitialAuthorityHistory::PhaseRefreshExecution(Box::new(
-                    execution,
-                )));
-            }
-            return Ok(InitialAuthorityHistory::AcceptedRefreshNoLaunch(Box::new(
-                history,
-            )));
-        }
-        let history = accepted_preparation::load_accepted_history_locked(tx, binding).await?;
-        if history.request.original.identity.node_id != node
-            || history.proposal.original.offered.offer.binding != *binding
-        {
-            return Err(unsupported());
-        }
-        if let Some(execution) =
-            super::phase_execution::history::load_optional_locked(tx, node, binding, grant_id)
-                .await?
-        {
-            return Ok(InitialAuthorityHistory::PhaseExecution(Box::new(execution)));
-        }
-        return Ok(InitialAuthorityHistory::AcceptedNoLaunch(Box::new(history)));
+    if !has_accepted_origin_locked(tx, binding).await? {
+        return Ok(InitialAuthorityHistory::Legacy(Box::new(
+            initial_grant::load_legacy_original_grant_locked(tx, node, binding, grant_id).await?,
+        )));
     }
-    Ok(InitialAuthorityHistory::Legacy(Box::new(
-        initial_grant::load_legacy_original_grant_locked(tx, node, binding, grant_id).await?,
+    if super::phase_profile::for_attempt_locked(tx, binding.attempt_id).await?
+        == Some(super::phase_profile::Profile::Refresh)
+    {
+        return load_refresh_locked(tx, node, binding, grant_id).await;
+    }
+    let history = accepted_preparation::load_accepted_history_locked(tx, binding).await?;
+    if history.request.original.identity.node_id != node
+        || history.proposal.original.offered.offer.binding != *binding
+    {
+        return Err(unsupported());
+    }
+    if let Some(execution) =
+        super::phase_execution::history::load_optional_locked(tx, node, binding, grant_id).await?
+    {
+        return Ok(InitialAuthorityHistory::PhaseExecution(Box::new(execution)));
+    }
+    Ok(InitialAuthorityHistory::AcceptedNoLaunch(Box::new(history)))
+}
+async fn load_refresh_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    binding: &LaunchBinding,
+    grant_id: Uuid,
+) -> Result<InitialAuthorityHistory, AppError> {
+    let history = super::accepted_refresh::load_accepted_history_locked(tx, binding).await?;
+    if history.request.original.identity.node_id != node
+        || history.proposal.original.offered.offer.binding != *binding
+    {
+        return Err(unsupported());
+    }
+    if let Some(execution) =
+        super::phase_refresh_execution::history::load_optional_locked(tx, node, binding, grant_id)
+            .await?
+    {
+        return Ok(InitialAuthorityHistory::PhaseRefreshExecution(Box::new(
+            execution,
+        )));
+    }
+    Ok(InitialAuthorityHistory::AcceptedRefreshNoLaunch(Box::new(
+        history,
     )))
 }
 pub(crate) async fn load_legacy_initial_grant_locked(

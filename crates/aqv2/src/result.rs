@@ -387,10 +387,7 @@ impl ResultClient {
         let candidate = Submission::new(self.binding.clone(), input)?;
         let _writer = self.submissions.lock_named(wire::WRITER_LOCK_FILE)?;
         if let Some(existing) = self.existing_submission()? {
-            if existing != candidate {
-                return Ok(self.conflict());
-            }
-            return self.status();
+            return self.replay_submission(&candidate, Some(&existing));
         }
         if self
             .root
@@ -408,18 +405,7 @@ impl ResultClient {
         self.check_binding()?;
         let bytes = wire::encode(&candidate)?;
         if let Err(error) = self.submissions.write_new(wire::SUBMISSION_FILE, &bytes) {
-            // A competing/uncertain publication never receives a new UUID or
-            // overwrite. Keep this original scope available for status/recovery.
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
-            {
-                if self.existing_submission()?.as_ref() == Some(&candidate) {
-                    return self.status();
-                }
-                return Ok(self.conflict());
-            }
-            return self.unknown(&candidate);
+            return self.write_failure(&candidate, error);
         }
         if self.check_binding().is_err() {
             return self.unknown(&candidate);
@@ -428,6 +414,27 @@ impl ResultClient {
         // accept it; do not manufacture an Accepted acknowledgment here.
         self.wait_for_acknowledgment()
             .or_else(|_| self.unknown(&candidate))
+    }
+    fn replay_submission(
+        &self,
+        candidate: &Submission,
+        existing: Option<&Submission>,
+    ) -> Result<Outcome> {
+        if existing == Some(candidate) {
+            self.status()
+        } else {
+            Ok(self.conflict())
+        }
+    }
+    fn write_failure(&self, candidate: &Submission, error: anyhow::Error) -> Result<Outcome> {
+        // A competing publication keeps the original identity and bytes available for recovery.
+        let exists = error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists);
+        if exists {
+            return self.replay_submission(candidate, self.existing_submission()?.as_ref());
+        }
+        self.unknown(candidate)
     }
     /// One bounded local wait after NEW publication only. It never retries,
     /// replaces an intent or renews its original execution ceiling. Pending on

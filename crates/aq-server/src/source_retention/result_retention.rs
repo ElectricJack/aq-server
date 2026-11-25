@@ -26,26 +26,25 @@ fn stamp(state: &AppState) -> Result<u64> {
 }
 fn verify(fact: &RecordedSourceConfirmation, v: &Value) -> Result<()> {
     let m = &fact.manifest;
-    if serde_json::to_vec(v).map_err(internal)?.len() > 16384
-        || v["version"] != 1
-        || v["id"] != m.artifact_id.to_string()
-        || v["repository_id"] != m.source.repository_id.to_string()
-        || v["binding_generation"] != m.source.binding_generation
-        || v["generation"]
-            .as_u64()
-            .is_none_or(|n| n == 0 || n > i64::MAX as u64)
-        || v["state"] != "active"
-        || v["resource"] != "transfer"
-        || v.get("release_operation") != Some(&Value::Null)
-        || v.get("release_reason") != Some(&Value::Null)
-        || v["refs"]
-            != json!([{"name":format!("refs/aq-git/transfers/{}",m.artifact_id),"oid":fact.receipt.source.hex}])
-    {
+    let record = RetentionRecord(v);
+    let matches = record.matches_handle(
+        m.artifact_id,
+        m.source.repository_id,
+        m.source.binding_generation,
+    ) && record.active_transfer()
+        && record.unreleased()
+        && record.matches_ref(m.artifact_id, &fact.receipt.source.hex);
+    if serde_json::to_vec(v).map_err(internal)?.len() > 16384 || !matches {
         return Err(unavailable());
     }
     Ok(())
 }
 impl ResultRetentionObservation {
+    fn valid_at(&self, now: u64) -> bool {
+        self.observed_at_ms != 0
+            && self.expires_at_ms.checked_sub(self.observed_at_ms) == Some(30_000)
+            && (self.observed_at_ms..self.expires_at_ms).contains(&now)
+    }
     /// Call after reloading the exact owner fact in the admission transaction.
     /// Observation expiry is rechecked after all DB lock waits; no distributed
     /// lock against a later Git release is claimed.
@@ -55,13 +54,7 @@ impl ResultRetentionObservation {
         fact: &RecordedSourceConfirmation,
     ) -> Result<()> {
         let now = stamp(state)?;
-        if self.confirmation_digest != confirmation_digest(fact)?
-            || self.observed_at_ms == 0
-            || self.expires_at_ms <= self.observed_at_ms
-            || self.expires_at_ms - self.observed_at_ms != 30_000
-            || now < self.observed_at_ms
-            || now >= self.expires_at_ms
-        {
+        if self.confirmation_digest != confirmation_digest(fact)? || !self.valid_at(now) {
             return Err(unavailable());
         }
         verify(fact, &self.inspection)
@@ -96,11 +89,7 @@ pub async fn inspect_current(
             return Err(unavailable());
         }
         let reply: Value = serde_json::from_slice(&frame).map_err(|_| unavailable())?;
-        if reply["protocol_version"] != 1
-            || reply["request_id"] != request_id
-            || reply["ok"] != true
-            || reply.get("error").is_some()
-        {
+        if !successful_reply(&reply, &request["request_id"]) {
             return Err(unavailable());
         }
         Ok(reply["result"].clone())

@@ -1,50 +1,20 @@
 //! AQ-07 real PostgreSQL intent/outbox and bounded public HTTP graph adapter.
+use crate::agent_launch::{Launch, enroll, send, state};
 use aq_server::{
     AppState,
     agent_access::{AgentAccessConfig, Runtime},
-    config::Config,
-    identity::verifier_from_config,
-    store::NewNode,
     test_support::TestDb,
-    tokens,
 };
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{Duration, TimeZone, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
-async fn send(
-    app: &Router,
-    path: &str,
-    token: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let mut b = Request::builder()
-        .method(if body.is_some() { "POST" } else { "GET" })
-        .uri(path)
-        .header("content-type", "application/json")
-        .header("X-AQ-Request", "1");
-    if let Some(t) = token {
-        b = b.header("authorization", format!("Bearer {t}"));
-    }
-    let r = app
-        .clone()
-        .oneshot(
-            b.body(Body::from(body.map(|v| v.to_string()).unwrap_or_default()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = r.status();
-    let bytes = r.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
 struct Env {
     db: TestDb,
     pool: sqlx::PgPool,
@@ -66,89 +36,27 @@ async fn setup_scoped(structural: bool) -> Env {
     let db = TestDb::create().await;
     let store = db.store().await;
     let pool = db.pool().await;
-    let now = Utc.timestamp_millis_opt(1_000_000).unwrap();
-    let owner = store
-        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
-        .await
-        .unwrap()
-        .unwrap();
-    let node_token = tokens::new_node_credential();
-    store
-        .create_enrollment("agent-test", owner.id, now, now + Duration::minutes(5))
-        .await
-        .unwrap();
-    let node = store
-        .redeem_enrollment(
-            "agent-test",
-            NewNode {
-                name: "agent".into(),
-                credential_hash: tokens::verifier(&node_token),
-                worker_version: "0.1.0".into(),
-                protocol_version: 1,
-            },
-            now,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../protocol/agent-access/v1/fixtures/base.json"
-    ))
-    .unwrap();
-    let mut profile = fixture["context"]["profile"].clone();
-    profile["capabilities"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("write.task_content"));
-    if structural {
-        for edge in ["blocks", "parent-child"] {
-            profile["write_scope"]["relationship_types"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!(edge));
+    let (node, node_token) = enroll(&store).await;
+    let launch = Launch::new(node, None, |profile, _| {
+        profile["capabilities"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("write.task_content"));
+        if structural {
+            for edge in ["blocks", "parent-child"] {
+                profile["write_scope"]["relationship_types"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(edge));
+            }
         }
-    }
-    let context = fixture["context"]["context"].clone();
-    let mut binding = fixture["context"]["binding"].clone();
-    binding["node_id"] = json!(node.id);
-    binding["profile_digest"] = json!(tokens::verifier(&profile.to_string()));
-    let boot = binding["boot_id"].clone();
-    let identity = json!({"node_id":node.id,"boot_id":boot});
-    let attempt = json!({"attempt_id":binding["attempt_id"],"session_id":binding["session_id"],"generation":1});
-    let spec = json!({"project_id":binding["project_id"],"harness":"deterministic-agent-v1","resolved_spec_digest":binding["resolved_spec_digest"],"fixture_output":"done","resources":{"slots":1,"cpu_millis":100,"memory_bytes":1024,"disk_bytes":1024},"required_capabilities":["deterministic-agent-v1","scoped-agent-access-v1"],"bindings":{"source":{"repository_id":Uuid::new_v4(),"binding_generation":1,"logical_identity":"test","base":{"algorithm":"sha1","hex":"1111111111111111111111111111111111111111"}},"graph":{"workspace_id":binding["workspace_id"],"profile_id":profile["profile_id"],"profile_revision":profile["revision"],"profile_digest":binding["profile_digest"],"context_digest":binding["context_digest"]}}});
-    let offer_id = Uuid::new_v4();
-    let attempt_id: Uuid = binding["attempt_id"].as_str().unwrap().parse().unwrap();
-    let task_id: Uuid = binding["task_id"].as_str().unwrap().parse().unwrap();
-    let session_id: Uuid = binding["session_id"].as_str().unwrap().parse().unwrap();
-    let execution = json!({"task_id":task_id,"offer":{"offer_id":offer_id,"identity":identity,"attempt":attempt,"spec":spec,"offer_expires_at_ms":2_000_000,"reservation_ttl_ms":10000},"status":"granted","grant":null,"grant_expires_at_ms":1_100_000,"last_observation":null,"report":null,"disposition":null,"cancellation_id":null,"cancellation_reason":null,"stopped":false});
-    sqlx::query("INSERT INTO execution_nodes(node_id,state) VALUES($1,$2)")
-        .bind(node.id)
-        .bind(json!({"identity":identity}))
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO execution_attempts(attempt_id,task_id,node_id,offer_id,session_id,state) VALUES($1,$2,$3,$4,$5,$6)").bind(attempt_id).bind(task_id).bind(node.id).bind(offer_id).bind(session_id).bind(execution).execute(&pool).await.unwrap();
+    });
+    launch.install(&pool, node).await;
     let directory = tempfile::tempdir().unwrap();
     let token_file = directory.path().join("graph-token");
     std::fs::write(&token_file, "ordinary-service-credential-0000000000000000").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let config: Config = toml::from_str(
-        r#"format_version=1
-environment="development"
-[server]
-admin_bind="127.0.0.1:0"
-worker_bind="127.0.0.1:0"
-public_origin="http://127.0.0.1:8080"
-[auth]
-mode="dev"
-dev_email="owner@localhost"
-[bootstrap]
-owner_email="owner@localhost"
-enabled=true
-"#,
-    )
-    .unwrap();
     let fake = Arc::new(FakeGraph::new());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = format!("http://{}", listener.local_addr().unwrap());
@@ -164,48 +72,18 @@ enabled=true
     })
     .await
     .unwrap();
-    let time = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
-    let clock_time = time.clone();
-    let state = AppState {
-        internal_work: Default::default(),
-        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
-        config: Arc::new(config),
-        store: store.clone(),
-        clock: Arc::new(move || {
-            Utc.timestamp_millis_opt(clock_time.load(std::sync::atomic::Ordering::SeqCst))
-                .unwrap()
-        }),
-        agent_access: Some(Arc::new(runtime)),
-        source_retention: None,
-    };
+    let (state, time) = state(store, runtime);
     let app = aq_server::build_worker_router(state.clone());
     let admin = aq_server::build_admin_router(state.clone());
-    assert_eq!(
-        send(
-            &admin,
-            "/api/agent-access/provision",
-            None,
-            Some(json!({"attempt_id":attempt_id,"profile":profile,"context":context}))
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let (status, issued) = send(
-        &app,
-        "/v2/worker/agent-session",
-        Some(&node_token),
-        Some(json!({"identity":identity,"attempt":attempt,"expected_credential_version":0})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{issued}");
+    launch.provision(&admin, None).await;
+    let token = launch.issue(&app, &node_token).await;
     Env {
         db,
         pool,
         app,
         admin,
-        token: issued["token"].as_str().unwrap().into(),
-        binding,
+        token,
+        binding: launch.binding,
         time,
         node_token,
         fake,
@@ -219,254 +97,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::collections::BTreeMap;
-struct FakeData {
-    nodes: BTreeMap<String, Value>,
-    edges: BTreeMap<String, Value>,
-    receipts: BTreeMap<String, (Value, Value)>,
-    posts: Vec<Value>,
-    applied: usize,
-}
-struct FakeGraph {
-    upstream: Option<String>,
-    data: tokio::sync::Mutex<FakeData>,
-    lose_once: std::sync::atomic::AtomicBool,
-    race_after_get: std::sync::atomic::AtomicBool,
-    hold: std::sync::atomic::AtomicBool,
-    arrived: tokio::sync::Notify,
-    release: tokio::sync::Notify,
-}
-impl FakeGraph {
-    fn new() -> Self {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../protocol/agent-access/v1/fixtures/qualified-graph.json"
-        ))
-        .unwrap();
-        Self {
-            upstream: std::env::var("AQ_MUTATION_GRAPH_URL").ok(),
-            data: tokio::sync::Mutex::new(FakeData {
-                nodes: serde_json::from_value(fixture["nodes"].clone()).unwrap(),
-                edges: serde_json::from_value(fixture["edges"].clone()).unwrap(),
-                receipts: BTreeMap::new(),
-                posts: Vec::new(),
-                applied: 0,
-            }),
-            lose_once: false.into(),
-            race_after_get: false.into(),
-            hold: false.into(),
-            arrived: tokio::sync::Notify::new(),
-            release: tokio::sync::Notify::new(),
-        }
-    }
-}
-fn graph_response(code: StatusCode, body: Value) -> Response {
-    (code, [("X-AQ-Graph-API-Version", "1")], axum::Json(body)).into_response()
-}
-async fn graph_http(State(fake): State<Arc<FakeGraph>>, request: AxumRequest) -> Response {
-    if let Some(origin) = &fake.upstream {
-        return qualified_proxy(&fake, origin, request).await;
-    }
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let parts: Vec<_> = path.split('/').collect();
-    if parts.len() < 5 || parts[1] != "v1" || parts[2] != "workspaces" {
-        return graph_response(StatusCode::NOT_FOUND, json!({"error":{"code":"not_found"}}));
-    }
-    let mut data = fake.data.lock().await;
-    if method == axum::http::Method::GET {
-        if parts.len() == 6 && parts[4] == "nodes" {
-            let observed = data.nodes.get(parts[5]).cloned();
-            if parts[5] == uid(2)
-                && fake
-                    .race_after_get
-                    .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                let n = data.nodes.get_mut(parts[5]).unwrap();
-                n["version"] = json!(n["version"].as_i64().unwrap() + 1);
-                n["verification"] = json!("verified");
-            }
-            return match observed {
-                Some(n) => graph_response(StatusCode::OK, n),
-                None => {
-                    graph_response(StatusCode::NOT_FOUND, json!({"error":{"code":"not_found"}}))
-                }
-            };
-        }
-        if parts.len() == 7 && parts[6] == "context" {
-            let fixture: Value = serde_json::from_str(include_str!(
-                "../../../../protocol/agent-access/v1/fixtures/qualified-graph.json"
-            ))
-            .unwrap();
-            let mut c = fixture["context"].clone();
-            c["node"] = data.nodes.get(parts[5]).cloned().unwrap_or(Value::Null);
-            c["edges"] = json!(data.edges.values().cloned().collect::<Vec<_>>());
-            return graph_response(StatusCode::OK, c);
-        }
-    }
-    if method != axum::http::Method::POST {
-        return graph_response(
-            StatusCode::BAD_REQUEST,
-            json!({"error":{"code":"invalid_request"}}),
-        );
-    }
-    let raw = axum::body::to_bytes(request.into_body(), 1048576)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&raw).unwrap();
-    data.posts.push(payload.clone());
-    let key = payload["idempotency_key"].as_str().unwrap().to_string();
-    if let Some((old, response)) = data.receipts.get(&key) {
-        return if old == &payload {
-            graph_response(StatusCode::OK, response.clone())
-        } else {
-            graph_response(StatusCode::CONFLICT, json!({"error":{"code":"conflict"}}))
-        };
-    }
-    drop(data);
-    if fake.hold.load(std::sync::atomic::Ordering::SeqCst) {
-        fake.arrived.notify_one();
-        fake.release.notified().await;
-    }
-    let mut data = fake.data.lock().await;
-    let mut nodes = data.nodes.clone();
-    let mut edges = data.edges.clone();
-    let mut results = Vec::new();
-    for op in payload["operations"].as_array().unwrap() {
-        let id = op["id"].as_str().unwrap().to_string();
-        match op["op"].as_str().unwrap() {
-            "update_node" => {
-                let Some(node) = nodes.get_mut(&id) else {
-                    return graph_response(
-                        StatusCode::NOT_FOUND,
-                        json!({"error":{"code":"not_found"}}),
-                    );
-                };
-                if node["retired"] == true
-                    || node["verification"] != "unverified"
-                    || (node["kind"] == "knowledge" && node["created_by"] != "api01-writer")
-                {
-                    return graph_response(
-                        StatusCode::FORBIDDEN,
-                        json!({"error":{"code":"forbidden"}}),
-                    );
-                }
-                if node["version"] != op["expected_version"] {
-                    return graph_response(
-                        StatusCode::CONFLICT,
-                        json!({"error":{"code":"conflict"}}),
-                    );
-                }
-                if !op["patch"].as_object().unwrap().is_empty() {
-                    for (k, v) in op["patch"].as_object().unwrap() {
-                        node[k] = v.clone();
-                    }
-                    node["version"] = json!(node["version"].as_i64().unwrap() + 1);
-                    node["content_revision"] =
-                        json!(node["content_revision"].as_i64().unwrap() + 1);
-                }
-                results.push(node.clone());
-            }
-            "create_node" => {
-                if nodes.contains_key(&id) {
-                    return graph_response(
-                        StatusCode::CONFLICT,
-                        json!({"error":{"code":"conflict"}}),
-                    );
-                }
-                let prototype = if op["kind"] == "task" { uid(1) } else { uid(2) };
-                let mut n = nodes[&prototype].clone();
-                n["id"] = json!(id);
-                n["version"] = json!(1);
-                n["content_revision"] = json!(1);
-                n["created_by"] = json!("api01-writer");
-                for field in [
-                    "title",
-                    "body",
-                    "labels",
-                    "content_type",
-                    "acceptance_criteria",
-                    "task_state",
-                    "provenance",
-                ] {
-                    if let Some(v) = op.get(field) {
-                        n[field] = v.clone();
-                    }
-                }
-                nodes.insert(id, n.clone());
-                results.push(n);
-            }
-            "add_edge" => {
-                if edges.contains_key(&id) {
-                    return graph_response(
-                        StatusCode::CONFLICT,
-                        json!({"error":{"code":"conflict"}}),
-                    );
-                }
-                let mut e = edges.values().next().unwrap().clone();
-                e["id"] = json!(id);
-                for field in [
-                    "source",
-                    "target",
-                    "edge_type",
-                    "description",
-                    "source_revision",
-                    "target_revision",
-                ] {
-                    e[field] = op.get(field).cloned().unwrap_or(Value::Null);
-                }
-                e["version"] = json!(1);
-                e["deleted"] = json!(false);
-                edges.insert(id, e.clone());
-                if let Some(n) = nodes.get_mut(op["source"].as_str().unwrap()) {
-                    n["version"] = json!(n["version"].as_i64().unwrap() + 1);
-                    n["content_revision"] = json!(n["content_revision"].as_i64().unwrap() + 1);
-                }
-                results.push(e);
-            }
-            "remove_edge" => {
-                let Some(e) = edges.get_mut(&id) else {
-                    return graph_response(
-                        StatusCode::NOT_FOUND,
-                        json!({"error":{"code":"not_found"}}),
-                    );
-                };
-                if e["version"] != op["expected_version"] {
-                    return graph_response(
-                        StatusCode::CONFLICT,
-                        json!({"error":{"code":"conflict"}}),
-                    );
-                }
-                e["deleted"] = json!(true);
-                e["version"] = json!(e["version"].as_i64().unwrap() + 1);
-                results.push(e.clone());
-            }
-            _ => {
-                return graph_response(
-                    StatusCode::BAD_REQUEST,
-                    json!({"error":{"code":"invalid_request"}}),
-                );
-            }
-        }
-    }
-    let response = if parts[4] == "changesets" {
-        json!({"id":Uuid::new_v4(),"workspace_id":parts[3],"actor_id":"api01-writer","name":payload["name"],"reason":payload["reason"],"operations":payload["operations"],"status":"draft","created_at":"2026-10-30T00:00:00Z","applied_at":null,"result":null})
-    } else {
-        data.nodes = nodes;
-        data.edges = edges;
-        json!({"change_set_id":Uuid::new_v4(),"results":results})
-    };
-    data.applied += 1;
-    data.receipts.insert(key, (payload, response.clone()));
-    if fake
-        .lose_once
-        .swap(false, std::sync::atomic::Ordering::SeqCst)
-    {
-        return graph_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({"error":{"code":"internal"}}),
-        );
-    }
-    graph_response(StatusCode::OK, response)
-}
+mod changes;
+mod cursors;
+mod graph;
+mod qualified;
+mod work_policy;
+use changes::Changes;
+use graph::{ApiError, FakeGraph, graph_http, graph_response};
 fn uid(n: u128) -> String {
     Uuid::from_u128(n).to_string()
 }
@@ -491,8 +128,14 @@ async fn confirmed_outbox_replay_byte_conflict_and_truthful_version_conflict() {
     let r = correction(&e);
     let (status, receipt) = submit(&e, r.clone()).await;
     assert_eq!(status, StatusCode::OK, "{receipt}");
-    assert_eq!(receipt["receipt"]["versions"][0]["version"], "3");
-    assert_eq!(receipt["receipt"]["task_completion"], false);
+    let change = &receipt["receipt"];
+    assert_eq!(
+        (
+            change["versions"][0]["version"].clone(),
+            change["task_completion"].clone()
+        ),
+        (json!("3"), json!(false))
+    );
     assert_eq!(submit(&e, r.clone()).await.1, receipt);
     assert_eq!(e.fake.data.lock().await.applied, 1);
     let mut changed = r.clone();
@@ -502,13 +145,11 @@ async fn confirmed_outbox_replay_byte_conflict_and_truthful_version_conflict() {
     assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
     assert_eq!(conflict["code"], "id_conflict");
     assert_eq!(e.fake.data.lock().await.applied, 1);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_outbox")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        1
-    );
+    let agent_graph_outbox: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_graph_outbox")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(agent_graph_outbox, 1);
     let reopened = e.db.store().await;
     drop(reopened);
     assert_eq!(
@@ -577,13 +218,12 @@ async fn response_loss_recovery_after_expiry_and_revocation_replays_exact_intent
         .0,
         StatusCode::NOT_FOUND
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_operations")
+    let agent_graph_operations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations")
             .fetch_one(&e.pool)
             .await
-            .unwrap(),
-        1
-    );
+            .unwrap();
+    assert_eq!(agent_graph_operations, 1);
 }
 #[tokio::test]
 async fn permissions_protected_authors_and_capabilities_refuse_before_admission() {
@@ -605,13 +245,12 @@ async fn permissions_protected_authors_and_capabilities_refuse_before_admission(
     sqlx::query("UPDATE agent_launch_bindings SET profile=jsonb_set(profile,'{capabilities}','[\"read.get\"]')").execute(&e.pool).await.unwrap();
     assert_eq!(submit(&e, correction(&e)).await.0, StatusCode::FORBIDDEN);
     assert_eq!(e.fake.data.lock().await.posts.len(), 0);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_operations")
+    let agent_graph_operations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations")
             .fetch_one(&e.pool)
             .await
-            .unwrap(),
-        0
-    );
+            .unwrap();
+    assert_eq!(agent_graph_operations, 0);
 }
 #[tokio::test]
 async fn relationship_guard_same_batch_and_findings_created_scope() {
@@ -693,8 +332,11 @@ async fn structural_proposals_need_explicit_edge_scopes_and_never_apply() {
         let (status, body) = submit(&e, r.clone()).await;
         if granted {
             assert_eq!(status, StatusCode::OK, "{body}");
-            assert_eq!(body["receipt"]["kind"], "graph_draft");
-            assert_eq!(body["receipt"]["applied"], false);
+            let draft = &body["receipt"];
+            assert_eq!(
+                (draft["kind"].clone(), draft["applied"].clone()),
+                (json!("graph_draft"), json!(false))
+            );
             assert_eq!(e.fake.data.lock().await.nodes.len(), 6);
             assert_eq!(
                 send(
@@ -776,42 +418,7 @@ async fn admitted_dispatch_does_not_hold_authority_locks_and_cannot_be_cancelled
     );
 }
 
-async fn qualified_proxy(fake: &FakeGraph, origin: &str, request: AxumRequest) -> Response {
-    let method = request.method().clone();
-    let path = request.uri().path_and_query().unwrap().as_str().to_string();
-    let credential = request.headers().get("authorization").cloned().unwrap();
-    let bytes = axum::body::to_bytes(request.into_body(), 1048576)
-        .await
-        .unwrap();
-    if method == axum::http::Method::POST {
-        let value: Value = serde_json::from_slice(&bytes).unwrap();
-        fake.data.lock().await.posts.push(value);
-    }
-    let response = reqwest::Client::new()
-        .request(method.clone(), format!("{origin}{path}"))
-        .header("authorization", credential)
-        .header("X-AQ-Graph-API-Version", "1")
-        .header("content-type", "application/json")
-        .body(bytes)
-        .send()
-        .await
-        .unwrap();
-    let status = response.status();
-    assert_eq!(response.headers()["X-AQ-Graph-API-Version"], "1");
-    let body: Value = response.json().await.unwrap();
-    if method == axum::http::Method::POST
-        && status.is_success()
-        && fake
-            .lose_once
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-    {
-        return graph_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error":{"code":"internal"}}),
-        );
-    }
-    graph_response(status, body)
-}
+use qualified::qualified_proxy;
 #[tokio::test]
 #[ignore = "requires scripts/test-agent-mutations.py isolated pinned graph image and ordinary credential"]
 async fn actual_qualified_graph_delivery_recovers_lost_receipt_without_duplicate_history() {
@@ -821,120 +428,10 @@ async fn actual_qualified_graph_delivery_recovers_lost_receipt_without_duplicate
         std::env::var("AQ_MUTATION_GRAPH_TOKEN_FILE").expect("isolated ordinary writer token file");
     let token = std::fs::read_to_string(path).unwrap();
     let mut e = setup_scoped(true).await;
-    async fn history(origin: &str, token: &str) -> Value {
-        reqwest::Client::new()
-            .get(format!(
-                "{origin}/v1/workspaces/{}/nodes/{}/history?limit=64",
-                uid(105),
-                uid(2)
-            ))
-            .bearer_auth(token.trim())
-            .header("X-AQ-Graph-API-Version", "1")
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-    let before = history(&origin, &token).await;
-    e.fake
-        .lose_once
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let request = correction(&e);
-    let (status, body) = submit(&e, request.clone()).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(body["state"], "unknown");
-    e.time.store(1_020_000, std::sync::atomic::Ordering::SeqCst);
-    let retry = recovery(&e, &request["operation_id"]);
-    let (status, body) = send(
-        &e.app,
-        "/v2/worker/agent-operations/retry",
-        Some(&e.node_token),
-        Some(retry),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["operations"][0]["state"], "confirmed");
-    let after = history(&origin, &token).await;
-    assert_eq!(
-        after["items"].as_array().unwrap().len(),
-        before["items"].as_array().unwrap().len() + 1
-    );
-    let data = e.fake.data.lock().await;
-    assert_eq!(data.posts.len(), 2);
-    assert_eq!(data.posts[0], data.posts[1]);
-    drop(data);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_outbox")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        1
-    );
-    assert_eq!(submit(&e, correction(&e)).await.0, StatusCode::UNAUTHORIZED);
-    let issue = json!({"identity":{"node_id":e.binding["node_id"],"boot_id":e.binding["boot_id"]},"attempt":{"attempt_id":e.binding["attempt_id"],"session_id":e.binding["session_id"],"generation":e.binding["generation"]},"expected_credential_version":1});
-    let (status, issued) = send(
-        &e.app,
-        "/v2/worker/agent-session",
-        Some(&e.node_token),
-        Some(issue),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{issued}");
-    e.token = issued["token"].as_str().unwrap().into();
-    assert_eq!(submit(&e, correction(&e)).await.0, StatusCode::CONFLICT);
-    assert_eq!(
-        history(&origin, &token).await,
-        after,
-        "stale operation never becomes blind overwrite"
-    );
-    let finding = command(
-        &e,
-        json!([{"kind":"create_finding","id":Uuid::new_v4(),"title":"AQ07 retained provenance","body":"Synthetic isolated qualification finding","labels":[],"content_type":"fact"}]),
-    );
-    let (status, result) = submit(&e, finding).await;
-    assert_eq!(status, StatusCode::OK, "{result}");
-    let edge = Uuid::new_v4();
-    let relation = command(
-        &e,
-        json!([{"kind":"add_relationship","id":edge,"source":uid(2),"target":uid(3),"expected_source_version":"3","edge_type":"references","source_revision":null,"target_revision":null,"description":"AQ07 isolated qualification"}]),
-    );
-    let (status, added) = submit(&e, relation).await;
-    assert_eq!(status, StatusCode::OK, "{added}");
-    let remove = command(
-        &e,
-        json!([{"kind":"remove_relationship","id":edge,"source":uid(2),"target":uid(3),"expected_source_version":"4","expected_version":"1"}]),
-    );
-    let (status, removed) = submit(&e, remove).await;
-    assert_eq!(status, StatusCode::OK, "{removed}");
-    let mut draft = proposal(&e);
-    let proposed = draft["commands"][0]["tasks"][0]["id"].clone();
-    draft["commands"][0]["relationships"] =
-        json!([{"id":Uuid::new_v4(),"source":uid(1),"target":proposed,"edge_type":"parent-child"}]);
-    let proposed_id = draft["commands"][0]["tasks"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let (status, receipt) = submit(&e, draft).await;
-    assert_eq!(status, StatusCode::OK, "{receipt}");
-    assert_eq!(receipt["receipt"]["applied"], false);
-    let unavailable = reqwest::Client::new()
-        .get(format!(
-            "{origin}/v1/workspaces/{}/nodes/{proposed_id}",
-            uid(105)
-        ))
-        .bearer_auth(token.trim())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        unavailable.status(),
-        StatusCode::NOT_FOUND,
-        "draft task must remain unapplied"
-    );
+    let after = qualified::verify_replay(&e, &origin, &token).await;
+    qualified::verify_stale(&mut e, &origin, &token, after).await;
+    qualified::verify_finding_and_relation(&e).await;
+    qualified::verify_draft(&e, &origin, &token).await;
 }
 async fn admit_only(e: &Env, request: &Value) -> (StatusCode, Value) {
     let response = e
@@ -1005,97 +502,19 @@ async fn retained_budget_refuses_new_intents_but_preserves_exact_replay() {
     let (status, body) = admit_only(&e, &correction(&e)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["code"], "overloaded");
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_operations")
+    let agent_graph_operations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations")
             .fetch_one(&e.pool)
             .await
-            .unwrap(),
-        1
-    );
+            .unwrap();
+    assert_eq!(agent_graph_operations, 1);
     assert!(e.fake.data.lock().await.posts.is_empty());
 }
 #[tokio::test]
 async fn recovery_cursor_freezes_membership_and_serializes_its_finite_quota() {
     let e = setup().await;
-    let first = correction(&e);
-    let second = correction(&e);
-    assert_eq!(admit_only(&e, &first).await.0, StatusCode::ACCEPTED);
-    assert_eq!(admit_only(&e, &second).await.0, StatusCode::ACCEPTED);
-    let mut request = recovery(&e, &first["operation_id"]);
-    request["mode"] = json!("list");
-    request.as_object_mut().unwrap().remove("operation_ids");
-    request["limit"] = json!(1);
-    request["cursor"] = Value::Null;
-    let (status, page) = send(
-        &e.app,
-        "/v2/worker/agent-operations/query",
-        Some(&e.node_token),
-        Some(request.clone()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(page["operations"][0]["operation_id"], first["operation_id"]);
-    let opaque = page["next_cursor"].as_str().unwrap();
-    assert!(opaque.starts_with("aqc_") && !opaque.starts_with("aqa_"));
-    // A later UUID sorts below previous IDs but is beyond the frozen membership.
-    let mut concurrent = correction(&e);
-    concurrent["operation_id"] = json!(uid(1));
-    assert_eq!(admit_only(&e, &concurrent).await.0, StatusCode::ACCEPTED);
-    let mut next = request.clone();
-    next["cursor"] = page["next_cursor"].clone();
-    let (status, tail) = send(
-        &e.app,
-        "/v2/worker/agent-operations/query",
-        Some(&e.node_token),
-        Some(next.clone()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{tail}");
-    assert_eq!(tail["operations"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        tail["operations"][0]["operation_id"],
-        second["operation_id"]
-    );
-    assert_eq!(tail["coverage"]["status"], "complete");
-    next["limit"] = json!(2);
-    assert_eq!(
-        send(
-            &e.app,
-            "/v2/worker/agent-operations/query",
-            Some(&e.node_token),
-            Some(next)
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    // Reserve 127 valid opaque cursor rows, then race two allocations. Node locking
-    // must let exactly one reach the 128 ceiling; no thousands-of-operation fixture.
-    sqlx::query("INSERT INTO agent_operation_cursors(verifier,node_id,attempt_id,query_digest,after_sequence,upper_sequence,expires_at_ms) SELECT 'fixture-'||n,$1,$2,'fixture',0,0,2000000 FROM generate_series(1,126) n").bind(e.binding["node_id"].as_str().unwrap().parse::<Uuid>().unwrap()).bind(e.binding["attempt_id"].as_str().unwrap().parse::<Uuid>().unwrap()).execute(&e.pool).await.unwrap();
-    let (a, b) = tokio::join!(
-        send(
-            &e.app,
-            "/v2/worker/agent-operations/query",
-            Some(&e.node_token),
-            Some(request.clone())
-        ),
-        send(
-            &e.app,
-            "/v2/worker/agent-operations/query",
-            Some(&e.node_token),
-            Some(request)
-        )
-    );
-    let statuses = [a.0, b.0];
-    assert!(statuses.contains(&StatusCode::OK));
-    assert!(statuses.contains(&StatusCode::SERVICE_UNAVAILABLE));
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_operation_cursors")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        128
-    );
+    let request = cursors::membership(&e).await;
+    cursors::quota(&e, request).await;
 }
 #[tokio::test]
 async fn retry_budget_and_changed_service_mapping_hold_unknown_without_new_dispatch() {
@@ -1158,13 +577,11 @@ async fn retry_budget_and_changed_service_mapping_hold_unknown_without_new_dispa
         "manual_reconciliation"
     );
     assert_eq!(e.fake.data.lock().await.posts.len(), 1);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_outbox")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        0
-    );
+    let agent_graph_outbox: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_graph_outbox")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(agent_graph_outbox, 0);
 }
 #[tokio::test]
 async fn local_receipt_commit_failure_keeps_unknown_and_recovery_publishes_once() {
@@ -1173,16 +590,16 @@ async fn local_receipt_commit_failure_keeps_unknown_and_recovery_publishes_once(
     let request = correction(&e);
     let (status, unknown) = submit(&e, request.clone()).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{unknown}");
-    assert_eq!(unknown["state"], "unknown");
-    assert_eq!(unknown["effect"], "possible");
-    assert_eq!(e.fake.data.lock().await.applied, 1);
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_outbox")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        0
+        (unknown["state"].clone(), unknown["effect"].clone()),
+        (json!("unknown"), json!("possible"))
     );
+    assert_eq!(e.fake.data.lock().await.applied, 1);
+    let agent_graph_outbox: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_graph_outbox")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(agent_graph_outbox, 0);
     let state: Value = sqlx::query_scalar("SELECT status FROM agent_graph_operations")
         .fetch_one(&e.pool)
         .await
@@ -1206,13 +623,11 @@ async fn local_receipt_commit_failure_keeps_unknown_and_recovery_publishes_once(
     .await;
     assert_eq!(body["operations"][0]["state"], "confirmed");
     assert_eq!(e.fake.data.lock().await.applied, 1);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_graph_outbox")
-            .fetch_one(&e.pool)
-            .await
-            .unwrap(),
-        1
-    );
+    let agent_graph_outbox: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_graph_outbox")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    assert_eq!(agent_graph_outbox, 1);
 }
 
 #[tokio::test]
@@ -1222,67 +637,8 @@ async fn work_kind_policy_fences_raw_task_mutations_but_preserves_knowledge_auth
         if e.fake.upstream.is_some() {
             return;
         }
-        let project = e.binding["project_id"]
-            .as_str()
-            .unwrap()
-            .parse::<Uuid>()
-            .unwrap();
-        let workspace = e.binding["workspace_id"]
-            .as_str()
-            .unwrap()
-            .parse::<Uuid>()
-            .unwrap();
-        let task = e.binding["task_id"]
-            .as_str()
-            .unwrap()
-            .parse::<Uuid>()
-            .unwrap();
-        let namespace = Uuid::new_v4();
-        Arc::make_mut(&mut e.state.config).profiled_execution = Some(
-            serde_json::from_value(json!({
-                "revision":1,"qualified_runtimes":[],"definition_bodies":[],
-                "projects":[{"project_id":project,"enabled":true,"priority":0,
-                    "retention_handle":Uuid::new_v4(),
-                    "source":{"kind":"named_ref","reference":"refs/heads/main"},
-                    "agent_grants":{"by_work_kind":{
-                        "investigation":{"max_created_tasks":0},
-                        "fidelity_review":{"max_created_tasks":10,"edit_drafts":true}
-                    }}}]
-            }))
-            .unwrap(),
-        );
-        e.fake
-            .data
-            .lock()
-            .await
-            .nodes
-            .get_mut(&task.to_string())
-            .unwrap()["metadata"] = json!({"aq:project_id":project,"aq:playbook_namespace":namespace,
-                "aq:logical_key":"test-policy","aq:work_kind":kind});
-        sqlx::query("INSERT INTO playbook_namespaces(namespace_id,generation,name,workspace_id,project_id,owner_user_id,catalog_digest,source_digest)
-                     SELECT $1,1,'test-kind-policy',$2,$3,id,repeat('a',64),repeat('b',64) FROM users LIMIT 1")
-            .bind(namespace).bind(workspace).bind(project).execute(&e.pool).await.unwrap();
-        sqlx::query("INSERT INTO playbook_work_keys(namespace_id,generation,logical_key,task_id,request_digest,created_at_ms)
-                     VALUES($1,1,'test-policy',$2,repeat('c',64),1)")
-            .bind(namespace).bind(task).execute(&e.pool).await.unwrap();
-        e.app = aq_server::build_worker_router(e.state.clone());
-        let correction = command(
-            &e,
-            json!([{"kind":"correct_record","id":task,
-            "expected_version":"3","patch":{"title":"Attempted task bypass"}}]),
-        );
-        for request in [correction, proposal(&e)] {
-            let (status, denied) = submit(&e, request).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{kind}: {denied}");
-            assert_eq!(denied["code"], "scope_denied");
-        }
-        assert!(e.fake.data.lock().await.posts.is_empty());
-        let (status, corrected) = submit(&e, self::correction(&e)).await;
-        assert_eq!(status, StatusCode::OK, "{kind}: {corrected}");
-        assert_eq!(corrected["state"], "confirmed");
-        let (status, found) = submit(&e, command(&e, json!([{"kind":"create_finding",
-            "id":Uuid::new_v4(),"title":"Retained finding","body":"","labels":[],"content_type":"note"}]))).await;
-        assert_eq!(status, StatusCode::OK, "{kind}: {found}");
-        assert_eq!(found["state"], "confirmed");
+        let task = work_policy::install(&mut e, kind).await;
+        work_policy::denies_task_changes(&e, kind, task).await;
+        work_policy::permits_knowledge(&e, kind).await;
     }
 }

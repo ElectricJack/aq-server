@@ -8,11 +8,13 @@ mod codec;
 pub mod config;
 mod domain;
 mod limits;
+mod processing;
 
 pub use clip::{ClipHeader, preflight_mp4, synthetic_mp4};
 pub use codec::{Header, PreparedImage, PreparedVariant, preflight_png, prepare_png};
 pub use domain::*;
 pub use limits::*;
+pub use processing::{PreparedMedia, ReceiptSource, prepare_clip, prepare_image};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Invalid {

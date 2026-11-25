@@ -59,33 +59,54 @@ def read_plan():
     require(len(by_id) == len(tasks), "duplicate task IDs")
     milestones = {item["id"]: item for item in plan["milestones"]}
     require(len(milestones) == len(plan["milestones"]), "duplicate milestone IDs")
+    requirements = known_requirements(plan["requirement_sources"])
+    covered = set()
+    for task in tasks:
+        validate_task(task, plan["status_values"], milestones)
+        validate_dependencies(task, by_id, requirements)
+        covered.update(task["requirements"])
+    require(covered == requirements, f"unassigned requirements: {sorted(requirements - covered)}")
+
+    order = dependency_order(by_id)
+    check_gates(milestones, by_id, order, plan["milestones"][-1]["gate"])
+    check_references(plan, by_id)
+    return plan, order, requirements
+
+
+def known_requirements(sources_by_prefix):
     requirements = set()
-    for prefix, sources in plan["requirement_sources"].items():
+    for prefix, sources in sources_by_prefix.items():
         for relative in sources:
             path = plan_path(relative)
             require(path.is_file(), f"missing requirement source: {relative}")
             requirements.update(re.findall(r"^\| (" + prefix + r"\d+) \|", path.read_text(), re.M))
-    covered = set()
-    for task in tasks:
-        name = task["id"]
-        require(re.fullmatch(r"[A-Z]+-\d{2}", name), f"invalid task ID: {name}")
-        require(task["status"] in plan["status_values"], f"invalid status: {name}")
-        require(task["milestone"] in milestones, f"invalid milestone: {name}")
-        require(owner_directory(task["repo"]).is_dir(), f"missing owner repo/directory: {name}")
-        require(task["scope"] and task["acceptance"], f"missing task contract: {name}")
-        deps = task["depends_on"]
-        require(len(deps) == len(set(deps)), f"duplicate dependencies: {name}")
-        require(name not in deps, f"self dependency: {name}")
-        require(set(deps) <= by_id.keys(), f"unknown dependency: {name}")
-        require(set(task["requirements"]) <= requirements, f"unknown requirement: {name}")
-        covered.update(task["requirements"])
-        if task["status"] == "complete":
-            require(task["evidence"], f"completed task lacks evidence: {name}")
-            require(all(by_id[d]["status"] == "complete" for d in deps), f"incomplete prerequisite: {name}")
-        for relative in task["evidence"]:
-            require(plan_path(relative).exists(), f"missing evidence for {name}: {relative}")
-    require(covered == requirements, f"unassigned requirements: {sorted(requirements - covered)}")
+    return requirements
 
+
+def validate_task(task, statuses, milestones):
+    name = task["id"]
+    require(re.fullmatch(r"[A-Z]+-\d{2}", name), f"invalid task ID: {name}")
+    require(task["status"] in statuses, f"invalid status: {name}")
+    require(task["milestone"] in milestones, f"invalid milestone: {name}")
+    require(owner_directory(task["repo"]).is_dir(), f"missing owner repo/directory: {name}")
+    require(task["scope"] and task["acceptance"], f"missing task contract: {name}")
+
+
+def validate_dependencies(task, by_id, requirements):
+    name = task["id"]
+    deps = task["depends_on"]
+    require(len(deps) == len(set(deps)), f"duplicate dependencies: {name}")
+    require(name not in deps, f"self dependency: {name}")
+    require(set(deps) <= by_id.keys(), f"unknown dependency: {name}")
+    require(set(task["requirements"]) <= requirements, f"unknown requirement: {name}")
+    if task["status"] == "complete":
+        require(task["evidence"], f"completed task lacks evidence: {name}")
+        require(all(by_id[d]["status"] == "complete" for d in deps), f"incomplete prerequisite: {name}")
+    for relative in task["evidence"]:
+        require(plan_path(relative).exists(), f"missing evidence for {name}: {relative}")
+
+
+def dependency_order(by_id):
     visiting, visited, order = set(), set(), []
 
     def visit(name):
@@ -102,41 +123,54 @@ def read_plan():
     for name in by_id:
         visit(name)
 
-    def ancestors(name):
-        result = set()
-        for dependency in by_id[name]["depends_on"]:
-            result.add(dependency)
-            result.update(ancestors(dependency))
-        return result
+    return order
 
+
+def check_gates(milestones, by_id, order, final_gate):
+    # Every direct prerequisite has already been visited in dependency order.
+    reachable = {}
+    for name in order:
+        predecessors = {name}
+        for dependency in by_id[name]["depends_on"]:
+            predecessors.update(reachable[dependency])
+        reachable[name] = predecessors
     for milestone in milestones.values():
         gate = milestone["gate"]
         require(gate in by_id, f"unknown milestone gate: {gate}")
         require(by_id[gate]["milestone"] == milestone["id"], f"gate in wrong milestone: {gate}")
-        required = {task["id"] for task in tasks if task["milestone"] == milestone["id"]}
-        require(required <= ancestors(gate) | {gate}, f"milestone tasks not covered by gate: {milestone['id']}")
-    final_gate = plan["milestones"][-1]["gate"]
-    require(set(by_id) <= ancestors(final_gate) | {final_gate}, "tasks disconnected from final gate")
+        required = {task["id"] for task in by_id.values() if task["milestone"] == milestone["id"]}
+        require(required <= reachable[gate], f"milestone tasks not covered by gate: {milestone['id']}")
+    require(set(by_id) <= reachable[final_gate], "tasks disconnected from final gate")
+
+
+def check_references(plan, by_id):
     for key in ("audit", "snapshot"):
         require((SOURCE.parent / plan[key]).is_file(), f"missing {key}")
     for update in plan.get("design_updates", []):
         require(plan_path(update["source"]).is_file(), "missing design update source")
         require(update["summary"], "missing design update summary")
     for reference in plan.get("implementation_reference_maps", []):
-        inventory_path = SOURCE.parent / reference["inventory"]
-        require((SOURCE.parent / reference["guide"]).is_file(), "missing implementation reference guide")
-        inventory = json.loads(inventory_path.read_text())
-        require(re.fullmatch(r"[0-9a-f]{40}", inventory["source_revision"]), "unpinned implementation reference")
-        for entry in inventory["entries"]:
-            require(entry["tasks"] and set(entry["tasks"]) <= by_id.keys(), "unknown implementation reference task")
-            require(entry["rationale"] and entry["coverage"], "missing reference disposition/coverage")
-            require(entry["disposition"] in {"preserve", "adapt", "replace", "omit"}, "invalid reference disposition")
-            for source in entry["sources"] + entry["tests"]:
-                require(source["path"] in inventory["files"], "unhashed implementation reference")
-                require(source["sha256"] == inventory["files"][source["path"]]["sha256"], "reference hash disagreement")
-                require(re.fullmatch(r"[0-9a-f]{64}", source["sha256"]), "invalid reference hash")
-                require(source["symbol"] and 0 < source["line"] <= source["end_line"], "invalid reference symbol")
-    return plan, order, requirements
+        check_inventory(reference, by_id)
+
+
+def check_inventory(reference, by_id):
+    inventory_path = SOURCE.parent / reference["inventory"]
+    require((SOURCE.parent / reference["guide"]).is_file(), "missing implementation reference guide")
+    inventory = json.loads(inventory_path.read_text())
+    require(re.fullmatch(r"[0-9a-f]{40}", inventory["source_revision"]), "unpinned implementation reference")
+    for entry in inventory["entries"]:
+        check_reference_entry(entry, inventory["files"], by_id)
+
+
+def check_reference_entry(entry, files, by_id):
+    require(entry["tasks"] and set(entry["tasks"]) <= by_id.keys(), "unknown implementation reference task")
+    require(entry["rationale"] and entry["coverage"], "missing reference disposition/coverage")
+    require(entry["disposition"] in {"preserve", "adapt", "replace", "omit"}, "invalid reference disposition")
+    for source in entry["sources"] + entry["tests"]:
+        require(source["path"] in files, "unhashed implementation reference")
+        require(source["sha256"] == files[source["path"]]["sha256"], "reference hash disagreement")
+        require(re.fullmatch(r"[0-9a-f]{64}", source["sha256"]), "invalid reference hash")
+        require(source["symbol"] and 0 < source["line"] <= source["end_line"], "invalid reference symbol")
 
 
 def ready_tasks(plan):
@@ -174,23 +208,41 @@ def render(plan):
         "### Definition of done", "",
     ]
     lines += ["- " + item for item in plan["definition_of_done"]]
-    if plan.get("design_updates"):
-        lines += ["", "### Design additions", ""]
-        for update in plan["design_updates"]:
-            lines += [f"- [{Path(update['source']).name}]({update['source']}): {update['summary']}"]
-    if plan.get("implementation_reference_maps"):
-        lines += ["", "### V1 implementation evidence", "",
-                  "Read the mapped source and regression cases before implementing an affected task. "
-                  "The pinned references inform the v2 contract; inventory inclusion is not passing v2 coverage. "
-                  "Normal builds and plan checks require no v1 checkout.", ""]
-        for reference in plan["implementation_reference_maps"]:
-            lines += [f"- [Reference guide]({reference['guide']}) and [pinned symbol/test inventory]({reference['inventory']})."]
+    append_design_references(lines, plan)
     lines += ["", "### Ready work", "", "| Task | Owner | Deliverable |", "| --- | --- | --- |"]
     lines += [f"| {link(task['id'])} | {task['repo']} | {task['title']} |" for task in ready_tasks(plan)]
     lines += ["", "The daemon authority track can start after BASE-01 and CON-01. The worker runtime track follows connector extraction. "
               "Graph, Git and playbook qualification are independent early tracks; they are not artificial prerequisites for fake-agent execution. "
               "Dashboard work waits for a versioned inspection/action API, but does not wait for production deployment.", "",
               "## Milestone outcomes", "", "| Milestone | Acceptance gate | Observable result |", "| --- | --- | --- |"]
+    append_milestone_tables(lines, plan)
+    lines += ["## Task contracts", ""]
+    for task in plan["tasks"]:
+        append_contract(lines, task)
+    lines += ["## Validation and updates", "", "```sh", "python3 scripts/check-v2-plan.py",
+              "python3 scripts/check-v2-plan.py --ready", "python3 scripts/check-v2-plan.py --render", "```", "",
+              "The checker verifies unique IDs, known requirements, evidence references, acyclicity, hard prerequisites for completed tasks, "
+              "milestone gate coverage, final-gate reachability and generated-document consistency. It never creates live AQ tasks or starts implementation.", "",
+              "When implementation work is admitted to AQ later, retain these stable plan IDs as provenance. "
+              "Use one task-status authority; explicitly replace this file's planning statuses with links to that execution system rather than maintaining two independently writable queues.", ""]
+    return "\n".join(lines)
+
+
+def append_design_references(lines, plan):
+    if plan.get("design_updates"):
+        lines += ["", "### Design additions", ""]
+        lines.extend(f"- [{Path(update['source']).name}]({update['source']}): {update['summary']}"
+                     for update in plan["design_updates"])
+    if plan.get("implementation_reference_maps"):
+        lines += ["", "### V1 implementation evidence", "",
+                  "Read the mapped source and regression cases before implementing an affected task. "
+                  "The pinned references inform the v2 contract; inventory inclusion is not passing v2 coverage. "
+                  "Normal builds and plan checks require no v1 checkout.", ""]
+        lines.extend(f"- [Reference guide]({ref['guide']}) and [pinned symbol/test inventory]({ref['inventory']})."
+                     for ref in plan["implementation_reference_maps"])
+
+
+def append_milestone_tables(lines, plan):
     for milestone in plan["milestones"]:
         lines.append(f"| {milestone['id']}: {milestone['title']} | {link(milestone['gate'])} | {milestone['outcome']} |")
     lines += ["", "The milestone spine below is a summary. The task dependencies in the JSON are authoritative.", "",
@@ -211,25 +263,19 @@ def render(plan):
             deps = ", ".join(link(dep) for dep in task["depends_on"]) or "None"
             lines.append(f"| {link(task['id'])}: {task['title']} | {task['repo']} | {deps} | {task['status']} |")
         lines.append("")
-    lines += ["## Task contracts", ""]
-    for task in plan["tasks"]:
-        deps = ", ".join(link(dep) for dep in task["depends_on"]) or "None"
-        lines += [f"### {task['id']}", "", f"**{task['title']}**", "",
-                  f"Owner: `{task['repo']}`. Milestone: {task['milestone']}. Kind: {task['kind']}. Status: {task['status']}.", "",
-                  f"Hard prerequisites: {deps}.", "", task["scope"], "", "Acceptance:", ""]
-        lines += ["- " + item for item in task["acceptance"]]
-        lines += ["", "Requirement links: " + ", ".join(task["requirements"]) + ".", ""]
-        if task["out_of_scope"]:
-            lines += ["Outside this task: " + "; ".join(task["out_of_scope"]) + ".", ""]
-        if task["evidence"]:
-            lines += ["Evidence: " + ", ".join(f"[{Path(item).name}]({item})" for item in task["evidence"]) + ".", ""]
-    lines += ["## Validation and updates", "", "```sh", "python3 scripts/check-v2-plan.py",
-              "python3 scripts/check-v2-plan.py --ready", "python3 scripts/check-v2-plan.py --render", "```", "",
-              "The checker verifies unique IDs, known requirements, evidence references, acyclicity, hard prerequisites for completed tasks, "
-              "milestone gate coverage, final-gate reachability and generated-document consistency. It never creates live AQ tasks or starts implementation.", "",
-              "When implementation work is admitted to AQ later, retain these stable plan IDs as provenance. "
-              "Use one task-status authority; explicitly replace this file's planning statuses with links to that execution system rather than maintaining two independently writable queues.", ""]
-    return "\n".join(lines)
+
+
+def append_contract(lines, task):
+    deps = ", ".join(link(dep) for dep in task["depends_on"]) or "None"
+    lines += [f"### {task['id']}", "", f"**{task['title']}**", "",
+              f"Owner: `{task['repo']}`. Milestone: {task['milestone']}. Kind: {task['kind']}. Status: {task['status']}.", "",
+              f"Hard prerequisites: {deps}.", "", task["scope"], "", "Acceptance:", ""]
+    lines += ["- " + item for item in task["acceptance"]]
+    lines += ["", "Requirement links: " + ", ".join(task["requirements"]) + ".", ""]
+    if task["out_of_scope"]:
+        lines += ["Outside this task: " + "; ".join(task["out_of_scope"]) + ".", ""]
+    if task["evidence"]:
+        lines += ["Evidence: " + ", ".join(f"[{Path(item).name}]({item})" for item in task["evidence"]) + ".", ""]
 
 
 def main():

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use aq_admission::{granted_closure as closure, preparation_v2 as phase, started, stopped};
+use aq_admission::{granted_closure as closure, preparation_v2 as phase, started};
 use aq_phase_terminal_protocol::*;
 use serde_json::{Value, json};
 pub struct Case {
@@ -27,9 +27,9 @@ impl Case {
         }
     }
 }
-fn set(v: &mut Value, key: &str, val: &impl serde::Serialize) {
-    v[key] = serde_json::to_value(val).unwrap();
-}
+#[path = "support/terminal_fixture.rs"]
+mod terminal_fixture;
+
 pub fn case() -> Case {
     let p: Value = serde_json::from_str(include_str!("data/preparation-v2.fixture.json")).unwrap();
     let proposal = serde_json::from_value(p["proposal"].clone()).unwrap();
@@ -50,10 +50,7 @@ pub fn case() -> Case {
     s.launch_id = accepted.lease.launch_id;
     s.reservation_id = accepted.lease.hold.reservation.reservation_id;
     s.journal_revision = prepared.revision + 1;
-    s.observation.guardian.intent.launch_id = s.launch_id;
-    s.observation.guardian.intent.session = s.binding.session.clone();
-    s.observation.guardian.intent.manifest_digest = s.binding.launch_manifest_digest.clone();
-    s.observation_digest = s.observation.digest().unwrap();
+    terminal_fixture::bind_observation(&mut s);
     let c = Context {
         execution: &execution,
         prepare: &prepare,
@@ -72,90 +69,21 @@ pub fn case() -> Case {
         origin: origin.clone(),
         original: s,
     };
-    let mut t: Value = serde_json::from_str(include_str!("data/stopped.fixture.json")).unwrap();
-    set(&mut t, "runtime", &started.original.runtime);
-    set(&mut t, "qualification", &started.original.qualification);
-    set(&mut t, "reservation_id", &started.original.reservation_id);
-    set(&mut t["evidence"], "binding", &started.original.binding);
-    set(
-        &mut t["evidence"],
-        "guardian_id",
-        &started.original.guardian_id,
-    );
-    set(&mut t["evidence"], "launch_id", &started.original.launch_id);
-    set(
-        &mut t["evidence"]["disposition"],
-        "grant_id",
-        &started.original.grant_id,
-    );
-    t["evidence"]["journal"]["revision"] = json!(started.original.journal_revision + 1);
-    set(
-        &mut t["proof"]["observation"],
-        "guardian",
-        &started.original.observation.guardian,
-    );
-    set(
-        &mut t["proof"]["observation"],
-        "pane",
-        &started.original.observation.pane,
-    );
-    let proof: stopped::HostStoppedProof = serde_json::from_value(t["proof"].clone()).unwrap();
-    t["evidence"]["disposition"]["stop_receipt_digest"] = json!(proof.digest().unwrap());
     let stopped = StoppedRequest {
         schema_version: 1,
         negotiation: negotiation.clone(),
         origin: origin.clone(),
-        original: serde_json::from_value(t).unwrap(),
+        original: terminal_fixture::stopped(&started.original),
     };
-    let old: Value =
-        serde_json::from_str(include_str!("data/granted-closure.fixture.json")).unwrap();
-    let mut closures = Vec::new();
-    for value in old["valid_requests"].as_array().unwrap() {
-        let mut q: closure::Request = serde_json::from_value(value.clone()).unwrap();
-        q.binding = started.original.binding.clone();
-        q.grant_id = started.original.grant_id;
-        q.guardian_id = started.original.guardian_id;
-        q.launch_id = started.original.launch_id;
-        q.reservation_id = started.original.reservation_id;
-        q.journal.revision = prepared.revision + 3;
-        match &mut q.evidence {
-            closure::Evidence::Suppressed {
-                record,
-                record_digest,
-            } => {
-                record.binding = q.binding.clone();
-                record.grant_id = q.grant_id;
-                record.guardian_id = q.guardian_id;
-                record.launch_id = q.launch_id;
-                record.reservation_id = q.reservation_id;
-                record.previous = prepared.clone();
-                record.terminal_revision = q.journal.revision;
-                *record_digest = record.digest().unwrap();
-            }
-            closure::Evidence::HostStopped {
-                driver_intent,
-                proof,
-                proof_digest,
-            } => {
-                driver_intent.binding = q.binding.clone();
-                driver_intent.grant_id = q.grant_id;
-                driver_intent.guardian_id = q.guardian_id;
-                driver_intent.reservation_id = q.reservation_id;
-                driver_intent.host.launch_id = q.launch_id;
-                driver_intent.host.session = q.binding.session.clone();
-                driver_intent.host.manifest_digest = q.binding.launch_manifest_digest.clone();
-                driver_intent.journal.revision = prepared.revision + 1;
-                proof.observation.guardian.intent = driver_intent.host.clone();
-                *proof_digest = proof.digest().unwrap();
-            }
-        }
-        closures.push(ClosureRequest {
+    let closures = terminal_fixture::closures(&started.original, &prepared)
+        .into_iter()
+        .map(|original| ClosureRequest {
             schema_version: 1,
             negotiation: negotiation.clone(),
             origin: origin.clone(),
-            original: q,
-        });
-    }
+            original,
+        })
+        .collect();
     Case {
         proposal,
         acceptance,
