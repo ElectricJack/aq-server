@@ -135,7 +135,7 @@ pub(super) async fn publish(
         m.bindings.graph_id,
         m.bindings.task_id,
     );
-    let scope = crate::task_workspace_resume::scope(&mut *tx, project, task).await?;
+    let scope = crate::task_workspace_resume::scope(&mut tx, project, task).await?;
     if let Some(reason) = scope.blocker(true) {
         return Ok(Outcome::WorkspaceBlocked(reason));
     }
