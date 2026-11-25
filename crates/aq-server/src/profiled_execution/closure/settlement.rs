@@ -150,19 +150,10 @@ pub async fn settle(
             return Ok(ClosureSettlement::Unchanged);
         }
     }
-<<<<<<< HEAD
-    if execution_history_present_locked(&mut tx, attempt).await? {
-        return Ok(ClosureSettlement::Held("closure_has_execution_history"));
-    }
-    // Effects: no AQ-mediated effect may exist at all for a never-started launch.
-    if agent_effects_present(&mut tx, attempt).await? {
-        return Ok(ClosureSettlement::Held("closure_effects_present"));
-=======
     // Neither execution history nor any AQ-mediated effect may exist for a never-started launch.
     let used = closed_launch::used(&mut tx, attempt).await;
     if let Some(code) = used.map_err(mapped)? {
         return Ok(ClosureSettlement::Held(code));
->>>>>>> refs/remotes/central/main
     }
     let source_receipt = source_receipt_locked(&mut tx, attempt).await?;
     let (operation, stop_receipt) =
@@ -191,23 +182,6 @@ pub async fn settle(
         .map_err(database)?;
     tx.commit().await.map_err(database)?;
     Ok(ClosureSettlement::Settled)
-}
-
-<<<<<<< HEAD
-async fn execution_history_present_locked(
-    tx: &mut Transaction<'_, Postgres>,
-    attempt: Uuid,
-) -> Result<bool, AppError> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_stopped_receipts WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM profiled_result_reports WHERE attempt_id=$1) \
-         OR EXISTS(SELECT 1 FROM source_transfers WHERE attempt_id=$1)",
-    )
-    .bind(attempt)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(database)
 }
 
 async fn source_receipt_locked(
@@ -254,43 +228,6 @@ async fn stop_receipt_locked(
     }
 }
 
-/// Whether the attempt's agent made any AQ-mediated effect: a graph operation, or mail sent
-/// from its session (a retry or closure would leave or repeat it).
-pub(crate) async fn agent_effects_present(
-    conn: &mut sqlx::PgConnection,
-    attempt: Uuid,
-) -> Result<bool, AppError> {
-    let operations: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agent_graph_operations WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?;
-    let agent: Option<Value> =
-        sqlx::query_scalar("SELECT binding FROM agent_launch_bindings WHERE attempt_id=$1")
-            .bind(attempt)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(database)?;
-    let mailed = match &agent {
-        None => false,
-        Some(binding) => {
-            let key = aq_agent_api::digest(&json!({"kind":"session","binding":binding}))
-                .map_err(|_| AppError::Internal)?;
-            sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM mailbox_operations WHERE sender_key=$1)",
-            )
-            .bind(key)
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(database)?
-        }
-    };
-    Ok(operations != 0 || mailed)
-}
-
-=======
->>>>>>> refs/remotes/central/main
 /// Settles a closed launch, then releases its task claim through B4 when B4
 /// admits a replacement: the claim of a never-started attempt is what keeps
 /// its node from re-registering (the incarnation guard only accepts stopped
