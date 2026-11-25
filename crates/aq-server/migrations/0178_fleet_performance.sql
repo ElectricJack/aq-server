@@ -75,6 +75,16 @@ CREATE INDEX performance_delivery_decision_clock ON delivery_decisions(decided_a
 CREATE INDEX performance_result_task ON result_revision_pins(project_id,task_id,submitted_at_ms,report_id);
 CREATE INDEX performance_cancelled_clock ON profiled_cancelled_settlements(recorded_at_ms);
 
+-- Replay may attach the same forge PR to another task. Keep the first
+-- verification clock within the authorized reporting scope.
+CREATE INDEX performance_merge_forge_identity ON delivery_merge_evidence (
+    (coalesce(lower(target#>>'{github,owner}') || '/' || lower(target#>>'{github,name}'),
+              target#>>'{git,repository_id}')),pull_request,observed_at_ms
+);
+CREATE INDEX performance_merge_host_task ON playbook_host_operations
+    ((request->>'project'),(request->>'task'),created_at_ms)
+    WHERE command_name='pull_request.merge';
+
 -- Optional scheduling diagnostics. Actual claim ownership remains in execution_attempts.
 CREATE TABLE performance_scheduling_minute (
     minute_ms BIGINT NOT NULL,
