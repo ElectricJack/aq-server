@@ -142,7 +142,13 @@ async fn ready(state: &AppState) -> Ready {
                 return Some(None);
             }
             let page = graph
-                .scheduling_ready_current(workspace, 64, None, state.clock.as_ref())
+                .scheduling_ready_for_project(
+                    &record.binding,
+                    64,
+                    None,
+                    state.clock.as_ref(),
+                    &state.store.pool,
+                )
                 .await
                 .ok()?;
             Some(Some(page))

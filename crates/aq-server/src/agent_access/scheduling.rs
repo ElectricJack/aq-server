@@ -242,10 +242,8 @@ impl Runtime {
             .map(|_| first_ready::take(&mut value, stamp.received_at_ms))
             .unwrap_or_default();
         let page = ready_page(workspace, limit, cursor, value, stamp)?;
-        if let Some((pool, project_id)) = project
-            && let Err(error) = first_ready::record(pool, project_id, workspace, evidence).await
-        {
-            tracing::warn!(%project_id, %error, "unable to record Graph first-ready evidence");
+        if let Some((pool, project_id)) = project {
+            first_ready::enqueue(pool, project_id, workspace, evidence);
         }
         Ok(page)
     }

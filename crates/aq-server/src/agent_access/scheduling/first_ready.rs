@@ -1,6 +1,7 @@
 //! Optional Graph first-ready evidence, outside scheduling's node identity.
 use serde_json::Value;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 pub(super) struct Evidence {
@@ -49,15 +50,37 @@ fn parse_ms(value: &Value) -> Option<i64> {
         .map(|at| at.timestamp_millis())
 }
 
-pub(super) async fn record(
+// A shared, bounded queue keeps Graph observations from waiting on storage.
+// Only one background job can acquire a database connection at a time.
+static PENDING: Semaphore = Semaphore::const_new(32);
+static WRITER: Semaphore = Semaphore::const_new(1);
+
+pub(super) fn enqueue(pool: &PgPool, project: Uuid, workspace: Uuid, evidence: Vec<Evidence>) {
+    if evidence.is_empty() {
+        return;
+    }
+    let Ok(pending) = PENDING.try_acquire() else {
+        tracing::debug!(%project, "Graph first-ready evidence queue is full");
+        return;
+    };
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let _pending = pending;
+        let Ok(_writer) = WRITER.acquire().await else {
+            return;
+        };
+        if let Err(error) = record(&pool, project, workspace, evidence).await {
+            tracing::warn!(%project, %error, "unable to record Graph first-ready evidence");
+        }
+    });
+}
+
+async fn record(
     pool: &PgPool,
     project: Uuid,
     workspace: Uuid,
     evidence: Vec<Evidence>,
 ) -> sqlx::Result<()> {
-    if evidence.is_empty() {
-        return Ok(());
-    }
     let tasks: Vec<_> = evidence.iter().map(|row| row.task).collect();
     let times: Vec<_> = evidence.iter().map(|row| row.at_ms).collect();
     let classes: Vec<_> = evidence.into_iter().map(|row| row.class).collect();
@@ -89,6 +112,31 @@ pub(super) async fn record(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn enqueue_stays_bounded_while_the_database_writer_is_busy() {
+        let _writer = WRITER.acquire().await.unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost:1/unused")
+            .unwrap();
+        let project = Uuid::new_v4();
+        let workspace = Uuid::new_v4();
+        let capacity = PENDING.available_permits();
+        assert!(capacity > 0);
+        for _ in 0..=capacity {
+            enqueue(
+                &pool,
+                project,
+                workspace,
+                vec![Evidence {
+                    task: Uuid::new_v4(),
+                    at_ms: 1,
+                    class: None,
+                }],
+            );
+        }
+        assert_eq!(PENDING.available_permits(), 0);
+    }
 
     #[test]
     fn only_explicit_credible_graph_clocks_survive_and_node_identity_is_preserved() {
