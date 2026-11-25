@@ -253,8 +253,27 @@ pub(super) async fn summary(
     let book = catalog::rate_book(state);
     let mut tx = authority::snapshot(&state.store.observation_pool).await?;
     let report = load(&mut tx, &book, project, None, cutoff).await?;
+    let mut view = report.view();
+    if project.is_none() {
+        let overhead: Value = sqlx::query_scalar(
+            "SELECT jsonb_build_object(
+                'scope', 'finished_internal_runs',
+                'finished_runs', count(*),
+                'reported_runs', count(usage),
+                'input_tokens', sum((usage->>'input_tokens')::numeric),
+                'output_tokens', sum((usage->>'output_tokens')::numeric)
+             ) FROM internal_tasks
+             WHERE status IN ('answered','failed') AND affected_kind<>'task'
+               AND finished_at_ms BETWEEN $1 AND $2",
+        )
+        .bind(cutoff.saturating_sub(WEEK_MS))
+        .bind(cutoff)
+        .fetch_one(&mut *tx)
+        .await?;
+        view["shared_overhead"] = overhead;
+    }
     tx.commit().await?;
-    Ok(report.view())
+    Ok(view)
 }
 
 pub(super) async fn task(
@@ -266,19 +285,12 @@ pub(super) async fn task(
     let book = catalog::rate_book(state);
     let mut tx = authority::snapshot(&state.store.observation_pool).await?;
     let report = load(&mut tx, &book, project, Some(task_id), cutoff).await?;
-    let first_route: Option<Value> = sqlx::query_scalar(
-        "SELECT jsonb_build_object('attempt_id', attempt_id, 'candidate', candidate,
-             'intended_model', intended_model, 'policy_revision', policy_revision,
-             'registry_revision', registry_revision, 'recorded_at_ms', recorded_at_ms)
-         FROM performance_first_routes
-         WHERE task_id=$1 AND ($2::uuid IS NULL OR project_id=$2) AND recorded_at_ms<=$3
-         ORDER BY recorded_at_ms, attempt_id LIMIT 1",
-    )
-    .bind(task_id)
-    .bind(project)
-    .bind(cutoff)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let first_route: Option<Value> = sqlx::query_scalar(include_str!("usage_route.sql"))
+        .bind(task_id)
+        .bind(project)
+        .bind(cutoff)
+        .fetch_optional(&mut *tx)
+        .await?;
     tx.commit().await?;
     if report.attempts.is_empty() && first_route.is_none() {
         return Ok(Value::Null);

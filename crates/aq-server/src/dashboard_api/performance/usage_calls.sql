@@ -8,7 +8,7 @@ WITH in_window AS (
     JOIN observation_call_heads h USING(call_key)
     JOIN execution_attempts a ON a.attempt_id=h.owner_attempt_id
     LEFT JOIN profiled_launches l ON l.attempt_id=a.attempt_id
-    LEFT JOIN admission_source_observations so USING(source_observation_id)
+    LEFT JOIN admission_source_observations so ON so.observation_id=l.source_observation_id
     LEFT JOIN intelligence_attempt_selections s ON s.attempt_id=a.attempt_id
     WHERE e.recorded_at_ms BETWEEN $3 AND $4
       AND ($1::uuid IS NULL OR so.project_id=$1)

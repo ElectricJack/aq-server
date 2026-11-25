@@ -21,7 +21,7 @@ SELECT a.attempt_id, sum(activity.unresolved)::bigint AS unresolved,
 FROM activity
 JOIN execution_attempts a USING(attempt_id)
 LEFT JOIN profiled_launches l USING(attempt_id)
-LEFT JOIN admission_source_observations so USING(source_observation_id)
+LEFT JOIN admission_source_observations so ON so.observation_id=l.source_observation_id
 LEFT JOIN intelligence_attempt_selections s USING(attempt_id)
 LEFT JOIN profiled_authority_hot head USING(attempt_id)
 WHERE ($1::uuid IS NULL OR so.project_id=$1)
