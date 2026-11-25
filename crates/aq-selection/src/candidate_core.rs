@@ -1,7 +1,7 @@
 //! One subject-neutral candidate evaluator. Domain wrappers own admission facts.
 use crate::validate::fresh;
 use crate::*;
-use aq_profiles::{FallbackReason, SelectionPolicy};
+use aq_profiles::SelectionPolicy;
 use aq_session_protocol::require_capabilities;
 mod composition;
 mod observations;
@@ -147,7 +147,7 @@ pub(crate) fn evaluate(
             row.trace.reason_codes = vec![(*reason).into()];
         }
     }
-    Ok(rank(rows, input.route, policy))
+    Ok(rank(rows, input.route))
 }
 
 impl Evaluation<'_> {
@@ -217,7 +217,7 @@ impl Evaluation<'_> {
         }
         if before == rows.len() {
             ensure(rows.len() < 128, "candidate fanout exceeds published bound")?;
-            rows.push(candidate.unavailable(self.input.route)?);
+            rows.push(candidate.unavailable()?);
         }
         Ok(())
     }
@@ -238,28 +238,18 @@ impl CoreCandidate<'_> {
             observation_ids: vec![],
         }
     }
-    fn unavailable(&self, route: Option<&RouteLimits>) -> Result<EvaluatedRow> {
+    fn unavailable(&self) -> Result<EvaluatedRow> {
         let id = format!(
             "choice:{}",
             digest(&(&self.id, "no-compatible-composition"))?.as_str()
         );
-        // When the harness is unknown, only the route's provider allowlist applies.
-        let excluded = route.and_then(|r| crate::route::excludes_provider(r, self.provider));
-        let (state, reason) = match excluded {
-            Some(reason) => (CandidateState::PolicyDenied, reason),
-            None => (
-                CandidateState::Unsupported,
-                "compatible_installed_composition_unavailable",
-            ),
-        };
         let mut trace = self.trace(id, "unavailable", "unavailable".into());
-        trace.state = state;
-        trace.reason_codes = vec![reason.into()];
+        trace.state = CandidateState::Unsupported;
+        trace.reason_codes = vec!["compatible_installed_composition_unavailable".into()];
         Ok(EvaluatedRow {
             trace,
             choice: None,
             revision: 0,
-            excluded: excluded.is_some(),
         })
     }
 }
@@ -285,13 +275,7 @@ impl Composition<'_> {
         );
         let mut trace = candidate.trace(id, &harness.harness, profile_key(&harness.environment));
         trace.credential_profile = credential.map(|c| c.profile.clone());
-        // A global refusal outranks route exclusion.
-        let input = context.input;
-        let excluded = input
-            .route
-            .filter(|_| input.global.is_none())
-            .and_then(|r| crate::route::excludes(r, &harness.harness, candidate.provider));
-        let choice = match self.check(context, input.global.or(excluded), &mut trace) {
+        let choice = match self.check(context, context.input.global, &mut trace) {
             Ok(choice) => choice,
             Err((state, reason)) => {
                 trace.state = state;
@@ -303,7 +287,6 @@ impl Composition<'_> {
             trace,
             choice,
             revision: credential.map_or(0, |c| c.revision),
-            excluded: excluded.is_some(),
         })
     }
 }

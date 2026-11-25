@@ -21,7 +21,7 @@ pub fn select_for_offer(
 }
 
 /// Rank the same launch against provider/class refusals observed by the server.
-/// A capacity refusal is an unavailable candidate under the profile's fallback policy.
+/// A capacity refusal makes that provider unavailable for this pass.
 pub fn select_for_offer_with_capacity(
     launch: &aq_profiles::roles::Launch<'_>,
     input: &SelectionInputs,
