@@ -154,36 +154,67 @@ pub async fn check(
     conn: &mut PgConnection,
     cell: Option<&Cell>,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    if !available(conn).await? {
-        return Ok(None);
-    }
-    let settings = crate::lock(conn).await.map_err(|e| match e {
-        crate::Error::Database(e) => e,
-        _ => sqlx::Error::Protocol("invalid swarm settings".into()),
-    })?;
-    if !crate::providers::allows(conn, cell.map_or("", |c| c.provider.as_str())).await? {
-        return Ok(Some(if cell.is_some() {
-            PROVIDER_REMOVED
-        } else {
-            UNCLASSIFIED
-        }));
-    }
-    if !has_limits(&settings) {
-        return Ok(None);
-    }
-    // Publish a row version so SERIALIZABLE claimants retry after another wins.
-    sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
-        .execute(&mut *conn)
-        .await?;
-    let Some(cell) = cell else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let Some((provider_limit, limit)) = configured_limits(&settings, cell) else {
-        return Ok(Some(UNCLASSIFIED));
-    };
-    let active = occupancy(conn).await?;
-    Ok(capacity_block(&active, cell, provider_limit, limit))
+    Ok(Capacity::load(conn)
+        .await?
+        .and_then(|snapshot| snapshot.reason(cell)))
 }
+
+/// A single locked view of all provider and class ceilings for a placement pass.
+pub(crate) struct Capacity {
+    settings: crate::Settings,
+    providers: Option<Value>,
+    // None means this installation has no configured concurrency limits.
+    active: Option<Vec<(Cell, bool)>>,
+}
+
+impl Capacity {
+    pub(crate) async fn load(conn: &mut PgConnection) -> Result<Option<Self>, sqlx::Error> {
+        if !available(conn).await? {
+            return Ok(None);
+        }
+        let settings = crate::lock(conn).await.map_err(|e| match e {
+            crate::Error::Database(e) => e,
+            _ => sqlx::Error::Protocol("invalid swarm settings".into()),
+        })?;
+        let providers = crate::providers::membership(conn).await?;
+        let active = if has_limits(&settings) {
+            // Publish a row version so SERIALIZABLE claimants retry after another wins.
+            sqlx::query("UPDATE swarm_settings SET revision=revision WHERE singleton")
+                .execute(&mut *conn)
+                .await?;
+            Some(occupancy(conn).await?)
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            settings,
+            providers,
+            active,
+        }))
+    }
+
+    pub(crate) fn reason(&self, cell: Option<&Cell>) -> Option<&'static str> {
+        if !crate::providers::includes(
+            self.providers.as_ref(),
+            cell.map_or("", |c| c.provider.as_str()),
+        ) {
+            return Some(if cell.is_some() {
+                PROVIDER_REMOVED
+            } else {
+                UNCLASSIFIED
+            });
+        }
+        let active = self.active.as_ref()?;
+        let Some(cell) = cell else {
+            return Some(UNCLASSIFIED);
+        };
+        let Some((provider_limit, limit)) = configured_limits(&self.settings, cell) else {
+            return Some(UNCLASSIFIED);
+        };
+        capacity_block(active, cell, provider_limit, limit)
+    }
+}
+
 fn configured_limits(
     settings: &crate::Settings,
     cell: &Cell,
@@ -256,10 +287,21 @@ pub async fn observe(
     cell: Option<&Cell>,
     now: i64,
 ) -> Result<Option<&'static str>, sqlx::Error> {
-    let reason = check(conn, cell).await?;
-    if !available(conn).await? {
-        return Ok(reason);
-    }
+    let Some(capacity) = Capacity::load(conn).await? else {
+        return Ok(None);
+    };
+    let reason = capacity.reason(cell);
+    record_wait(conn, task, cell, now, reason).await?;
+    Ok(reason)
+}
+
+pub(crate) async fn record_wait(
+    conn: &mut PgConnection,
+    task: Uuid,
+    cell: Option<&Cell>,
+    now: i64,
+    reason: Option<&'static str>,
+) -> Result<(), sqlx::Error> {
     // Observations are a short-lived projection, including tasks cancelled or
     // removed from the graph since their last poll. Reclaim expired rows on
     // writes; read-only settings snapshots never mutate or wait for cleanup.
@@ -271,7 +313,7 @@ pub async fn observe(
     } else {
         clear_waiting(conn, task).await?;
     }
-    Ok(reason)
+    Ok(())
 }
 /// The scheduler refreshes a refused task's observation until it can admit the task.
 pub async fn show_task_wait(
