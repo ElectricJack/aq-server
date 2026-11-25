@@ -1,5 +1,27 @@
 # Running task terminal browser pilot
 
+## Terminal repair qualification, 2026-11-25
+
+The rehearsal used the ID and title of the original terminal ticket,
+`a3c72f06-d1a6-428e-bf67-b0f1c734a8c9`, in a private Graph workspace.
+The earlier repair is retained at `3bed9a998cd64766f0cdcd0f0da636af21f66da3`.
+Its fourteen terminal regressions, seven dashboard package checks and
+database-backed WebSocket regression passed locally.
+
+| Test | Observed result |
+| --- | --- |
+| Resource request on schema 183 | A running attempt requested a writable sibling and PostgreSQL together. Two machine polls delivered the same checkpoint. Target review rejected a stale commit and approved the pinned one. |
+| Fresh checkout after a branch moves | A fresh Git receiver restored the approved commit after its branch disappeared. The authenticated server route replayed identical bundle bytes and refused access after revocation. |
+| Browser and terminal | Dashboard v0.1.6 acquired control twice for one socket. Dashboard `1a2e343` acquired control once, accepted shell input, replayed output written during disconnect, and accepted input after reconnect. Chromium ran against the resource-seeded server and a real tmux shell. |
+| Files and SQL together | An isolated Docker Engine container with UID 10002 ran SQL over a private socket and returned the output in its writable sibling archive. The kernel rejected a write to its read-only sibling. |
+
+The browser used an authenticated worker protocol peer. The physical SQL test
+used a rootful Docker daemon. The native worker control, archive and scheduler
+paths have separate tests. This host lacks the UID/GID mapping helpers for a
+physical multi-UID rootless worker rehearsal.
+
+## Run the pilot
+
 Run this from the server pilot worktree. The build uses the existing dashboard integration binary and the worktree's own Cargo target. The runner needs Docker with the local `postgres:17-bookworm` and Graph images, tmux, and Python with `websockets` 16.
 The runner defaults to the pinned local Graph image. Supply another existing fixture image with `--graph-image`.
 
