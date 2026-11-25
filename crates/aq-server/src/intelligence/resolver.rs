@@ -24,7 +24,7 @@ pub async fn resolve_trusted(
     snapshot: &aq_profiles::roles::Snapshot,
 ) -> Result<Decision> {
     let subject = principal::Principal::human(actor)?;
-    resolve_with_principal(state, subject, request, snapshot).await
+    resolve_with_principal(state, subject, request, snapshot, false).await
 }
 /// Scheduled selection derives its principal only from this daemon's configured
 /// project policy. No user identity or worker-selected policy enters this path.
@@ -32,9 +32,10 @@ pub async fn resolve_for_project_policy(
     state: &AppState,
     request: ResolveRequest,
     snapshot: &aq_profiles::roles::Snapshot,
+    workspace_alternative: bool,
 ) -> Result<Decision> {
     let subject = principal::Principal::configured(state, request.lineage.project_id)?;
-    resolve_with_principal(state, subject, request, snapshot).await
+    resolve_with_principal(state, subject, request, snapshot, workspace_alternative).await
 }
 /// `snapshot` is the role snapshot the request's frozen binding names; the
 /// candidates and the selection policy are resolved from it alone.
@@ -43,6 +44,7 @@ async fn resolve_with_principal(
     subject: principal::Principal,
     request: ResolveRequest,
     snapshot: &aq_profiles::roles::Snapshot,
+    workspace_alternative: bool,
 ) -> Result<Decision> {
     let launch = request.launch(snapshot).map_err(bad)?;
     let publication = publication::Publication::new(state, subject, &request)?;
@@ -51,7 +53,7 @@ async fn resolve_with_principal(
     }
     let (project, input) = inputs::collect(state, request, snapshot.digest()).await?;
     use aq_swarm_settings::placement::{self, PlacementError};
-    let outcome = placement::select(&state.store.pool, &launch, &input)
+    let outcome = placement::select(&state.store.pool, &launch, &input, workspace_alternative)
         .await
         .map_err(|e| match e {
             PlacementError::Database(e) => db(e),

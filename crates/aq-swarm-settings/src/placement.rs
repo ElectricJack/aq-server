@@ -2,8 +2,8 @@
 use crate::admission::{self, Cell};
 use aq_profiles::roles::Launch;
 use aq_selection::{
-    ConcreteChoice, SelectionError, SelectionInputs, SelectionOutcome, select_for_offer,
-    select_for_offer_with_capacity,
+    ConcreteChoice, SelectionError, SelectionInputs, SelectionOutcome,
+    select_for_offer_with_capacity, select_for_workspace_environment_with_capacity,
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
@@ -30,8 +30,14 @@ pub async fn select(
     pool: &PgPool,
     launch: &Launch<'_>,
     input: &SelectionInputs,
+    workspace_alternative: bool,
 ) -> Result<SelectionOutcome, PlacementError> {
-    let mut outcome = select_for_offer(launch, input)?;
+    let rank = if workspace_alternative {
+        select_for_workspace_environment_with_capacity
+    } else {
+        select_for_offer_with_capacity
+    };
+    let mut outcome = rank(launch, input, &BTreeMap::new())?;
     let Some(preferred) = &outcome.resolved else {
         return Ok(outcome);
     };
@@ -53,7 +59,7 @@ pub async fn select(
                 unavailable.insert(cell.provider, reason);
             }
         }
-        outcome = select_for_offer_with_capacity(launch, input, &unavailable)?;
+        outcome = rank(launch, input, &unavailable)?;
         if outcome.resolved.is_some() {
             wait = None;
         } else {

@@ -40,6 +40,7 @@ pub struct Compiled {
     pub work_kind: Option<String>,
     /// A routed task's harness and provider limits (spec 0011 §4).
     pub route: Option<aq_routing::RouteLimits>,
+    pub workspace_alternative: bool,
 }
 impl Compiled {
     pub fn launch(&self) -> Result<roles::Launch<'_>, AppError> {
@@ -304,6 +305,7 @@ pub async fn compile(
         thread_identity,
         work_kind,
         route: route.map(aq_routing::CompactRoute::limits),
+        workspace_alternative,
         snapshot: active,
     })
 }

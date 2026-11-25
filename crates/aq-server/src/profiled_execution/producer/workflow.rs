@@ -243,6 +243,7 @@ async fn selection(
             route: compiled.route.clone(),
         },
         &compiled.snapshot,
+        compiled.workspace_alternative,
     )
     .await
 }
