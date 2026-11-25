@@ -61,12 +61,15 @@ async fn resolve_with_principal(
     }
     let (project, input) = inputs::collect(state, request, snapshot.digest()).await?;
     use aq_swarm_settings::placement::{self, PlacementError};
-    let outcome = placement::select(&state.store.pool, &launch, &input, workspace_alternative)
-        .await
-        .map_err(|e| match e {
-            PlacementError::Database(e) => db(e),
-            PlacementError::Selection(_) => bad("selection snapshot refused"),
-        })?;
+    let result = if workspace_alternative {
+        placement::select_for_workspace(&state.store.pool, &launch, &input).await
+    } else {
+        placement::select(&state.store.pool, &launch, &input).await
+    };
+    let outcome = result.map_err(|e| match e {
+        PlacementError::Database(e) => db(e),
+        PlacementError::Selection(_) => bad("selection snapshot refused"),
+    })?;
     publication
         .publish(Decision {
             decision_id: Uuid::new_v4(),

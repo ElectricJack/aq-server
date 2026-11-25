@@ -30,6 +30,24 @@ pub async fn select(
     pool: &PgPool,
     launch: &Launch<'_>,
     input: &SelectionInputs,
+) -> Result<SelectionOutcome, PlacementError> {
+    select_with_capacity(pool, launch, input, false).await
+}
+
+/// Provider capacity can rerank a workspace launch within its one already
+/// admitted environment, retaining all other restrictions.
+pub async fn select_for_workspace(
+    pool: &PgPool,
+    launch: &Launch<'_>,
+    input: &SelectionInputs,
+) -> Result<SelectionOutcome, PlacementError> {
+    select_with_capacity(pool, launch, input, true).await
+}
+
+async fn select_with_capacity(
+    pool: &PgPool,
+    launch: &Launch<'_>,
+    input: &SelectionInputs,
     workspace_alternative: bool,
 ) -> Result<SelectionOutcome, PlacementError> {
     let rank = if workspace_alternative {
