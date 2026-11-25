@@ -52,7 +52,10 @@ directory. It exports one checkpoint bundle per repository, verifies the bundle 
 restores each into an empty bare receiver, and
 prints the exact base and head objects, logical repository IDs, and retention
 handles. The sibling pin is on an orphan branch, so its default branch history
-cannot supply the exact pinned object. These bundles demonstrate the Git substrate and are separate from
+cannot supply the exact pinned object. The stage removes that branch from its
+disposable remote after retaining it, proves a fresh fetch misses it, and
+recovers the exact tree from an aq-git export of the active retention handle.
+These bundles demonstrate the Git substrate and are separate from
 the task's delivery evidence. Ctrl-C stops
 its daemon. The two seed repositories and broker logs remain available for
 local inspection in that directory.

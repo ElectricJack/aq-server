@@ -129,6 +129,38 @@ def retain(binary, address, directory, name, repository, base):
             "bundle_sha256": manifest["bundle_sha256"]}
 
 
+def recover_retained_pin(binary, address, directory, repo, repo_id, oid, retention):
+    # Remove the source ref from this disposable remote to prevent fresh fetch
+    # from accidentally satisfying the test with its default branch.
+    run("git", "-C", repo, "branch", "-D", "workspace-source", stdout=subprocess.DEVNULL)
+    receiver = directory / "sibling-pin-proof"
+    run("git", "init", "--bare", "--quiet", receiver)
+    run("git", "-C", receiver, "-c", "protocol.file.allow=always", "fetch", "--quiet",
+        "--no-tags", repo.as_uri(), "refs/heads/main")
+    reachable = subprocess.run(("git", "-C", receiver, "cat-file", "-e", oid + "^{commit}"),
+                               capture_output=True, check=False)
+    if reachable.returncode == 0:
+        raise RuntimeError("the fresh Git receiver already had the approved sibling pin")
+    base = {"algorithm": "sha1", "hex": oid}
+    exported = request(binary, address, "artifact.export", repo_id, {
+        "source": base, "base": base, "retention_handle": retention,
+    }, generation=1)
+    manifest = exported["manifest"]
+    if manifest["repository_id"] != repo_id or manifest["source"] != base:
+        raise RuntimeError("retained source export did not match the pinned sibling")
+    bundle = directory / "state" / "artifacts" / str(UUID(exported["artifact_handle"])) / "objects.bundle"
+    if hashlib.sha256(bundle.read_bytes()).hexdigest() != manifest["bundle_sha256"]:
+        raise RuntimeError("retained source bundle bytes changed")
+    run("git", "-C", receiver, "bundle", "unbundle", bundle, stdout=subprocess.DEVNULL)
+    marker = run("git", "-C", receiver, "show", oid + ":README.md",
+                 capture_output=True).stdout
+    if marker != b"Disposable dashboard pin with unrelated history\n":
+        raise RuntimeError("fresh receiver did not recover the exact pinned sibling tree")
+    return {"artifact_handle": exported["artifact_handle"],
+            "bundle_sha256": manifest["bundle_sha256"],
+            "recovered_oid": oid}
+
+
 def seed(binary, address, directory, name):
     repo, oid, main, refs = fixture_repo(directory, name)
     repo_id = str(uuid4())
@@ -147,9 +179,14 @@ def seed(binary, address, directory, name):
                         {"oid": {"algorithm": "sha1", "hex": oid}})
     if inspected["oid"] != {"algorithm": "sha1", "hex": oid}:
         raise RuntimeError("aq-git returned an unrelated commit")
-    return {"repository_id": repo_id, "binding_generation": 1, "commit_oid": oid,
-            "default_head": main,
-            "retained_fixture": retain(binary, address, directory, name, repo_id, oid)}
+    retained = retain(binary, address, directory, name, repo_id, oid)
+    result = {"repository_id": repo_id, "binding_generation": 1, "commit_oid": oid,
+              "default_head": main, "retained_fixture": retained}
+    if name == "aq-dashboard":
+        result["retained_pin_recovery"] = recover_retained_pin(
+            binary, address, directory, repo, repo_id, oid, retained["base_retention_handle"],
+        )
+    return result
 
 
 def wait_for_socket(service, address):
