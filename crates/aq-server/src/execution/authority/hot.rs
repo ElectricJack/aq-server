@@ -80,7 +80,6 @@ pub(super) async fn load_adopted_locked(
     rows: super::Rows,
 ) -> super::Result<Option<super::AuthorityView>> {
     use super::Policy;
-    use aq_session_protocol::Digest;
     if node.is_nil() || attempt_id.is_nil() {
         return Err(AuthorityError::Identity);
     }
@@ -94,18 +93,7 @@ pub(super) async fn load_adopted_locked(
     // selection, spec or historical-state JSON. All joined rows have SQL guards.
     let Some(row)=sqlx::query(&rows.sql("SELECT h.state,h.record_revision,h.authority_revision,h.grant_revision,l.decision_id,l.source_observation_id,l.execution_spec_digest,l.manifest_digest,s.selection_digest FROM profiled_authority_hot h JOIN profiled_launches l ON l.attempt_id=h.attempt_id JOIN intelligence_attempt_selections s ON s.attempt_id=h.attempt_id JOIN intelligence_decisions d ON d.decision_id=l.decision_id WHERE h.attempt_id=$1", "FOR UPDATE OF h FOR SHARE OF l,s,d"))
         .bind(attempt_id).fetch_optional(&mut **tx).await? else {return Ok(None);};
-    let digest = |field: &str| -> super::Result<Digest> {
-        serde_json::from_value(serde_json::Value::String(row.get(field)))
-            .map_err(|_| AuthorityError::InvalidState)
-    };
-    let key = Key {
-        attempt_id,
-        decision_id: row.get("decision_id"),
-        source_observation_id: row.get("source_observation_id"),
-        execution_spec_digest: row.get("execution_spec_digest"),
-        launch_manifest_digest: digest("manifest_digest")?,
-        selection_digest: digest("selection_digest")?,
-    };
+    let key = authority_key(&row, attempt_id)?;
     let facts = load_verified_facts(state, tx, &key, &common, revoked, rows).await?;
     let hot: HotState =
         serde_json::from_value(row.get("state")).map_err(|_| AuthorityError::InvalidState)?;
@@ -133,6 +121,22 @@ pub(super) async fn load_adopted_locked(
     })
     .await?;
     Ok(Some(view))
+}
+
+fn authority_key(row: &PgRow, attempt_id: Uuid) -> super::Result<Key> {
+    use aq_session_protocol::Digest;
+    let digest = |field: &str| -> super::Result<Digest> {
+        serde_json::from_value(serde_json::Value::String(row.get(field)))
+            .map_err(|_| AuthorityError::InvalidState)
+    };
+    Ok(Key {
+        attempt_id,
+        decision_id: row.get("decision_id"),
+        source_observation_id: row.get("source_observation_id"),
+        execution_spec_digest: row.get("execution_spec_digest"),
+        launch_manifest_digest: digest("manifest_digest")?,
+        selection_digest: digest("selection_digest")?,
+    })
 }
 
 async fn load_verified_facts(

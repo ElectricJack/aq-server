@@ -1,5 +1,12 @@
 use super::*;
 
+fn assert_refused<T: std::fmt::Debug>(result: Result<T>, expected: ErrorCode) {
+    match result {
+        Err(Error::Refused(code, _)) => assert_eq!(code, expected),
+        other => panic!("expected {expected:?}, got {other:?}"),
+    }
+}
+
 fn granted_attempt() -> AttemptState {
     let identity = NodeIdentity {
         node_id: Uuid::new_v4(),
@@ -242,4 +249,115 @@ fn source_receipt_cannot_release_another_artifact_or_omit_bundle_bytes() {
         check(&incomplete_artifact, &receipt),
         Err(Error::Refused(ErrorCode::InvalidRequest, _))
     ));
+}
+
+#[test]
+fn renewal_checks_authority_before_expiry_and_sequence_without_changing_state() {
+    let state = granted_attempt();
+    let request = RenewRequest {
+        identity: state.offer.identity.clone(),
+        operation_id: Uuid::new_v4(),
+        attempt: state.offer.attempt.clone(),
+        grant_sequence: 1,
+    };
+    let before = encode(&state).unwrap();
+    let grant = state.grant_for_renewal(&request, 99).unwrap();
+    assert_eq!(grant.grant_sequence, 2);
+    assert_eq!(encode(&state).unwrap(), before);
+
+    let mut stale = request.clone();
+    stale.grant_sequence = 0;
+    assert_refused(
+        state.grant_for_renewal(&stale, 99),
+        ErrorCode::StaleGeneration,
+    );
+    assert_refused(
+        state.grant_for_renewal(&stale, 100),
+        ErrorCode::GrantExpired,
+    );
+    stale.identity.boot_id = Uuid::new_v4();
+    assert_refused(state.grant_for_renewal(&stale, 100), ErrorCode::Cancelled);
+
+    for status in [
+        AuthorityStatus::Offered,
+        AuthorityStatus::Cancelling,
+        AuthorityStatus::Finished,
+        AuthorityStatus::Declined,
+    ] {
+        let mut inactive = state.clone();
+        inactive.status = status;
+        assert_refused(
+            inactive.grant_for_renewal(&request, 99),
+            ErrorCode::Cancelled,
+        );
+    }
+    let mut stopped = state.clone();
+    stopped.stopped = true;
+    assert_refused(
+        stopped.grant_for_renewal(&request, 99),
+        ErrorCode::Cancelled,
+    );
+
+    let mut missing = state.clone();
+    missing.grant = None;
+    assert_refused(
+        missing.grant_for_renewal(&request, 99),
+        ErrorCode::InvalidRequest,
+    );
+    let mut exhausted = state;
+    exhausted.grant.as_mut().unwrap().grant_sequence = u64::MAX;
+    let mut request = request;
+    request.grant_sequence = u64::MAX;
+    assert_refused(
+        exhausted.grant_for_renewal(&request, 99),
+        ErrorCode::InvalidRequest,
+    );
+}
+
+#[test]
+fn observations_keep_start_and_stop_evidence_and_refuse_regressions_without_mutation() {
+    let mut state = granted_attempt();
+    let mut observation = Observation {
+        identity: state.offer.identity.clone(),
+        operation_id: Uuid::new_v4(),
+        attempt: state.offer.attempt.clone(),
+        sequence: 1,
+        phase: Phase::LaunchUncertain,
+        stop_certainty: StopCertainty::NotStarted,
+        detail: "launch outcome unknown".into(),
+    };
+    state.observe(&observation).unwrap();
+    assert!(state.may_have_started);
+    assert!(!state.stopped);
+    observation.sequence = 2;
+    observation.phase = Phase::Collecting;
+    observation.stop_certainty = StopCertainty::ConfirmedStopped;
+    state.observe(&observation).unwrap();
+    assert!(state.stopped);
+    assert!(state.may_have_started);
+
+    let before = encode(&state).unwrap();
+    let mut invalid = observation.clone();
+    invalid.identity.boot_id = Uuid::new_v4();
+    assert_refused(state.observe(&invalid), ErrorCode::StaleBoot);
+    assert_eq!(encode(&state).unwrap(), before);
+    assert_refused(state.observe(&observation), ErrorCode::IdConflict);
+    assert_eq!(encode(&state).unwrap(), before);
+    invalid = observation.clone();
+    invalid.sequence += 1;
+    invalid.phase = Phase::Running;
+    assert_refused(state.observe(&invalid), ErrorCode::InvalidRequest);
+    assert_eq!(encode(&state).unwrap(), before);
+    invalid.phase = Phase::Reporting;
+    invalid.stop_certainty = StopCertainty::Running;
+    assert_refused(state.observe(&invalid), ErrorCode::InvalidRequest);
+    assert_eq!(encode(&state).unwrap(), before);
+
+    observation.sequence += 1;
+    observation.phase = Phase::Reporting;
+    observation.stop_certainty = StopCertainty::NotStarted;
+    state.observe(&observation).unwrap();
+    assert!(state.may_have_started);
+    assert!(state.stopped);
+    assert_eq!(state.last_observation, Some(observation));
 }

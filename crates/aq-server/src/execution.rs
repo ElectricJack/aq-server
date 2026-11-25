@@ -103,6 +103,71 @@ pub struct AttemptState {
 }
 
 impl AttemptState {
+    fn grant_for_renewal(&self, request: &RenewRequest, now: u64) -> Result<Grant> {
+        if self.offer.identity != request.identity
+            || self.status != AuthorityStatus::Granted
+            || self.stopped
+        {
+            return Err(refuse(ErrorCode::Cancelled, "attempt no longer authorized"));
+        }
+        if self.grant_expires_at_ms <= now {
+            return Err(refuse(
+                ErrorCode::GrantExpired,
+                "expired grants cannot be renewed",
+            ));
+        }
+        let mut grant = self
+            .grant
+            .clone()
+            .ok_or_else(|| refuse(ErrorCode::InvalidRequest, "grant missing"))?;
+        if request.grant_sequence != grant.grant_sequence {
+            return Err(refuse(ErrorCode::StaleGeneration, "grant sequence changed"));
+        }
+        grant.grant_sequence = grant
+            .grant_sequence
+            .checked_add(1)
+            .ok_or_else(|| refuse(ErrorCode::InvalidRequest, "grant sequence exhausted"))?;
+        Ok(grant)
+    }
+
+    fn observe(&mut self, request: &Observation) -> Result<()> {
+        if self.offer.identity != request.identity {
+            return Err(refuse(
+                ErrorCode::StaleBoot,
+                "observation must name original boot",
+            ));
+        }
+        if let Some(previous) = &self.last_observation {
+            if request.sequence <= previous.sequence {
+                return Err(refuse(
+                    ErrorCode::IdConflict,
+                    "observation sequence already used",
+                ));
+            }
+            if phase_rank(request.phase) < phase_rank(previous.phase) {
+                return Err(refuse(
+                    ErrorCode::InvalidRequest,
+                    "observation phase regressed",
+                ));
+            }
+        }
+        if self.stopped
+            && request.stop_certainty != StopCertainty::ConfirmedStopped
+            && request.stop_certainty != StopCertainty::NotStarted
+        {
+            return Err(refuse(
+                ErrorCode::InvalidRequest,
+                "stopped execution cannot resume",
+            ));
+        }
+        if request.stop_certainty == StopCertainty::ConfirmedStopped {
+            self.stopped = true;
+        }
+        self.may_have_started |= observation_may_have_started(request);
+        self.last_observation = Some(request.clone());
+        Ok(())
+    }
+
     fn validate_result(&self, request: &ResultReport) -> Result<()> {
         if self.offer.identity != request.identity
             || self.offer.spec.resolved_spec_digest != request.resolved_spec_digest
@@ -818,29 +883,7 @@ impl Store {
                 grant: remaining_grant(receipt, &state, now)?,
             });
         }
-        if state.offer.identity != request.identity
-            || state.status != AuthorityStatus::Granted
-            || state.stopped
-        {
-            return Err(refuse(ErrorCode::Cancelled, "attempt no longer authorized"));
-        }
-        if state.grant_expires_at_ms <= now {
-            return Err(refuse(
-                ErrorCode::GrantExpired,
-                "expired grants cannot be renewed",
-            ));
-        }
-        let mut grant = state
-            .grant
-            .clone()
-            .ok_or_else(|| refuse(ErrorCode::InvalidRequest, "grant missing"))?;
-        if request.grant_sequence != grant.grant_sequence {
-            return Err(refuse(ErrorCode::StaleGeneration, "grant sequence changed"));
-        }
-        grant.grant_sequence = grant
-            .grant_sequence
-            .checked_add(1)
-            .ok_or_else(|| refuse(ErrorCode::InvalidRequest, "grant sequence exhausted"))?;
+        let mut grant = state.grant_for_renewal(request, now)?;
         grant.valid_for_ms = self.execution_grant_ttl();
         state.grant = Some(grant.clone());
         state.grant_expires_at_ms = now.saturating_add(grant.valid_for_ms);
@@ -879,40 +922,7 @@ impl Store {
         }
         let mut state = load_attempt(&mut tx, request.attempt.attempt_id).await?;
         bind_attempt(&state, request.identity.node_id, &request.attempt)?;
-        if state.offer.identity != request.identity {
-            return Err(refuse(
-                ErrorCode::StaleBoot,
-                "observation must name original boot",
-            ));
-        }
-        if let Some(previous) = &state.last_observation {
-            if request.sequence <= previous.sequence {
-                return Err(refuse(
-                    ErrorCode::IdConflict,
-                    "observation sequence already used",
-                ));
-            }
-            if phase_rank(request.phase) < phase_rank(previous.phase) {
-                return Err(refuse(
-                    ErrorCode::InvalidRequest,
-                    "observation phase regressed",
-                ));
-            }
-        }
-        if state.stopped
-            && request.stop_certainty != StopCertainty::ConfirmedStopped
-            && request.stop_certainty != StopCertainty::NotStarted
-        {
-            return Err(refuse(
-                ErrorCode::InvalidRequest,
-                "stopped execution cannot resume",
-            ));
-        }
-        if request.stop_certainty == StopCertainty::ConfirmedStopped {
-            state.stopped = true;
-        }
-        state.may_have_started |= observation_may_have_started(request);
-        state.last_observation = Some(request.clone());
+        state.observe(request)?;
         save_attempt(&mut tx, &state).await?;
         let ack = Ack {
             operation_id: request.operation_id,
