@@ -27,6 +27,30 @@ pub fn select_for_offer_with_capacity(
     input: &SelectionInputs,
     unavailable: &BTreeMap<String, &'static str>,
 ) -> Result<SelectionOutcome> {
+    select_with_capacity(launch, input, unavailable, false)
+}
+
+/// Rank an offer for the single environment the scheduler already admitted
+/// for its workspace service scope. All other profile restrictions apply.
+pub fn select_for_workspace_environment_with_capacity(
+    launch: &aq_profiles::roles::Launch<'_>,
+    input: &SelectionInputs,
+    unavailable: &BTreeMap<String, &'static str>,
+) -> Result<SelectionOutcome> {
+    if input.project.allowed_environments.len() != 1 {
+        return Err(SelectionError::Invalid(
+            "workspace offer requires one admitted environment".into(),
+        ));
+    }
+    select_with_capacity(launch, input, unavailable, true)
+}
+
+fn select_with_capacity(
+    launch: &aq_profiles::roles::Launch<'_>,
+    input: &SelectionInputs,
+    unavailable: &BTreeMap<String, &'static str>,
+    workspace_alternative: bool,
+) -> Result<SelectionOutcome> {
     crate::validate::validate_launch(launch, input)?;
     let policy = &launch.selection_policy;
     policy
@@ -43,7 +67,7 @@ pub fn select_for_offer_with_capacity(
         .collect();
     let mut profile = CoreProfile::launch(launch);
     // Spec 0017 §5.4: the frozen binding allows exactly the placed environment.
-    if profile.environments.is_empty() {
+    if workspace_alternative || profile.environments.is_empty() {
         profile.environments = &input.project.allowed_environments;
     }
     finish(&profile, policy, &prepared, input, unavailable)

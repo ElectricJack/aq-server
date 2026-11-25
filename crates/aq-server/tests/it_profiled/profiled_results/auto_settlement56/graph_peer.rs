@@ -35,7 +35,14 @@ impl GraphPeer {
             receipt.clone(),
         );
         let reader = recovery.clone();
+        let active = graph["node"].clone();
         let app = Router::new()
+            .route(
+                "/v1/workspaces/{workspace}/nodes/{id}",
+                axum::routing::get(move || {
+                    std::future::ready(([("X-AQ-Graph-API-Version", "1")], Json(active.clone())))
+                }),
+            )
             .route(
                 "/v1/workspaces/{workspace}/nodes/{id}/context",
                 axum::routing::get(move || {
