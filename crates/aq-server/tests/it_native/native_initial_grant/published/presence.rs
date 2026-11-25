@@ -52,6 +52,65 @@ async fn setup_presence() -> Installed {
     };
     assert_eq!(page.offers.len(), 1);
     let mut c = setup_from(ready.c, page.offers.remove(0)).await;
+    let (record, observed_digest, observed_bytes) = install_material(&mut c).await;
+    let initial = grant(&c).await.unwrap();
+    let grant_sent = 2_000_000_000;
+    let grant_received = 2_001_000_000;
+    let deadline = initial
+        .delivery
+        .clock
+        .client_deadline_ns(grant_sent, grant_received)
+        .unwrap();
+    let report = PresenceReport {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        identity: c.request.identity.clone(),
+        runtime: ready.request.runtime.clone(),
+        runtime_qualification: ready.request.runtime_qualification.clone(),
+        negotiation: ready.request.negotiation.clone(),
+        binding: c.request.binding.clone(),
+        grant_id: initial.original.grant.grant_id,
+        guardian_id: c.request.guardian_id,
+        launch_id: c.request.launch_id,
+        reservation_id: c.request.reservation.reservation_id,
+        lease_id: c.plan.materials[0].lease_id,
+        installation_receipt_digest: aq_selection::digest(&c.request.materials[0]).unwrap(),
+        private_binding: c.request.materials[0].private_binding.clone(),
+        inventory: inventory.inventory.clone(),
+        authority: AuthorityAnchor {
+            kind: AuthorityKind::InitialGrant,
+            operation_id: initial.operation_id,
+            grant_revision: initial.versions.grant_revision,
+            expires_at_ms: initial.original.grant.expires_at_ms,
+        },
+        sequence: 1,
+        ttl_ms: 30_000,
+        observation: Observation {
+            kernel_boot_id: record.kernel_boot_id,
+            clock_source: ClockSource::Boottime,
+            permit_acquired_ns: grant_received,
+            permit_deadline_ns: deadline,
+            read_started_ns: grant_received + 1_000_000,
+            read_completed_ns: grant_received + 2_000_000,
+            sent_ns: grant_received + 3_000_000,
+        },
+        presence: Presence::Present {
+            installation: Box::new(record),
+            observed_material_digest: observed_digest,
+            observed_material_bytes: observed_bytes,
+        },
+    };
+    report
+        .validate_against(&c.plan.materials[0], &c.request.materials[0])
+        .unwrap();
+    Installed {
+        c,
+        initial,
+        report,
+        inventory_request: ready.request,
+    }
+}
+async fn install_material(c: &mut Prepared) -> (PrivateInstallationRecord, Digest, u64) {
     let fetch = MaterialFetch {
         schema_version: 1,
         operation_id: Uuid::new_v4(),
@@ -94,62 +153,19 @@ async fn setup_presence() -> Installed {
         delivery,
     };
     c.request.materials = vec![record.receipt().unwrap()];
-    let initial = grant(&c).await.unwrap();
-    let grant_sent = 2_000_000_000;
-    let grant_received = 2_001_000_000;
-    let deadline = initial
-        .delivery
-        .clock
-        .client_deadline_ns(grant_sent, grant_received)
-        .unwrap();
-    let report = PresenceReport {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        identity: c.request.identity.clone(),
-        runtime: ready.request.runtime.clone(),
-        runtime_qualification: ready.request.runtime_qualification.clone(),
-        negotiation: ready.request.negotiation.clone(),
-        binding: c.request.binding.clone(),
-        grant_id: initial.original.grant.grant_id,
-        guardian_id: c.request.guardian_id,
-        launch_id: c.request.launch_id,
-        reservation_id: c.request.reservation.reservation_id,
-        lease_id: fetch.lease_id,
-        installation_receipt_digest: aq_selection::digest(&c.request.materials[0]).unwrap(),
-        private_binding: c.request.materials[0].private_binding.clone(),
-        inventory: inventory.inventory.clone(),
-        authority: AuthorityAnchor {
-            kind: AuthorityKind::InitialGrant,
-            operation_id: initial.operation_id,
-            grant_revision: initial.versions.grant_revision,
-            expires_at_ms: initial.original.grant.expires_at_ms,
-        },
-        sequence: 1,
-        ttl_ms: 30_000,
-        observation: Observation {
-            kernel_boot_id: record.kernel_boot_id,
-            clock_source: ClockSource::Boottime,
-            permit_acquired_ns: grant_received,
-            permit_deadline_ns: deadline,
-            read_started_ns: grant_received + 1_000_000,
-            read_completed_ns: grant_received + 2_000_000,
-            sent_ns: grant_received + 3_000_000,
-        },
-        presence: Presence::Present {
-            installation: Box::new(record),
-            observed_material_digest: observed_digest,
-            observed_material_bytes: observed_bytes,
-        },
-    };
-    report
-        .validate_against(&c.plan.materials[0], &c.request.materials[0])
-        .unwrap();
-    Installed {
-        c,
-        initial,
-        report,
-        inventory_request: ready.request,
-    }
+    (record, observed_digest, observed_bytes)
+}
+fn private_material_path(c: &Prepared) -> &std::path::Path {
+    let registry = c.case.env.env.state.config.intelligence.as_ref().unwrap();
+    registry
+        .config
+        .credentials
+        .iter()
+        .find(|r| r.credential.profile == c.plan.materials[0].credential_profile)
+        .unwrap()
+        .secret_file
+        .as_deref()
+        .unwrap()
 }
 async fn send_presence(c: &Prepared, r: &PresenceReport) -> (StatusCode, Value) {
     json_post(c, "/v1/worker/profiled/material-presence", r).await
@@ -370,16 +386,7 @@ async fn present_fact_never_bypasses_current_private_backing_or_agent_revocation
     let f = setup_presence().await;
     let (status, body) = send_presence(&f.c, &f.report).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let registry = f.c.case.env.env.state.config.intelligence.as_ref().unwrap();
-    let path = registry
-        .config
-        .credentials
-        .iter()
-        .find(|r| r.credential.profile == f.c.plan.materials[0].credential_profile)
-        .unwrap()
-        .secret_file
-        .as_ref()
-        .unwrap();
+    let path = private_material_path(&f.c);
     let original = std::fs::read(path).unwrap();
     std::fs::write(path, b"changed synthetic private material").unwrap();
     let (status, reply) = renew(&f.c, &f.initial).await;
@@ -398,16 +405,7 @@ async fn normalized_binding_removal_then_restore_requires_new_scoped_read() {
     let f = setup_presence().await;
     let (status, body) = send_presence(&f.c, &f.report).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let registry = f.c.case.env.env.state.config.intelligence.as_ref().unwrap();
-    let path = registry
-        .config
-        .credentials
-        .iter()
-        .find(|r| r.credential.profile == f.c.plan.materials[0].credential_profile)
-        .unwrap()
-        .secret_file
-        .as_ref()
-        .unwrap();
+    let path = private_material_path(&f.c);
     let original = std::fs::read(path).unwrap();
     std::fs::write(path, b"changed actual backing").unwrap();
     let mut inventory = f.inventory_request.clone();
