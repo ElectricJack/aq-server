@@ -36,6 +36,7 @@ python3 scripts/task-workspace-pilot-git.py "$workspace_git"
 ```
 
 Add `--workspace-git "$workspace_git/repositories.json"` to the runner.
+Add `--workspace-only` to exit after the endpoint assertions and bridge readiness.
 The optional phase issues a current attempt credential through the actual worker
 API, requests sibling write access and PostgreSQL in one batch, and verifies
 the exact canonical commit, a durable checkpoint intent, and redelivery in the
@@ -48,7 +49,8 @@ worker eviction, successor hydration, forge PR creation, or task results.
 The aq-git stage fetches only `file:` sources created under its own private
 directory. It exports and checks one distinct local checkpoint bundle per repository and
 prints the exact base and head objects, logical repository IDs, and retention
-handles. These bundles demonstrate the Git substrate and are separate from
+handles. The sibling pin is on an orphan branch, so its default branch history
+cannot supply the exact pinned object. These bundles demonstrate the Git substrate and are separate from
 the task's delivery evidence. Ctrl-C stops
 its daemon. The two seed repositories and broker logs remain available for
 local inspection in that directory.

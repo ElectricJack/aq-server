@@ -179,13 +179,14 @@ def seed_graph(database, password, network, directory, image):
     }
 
 
-async def attach(peer, pane, directory):
+async def attach(peer, pane, directory, workspace_only):
     async with connect(peer.pop("worker_websocket"), additional_headers={
         "Authorization": "Bearer " + peer.pop("worker_token"),
     }) as socket:
         (directory / "browser.json").write_text(json.dumps(peer) + "\n")
         print(json.dumps(peer), flush=True)
-        await relay(socket, pane)
+        if not workspace_only:
+            await relay(socket, pane)
 
 
 def main():
@@ -196,7 +197,11 @@ def main():
     parser.add_argument("--graph-image", default=GRAPH_IMAGE)
     parser.add_argument("--workspace-git", type=Path,
                         help="repositories.json from the private workspace Git stage")
+    parser.add_argument("--workspace-only", action="store_true",
+                        help="exit after the authenticated workspace assertions")
     args = parser.parse_args()
+    if args.workspace_only and args.workspace_git is None:
+        parser.error("--workspace-only requires --workspace-git")
     os.umask(0o077)
     database = "aq-terminal-pilot-" + secrets.token_hex(6)
     shell_container = database + "-shell"
@@ -225,7 +230,7 @@ def main():
                 "AQ_TERMINAL_PILOT_DIR": str(directory),
                 "AQ_TERMINAL_PILOT_DASHBOARD_DIR": str(args.dist.resolve(strict=True)),
             })
-            asyncio.run(attach(await_peer(server, directory), pane, directory))
+            asyncio.run(attach(await_peer(server, directory), pane, directory, args.workspace_only))
         except KeyboardInterrupt:
             pass
         finally:
