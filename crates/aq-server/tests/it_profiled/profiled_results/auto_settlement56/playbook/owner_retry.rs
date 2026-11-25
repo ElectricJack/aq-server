@@ -605,7 +605,7 @@ async fn retry_reconciles_terminal_publication_refusal_after_restart() {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }).await.expect("the original approval retains its publication proof");
-    use aq_playbook_domain::delivery_store::ResultPort;
+    use aq_playbook_domain::delivery_store::DeliveryPort;
     let (port, origin, _) = h.notification();
     let mut tx = h.pool.begin().await.unwrap();
     assert!(
