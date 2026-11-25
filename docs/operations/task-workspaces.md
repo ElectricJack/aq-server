@@ -35,4 +35,9 @@ Docker-local workers with node Git and a private state-directory mapping adverti
 
 The server's Git transport currently comes with the `delivery_playbook` build feature. Enable `project_environments` for database-backed tasks. An approved environment that advertises `postgres` must have PostgreSQL server and client tools installed. The template builder checks those binaries, and the sandbox runs a SQL readiness query before starting the harness. Other toolchain requirements use the existing task `needs` and environment `provides` mechanism.
 
+The sandbox daemon must be able to run the environment's unprivileged agent
+account. Rootless installations need a UID and GID mapping that includes this
+account. Run a task that executes `psql "$DATABASE_URL" -c 'SELECT 1'` when
+qualifying a worker environment for PostgreSQL.
+
 For a local server and dashboard from separate checkouts, build the dashboard with `pnpm build` and use `compose.dashboard.yaml` with `AQ_DASHBOARD_BUNDLE` set to the absolute path of its `dist` directory.
