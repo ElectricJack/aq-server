@@ -27,20 +27,7 @@ impl IntoResponse for Error {
         // The pinned native failure enum stays wire-compatible. A fixed safe
         // diagnostic header names this recoverable configuration conflict.
         let definition_conflict = matches!(self.0, AppError::DefinitionIdentityConflict);
-        let code = if matches!(self.0, AppError::ExecutionCancelled) {
-            FailureCode::Cancelled
-        } else {
-            match status {
-                StatusCode::UNAUTHORIZED => FailureCode::AuthenticationRequired,
-                StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => FailureCode::UnknownOrNotOwned,
-                StatusCode::BAD_REQUEST => FailureCode::InvalidRequest,
-                StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS => {
-                    FailureCode::Capacity
-                }
-                StatusCode::CONFLICT => FailureCode::Conflict,
-                _ => FailureCode::Unavailable,
-            }
-        };
+        let code = failure_code(&self.0, status);
         // Live acceptance D10: the typed failure is redacted on the wire, so
         // the server logs each refusal with its code and owner's reason.
         let reason = self.0.to_api_error();
@@ -77,9 +64,72 @@ impl IntoResponse for Error {
     }
 }
 
+fn failure_code(error: &AppError, status: StatusCode) -> FailureCode {
+    if matches!(error, AppError::ExecutionCancelled) {
+        return FailureCode::Cancelled;
+    }
+    match status {
+        StatusCode::UNAUTHORIZED => FailureCode::AuthenticationRequired,
+        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => FailureCode::UnknownOrNotOwned,
+        StatusCode::BAD_REQUEST => FailureCode::InvalidRequest,
+        StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS => FailureCode::Capacity,
+        StatusCode::CONFLICT => FailureCode::Conflict,
+        _ => FailureCode::Unavailable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_failures_keep_status_code_redaction_and_cache_policy() {
+        for (error, code) in [
+            (
+                AppError::Unauthenticated("private detail".into()),
+                FailureCode::AuthenticationRequired,
+            ),
+            (
+                AppError::Forbidden("private detail".into()),
+                FailureCode::UnknownOrNotOwned,
+            ),
+            (
+                AppError::NotFound("private detail".into()),
+                FailureCode::UnknownOrNotOwned,
+            ),
+            (
+                AppError::BadRequest("private detail".into()),
+                FailureCode::InvalidRequest,
+            ),
+            (
+                AppError::PayloadTooLarge("private detail".into()),
+                FailureCode::Capacity,
+            ),
+            (
+                AppError::Conflict("private detail".into()),
+                FailureCode::Conflict,
+            ),
+            (AppError::ExecutionCancelled, FailureCode::Cancelled),
+            (AppError::Busy, FailureCode::Unavailable),
+            (AppError::Internal, FailureCode::Unavailable),
+        ] {
+            let status = error.status();
+            let response = Error(error).into_response();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(!response.headers().contains_key("aq-error-code"));
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let expected = serde_json::to_vec(&ControlReply::Failure(Failure {
+                schema_version: 1,
+                code,
+                operation_id: None,
+            }))
+            .unwrap();
+            assert_eq!(bytes.as_ref(), expected);
+        }
+    }
 
     #[tokio::test]
     async fn definition_identity_conflict_has_named_native_diagnostic() {
