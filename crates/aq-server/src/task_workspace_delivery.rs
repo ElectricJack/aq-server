@@ -489,11 +489,12 @@ mod tests {
         assert!(!accepts_plan(&mut conn, &plan, false).await.unwrap());
 
         sqlx::query(
-            "INSERT INTO task_workspace_target_acceptance(operation_id,home_project_id,task_id,target_project_id,
-                project_revision,repository_id,binding_generation,result_head,target_ref,kind,evidence,actor_id,recorded_at_ms)
-             VALUES($1,$2,$3,$4,1,$5,2,$6,'refs/heads/main','verified_merge','PR 51',$7,1)",
-        ).bind(Uuid::new_v4()).bind(home).bind(task).bind(sibling).bind(second.repository_id)
-         .bind(&second.head).bind(owner).execute(&mut *conn).await.unwrap();
+            "INSERT INTO delivery_merge_evidence(operation_id,project_id,task_id,pull_request,target,
+                target_ref,expected_head_sha,merge_sha,observed_at_ms)
+             VALUES($1,$2,$3,51,$4,'refs/heads/main',$5,repeat('f',40),1)",
+        ).bind(Uuid::new_v4()).bind(sibling).bind(task)
+         .bind(serde_json::json!({"git":{"repository_id":second.repository_id,"binding_generation":2}}))
+         .bind(&second.head).execute(&mut *conn).await.unwrap();
         assert!(accepts_plan(&mut conn, &plan, false).await.unwrap());
         let mut changed_policy = first.clone();
         changed_policy.project_revision += 1;
