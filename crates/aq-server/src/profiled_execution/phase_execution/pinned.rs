@@ -106,7 +106,6 @@ async fn load_for_locked(
     q: &PrepareRequest,
     mode: LoadMode<'_>,
 ) -> Result<Pinned, AppError> {
-    let issued = mode.issued();
     let h = load_accepted_locked(state, tx, auth, q, mode).await?;
     let runtime =
         registration::current_runtime_locked(state, tx, auth.id(), q.original.identity.boot_id)
@@ -156,7 +155,7 @@ async fn load_for_locked(
     {
         return Err(refused());
     }
-    let ceiling = match issued {
+    let ceiling = match mode.issued() {
         Some(h) => hot
             .grant
             .as_ref()
@@ -527,28 +526,30 @@ fn require_hot_state(
     q: &PrepareRequest,
     h: &AcceptedHistory,
 ) -> Result<(), AppError> {
-    if let Some(issued) = mode.issued() {
-        let live = hot.grant.as_ref().ok_or_else(|| refused())?;
-        let grant_matches = if matches!(mode, LoadMode::Continuing(_)) {
-            live.binding == issued.receipt.grant.binding
-                && live.grant_id == issued.receipt.grant.grant_id
-                && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
-                && live.expires_at_ms <= issued.receipt.execution_deadline_ms
-        } else {
-            same(live, &issued.receipt.grant)?
-        };
-        if !grant_matches
-            || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
-            || hot.preparation_operation_id != Some(h.request.original.operation_id)
-            || hot.owner.as_ref().is_none_or(|o| {
-                o.guardian_id != q.original.guardian_id
-                    || o.launch_id != q.original.launch_id
-                    || o.reservation_id != q.original.reservation.reservation_id
-            })
-        {
+    let Some(issued) = mode.issued() else {
+        if hot.grant.is_some() || hot.execution_deadline_ms.is_some() {
             return Err(refused());
         }
-    } else if hot.grant.is_some() || hot.execution_deadline_ms.is_some() {
+        return Ok(());
+    };
+    let live = hot.grant.as_ref().ok_or_else(|| refused())?;
+    let grant_matches = if matches!(mode, LoadMode::Continuing(_)) {
+        live.binding == issued.receipt.grant.binding
+            && live.grant_id == issued.receipt.grant.grant_id
+            && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
+            && live.expires_at_ms <= issued.receipt.execution_deadline_ms
+    } else {
+        same(live, &issued.receipt.grant)?
+    };
+    if !grant_matches
+        || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
+        || hot.preparation_operation_id != Some(h.request.original.operation_id)
+        || hot.owner.as_ref().is_none_or(|o| {
+            o.guardian_id != q.original.guardian_id
+                || o.launch_id != q.original.launch_id
+                || o.reservation_id != q.original.reservation.reservation_id
+        })
+    {
         return Err(refused());
     }
     Ok(())

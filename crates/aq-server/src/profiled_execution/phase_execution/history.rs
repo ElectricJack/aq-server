@@ -93,18 +93,18 @@ async fn history_storage_available(tx: &mut Transaction<'_, Postgres>) -> Result
             .fetch_one(&mut **tx)
             .await
             .map_err(db)?;
-    if !present {
-        let version: String =
-            sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
-                .fetch_one(&mut **tx)
-                .await
-                .map_err(db)?;
-        if version.parse::<u32>().map_err(|_| refused())? >= 32 {
-            return Err(refused());
-        }
-        return Ok(false);
+    if present {
+        return Ok(true);
     }
-    Ok(true)
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key='state_format_version'")
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    if version.parse::<u32>().map_err(|_| refused())? >= 32 {
+        return Err(refused());
+    }
+    Ok(false)
 }
 
 fn validate_provenance_row(
@@ -194,8 +194,7 @@ impl IssuedDocuments {
         {
             return Err(refused());
         }
-        validate_provenance_row(row, provenance, accepted)?;
-        Ok(())
+        validate_provenance_row(row, provenance, accepted)
     }
 }
 
