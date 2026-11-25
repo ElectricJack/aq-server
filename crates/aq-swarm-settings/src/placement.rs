@@ -23,7 +23,7 @@ pub fn cell(input: &SelectionInputs, choice: &ConcreteChoice) -> Cell {
     }
 }
 
-/// The ordinary ranker owns route preferences, pins and fallback policy. On a
+/// The ordinary ranker owns route preferences and candidate eligibility. On a
 /// capacity refusal it ranks the same launch against one snapshot of all limits.
 /// The offer transaction independently fences the winner before claiming the task.
 pub async fn select(
