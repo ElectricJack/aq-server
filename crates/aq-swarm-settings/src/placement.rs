@@ -23,9 +23,9 @@ pub fn cell(input: &SelectionInputs, choice: &ConcreteChoice) -> Cell {
     }
 }
 
-/// Check only providers the ordinary ranker would actually choose. All checks
-/// and the final wait projection share the settings lock. The offer transaction
-/// independently fences the winner before claiming the task.
+/// The ordinary ranker owns route preferences, pins and fallback policy. On a
+/// capacity refusal it ranks the same launch against one snapshot of all limits.
+/// The offer transaction independently fences the winner before claiming the task.
 pub async fn select(
     pool: &PgPool,
     launch: &Launch<'_>,
@@ -35,32 +35,40 @@ pub async fn select(
     let Some(preferred) = &outcome.resolved else {
         return Ok(outcome);
     };
-    let task = input.project.lineage.task_id;
     let first = cell(input, &preferred.choice);
     let mut tx = pool.begin().await?;
-    let wait = admission::observe(&mut tx, task, Some(&first), input.now_ms as i64).await?;
+    let Some(capacity) = admission::Capacity::load(&mut tx).await? else {
+        tx.commit().await?;
+        return Ok(outcome);
+    };
+    let mut wait = capacity.reason(Some(&first));
     if let Some(first_reason) = wait {
-        let mut unavailable = BTreeMap::from([(first.provider, first_reason)]);
-        loop {
-            outcome = select_for_offer_with_capacity(launch, input, &unavailable)?;
-            let Some(next) = &outcome.resolved else {
-                // Keep the preferred cell's actionable wait. Per-candidate reasons
-                // in the traces retain other refusals and any fallback restrictions.
-                outcome.reason_codes = vec![first_reason.into()];
-                break;
+        let mut unavailable = BTreeMap::new();
+        for candidate in &launch.candidates {
+            let cell = Cell {
+                provider: candidate.provider.clone(),
+                intelligence_class: first.intelligence_class.clone(),
             };
-            let next = cell(input, &next.choice);
-            match admission::check(&mut tx, Some(&next)).await? {
-                Some(reason) => {
-                    unavailable.insert(next.provider, reason);
-                }
-                None => {
-                    admission::clear_waiting(&mut tx, task).await?;
-                    break;
-                }
+            if let Some(reason) = capacity.reason(Some(&cell)) {
+                unavailable.insert(cell.provider, reason);
             }
         }
+        outcome = select_for_offer_with_capacity(launch, input, &unavailable)?;
+        if outcome.resolved.is_some() {
+            wait = None;
+        } else {
+            // Keep the preferred cell's actionable wait and all per-candidate traces.
+            outcome.reason_codes = vec![first_reason.into()];
+        }
     }
+    admission::record_wait(
+        &mut tx,
+        input.project.lineage.task_id,
+        Some(&first),
+        input.now_ms as i64,
+        wait,
+    )
+    .await?;
     tx.commit().await?;
     Ok(outcome)
 }
