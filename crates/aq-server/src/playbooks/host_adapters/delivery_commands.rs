@@ -61,6 +61,34 @@ impl DeliveryOps for ServerDelivery {
         self.commands.get_or_init(init).await.clone()
     }
 
+    async fn replay_publication(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        origin: &aq_playbook_domain::host10::ResultReady,
+        command: &str,
+    ) -> Result<Option<delivery::Completion>> {
+        use crate::task_workspace_delivery as workspaces;
+        if !workspaces::has_scope(
+            &self.state,
+            tx,
+            origin.attempt_id,
+            origin.project_id,
+            origin.task_id,
+        )
+        .await
+        .map_err(|_| Error::Unknown)?
+        {
+            return Ok(None);
+        }
+        let result =
+            crate::profiled_execution::results::load_locked(&self.state, tx, origin.result_id)
+                .await
+                .map_err(|_| Error::Unknown)?;
+        workspaces::replay_home_publication(&self.state, tx, &result, command)
+            .await
+            .map_err(|_| Error::Unknown)
+    }
+
     async fn merge_readiness(
         &self,
         tx: &mut Transaction<'_, Postgres>,

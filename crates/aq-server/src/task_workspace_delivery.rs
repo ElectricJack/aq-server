@@ -270,6 +270,90 @@ pub(crate) async fn has_scope(
     ).bind(attempt).bind(project).bind(task).fetch_one(db).await.map_err(crate::error::db)
 }
 
+/// Replaying a result at an already-merged Home head must not republish
+/// the removed branch or create a replacement PR for that same revision.
+pub(crate) async fn replay_home_publication(
+    state: &AppState,
+    db: &mut PgConnection,
+    result: &RecordedResult,
+    command: &str,
+) -> Result<Option<aq_delivery::commands::Completion>, AppError> {
+    use aq_delivery::commands::Completion;
+    use serde_json::json;
+    let Some(plan) = load(state, db, result).await? else {
+        return Ok(None);
+    };
+    let Some(home) = plan
+        .sources
+        .get(&plan.home)
+        .filter(|source| source.publication_mode.as_deref() == Some("pull_request"))
+    else {
+        return Ok(None);
+    };
+    if !target_accepted(db, &plan, home).await? {
+        return Ok(None);
+    }
+    if command == "branch.publish" {
+        return Ok(Some(Completion::new(
+            "published",
+            json!({"head":home.head}),
+        )));
+    }
+    let proof: Option<(i64, String)> = sqlx::query_as(
+        "SELECT pull_request,concat('https://github.com/',target#>>'{github,owner}','/',
+             target#>>'{github,name}','/pull/',pull_request) AS url
+         FROM delivery_merge_evidence
+         WHERE task_id=$1 AND project_id=$2 AND expected_head_sha=$3 AND target_ref=$4
+           AND target#>>'{git,repository_id}'=$5::uuid::text
+           AND target#>>'{git,binding_generation}'=$6::bigint::text
+           AND target#>>'{github,owner}' IS NOT NULL AND target#>>'{github,name}' IS NOT NULL
+         ORDER BY observed_at_ms,operation_id LIMIT 1",
+    )
+    .bind(plan.task)
+    .bind(plan.home)
+    .bind(&home.head)
+    .bind(&home.target_ref)
+    .bind(home.repository_id)
+    .bind(home.binding_generation)
+    .fetch_optional(&mut *db)
+    .await
+    .map_err(crate::error::db)?;
+    if let Some((number, url)) = proof {
+        return Ok(Some(Completion::new(
+            "opened",
+            json!({"number":number,"url":url}),
+        )));
+    }
+    let url: Option<String> = sqlx::query_scalar(
+        "SELECT evidence FROM task_workspace_target_acceptance
+         WHERE home_project_id=$1 AND task_id=$2 AND target_project_id=$1 AND project_revision=$3
+           AND repository_id=$4 AND binding_generation=$5 AND result_head=$6 AND target_ref=$7
+           AND kind='verified_merge'
+         ORDER BY recorded_at_ms,operation_id LIMIT 1",
+    )
+    .bind(plan.home)
+    .bind(plan.task)
+    .bind(home.project_revision)
+    .bind(home.repository_id)
+    .bind(home.binding_generation)
+    .bind(&home.head)
+    .bind(&home.target_ref)
+    .fetch_optional(&mut *db)
+    .await
+    .map_err(crate::error::db)?;
+    if let Some(url) = url
+        && let Some(number) = url.rsplit('/').next().and_then(|n| n.parse::<u64>().ok())
+    {
+        return Ok(Some(Completion::new(
+            "opened",
+            json!({"number":number,"url":url}),
+        )));
+    }
+    // Known delivery still prevents any new forge write even if the original
+    // PR display URL was not retained.
+    Ok(Some(Completion::refused("unreachable")))
+}
+
 pub(crate) async fn merge_readiness(
     state: &AppState,
     db: &mut PgConnection,

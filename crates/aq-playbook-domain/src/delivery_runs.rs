@@ -95,6 +95,16 @@ pub trait DeliveryOps: Send + Sync {
     async fn target(&self, project: Uuid) -> Result<Option<DeliveryTarget>>;
     /// Operations over the forge and central aq-git, if configured.
     async fn commands(&self) -> Option<Delivery>;
+    /// An already delivered Home revision can reuse its publication even
+    /// when the other repositories in the same task are retried.
+    async fn replay_publication(
+        &self,
+        _tx: &mut Transaction<'_, Postgres>,
+        _origin: &ResultReady,
+        _command: &str,
+    ) -> Result<Option<Completion>> {
+        Ok(None)
+    }
     /// A multi-repository result may have additional Home delivery fences.
     async fn merge_readiness(
         &self,
@@ -322,6 +332,14 @@ impl DeliveryRuns<'_> {
             };
             if !self.results.lock_current(db, &origin).await? {
                 return Ok(Some(stale_completion(command)));
+            }
+            if matches!(command, "branch.publish" | "pull_request.open")
+                && let Some(receipt) = self
+                    .operations
+                    .replay_publication(db, &origin, command)
+                    .await?
+            {
+                return Ok(Some(receipt));
             }
             if command == "pull_request.merge" {
                 match self.operations.merge_readiness(db, &origin).await? {
