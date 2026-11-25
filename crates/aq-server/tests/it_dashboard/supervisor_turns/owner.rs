@@ -980,6 +980,33 @@ async fn project_supervisor_cannot_attest_or_publish_a_sibling_workspace() {
             "{body}"
         );
     }
+    let command = json!({"operation_id":Uuid::new_v4(),"action":{
+        "kind":"publish","target_project_id":o.other,"head":head
+    }});
+    let human = || {
+        call(
+            &o.owner,
+            "POST",
+            &path,
+            As::Owner { csrf: true },
+            Some(command.clone()),
+        )
+    };
+    assert_eq!(
+        human().await.0,
+        StatusCode::NOT_FOUND,
+        "the human reaches report lookup"
+    );
+    sqlx::query("UPDATE users SET role='viewer' WHERE id=$1")
+        .bind(o.f.user.id)
+        .execute(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        human().await.0,
+        StatusCode::FORBIDDEN,
+        "the same identity lost owner rights"
+    );
     let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM task_workspace_target_acceptance")
         .fetch_one(&o.f.pool)
         .await
