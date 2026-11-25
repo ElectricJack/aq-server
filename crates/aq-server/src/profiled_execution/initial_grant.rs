@@ -256,6 +256,16 @@ async fn locked(
         return Err(refused());
     }
     let old = original(tx, request).await?;
+    if old.is_none() {
+        let scope = &offer.offered.offer.manifest.bindings;
+        crate::task_workspace_resume::fence_start(
+            tx,
+            scope.project_id,
+            scope.task_id,
+            request.binding.attempt_id,
+        )
+        .await?;
+    }
     let decision:Value=sqlx::query_scalar("SELECT d.decision FROM profiled_launches l JOIN intelligence_decisions d USING(decision_id) WHERE l.attempt_id=$1 FOR SHARE OF d").bind(request.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
     let decision: Decision = serde_json::from_value(decision).map_err(|_| refused())?;
     if let Some(grant) = &old {

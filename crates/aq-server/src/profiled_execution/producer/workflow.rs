@@ -396,7 +396,7 @@ pub async fn poll(
     auth: &AuthenticatedNode,
     request: &Poll,
 ) -> Result<NativePollPage, AppError> {
-    poll_slot(state, auth, request, 1, false)
+    poll_slot(state, auth, request, 1, false, false)
         .await
         .map(PollDelivery::into_native)
 }
@@ -406,6 +406,7 @@ pub(super) async fn poll_slot(
     request: &Poll,
     slot: u32,
     supports_git_author: bool,
+    supports_workspace: bool,
 ) -> Result<PollDelivery, AppError> {
     TransportDocument::Poll(request.clone())
         .validate()
@@ -446,6 +447,7 @@ pub(super) async fn poll_slot(
                 page,
                 slot,
                 supports_git_author,
+                supports_workspace,
             ))
             .await;
             if let Err(error) = &result {
@@ -477,6 +479,7 @@ async fn offers(
     mut page: PollDelivery,
     slot: u32,
     supports_git_author: bool,
+    supports_workspace: bool,
 ) -> Result<PollDelivery, AppError> {
     let diagnostics = PollDiagnostics::new(state, request);
     let (runtime, snapshot, modes) = on_heap(|| runtime(state, auth, request)).await?;
@@ -492,6 +495,21 @@ async fn offers(
                 Some(native.native.offered.offer.manifest.bindings.task_id),
                 "git_author_unsupported",
             );
+            return Ok(page);
+        }
+        let offer = &native.native.offered.offer;
+        let binding = &offer.manifest.bindings;
+        let mut connection = state.store.pool.acquire().await.map_err(db)?;
+        if let Some(reason) = crate::task_workspace_resume::still_current(
+            &mut connection,
+            binding.project_id,
+            binding.task_id,
+            offer.binding.attempt_id,
+            supports_workspace,
+        )
+        .await?
+        {
+            diagnostics.record(Some(binding.task_id), reason);
             return Ok(page);
         }
         page.server_time_ms = native.native.offered.clock.server_time_ms;
@@ -678,6 +696,13 @@ async fn offers(
                         {
                             return Ok(Assessment::Blocked("git_author_unsupported"));
                         }
+                        if let Some(reason) =
+                            crate::task_workspace_resume::scope(pool, project, task)
+                                .await?
+                                .blocker(supports_workspace)
+                        {
+                            return Ok(Assessment::Blocked(reason));
+                        }
                         let seen = holds::history(pool, task).await;
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
@@ -760,10 +785,19 @@ async fn offers(
         let generation =
             on_heap(|| super::super::no_grant::next_generation(&state.store.pool, task.task_id))
                 .await?;
-        let metadata = (ready.items.iter())
+        let workspace =
+            crate::task_workspace_resume::scope(&state.store.pool, policy.project_id, task.task_id)
+                .await?;
+        if let Some(reason) = workspace.blocker(supports_workspace) {
+            diagnostics.record(Some(task.task_id), reason);
+            skipped.insert(task.task_id);
+            continue;
+        }
+        let mut metadata = (ready.items.iter())
             .find(|r| r.revision == task)
             .map(|r| r.node["metadata"].clone())
             .ok_or_else(|| refused())?;
+        workspace.apply_service_needs(&mut metadata);
         let context = on_heap(|| {
             graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref())
         })
@@ -837,6 +871,19 @@ async fn offers(
             }
             None => None,
         };
+        if handoff.is_none()
+            && let Some(r) = &replacement
+        {
+            let mut connection = state.store.pool.acquire().await.map_err(db)?;
+            if crate::task_workspace_resume::checkpoint_required(&mut connection, r.predecessor)
+                .await?
+                && !super::super::has_delivery_grant(&mut *connection, r.predecessor).await?
+            {
+                diagnostics.record(Some(task.task_id), crate::task_workspace_resume::CHECKPOINT);
+                skipped.insert(task.task_id);
+                continue;
+            }
+        }
         let retained = match replacement.as_ref().filter(|_| handoff.is_none()) {
             Some(r) => {
                 Some(on_heap(|| replacement::retained_source(state, task.task_id, r)).await?)
@@ -1031,6 +1078,7 @@ async fn offers(
                     generation,
                     enrolled,
                     supports_git_author,
+                    workspace: &workspace,
                 })
             })
             .await?;
@@ -1096,6 +1144,11 @@ async fn offers(
             publication::Outcome::Unavailable => {
                 diagnostics.record(Some(task.task_id), "publication_unavailable");
                 return Ok(page);
+            }
+            publication::Outcome::WorkspaceBlocked(reason) => {
+                diagnostics.record(Some(task.task_id), reason);
+                skipped.insert(task.task_id);
+                continue;
             }
             publication::Outcome::NeedsGitAuthor => {
                 diagnostics.record(Some(task.task_id), "git_author_unsupported");

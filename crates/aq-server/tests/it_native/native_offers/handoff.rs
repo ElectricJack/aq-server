@@ -418,3 +418,82 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     let rows = super::holds::hold_rows(&c, task).await;
     assert_eq!(rows[0].3.as_deref(), Some("task_closed"), "{rows:?}");
 }
+
+#[tokio::test]
+async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let c = native_offer::setup().await;
+    let pool = &c.env.env.pool;
+    let (home, task) = (c.env.lineage.project_id, c.env.lineage.task_id);
+    let (sibling, repository) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO project_execution_bindings
+         (project_id,revision,binding,validated_at_ms,binding_observation)
+         VALUES ($1,1,jsonb_build_object('enabled',true,'repository_id',$2::text,
+                                         'repository_binding_generation',1),1,'{}')",
+    )
+    .bind(sibling)
+    .bind(repository.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO task_workspace_sources
+         (home_project_id,task_id,target_project_id,project_revision,repository_id,
+          binding_generation,commit_oid,access,state)
+         VALUES($1,$2,$3,1,$4,1,repeat('a',40),'read','pending')",
+    )
+    .bind(home)
+    .bind(task)
+    .bind(sibling)
+    .bind(repository)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let poll = || async {
+        let response = aq_server::build_worker_router(c.env.env.state.clone())
+            .oneshot(
+                axum::http::Request::post("/v1/worker/profiled/poll")
+                    .header("authorization", format!("Bearer {}", c.env.env.credential))
+                    .header("content-type", "application/json")
+                    .header("AQ-Workspace-Expansion", "1")
+                    .body(Body::from(serde_json::to_vec(&c.request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
+            .unwrap()
+    };
+    assert_eq!(poll().await["offers"], json!([]));
+    native_offer::assembled(&c).await;
+    sqlx::query("UPDATE task_workspace_sources SET state='approved' WHERE task_id=$1")
+        .bind(task)
+        .execute(pool)
+        .await
+        .unwrap();
+    refused_poll(&c).await;
+
+    let mut body = poll().await;
+    native_offer::assembled(&c).await;
+    if body["offers"] == json!([]) {
+        body = poll().await;
+    }
+    let offer = sole_offer(&body);
+    let attempt = offer.offered.offer.binding.attempt_id;
+    let frozen: Value =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(frozen["sources"][0]["target_project_id"], json!(sibling));
+    assert_eq!(frozen["sources"][0]["commit_oid"], json!("a".repeat(40)));
+    assert_eq!(frozen["services"], json!([]));
+    refused_poll(&c).await;
+}

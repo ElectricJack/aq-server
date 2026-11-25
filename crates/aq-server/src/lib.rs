@@ -8,6 +8,7 @@ pub mod dashboard_api;
 pub mod dashboard_assets;
 pub mod delegated_permits;
 mod scheduling_diagnostics;
+mod task_workspace_resume;
 pub use aq_delivery as delivery;
 pub mod error;
 pub mod execution;
