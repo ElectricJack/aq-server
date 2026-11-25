@@ -38,7 +38,16 @@ fn private_file(path: &Path, bytes: &[u8]) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 fn config(path: &Path, origin: &str, node: Uuid, boot: Uuid, token: &Path) {
-    private_file(path,&serde_json::to_vec(&json!({"version":1,"origin":origin,"node_id":node,"boot_id":boot,"credential_file":token,"allow_loopback_http":true})).unwrap());
+    let bytes = serde_json::to_vec(&json!({
+        "version": 1,
+        "origin": origin,
+        "node_id": node,
+        "boot_id": boot,
+        "credential_file": token,
+        "allow_loopback_http": true,
+    }))
+    .unwrap();
+    private_file(path, &bytes);
 }
 async fn invoke(
     binary: &Path,
@@ -125,6 +134,69 @@ fn read_request(s: &mut TcpStream) -> Vec<u8> {
         }
     }
 }
+fn proxy_request(raw: &[u8], upstream: SocketAddr) -> (Vec<u8>, Option<Request>) {
+    let end = header_end(raw).unwrap();
+    let headers = std::str::from_utf8(&raw[..end]).unwrap();
+    let first = headers.lines().next().unwrap();
+    assert!(matches!(
+        first,
+        "POST /v1/worker/observations/transport HTTP/1.1"
+            | "GET /v1/worker/observations/transport HTTP/1.1"
+    ));
+    let mutation = first
+        .starts_with("POST ")
+        .then(|| serde_json::from_slice(&raw[end..]).unwrap());
+    let mut forward = format!("{first}\r\nHost: {upstream}\r\nConnection: close\r\n").into_bytes();
+    for line in headers.lines().skip(1).filter(|s| !s.is_empty()) {
+        let (key, _) = line.split_once(':').unwrap();
+        if !key.eq_ignore_ascii_case("host") && !key.eq_ignore_ascii_case("connection") {
+            forward.extend_from_slice(line.as_bytes());
+            forward.extend_from_slice(b"\r\n");
+        }
+    }
+    forward.extend_from_slice(b"\r\n");
+    forward.extend_from_slice(&raw[end..]);
+    (forward, mutation)
+}
+
+fn upstream_reply(upstream: SocketAddr, request: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect_timeout(&upstream, Duration::from_secs(3)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.write_all(request).unwrap();
+    let mut response = vec![];
+    stream.take(24577).read_to_end(&mut response).unwrap();
+    assert!(response.len() <= 24576);
+    assert!(
+        response.starts_with(b"HTTP/1.1 200"),
+        "unexpected synthetic upstream status"
+    );
+    response
+}
+
+fn proxy_reply(
+    downstream: &mut TcpStream,
+    upstream: SocketAddr,
+    mutations: &Mutex<Vec<Request>>,
+    drops: &mut BTreeSet<String>,
+) {
+    let (forward, mutation) = proxy_request(&read_request(downstream), upstream);
+    let kind = mutation.map(|request| {
+        let kind = match request.operation {
+            Operation::Prepare { .. } => "prepare",
+            Operation::Activate { .. } => "activate",
+            Operation::AdvanceBoot { .. } => "advance_boot",
+        };
+        mutations.lock().unwrap().push(request);
+        kind
+    });
+    let response = upstream_reply(upstream, &forward);
+    if !kind.is_some_and(|k| drops.remove(k)) {
+        downstream.write_all(&response).unwrap();
+    }
+}
+
 /// This fault proxy can connect only to the synthetic listener supplied by this
 /// test. It never takes a caller URL or forwards any other route.
 struct LostReplyProxy {
@@ -154,51 +226,7 @@ impl LostReplyProxy {
                     }
                     Err(e) => panic!("{e}"),
                 };
-                let raw = read_request(&mut downstream);
-                let end = header_end(&raw).unwrap();
-                let headers = std::str::from_utf8(&raw[..end]).unwrap();
-                let first = headers.lines().next().unwrap();
-                assert!(matches!(
-                    first,
-                    "POST /v1/worker/observations/transport HTTP/1.1"
-                        | "GET /v1/worker/observations/transport HTTP/1.1"
-                ));
-                let mut kind = None;
-                if first.starts_with("POST ") {
-                    let request: Request = serde_json::from_slice(&raw[end..]).unwrap();
-                    kind = Some(match request.operation {
-                        Operation::Prepare { .. } => "prepare",
-                        Operation::Activate { .. } => "activate",
-                        Operation::AdvanceBoot { .. } => "advance_boot",
-                    });
-                    captured.lock().unwrap().push(request);
-                }
-                let mut forward =
-                    format!("{first}\r\nHost: {upstream}\r\nConnection: close\r\n").into_bytes();
-                for line in headers.lines().skip(1).filter(|s| !s.is_empty()) {
-                    let (key, _) = line.split_once(':').unwrap();
-                    if !key.eq_ignore_ascii_case("host") && !key.eq_ignore_ascii_case("connection")
-                    {
-                        forward.extend_from_slice(line.as_bytes());
-                        forward.extend_from_slice(b"\r\n");
-                    }
-                }
-                forward.extend_from_slice(b"\r\n");
-                forward.extend_from_slice(&raw[end..]);
-                let mut up = TcpStream::connect_timeout(&upstream, Duration::from_secs(3)).unwrap();
-                up.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                up.write_all(&forward).unwrap();
-                let mut response = vec![];
-                up.take(24577).read_to_end(&mut response).unwrap();
-                assert!(response.len() <= 24576);
-                assert!(
-                    response.starts_with(b"HTTP/1.1 200"),
-                    "unexpected synthetic upstream status"
-                );
-                if kind.is_some_and(|k| drops.remove(k)) {
-                    continue;
-                }
-                downstream.write_all(&response).unwrap();
+                proxy_reply(&mut downstream, upstream, &captured, &mut drops);
             }
         });
         Self {
@@ -215,6 +243,65 @@ impl Drop for LostReplyProxy {
         self.thread.take().unwrap().join().unwrap();
     }
 }
+
+#[test]
+fn proxy_preserves_get_headers_without_capturing_a_mutation() {
+    let upstream = "127.0.0.1:12345".parse().unwrap();
+    let credential = Uuid::new_v4().to_string();
+    let raw = format!(
+        "GET /v1/worker/observations/transport HTTP/1.1\r\nhOsT: old.invalid\r\ncOnNeCtIoN: keep-alive\r\nAuthorization: Bearer {credential}\r\n\r\n"
+    );
+    let (forward, mutation) = proxy_request(raw.as_bytes(), upstream);
+    assert!(mutation.is_none());
+    assert_eq!(
+        String::from_utf8(forward).unwrap(),
+        format!(
+            "GET /v1/worker/observations/transport HTTP/1.1\r\nHost: {upstream}\r\nConnection: close\r\nAuthorization: Bearer {credential}\r\n\r\n"
+        )
+    );
+}
+
+#[test]
+fn proxy_preserves_post_body_and_captures_exact_mutation() {
+    let upstream = "127.0.0.1:12345".parse().unwrap();
+    let request = Request {
+        version: aq_observation_admission::VERSION,
+        operation_id: Uuid::new_v4(),
+        node_id: Uuid::new_v4(),
+        operation: Operation::Prepare {
+            boot_id: Uuid::new_v4(),
+            store_id: Uuid::new_v4(),
+        },
+    };
+    let body = serde_json::to_vec_pretty(&request).unwrap();
+    let headers = format!(
+        "POST /v1/worker/observations/transport HTTP/1.1\r\nHost: old.invalid\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n",
+        body.len()
+    );
+    let mut raw = headers.into_bytes();
+    raw.extend_from_slice(&body);
+    let (forward, mutation) = proxy_request(&raw, upstream);
+    assert_eq!(mutation, Some(request));
+    let end = header_end(&forward).unwrap();
+    assert_eq!(&forward[end..], body);
+    assert_eq!(
+        std::str::from_utf8(&forward[..end]).unwrap(),
+        format!(
+            "POST /v1/worker/observations/transport HTTP/1.1\r\nHost: {upstream}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n",
+            body.len()
+        )
+    );
+}
+
+#[test]
+#[should_panic]
+fn proxy_rejects_other_routes() {
+    proxy_request(
+        b"GET /v2/worker/register HTTP/1.1\r\nHost: old.invalid\r\n\r\n",
+        "127.0.0.1:12345".parse().unwrap(),
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires separately qualified exact owner_peer artifact and scripts/test-db disposable Postgres"]
 async fn actual_http_lost_prepare_activate_reply_restart_and_missing_active_store_never_reseed() {

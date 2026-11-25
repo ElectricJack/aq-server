@@ -28,6 +28,7 @@ mod human_work;
 mod notification_discord_live;
 mod notification_policy;
 mod notification_store;
+mod performance;
 mod session_inspection;
 mod supervisor_conversation;
 mod supervisor_turns;

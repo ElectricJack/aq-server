@@ -314,12 +314,12 @@ pub(crate) fn cancellation_path(path: &str) -> bool {
         .strip_prefix("/api/playbooks/runs/")
         .and_then(|s| s.strip_suffix("/cancel"))
     {
-        return id
-            .strip_prefix("run-")
-            .is_some_and(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            || id
-                .strip_prefix("event-sha256:")
-                .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        return [("run-", 16), ("event-sha256:", 64)]
+            .iter()
+            .any(|(prefix, len)| {
+                id.strip_prefix(prefix)
+                    .is_some_and(|s| s.len() == *len && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            });
     }
     false
 }
@@ -331,4 +331,41 @@ async fn inspect_run(
 ) -> Result<impl IntoResponse> {
     owner(&d, user.id)?;
     Ok(Json(d.inspect_run(id).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cancellation_path;
+
+    #[test]
+    fn cancellation_routes_require_exact_typed_identifiers() {
+        assert!(cancellation_path("/api/playbooks/stop"));
+        assert!(cancellation_path(&format!(
+            "/api/playbooks/grants/{}/revoke",
+            uuid::Uuid::nil()
+        )));
+        for (prefix, length) in [("run-", 16), ("event-sha256:", 64)] {
+            let path = |id: String| format!("/api/playbooks/runs/{prefix}{id}/cancel");
+            assert!(cancellation_path(&path("aB09".repeat(length / 4))));
+            for id in [
+                "a".repeat(length - 1),
+                "a".repeat(length + 1),
+                "g".repeat(length),
+                "/".repeat(length),
+                "é".repeat(length / 2),
+            ] {
+                assert!(!cancellation_path(&path(id)));
+            }
+        }
+        for path in [
+            "/api/playbooks/stop/",
+            "/api/playbooks/grants/no/revoke",
+            "/api/playbooks/runs/run-/cancel",
+            "/api/playbooks/bindings/id/deactivate",
+            "/other/stop",
+            "/api/playbooks/runs/run-0000000000000000/cancel/extra",
+        ] {
+            assert!(!cancellation_path(path), "{path}");
+        }
+    }
 }

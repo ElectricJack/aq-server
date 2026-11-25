@@ -269,61 +269,108 @@ async fn exchange(mut peer: Peer, request: Request) -> std::result::Result<Strin
     .await
     .map_err(|_| ())??;
     let scope = peer.scope.lock().map_err(|_| ())?.clone().ok_or(())?;
-    tokio::time::timeout(remaining(scope.deadline_ns).map_err(|_|())?, async {
-        let body = to_bytes(request.into_body(), MAX_BODY - 1).await.map_err(|_| ())?;
-        let text = std::str::from_utf8(&body).map_err(|_| ())?;
-        let mut forbidden=peer.forbidden.clone();
-        forbidden.push(scope.local_capability.clone());
-        let checked = peer.cli.call(&json!({"operation":"check","model":peer.model,"output_cap":4096,
-            "forbidden_material":forbidden,"body_utf8":text})).await.map_err(|_| ())?;
-        if checked["valid"] != true { return Err(()); }
-        let body:Value=serde_json::from_slice(&body).map_err(|_|())?;
-        let requests={
-            let mut observed=peer.observed.lock().map_err(|_|())?;
-            if observed.len()>=MAX_REQUESTS {return Err(());}
-            observed.push(body.clone()); observed.clone()
+    tokio::time::timeout(remaining(scope.deadline_ns).map_err(|_| ())?, async {
+        let body = peer.checked_request(request, &scope).await?;
+        let requests = peer.record_request(&body)?;
+        let next = peer
+            .program
+            .call(&json!({"operation":"next_tool","requests":requests}))
+            .await
+            .map_err(|_| ())?;
+        let next = &next["next"];
+        let response = if next.is_null() {
+            let proof = peer
+                .program
+                .call(&json!({"operation":"validate","requests":requests,"binding":scope.binding}))
+                .await
+                .map_err(|_| ())?;
+            if proof["completion"] != peer.completion_text {
+                return Err(());
+            }
+            peer.completion.clone()
+        } else {
+            peer.tool_response(next, &body["tools"]).await?
         };
-        let next=peer.program.call(&json!({"operation":"next_tool","requests":requests})).await.map_err(|_|())?;
-        let next=&next["next"];
-        if next.is_null() {
-            let proof=peer.program.call(&json!({"operation":"validate","requests":requests,"binding":scope.binding})).await.map_err(|_|())?;
-            if proof["completion"]!=peer.completion_text {return Err(());}
-            remaining(scope.deadline_ns).map_err(|_|())?;
-            return Ok(peer.completion.clone());
-        }
-        let response=match next["tool"].as_str() {
-            Some("exec_command")=>{
-                let value=peer.cli.call(&json!({"operation":"vectors","model":peer.model,"commands":[{
-                    "response_id":next["response_id"],"item_id":next["item_id"],"call_id":next["call_id"],"command":next["arguments"]["cmd"]}],"completion":peer.completion_text})).await.map_err(|_|())?;
-                value["responses"][0].as_str().ok_or(())?.to_owned()
-            },
-            Some("write_stdin")=>{
-                let value=peer.cli.call(&json!({"operation":"poll","model":peer.model,
-                    "response_id":next["response_id"],"item_id":next["item_id"],"call_id":next["call_id"],
-                    "session_id":next["arguments"]["session_id"],"offered_tools":body["tools"]})).await.map_err(|_|())?;
-                value["response"].as_str().ok_or(())?.to_owned()
-            },
-            _=>return Err(()),
-        };
-        remaining(scope.deadline_ns).map_err(|_|())?;
+        remaining(scope.deadline_ns).map_err(|_| ())?;
         Ok(response)
-    }).await.map_err(|_|())?
+    })
+    .await
+    .map_err(|_| ())?
+}
+
+impl Peer {
+    async fn checked_request(
+        &self,
+        request: Request,
+        scope: &Scope,
+    ) -> std::result::Result<Value, ()> {
+        let body = to_bytes(request.into_body(), MAX_BODY - 1)
+            .await
+            .map_err(|_| ())?;
+        let text = std::str::from_utf8(&body).map_err(|_| ())?;
+        let mut forbidden = self.forbidden.clone();
+        forbidden.push(scope.local_capability.clone());
+        let checked = self
+            .cli
+            .call(
+                &json!({"operation":"check","model":self.model,"output_cap":4096,
+                "forbidden_material":forbidden,"body_utf8":text}),
+            )
+            .await
+            .map_err(|_| ())?;
+        if checked["valid"] != true {
+            return Err(());
+        }
+        serde_json::from_slice(&body).map_err(|_| ())
+    }
+
+    fn record_request(&self, body: &Value) -> std::result::Result<Vec<Value>, ()> {
+        let mut observed = self.observed.lock().map_err(|_| ())?;
+        if observed.len() >= MAX_REQUESTS {
+            return Err(());
+        }
+        observed.push(body.clone());
+        Ok(observed.clone())
+    }
+
+    async fn tool_response(
+        &self,
+        next: &Value,
+        offered_tools: &Value,
+    ) -> std::result::Result<String, ()> {
+        match next["tool"].as_str() {
+            Some("exec_command") => {
+                let value = self
+                    .cli
+                    .call(&json!({"operation":"vectors","model":self.model,"commands":[{
+                        "response_id":next["response_id"],"item_id":next["item_id"],"call_id":next["call_id"],
+                        "command":next["arguments"]["cmd"]}],"completion":self.completion_text}))
+                    .await
+                    .map_err(|_| ())?;
+                value["responses"][0].as_str().ok_or(()).map(str::to_owned)
+            }
+            Some("write_stdin") => {
+                let value = self
+                    .cli
+                    .call(&json!({"operation":"poll","model":self.model,
+                        "response_id":next["response_id"],"item_id":next["item_id"],"call_id":next["call_id"],
+                        "session_id":next["arguments"]["session_id"],"offered_tools":offered_tools}))
+                    .await
+                    .map_err(|_| ())?;
+                value["response"].as_str().ok_or(()).map(str::to_owned)
+            }
+            _ => Err(()),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    async fn pure_json_child_receives_eof_before_parent_waits_for_output() {
-        let input = json!({"closed":"public fixture data"});
-        let reply=run_pure("/usr/bin/python3".into(),vec!["-c".into(),"import json,sys; value=json.loads(sys.stdin.buffer.read()); print(json.dumps(value))".into()],&input).await.unwrap();
-        assert_eq!(reply, input);
-    }
-    #[tokio::test]
-    async fn unauthorized_request_cannot_start_cli_or_record_model_input() {
+    fn test_peer() -> Peer {
         let (_, release) = watch::channel(false);
         let observed = Arc::new(Mutex::new(Vec::new()));
-        let peer = Peer {
+        Peer {
             cli: FixtureCli {
                 path: "/absent".into(),
             },
@@ -336,10 +383,75 @@ mod tests {
             completion: String::new(),
             completion_text: String::new(),
             admitted: Arc::new(AtomicUsize::new(0)),
-            observed: observed.clone(),
+            observed,
             scope: Arc::new(Mutex::new(None)),
             release,
-        };
+        }
+    }
+
+    #[test]
+    fn transcript_retains_order_and_refuses_overflow_without_mutation() {
+        let peer = test_peer();
+        for index in 0..MAX_REQUESTS {
+            let history = peer.record_request(&json!({"index":index})).unwrap();
+            assert_eq!(
+                history,
+                (0..=index).map(|i| json!({"index":i})).collect::<Vec<_>>()
+            );
+        }
+        let before = peer.observed.lock().unwrap().clone();
+        assert!(peer.record_request(&json!({"index":MAX_REQUESTS})).is_err());
+        assert_eq!(*peer.observed.lock().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn tool_responses_preserve_command_and_poll_cli_payloads() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("echo-fixture-cli");
+        std::fs::write(
+            &path,
+            "#!/usr/bin/python3\nimport json,sys\nassert sys.argv[1:] == ['fixture-responses']\nvalue=json.dumps(json.load(sys.stdin))\nprint(json.dumps({'responses':[value], 'response':value}))\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut peer = test_peer();
+        peer.cli.path = path;
+        peer.completion_text = "finite completion".into();
+        let offered_tools = json!([{"name":"write_stdin"}]);
+        let mut next = json!({
+            "tool":"exec_command", "response_id":"response", "item_id":"item", "call_id":"call",
+            "arguments":{"cmd":"printf fixture", "session_id":17}
+        });
+        let response = peer.tool_response(&next, &offered_tools).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&response).unwrap(),
+            json!({"operation":"vectors", "model":"m", "commands":[{
+                "response_id":"response", "item_id":"item", "call_id":"call", "command":"printf fixture"
+            }], "completion":"finite completion"})
+        );
+        next["tool"] = json!("write_stdin");
+        let response = peer.tool_response(&next, &offered_tools).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&response).unwrap(),
+            json!({"operation":"poll", "model":"m", "response_id":"response", "item_id":"item",
+                "call_id":"call", "session_id":17, "offered_tools":offered_tools})
+        );
+        next["tool"] = json!("unsupported");
+        assert!(peer.tool_response(&next, &offered_tools).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pure_json_child_receives_eof_before_parent_waits_for_output() {
+        let input = json!({"closed":"public fixture data"});
+        let reply=run_pure("/usr/bin/python3".into(),vec!["-c".into(),"import json,sys; value=json.loads(sys.stdin.buffer.read()); print(json.dumps(value))".into()],&input).await.unwrap();
+        assert_eq!(reply, input);
+    }
+    #[tokio::test]
+    async fn unauthorized_request_cannot_start_cli_or_record_model_input() {
+        let peer = test_peer();
+        let observed = peer.observed.clone();
         let response = exchange(
             peer,
             Request::post("/v1/responses")

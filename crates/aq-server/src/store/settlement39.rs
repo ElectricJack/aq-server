@@ -90,6 +90,14 @@ fn expected_catalog(supported: u32) -> Result<serde_json::Value> {
     for (name, body) in super::replacement52::guard_overrides(supported)? {
         replace_function(&mut expected, name, body)?;
     }
+    if supported >= 178 {
+        // The completion clock trigger observes the guarded transition.
+        // Attest both its exact definition and its function body.
+        let clock: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("settlement39_performance_catalog.json"))
+                .map_err(|_| corrupt())?;
+        expected.as_array_mut().ok_or_else(corrupt)?.extend(clock);
+    }
     Ok(expected)
 }
 
