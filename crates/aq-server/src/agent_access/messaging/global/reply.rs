@@ -231,19 +231,7 @@ async fn write(
         tx.commit().await.map_err(db)?;
         return Ok(receipt);
     }
-    let row = sqlx::query("SELECT actor_id,generation,host_operation_id,batch_digest FROM central_supervisor_dispatches WHERE dispatch_id=$1")
-        .bind(request.dispatch_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db)?
-        .ok_or_else(unknown_dispatch)?;
-    if row.get::<Uuid, _>("actor_id") != p.actor_id
-        || u64::try_from(row.get::<i64, _>("generation")).ok() != Some(p.generation)
-        || row.get::<Uuid, _>("host_operation_id") != dispatch.host_operation_id
-        || row.get::<String, _>("batch_digest") != dispatch.batch_digest.as_str()
-    {
-        return Err(unknown_dispatch());
-    }
+    verify_dispatch(&mut tx, p, request.dispatch_id, &dispatch).await?;
     let attachments = resolve(&mut tx, p, &request).await?;
     let attachment_bytes = serde_json::to_vec(&attachments)
         .map_err(|_| unavailable())?
@@ -287,33 +275,7 @@ async fn write(
             unavailable()
         }
     })?;
-    let body_digest = Digest::of(request.body.as_bytes());
-    let link = ReplyAssociation {
-        dispatch,
-        reply_message_id: request.message_id,
-        reply_operation_id: request.operation_id,
-        body_digest: body_digest.clone(),
-    };
-    link.validate().map_err(|_| invalid())?;
-    // Migration 49 consumes the associated reservation and clears its actor's
-    // current pointer in this transaction. Reply replay returns the original
-    // receipt above, so it cannot release a newer reservation.
-    // Without attachments the row is exactly the pre-0062 row (column default).
-    let insert = if attachments.is_empty() {
-        "INSERT INTO central_supervisor_replies(reply_message_id,reply_operation_id,dispatch_id,body_digest,association) VALUES($1,$2,$3,$4,$5)"
-    } else {
-        "INSERT INTO central_supervisor_replies(reply_message_id,reply_operation_id,dispatch_id,body_digest,association,attachments) VALUES($1,$2,$3,$4,$5,$6)"
-    };
-    let mut insert = sqlx::query(insert)
-        .bind(request.message_id)
-        .bind(request.operation_id)
-        .bind(request.dispatch_id)
-        .bind(body_digest.as_str())
-        .bind(json!(link));
-    if !attachments.is_empty() {
-        insert = insert.bind(Value::Array(attachments));
-    }
-    insert.execute(&mut *tx).await.map_err(|_| conflict())?;
+    record_reply(&mut tx, &request, dispatch, attachments).await?;
     let result = ReplyReceipt {
         contract: REPLY_CONTRACT.into(),
         reply_message_id: request.message_id,
@@ -336,6 +298,64 @@ async fn write(
     .map_err(|_| unavailable())?;
     tx.commit().await.map_err(db)?;
     Ok(result)
+}
+
+async fn verify_dispatch(
+    tx: &mut Transaction<'_, Postgres>,
+    p: &SupervisorPrincipal,
+    dispatch_id: Uuid,
+    dispatch: &DispatchAssociation,
+) -> Result<()> {
+    let row = sqlx::query("SELECT actor_id,generation,host_operation_id,batch_digest FROM central_supervisor_dispatches WHERE dispatch_id=$1")
+        .bind(dispatch_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+        .ok_or_else(unknown_dispatch)?;
+    if row.get::<Uuid, _>("actor_id") != p.actor_id
+        || u64::try_from(row.get::<i64, _>("generation")).ok() != Some(p.generation)
+        || row.get::<Uuid, _>("host_operation_id") != dispatch.host_operation_id
+        || row.get::<String, _>("batch_digest") != dispatch.batch_digest.as_str()
+    {
+        return Err(unknown_dispatch());
+    }
+    Ok(())
+}
+
+/// Migration 49 consumes the associated reservation and clears its actor's
+/// current pointer in this transaction. Called only after the replay check,
+/// so an old reply cannot release a newer reservation.
+async fn record_reply(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &ReplyRequest,
+    dispatch: DispatchAssociation,
+    attachments: Vec<Value>,
+) -> Result<()> {
+    let body_digest = Digest::of(request.body.as_bytes());
+    let link = ReplyAssociation {
+        dispatch,
+        reply_message_id: request.message_id,
+        reply_operation_id: request.operation_id,
+        body_digest: body_digest.clone(),
+    };
+    link.validate().map_err(|_| invalid())?;
+    // Without attachments the row is exactly the pre-0062 row (column default).
+    let insert = if attachments.is_empty() {
+        "INSERT INTO central_supervisor_replies(reply_message_id,reply_operation_id,dispatch_id,body_digest,association) VALUES($1,$2,$3,$4,$5)"
+    } else {
+        "INSERT INTO central_supervisor_replies(reply_message_id,reply_operation_id,dispatch_id,body_digest,association,attachments) VALUES($1,$2,$3,$4,$5,$6)"
+    };
+    let mut insert = sqlx::query(insert)
+        .bind(request.message_id)
+        .bind(request.operation_id)
+        .bind(request.dispatch_id)
+        .bind(body_digest.as_str())
+        .bind(json!(link));
+    if !attachments.is_empty() {
+        insert = insert.bind(Value::Array(attachments));
+    }
+    insert.execute(&mut **tx).await.map_err(|_| conflict())?;
+    Ok(())
 }
 
 fn receipt_unavailable() -> AppError {
