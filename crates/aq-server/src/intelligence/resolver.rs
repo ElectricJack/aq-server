@@ -32,6 +32,14 @@ pub async fn resolve_for_project_policy(
     state: &AppState,
     request: ResolveRequest,
     snapshot: &aq_profiles::roles::Snapshot,
+) -> Result<Decision> {
+    resolve_for_scheduler(state, request, snapshot, false).await
+}
+
+pub(crate) async fn resolve_for_scheduler(
+    state: &AppState,
+    request: ResolveRequest,
+    snapshot: &aq_profiles::roles::Snapshot,
     workspace_alternative: bool,
 ) -> Result<Decision> {
     let subject = principal::Principal::configured(state, request.lineage.project_id)?;

@@ -231,7 +231,7 @@ async fn selection(
             })
         })
         .transpose()?;
-    resolver::resolve_for_project_policy(
+    resolver::resolve_for_scheduler(
         state,
         ResolveRequest {
             operation_id: Uuid::new_v4(),
