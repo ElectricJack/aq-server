@@ -41,3 +41,27 @@ The previous format-177 database backup restored into an isolated PostgreSQL ins
 The qualifying sample included 41,871 retained observation events. Across twelve runs on a host with concurrent builds, the fleet call query took 401 ms at p50 and 576 ms at p95. Queue diagnostics took 3.3 ms and 6.1 ms respectively. Project-scoped outcomes took 22 ms and 43 ms. These are SQL execution times.
 
 In an alternating twelve-run comparison, projecting attempt identity and the unresolved flag before grouping removed 4,543 temporary blocks from the usage-attempt query. The same 443 result rows were returned, and p50/p95 fell from 398/682 ms to 272/357 ms. The release includes the narrower projection.
+
+## Authenticated worker polling
+
+The benchmark uses the format-178 integrated server with clock attestation (8488faff) and one unchanged test executable for all four arms. It runs the candidate server’s normal startup and authenticated worker HTTP listener over loopback. Each arm creates its own database on the disposable PostgreSQL 17.11 test instance. The existing native fixture supplies the synthetic Graph and Git owners and a registered worker. The server publishes one new offer in each arm, then 250 polls are paced at 30 ms. The mix is 200 zero-capacity polls and 50 redeliveries of the same durable offer. Every response is decoded and validated against its request. There are two diagnostics-disabled and two enabled arms in off/on/on/off order. Fleet sampling is disabled in every arm to isolate scheduling capture.
+
+The reported percentiles are nearest rank over requests, inclusive of authentication, HTTP, database reads, serialization and response validation. Throughput reflects the paced workload. Database writes are the PostgreSQL insert/update/delete tuple-counter differences, taken after the five-second collector flush and the stats publication wait. Diagnostic tuple writes are restricted to the performance scheduling tables. Warmup and flush waiting are outside the measured request interval.
+
+The workload compares admission and redelivery behavior with diagnostics toggled. It uses a synthetic scheduler fixture with one worker, bounded concurrency and a fixed fixture clock. Production two-machine behavior, machine-sampler overhead, saturation throughput and first-claim latency need separate measurements.
+
+## Results
+
+| Arm | Polls | Polls/s | p50 ms | p95 ms | All tuple writes/s | Diagnostic tuple writes/s | Captured | Dropped |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 off | 250 | 19.96 | 16.579 | 196.785 | 12.85 | 0.00 | 0 | 0 |
+| 2 on | 250 | 33.15 | 10.014 | 116.088 | 34.47 | 26.91 | 200 | 0 |
+| 3 on | 250 | 27.32 | 11.345 | 141.798 | 37.48 | 22.18 | 200 | 0 |
+| 4 off | 250 | 27.47 | 12.295 | 142.341 | 15.60 | 0.00 | 0 | 0 |
+
+Every arm published one durable claim, returned 200 valid empty zero-capacity pages, redelivered the same offer 50 times, and returned zero cancellations and zero poll errors.
+Write rates normalize tuple changes to the request interval after allowing the collector to flush.
+
+Baseline p50 varied from 12.295 to 16.579 ms and p95 varied from 142.341 to 196.785 ms. With diagnostics enabled p50 was 10.014 to 11.345 ms and p95 was 116.088 to 141.798 ms. The four runs showed no latency increase.
+
+Two runs per setting screen for regressions. Builds were active on the same host throughout the measurement, so host variation could account for the lower enabled latencies or conceal a small regression.
