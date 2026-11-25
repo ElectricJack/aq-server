@@ -121,6 +121,13 @@ checks discovery, a task creation receipt and the final reply.
 python3 scripts/claude-supervisor-cli-smoke.py "$CLAUDE_BINARY" --host-binary "$SUPERVISOR_BINARY"
 ```
 
+A fleet can also use a pre-seeded named Docker volume. Set
+`claude_subscription_volume` to `<prefix>claude-login` in place of
+`claude_subscription_dir`. The volume must already exist, with its root
+directory owned by root and mode 0700, and a root-owned mode-0600 file named
+`token`. Seed it once from the approved subscription. Every supervisor mounts
+the volume read-only. Rotate the token in this fleet volume when needed.
+
 ### Upgrade an existing conversation
 
 Keep the scope disabled during the upgrade. In the dashboard, stop the

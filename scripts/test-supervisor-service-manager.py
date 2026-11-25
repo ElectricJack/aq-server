@@ -64,6 +64,20 @@ class FleetTest(unittest.TestCase):
                 self.assertEqual(service['conversation_id'], SCOPE)
                 self.assertEqual(service['image_digest'], IMAGE)
 
+    def test_preseeded_scoped_claude_volume_is_read_only(self):
+        fleet = self.fleet()
+        cfg = dict(fleet.cfg)
+        del cfg['claude_subscription_dir']
+        volume = PREFIX + 'claude-login'
+        fleet = Fleet(dict(cfg, claude_subscription_volume=volume))
+        self.assertIn((['docker', 'volume', 'inspect', volume], None), self.calls)
+        with patch.object(fleet, 'container', return_value={}), patch.object(fleet, 'seed_login'):
+            fleet.create(PREFIX + SCOPE, SCOPE)
+        cmd = next(args for args, _ in self.calls if args[:2] == ['docker', 'create'])
+        self.assertIn(f'type=volume,src={volume},dst=/claude-login,readonly', cmd)
+        with self.assertRaises(ValueError):
+            Fleet(dict(cfg, claude_subscription_volume='unrelated-login'))
+
     def test_shared_codex_login_survives_existing_auth_or_failed_probe(self):
         fleet = self.fleet(claude=False)
         cached = manager['archive']({'login/auth.json': b'refreshed'})

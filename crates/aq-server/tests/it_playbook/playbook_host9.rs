@@ -2403,6 +2403,8 @@ mod delivery {
             branch_head: Mutex<String>,
             refresh_refused: Mutex<bool>,
             pr_head: Mutex<String>,
+            pr_base: Mutex<String>,
+            parents: Mutex<Vec<String>>,
         }
         #[async_trait::async_trait]
         impl GitPort for Fake {
@@ -2497,6 +2499,7 @@ mod delivery {
                 Ok(PullRequest {
                     mergeability: *self.mergeability.lock().unwrap(),
                     head_sha: self.pr_head.lock().unwrap().clone(),
+                    base_sha: self.pr_base.lock().unwrap().clone(),
                     ..pull(*self.pr_state.lock().unwrap())
                 })
             }
@@ -2566,13 +2569,12 @@ mod delivery {
                     false => Ok(()),
                 }
             }
-            /// Every head is the merge of result head a and main b.
             async fn commit_parents(
                 &self,
                 _: &GitHubRepository,
                 _: &str,
             ) -> GitHubResult<Vec<String>> {
-                Ok(vec![oid('a'), oid('b')])
+                Ok(self.parents.lock().unwrap().clone())
             }
         }
         struct Ops(Arc<Fake>, DeliveryTarget);
@@ -2616,6 +2618,9 @@ mod delivery {
                 branch_head: Mutex::new(oid('b')),
                 refresh_refused: Mutex::new(false),
                 pr_head: Mutex::new(oid('a')),
+                pr_base: Mutex::new(oid('b')),
+                // Every head is the merge of result head a and main b.
+                parents: Mutex::new(vec![oid('a'), oid('b')]),
             });
             // By value: the port of a shared (cloned) service is not replaced.
             h.service = h
@@ -3176,6 +3181,81 @@ mod delivery {
                     .iter()
                     .any(|l| l.starts_with("publish"))
             );
+        }
+
+        #[tokio::test]
+        async fn a_queued_task_that_is_returned_gives_up_its_place() {
+            let (h, fake) = harness().await;
+            let steps = Steps::new(&h, &fake).await;
+            let (b, pending) = h.stopped(h.scope.project_id, "success");
+            let (a, c) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(steps.wait(a).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(b).await, None);
+            h.later(1);
+            assert_eq!(steps.wait(c).await, None);
+            assert_eq!(
+                steps.run(a, "pull_request.merge", 0).await.as_deref(),
+                Some("merged")
+            );
+            // b, queued ahead of c, goes back to an agent before it looks again.
+            *h.settle.answer.lock().unwrap() = Settled::Returned;
+            let input = json!({"task": b, "result_id": pending.result_id,
+                "reason": "merge_conflict", "update_from_main": true});
+            assert_eq!(
+                h.run("return-b", "work.return", input).await.outcome,
+                "returned"
+            );
+            // c is refreshed on its next look; b's queue row is gone.
+            assert_eq!(steps.wait(c).await, None);
+            assert!(steps.requested(c).await);
+            assert_eq!(updates(&fake), 2);
+            let rows: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM delivery_branch_refreshes WHERE task_id=$1",
+            )
+            .bind(b)
+            .fetch_one(&steps.pool)
+            .await
+            .unwrap();
+            assert_eq!(rows, 0);
+        }
+
+        #[tokio::test]
+        async fn every_move_of_main_under_a_green_pr_is_refreshed_once() {
+            let (h, fake) = harness().await;
+            let steps = Steps::new(&h, &fake).await;
+            let task = Uuid::new_v4();
+            let (heads, bases) = (['a', '1', '2', '3', '4'], ['b', '5', '6', '7', '8']);
+            for i in 0..4 {
+                *fake.pr_head.lock().unwrap() = oid(heads[i]);
+                *fake.pr_base.lock().unwrap() = oid(bases[i]);
+                *fake.mergeability.lock().unwrap() = Mergeability::Behind;
+                *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+                assert_eq!(steps.wait(task).await, None);
+                assert_eq!(steps.wait(task).await, None, "pending");
+                if i == 0 {
+                    // Long after, the same head and base are still not asked for again.
+                    h.later(3_600_001);
+                    assert_eq!(steps.wait(task).await, None);
+                }
+                assert_eq!(updates(&fake), i + 1);
+                // GitHub merges main in; its checks run on the new head.
+                *fake.pr_head.lock().unwrap() = oid(heads[i + 1]);
+                *fake.parents.lock().unwrap() = vec![oid(heads[i]), oid(bases[i])];
+                *fake.mergeability.lock().unwrap() = Mergeability::Clean;
+                *fake.checks.lock().unwrap() = (ChecksState::Pending, vec![]);
+                assert_eq!(steps.wait(task).await, None);
+            }
+            *fake.checks.lock().unwrap() = (ChecksState::Passed, vec![]);
+            assert_eq!(steps.wait(task).await.as_deref(), Some("passed"));
+            let refreshes: i32 = sqlx::query_scalar(
+                "SELECT refreshes FROM delivery_branch_refreshes WHERE task_id=$1",
+            )
+            .bind(task)
+            .fetch_one(&steps.pool)
+            .await
+            .unwrap();
+            assert_eq!((updates(&fake), refreshes), (4, 4));
         }
 
         #[tokio::test]

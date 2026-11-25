@@ -78,6 +78,7 @@ class Fleet:
                 raise ValueError('complete Codex configuration and shared supervisor login required')
             self.login_volume = self.prefix + 'login'
 
+        self.claude_volume = None
         self.claude_dir = None
         claude = cfg['service'].get('claude')
         if claude is not None:
@@ -86,19 +87,33 @@ class Fleet:
                     or claude['secret_file'] != CLAUDE_LOGIN + '/token'
                     or not re.fullmatch(r'[0-9a-f]{64}', claude['native_digest'])):
                 raise ValueError('pinned Claude supervisor configuration required')
-            directory = Path(cfg['claude_subscription_dir'])
-            if not directory.is_absolute() or any(c in str(directory) for c in ',\"\n\r'):
-                raise ValueError('absolute Claude subscription directory required')
-            if directory != directory.resolve(strict=True):
-                raise ValueError('use the canonical Claude subscription directory path')
-            self.claude_dir = directory
+            directory = cfg.get('claude_subscription_dir')
+            volume = cfg.get('claude_subscription_volume')
+            if (directory is None) == (volume is None):
+                raise ValueError('choose one supervisor Claude login source')
+            if volume is not None:
+                if volume != self.prefix + 'claude-login':
+                    raise ValueError('scoped Claude login volume required')
+                self.claude_volume = volume
+            else:
+                directory = Path(directory)
+                if not directory.is_absolute() or any(c in str(directory) for c in ',\"\n\r'):
+                    raise ValueError('absolute Claude subscription directory required')
+                if directory != directory.resolve(strict=True):
+                    raise ValueError('use the canonical Claude subscription directory path')
+                self.claude_dir = directory
             self.validate_claude_login()
-        elif 'claude_subscription_dir' in cfg:
-            raise ValueError('Claude subscription directory requires service.claude')
-        if self.login_volume is None and self.claude_dir is None:
+        elif 'claude_subscription_dir' in cfg or 'claude_subscription_volume' in cfg:
+            raise ValueError('Claude login source requires service.claude')
+        if self.login_volume is None and claude is None:
             raise ValueError('at least one supervisor harness is required')
 
     def validate_claude_login(self):
+        if self.claude_volume:
+            # Volumes live on the Docker daemon's filesystem. The controller
+            # checks token ownership and material when admitting a Claude turn.
+            run(['docker', 'volume', 'inspect', self.claude_volume])
+            return
         info = self.claude_dir.stat()
         if info.st_uid != 0 or not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
             raise ValueError('root-owned private Claude subscription directory required')
@@ -174,20 +189,27 @@ class Fleet:
                 raise ValueError('retained supervisor has unexpected durable mounts')
         return mounts
 
+    def login_mounts(self):
+        """Describe each login once for both creation and retained-container checks."""
+        yield '/login', 'volume', self.login_volume, True
+        if self.claude_dir:
+            yield CLAUDE_LOGIN, 'bind', str(self.claude_dir), False
+        else:
+            yield CLAUDE_LOGIN, 'volume', self.claude_volume, False
+
     def matches_deployment(self, record, mounts):
         if record['Image'] != self.image:
             return False
-        login = mounts.get('/login')
-        if self.login_volume is None:
-            if login is not None:
+        for target, kind, source, writable in self.login_mounts():
+            mount = mounts.get(target)
+            if source is None:
+                if mount is not None:
+                    return False
+                continue
+            key = 'Name' if kind == 'volume' else 'Source'
+            if not mount or (mount.get('Type'), mount.get(key), mount.get('RW')) != (kind, source, writable):
                 return False
-        elif login is None or login.get('Name') != self.login_volume or login.get('Type') != 'volume' or not login.get('RW'):
-            return False
-        claude = mounts.get(CLAUDE_LOGIN)
-        if self.claude_dir is None:
-            return claude is None
-        return (claude is not None and claude['Type'] == 'bind' and not claude['RW']
-                and claude['Source'] == str(self.claude_dir))
+        return True
 
     def ensure(self, scope):
         name = self.scope_name(scope)
@@ -208,7 +230,7 @@ class Fleet:
         name = self.scope_name(scope)
         backup_name = name + '-upgrade-backup'
         self.require_disabled(scope)
-        if self.claude_dir:
+        if self.claude_dir or self.claude_volume:
             self.validate_claude_login()
         run(['docker', 'image', 'inspect', self.image])
 
@@ -272,11 +294,12 @@ class Fleet:
                '--mount', 'type=volume,src=' + volume + ',dst=/state',
                '--mount', 'type=volume,src=' + name + '-workspace,dst=/workspace',
                '--log-opt', 'max-size=2m', '--log-opt', 'max-file=2']
-        if self.login_volume:
-            cmd.extend(['--mount', 'type=volume,src=' + self.login_volume + ',dst=/login'])
-        if self.claude_dir:
+        if self.claude_dir or self.claude_volume:
             self.validate_claude_login()
-            cmd.extend(['--mount', f'type=bind,src={self.claude_dir},dst={CLAUDE_LOGIN},readonly'])
+        for target, kind, source, writable in self.login_mounts():
+            if source is not None:
+                mount = f'type={kind},src={source},dst={target}'
+                cmd.extend(['--mount', mount if writable else mount + ',readonly'])
         run(cmd + [self.image, 'serve', '/state/service.json'])
         self.initialize(name, scope, self.container(name))
         print('Created supervisor: ' + scope, flush=True)
