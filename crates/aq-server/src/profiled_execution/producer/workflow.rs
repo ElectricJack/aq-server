@@ -834,6 +834,7 @@ async fn offers(
                 &metadata,
                 route,
                 replacement.as_ref().map(|r| r.predecessor),
+                &workspace,
             )
         };
         let compiled = match on_heap(compile).await {
@@ -1033,6 +1034,7 @@ async fn offers(
                 &metadata,
                 route,
                 replacement.as_ref().map(|r| r.predecessor),
+                &workspace,
             )
         };
         let compiled = match on_heap(compile).await {
