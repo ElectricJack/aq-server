@@ -60,7 +60,6 @@ mod tests {
             prefer: vec!["other-harness".into()],
             harnesses: vec!["historical-harness".into()],
             pinned: true,
-            ..RouteLimits::default()
         };
         let mut entries = [
             ("other", "unlisted"),
