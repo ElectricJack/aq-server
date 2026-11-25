@@ -193,8 +193,14 @@ async fn write(
             head,
         } => {
             let source = source(&plan, target_project_id, &head)?;
-            let output =
-                publication::publish(&state, tx, subject, &plan, source, operation, &actor).await?;
+            let admission = publication::Admission {
+                subject,
+                plan: &plan,
+                source,
+                operation,
+                actor: &actor,
+            };
+            let output = publication::publish(&state, tx, admission).await?;
             return Ok(Json(output));
         }
         Action::VerifyMerge {
@@ -248,7 +254,7 @@ async fn plan(
     }
     load(state, tx, &result)
         .await?
-        .ok_or_else(|| AppError::NotFound("task has no writable supplemental workspaces".into()))
+        .ok_or_else(|| AppError::NotFound("task has no supplemental workspaces".into()))
 }
 
 async fn read_plan(db: &mut PgConnection, plan: &Plan) -> Result<Value, AppError> {

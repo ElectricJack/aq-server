@@ -90,6 +90,7 @@ async fn record(
         ));
     }
     let mut tx = state.store.pool.begin().await.map_err(db)?;
+    worker_api::lock_current_node(&mut tx, &node).await?;
     // Serialize with the stopped report writer before checking whether this
     // attempt is still allowed to freeze new source facts.
     let live: Option<bool> = sqlx::query_scalar(
@@ -107,9 +108,7 @@ async fn record(
     .map_err(db)?;
     let live = live.ok_or_else(|| AppError::NotFound("task workspace grant not found".into()))?;
     let rows = sqlx::query(
-        "SELECT g.target_project_id,g.repository_id,g.binding_generation,g.task_ref,g.lease,
-            coalesce(to_jsonb(g)->>'checkout_head',g.commit_oid) AS checkout_head,
-            s.status,s.result_head
+        "SELECT g.target_project_id,g.repository_id,s.status,s.result_head
          FROM task_workspace_git_grants g
          LEFT JOIN task_workspace_result_sources s USING(attempt_id,target_project_id)
          WHERE g.attempt_id=$1 AND g.access='write' ORDER BY g.target_project_id",
@@ -150,22 +149,20 @@ async fn record(
             }
             continue;
         }
-        if !live
-            || live_grant_locked(&mut tx, attempt, node.id(), project)
-                .await
-                .map_err(db)?
-                .is_none()
-        {
+        if !live {
             return Err(conflict("workspace result grant is no longer current"));
         }
-        let generation: i64 = row.get("binding_generation");
+        let grant = live_grant_locked(&mut tx, attempt, node.id(), project)
+            .await
+            .map_err(db)?
+            .ok_or_else(|| conflict("workspace result grant is no longer current"))?;
         let target = GitTarget {
             repository_id,
-            binding_generation: u64::try_from(generation).map_err(|_| AppError::Internal)?,
+            binding_generation: grant.binding_generation,
         };
-        let reference: String = row.get("task_ref");
-        let lease: Option<String> = row.get("lease");
-        let base: String = row.get("checkout_head");
+        let reference = grant.grant.task_ref;
+        let lease = grant.grant.lease;
+        let base = grant.checkout_head;
         let storage = &state
             .source_retention
             .as_ref()

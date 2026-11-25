@@ -92,7 +92,7 @@ pub async fn settle_after_record(
         }
     }
     #[cfg(feature = "delivery_playbook")]
-    if crate::task_workspace_delivery::has_write(state, &mut tx, &r).await? {
+    if crate::task_workspace_delivery::has_supplemental(state, &mut tx, &r).await? {
         return Ok(None);
     }
     // H5: a parked (Held / RetainedSuspended) predecessor is suspended, never

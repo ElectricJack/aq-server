@@ -953,3 +953,36 @@ mod git {
         assert!(!seen[0].contains_key("authorization"));
     }
 }
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn project_supervisor_cannot_attest_or_publish_a_sibling_workspace() {
+    let o = project_owner().await;
+    let task = Uuid::new_v4();
+    let report = Uuid::new_v4();
+    let path = format!(
+        "/api/projects/{}/tasks/{task}/results/{report}/workspace-delivery",
+        o.project
+    );
+    let head = "a".repeat(40);
+    for action in [
+        json!({"kind":"integrated_checks","heads":{},"verdict":"passed","evidence":"checks"}),
+        json!({"kind":"owner_acceptance","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"external_delivery","target_project_id":o.other,"head":head,"evidence":"self"}),
+        json!({"kind":"publish","target_project_id":o.other,"head":head}),
+        json!({"kind":"verify_merge","target_project_id":o.other,"head":head,"pull_request":1}),
+    ] {
+        let command = json!({"operation_id":Uuid::new_v4(),"action":action});
+        let (status, body) = o.supervisor("POST", &path, Some(command)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body.to_string().contains("requires the human owner"),
+            "{body}"
+        );
+    }
+    let actions: i64 = sqlx::query_scalar("SELECT count(*) FROM task_workspace_target_acceptance")
+        .fetch_one(&o.f.pool)
+        .await
+        .unwrap();
+    assert_eq!(actions, 0);
+}

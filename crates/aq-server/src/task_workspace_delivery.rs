@@ -109,8 +109,7 @@ async fn load(
              AND w.commit_oid=g.commit_oid AND b.revision=g.project_revision
              AND b.binding->>'repository_id'=g.repository_id::text
              AND b.binding->>'repository_binding_generation'=g.binding_generation::text
-             AND b.binding->>'enabled'='true',false) AS approved,
-           (w.access='write' OR g.access='write') IS TRUE AS required_write
+             AND b.binding->>'enabled'='true',false) AS approved
          FROM required p
          LEFT JOIN task_workspace_git_grants g ON g.attempt_id=$3 AND g.target_project_id=p.target_project_id
          LEFT JOIN task_workspace_sources w ON w.home_project_id=$1 AND w.task_id=$2 AND w.target_project_id=p.target_project_id
@@ -118,12 +117,6 @@ async fn load(
          LEFT JOIN project_execution_bindings b ON b.project_id=p.target_project_id
          ORDER BY p.target_project_id",
     ).bind(home).bind(task).bind(attempt).fetch_all(&mut *db).await.map_err(crate::error::db)?;
-    if !supplemental
-        .iter()
-        .any(|row| row.get::<bool, _>("required_write"))
-    {
-        return Ok(None);
-    }
     let mut plan = Plan {
         home,
         task,
@@ -246,7 +239,7 @@ pub(crate) async fn gate(
     Ok(true)
 }
 
-pub(crate) async fn has_write(
+pub(crate) async fn has_supplemental(
     state: &AppState,
     db: &mut PgConnection,
     result: &RecordedResult,
@@ -272,8 +265,8 @@ pub(crate) async fn has_scope(
         return Ok(false);
     }
     sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM task_workspace_git_grants WHERE attempt_id=$1 AND access='write')
-         OR EXISTS(SELECT 1 FROM task_workspace_sources WHERE home_project_id=$2 AND task_id=$3 AND access='write' AND state IN ('pending','approved'))",
+        "SELECT EXISTS(SELECT 1 FROM task_workspace_git_grants WHERE attempt_id=$1)
+         OR EXISTS(SELECT 1 FROM task_workspace_sources WHERE home_project_id=$2 AND task_id=$3 AND state IN ('pending','approved'))",
     ).bind(attempt).bind(project).bind(task).fetch_one(db).await.map_err(crate::error::db)
 }
 
@@ -298,4 +291,78 @@ pub(crate) async fn merge_readiness(
         return Ok(MergeReadiness::PendingEvidence);
     }
     Ok(MergeReadiness::Proceed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(project_id: Uuid, head: char) -> Source {
+        Source {
+            project_id,
+            project_revision: 1,
+            repository_id: Uuid::new_v4(),
+            binding_generation: 2,
+            head: head.to_string().repeat(40),
+            changed: true,
+            target_ref: Some("refs/heads/main".into()),
+            publication_mode: Some("pull_request".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_retry_reuses_one_verified_merge_but_requires_new_integrated_checks() {
+        let database = crate::test_support::TestDb::create().await;
+        let _store = database.store().await;
+        let pool = database.pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let owner = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,role,created_at) VALUES($1,'delivery@example.org','owner',now())")
+            .bind(owner).execute(&mut *conn).await.unwrap();
+        let home = Uuid::new_v4();
+        let sibling = Uuid::new_v4();
+        let task = Uuid::new_v4();
+        let dependency = Uuid::new_v4();
+        let first = source(home, 'a');
+        let second = source(sibling, 'b');
+        let mut readonly = source(dependency, 'd');
+        readonly.changed = false;
+        let mut plan = Plan {
+            home,
+            task,
+            sources: BTreeMap::from([
+                (home, first.clone()),
+                (sibling, second.clone()),
+                (dependency, readonly),
+            ]),
+            missing_projects: vec![],
+        };
+        sqlx::query(
+            "INSERT INTO task_workspace_target_acceptance(operation_id,home_project_id,task_id,target_project_id,
+                project_revision,repository_id,binding_generation,result_head,target_ref,kind,evidence,actor_id,recorded_at_ms)
+             VALUES($1,$2,$3,$2,1,$4,2,$5,'refs/heads/main','verified_merge','PR 23',$6,1)",
+        ).bind(Uuid::new_v4()).bind(home).bind(task).bind(first.repository_id)
+         .bind(&first.head).bind(owner).execute(&mut *conn).await.unwrap();
+        sqlx::query(
+            "INSERT INTO task_workspace_integrated_checks(operation_id,home_project_id,task_id,inputs_digest,verdict,evidence,actor_id,recorded_at_ms)
+             VALUES($1,$2,$3,$4,'passed','suite 99',$5,1)",
+        ).bind(Uuid::new_v4()).bind(home).bind(task).bind(plan.digest().unwrap())
+         .bind(owner).execute(&mut *conn).await.unwrap();
+
+        assert!(target_accepted(&mut conn, &plan, &first).await.unwrap());
+        assert!(!target_accepted(&mut conn, &plan, &second).await.unwrap());
+        assert!(check_passed(&mut conn, &plan).await.unwrap());
+        plan.sources.get_mut(&dependency).unwrap().head = "e".repeat(40);
+        assert!(!check_passed(&mut conn, &plan).await.unwrap());
+        plan.sources.get_mut(&dependency).unwrap().head = "d".repeat(40);
+
+        plan.sources.get_mut(&sibling).unwrap().head = "c".repeat(40);
+        assert!(target_accepted(&mut conn, &plan, &first).await.unwrap());
+        assert!(
+            !target_accepted(&mut conn, &plan, &plan.sources[&sibling])
+                .await
+                .unwrap()
+        );
+        assert!(!check_passed(&mut conn, &plan).await.unwrap());
+    }
 }

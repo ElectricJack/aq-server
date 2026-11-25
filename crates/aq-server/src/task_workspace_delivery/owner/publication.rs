@@ -47,15 +47,26 @@ pub(super) async fn configured(
     Ok((Delivery::configured(socket, forge), target))
 }
 
+pub(super) struct Admission<'a> {
+    pub(super) subject: Subject,
+    pub(super) plan: &'a Plan,
+    pub(super) source: &'a Source,
+    pub(super) operation: Uuid,
+    pub(super) actor: &'a ActorPin,
+}
+
 pub(super) async fn publish(
     state: &AppState,
     mut tx: Transaction<'_, Postgres>,
-    subject: Subject,
-    plan: &Plan,
-    source: &Source,
-    operation: Uuid,
-    actor: &ActorPin,
+    admission: Admission<'_>,
 ) -> Result<Value, AppError> {
+    let Admission {
+        subject,
+        plan,
+        source,
+        operation,
+        actor,
+    } = admission;
     if target_accepted(&mut tx, plan, source).await? {
         tx.commit().await.map_err(crate::error::db)?;
         return Ok(json!({"state":"already_accepted"}));
