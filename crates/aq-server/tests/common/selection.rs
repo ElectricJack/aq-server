@@ -78,6 +78,54 @@ async fn graph(
         }),
     )
 }
+/// Keep the fake peer's connection handling separate from its protocol response.
+async fn serve_git(
+    listener: tokio::net::UnixListener,
+    repository: Uuid,
+    generation: Arc<AtomicU64>,
+    status: Arc<AtomicU8>,
+) {
+    loop {
+        let (stream, _) = listener.accept().await.unwrap();
+        let generation = generation.clone();
+        let status = status.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stream);
+            let mut line = Vec::new();
+            reader.read_until(b'\n', &mut line).await.unwrap();
+            let request: Value = serde_json::from_slice(&line).unwrap();
+            let response = git_response(&request, repository, &generation, &status);
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            reader.into_inner().write_all(&bytes).await.unwrap();
+        });
+    }
+}
+
+fn git_response(
+    request: &Value,
+    repository: Uuid,
+    generation: &AtomicU64,
+    status: &AtomicU8,
+) -> Value {
+    assert_eq!(request["operation"], "repo.show");
+    assert_eq!(request["protocol_version"], 1);
+    let expected = request["expected_binding_generation"].as_u64().unwrap();
+    let current = generation.load(Ordering::SeqCst);
+    let mut response = json!({"protocol_version":1,"request_id":request["request_id"]});
+    if request["repository_id"] != repository.to_string() || status.load(Ordering::SeqCst) == 1 {
+        response["ok"] = false.into();
+        response["error"] = json!({"code":"repository_not_found","message":"absent","details":{},"retry":"refresh_inputs"});
+    } else if expected != current {
+        response["ok"] = false.into();
+        response["error"] = json!({"code":"binding_conflict","message":"stale","details":{"binding_generation":current},"retry":"refresh_inputs"});
+    } else {
+        response["ok"] = true.into();
+        response["result"] = json!({"repository_id":repository,"binding_generation":current,"mode":if status.load(Ordering::SeqCst)==2{"worker"}else{"central"},"object_format":"sha1"});
+    }
+    response
+}
+
 pub async fn call(
     app: &Router,
     path: &str,
@@ -192,11 +240,7 @@ pub async fn setup(real: bool) -> Env {
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         let g = generation.clone();
         let status = git_status.clone();
-        tasks.push(tokio::spawn(async move {loop {let(stream,_)=listener.accept().await.unwrap();let g=g.clone();let status=status.clone();tokio::spawn(async move {let mut reader=BufReader::new(stream);let mut line=Vec::new();reader.read_until(b'\n',&mut line).await.unwrap();let r:Value=serde_json::from_slice(&line).unwrap();assert_eq!(r["operation"],"repo.show");assert_eq!(r["protocol_version"],1);let expected=r["expected_binding_generation"].as_u64().unwrap();let current=g.load(Ordering::SeqCst);let mut out=json!({"protocol_version":1,"request_id":r["request_id"]});
-            if r["repository_id"]!=repository.to_string() || status.load(Ordering::SeqCst)==1 {out["ok"]=false.into();out["error"]=json!({"code":"repository_not_found","message":"absent","details":{},"retry":"refresh_inputs"});}
-            else if expected!=current {out["ok"]=false.into();out["error"]=json!({"code":"binding_conflict","message":"stale","details":{"binding_generation":current},"retry":"refresh_inputs"});}
-            else {out["ok"]=true.into();out["result"]=json!({"repository_id":repository,"binding_generation":current,"mode":if status.load(Ordering::SeqCst)==2{"worker"}else{"central"},"object_format":"sha1"});}
-            let mut bytes=serde_json::to_vec(&out).unwrap();bytes.push(b'\n');reader.into_inner().write_all(&bytes).await.unwrap();});}}));
+        tasks.push(tokio::spawn(serve_git(listener, repository, g, status)));
     }
     let graph_url = if real {
         std::env::var("AQ_AGENT_GRAPH_TEST_URL").unwrap()
@@ -544,5 +588,59 @@ pub async fn selection_fixture() -> SelectionFixture {
         unrelated,
         time,
         operation,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_response_preserves_modes_errors_and_request_correlation() {
+        let repository = Uuid::from_u128(2);
+        let generation = AtomicU64::new(7);
+        let status = AtomicU8::new(0);
+        let request = json!({
+            "operation":"repo.show",
+            "protocol_version":1,
+            "request_id":"fixture-request",
+            "repository_id":repository,
+            "expected_binding_generation":7
+        });
+        for (state, mode) in [(0, "central"), (2, "worker")] {
+            status.store(state, Ordering::SeqCst);
+            assert_eq!(
+                git_response(&request, repository, &generation, &status),
+                json!({
+                    "protocol_version":1,"request_id":"fixture-request","ok":true,
+                    "result":{"repository_id":repository,"binding_generation":7,
+                        "mode":mode,"object_format":"sha1"}
+                })
+            );
+        }
+
+        generation.store(8, Ordering::SeqCst);
+        assert_eq!(
+            git_response(&request, repository, &generation, &status),
+            json!({
+                "protocol_version":1,"request_id":"fixture-request","ok":false,
+                "error":{"code":"binding_conflict","message":"stale",
+                    "details":{"binding_generation":8},"retry":"refresh_inputs"}
+            })
+        );
+        // Missing repositories take precedence over a stale binding generation.
+        for (requested_repository, state) in [(repository, 1), (Uuid::from_u128(3), 0)] {
+            let mut request = request.clone();
+            request["repository_id"] = json!(requested_repository);
+            status.store(state, Ordering::SeqCst);
+            assert_eq!(
+                git_response(&request, repository, &generation, &status),
+                json!({
+                    "protocol_version":1,"request_id":"fixture-request","ok":false,
+                    "error":{"code":"repository_not_found","message":"absent",
+                        "details":{},"retry":"refresh_inputs"}
+                })
+            );
+        }
     }
 }
