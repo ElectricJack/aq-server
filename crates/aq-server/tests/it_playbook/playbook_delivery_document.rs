@@ -145,7 +145,12 @@ async fn assert_delivery_authoring_request(pool: &sqlx::PgPool) {
     let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
     assert_eq!(record["id"], DELIVERY);
     assert_eq!(record["binding"], DELIVERY_BINDING);
-    assert_eq!(record["events"], json!(["aq.work.result_ready"]));
+    let events = if cfg!(feature = "project_environments") {
+        json!(["aq.environment.base_changed", "aq.work.result_ready"])
+    } else {
+        json!(["aq.work.result_ready"])
+    };
+    assert_eq!(record["events"], events);
     let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
     assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
     for command in [
@@ -270,45 +275,7 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     let app = aq_server::build_admin_router(state.clone());
     let (status, saved) = put(&app, DOCUMENT, 0).await;
     assert_eq!(status, 200, "{saved}");
-<<<<<<< HEAD
     assert_delivery_authoring_request(&pool).await;
-=======
-    let runs = authoring::in_flight(&pool).await.unwrap();
-    assert_eq!(runs.len(), 1, "one authoring run for the delivery source");
-    let internal = runs[0].internal_task_id.unwrap();
-    let submitted = aq_internal_work::store::get(&pool, internal)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        submitted.purpose,
-        aq_internal_work::Purpose::PlaybookCompilation
-    );
-    assert_eq!(submitted.request.affected.id, DELIVERY);
-    let files = submitted.request.agent.unwrap().files;
-    assert_eq!(files["source.md"], DOCUMENT);
-    let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
-    assert_eq!(record["id"], DELIVERY);
-    assert_eq!(record["binding"], DELIVERY_BINDING);
-    let events = if cfg!(feature = "project_environments") {
-        json!(["aq.environment.base_changed", "aq.work.result_ready"])
-    } else {
-        json!(["aq.work.result_ready"])
-    };
-    assert_eq!(record["events"], events);
-    let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
-    assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
-    for command in [
-        "work.complete",
-        "work.return",
-        "work.hold",
-        "branch.publish",
-    ] {
-        assert!(catalog["commands"].get(command).is_some(), "{command}");
-    }
-    assert!(catalog["events"].get("aq.work.result_ready").is_some());
-    assert!(files["CATALOG.md"].contains("aq.work.result_ready"));
->>>>>>> refs/remotes/central/main
     // Saving the same document again, or other settings, starts no second run.
     authoring::author_document(&state, &authoring::builtin::delivery()).await;
     assert_eq!(authoring::in_flight(&pool).await.unwrap().len(), 1);
