@@ -118,6 +118,7 @@ pub(crate) fn evaluate(
     profile: &CoreProfile<'_>,
     policy: &SelectionPolicy,
     input: &CoreInputs<'_>,
+    unavailable: &std::collections::BTreeMap<String, &'static str>,
 ) -> Result<CoreOutcome> {
     let context = Evaluation {
         input,
@@ -136,6 +137,15 @@ pub(crate) fn evaluate(
     });
     for candidate in &profile.candidates {
         context.candidate_rows(candidate, &harnesses, &mut rows)?;
+    }
+    for row in &mut rows {
+        if row.choice.is_some()
+            && let Some(reason) = unavailable.get(&row.trace.provider)
+        {
+            row.choice = None;
+            row.trace.state = CandidateState::Unavailable;
+            row.trace.reason_codes = vec![(*reason).into()];
+        }
     }
     Ok(rank(rows, input.route, policy))
 }
