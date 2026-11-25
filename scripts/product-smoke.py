@@ -373,7 +373,10 @@ class Fixture:
             socket, sandbox = workers_smoke.sandbox_socket()
             owner = os.stat(socket)
             user = f"{owner.st_uid}:{owner.st_gid}"
-            self.record["sandbox"] = dict(sandbox, uid=owner.st_uid, gid=owner.st_gid)
+            # The disposable runner's rootless daemon uses the runner filesystem.
+            docker_local = {"socket": SANDBOX_SOCKET, "shared_root_fs": True}
+            self.record["sandbox"] = dict(sandbox, uid=owner.st_uid, gid=owner.st_gid,
+                                          shared_root_fs_override=docker_local["shared_root_fs"])
             controller = self.temp / "controller.json"
             controller.write_text(json.dumps({
                 "state_dir": "/state/controller",
@@ -382,7 +385,7 @@ class Fixture:
                          "spend_ceiling": None,
                          "capacity": {"memory_bytes": 1 << 30, "cpu_millis": 1000, "disk_bytes": 1 << 30,
                                       "max_preparing": 1}},
-                "docker_local": {"socket": SANDBOX_SOCKET}}, indent=2))
+                "docker_local": docker_local}, indent=2))
             controller.chmod(0o644)
             for name in ["worker", "runtime"]:
                 # nocopy: Docker copies an image VOLUME's content and owner into a volume

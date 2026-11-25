@@ -285,9 +285,10 @@ class WorkerFixture:
         (directory / "agent-q/worker.toml").write_text(
             f'server_url = "http://server:8081"\nnode_id = "{node_id}"\ncredential = "{credential}"\n')
         (directory / "agent-q/worker.toml").chmod(0o600)
+        # The smoke may use a rootless daemon on the test host filesystem.
         (directory / "controller.json").write_text(json.dumps({
             "state_dir": "/state/controller",
-            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "templates": []},
+            "docker_local": {"socket": "/run/aq-sandbox/podman.sock", "shared_root_fs": True, "templates": []},
             "node": {"runtime": {"id": "aq-worker", "version": candidate["version"], "digest": "0" * 64},
                      "capabilities": [], "features": [], "templates": [], "max_concurrent_sandboxes": 2,
                      "spend_ceiling": None, "capacity": {"memory_bytes": 8 * 2**30, "cpu_millis": 4000,
