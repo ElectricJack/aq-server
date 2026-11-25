@@ -464,12 +464,112 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
 }
 
 #[cfg(feature = "delivery_playbook")]
-#[tokio::test]
-async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
+async fn workspace_poll(c: &Case) -> Value {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    let response = aq_server::build_worker_router(c.env.env.state.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/worker/profiled/poll")
+                .header("authorization", format!("Bearer {}", c.env.env.credential))
+                .header("content-type", "application/json")
+                .header("AQ-Workspace-Expansion", "1")
+                .body(Body::from(serde_json::to_vec(&c.request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
+        .unwrap()
+}
+
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+#[tokio::test]
+async fn workspace_service_successor_is_granted_under_the_same_pinned_role() {
+    use super::environments::{TEMPLATE, definition_of, on_web, ready, republish};
+    use crate::common::roles;
+    use aq_profiles::roles::Kind;
+
+    let mut c = native_offer::setup().await;
+    on_web(&mut c).await;
+    // Keep the original job's profile pin even though the project permits an
+    // additional environment and the node can launch either image.
+    roles::save(
+        &c.env.env.pool,
+        c.env.actor,
+        Kind::Execution,
+        "sandbox",
+        &roles::execution(8192),
+    )
+    .await;
+    sqlx::query("UPDATE environment_versions SET provides=$1 WHERE environment_id='example.web'")
+        .bind(json!(["postgres"]))
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+    ready(&c, json!([TEMPLATE])).await;
+    republish(&c).await;
+
+    let (status, body) = native_offer::poll_offered(&c).await;
+    assert_eq!(status, 200, "{body}");
+    let first = sole_offer(&body);
+    assert_eq!(
+        first.offered.offer.manifest.harness.environment.id.as_str(),
+        roles::ENVIRONMENT
+    );
+    let first_grant = granted(&mut c, &first).await;
+    run_and_hand_off(&c, &first_grant, &"5".repeat(40), true).await;
+
+    c.request.operation_id = Uuid::new_v4();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let successor = loop {
+        let body = workspace_poll(&c).await;
+        let decoded = aq_profiled_state::git_author::decode_poll_reply(
+            &serde_json::to_vec(&body).unwrap(),
+            &c.request,
+        )
+        .unwrap();
+        if let [offer] = decoded.offers.as_slice() {
+            assert!(offer.workspace_required);
+            break offer.native.clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{body}");
+        native_offer::assembled(&c).await;
+    };
+    assert_eq!(
+        successor.offered.offer.manifest.harness.environment,
+        definition_of(&c).await
+    );
+    assert_eq!(
+        successor.offered.offer.manifest.bindings.task_id,
+        first.offered.offer.manifest.bindings.task_id
+    );
+    let attempt = successor.offered.offer.binding.attempt_id;
+    assert_ne!(attempt, first.offered.offer.binding.attempt_id);
+    let scope: Value =
+        sqlx::query_scalar("SELECT scope FROM task_workspace_offer_fences WHERE attempt_id=$1")
+            .bind(attempt)
+            .fetch_one(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(scope["services"], json!(["postgres"]));
+
+    let (_, plan, request, _) = native_offer::prepare_request(&mut c, &successor).await;
+    let nonce = Uuid::new_v4();
+    let delivery = initial_grant::prepare(&c.env.env.state, &auth(&c).await, &request, nonce)
+        .await
+        .unwrap();
+    delivery
+        .validate_for(&request, &plan, &successor, nonce)
+        .unwrap();
+    assert_eq!(delivery.original.grant.binding.attempt_id, attempt);
+}
+
+#[cfg(feature = "delivery_playbook")]
+#[tokio::test]
+async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
     let c = native_offer::setup().await;
     let pool = &c.env.env.pool;
     let (home, task) = (c.env.lineage.project_id, c.env.lineage.task_id);
@@ -499,23 +599,7 @@ async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
     .await
     .unwrap();
 
-    let poll = || async {
-        let response = aq_server::build_worker_router(c.env.env.state.clone())
-            .oneshot(
-                axum::http::Request::post("/v1/worker/profiled/poll")
-                    .header("authorization", format!("Bearer {}", c.env.env.credential))
-                    .header("content-type", "application/json")
-                    .header("AQ-Workspace-Expansion", "1")
-                    .body(Body::from(serde_json::to_vec(&c.request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        serde_json::from_slice::<Value>(&response.into_body().collect().await.unwrap().to_bytes())
-            .unwrap()
-    };
-    assert_eq!(poll().await["body"]["offers"], json!([]));
+    assert_eq!(workspace_poll(&c).await["body"]["offers"], json!([]));
     native_offer::assembled(&c).await;
     sqlx::query("UPDATE task_workspace_sources SET state='approved' WHERE task_id=$1")
         .bind(task)
@@ -524,10 +608,10 @@ async fn workspace_approval_wakes_only_capable_offer_and_freezes_scope() {
         .unwrap();
     refused_poll(&c).await;
 
-    let mut body = poll().await;
+    let mut body = workspace_poll(&c).await;
     native_offer::assembled(&c).await;
     if body["body"]["offers"] == json!([]) {
-        body = poll().await;
+        body = workspace_poll(&c).await;
     }
     assert_eq!(body["body"]["offers"][0]["workspace_required"], true);
     let decoded = aq_profiled_state::git_author::decode_poll_reply(
