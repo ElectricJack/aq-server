@@ -1,0 +1,56 @@
+{
+  "commands_added": [
+    "environment.admit",
+    "environment.build",
+    "work.activate"
+  ],
+  "commands_changed": [
+    "decision.request",
+    "operation.get",
+    "work.read",
+    "work.route"
+  ],
+  "context_views": [
+    "work",
+    "project",
+    "execution_options",
+    "evidence",
+    "health_observations"
+  ],
+  "events_added": [
+    "aq.environment.base_changed",
+    "aq.environment.completed"
+  ],
+  "events_changed": [
+    "aq.decision.completed"
+  ],
+  "fingerprint": "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f",
+  "includes": {
+    "fingerprint": "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac",
+    "version": "2.4.0"
+  },
+  "supersedes": {
+    "fingerprint": "sha256:0bda7d5de41b0630ec46a4b9cf555609db59a7276459e89620c5771deeced89a",
+    "version": "2.3.0"
+  },
+  "version": "2.5.0",
+  "work_change_variants": [
+    "requirements",
+    "priority",
+    "dependencies",
+    "execution_constraints",
+    "hold",
+    "release_hold"
+  ],
+  "work_kinds": [
+    "implementation",
+    "investigation",
+    "planning",
+    "review",
+    "repair",
+    "supervisor_authoring",
+    "spec_ingestion",
+    "fidelity_review",
+    "onboarding"
+  ]
+}

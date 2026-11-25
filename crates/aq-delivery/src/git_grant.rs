@@ -10,7 +10,11 @@
 //! describe the request body. The server itself refuses a push that updates
 //! any ref but the grant's task ref, from any old head but the lease, or that
 //! is larger than Settings `delivery-limits.max_push_bytes`. It decides nothing
-//! about the result.
+//! about the result. With `environment_try` (spec 0017 §6.2), a push may
+//! instead update the attempt's own try ref from any old head; aq-git gets it
+//! as `AQ-Try-Ref`, and the push is recorded so the ref is deleted when the
+//! attempt ends. [`serve_read`] forwards a supervisor's fetch, which the
+//! caller has authorized, under a fixed read grant.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 #[cfg(test)]
@@ -84,6 +88,13 @@ pub struct GitGrant {
 
 /// The request header naming the attempt a `/v1/git` request is for.
 pub const ATTEMPT_HEADER: &str = "aq-attempt";
+pub use crate::commands::TRY_PREFIX;
+
+/// The attempt's own try ref, the one ref beside the task ref its push may
+/// update; `None` without `environment_try`.
+pub fn try_ref(attempt: Uuid) -> Option<String> {
+    cfg!(feature = "environment_try").then(|| format!("{TRY_PREFIX}{attempt}"))
+}
 
 /// The grant's endpoint on the worker API; git appends `/info/refs` etc.
 pub fn endpoint(repository: Uuid) -> String {
@@ -153,6 +164,32 @@ pub async fn offer(
     })
 }
 
+/// The head central aq-git shows now for `attempt`'s granted task ref (`Some(None)`: no such
+/// branch); `None` when the attempt has no grant, or aq-git is not configured or did not answer.
+pub async fn granted_ref_head(
+    pool: &PgPool,
+    socket: Option<&Path>,
+    attempt: Uuid,
+) -> Option<Option<String>> {
+    let row = sqlx::query(
+        "SELECT g.repository_id,g.task_ref,\
+         (l.execution_spec#>>'{source,repository_binding_generation}')::bigint AS generation \
+         FROM delivery_git_grants g JOIN profiled_launches l USING(attempt_id) WHERE g.attempt_id=$1",
+    )
+    .bind(attempt)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    let target = GitTarget {
+        repository_id: row.get("repository_id"),
+        binding_generation: u64::try_from(row.get::<Option<i64>, _>("generation")?).ok()?,
+    };
+    let git = SocketGit::new(socket?);
+    git.show_ref(&target, &row.get::<String, _>("task_ref"))
+        .await
+        .ok()
+}
+
 /// Records `grant` for `attempt` in the offer's publication.
 pub async fn record_locked(
     tx: &mut Transaction<'_, Postgres>,
@@ -197,6 +234,84 @@ pub async fn held_report<'e>(
                AND o.command_name='pull_request.merge' AND o.status NOT IN ('conflict','refused','not_mergeable'))
            ELSE false END",
     ).bind(task).fetch_optional(db).await
+}
+
+/// Why the delivery hold of `task`'s current result still keeps it from being replaced: a
+/// delivery operation for the result is running, or no override was recorded for the claiming
+/// attempt since the hold. Reconciling a held result never releases it by itself. An override
+/// (`aq_machine_control::holds::budget_code`) applies to a result [`held_report`] reconciles.
+pub async fn held_gate(
+    db: &mut sqlx::PgConnection,
+    task: Uuid,
+) -> sqlx::Result<Option<&'static str>> {
+    let row: Option<(Uuid, bool, bool, Option<String>)> = sqlx::query_as(
+        "SELECT h.report_id,
+           EXISTS(SELECT 1 FROM playbook_host_operations o WHERE o.subject_id=a.task_id::text
+             AND o.request#>>'{result_ready,result_id}'=h.report_id::text AND o.status='running'),
+           EXISTS(SELECT 1 FROM task_limit_overrides v WHERE v.task_id=a.task_id
+             AND v.attempt_id=a.attempt_id AND v.recorded_at_ms>=d.decided_at_ms),
+           d.reason
+         FROM execution_attempts a JOIN profiled_result_heads h USING(attempt_id)
+         JOIN delivery_decisions d ON d.result_id=h.report_id
+         WHERE a.task_id=$1 AND a.holds_task AND d.task_id=$1 AND d.decision='held'",
+    )
+    .bind(task)
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some((report, running, overridden, reason)) = row else {
+        return Ok(None);
+    };
+    if running {
+        return Ok(Some("replacement_delivery_effects_pending"));
+    }
+    if overridden {
+        return Ok(None);
+    }
+    Ok(Some(
+        match (
+            held_report(&mut *db, task).await? == Some(report),
+            reason.as_deref(),
+        ) {
+            (true, Some("returns_exhausted")) => "returns_exhausted",
+            (true, _) => "delivery_policy_held",
+            (false, _) => "delivery_result_held",
+        },
+    ))
+}
+
+/// The current failed result an owner can reconcile after a proven cancellation.
+/// A stopped attempt with no result needs a separate source-custody proof.
+pub async fn cancelled_failed_report<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    task: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT h.report_id FROM execution_attempts a
+         JOIN profiled_result_heads h USING(attempt_id)
+         JOIN profiled_cancelled_settlements c USING(attempt_id)
+         JOIN profiled_authority_hot hot USING(attempt_id)
+         JOIN delivery_git_grants g USING(attempt_id)
+         JOIN profiled_result_reports r ON r.report_id=h.report_id
+         JOIN delivery_pushed_results p ON p.report_id=h.report_id AND p.attempt_id=a.attempt_id
+         WHERE a.task_id=$1 AND a.holds_task AND p.head IS NOT NULL AND p.task_ref=g.task_ref
+         AND hot.state#>>'{stop,kind}'='stopped'
+         AND hot.state#>>'{stop,receipt,digest}'=c.stop_receipt_digest
+         AND hot.state->>'cancellation_id'=c.cancellation_id::text
+         AND convert_from(r.report_bytes,'UTF8')::jsonb->>'outcome'='failed'
+         AND NOT EXISTS(SELECT 1 FROM delivery_decisions d WHERE d.result_id=h.report_id
+                        AND d.decision='completed')
+         AND NOT EXISTS(SELECT 1 FROM profiled_delivery_evidence d WHERE d.attempt_id=a.attempt_id
+                        AND d.state IN ('indeterminate','published'))
+         AND NOT EXISTS(SELECT 1 FROM delivery_merge_evidence m WHERE m.attempt_id=a.attempt_id)
+         AND NOT EXISTS(SELECT 1 FROM playbook_host_operations o
+                        WHERE o.subject_id=a.task_id::text
+                        AND o.request#>>'{result_ready,attempt_id}'=a.attempt_id::text
+                        AND o.command_name='pull_request.merge'
+                        AND o.status NOT IN ('conflict','refused','not_mergeable'))",
+    )
+    .bind(task)
+    .fetch_optional(db)
+    .await
 }
 
 /// The frozen delivery selector, independent of the attempt's lifecycle.
@@ -348,6 +463,26 @@ pub async fn confirm_pushed(
     if row.get::<bool, _>("recorded") {
         return Ok(());
     }
+    let task_ref = confirm_head(&row, git, pushed_at).await?;
+    sqlx::query(
+        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
+         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
+    )
+    .bind(report)
+    .bind(attempt)
+    .bind(&task_ref)
+    .bind(pushed_at.map(|p| &p.head))
+    .execute(pool)
+    .await
+    .map_err(|_| PushedRefusal::Unavailable)?;
+    Ok(())
+}
+
+async fn confirm_head(
+    row: &sqlx::postgres::PgRow,
+    git: &SocketGit,
+    pushed_at: Option<&PushedRef>,
+) -> Result<String, PushedRefusal> {
     let task_ref: String = row.get("task_ref");
     if pushed_at.is_some_and(|p| p.reference != task_ref) {
         return Err(PushedRefusal::Refused(
@@ -374,18 +509,7 @@ pub async fn confirm_pushed(
         }
         _ => {}
     }
-    sqlx::query(
-        "INSERT INTO delivery_pushed_results(report_id,attempt_id,task_ref,head) \
-         VALUES($1,$2,$3,$4) ON CONFLICT(report_id) DO NOTHING",
-    )
-    .bind(report)
-    .bind(attempt)
-    .bind(&task_ref)
-    .bind(pushed_at.map(|p| &p.head))
-    .execute(pool)
-    .await
-    .map_err(|_| PushedRefusal::Unavailable)?;
-    Ok(())
+    Ok(task_ref)
 }
 
 /// [`confirm_pushed`] of what a result request's headers name, if anything.
@@ -419,6 +543,9 @@ pub async fn pushed_of(
     }))
 }
 
+/// aq-git's answer to one forwarded git request.
+pub type Served = Response<Incoming>;
+
 /// One `/v1/git/<repository>/<path>` request of the authenticated `node` for
 /// the attempt its `AQ-Attempt` header names, forwarded to aq-git's git
 /// socket under the attempt's recorded grant.
@@ -428,12 +555,12 @@ pub async fn serve<B>(
     node: Uuid,
     (repository, path): (Uuid, &str),
     request: Request<B>,
-) -> Result<Response<Incoming>, Refusal>
+) -> Result<Served, Refusal>
 where
     B: Body<Data = Bytes> + Send + Unpin + 'static,
     B::Error: Into<BoxError>,
 {
-    let push = route(request.method(), path, request.uri().query())?;
+    route(request.method(), path, request.uri().query())?;
     let attempt = (request.headers().get(ATTEMPT_HEADER))
         .and_then(|v| Uuid::try_parse(v.to_str().ok()?).ok())
         .ok_or(Refusal::BadRequest(
@@ -444,6 +571,33 @@ where
         .map_err(|_| Refusal::Unavailable)?;
     let grant = (grant.filter(|g| g.repository_id == repository))
         .ok_or(Refusal::Forbidden("no live git grant for this request"))?;
+    forward(
+        pool,
+        socket,
+        (&grant, Some(attempt)),
+        (repository, path),
+        request,
+    )
+    .await
+}
+
+/// Forwards one `/v1/git/<repository>/<path>` request to aq-git's git socket
+/// under `grant`, which the caller found live for the node and repository.
+/// A push may update only the grant's task ref from its lease, or, for an
+/// `attempt` (not a builder's job), that attempt's [`try_ref`] from any head.
+pub async fn forward<B>(
+    pool: &PgPool,
+    socket: &Path,
+    (grant, attempt): (&GitGrant, Option<Uuid>),
+    (repository, path): (Uuid, &str),
+    request: Request<B>,
+) -> Result<Served, Refusal>
+where
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BoxError>,
+{
+    let push = route(request.method(), path, request.uri().query())?;
+    let try_ref = attempt.and_then(try_ref);
     let (limits, _) = aq_role_settings::delivery_limits(pool)
         .await
         .map_err(|_| Refusal::Unavailable)?;
@@ -465,9 +619,81 @@ where
                 "an encoded push body cannot be checked",
             ));
         }
-        let read = tokio::time::timeout_at(deadline, commands(&mut body, &grant)).await;
-        body.prefix = Some(read.map_err(|_| Refusal::Unavailable)??);
+        let commands = commands(&mut body, grant, try_ref.as_deref());
+        let (read, tried) = (tokio::time::timeout_at(deadline, commands).await)
+            .map_err(|_| Refusal::Unavailable)??;
+        body.prefix = Some(read);
+        if let Some(attempt) = attempt.filter(|_| tried) {
+            record_try(pool, attempt, repository).await?;
+        }
     }
+    let grant = (
+        grant.base.as_str(),
+        grant.task_ref.as_str(),
+        limits.max_push_bytes,
+    );
+    let to = (socket, repository, path);
+    to_aq_git(to, parts, body, (grant, try_ref.as_deref()), deadline).await
+}
+
+/// The grant a supervisor's fetch is forwarded under: aq-git checks only its
+/// syntax, and it constrains nothing but a push, which is never forwarded.
+pub const READ_BASE: &str = ZERO_OID;
+pub const READ_TASK_REF: &str = "refs/heads/aq/supervisor-read";
+const READ_GRANT: (&str, &str, u64) = (READ_BASE, READ_TASK_REF, 1);
+
+/// One `/v1/supervisor/git/<repository>/<path>` fetch, which the caller has
+/// authorized for `repository`, forwarded to aq-git's git socket under
+/// [`READ_GRANT`] within Settings `git_transfer_timeout_ms`. Anything but the
+/// two fetch routes is refused; the body passes through unread and unlimited.
+pub async fn serve_read<B>(
+    pool: &PgPool,
+    socket: &Path,
+    repository: Uuid,
+    path: &str,
+    request: Request<B>,
+) -> Result<Response<Incoming>, Refusal>
+where
+    B: Body<Data = Bytes> + Send + Unpin + 'static,
+    B::Error: Into<BoxError>,
+{
+    let fetch = matches!(
+        (request.method().as_str(), path, request.uri().query()),
+        ("GET", "info/refs", Some("service=git-upload-pack")) | ("POST", "git-upload-pack", None)
+    );
+    if !fetch {
+        return Err(Refusal::Forbidden("Supervisors can only fetch"));
+    }
+    let (limits, _) = aq_role_settings::delivery_limits(pool)
+        .await
+        .map_err(|_| Refusal::Unavailable)?;
+    let deadline = Instant::now() + Duration::from_millis(limits.git_transfer_timeout_ms);
+    let (parts, body) = request.into_parts();
+    to_aq_git(
+        (socket, repository, path),
+        parts,
+        body,
+        (READ_GRANT, None),
+        deadline,
+    )
+    .await
+}
+
+/// Sends the request to aq-git at `/<repository>/<path>` with only the
+/// [`FORWARDED`] client headers and the grant headers of `(base, task_ref,
+/// max_push_bytes)` (and `AQ-Try-Ref`, if any), and returns aq-git's
+/// response with only [`RETURNED`].
+async fn to_aq_git<B>(
+    (socket, repository, path): (&Path, Uuid, &str),
+    parts: http::request::Parts,
+    body: B,
+    ((base, task_ref, max_push_bytes), try_ref): ((&str, &str, u64), Option<&str>),
+    deadline: Instant,
+) -> Result<Response<Incoming>, Refusal>
+where
+    B: Body<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
+{
     let mut uri = format!("/{repository}/{path}");
     if let Some(query) = parts.uri.query() {
         uri = format!("{uri}?{query}");
@@ -480,10 +706,13 @@ where
     }
     out = (out.header(header::HOST, "aq-git"))
         .header("aq-repository", repository.to_string())
-        .header("aq-base", &grant.base)
-        .header("aq-task-ref", &grant.task_ref)
-        .header("aq-max-push-bytes", limits.max_push_bytes.to_string())
+        .header("aq-base", base)
+        .header("aq-task-ref", task_ref)
+        .header("aq-max-push-bytes", max_push_bytes.to_string())
         .header("aq-operation", Uuid::new_v4().to_string());
+    if let Some(try_ref) = try_ref {
+        out = out.header("aq-try-ref", try_ref);
+    }
     let request = out
         .body(body)
         .map_err(|_| Refusal::BadRequest("invalid git request"))?;
@@ -498,7 +727,7 @@ where
 }
 
 /// Whether `method path?query` is a smart-HTTP route, and a push.
-fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
+pub fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refusal> {
     match (method.as_str(), path, query) {
         ("GET", "info/refs", Some("service=git-upload-pack" | "service=git-receive-pack"))
         | ("POST", "git-upload-pack", None) => Ok(false),
@@ -507,21 +736,49 @@ fn route(method: &Method, path: &str, query: Option<&str>) -> Result<bool, Refus
     }
 }
 
+/// Records, before it reaches aq-git, that `attempt` pushes its try ref, so
+/// the sweep deletes the ref once the attempt ends. Only while the attempt
+/// holds its task: a push that passed the grant check as the attempt ended
+/// records nothing and is refused.
+async fn record_try(pool: &PgPool, attempt: Uuid, repository: Uuid) -> Result<(), Refusal> {
+    let recorded = sqlx::query(
+        "INSERT INTO environment_try_refs(attempt_id,repository_id,binding_generation) \
+         SELECT a.attempt_id,$2,(l.execution_spec#>>'{source,repository_binding_generation}')::bigint \
+         FROM execution_attempts a JOIN profiled_launches l USING(attempt_id) \
+         WHERE a.attempt_id=$1 AND a.holds_task \
+         ON CONFLICT(attempt_id) DO UPDATE SET pushed_at=now()",
+    )
+    .bind(attempt)
+    .bind(repository)
+    .execute(pool)
+    .await
+    .map_err(|_| Refusal::Unavailable)?;
+    match recorded.rows_affected() {
+        0 => Err(Refusal::Forbidden("no live git grant for this request")),
+        _ => Ok(()),
+    }
+}
+
 /// Reads a receive-pack request's command list (pkt-lines up to the first
 /// flush) and checks it against `grant`: no command (git's probe), or one
-/// update of the task ref from the lease to a commit. Returns the bytes read.
-async fn commands<B>(body: &mut B, grant: &GitGrant) -> Result<Bytes, Refusal>
+/// update of the task ref from the lease, or of `try_ref` from any head, to a
+/// commit. Returns the bytes read and whether the update is of `try_ref`.
+async fn commands<B>(
+    body: &mut B,
+    grant: &GitGrant,
+    try_ref: Option<&str>,
+) -> Result<(Bytes, bool), Refusal>
 where
     B: Body<Data = Bytes> + Unpin,
 {
     let malformed = Refusal::BadRequest("malformed receive-pack commands");
-    let (mut read, mut at, mut seen) = (BytesMut::new(), 0, 0);
+    let (mut read, mut at, mut seen, mut tried) = (BytesMut::new(), 0, 0, false);
     loop {
         while let Some(length) = read.get(at..at + 4) {
             let length = std::str::from_utf8(length).ok();
             let length = length.and_then(|l| usize::from_str_radix(l, 16).ok());
             match length.ok_or(malformed)? {
-                0 => return Ok(read.freeze()),
+                0 => return Ok((read.freeze(), tried)),
                 1..=4 => return Err(malformed),
                 length if read.len() < at + length => break,
                 length => {
@@ -529,7 +786,7 @@ where
                     if seen > 1 {
                         return Err(Refusal::Forbidden("a push may update only the task ref"));
                     }
-                    check_command(&read[at + 4..at + length], grant)?;
+                    tried = check_command(&read[at + 4..at + length], grant, try_ref)?;
                     at += length;
                 }
             }
@@ -542,8 +799,8 @@ where
     }
 }
 
-/// `<old> <new> <ref>[\0<capabilities>]\n`.
-fn check_command(line: &[u8], grant: &GitGrant) -> Result<(), Refusal> {
+/// `<old> <new> <ref>[\0<capabilities>]\n`; whether it updates `try_ref`.
+fn check_command(line: &[u8], grant: &GitGrant, try_ref: Option<&str>) -> Result<bool, Refusal> {
     let malformed = Refusal::BadRequest("malformed receive-pack command");
     let line = line.split(|b| *b == 0).next().unwrap_or_default();
     let line = std::str::from_utf8(line).map_err(|_| malformed)?;
@@ -554,16 +811,21 @@ fn check_command(line: &[u8], grant: &GitGrant) -> Result<(), Refusal> {
     if !object_id(old) || !object_id(new) {
         return Err(malformed);
     }
-    if reference != grant.task_ref {
+    let tried = try_ref == Some(reference);
+    if reference != grant.task_ref && !tried {
         return Err(Refusal::Forbidden("a push may update only the task ref"));
+    }
+    if new == ZERO_OID && tried {
+        return Err(Refusal::Forbidden("deleting the try ref is not allowed"));
     }
     if new == ZERO_OID {
         return Err(Refusal::Forbidden("deleting the task ref is not allowed"));
     }
-    if old != grant.lease.as_deref().unwrap_or(ZERO_OID) {
+    // A try ref moves from any head: tries are siblings, not a chain.
+    if !tried && old != grant.lease.as_deref().unwrap_or(ZERO_OID) {
         return Err(Refusal::StaleLease);
     }
-    Ok(())
+    Ok(tried)
 }
 
 /// The request body: the bytes [`commands`] already read, then the rest,
@@ -629,4 +891,22 @@ where
         .await
         .map_err(|_| Refusal::Unavailable)?
         .map_err(|_| Refusal::Unavailable)
+}
+
+/// Fence a selected result before recovering it for a resumed owner authorization.
+pub async fn is_retry_report(
+    pool: &sqlx::PgPool,
+    report: Uuid,
+    attempt: Option<Uuid>,
+) -> sqlx::Result<bool> {
+    let Some(attempt) = attempt else {
+        return Ok(true);
+    };
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM profiled_result_reports WHERE report_id=$1 AND attempt_id=$2)",
+    )
+    .bind(report)
+    .bind(attempt)
+    .fetch_one(pool)
+    .await
 }

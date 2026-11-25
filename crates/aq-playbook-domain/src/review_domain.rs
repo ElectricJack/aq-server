@@ -1,4 +1,5 @@
 //! Explicit catalog2 addition. Catalog1 functions/fixture bytes remain fixed.
+mod scope;
 use crate::{Error, Recipient, Result};
 use aq_playbook_host::{model::*, runner::Authority};
 use aq_session_protocol::{ArtifactRef, Validate};
@@ -42,6 +43,11 @@ pub enum CatalogProfile {
     Host10,
     /// AQ host catalog 2.4.0: Host9 plus decision notes and draft-subtree activation.
     Host11,
+    /// AQ host catalog 2.5.0 (spec 0017): Host10's delivery lineage plus
+    /// Host11's changes and the environment commands. Compiled in only with
+    /// the cargo features `delivery_playbook` and `project_environments`.
+    #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+    Host12,
 }
 pub const HOST9_VERSION: &str = "2.2.0";
 pub const HOST9_FINGERPRINT: &str =
@@ -107,25 +113,51 @@ pub const HOST9_COMMANDS: [&str; 16] = [
     "work.unroutable",
     "judgment.assess",
 ];
-fn host9_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.2.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.2.0 parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST9_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST9_FINGERPRINT),
-                "vendored AQ host catalog 2.2.0 fingerprint"
-            );
-            registry
-        })
-        .clone()
+struct CatalogSource {
+    cached: std::sync::OnceLock<Registry>,
+    version: &'static str,
+    fingerprint: &'static str,
+    label: &'static str,
+    input: &'static str,
 }
+impl CatalogSource {
+    const fn new(
+        version: &'static str,
+        fingerprint: &'static str,
+        label: &'static str,
+        input: &'static str,
+    ) -> Self {
+        Self {
+            cached: std::sync::OnceLock::new(),
+            version,
+            fingerprint,
+            label,
+            input,
+        }
+    }
+    fn load(&self) -> Registry {
+        self.cached.get_or_init(|| self.verified()).clone()
+    }
+    fn verified(&self) -> Registry {
+        let registry: Registry = serde_json::from_str(self.input)
+            .unwrap_or_else(|error| panic!("{} parses: {error:?}", self.label));
+        assert_eq!(
+            aq_playbook_host::model::digest(&(self.version, &registry))
+                .ok()
+                .as_deref(),
+            Some(self.fingerprint),
+            "{} fingerprint",
+            self.label
+        );
+        registry
+    }
+}
+static HOST9_CATALOG: CatalogSource = CatalogSource::new(
+    HOST9_VERSION,
+    HOST9_FINGERPRINT,
+    "vendored AQ host catalog 2.2.0",
+    include_str!("../../../vendor/aq-host-catalog-2.2.0/registry.json"),
+);
 /// AQ host catalog 2.3.0.
 #[cfg(feature = "delivery_playbook")]
 pub const HOST10_VERSION: &str = "2.3.0";
@@ -193,82 +225,66 @@ pub const HOST10_COMMANDS: [&str; 26] = [
 ];
 /// The asynchronous delivery commands: each completes by `aq.delivery.completed`.
 #[cfg(feature = "delivery_playbook")]
-pub const DELIVERY_COMMANDS: [&str; 6] = [
-    "main.sync",
-    "branch.publish",
-    "pull_request.open",
-    "pull_request.await_checks",
-    "pull_request.merge",
-    "pull_request.close",
-];
+pub use aq_playbook_host::ASYNC_DELIVERY_COMMANDS as DELIVERY_COMMANDS;
 #[cfg(feature = "delivery_playbook")]
-fn host10_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.3.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.3.0 parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST10_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST10_FINGERPRINT),
-                "vendored AQ host catalog 2.3.0 fingerprint"
-            );
-            registry
-        })
-        .clone()
-}
+static HOST10_CATALOG: CatalogSource = CatalogSource::new(
+    HOST10_VERSION,
+    HOST10_FINGERPRINT,
+    "vendored AQ host catalog 2.3.0",
+    include_str!("../../../vendor/aq-host-catalog-2.3.0/registry.json"),
+);
 pub const HOST11_VERSION: &str = "2.4.0";
 pub const HOST11_FINGERPRINT: &str =
     "sha256:d655322de4c8df54aee8df2eaa097343833aff582452a71d50abed934e0916ac";
 
-fn host11_registry() -> Registry {
+static HOST11_CATALOG: CatalogSource = CatalogSource::new(
+    HOST11_VERSION,
+    HOST11_FINGERPRINT,
+    "vendored AQ host catalog 2.4.0",
+    include_str!("../../../vendor/aq-host-catalog-2.4.0/registry.json"),
+);
+
+pub const WORK_ACTIVATE: &str = "work.activate";
+
+/// AQ host catalog 2.5.0.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const HOST12_VERSION: &str = "2.5.0";
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const HOST12_FINGERPRINT: &str =
+    "sha256:d51ac465281614d241fe0023bafd94aadbaf3e65a1c3464c597da5000c549a7f";
+/// The asynchronous environment commands: each completes by `aq.environment.completed`.
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+pub const ENVIRONMENT_COMMANDS: [&str; 2] = ["environment.build", "environment.admit"];
+#[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+fn host12_registry() -> Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY
         .get_or_init(|| {
             let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.4.0/registry.json"
+                "../../../vendor/aq-host-catalog-2.5.0/registry.json"
             ))
-            .expect("vendored AQ host catalog 2.4.0 parses");
+            .expect("vendored AQ host catalog 2.5.0 parses");
             assert_eq!(
-                aq_playbook_host::model::digest(&(HOST11_VERSION, &registry))
+                aq_playbook_host::model::digest(&(HOST12_VERSION, &registry))
                     .ok()
                     .as_deref(),
-                Some(HOST11_FINGERPRINT),
-                "vendored AQ host catalog 2.4.0 fingerprint",
+                Some(HOST12_FINGERPRINT),
+                "vendored AQ host catalog 2.5.0 fingerprint",
             );
             registry
         })
         .clone()
 }
-
-pub const WORK_ACTIVATE: &str = "work.activate";
 
 pub const HOST8_VERSION: &str = "2.1.0";
 pub const HOST8_FINGERPRINT: &str =
     "sha256:24407a41481dba1bc9618e4c9239e0282083cca2ef57316a42d5f61df32d1716";
-fn host8_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.1.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.1.0 parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST8_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST8_FINGERPRINT),
-                "vendored AQ host catalog 2.1.0 fingerprint"
-            );
-            registry
-        })
-        .clone()
-}
+static HOST8_CATALOG: CatalogSource = CatalogSource::new(
+    HOST8_VERSION,
+    HOST8_FINGERPRINT,
+    "vendored AQ host catalog 2.1.0",
+    include_str!("../../../vendor/aq-host-catalog-2.1.0/registry.json"),
+);
 pub const HOST7_VERSION: &str = "2.0.0";
 pub const HOST7_FINGERPRINT: &str =
     "sha256:e2ce7dc8ff4b37538f8d27f175a4e365ff95cf14508ae7074beea04026b143db";
@@ -286,25 +302,12 @@ pub const HOST7_CAPABILITIES: [&str; 12] = [
     "message.send",
     "decision.request",
 ];
-fn host7_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-2.0.0/registry.json"
-            ))
-            .expect("vendored AQ host catalog 2.0.0 parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST7_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST7_FINGERPRINT),
-                "vendored AQ host catalog 2.0.0 fingerprint"
-            );
-            registry
-        })
-        .clone()
-}
+static HOST7_CATALOG: CatalogSource = CatalogSource::new(
+    HOST7_VERSION,
+    HOST7_FINGERPRINT,
+    "vendored AQ host catalog 2.0.0",
+    include_str!("../../../vendor/aq-host-catalog-2.0.0/registry.json"),
+);
 pub const HOST5_VERSION: &str = "1.0.0";
 pub const HOST5_FINGERPRINT: &str =
     "sha256:627125cc393d8274bfaa9ffc785c338e566cc69af362ac027a3daa355c3509e1";
@@ -314,25 +317,12 @@ pub const HOST5_CAPABILITIES: [&str; 4] = [
     "work.change",
     "operation.cancel",
 ];
-fn host5_registry() -> Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            let registry: Registry = serde_json::from_str(include_str!(
-                "../../../vendor/aq-host-catalog-1.0.0/registry.json"
-            ))
-            .expect("vendored D4 host catalog parses");
-            assert_eq!(
-                aq_playbook_host::model::digest(&(HOST5_VERSION, &registry))
-                    .ok()
-                    .as_deref(),
-                Some(HOST5_FINGERPRINT),
-                "vendored D4 host catalog fingerprint"
-            );
-            registry
-        })
-        .clone()
-}
+static HOST5_CATALOG: CatalogSource = CatalogSource::new(
+    HOST5_VERSION,
+    HOST5_FINGERPRINT,
+    "vendored D4 host catalog",
+    include_str!("../../../vendor/aq-host-catalog-1.0.0/registry.json"),
+);
 impl CatalogProfile {
     pub fn number(self) -> i16 {
         match self {
@@ -348,6 +338,8 @@ impl CatalogProfile {
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => 10,
             Self::Host11 => 11,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => 12,
         }
     }
     /// Catalog 2.3.0 (Epic 0): always false without the feature
@@ -355,12 +347,27 @@ impl CatalogProfile {
     pub fn is_delivery(self) -> bool {
         #[cfg(feature = "delivery_playbook")]
         {
-            self == Self::Host10
+            self == Self::Host10 || self.has_environments()
         }
         #[cfg(not(feature = "delivery_playbook"))]
         {
             false
         }
+    }
+    /// Catalog 2.5.0 (spec 0017): always false without both features.
+    pub fn has_environments(self) -> bool {
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        {
+            self == Self::Host12
+        }
+        #[cfg(not(all(feature = "delivery_playbook", feature = "project_environments")))]
+        {
+            false
+        }
+    }
+    /// Catalog 2.4.0 and later: decision notes and `work.activate`.
+    pub fn has_notes(self) -> bool {
+        self == Self::Host11 || self.has_environments()
     }
     /// Catalog 2.2.0 and later: `work.read`, `work.route`, `work.unroutable`,
     /// `judgment.assess` and the event `aq.work.route_needed`.
@@ -388,7 +395,9 @@ impl CatalogProfile {
         self.is_host2() || self == Self::Monitoring6
     }
     pub fn from_number(number: i16) -> Option<Self> {
-        #[cfg(feature = "delivery_playbook")]
+        #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+        let delivery = [Self::Host10, Self::Host12];
+        #[cfg(all(feature = "delivery_playbook", not(feature = "project_environments")))]
         let delivery = [Self::Host10];
         #[cfg(not(feature = "delivery_playbook"))]
         let delivery: [Self; 0] = [];
@@ -423,6 +432,8 @@ impl CatalogProfile {
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => "host_v10",
             Self::Host11 => "host_v11",
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => "host_v12",
         }
     }
     /// Why a configured namespace cannot open over the stored row
@@ -460,6 +471,19 @@ impl CatalogProfile {
             }
             #[cfg(feature = "delivery_playbook")]
             Self::Host10 => &HOST10_COMMANDS,
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => {
+                static COMMANDS: std::sync::LazyLock<Vec<&'static str>> =
+                    std::sync::LazyLock::new(|| {
+                        [
+                            &HOST10_COMMANDS[..],
+                            &[WORK_ACTIVATE],
+                            &ENVIRONMENT_COMMANDS,
+                        ]
+                        .concat()
+                    });
+                &COMMANDS
+            }
             _ => &[],
         }
     }
@@ -467,32 +491,27 @@ impl CatalogProfile {
         !(self == Self::Mail1 || self.is_host())
     }
     pub fn registry(self) -> Registry {
-        if self == Self::Monitoring6 {
-            let mut registry = host5_registry();
-            for event in [graph_operation_event(), task_completed_event()] {
-                registry.events.insert(event.name.clone(), event);
+        match self {
+            Self::Monitoring6 => {
+                let mut registry = HOST5_CATALOG.load();
+                for event in [graph_operation_event(), task_completed_event()] {
+                    registry.events.insert(event.name.clone(), event);
+                }
+                registry
             }
-            return registry;
+            Self::Host5 => HOST5_CATALOG.load(),
+            Self::Host7 => HOST7_CATALOG.load(),
+            Self::Host8 => HOST8_CATALOG.load(),
+            Self::Host9 => HOST9_CATALOG.load(),
+            Self::Host11 => HOST11_CATALOG.load(),
+            #[cfg(feature = "delivery_playbook")]
+            Self::Host10 => HOST10_CATALOG.load(),
+            #[cfg(all(feature = "delivery_playbook", feature = "project_environments"))]
+            Self::Host12 => host12_registry(),
+            _ => self.review_registry(),
         }
-        if self == Self::Host5 {
-            return host5_registry();
-        }
-        if self == Self::Host7 {
-            return host7_registry();
-        }
-        if self == Self::Host8 {
-            return host8_registry();
-        }
-        if self == Self::Host9 {
-            return host9_registry();
-        }
-        if self == Self::Host11 {
-            return host11_registry();
-        }
-        #[cfg(feature = "delivery_playbook")]
-        if self == Self::Host10 {
-            return host10_registry();
-        }
+    }
+    fn review_registry(self) -> Registry {
         let mut registry = crate::registry();
         if matches!(self, Self::GraphEvents3 | Self::SettlementEvents4) {
             let event = graph_operation_event();
@@ -511,102 +530,6 @@ impl CatalogProfile {
             registry.events.insert(event.name.clone(), event);
         }
         registry
-    }
-    pub fn validate_scope(self, scope: &crate::GrantScope) -> Result<()> {
-        self.validate_scope_with_extensions(scope, |_| false)
-    }
-    pub fn validate_scope_with_extensions(
-        self,
-        scope: &crate::GrantScope,
-        installed: impl Fn(&str) -> bool,
-    ) -> Result<()> {
-        let mut base_capabilities = scope.capabilities.clone();
-        base_capabilities.retain(|capability| {
-            !aq_playbook_host::plugins::extension_capability(capability).is_some_and(&installed)
-        });
-        let has_extensions = base_capabilities != scope.capabilities;
-        if has_extensions
-            && (scope.workspace_id.is_nil()
-                || scope.project_id.is_nil()
-                || aq_playbook_host::model::canonical_bytes(scope)
-                    .map_err(|_| Error::Invalid)?
-                    .len()
-                    > 32768)
-        {
-            return Err(Error::Invalid);
-        }
-        if has_extensions && base_capabilities.is_empty() && scope.recipients.is_empty() {
-            return Ok(());
-        }
-        if self == Self::Mail1 {
-            let mut base = scope.clone();
-            base.capabilities = base_capabilities;
-            return base.validate();
-        }
-        if self.is_host() {
-            let mut allowed: BTreeSet<String> = if self.has_routing() {
-                HOST9_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            } else if self.is_host2() {
-                HOST7_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            } else {
-                HOST5_CAPABILITIES.iter().map(|c| c.to_string()).collect()
-            };
-            if self == Self::Monitoring6 {
-                allowed.insert("findings.reconcile".into());
-            }
-            if self == Self::Host11 {
-                allowed.insert(WORK_ACTIVATE.into());
-            }
-            #[cfg(feature = "delivery_playbook")]
-            if self.is_delivery() {
-                allowed.extend(HOST10_DELIVERY_CAPABILITIES.iter().map(|c| c.to_string()));
-            }
-            if scope.workspace_id.is_nil()
-                || scope.project_id.is_nil()
-                || !scope.recipients.is_empty()
-                || scope.capabilities.is_empty()
-                || !base_capabilities.is_subset(&allowed)
-                || aq_playbook_host::model::canonical_bytes(scope)
-                    .map_err(|_| Error::Invalid)?
-                    .len()
-                    > 32768
-            {
-                return Err(Error::Invalid);
-            }
-            return Ok(());
-        }
-        let mut base = scope.clone();
-        base.capabilities = BTreeSet::from(["message.send".into()]);
-        base.validate()?;
-        let allowed = BTreeSet::from([
-            "message.send".into(),
-            "decision.request".into(),
-            "operation.get".into(),
-        ]);
-        if scope.capabilities.is_empty() || !base_capabilities.is_subset(&allowed) {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
-    pub fn authority(
-        self,
-        id: Uuid,
-        revision: i64,
-        scope: &crate::GrantScope,
-    ) -> Result<Authority> {
-        self.authority_with_extensions(id, revision, scope, |_| false)
-    }
-    pub fn authority_with_extensions(
-        self,
-        id: Uuid,
-        revision: i64,
-        scope: &crate::GrantScope,
-        installed: impl Fn(&str) -> bool,
-    ) -> Result<Authority> {
-        self.validate_scope_with_extensions(scope, installed)?;
-        let mut authority = crate::authority(id, revision);
-        authority.capabilities = scope.capabilities.clone();
-        Ok(authority)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -631,23 +554,27 @@ impl DecisionInput {
             .version
             .validate()
             .map_err(|_| Error::Invalid)?;
-        if self.report_id.is_nil()
-            || self.source_operation_id.is_nil()
-            || self.expected_subject.id.as_str() != format!("aq.review-subject/{}", self.report_id)
-            || self.expected_subject.version.as_str() != "1"
-            || self.eligibility_project_revision == 0
-            || self.eligibility_project_revision > i64::MAX as u64
-            || self.expires_at_ms == 0
-            || self.expires_at_ms > i64::MAX as u64
-            || self.eligible_owners.is_empty()
-            || self.eligible_owners.len() > 16
-            || self.eligible_owners.iter().any(Uuid::is_nil)
-            || self.eligible_owners.iter().collect::<BTreeSet<_>>().len()
-                != self.eligible_owners.len()
-        {
+        let subject = self.expected_subject.id.as_str()
+            == format!("aq.review-subject/{}", self.report_id)
+            && self.expected_subject.version.as_str() == "1";
+        let ids = !self.report_id.is_nil() && !self.source_operation_id.is_nil();
+        let bounds = (1..=i64::MAX as u64).contains(&self.eligibility_project_revision)
+            && (1..=i64::MAX as u64).contains(&self.expires_at_ms);
+        if [subject, ids, bounds, self.valid_owners()].contains(&false) {
             return Err(Error::Invalid);
         }
         Ok(())
+    }
+}
+impl DecisionInput {
+    fn valid_owners(&self) -> bool {
+        if !(1..=16).contains(&self.eligible_owners.len()) {
+            return false;
+        }
+        let mut seen = BTreeSet::new();
+        self.eligible_owners
+            .iter()
+            .all(|id| !id.is_nil() && seen.insert(id))
     }
 }
 fn object(fields: impl IntoIterator<Item = (&'static str, Schema)>) -> Schema {

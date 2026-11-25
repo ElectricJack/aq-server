@@ -12,7 +12,9 @@ fn text(s: &str) -> Text {
 fn pretty(v: &impl serde::Serialize) -> String {
     serde_json::to_string_pretty(v).unwrap() + "\n"
 }
-pub fn artifacts() -> BTreeMap<String, String> {
+type Artifacts = BTreeMap<String, String>;
+
+pub fn artifacts() -> Artifacts {
     let mut out = BTreeMap::new();
     out.insert(
         "schema.json".into(),
@@ -28,7 +30,27 @@ pub fn artifacts() -> BTreeMap<String, String> {
             aq_terminal_relay::api::RuntimeDocument
         )),
     );
+
     for central in [false, true] {
+        let fixture = PeerFixture::new(central);
+        fixture.publish(&mut out, central);
+    }
+    epoch_artifacts(&mut out);
+    // Schemars output is compared as bytes by drift tests; runtime validators also
+    // enforce relational identity/capability/budget rules schema cannot express.
+    let _: Value = serde_json::from_str(&out["schema.json"]).unwrap();
+    out
+}
+
+struct PeerFixture {
+    peer: Peer,
+    lease: ControllerLease,
+    input: InputCommand,
+    resize: ResizeCommand,
+}
+
+impl PeerFixture {
+    fn new(central: bool) -> Self {
         let peer = if central {
             Peer::Central {
                 authority_id: id(1),
@@ -84,32 +106,20 @@ pub fn artifacts() -> BTreeMap<String, String> {
             columns: 80,
             rows: 24,
         };
-        let frame = OutputFrame {
-            terminal: terminal.clone(),
-            sequence: 2,
-            bytes: b"echo".to_vec(),
-            byte_length: 4,
-            digest: Digest::of(b"echo"),
-        };
-        let snapshot = Snapshot {
-            snapshot_id: id(9),
-            capture_request_id: id(10),
-            terminal: terminal.clone(),
-            through_sequence: 1,
-            columns: 80,
-            rows: 24,
-            renderer: ArtifactRef {
-                id: text("synthetic"),
-                version: text("1"),
-                digest: Digest::of(b"renderer"),
-            },
-            state: b"snapshot".to_vec(),
-            digest: Digest::of(b"snapshot"),
-        };
+        Self {
+            peer,
+            lease,
+            input,
+            resize,
+        }
+    }
+
+    fn downstream(&self) -> DraftDocument {
+        let terminal = &self.lease.terminal;
         let envelope = Envelope {
             version: VERSION,
             capability: text(CAPABILITY),
-            peer: peer.clone(),
+            peer: self.peer.clone(),
             exchange_id: id(11),
             cursor: 1,
             effects: vec![
@@ -117,10 +127,10 @@ pub fn artifacts() -> BTreeMap<String, String> {
                     terminal: terminal.clone(),
                     fence_id: id(12),
                     generation: 1,
-                    controller: Some(lease.clone()),
+                    controller: Some(self.lease.clone()),
                 }),
-                Effect::Input(input.clone()),
-                Effect::Resize(resize.clone()),
+                Effect::Input(self.input.clone()),
+                Effect::Resize(self.resize.clone()),
                 Effect::Watch(WatchSubscription {
                     terminal: terminal.clone(),
                     subscription_id: id(13),
@@ -144,16 +154,16 @@ pub fn artifacts() -> BTreeMap<String, String> {
                 }),
             ],
         };
-        let name = if central { "central" } else { "remote" };
-        let down = DraftDocument::Downstream(envelope.clone());
-        down.validate().unwrap();
-        out.insert(format!("valid-{name}-downstream.json"), pretty(&down));
+        DraftDocument::Downstream(envelope)
+    }
+
+    fn register(&self) -> DraftDocument {
         let registration = Register {
             version: 1,
             capability: text(CAPABILITY),
             operation_id: id(22),
-            peer: peer.clone(),
-            terminal: terminal.clone(),
+            peer: self.peer.clone(),
+            terminal: self.lease.terminal.clone(),
             expected_authority_revision: 1,
             input_mode: InputMode::FiniteV1,
             advertised_capabilities: vec![Capability {
@@ -162,27 +172,50 @@ pub fn artifacts() -> BTreeMap<String, String> {
             }],
         };
         registration.validate().unwrap();
-        out.insert(
-            format!("valid-{name}-registration.json"),
-            pretty(&DraftDocument::Register(registration)),
-        );
-        let upload = DraftDocument::Upstream(PeerUpload {
+        DraftDocument::Register(registration)
+    }
+
+    fn upstream(&self) -> DraftDocument {
+        let terminal = &self.lease.terminal;
+        let frame = OutputFrame {
+            terminal: terminal.clone(),
+            sequence: 2,
+            bytes: b"echo".to_vec(),
+            byte_length: 4,
+            digest: Digest::of(b"echo"),
+        };
+        let snapshot = Snapshot {
+            snapshot_id: id(9),
+            capture_request_id: id(10),
+            terminal: terminal.clone(),
+            through_sequence: 1,
+            columns: 80,
+            rows: 24,
+            renderer: ArtifactRef {
+                id: text("synthetic"),
+                version: text("1"),
+                digest: Digest::of(b"renderer"),
+            },
+            state: b"snapshot".to_vec(),
+            digest: Digest::of(b"snapshot"),
+        };
+        DraftDocument::Upstream(PeerUpload {
             version: VERSION,
             capability: text(CAPABILITY),
-            peer,
+            peer: self.peer.clone(),
             exchange_id: id(15),
             cursor: 1,
             epoch_receipts: vec![],
             receipts: vec![InputReceipt {
                 operation_id: id(7),
                 terminal: terminal.clone(),
-                command_digest: canonical_digest(&input).unwrap(),
+                command_digest: canonical_digest(&self.input).unwrap(),
                 disposition: InputDisposition::DeliveryUnknown,
             }],
             resize_receipts: vec![ResizeReceipt {
                 terminal: terminal.clone(),
                 operation_id: id(8),
-                command_digest: canonical_digest(&resize).unwrap(),
+                command_digest: canonical_digest(&self.resize).unwrap(),
                 sequence: 1,
                 applied: true,
             }],
@@ -198,88 +231,111 @@ pub fn artifacts() -> BTreeMap<String, String> {
                 first_missing: 3,
                 last_missing: 4,
             }],
-        });
-        upload.validate().unwrap();
-        out.insert(format!("valid-{name}-upstream.json"), pretty(&upload));
+        })
+    }
+
+    fn publish(self, out: &mut Artifacts, central: bool) {
+        let name = if central { "central" } else { "remote" };
+        let down = self.downstream();
+        let up = self.upstream();
+        down.validate().unwrap();
+        up.validate().unwrap();
+        out.insert(format!("valid-{name}-downstream.json"), pretty(&down));
+        out.insert(format!("valid-{name}-upstream.json"), pretty(&up));
+        out.insert(
+            format!("valid-{name}-registration.json"),
+            pretty(&self.register()),
+        );
         if central {
-            for (name, doc) in [
-                (
-                    "renew",
-                    HumanLifecycle::Renew(RenewControl {
-                        terminal: terminal.clone(),
-                        operation_id: id(16),
-                        expected_session_revision: 1,
-                        expected_controller_generation: 1,
-                        lease_id: id(6),
-                        expires_at_ms: 12000,
-                    }),
-                ),
-                (
-                    "release",
-                    HumanLifecycle::Release(ReleaseControl {
-                        terminal: terminal.clone(),
-                        operation_id: id(17),
-                        expected_session_revision: 1,
-                        expected_controller_generation: 1,
-                        lease_id: id(6),
-                    }),
-                ),
-                (
-                    "capture",
-                    HumanLifecycle::Capture(HumanCapture {
-                        terminal: terminal.clone(),
-                        operation_id: id(18),
-                        expected_session_revision: 1,
-                        uncertain_operation_id: id(7),
-                        lease_id: id(6),
-                        expected_controller_generation: 1,
-                        expires_at_ms: 1000,
-                    }),
-                ),
-                (
-                    "open-epoch",
-                    HumanLifecycle::OpenEpoch(aq_terminal_relay::epoch::Open {
-                        terminal: terminal.clone(),
-                        operation_id: id(19),
-                        expected_session_revision: 1,
-                        expected_controller_generation: 1,
-                        lease_id: id(6),
-                        expires_at_ms: 1000,
-                    }),
-                ),
-                (
-                    "status",
-                    HumanLifecycle::Status(ControlStatus {
-                        terminal: terminal.clone(),
-                        session_revision: 1,
-                        generation: 1,
-                        lease: Some(lease),
-                        fence_acknowledged: false,
-                        input_paused: true,
-                    }),
-                ),
-            ] {
-                let doc = DraftDocument::Human(doc);
-                doc.validate().unwrap();
-                out.insert(format!("valid-human-{name}.json"), pretty(&doc));
-            }
-            let mut value = serde_json::to_value(&down).unwrap();
-            value["body"]["version"] = json!(2);
-            out.insert("invalid-version.json".into(), pretty(&value));
-            let mut value = serde_json::to_value(&down).unwrap();
-            value["body"]["effects"][0]["body"]["unknown_mutation"] = json!(true);
-            out.insert("invalid-extra-mutation.json".into(), pretty(&value));
-            let mut value = serde_json::to_value(&down).unwrap();
-            value["body"]["peer"] = json!({"kind":"remote","node_id":id(1),"boot_id":id(2)});
-            out.insert("invalid-cross-peer.json".into(), pretty(&value));
-            let mut value = serde_json::to_value(&down).unwrap();
-            value["body"]["effects"][0]["body"]["generation"] = json!(0);
-            out.insert("invalid-zero-fence.json".into(), pretty(&value));
-            let mut value = serde_json::to_value(&down).unwrap();
-            value["body"]["effects"][4]["body"]["capture_request_id"] = json!(Uuid::nil());
-            out.insert("invalid-nil-capture.json".into(), pretty(&value));
+            human_artifacts(out, self.lease);
+            invalid_downstream_artifacts(out, &down);
         }
     }
+}
+fn human_artifacts(out: &mut Artifacts, lease: ControllerLease) {
+    let terminal = &lease.terminal;
+    for (name, doc) in [
+        (
+            "renew",
+            HumanLifecycle::Renew(RenewControl {
+                terminal: terminal.clone(),
+                operation_id: id(16),
+                expected_session_revision: 1,
+                expected_controller_generation: 1,
+                lease_id: id(6),
+                expires_at_ms: 12000,
+            }),
+        ),
+        (
+            "release",
+            HumanLifecycle::Release(ReleaseControl {
+                terminal: terminal.clone(),
+                operation_id: id(17),
+                expected_session_revision: 1,
+                expected_controller_generation: 1,
+                lease_id: id(6),
+            }),
+        ),
+        (
+            "capture",
+            HumanLifecycle::Capture(HumanCapture {
+                terminal: terminal.clone(),
+                operation_id: id(18),
+                expected_session_revision: 1,
+                uncertain_operation_id: id(7),
+                lease_id: id(6),
+                expected_controller_generation: 1,
+                expires_at_ms: 1000,
+            }),
+        ),
+        (
+            "open-epoch",
+            HumanLifecycle::OpenEpoch(aq_terminal_relay::epoch::Open {
+                terminal: terminal.clone(),
+                operation_id: id(19),
+                expected_session_revision: 1,
+                expected_controller_generation: 1,
+                lease_id: id(6),
+                expires_at_ms: 1000,
+            }),
+        ),
+        (
+            "status",
+            HumanLifecycle::Status(ControlStatus {
+                terminal: terminal.clone(),
+                session_revision: 1,
+                generation: 1,
+                lease: Some(lease),
+                fence_acknowledged: false,
+                input_paused: true,
+            }),
+        ),
+    ] {
+        let doc = DraftDocument::Human(doc);
+        doc.validate().unwrap();
+        out.insert(format!("valid-human-{name}.json"), pretty(&doc));
+    }
+}
+
+fn invalid_downstream_artifacts(out: &mut Artifacts, down: &DraftDocument) {
+    let mut value = serde_json::to_value(down).unwrap();
+    value["body"]["version"] = json!(2);
+    out.insert("invalid-version.json".into(), pretty(&value));
+    let mut value = serde_json::to_value(down).unwrap();
+    value["body"]["effects"][0]["body"]["unknown_mutation"] = json!(true);
+    out.insert("invalid-extra-mutation.json".into(), pretty(&value));
+    let mut value = serde_json::to_value(down).unwrap();
+    value["body"]["peer"] = json!({"kind":"remote","node_id":id(1),"boot_id":id(2)});
+    out.insert("invalid-cross-peer.json".into(), pretty(&value));
+    let mut value = serde_json::to_value(down).unwrap();
+    value["body"]["effects"][0]["body"]["generation"] = json!(0);
+    out.insert("invalid-zero-fence.json".into(), pretty(&value));
+    let mut value = serde_json::to_value(down).unwrap();
+    value["body"]["effects"][4]["body"]["capture_request_id"] = json!(Uuid::nil());
+    out.insert("invalid-nil-capture.json".into(), pretty(&value));
+}
+
+fn epoch_artifacts(out: &mut Artifacts) {
     let permit = aq_terminal_relay::epoch::Permit {
         terminal: TerminalIdentity {
             session: SessionIdentity::Central {
@@ -297,6 +353,20 @@ pub fn artifacts() -> BTreeMap<String, String> {
         derivation_version: 1,
     };
     let operation = aq_terminal_relay::epoch::operation_id(&permit, 1).unwrap();
+    epoch_request_artifacts(out, &permit, operation);
+    let command = epoch_command(&permit, operation);
+    epoch_downstream_artifacts(out, &command);
+    poll_artifacts(out);
+    epoch_upstream_artifacts(out, &command);
+    upload_ack_artifact(out, &permit);
+    out.insert("uuid-vectors.json".into(),pretty(&json!({"algorithm":"sha256-domain-terminal-epoch-lease-generation-sequence-uuidv8","permit":permit,"vectors":[{"sequence":1,"operation_id":"8da947e6-212b-8e9c-b631-f670ca25ba73"},{"sequence":2,"operation_id":"2bb83041-7173-835c-9847-9c25f8d014b8"},{"sequence":u64::MAX,"operation_id":"79e034f4-981d-8eb3-953f-4be646dc30df"}]})));
+}
+
+fn epoch_request_artifacts(
+    out: &mut Artifacts,
+    permit: &aq_terminal_relay::epoch::Permit,
+    operation: Uuid,
+) {
     let request = aq_terminal_relay::epoch::Request {
         version: 1,
         capability: text(aq_terminal_relay::epoch::CAPABILITY),
@@ -322,7 +392,13 @@ pub fn artifacts() -> BTreeMap<String, String> {
         "invalid-epoch-version.json".into(),
         pretty(&DraftDocument::EpochInput(bad)),
     );
-    let command = aq_terminal_relay::epoch::Command {
+}
+
+fn epoch_command(
+    permit: &aq_terminal_relay::epoch::Permit,
+    operation: Uuid,
+) -> aq_terminal_relay::epoch::Command {
+    aq_terminal_relay::epoch::Command {
         permit: permit.clone(),
         sequence: 1,
         input: InputCommand {
@@ -341,7 +417,10 @@ pub fn artifacts() -> BTreeMap<String, String> {
             bytes: b"x".to_vec(),
             escape_key: false,
         },
-    };
+    }
+}
+
+fn epoch_downstream_artifacts(out: &mut Artifacts, command: &aq_terminal_relay::epoch::Command) {
     let envelope = Envelope {
         version: 1,
         capability: text(aq_terminal_relay::epoch::CAPABILITY),
@@ -363,6 +442,9 @@ pub fn artifacts() -> BTreeMap<String, String> {
         "invalid-epoch-without-capability.json".into(),
         pretty(&DraftDocument::Downstream(unsupported)),
     );
+}
+
+fn poll_artifacts(out: &mut Artifacts) {
     let capabilities = vec![
         Capability {
             id: text(CAPABILITY),
@@ -397,6 +479,10 @@ pub fn artifacts() -> BTreeMap<String, String> {
         "invalid-poll-missing-epoch-capability.json".into(),
         pretty(&DraftDocument::Poll(unsupported)),
     );
+}
+
+fn epoch_upstream_artifacts(out: &mut Artifacts, command: &aq_terminal_relay::epoch::Command) {
+    let permit = &command.permit;
     let upload = PeerUpload {
         version: 1,
         capability: text(aq_terminal_relay::epoch::CAPABILITY),
@@ -411,7 +497,7 @@ pub fn artifacts() -> BTreeMap<String, String> {
             sequence: 1,
             receipt: InputReceipt {
                 terminal: permit.terminal.clone(),
-                operation_id: operation,
+                operation_id: command.input.operation_id,
                 command_digest: canonical_digest(&command.input).unwrap(),
                 disposition: InputDisposition::Applied,
             },
@@ -427,6 +513,9 @@ pub fn artifacts() -> BTreeMap<String, String> {
         "valid-epoch-upstream.json".into(),
         pretty(&DraftDocument::Upstream(upload)),
     );
+}
+
+fn upload_ack_artifact(out: &mut Artifacts, permit: &aq_terminal_relay::epoch::Permit) {
     let ack = UploadAck {
         version: 1,
         capability: text(aq_terminal_relay::epoch::CAPABILITY),
@@ -446,11 +535,6 @@ pub fn artifacts() -> BTreeMap<String, String> {
         "valid-upload-ack.json".into(),
         pretty(&DraftDocument::UploadAck(ack)),
     );
-    out.insert("uuid-vectors.json".into(),pretty(&json!({"algorithm":"sha256-domain-terminal-epoch-lease-generation-sequence-uuidv8","permit":permit,"vectors":[{"sequence":1,"operation_id":"8da947e6-212b-8e9c-b631-f670ca25ba73"},{"sequence":2,"operation_id":"2bb83041-7173-835c-9847-9c25f8d014b8"},{"sequence":u64::MAX,"operation_id":"79e034f4-981d-8eb3-953f-4be646dc30df"}]})));
-    // Schemars output is compared as bytes by drift tests; runtime validators also
-    // enforce relational identity/capability/budget rules schema cannot express.
-    let _: Value = serde_json::from_str(&out["schema.json"]).unwrap();
-    out
 }
 
 pub fn peer_artifacts() -> BTreeMap<String, String> {

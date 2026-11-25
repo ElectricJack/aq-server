@@ -159,6 +159,10 @@ pub struct Route {
     /// `classification`: reference, fields, labels, flags, rationale).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgment: Option<serde_json::Value>,
+    /// The environment the routing document chose (spec 0017 §5.4); none
+    /// keeps a continuation's own, else placement's default rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -184,6 +188,9 @@ pub struct CompactRoute {
     /// a later attempt ended is routed again (spec 0011 §4).
     #[serde(default)]
     pub a: u64,
+    /// The routed environment ([`Route::environment`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
 }
 
 /// Restrictions a route places on selection. An empty `harnesses` or
@@ -214,6 +221,7 @@ impl Route {
             s: self.source,
             n: sequence,
             a: self.ended_attempts,
+            e: self.environment.clone(),
         };
         let bytes = serde_json::to_vec(&compact)
             .map_err(|e| Error::Metadata {
@@ -232,6 +240,10 @@ impl Route {
 }
 
 impl CompactRoute {
+    fn predates_attempt(&self, ended_attempts: u64) -> bool {
+        self.s == Source::Router && self.a < ended_attempts
+    }
+
     /// Reads `aq:route` from task metadata. A missing key is `None`.
     pub fn from_metadata(metadata: &serde_json::Value) -> Result<Option<Self>, Error> {
         match metadata.get(ROUTE_KEY) {
@@ -286,9 +298,7 @@ impl Placement {
         }
         match CompactRoute::from_metadata(metadata) {
             Err(_) => Placement::Reroute,
-            Ok(Some(route))
-                if routing_on && route.s == Source::Router && route.a < ended_attempts =>
-            {
+            Ok(Some(route)) if routing_on && route.predates_attempt(ended_attempts) => {
                 Placement::Reroute
             }
             Ok(Some(route)) => Placement::Routed(route),
@@ -376,11 +386,12 @@ mod tests {
             source: Source::Router,
             ended_attempts: 0,
             judgment: None,
+            environment: None,
         }
     }
 
     #[test]
-    fn class_round_trips_as_parent_dash_effort_and_orders_by_parent_then_effort() {
+    fn class_round_trips_as_parent_dash_effort() {
         let c = class("standard-high");
         assert_eq!(
             c,
@@ -395,21 +406,29 @@ mod tests {
             serde_json::from_str::<Class>("\"deep-max\"").unwrap(),
             class("deep-max")
         );
+    }
+
+    #[test]
+    fn classes_sort_by_parent_then_effort() {
         assert!(class("standard-high") < class("complex-low"));
         assert!(class("standard-low") < class("standard-max"));
     }
 
     #[test]
     fn unknown_parent_or_effort_is_an_error() {
-        assert!("fast-high".parse::<Class>().is_err());
-        assert!("standard-ultra".parse::<Class>().is_err());
-        assert!("standard".parse::<Class>().is_err());
+        for invalid in ["fast-high", "standard-ultra", "standard"] {
+            assert!(invalid.parse::<Class>().is_err(), "{invalid}");
+        }
         assert!(serde_json::from_str::<Class>("\"fast-high\"").is_err());
     }
 
     #[test]
     fn compact_route_fits_2048_bytes_and_refuses_an_oversized_allowlist() {
-        let compact = route().compact(7).unwrap();
+        // The longest environment id catalog 2.5.0's `work.route` takes.
+        let mut routed = route();
+        routed.environment = Some("x".repeat(128));
+        let compact = routed.compact(7).unwrap();
+        assert_eq!(compact.e, routed.environment);
         assert_eq!(compact.d.as_deref(), Some("0123456789abcdef"));
         assert_eq!(compact.n, 7);
         assert!(serde_json::to_vec(&compact).unwrap().len() <= 2048);
@@ -426,11 +445,9 @@ mod tests {
         let compact = route().compact(2).unwrap();
         let md = json!({"aq:route": serde_json::to_value(&compact).unwrap(), "other": 1});
         assert_eq!(CompactRoute::from_metadata(&md).unwrap(), Some(compact));
-        assert_eq!(
-            CompactRoute::from_metadata(&json!({"other": 1})).unwrap(),
-            None
-        );
-        assert_eq!(CompactRoute::from_metadata(&json!(null)).unwrap(), None);
+        for missing in [json!({"other":1}), json!(null)] {
+            assert_eq!(CompactRoute::from_metadata(&missing).unwrap(), None);
+        }
         assert!(CompactRoute::from_metadata(&json!({"aq:route": "garbage"})).is_err());
     }
 
@@ -439,11 +456,19 @@ mod tests {
         let router = route().compact(1).unwrap();
         let mut owner = router.clone();
         owner.s = Source::Owner;
-        assert!(may_replace(None, Source::Router));
-        assert!(may_replace(Some(&router), Source::Router));
-        assert!(!may_replace(Some(&owner), Source::Router));
-        assert!(may_replace(Some(&owner), Source::Owner));
-        assert!(may_replace(Some(&router), Source::Owner));
+        for (current, source, permitted) in [
+            (None, Source::Router, true),
+            (Some(&router), Source::Router, true),
+            (Some(&owner), Source::Router, false),
+            (Some(&owner), Source::Owner, true),
+            (Some(&router), Source::Owner, true),
+        ] {
+            assert_eq!(
+                may_replace(current, source),
+                permitted,
+                "{source:?} replacing {current:?}"
+            );
+        }
     }
 
     #[test]

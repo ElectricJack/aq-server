@@ -1,0 +1,20 @@
+{
+  "id": "route-to-environment",
+  "binding": "aq.route-to-environment",
+  "scope": "project",
+  "purpose": "Choose the environment a task runs in",
+  "commands": [
+    "work.read",
+    "work.route",
+    "work.unroutable"
+  ],
+  "events": [
+    "aq.work.route_needed"
+  ],
+  "capabilities": [
+    "work.read",
+    "work.route",
+    "work.unroutable"
+  ],
+  "facts_version": "settings-7"
+}

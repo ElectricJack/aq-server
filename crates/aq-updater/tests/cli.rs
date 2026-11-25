@@ -22,17 +22,34 @@ struct H {
     config: PathBuf,
 }
 
-impl H {
-    fn new() -> H {
-        Self::with_verifier(
-            r#"kind = "cosign_keyless"
+enum VerifierFixture {
+    Cosign,
+    #[cfg(feature = "test-verifier")]
+    TestKey(String),
+}
+
+impl VerifierFixture {
+    fn config(&self) -> String {
+        match self {
+            Self::Cosign => r#"kind = "cosign_keyless"
 cosign_path = "/nonexistent/cosign"
 identity_regexp = "^x$"
-oidc_issuer = "https://token.actions.githubusercontent.com""#,
-        )
+oidc_issuer = "https://token.actions.githubusercontent.com""#
+                .to_owned(),
+            #[cfg(feature = "test-verifier")]
+            Self::TestKey(public_key) => {
+                format!("kind = \"test_key\"\npublic_key_hex = \"{public_key}\"")
+            }
+        }
+    }
+}
+
+impl H {
+    fn new() -> H {
+        Self::with_verifier(VerifierFixture::Cosign)
     }
 
-    fn with_verifier(verifier: &str) -> H {
+    fn with_verifier(verifier: VerifierFixture) -> H {
         let t = tempfile::tempdir().unwrap();
         let root = t.path().to_path_buf();
         let state_dir = root.join("state");
@@ -51,6 +68,7 @@ project_name = "agent-q-test"
 "#,
                 state = state_dir.display(),
                 root = root.display(),
+                verifier = verifier.config(),
             ),
         )
         .unwrap();
@@ -80,6 +98,13 @@ fn text(o: &Output) -> String {
         String::from_utf8_lossy(&o.stdout),
         String::from_utf8_lossy(&o.stderr)
     )
+}
+
+fn assert_stdout(o: &Output, snippets: &[&str]) {
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    for snippet in snippets {
+        assert!(stdout.contains(snippet), "missing {snippet:?}: {}", text(o));
+    }
 }
 
 fn manifest(v: &str, state_format: u32) -> ReleaseManifest {
@@ -170,16 +195,17 @@ fn status_prints_needs_operator_instructions() {
     let o = h.run(&["status"]);
     let out = text(&o);
     assert_eq!(o.status.code(), Some(0), "{out}");
-    let stdout = String::from_utf8_lossy(&o.stdout);
-    assert!(stdout.contains("failed_needs_operator"), "{out}");
-    assert!(stdout.contains(&detail), "{out}");
-    assert!(stdout.contains("active:    1.0.0"), "{out}");
-    assert!(
-        stdout.contains("aq-updater restore-previous --restore-backup"),
-        "{out}"
+    assert_stdout(
+        &o,
+        &[
+            "failed_needs_operator",
+            &detail,
+            "active:    1.0.0",
+            "aq-updater restore-previous --restore-backup",
+            "docker compose logs server",
+            "succeeded",
+        ],
     );
-    assert!(stdout.contains("docker compose logs server"), "{out}");
-    assert!(stdout.contains("succeeded"), "history listed: {out}");
     // No writes.
     assert_eq!(
         std::fs::read(h.state_dir.join("journal.json")).unwrap(),
@@ -251,12 +277,16 @@ fn status_shows_in_progress_and_available() {
     )
     .unwrap();
     let o = h.run(&["status"]);
-    let stdout = String::from_utf8_lossy(&o.stdout);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
-    assert!(stdout.contains("in_progress"), "{}", text(&o));
-    assert!(stdout.contains("backed_up"), "{}", text(&o));
-    assert!(stdout.contains("available: 1.2.0"), "{}", text(&o));
-    assert!(stdout.contains("previous:  none"), "{}", text(&o));
+    assert_stdout(
+        &o,
+        &[
+            "in_progress",
+            "backed_up",
+            "available: 1.2.0",
+            "previous:  none",
+        ],
+    );
 }
 
 #[test]
@@ -303,15 +333,23 @@ fn run_once_with_nothing_to_do_publishes_idle_status() {
     std::fs::write(spool.join("requests/garbage.json"), b"nope").unwrap();
     let o = h.run(&["run", "--once"]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert_spool_ready(&spool);
+    assert_idle_rejection(&h.state_dir, &spool);
+}
+
+fn assert_spool_ready(spool: &Path) {
     let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode(&spool.join("requests")), 0o2770);
     assert_eq!(mode(&spool.join("status")), 0o755);
     assert!(!spool.join("status/maintenance").exists());
     assert!(!spool.join("requests/garbage.json").exists());
+}
+
+fn assert_idle_rejection(state_dir: &Path, spool: &Path) {
     let s: UpdateStatus =
         serde_json::from_slice(&std::fs::read(spool.join("status/status.json")).unwrap()).unwrap();
     assert_eq!(s.state, UpdateState::Idle);
-    let hist = read_history(&h.state_dir, 10).unwrap();
+    let hist = read_history(state_dir, 10).unwrap();
     assert_eq!(hist.len(), 1);
     assert_eq!(hist[0].outcome, Outcome::Rejected);
     assert_eq!(hist[0].request_id, None);
@@ -405,10 +443,7 @@ fn test_sign_round_trip_through_verify_manifest() {
         .unwrap();
     assert_ne!(again.status.code(), Some(0));
 
-    let h = H::with_verifier(&format!(
-        "kind = \"test_key\"\npublic_key_hex = \"{}\"",
-        public.trim()
-    ));
+    let h = H::with_verifier(VerifierFixture::TestKey(public.trim().to_owned()));
     let m = h.root.join("manifest.json");
     std::fs::write(&m, manifest("1.0.0", 1).to_canonical_json()).unwrap();
     let o = Command::new(BIN)

@@ -217,7 +217,13 @@ subject revision and the single `expected_versions` entry (`task` or
   task version and record the change in the route history; a stale version
   returns a `conflict`.
 - `task.dependency.add` adds a `blocks` edge from `blocker_id`;
-  `task.dependency.remove` removes `edge_id` at `edge_version`.
+  `task.dependency.remove` removes `edge_id` at `edge_version`. With
+  `resume_held: true`, a task held at a limit an owner retry overrides (a
+  budget, or delivery's return limit) waits on the blocker instead: the edge
+  is added first, then the hold's override is recorded under the operation's
+  id, and the ordinary poll replaces the stopped attempt once the blocker
+  completes. Any other hold, or no hold, is `rejected` with its reason code
+  and no edge is added.
 - `task.activate` makes a `draft` task `active`, so the scheduler may start
   it. A task in any other state is `rejected` and nothing is written:
   reopening a completed or canceled task is not activation. A draft has never

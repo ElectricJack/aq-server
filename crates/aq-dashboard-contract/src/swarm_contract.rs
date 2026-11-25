@@ -169,6 +169,10 @@ pub enum ReportedState {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SwarmNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_observed_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory_rejection: Option<InventoryRejection>,
     /// Entity type `worker`.
     pub node: EntityRef,
     pub name: String,
@@ -186,6 +190,17 @@ pub struct SwarmNode {
     pub holding: Vec<HoldReason>,
     pub agents: Vec<SwarmAgent>,
 }
+/// The latest authenticated inventory refusal observed by this server.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InventoryRejection {
+    pub request_id: Uuid,
+    pub observed_at_ms: u64,
+    pub stage: String,
+    pub status: u16,
+    pub code: String,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IntelligenceClass {

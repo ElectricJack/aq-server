@@ -137,7 +137,12 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
         &state,
         namespace,
         Arc::new(keys),
-        CatalogProfile::Host10,
+        // Spec 0017: with environments the delivery record is on catalog 2.5.0.
+        if cfg!(feature = "project_environments") {
+            CatalogProfile::from_number(12).unwrap()
+        } else {
+            CatalogProfile::Host10
+        },
         graph,
         None,
         None,
@@ -207,7 +212,12 @@ async fn a_saved_delivery_document_starts_authoring_and_an_activated_artifact_re
     let record: Value = serde_json::from_str(&files["record.json"]).unwrap();
     assert_eq!(record["id"], DELIVERY);
     assert_eq!(record["binding"], DELIVERY_BINDING);
-    assert_eq!(record["events"], json!(["aq.work.result_ready"]));
+    let events = if cfg!(feature = "project_environments") {
+        json!(["aq.environment.base_changed", "aq.work.result_ready"])
+    } else {
+        json!(["aq.work.result_ready"])
+    };
+    assert_eq!(record["events"], events);
     let catalog: Value = serde_json::from_str(&files["catalog.json"]).unwrap();
     assert_eq!(catalog["commands"]["work.read"]["version"], "2.3.0");
     for command in [

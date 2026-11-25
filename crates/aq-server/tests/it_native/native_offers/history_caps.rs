@@ -29,12 +29,22 @@ fn offered(body: &serde_json::Value) -> usize {
 async fn gate(c: &Case, node: Uuid, now: i64) -> (bool, bool, Vec<String>) {
     let mut conn = c.env.env.pool.acquire().await.unwrap();
     let project = c.env.lineage.project_id;
-    let gate = aq_history_caps::poll_gate(&mut conn, node, &[project], now as u64, None)
-        .await
-        .unwrap();
-    let holds = aq_history_caps::holds(&mut conn, &[node], &[project], now as u64, None)
-        .await
-        .unwrap();
+    let gate = aq_history_caps::poll_gate(
+        &mut conn,
+        node,
+        &[project],
+        aq_history_caps::Snapshot::new(now as u64, None),
+    )
+    .await
+    .unwrap();
+    let holds = aq_history_caps::holds(
+        &mut conn,
+        &[node],
+        &[project],
+        aq_history_caps::Snapshot::new(now as u64, None),
+    )
+    .await
+    .unwrap();
     (
         gate.stop.is_some(),
         gate.is_held(project),

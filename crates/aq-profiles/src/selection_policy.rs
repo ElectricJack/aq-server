@@ -60,22 +60,26 @@ impl SelectionPolicy {
         )?;
         require_capabilities(&self.required_capabilities, &self.required_capabilities)
             .map_err(|e| crate::Error::Invalid(e.to_string()))?;
-        let budget = &self.budget;
+        self.budget.validate()
+    }
+}
+impl IntelligenceBudgetPolicy {
+    fn validate(&self) -> Result<()> {
         ensure(
-            budget.max_cost_microunits.is_some() == budget.currency.is_some()
-                && (!budget.require_hard_cost_enforcement || budget.max_cost_microunits.is_some()),
+            self.max_cost_microunits.is_some() == self.currency.is_some()
+                && (!self.require_hard_cost_enforcement || self.max_cost_microunits.is_some()),
             "selection cost basis",
         )?;
-        if let Some(currency) = &budget.currency {
+        if let Some(currency) = &self.currency {
             ensure(
                 currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()),
                 "selection currency",
             )?;
         }
         ensure(
-            !budget.require_hard_cost_enforcement
-                || (budget.require_complete_accounting
-                    && budget.unknown_cost == UnknownCostPolicy::Deny),
+            !self.require_hard_cost_enforcement
+                || (self.require_complete_accounting
+                    && self.unknown_cost == UnknownCostPolicy::Deny),
             "hard cost policy must require complete known accounting",
         )
     }
