@@ -52,8 +52,8 @@ fn sole_offer(body: &Value) -> NativeOffer {
     page.offers.remove(0)
 }
 
-/// The granted predecessor starts, saves `checkpoint`, is stopped by its owner
-/// (an `owner_stop` handoff) and reports Failed with that checkpoint's receipt.
+/// Start the predecessor and save its result from a known stopped owner.
+/// A workspace request can exist before a natural success reaches AQ.
 async fn run_and_hand_off(
     c: &Case,
     grant: &InitialGrantDelivery,
@@ -94,7 +94,10 @@ async fn run_and_hand_off(
             .bind(start.binding.attempt_id)
             .execute(&c.env.env.pool).await.unwrap();
     }
-    let stop = native_started::stop_request(&start);
+    let mut stop = native_started::stop_request(&start);
+    if expanded {
+        stop.evidence.reason = aq_admission::transport::StopReason::Completed;
+    }
     // The legacy stop and result owners need host stop evidence: the synthetic
     // host advertises it for those reports, then the registration is restored.
     let pool = &c.env.env.pool;
