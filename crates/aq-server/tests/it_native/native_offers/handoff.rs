@@ -124,31 +124,11 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     registered(json!(stop_capable)).await;
     stopped::record(state, &auth, &stop).await.unwrap();
 
-    // The worker's checkpoint transfer, centrally retained (validation only).
     let binding = &start.binding;
-    let aq_session_protocol::SessionIdentity::Remote {
-        node_id,
-        session_id,
-        ..
-    } = binding.session
-    else {
+    let aq_session_protocol::SessionIdentity::Remote { node_id, .. } = binding.session else {
         unreachable!()
     };
-    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let repository = c.env.frozen.project.binding.repository_id;
-    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
-    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
-        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
-        "resolved_spec_digest":binding.execution_spec_digest,
-        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
-        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
-    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
-        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
-    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
-        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
-    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
-        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
-        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
+    let source = retain_checkpoint(c, binding, checkpoint).await;
     sqlx::query("INSERT INTO attempt_handoffs(attempt_id,node_id,reason,requested_at) VALUES($1,$2,'owner_stop',now())")
         .bind(binding.attempt_id).bind(node_id).execute(pool).await.unwrap();
     let report = ResultReport {
@@ -204,9 +184,56 @@ async fn run_and_hand_off(c: &Case, grant: &InitialGrantDelivery, checkpoint: &s
     replacement::release(state, task, &r).await.unwrap();
 }
 
+async fn retain_checkpoint(
+    c: &Case,
+    binding: &aq_admission::LaunchBinding,
+    checkpoint: &str,
+) -> Uuid {
+    let pool = &c.env.env.pool;
+    // The worker's checkpoint transfer, centrally retained (validation only).
+    let aq_session_protocol::SessionIdentity::Remote {
+        node_id,
+        session_id,
+        ..
+    } = binding.session
+    else {
+        unreachable!()
+    };
+    let (source, transfer_id, artifact_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let repository = c.env.frozen.project.binding.repository_id;
+    let sha1 = |hex: &str| json!({"algorithm":"sha1","hex":hex});
+    let manifest = json!({"transfer_id":transfer_id,"role":"checkpoint","checkpoint":sha1(checkpoint),
+        "attempt":{"attempt_id":binding.attempt_id,"session_id":session_id,"generation":binding.assignment_generation},
+        "resolved_spec_digest":binding.execution_spec_digest,
+        "source":{"repository_id":repository,"binding_generation":1,"logical_identity":"synthetic-native-repository","base":sha1(&"a".repeat(40))},
+        "artifact_id":artifact_id,"manifest_digest":"a".repeat(64),"bundle_digest":null,"manifest_bytes":1,"bundle_bytes":0});
+    let receipt = json!({"receipt_id":source,"transfer_id":transfer_id,"repository_id":repository,"binding_generation":1,
+        "source":sha1(checkpoint),"retention_handle":artifact_id,"manifest_digest":"b".repeat(64)});
+    let central = json!({"repository_id":repository,"binding_generation":1,"transfer_id":artifact_id,"retention_handle":artifact_id,
+        "manifest_digest":"b".repeat(64),"source":sha1(checkpoint),"retention_state":"active","historical":false,"receiver_installation_id":Uuid::new_v4()});
+    sqlx::query("INSERT INTO source_transfers(transfer_id,attempt_id,node_id,repository_id,artifact_id,import_operation_id,manifest,state,receipt,central_receipt) VALUES($1,$2,$3,$4,$5,$6,$7,'retained',$8,$9)")
+        .bind(transfer_id).bind(binding.attempt_id).bind(node_id).bind(repository).bind(artifact_id).bind(source)
+        .bind(manifest).bind(receipt).bind(central).execute(pool).await.unwrap();
+    source
+}
+
 async fn export_of(c: &Case, attempt: Uuid) -> (Uuid, Value) {
     sqlx::query_as::<_, (Uuid, Value)>("SELECT x.operation_id,convert_from(e.request_bytes,'UTF8')::jsonb FROM profiled_launch_source_exports x JOIN profiled_source_exports e USING(operation_id) WHERE x.attempt_id=$1")
         .bind(attempt).fetch_one(&c.env.env.pool).await.unwrap()
+}
+
+async fn refused_poll(c: &Case) {
+    let (status, body) = native_offer::poll(c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}")
+    };
+    assert!(page.offers.is_empty(), "{body}");
+    // A refused successor is counted when the poll's assembly ends, which on a
+    // loaded runner is after the poll has answered the empty page; until then
+    // a further poll counts nothing.
+    native_offer::assembled(c).await;
 }
 
 async fn handed_off() -> (Case, Uuid) {
@@ -287,17 +314,7 @@ async fn handoff_successor_cannot_export_a_commit_other_than_the_recorded_candid
     };
     let exports = count("SELECT count(*) FROM profiled_source_exports").await;
     for _ in 0..2 {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(
-            status, 200,
-            "a refused handoff never fails the poll: {body}"
-        );
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        native_offer::assembled(&c).await;
+        refused_poll(&c).await;
     }
     assert_eq!(
         count("SELECT count(*) FROM profiled_source_exports").await,
@@ -340,22 +357,9 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
             .await
             .unwrap()
     };
-    let refused_poll = || async {
-        let (status, body) = native_offer::poll(&c).await;
-        assert_eq!(status, 200, "{body}");
-        let ControlReply::Poll(page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
-        else {
-            panic!("{body}")
-        };
-        assert!(page.offers.is_empty(), "{body}");
-        // A refused successor is counted when the poll's assembly ends, which on a
-        // loaded runner is after the poll has answered the empty page; until then
-        // a further poll counts nothing.
-        native_offer::assembled(&c).await;
-    };
     // The case clock stands still: 20 skips within a moment are not stuck.
     for n in 1..=holds::STUCK_SKIPS {
-        refused_poll().await;
+        refused_poll(&c).await;
         assert_eq!(skips().await, Some(n));
         assert!(
             super::holds::hold_rows(&c, task).await.is_empty(),
@@ -371,7 +375,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
     .execute(pool)
     .await
     .unwrap();
-    refused_poll().await;
+    refused_poll(&c).await;
     let readiness = super::holds::work(&c, task).await;
     assert_eq!(readiness["state"], "held", "{readiness}");
     assert_eq!(
@@ -388,7 +392,7 @@ async fn a_handoff_successor_refused_on_every_poll_is_held_once_stuck_not_before
         )]
     );
     // AQ keeps trying it; the hold and its one comment stay as they are.
-    refused_poll().await;
+    refused_poll(&c).await;
     assert_eq!(skips().await, Some(holds::STUCK_SKIPS + 2));
     assert_eq!(posted().await, 1);
     let comments = super::holds::system_comments(&c, task).await;

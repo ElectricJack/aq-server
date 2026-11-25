@@ -148,6 +148,18 @@ async fn lease(
         .bind(id).bind(Uuid::new_v4()).bind("a".repeat(64)).bind(f.node.node_id).bind(f.node.boot_id).bind(attempt).bind(f.profiled.offer.binding.offer_id).bind(json!(body)).bind(Digest::of(id.as_bytes()).as_str()).bind(NOW as i64).bind(expiry as i64).execute(pool).await.unwrap();
     id
 }
+fn preparing_hot(f: &common::profiled::Fixture) -> HotState {
+    use aq_server::execution::authority::hot::LaunchOwner;
+    let mut hot = HotState::from_compat(&f.profiled).unwrap();
+    hot.status = Status::Preparing;
+    hot.owner = Some(LaunchOwner {
+        guardian_id: Uuid::new_v4(),
+        launch_id: Uuid::new_v4(),
+        reservation_id: Uuid::new_v4(),
+    });
+    hot
+}
+
 async fn plan(
     f: &common::profiled::Fixture,
     hot: &mut HotState,
@@ -185,7 +197,6 @@ async fn plan(
 
 #[tokio::test]
 async fn preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_closes() {
-    use aq_server::execution::authority::hot::LaunchOwner;
     let (f, attempt, pool) = setup().await;
     let old_lease = lease(&f, attempt, &pool, NOW + 1000).await;
     sqlx::query("UPDATE admission_material_leases SET state='revoked' WHERE lease_id=$1")
@@ -194,13 +205,7 @@ async fn preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_
         .await
         .unwrap();
     let lease = lease(&f, attempt, &pool, NOW + 60000).await;
-    let mut hot = HotState::from_compat(&f.profiled).unwrap();
-    hot.status = Status::Preparing;
-    hot.owner = Some(LaunchOwner {
-        guardian_id: Uuid::new_v4(),
-        launch_id: Uuid::new_v4(),
-        reservation_id: Uuid::new_v4(),
-    });
+    let mut hot = preparing_hot(&f);
     plan(&f, &mut hot, &pool, lease, NOW + 60000).await;
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(attempt)
@@ -238,13 +243,7 @@ async fn preparing_deadline_revokes_actual_material_and_ever_issued_grant_never_
             .is_err()
     );
     let (f, attempt, pool) = setup().await;
-    let mut hot = HotState::from_compat(&f.profiled).unwrap();
-    hot.status = Status::Preparing;
-    hot.owner = Some(LaunchOwner {
-        guardian_id: Uuid::new_v4(),
-        launch_id: Uuid::new_v4(),
-        reservation_id: Uuid::new_v4(),
-    });
+    let mut hot = preparing_hot(&f);
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(attempt)
         .bind(json!(hot))
@@ -391,15 +390,8 @@ async fn queued_mail_becomes_stale_but_received_or_unknown_mail_refuses_closure(
 
 #[tokio::test]
 async fn missing_or_unsupported_empty_material_plan_is_unknown_not_fake_preparation_authority() {
-    use aq_server::execution::authority::hot::LaunchOwner;
     let (f, attempt, pool) = setup().await;
-    let mut hot = HotState::from_compat(&f.profiled).unwrap();
-    hot.status = Status::Preparing;
-    hot.owner = Some(LaunchOwner {
-        guardian_id: Uuid::new_v4(),
-        launch_id: Uuid::new_v4(),
-        reservation_id: Uuid::new_v4(),
-    });
+    let mut hot = preparing_hot(&f);
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(attempt)
         .bind(json!(hot))
@@ -437,16 +429,9 @@ async fn missing_or_unsupported_empty_material_plan_is_unknown_not_fake_preparat
 
 #[tokio::test]
 async fn observed_node_lock_race_issued_authority_wins_and_closure_cannot_erase_it() {
-    use aq_server::execution::authority::hot::LaunchOwner;
     let (f, attempt, pool) = setup().await;
     let material = lease(&f, attempt, &pool, NOW + 60000).await;
-    let mut hot = HotState::from_compat(&f.profiled).unwrap();
-    hot.status = Status::Preparing;
-    hot.owner = Some(LaunchOwner {
-        guardian_id: Uuid::new_v4(),
-        launch_id: Uuid::new_v4(),
-        reservation_id: Uuid::new_v4(),
-    });
+    let mut hot = preparing_hot(&f);
     plan(&f, &mut hot, &pool, material, NOW + 60000).await;
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
         .bind(attempt)
