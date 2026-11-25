@@ -7,6 +7,8 @@ publish.workspace = true
 [features]
 # Epic 0 (spec 0016): the built-in delivery source and catalog 2.3.0, off by default.
 delivery_playbook = ["aq-playbooks-compiler/delivery_playbook"]
+# Spec 0017: the delivery source on catalog 2.5.0 (with `delivery_playbook`).
+project_environments = []
 
 [dependencies]
 aq-internal-work = { path = "../aq-internal-work" }

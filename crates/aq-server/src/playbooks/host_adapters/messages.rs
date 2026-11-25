@@ -28,12 +28,12 @@ impl Service {
     pub(super) async fn host_message_send(
         &self,
         owner: &RuntimeOwner,
-        id: Uuid,
-        revision: i64,
-        intent: &Intent,
+        command: HostIntent<'_>,
     ) -> Result<HostResult> {
+        let id = command.grant;
+        let intent = command.intent;
         let ports = self.ports()?;
-        let (mut tx, stage, identity) = self.begin(Some(owner), id, revision, intent).await?;
+        let (mut tx, stage, identity) = self.begin(Some(owner), command).await?;
         let input = &intent.input;
         let key = text(input, "identity")?;
         let message = stable_id(
@@ -54,61 +54,26 @@ impl Service {
                 plan
             }
             Stage::Fresh => {
-                let body = text(input, "body")?;
-                let recipient = text(input, "recipient")?;
-                // Only the namespace owner is a granted recipient: Host7
-                // grants carry no recipient list, and no route is chosen here.
-                let owner_user = format!("{USER}{}", self.namespace.owner_user_id);
-                let refused = !bounded(key)
-                    || recipient != owner_user
-                    || text(input, "visibility")? != "project"
-                    || body.trim().is_empty()
-                    || body.encode_utf16().count() > 1600
-                    || body
-                        .chars()
-                        .any(|c| c.is_control() && c != '\n' && c != '\t');
-                if refused {
-                    let result = HostResult {
-                        outcome: "refused".into(),
-                        output,
-                    };
+                let Some(plan) = self.message_plan(intent, key, message)? else {
                     return self
-                        .settle_fresh(tx, id, revision, intent, &identity, result)
+                        .settle_fresh(
+                            tx,
+                            command.retained(&identity),
+                            host_result("refused", output),
+                        )
                         .await;
-                }
-                let request = SendRequest {
-                    operation_id: self.operation(intent)?,
-                    message_id: message,
-                    revision: 1,
-                    scope: aq_lifecycle_api::Scope {
-                        project_id: self.namespace.project_id,
-                        workspace_id: self.namespace.workspace_id,
-                    },
-                    recipient_user_id: self.namespace.owner_user_id,
-                    summary: body.to_string(),
-                    ttl_ms: MESSAGE_TTL_MS,
                 };
-                let plan = json!({"request": request});
-                self.record(&mut tx, id, revision, intent, &identity, PENDING, &plan)
-                    .await?;
+                self.record(
+                    &mut tx,
+                    command.retained(&identity),
+                    EffectReceipt::new(PENDING, &plan),
+                )
+                .await?;
                 self.commit_fresh(tx, id, intent).await?;
                 plan
             }
         };
-        let request: SendRequest = serde_json::from_value(plan["request"].clone())?;
-        let outcome = match crate::notifications::api::service(&ports.state)
-            .enqueue(self.namespace.owner_user_id, request)
-            .await
-        {
-            Ok(_) => "queued",
-            // The same identity already names a different message.
-            Err(crate::notifications::Error::Conflict) => "refused",
-            Err(error) => {
-                // Pending: a resumed dispatch re-submits the same IDs.
-                tracing::warn!(%error, "playbook message remains pending");
-                return Err(Error::Unknown);
-            }
-        };
+        let outcome = self.enqueue_report(ports, &plan).await?;
         self.finish(
             intent,
             &identity,
@@ -119,4 +84,58 @@ impl Service {
         )
         .await
     }
+    async fn enqueue_report(&self, ports: &HostPorts, plan: &Value) -> Result<&'static str> {
+        let request: SendRequest = serde_json::from_value(plan["request"].clone())?;
+        Ok(
+            match crate::notifications::api::service(&ports.state)
+                .enqueue(self.namespace.owner_user_id, request)
+                .await
+            {
+                Ok(_) => "queued",
+                // The same identity already names a different message.
+                Err(crate::notifications::Error::Conflict) => "refused",
+                Err(error) => {
+                    // Pending: a resumed dispatch re-submits the same IDs.
+                    tracing::warn!(%error, "playbook message remains pending");
+                    return Err(Error::Unknown);
+                }
+            },
+        )
+    }
+    fn message_plan(&self, intent: &Intent, key: &str, message: Uuid) -> Result<Option<Value>> {
+        let input = &intent.input;
+        let body = text(input, "body")?;
+        let recipient = text(input, "recipient")?;
+        // Only the namespace owner is a granted recipient: Host7
+        // grants carry no recipient list, and no route is chosen here.
+        let owner_user = format!("{USER}{}", self.namespace.owner_user_id);
+        let refused = !bounded(key)
+            || recipient != owner_user
+            || text(input, "visibility")? != "project"
+            || !report_body_valid(body);
+        if refused {
+            return Ok(None);
+        }
+        let request = SendRequest {
+            operation_id: self.operation(intent)?,
+            message_id: message,
+            revision: 1,
+            scope: aq_lifecycle_api::Scope {
+                project_id: self.namespace.project_id,
+                workspace_id: self.namespace.workspace_id,
+            },
+            recipient_user_id: self.namespace.owner_user_id,
+            summary: body.to_string(),
+            ttl_ms: MESSAGE_TTL_MS,
+        };
+        Ok(Some(json!({"request":request})))
+    }
+}
+
+fn report_body_valid(body: &str) -> bool {
+    !body.trim().is_empty()
+        && body.encode_utf16().count() <= 1600
+        && !body
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
 }

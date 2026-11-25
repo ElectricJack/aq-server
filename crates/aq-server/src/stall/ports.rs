@@ -2,7 +2,7 @@
 //! terminal input and B3 stop state; effects through the F3 mailbox, F4
 //! notifications, B3 cancellation and B4 replacement. Every effect is
 //! idempotent by its ladder action ID.
-use super::engine::{Ports, Target};
+use super::engine::{Action, Ports, Target, Tick};
 use super::evidence::{Admission, Evidence, Explanation, InputState, PROGRESS_SQL};
 use super::ladder::{Delivery, Intent, Outcome};
 use super::policy::ExecutionPolicy;
@@ -15,6 +15,7 @@ use crate::{
         replacement::{self, Assessment},
     },
 };
+pub use aq_stall_ladder::run::Nudge;
 use async_trait::async_trait;
 use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
@@ -56,12 +57,9 @@ pub async fn input_state(
 pub async fn nudge(
     tx: &mut Transaction<'_, Postgres>,
     target: &Target,
-    action_id: Uuid,
-    body: &str,
-    defer: bool,
-    now: u64,
+    nudge: Nudge<'_>,
 ) -> Result<Outcome, AppError> {
-    nudge_as(tx, target, action_id, body, defer, None, now)
+    nudge_as(tx, target, nudge, None)
         .await
         .map(|(outcome, _)| outcome)
         .map_err(|e| match e {
@@ -78,11 +76,13 @@ pub async fn nudge(
 pub(crate) async fn nudge_as(
     tx: &mut Transaction<'_, Postgres>,
     target: &Target,
-    operation_id: Uuid,
-    body: &str,
-    defer: bool,
+    Nudge {
+        operation_id,
+        body,
+        defer,
+        now,
+    }: Nudge<'_>,
     owner: Option<Uuid>,
-    now: u64,
 ) -> Result<(Outcome, serde_json::Value), OwnerSendError> {
     let unknown = |_| OwnerSendError::Unknown;
     let input = input_state(tx, target.attempt_id)
@@ -243,11 +243,14 @@ impl Ports for DbPorts {
     async fn effect(
         &self,
         target: &Target,
-        action_id: Uuid,
-        intent: &Intent,
-        policy: &ExecutionPolicy,
-        now: u64,
+        action: Action<'_>,
+        tick: Tick<'_>,
     ) -> Result<Outcome, AppError> {
+        let Action {
+            id: action_id,
+            intent,
+        } = action;
+        let now = tick.now;
         let state = &self.state;
         match intent {
             Intent::MonitoringIncident { ordinal } => {
@@ -257,28 +260,21 @@ impl Ports for DbPorts {
             }
             Intent::Nudge { defer, .. } => {
                 let mut tx = state.store.pool.begin().await.map_err(db)?;
-                let outcome = nudge(&mut tx, target, action_id, NUDGE_BODY, *defer, now).await?;
+                let outcome = nudge(
+                    &mut tx,
+                    target,
+                    Nudge {
+                        operation_id: action_id,
+                        body: NUDGE_BODY,
+                        defer: *defer,
+                        now,
+                    },
+                )
+                .await?;
                 tx.commit().await.map_err(db)?;
                 Ok(outcome)
             }
-            Intent::Notify => {
-                let policy_f4 = crate::notifications::policy::Policy::new(
-                    crate::notifications::api::service(state),
-                );
-                policy_f4
-                    .observe_stall(
-                        action_id,
-                        aq_lifecycle_api::Scope {
-                            project_id: target.project_id,
-                            workspace_id: target.workspace_id,
-                        },
-                        target.attempt_id,
-                        "Session stalled after nudges".into(),
-                    )
-                    .await
-                    .map_err(|_| AppError::Internal)?;
-                Ok(Outcome::Done)
-            }
+            Intent::Notify => self.notify(target, action_id).await,
             Intent::Stop => {
                 cancellation::cancel(state, target.attempt_id, action_id, "stall_ladder_stop")
                     .await?;
@@ -295,8 +291,44 @@ impl Ports for DbPorts {
                 }),
             },
             Intent::Quarantine { reason } => {
-                let held = json!({"task_id":target.task_id,"attempt_id":target.attempt_id,"session_id":target.session_id,"generation":target.generation,"claim":"task","worktree":"retained"});
-                sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(attempt_id) DO NOTHING")
+                self.quarantine(target, (action.id, reason), tick).await?;
+                Ok(Outcome::Done)
+            }
+        }
+    }
+}
+
+impl DbPorts {
+    async fn notify(&self, target: &Target, action_id: Uuid) -> Result<Outcome, AppError> {
+        let policy_f4 = crate::notifications::policy::Policy::new(
+            crate::notifications::api::service(&self.state),
+        );
+        policy_f4
+            .observe_stall(
+                aq_notifications::policy::Origin::new(
+                    action_id,
+                    aq_lifecycle_api::Scope {
+                        project_id: target.project_id,
+                        workspace_id: target.workspace_id,
+                    },
+                ),
+                target.attempt_id,
+                "Session stalled after nudges".into(),
+            )
+            .await
+            .map_err(|_| AppError::Internal)?;
+        Ok(Outcome::Done)
+    }
+    async fn quarantine(
+        &self,
+        target: &Target,
+        (action_id, reason): (Uuid, &str),
+        tick: Tick<'_>,
+    ) -> Result<(), AppError> {
+        let Tick { policy, now } = tick;
+        let state = &self.state;
+        let held = json!({"task_id":target.task_id,"attempt_id":target.attempt_id,"session_id":target.session_id,"generation":target.generation,"claim":"task","worktree":"retained"});
+        sqlx::query("INSERT INTO stall_quarantines(attempt_id,lineage_id,reason,escalation,held,action_id,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(attempt_id) DO NOTHING")
                     .bind(target.attempt_id)
                     .bind(target.task_id)
                     .bind(reason)
@@ -307,9 +339,7 @@ impl Ports for DbPorts {
                     .execute(&state.store.pool)
                     .await
                     .map_err(db)?;
-                tracing::warn!(attempt = %target.attempt_id, %reason, escalation = %policy.escalation, "stall ladder quarantined lineage");
-                Ok(Outcome::Done)
-            }
-        }
+        tracing::warn!(attempt = %target.attempt_id, %reason, escalation = %policy.escalation, "stall ladder quarantined lineage");
+        Ok(())
     }
 }

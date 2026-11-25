@@ -40,6 +40,10 @@ enum Subject {
 }
 pub type Auth =
     Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Result<Uuid>> + Send>> + Send + Sync>;
+pub struct Authentication {
+    pub owner: Auth,
+    pub node: Auth,
+}
 pub type ComputeWitness = for<'a, 'c> fn(
     &'a mut sqlx::Transaction<'c, sqlx::Postgres>,
     Uuid,
@@ -102,8 +106,7 @@ pub struct Service {
 impl Service {
     pub fn new(
         pool: PgPool,
-        owner: Auth,
-        node: Auth,
+        Authentication { owner, node }: Authentication,
         sources: BTreeMap<Uuid, Value>,
         runtime: Runtime,
     ) -> Self {

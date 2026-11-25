@@ -193,6 +193,9 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         root.join("../aq-internal-work/src"),
         root.join("../aq-playbook-authoring/src"),
     ];
+    // Spec 0017: the node routes of `project_environments` (see `reviewed_node_route`).
+    #[cfg(feature = "project_environments")]
+    stack.push(root.join("../aq-environments/src"));
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -214,6 +217,7 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
     out
 }
 
+<<<<<<< HEAD
 fn parse_source_routes(
     path: &Path,
     text: &str,
@@ -275,6 +279,23 @@ mod tests {
         parse_source_routes(Path::new("fixture.rs"), source, &consts),
         ["/chained", "/constant", "/variable", "/nested"]
     );
+=======
+/// Node routes reviewed here rather than in the published `routes.json`,
+/// which documents the default build: spec 0017's builder and environment
+/// routes under the node credential (`worker_api::authenticate_context`;
+/// claim and complete only for the `template-build` worker group), mounted
+/// only with `project_environments`. They join `routes.json` when the
+/// feature is removed.
+fn reviewed_node_route(path: &str) -> bool {
+    cfg!(feature = "project_environments")
+        && matches!(
+            path,
+            "/v1/worker/environments"
+                | "/v1/worker/environments/ready"
+                | "/v1/worker/environments/claim"
+                | "/v1/worker/environments/complete"
+        )
+>>>>>>> refs/remotes/central/main
 }
 
 #[test]
@@ -284,7 +305,9 @@ fn every_mounted_route_is_a_command_or_reviewed() {
     assert!(mounted.len() > 150, "the scan found the routes");
     let unclassified: Vec<_> = mounted
         .iter()
-        .filter(|(path, _)| routes::classify(registry, path).is_none())
+        .filter(|(path, _)| {
+            routes::classify(registry, path).is_none() && !reviewed_node_route(path)
+        })
         .collect();
     assert!(
         unclassified.is_empty(),

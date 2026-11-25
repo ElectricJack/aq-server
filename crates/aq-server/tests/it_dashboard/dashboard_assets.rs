@@ -91,19 +91,11 @@ enabled=false
 }
 async fn request(
     app: &Router,
-    method: &str,
-    path: &str,
+    mut builder: axum::http::request::Builder,
     email: Option<&str>,
-    csrf: bool,
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
-    let mut builder = Request::builder().method(method).uri(path);
     if let Some(email) = email {
         builder = builder.header("x-test-verified-email", email);
-    }
-    if csrf {
-        builder = builder
-            .header("x-aq-request", "1")
-            .header("origin", "https://aq.example.test");
     }
     let response = app
         .clone()
@@ -134,40 +126,18 @@ async fn current_owner_viewer_and_removed_user_authenticate_each_get_and_head() 
         "/results/result-1/revisions/2",
         "/playbooks/runs/run-1",
     ] {
-        let (status, headers, body) = request(&app, "GET", path, None, false).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert_eq!(headers["content-type"], "application/json");
-        assert!(serde_json::from_slice::<serde_json::Value>(&body).is_ok());
-        for email in ["owner@example.test", "viewer@example.test"] {
-            let (status, headers, body) = request(&app, "GET", path, Some(email), false).await;
-            assert_eq!(status, StatusCode::OK, "{path} {email}");
-            assert_eq!(headers["cache-control"], "no-cache");
-            assert_eq!(headers["x-content-type-options"], "nosniff");
-            assert_eq!(
-                body,
-                if path.starts_with("/assets/") {
-                    JS
-                } else {
-                    INDEX
-                }
-            );
-        }
+        assert_authenticated_gets(&app, path).await;
     }
     for path in ["/", "/assets/app.js"] {
         let (status, headers, body) =
-            request(&app, "HEAD", path, Some("viewer@example.test"), false).await;
+            request(&app, Request::head(path), Some("viewer@example.test")).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.is_empty());
+        let length: usize = headers["content-length"].to_str().unwrap().parse().unwrap();
+        let expected = if path == "/" { INDEX } else { JS };
+        assert_eq!(length, expected.len());
         assert_eq!(
-            headers["content-length"]
-                .to_str()
-                .unwrap()
-                .parse::<usize>()
-                .unwrap(),
-            if path == "/" { INDEX.len() } else { JS.len() }
-        );
-        assert_eq!(
-            request(&app, "HEAD", path, None, false).await.0,
+            request(&app, Request::head(path), None).await.0,
             StatusCode::UNAUTHORIZED
         );
     }
@@ -178,7 +148,7 @@ async fn current_owner_viewer_and_removed_user_authenticate_each_get_and_head() 
         .unwrap();
     for path in ["/", "/assets/app.js"] {
         assert_eq!(
-            request(&app, "GET", path, Some("viewer@example.test"), false)
+            request(&app, Request::get(path), Some("viewer@example.test"))
                 .await
                 .0,
             StatusCode::FORBIDDEN
@@ -193,74 +163,29 @@ async fn exact_spa_paths_do_not_capture_api_machine_unknown_assets_or_traversal(
     let app = build_admin_router_with_dashboard(state.clone(), assets);
     let worker = build_worker_router(state.clone());
     let api_only = build_admin_router(state);
-    for path in [
-        "/overview",
-        "/supervisor",
-        "/work",
-        "/work/a.b_-9",
-        "/results",
-        "/results/a/revisions/v1",
-        "/decisions",
-        "/decisions/a",
-        "/agents",
-        "/agents/a",
-        "/playbooks",
-        "/playbooks/runs/a",
-        "/knowledge",
-        "/knowledge/a",
-        "/settings",
-    ] {
-        assert_eq!(
-            request(&app, "GET", path, Some("owner@example.test"), false)
-                .await
-                .0,
-            StatusCode::OK,
-            "{path}"
-        );
-    }
-    for path in [
-        "/projects",
-        "/unknown",
-        "/api/missing",
-        "/v1/worker/missing",
-        "/assets/missing.js",
-        "/assets/not-listed.js",
-        "/assets/app.js.map",
-        "/work/..",
-        "/work/%2e%2e",
-        "/work/a%2fb",
-        "/assets/../index.html",
-        "/settings/",
-        "/knowledge/a/b",
-    ] {
-        let (status, headers, body) =
-            request(&app, "GET", path, Some("owner@example.test"), false).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
-        assert_eq!(headers["content-type"], "application/json");
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&body).is_ok(),
-            "{path}"
-        );
-    }
-    let (status, headers, body) =
-        request(&app, "GET", "/api/me", Some("owner@example.test"), false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers["content-type"], "application/json");
-    assert!(serde_json::from_slice::<serde_json::Value>(&body).is_ok());
+    assert_only_spa_paths(&app).await;
+    let me = request(&app, Request::get("/api/me"), Some("owner@example.test")).await;
+    assert_json_response(me, StatusCode::OK, "/api/me");
     assert_eq!(
-        request(&app, "POST", "/settings", Some("owner@example.test"), false)
+        request(&app, Request::post("/settings"), Some("owner@example.test"))
             .await
             .0,
         StatusCode::FORBIDDEN
     );
-    let (status, headers, _) =
-        request(&app, "POST", "/settings", Some("owner@example.test"), true).await;
+    let (status, headers, _) = request(
+        &app,
+        Request::post("/settings")
+            .header("x-aq-request", "1")
+            .header("origin", "https://aq.example.test"),
+        Some("owner@example.test"),
+    )
+    .await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(headers["content-type"], "application/json");
     for router in [&worker, &api_only] {
         for path in ["/", "/work/a", "/assets/app.js"] {
             let (status, headers, _) =
-                request(router, "GET", path, Some("owner@example.test"), false).await;
+                request(router, Request::get(path), Some("owner@example.test")).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
             assert_eq!(headers["content-type"], "application/json");
         }
@@ -341,12 +266,149 @@ async fn server_image_serves_pinned_dashboard_digest() {
     .unwrap();
     let (_db, state) = state().await;
     let app = build_admin_router_with_dashboard(state, assets);
-    let (status, headers, body) = request(
+    assert_release_bootstrap(&app, &manifest, &pin).await;
+    assert_release_routes(&app, root.path()).await;
+    let asset = manifest["files"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .find(|p| p.ends_with(".js"))
+        .unwrap();
+    assert_script(&app, asset, &manifest["files"][asset]).await;
+    for path in [
+        format!("/{asset}"),
+        "/dashboard-manifest.json".into(),
+        "/api/v1/bootstrap".into(),
+        "/api/missing".into(),
+    ] {
+        let (status, headers, _) = request(&app, Request::get(path.as_str()), None).await;
+        assert!(status.is_client_error());
+        assert_eq!(headers["cache-control"], "no-store");
+    }
+}
+#[tokio::test]
+async fn browser_navigation_to_an_unknown_page_loads_the_app_with_404() {
+    // QA SO-02: a hard-loaded unknown route showed the raw JSON 404.
+    let (_db, state) = state().await;
+    let root = bundle();
+    let assets = Arc::new(DashboardAssets::load(root.path()).unwrap());
+    let app = build_admin_router_with_dashboard(state.clone(), assets);
+    let api_only = build_admin_router(state);
+    for path in [
+        "/nonexistent",
+        "/overview/extra",
+        "/knowledge/a/b",
+        "/work/a%2fb",
+        "/settings/",
+    ] {
+        let (status, headers, body) = browse(&app, path, Some("owner@example.test")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_html(&headers, &body, path);
+    }
+    // API, machine and asset paths, non-browser clients, unauthenticated
+    // visitors and a router without a bundle keep the JSON answers.
+    for (router, path, email) in [
+        (&app, "/api/missing", Some("owner@example.test")),
+        (&app, "/api", Some("owner@example.test")),
+        (&app, "/v1/worker/missing", Some("owner@example.test")),
+        (&app, "/assets/missing.js", Some("owner@example.test")),
+        (&app, "/nonexistent", None),
+        (&api_only, "/nonexistent", Some("owner@example.test")),
+    ] {
+        let (status, headers, _) = browse(router, path, email).await;
+        assert_ne!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers["content-type"], "application/json", "{path}");
+    }
+    let (status, headers, _) = request(
         &app,
-        "GET",
-        "/api/v1/bootstrap",
+        Request::get("/nonexistent"),
         Some("owner@example.test"),
-        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers["content-type"], "application/json");
+}
+async fn browse(app: &Router, path: &str, email: Option<&str>) -> (StatusCode, HeaderMap, Vec<u8>) {
+    request(
+        app,
+        Request::get(path).header("accept", "text/html,application/xhtml+xml,*/*;q=0.8"),
+        email,
+    )
+    .await
+}
+
+async fn assert_authenticated_gets(app: &Router, path: &str) {
+    let anonymous = request(app, Request::get(path), None).await;
+    assert_json_response(anonymous, StatusCode::UNAUTHORIZED, path);
+    for email in ["owner@example.test", "viewer@example.test"] {
+        let (status, headers, body) = request(app, Request::get(path), Some(email)).await;
+        assert_eq!(status, StatusCode::OK, "{path} {email}");
+        assert_eq!(headers["cache-control"], "no-cache");
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        let expected = if path.starts_with("/assets/") {
+            JS
+        } else {
+            INDEX
+        };
+        assert_eq!(body, expected, "{path}");
+    }
+}
+
+async fn assert_only_spa_paths(app: &Router) {
+    for path in [
+        "/overview",
+        "/supervisor",
+        "/work",
+        "/work/a.b_-9",
+        "/results",
+        "/results/a/revisions/v1",
+        "/decisions",
+        "/decisions/a",
+        "/agents",
+        "/agents/a",
+        "/playbooks",
+        "/playbooks/runs/a",
+        "/knowledge",
+        "/knowledge/a",
+        "/settings",
+    ] {
+        assert_eq!(
+            request(app, Request::get(path), Some("owner@example.test"))
+                .await
+                .0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    for path in [
+        "/projects",
+        "/unknown",
+        "/api/missing",
+        "/v1/worker/missing",
+        "/assets/missing.js",
+        "/assets/not-listed.js",
+        "/assets/app.js.map",
+        "/work/..",
+        "/work/%2e%2e",
+        "/work/a%2fb",
+        "/assets/../index.html",
+        "/settings/",
+        "/knowledge/a/b",
+    ] {
+        let response = request(app, Request::get(path), Some("owner@example.test")).await;
+        assert_json_response(response, StatusCode::NOT_FOUND, path);
+    }
+}
+
+async fn assert_release_bootstrap(
+    app: &Router,
+    manifest: &serde_json::Value,
+    pin: &serde_json::Value,
+) {
+    let (status, headers, body) = request(
+        app,
+        Request::get("/api/v1/bootstrap"),
+        Some("owner@example.test"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -373,6 +435,9 @@ async fn server_image_serves_pinned_dashboard_digest() {
             "missing API {required}"
         );
     }
+}
+
+async fn assert_release_routes(app: &Router, root: &std::path::Path) {
     for path in [
         "/",
         "/index.html",
@@ -380,8 +445,12 @@ async fn server_image_serves_pinned_dashboard_digest() {
         "/work/task_1",
     ] {
         for method in ["GET", "HEAD"] {
-            let (status, headers, body) =
-                request(&app, method, path, Some("owner@example.test"), false).await;
+            let (status, headers, body) = request(
+                app,
+                Request::builder().method(method).uri(path),
+                Some("owner@example.test"),
+            )
+            .await;
             assert_eq!(status, StatusCode::OK, "{path}");
             assert_eq!(headers["cache-control"], "no-cache", "{path}");
             if method == "HEAD" {
@@ -392,23 +461,18 @@ async fn server_image_serves_pinned_dashboard_digest() {
                 } else {
                     "index.html"
                 };
-                assert_eq!(body, std::fs::read(root.path().join(file)).unwrap());
+                assert_eq!(body, std::fs::read(root.join(file)).unwrap());
             }
         }
     }
-    let asset = manifest["files"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .find(|p| p.ends_with(".js"))
-        .unwrap();
+}
+
+async fn assert_script(app: &Router, asset: &str, entry: &serde_json::Value) {
     for method in ["GET", "HEAD"] {
         let (status, headers, body) = request(
-            &app,
-            method,
-            &format!("/{asset}"),
+            app,
+            Request::builder().method(method).uri(format!("/{asset}")),
             Some("owner@example.test"),
-            false,
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -419,90 +483,26 @@ async fn server_image_serves_pinned_dashboard_digest() {
         if method == "HEAD" {
             assert!(body.is_empty());
         } else {
-            assert_eq!(
-                hex::encode(Sha256::digest(&body)),
-                manifest["files"][asset]["sha256"]
-            );
-            assert_eq!(body.len() as u64, manifest["files"][asset]["bytes"]);
+            assert_eq!(hex::encode(Sha256::digest(&body)), entry["sha256"]);
+            assert_eq!(body.len() as u64, entry["bytes"]);
         }
-    }
-    for path in [
-        format!("/{asset}"),
-        "/dashboard-manifest.json".into(),
-        "/api/v1/bootstrap".into(),
-        "/api/missing".into(),
-    ] {
-        let (status, headers, _) = request(&app, "GET", &path, None, false).await;
-        assert!(status.is_client_error());
-        assert_eq!(headers["cache-control"], "no-store");
     }
 }
-#[tokio::test]
-async fn browser_navigation_to_an_unknown_page_loads_the_app_with_404() {
-    // QA SO-02: a hard-loaded unknown route showed the raw JSON 404.
-    let (_db, state) = state().await;
-    let root = bundle();
-    let assets = Arc::new(DashboardAssets::load(root.path()).unwrap());
-    let app = build_admin_router_with_dashboard(state.clone(), assets);
-    let api_only = build_admin_router(state);
-    let browse = |router: &Router, path: &str, email: Option<&str>| {
-        let mut builder =
-            Request::get(path).header("accept", "text/html,application/xhtml+xml,*/*;q=0.8");
-        if let Some(email) = email {
-            builder = builder.header("x-test-verified-email", email);
-        }
-        let response = router.clone().oneshot(builder.body(Body::empty()).unwrap());
-        async move {
-            let response = response.await.unwrap();
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .unwrap()
-                .to_bytes()
-                .to_vec();
-            (status, headers, body)
-        }
-    };
-    for path in [
-        "/nonexistent",
-        "/overview/extra",
-        "/knowledge/a/b",
-        "/work/a%2fb",
-        "/settings/",
-    ] {
-        let (status, headers, body) = browse(&app, path, Some("owner@example.test")).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
-        assert_eq!(
-            headers["content-type"], "text/html; charset=utf-8",
-            "{path}"
-        );
-        assert_eq!(body, INDEX, "{path}");
-    }
-    // API, machine and asset paths, non-browser clients, unauthenticated
-    // visitors and a router without a bundle keep the JSON answers.
-    for (router, path, email) in [
-        (&app, "/api/missing", Some("owner@example.test")),
-        (&app, "/api", Some("owner@example.test")),
-        (&app, "/v1/worker/missing", Some("owner@example.test")),
-        (&app, "/assets/missing.js", Some("owner@example.test")),
-        (&app, "/nonexistent", None),
-        (&api_only, "/nonexistent", Some("owner@example.test")),
-    ] {
-        let (status, headers, _) = browse(router, path, email).await;
-        assert_ne!(status, StatusCode::OK, "{path}");
-        assert_eq!(headers["content-type"], "application/json", "{path}");
-    }
-    let (status, headers, _) = request(
-        &app,
-        "GET",
-        "/nonexistent",
-        Some("owner@example.test"),
-        false,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(headers["content-type"], "application/json");
+
+fn assert_json_response(
+    response: (StatusCode, HeaderMap, Vec<u8>),
+    expected: StatusCode,
+    path: &str,
+) {
+    let (status, headers, body) = response;
+    assert_eq!(status, expected, "{path}");
+    assert_eq!(headers["content-type"], "application/json", "{path}");
+    serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_else(|e| panic!("{path}: {e}"));
+}
+fn assert_html(headers: &HeaderMap, body: &[u8], path: &str) {
+    assert_eq!(
+        headers["content-type"], "text/html; charset=utf-8",
+        "{path}"
+    );
+    assert_eq!(body, INDEX, "{path}");
 }

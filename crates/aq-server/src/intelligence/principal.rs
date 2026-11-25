@@ -66,19 +66,7 @@ impl Principal {
         tx: &mut Transaction<'_, Postgres>,
     ) -> Result<()> {
         match self {
-            Self::Human(actor) => {
-                let role: Option<String> =
-                    sqlx::query_scalar("SELECT role FROM users WHERE id=$1 FOR SHARE")
-                        .bind(actor)
-                        .fetch_optional(&mut **tx)
-                        .await
-                        .map_err(db)?;
-                if role.as_deref() != Some("owner") {
-                    return Err(AppError::Forbidden(
-                        "decision requires current owner authority".into(),
-                    ));
-                }
-            }
+            Self::Human(actor) => authorize_human(tx, *actor).await,
             Self::Policy {
                 project,
                 reference,
@@ -95,21 +83,17 @@ impl Principal {
                 if reference != &configured || *revision != configured_revision {
                     return Err(conflict("configured project policy changed"));
                 }
-                let row=sqlx::query("SELECT revision,policy_digest,policy FROM admission_source_policies WHERE project_id=$1 FOR SHARE").bind(project).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(||conflict("project policy has not been installed"))?;
-                let installed: ProjectPolicyRecord =
-                    serde_json::from_value(row.get("policy")).map_err(|_| AppError::Internal)?;
-                if !installed.enabled
-                    || installed.project_id != *project
-                    || installed.revision != *revision
-                    || row.get::<i64, _>("revision") != *revision as i64
-                    || row.get::<String, _>("policy_digest") != reference.digest.as_str()
-                    || installed.artifact().map_err(|_| AppError::Internal)? != *reference
-                {
-                    return Err(conflict("installed project policy changed or disabled"));
-                }
+                authorize_project(
+                    tx,
+                    *project,
+                    InstalledPolicy {
+                        reference,
+                        revision: *revision,
+                    },
+                )
+                .await
             }
         }
-        Ok(())
     }
     pub async fn lookup(
         &self,
@@ -129,10 +113,8 @@ impl Principal {
     pub async fn insert(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        operation: Uuid,
-        payload: &Digest,
-        decision: &Decision,
-        encoded: Value,
+        (operation, payload): (Uuid, &Digest),
+        (decision, encoded): (&Decision, Value),
     ) -> Result<()> {
         let (kind, revision) = match self {
             Self::Human(_) => ("human_owner", None),
@@ -152,8 +134,10 @@ pub(super) async fn fence(
         state,
         tx,
         decision.decision_id,
-        decision.inputs.project.lineage.project_id,
-        decision.project.project.binding.project_id,
+        (
+            decision.inputs.project.lineage.project_id,
+            decision.project.project.binding.project_id,
+        ),
     )
     .await
 }
@@ -163,8 +147,7 @@ pub(super) async fn fence_subject(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     decision_id: Uuid,
-    input_project: Uuid,
-    binding_project: Uuid,
+    (input_project, binding_project): (Uuid, Uuid),
 ) -> Result<()> {
     let row=sqlx::query("SELECT actor_id,authority_kind,authority_project_id,authority_policy_ref,authority_policy_revision,authority_policy_digest FROM intelligence_decisions WHERE decision_id=$1 FOR SHARE").bind(decision_id).fetch_one(&mut **tx).await.map_err(db)?;
     let principal = match row.get::<String, _>("authority_kind").as_str() {
@@ -204,4 +187,54 @@ pub(super) async fn fence_subject(
         _ => return Err(AppError::Internal),
     };
     principal.authorize(state, tx).await
+}
+
+async fn authorize_human(tx: &mut Transaction<'_, Postgres>, actor: Uuid) -> Result<()> {
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id=$1 FOR SHARE")
+        .bind(actor)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?;
+    if role.as_deref() != Some("owner") {
+        return Err(AppError::Forbidden(
+            "decision requires current owner authority".into(),
+        ));
+    }
+    Ok(())
+}
+
+struct InstalledPolicy<'a> {
+    reference: &'a ArtifactRef,
+    revision: u64,
+}
+impl InstalledPolicy<'_> {
+    fn matches(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        installed: &ProjectPolicyRecord,
+        project: Uuid,
+    ) -> Result<bool> {
+        let subject = installed.enabled
+            && installed.project_id == project
+            && installed.revision == self.revision;
+        let record = row.get::<i64, _>("revision") == self.revision as i64
+            && row.get::<String, _>("policy_digest") == self.reference.digest.as_str();
+        Ok(subject
+            && record
+            && installed.artifact().map_err(|_| AppError::Internal)? == *self.reference)
+    }
+}
+
+async fn authorize_project(
+    tx: &mut Transaction<'_, Postgres>,
+    project: Uuid,
+    policy: InstalledPolicy<'_>,
+) -> Result<()> {
+    let row=sqlx::query("SELECT revision,policy_digest,policy FROM admission_source_policies WHERE project_id=$1 FOR SHARE").bind(project).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(||conflict("project policy has not been installed"))?;
+    let installed: ProjectPolicyRecord =
+        serde_json::from_value(row.get("policy")).map_err(|_| AppError::Internal)?;
+    if !policy.matches(&row, &installed, project)? {
+        return Err(conflict("installed project policy changed or disabled"));
+    }
+    Ok(())
 }

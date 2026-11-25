@@ -1,10 +1,7 @@
 //! Additive typed catalog owner messages retain the legacy request wire surface.
 use aq_playbook_host::{
     CatalogCallError, Error, Limits, Owner, Request,
-    runner::{
-        CatalogError, CatalogKind, CatalogPage, CatalogQuery, MemoryStorage, State, Storage,
-        StorageError, VersionedState,
-    },
+    runner::{CatalogError, CatalogKind, CatalogQuery, Storage},
 };
 use std::sync::{
     Arc,
@@ -13,52 +10,23 @@ use std::sync::{
 use std::time::Duration;
 mod common;
 const DEADLINE: Duration = Duration::from_secs(5);
+#[path = "common/observed.rs"]
+mod observed;
+use observed::{Observed, Probe};
 #[derive(Clone, Default)]
-struct Counted {
-    inner: MemoryStorage,
+struct CatalogProbe {
     loads: Arc<AtomicUsize>,
     unsupported: Arc<AtomicBool>,
 }
-impl Storage for Counted {
-    fn load(&self, n: &str) -> Result<VersionedState, StorageError> {
+impl Probe for CatalogProbe {
+    fn loaded(&self) {
         self.loads.fetch_add(1, Ordering::SeqCst);
-        self.inner.load(n)
     }
-    fn acquire(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.inner.acquire(n, o)
-    }
-    fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.inner.release(n, o)
-    }
-    fn persists_history(&self) -> bool {
-        self.inner.persists_history()
-    }
-    fn history_page(
-        &self,
-        n: &str,
-        q: &aq_playbook_host::runner::InspectionQuery,
-    ) -> Result<Vec<aq_playbook_host::runner::HistoryItem>, StorageError> {
-        self.inner.history_page(n, q)
-    }
-    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
-        self.inner.delete_history(n, o, before_ms)
-    }
-    fn compare_and_swap(&self, n: &str, o: &str, r: u64, s: &State) -> Result<u64, StorageError> {
-        self.inner.compare_and_swap(n, o, r, s)
-    }
-    fn inspect_catalog(
-        &self,
-        n: &str,
-        o: &str,
-        q: &CatalogQuery,
-    ) -> Result<CatalogPage, CatalogError> {
-        if self.unsupported.load(Ordering::SeqCst) {
-            Err(CatalogError::Unsupported)
-        } else {
-            self.inner.inspect_catalog(n, o, q)
-        }
+    fn supports_catalog(&self) -> bool {
+        !self.unsupported.load(Ordering::SeqCst)
     }
 }
+type Counted = Observed<CatalogProbe>;
 #[tokio::test]
 async fn current_queries_delegate_without_snapshot_and_follow_actual_installation() {
     let store = Counted::default();
@@ -72,29 +40,8 @@ async fn current_queries_delegate_without_snapshot_and_follow_actual_installatio
         .await
         .unwrap();
     assert!(initial.items.is_empty());
-    let artifact = common::artifact();
-    let digest = artifact.digest.clone();
-    owner
-        .call(
-            Request::Install {
-                artifact: Box::new(artifact),
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    owner
-        .call(
-            Request::Activate {
-                binding: "current-binding".into(),
-                artifact: digest.clone(),
-                authority: common::authority(),
-            },
-            DEADLINE,
-        )
-        .await
-        .unwrap();
-    let loads = observed.loads.load(Ordering::SeqCst);
+    let digest = install_current(&owner).await;
+    let loads = observed.probe.loads.load(Ordering::SeqCst);
     for _ in 0..2 {
         assert!(owner.catalog_supported());
         let page = owner
@@ -111,7 +58,7 @@ async fn current_queries_delegate_without_snapshot_and_follow_actual_installatio
         assert_eq!(bindings.items.len(), 1);
     }
     assert_eq!(
-        observed.loads.load(Ordering::SeqCst),
+        observed.probe.loads.load(Ordering::SeqCst),
         loads,
         "neither support checks nor catalog reads may load State"
     );
@@ -124,7 +71,7 @@ async fn current_queries_delegate_without_snapshot_and_follow_actual_installatio
             .runs
             .is_empty()
     );
-    observed.unsupported.store(true, Ordering::SeqCst);
+    observed.probe.unsupported.store(true, Ordering::SeqCst);
     assert!(
         owner.catalog_supported(),
         "interface support is not cached current data/health"
@@ -139,38 +86,12 @@ async fn current_queries_delegate_without_snapshot_and_follow_actual_installatio
     assert!(!owner.catalog_supported());
 }
 #[derive(Default)]
-struct Opaque(MemoryStorage);
-impl Storage for Opaque {
-    fn load(&self, n: &str) -> Result<VersionedState, StorageError> {
-        self.0.load(n)
-    }
-    fn acquire(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.0.acquire(n, o)
-    }
-    fn release(&self, n: &str, o: &str) -> Result<(), StorageError> {
-        self.0.release(n, o)
-    }
-    fn persists_history(&self) -> bool {
-        self.0.persists_history()
-    }
-    fn history_page(
-        &self,
-        n: &str,
-        q: &aq_playbook_host::runner::InspectionQuery,
-    ) -> Result<Vec<aq_playbook_host::runner::HistoryItem>, StorageError> {
-        self.0.history_page(n, q)
-    }
-    fn delete_history(&self, n: &str, o: &str, before_ms: i64) -> Result<u64, StorageError> {
-        self.0.delete_history(n, o, before_ms)
-    }
-    fn compare_and_swap(&self, n: &str, o: &str, r: u64, s: &State) -> Result<u64, StorageError> {
-        self.0.compare_and_swap(n, o, r, s)
-    }
-}
+struct Opaque;
+impl Probe for Opaque {}
 #[tokio::test]
 async fn unsupported_backend_is_not_advertised_and_legacy_request_json_stays_closed() {
     let owner = Owner::start("opaque-owner".into(), Limits::default(), || {
-        Ok(Opaque::default())
+        Ok(Observed::<Opaque>::default())
     })
     .await
     .unwrap();
@@ -219,4 +140,30 @@ async fn support_handle_observes_stop_and_does_not_prolong_owner_lifetime() {
     .expect("weak support handle must not retain an owning client");
     observed.inner.release("weak-support", "successor").unwrap();
     assert!(!support.available());
+}
+
+async fn install_current(owner: &Owner) -> String {
+    let artifact = common::artifact();
+    let digest = artifact.digest.clone();
+    owner
+        .call(
+            Request::Install {
+                artifact: Box::new(artifact),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    owner
+        .call(
+            Request::Activate {
+                binding: "current-binding".into(),
+                artifact: digest.clone(),
+                authority: common::authority(),
+            },
+            DEADLINE,
+        )
+        .await
+        .unwrap();
+    digest
 }

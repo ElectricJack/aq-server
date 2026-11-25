@@ -11,13 +11,12 @@ const MAX_FRAME: usize = 262_144;
 /// Read a fixed public source observation through the central aq-git socket.
 pub async fn read(
     socket: &Path,
-    repository: Uuid,
-    generation: u64,
+    repository: crate::source_checks::Repository,
     operation: &str,
     params: Value,
 ) -> Result<Value> {
     let id = format!("profiled-source-{}", Uuid::new_v4());
-    let request = json!({"protocol_version":1,"request_id":id,"operation":operation,"repository_id":repository,"expected_binding_generation":generation,"params":params,"deadline_ms":5000});
+    let request = json!({"protocol_version":1,"request_id":id,"operation":operation,"repository_id":repository.id,"expected_binding_generation":repository.generation,"params":params,"deadline_ms":5000});
     let exchange = async {
         let mut socket = tokio::net::UnixStream::connect(socket).await?;
         let mut request = serde_json::to_vec(&request)?;
@@ -32,11 +31,7 @@ pub async fn read(
             return Err(DeliveryError::Protocol);
         }
         let value: Value = serde_json::from_slice(&frame).map_err(|_| DeliveryError::Protocol)?;
-        if value["protocol_version"] != 1
-            || value["request_id"] != id
-            || value["ok"] != true
-            || value.get("error").is_some()
-        {
+        if !crate::source_transport::successful_reply(&value, &Value::String(id)) {
             return Err(DeliveryError::Protocol);
         }
         value.get("result").cloned().ok_or(DeliveryError::Protocol)
@@ -46,17 +41,26 @@ pub async fn read(
         .map_err(|_| DeliveryError::Protocol)?
 }
 
+pub struct ExportScope {
+    pub project: Uuid,
+    pub revision: u64,
+    pub generation: u64,
+    pub enrolled: bool,
+}
 /// Keep the original export key for immutable policies. A followed ref adds
 /// the exact commit retained for this offer, so moving the ref gets a new key.
 pub fn export_operation(
-    project: Uuid,
+    scope: ExportScope,
     task: &impl Serialize,
-    project_revision: u64,
-    generation: u64,
     policy_ref: impl Serialize,
     commit: Option<&str>,
-    enrolled: bool,
 ) -> Result<Uuid> {
+    let ExportScope {
+        project,
+        revision: project_revision,
+        generation,
+        enrolled,
+    } = scope;
     let mut key = match commit {
         None => serde_json::to_value((project, task, project_revision, generation, policy_ref))?,
         Some(commit) => serde_json::to_value((
@@ -92,7 +96,18 @@ mod tests {
         let policy_ref = "policy";
         let (a, b) = ("a".repeat(40), "b".repeat(40));
         let scoped = |commit, enrolled| {
-            export_operation(project, &task, 3, 1, policy_ref, commit, enrolled).unwrap()
+            export_operation(
+                ExportScope {
+                    project,
+                    revision: 3,
+                    generation: 1,
+                    enrolled,
+                },
+                &task,
+                policy_ref,
+                commit,
+            )
+            .unwrap()
         };
         let key = |commit| scoped(commit, false);
         assert_ne!(scoped(Some(&a), true), key(Some(&a)));
