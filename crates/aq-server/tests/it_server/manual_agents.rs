@@ -645,7 +645,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         leased["pending_count"], 0,
         "running work lets native pollers resume"
     );
-    let view = aq_machine_control::slots::view(&mut *pool.acquire().await.unwrap(), node)
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
         .await
         .unwrap();
     assert_eq!((view.occupied, view.idle), (1, 3));
@@ -872,7 +872,7 @@ async fn persistent_owner_session_has_scoped_idempotent_lifecycle_slots_and_term
         false,
     )
     .await;
-    let view = aq_machine_control::slots::view(&mut *pool.acquire().await.unwrap(), node)
+    let view = aq_machine_control::slots::view(&mut pool.acquire().await.unwrap(), node)
         .await
         .unwrap();
     assert_eq!((view.occupied, view.idle), (0, 4));
