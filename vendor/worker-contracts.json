@@ -1,16 +1,16 @@
 {
   "source_repository": "aq-worker",
-  "source_revision": "1d281f867855d7e0cf777fec3f782bdf747f330a",
+  "source_revision": "4682e775ff7c536a16536f827475b167902663e0",
   "method": "Cargo package archives; public contract only, immutable integration candidate, no remote publication",
   "packages": [
     {
       "name": "aq-worker-protocol",
       "version": "0.2.1",
-      "archive_sha256": "d111ee8a518f427f3460863188f37e5428a69bee0b046ff987845a66ba4b1ecb",
+      "archive_sha256": "debb8464bdc110f88f70f398b7a6cd6ef1fa6b6851149af0ca2d57f9d941a7a2",
       "files": [
         {
           "path": ".cargo_vcs_info.json",
-          "sha256": "1980742088d47e9ddb7676142ef214ac43059874183b2c5f54c8b8db2419b1d2"
+          "sha256": "0865bfc6858b12109226545b350a0293f02748c95f2f93b4da75647a0a8fb164"
         },
         {
           "path": "Cargo.lock",
@@ -73,11 +73,11 @@
     {
       "name": "aq-protocol",
       "version": "0.1.4",
-      "archive_sha256": "5ec3d2f60d4ca032f54c288ea426143241671117b67177877e73be7a8162787b",
+      "archive_sha256": "9c6716f57120525873d450331fdd9e03ba49eeb2060a7d16546717e64880fb4a",
       "files": [
         {
           "path": ".cargo_vcs_info.json",
-          "sha256": "51d911ab6e153fcd4325b908879257d53f840f1831fd05ef34625b4a08911423"
+          "sha256": "b7749412ff07fb7815acd7a24c9648cad9f41ff41af3194d5af812f136321573"
         },
         {
           "path": "Cargo.lock",

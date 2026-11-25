@@ -1,10 +1,10 @@
 {
   "candidate_format": 1,
   "source_repository": "aq-worker",
-  "source_revision": "1d281f867855d7e0cf777fec3f782bdf747f330a",
+  "source_revision": "4682e775ff7c536a16536f827475b167902663e0",
   "version": "0.5.1",
   "archive": "aq-worker-source.tar.gz",
-  "archive_sha256": "a6fed587c4309ee35b5fef37a8d029d893fee413f98c0d2071065fdf98c55dce",
+  "archive_sha256": "eb21f90042760c176140950deb70fde98cd952125e7bf7e20a0b34eb0b4ed545",
   "lockfile_sha256": "36d3bd75e2b4862cb439febb47102582889ecd501caf8f8a245a446336f3d898",
   "foundation_protocol": 1,
   "execution_protocol": 2,

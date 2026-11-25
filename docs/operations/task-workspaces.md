@@ -35,6 +35,8 @@ Docker-local workers with node Git and a private state-directory mapping adverti
 
 The server's Git transport currently comes with the `delivery_playbook` build feature. Enable `project_environments` for database-backed tasks. An approved environment that advertises `postgres` must have PostgreSQL server and client tools installed. The template builder checks those binaries, and the sandbox runs a SQL readiness query before starting the harness. Other toolchain requirements use the existing task `needs` and environment `provides` mechanism.
 
+On a template build host, use the bundled worker revision to run `aq-worker template build "$recipe_json" --build-config "$builder_json" --output "$output_dir"`. Use a pinned AQ OS parent and the reviewed PGDG PostgreSQL 17 server and client packages. The builder scans the OCI image before adding it to the allowlist. Make the verified image digest available to a workspace-capable Docker-local worker. Register a boot environment definition referencing that image with `"provides": ["postgres"]` and allow the same environment and qualified harness on the project and worker. If the execution profile fixes the role's environment, point it at the PostgreSQL-capable environment or use a dedicated opt-in role. Installations running a Host12 delivery playbook with `environment.build` and `environment.admit` can use the named recipe flow.
+
 The sandbox daemon must be able to run the environment's unprivileged agent
 account. Rootless installations need a UID and GID mapping that includes this
 account. Run a task that executes `psql "$DATABASE_URL" -c 'SELECT 1'` when
