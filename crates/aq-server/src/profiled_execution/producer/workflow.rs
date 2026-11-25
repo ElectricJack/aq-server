@@ -676,6 +676,18 @@ async fn offers(
                     policy.project_id,
                     record.binding.graph_workspace_id,
                 );
+                let ready_ids: Vec<_> = ready
+                    .items
+                    .iter()
+                    .map(|item| item.revision.task_id)
+                    .collect();
+                let workspace_tasks = crate::task_workspace_resume::tasks_with_requirements(
+                    &state.store.pool,
+                    project,
+                    &ready_ids,
+                )
+                .await?;
+                let workspace_tasks = &workspace_tasks;
                 let (placed, items, role_held) = (&placements, &ready.items, &role_held);
                 if let Some((task, assessment)) = on_heap(|| {
                     first_eligible_task(&ready, &skipped, Some(&diagnostics), |task| async move {
@@ -696,10 +708,11 @@ async fn offers(
                         {
                             return Ok(Assessment::Blocked("git_author_unsupported"));
                         }
-                        if let Some(reason) =
-                            crate::task_workspace_resume::scope_at_poll(pool, project, task)
-                                .await?
-                                .blocker(supports_workspace)
+                        if workspace_tasks.contains(&task)
+                            && let Some(reason) =
+                                crate::task_workspace_resume::scope_at_poll(pool, project, task)
+                                    .await?
+                                    .blocker(supports_workspace)
                         {
                             return Ok(Assessment::Blocked(reason));
                         }

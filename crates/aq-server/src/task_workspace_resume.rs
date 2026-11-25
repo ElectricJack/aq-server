@@ -70,6 +70,84 @@ impl Scope {
     }
 }
 
+/// Index-only membership prefilter for one bounded Graph ready page.
+pub(crate) async fn tasks_with_requirements(
+    pool: &PgPool,
+    project: Uuid,
+    tasks: &[Uuid],
+) -> Result<std::collections::BTreeSet<Uuid>, AppError> {
+    if tasks.is_empty() {
+        return Ok(Default::default());
+    }
+    let mut connection = pool.acquire().await.map_err(db)?;
+    if !supported(&mut connection).await? {
+        return Ok(Default::default());
+    }
+    let rows = sqlx::query_scalar::<_, Uuid>(
+        "SELECT task_id FROM task_workspace_sources WHERE home_project_id=$1 AND task_id=ANY($2)
+         UNION
+         SELECT task_id FROM task_workspace_services WHERE home_project_id=$1 AND task_id=ANY($2)
+         UNION
+         SELECT task_id FROM task_workspace_creations WHERE home_project_id=$1 AND task_id=ANY($2)",
+    )
+    .bind(project)
+    .bind(tasks)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(db)?;
+    Ok(rows.into_iter().collect())
+}
+
+pub(crate) async fn work_reason(
+    pool: &PgPool,
+    project: Uuid,
+    task: Uuid,
+    running_attempt: Option<Uuid>,
+) -> Result<Option<Value>, AppError> {
+    let mut connection = pool.acquire().await.map_err(db)?;
+    let scope = scope(&mut connection, project, task).await?;
+    let code = match scope.blocker(true) {
+        Some(code) => code,
+        None => match running_attempt {
+            Some(attempt)
+                if scope.supported && checkpoint_required(&mut connection, attempt).await? =>
+            {
+                CHECKPOINT
+            }
+            _ => return Ok(None),
+        },
+    };
+    let (message, wake_condition) = match code {
+        "workspace_creation_pending" => (
+            "AQ is waiting for Graph to confirm creation before applying the task’s workspace requirements.",
+            "graph_creation_confirmed",
+        ),
+        "workspace_expansion_approval_pending" => (
+            "An owner of the requested project must approve the workspace request. AQ will recheck it automatically.",
+            "workspace_request_approved",
+        ),
+        "workspace_expansion_approval_denied" => (
+            "A requested project denied workspace access. Review the request with its project owner.",
+            "workspace_request_revised",
+        ),
+        "workspace_expansion_binding_stale" => (
+            "A requested repository binding changed. Ask its project owner to approve a current pin.",
+            "workspace_binding_reapproved",
+        ),
+        CHECKPOINT => (
+            "AQ is waiting for the current attempt to save its work and stop before resuming with the expanded workspace.",
+            "workspace_checkpoint_retained",
+        ),
+        _ => (
+            "Workspace services require an AQ server with project environments enabled.",
+            "workspace_service_capability_enabled",
+        ),
+    };
+    Ok(Some(
+        serde_json::json!({"code":code,"message":message,"wake_condition":wake_condition}),
+    ))
+}
+
 pub(crate) async fn scope_at_poll(
     pool: &PgPool,
     project: Uuid,
