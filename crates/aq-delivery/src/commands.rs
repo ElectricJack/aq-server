@@ -13,7 +13,8 @@
 //! the same operation. Time is a parameter (`now_ms`), never read here.
 mod checks;
 mod run;
-pub use checks::CheckRequest;
+pub use checks::{CheckRequest, Refreshed};
+use checks::{REFRESHES, Refresh};
 pub use run::FrozenCommand;
 mod git;
 mod host;
@@ -23,8 +24,8 @@ pub use git::{
     TRY_PREFIX, object_id,
 };
 pub use host::{
-    Accepting, DeliveryRuntime, DueOperations, due_operations, frozen_request, onboarded_target,
-    published_head, pull_request_text, run_step,
+    Accepting, DeliveryRuntime, DueOperations, accepted_head, due_operations, frozen_request,
+    onboarded_target, published_head, pull_request_text, run_step,
 };
 
 use crate::github::GitHubApiError;
@@ -148,6 +149,8 @@ pub struct CheckPoll {
     pub completion: Option<Completion>,
     /// The pull request as this look found it (`None` when it could not be read).
     pub observed: Option<PullRequestObserved>,
+    /// A branch refresh this look asked for or found done.
+    pub refreshed: Option<Refreshed>,
 }
 
 /// One attempt at a command.
@@ -190,7 +193,11 @@ pub struct OpenPullRequest<'a> {
 #[derive(Clone, Copy)]
 pub struct MergeGuard<'a> {
     pub method: MergeMethod,
+    /// The pull request head the merge is pinned to.
     pub expected_head: &'a str,
+    /// The result head, when a recorded refresh moved the pull request past
+    /// it: the central branch is still there.
+    pub result_head: Option<&'a str>,
 }
 /// The commands, over a forge adapter and aq-git.
 #[derive(Clone)]
@@ -350,7 +357,9 @@ impl Delivery {
         {
             return step;
         }
-        self.finish_merge(scope, pr, guard.expected_head).await
+        let central = guard.result_head.unwrap_or(guard.expected_head);
+        self.finish_merge(scope, pr, (central, guard.expected_head))
+            .await
     }
 
     async fn merge_on_github(
@@ -362,6 +371,7 @@ impl Delivery {
         let MergeGuard {
             method,
             expected_head,
+            ..
         } = guard;
         let done = |completion| MergeAttempt::Unconfirmed(Step::Done(completion));
         let merged = self
@@ -409,20 +419,33 @@ impl Delivery {
         }
     }
 
-    async fn finish_merge(&self, scope: TaskOperation<'_>, pr: u64, expected_head: &str) -> Step {
-        let TaskOperation {
-            operation,
-            target,
-            task,
-        } = scope;
+    /// Deletes the task branch, in central aq-git under the lease `central`
+    /// and on the forge under `forge`; they differ after a branch refresh.
+    async fn delete_task_branch(
+        &self,
+        scope: TaskOperation<'_>,
+        (central, forge): (Option<&str>, Option<&str>),
+    ) -> Result<RefDeletion, GitFailure> {
+        let (repo, branch) = (&scope.target.git, task_branch(scope.task));
+        if central != forge {
+            // An absent central ref holds any lease, so a replay passes this.
+            self.git
+                .delete_central_ref(Uuid::new_v4(), repo, &branch, central)
+                .await?;
+        }
+        self.git
+            .delete_ref(scope.operation, repo, &branch, forge)
+            .await
+    }
+
+    async fn finish_merge(
+        &self,
+        scope: TaskOperation<'_>,
+        pr: u64,
+        (central, forge): (&str, &str),
+    ) -> Step {
         if let Err(e) = self
-            .git
-            .delete_ref(
-                operation,
-                &target.git,
-                &task_branch(task),
-                Some(expected_head),
-            )
+            .delete_task_branch(scope, (Some(central), Some(forge)))
             .await
         {
             return Step::Retry(format!("the merged branch is not deleted yet: {e}"));
@@ -443,19 +466,15 @@ impl Delivery {
     /// `pull_request.close`: closes the pull request without merging it and
     /// deletes the task's branch on the remote and in central aq-git.
     pub async fn pull_request_close(&self, scope: TaskOperation<'_>, pr: u64) -> Step {
-        self.close_result(scope, pr, None).await
+        self.close_result(scope, pr, (None, None)).await
     }
     async fn close_result(
         &self,
         scope: TaskOperation<'_>,
         pr: u64,
-        expected_head: Option<&str>,
+        leases: (Option<&str>, Option<&str>),
     ) -> Step {
-        let TaskOperation {
-            operation,
-            target,
-            task,
-        } = scope;
+        let target = scope.target;
         let closed = match self.github.close(&target.github, pr).await {
             Ok(p) => p,
             // No such pull request: nothing is open, which is what was asked.
@@ -470,11 +489,7 @@ impl Delivery {
             },
             Err(e) => return Step::Retry(format!("the forge did not close it: {}", e.code())),
         };
-        if let Err(e) = self
-            .git
-            .delete_ref(operation, &target.git, &task_branch(task), expected_head)
-            .await
-        {
+        if let Err(e) = self.delete_task_branch(scope, leases).await {
             return Step::Retry(format!("the branch is not deleted yet: {e}"));
         }
         Step::Done(
@@ -497,6 +512,7 @@ impl Delivery {
 pub struct Run {
     pub step: Option<Step>,
     pub observed: Option<PullRequestObserved>,
+    pub refreshed: Option<Refreshed>,
 }
 
 /// What a command whose project is no longer bound answers: there is nothing

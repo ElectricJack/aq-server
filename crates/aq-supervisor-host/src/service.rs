@@ -3,6 +3,7 @@
 mod plan;
 mod reconcile;
 mod reservation;
+mod retry;
 use crate::{
     Supervisor,
     adapter::NativeAdapter,
@@ -21,6 +22,7 @@ use aq_server::{
     store::{Role, User},
 };
 use aq_session_host::{LocalEnvironment, ResourcePolicy};
+use aq_session_protocol::Digest;
 use reconcile::Installed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,11 +45,31 @@ pub struct ServiceConfig {
     pub helper: PathBuf,
     pub tmux: PathBuf,
     pub tmux_version: String,
-    pub native: PathBuf,
-    pub native_digest: aq_session_protocol::Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_digest: Option<Digest>,
     pub image_digest: String,
-    pub secret_file: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<NativeInstallation>,
     pub server_origin: String,
+    /// Retries for each retained message after a provably unstarted turn.
+    #[serde(default = "default_turn_retries")]
+    pub automatic_turn_retries: u8,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInstallation {
+    pub native: PathBuf,
+    pub native_digest: Digest,
+    pub secret_file: PathBuf,
+}
+
+fn default_turn_retries() -> u8 {
+    1
 }
 #[derive(Clone)]
 struct Control {
@@ -58,8 +80,13 @@ struct Control {
     owner: Option<Uuid>,
     project: Option<Uuid>,
     label: String,
+    /// The owner's saved role text for a project supervisor, read at the start of its turn.
+    role: Option<String>,
+    /// A note for a turn after one that ended without a reply, set at its start.
+    recheck: Option<String>,
 }
 type Host = Supervisor<InstalledAuthority, NativeAdapter>;
+type NativePaths<'a> = (&'a Path, &'a Digest, &'a Path);
 impl ServiceConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let c: Self = serde_json::from_slice(&protected_read(path, 65536)?)?;
@@ -69,29 +96,60 @@ impl ServiceConfig {
         );
         crate::tool::origin(&c.server_origin)?;
         ensure!(
-            [
-                &c.root,
-                &c.workspace,
-                &c.homes,
-                &c.helper,
-                &c.tmux,
-                &c.native,
-                &c.secret_file
-            ]
-            .iter()
-            .all(|p| p.is_absolute()),
+            [&c.root, &c.workspace, &c.homes, &c.helper, &c.tmux]
+                .iter()
+                .all(|p| p.is_absolute()),
             "absolute supervisor service paths"
         );
+        let codex = c.codex()?;
+        ensure!(
+            codex.is_some() || c.claude.is_some(),
+            "at least one supervisor harness must be installed"
+        );
+        if let Some((native, _, secret)) = codex {
+            validate_native_paths(native, secret, &c.workspace)?;
+        }
+        if let Some(claude) = &c.claude {
+            validate_native_paths(&claude.native, &claude.secret_file, &c.workspace)?;
+            ensure!(
+                c.secret_file.as_ref() != Some(&claude.secret_file),
+                "Codex and Claude require separate credential files"
+            );
+        }
         ensure!(
             c.image_digest.starts_with("sha256:") && c.image_digest.len() == 71,
             "pinned supervisor environment"
         );
         Ok(c)
     }
+    fn codex(&self) -> Result<Option<NativePaths<'_>>> {
+        match (
+            self.native.as_deref(),
+            self.native_digest.as_ref(),
+            self.secret_file.as_deref(),
+        ) {
+            (Some(native), Some(digest), Some(secret)) => Ok(Some((native, digest, secret))),
+            (None, None, None) => Ok(None),
+            _ => anyhow::bail!("Codex installation requires native, native_digest and secret_file"),
+        }
+    }
+
     fn turn_file(&self) -> PathBuf {
         self.root.join("current-turn.json")
     }
 }
+fn validate_native_paths(native: &Path, secret: &Path, workspace: &Path) -> Result<()> {
+    ensure!(
+        native.is_absolute() && secret.is_absolute(),
+        "absolute supervisor native and credential paths"
+    );
+    ensure!(
+        !secret.starts_with(workspace),
+        "supervisor credential file overlaps workspace"
+    );
+    Ok(())
+}
+
 async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
     let r=sqlx::query("SELECT c.*,i.project_id,COALESCE(p.label,'Global supervisor')AS label FROM supervisor_controls c JOIN supervisor_conversation_ids i USING(conversation_id) LEFT JOIN project_supervisor_conversations p USING(conversation_id) WHERE c.conversation_id=$1").bind(id).fetch_one(pool).await?;
     Ok(Control {
@@ -102,6 +160,8 @@ async fn control(pool: &PgPool, id: Uuid) -> Result<Control> {
         owner: r.get("approved_by"),
         project: r.get("project_id"),
         label: r.get("label"),
+        role: None,
+        recheck: None,
     })
 }
 async fn user(pool: &PgPool, control: &Control) -> Result<User> {
@@ -213,6 +273,17 @@ fn clean_homes(config: &ServiceConfig) -> Result<()> {
         }
         for name in ["auth.json", "supervisor.credential"] {
             let _ = std::fs::remove_file(path.join(name));
+        }
+        #[cfg(all(feature = "supervisor_full_access", feature = "delivery_playbook"))]
+        {
+            // The caller has stopped proof. Remove repositories even when
+            // Claude killed the broker before its own cleanup could run.
+            let repos = path.join(crate::repo::SESSION_REPOS_DIR);
+            match std::fs::remove_dir_all(&repos) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     Ok(())
@@ -386,105 +457,10 @@ impl Service<'_> {
         self.scan(ctl, cursor).await
     }
 }
-/// Automatically retry a mail batch once if its previous guardian never
-/// started the harness. A repeated launch failure stays visible for inspection.
-async fn retry_unstarted(pool: &PgPool, previous: &Snapshot) -> Result<bool> {
-    let mut tx = pool.begin().await?;
-    if crate::verifier::not_started(&mut tx, &previous.run)
-        .await?
-        .is_none()
-    {
-        return Ok(false);
-    }
-    let first: bool = sqlx::query_scalar(
-        "SELECT NOT EXISTS(SELECT 1 FROM central_supervisor_dispatches p
-         WHERE p.actor_id=d.actor_id AND p.generation<d.generation AND p.batch_digest=d.batch_digest)
-         FROM central_supervisor_dispatches d WHERE d.dispatch_id=$1",
-    )
-    .bind(previous.run.plan().dispatch_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    Ok(first)
-}
-
-/// The current reservation's own turn ran (its generation is the latest) and
-/// stopped without a reply: `Some(true)` releases its mail for the next turn
-/// because the owner stopped and started the supervisor after the dispatch,
-/// `Some(false)` waits for that. `None` is any other outstanding reservation.
-struct DispatchTime {
-    created: Option<i64>,
-    control_updated: i64,
-}
-impl DispatchTime {
-    fn stopped_turn(&self, closed: bool, generation: u64, next: u64) -> Option<bool> {
-        let dispatched = self.created?;
-        (closed && generation + 1 == next).then_some(self.control_updated > dispatched)
-    }
-}
-
 fn swarm_stage(reason: &str) -> &'static str {
     if reason == aq_swarm_settings::admission::CEILING {
         "Waiting for this provider and intelligence class concurrency limit"
     } else {
         "Waiting for an authoritative intelligence class and configured capacity"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DispatchTime;
-
-    #[test]
-    fn a_stopped_turn_is_released_only_after_an_owner_restart() {
-        // Generation 5 ran for this reservation and stopped; the next would be 6.
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 900
-            }
-            .stopped_turn(true, 5, 6),
-            Some(false)
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 1_000
-            }
-            .stopped_turn(true, 5, 6),
-            Some(false)
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 1_001
-            }
-            .stopped_turn(true, 5, 6),
-            Some(true)
-        );
-        // Still running, an older generation, or no dispatch: not this case.
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 2_000
-            }
-            .stopped_turn(false, 5, 6),
-            None
-        );
-        assert_eq!(
-            DispatchTime {
-                created: Some(1_000),
-                control_updated: 2_000
-            }
-            .stopped_turn(true, 4, 6),
-            None
-        );
-        assert_eq!(
-            DispatchTime {
-                created: None,
-                control_updated: 2_000
-            }
-            .stopped_turn(true, 6, 6),
-            None
-        );
     }
 }

@@ -18,6 +18,7 @@ async fn merge_merges_then_deletes_the_branch_on_the_remote_and_in_the_pool() {
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await,
@@ -50,6 +51,7 @@ async fn merge_outcomes_other_than_merged_delete_nothing() {
                     MergeGuard {
                         method: MergeMethod::Squash,
                         expected_head: &sha('a'),
+                        result_head: None,
                     },
                 )
                 .await,
@@ -114,6 +116,7 @@ async fn a_merged_pull_request_whose_branch_is_not_deleted_yet_is_retried_not_re
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await
@@ -157,6 +160,7 @@ async fn merge_recovers_after_an_unknown_reply() {
                 MergeGuard {
                     method: MergeMethod::Merge,
                     expected_head: &sha('a'),
+                    result_head: None,
                 },
             )
             .await

@@ -25,8 +25,7 @@ pub async fn register(
         return Err(AppError::Conflict("epoch input is not enabled".into()));
     }
     let mut tx = super::persistence::begin(&state).await?;
-    require_owner(&state, &mut tx).await?;
-    super::peer::current_peer(&state, &mut tx, node, &r.peer).await?;
+    super::peer::peer_rows(&mut tx, node, &r.peer, authority::Rows::Snapshot).await?;
     let view = authority::load_locked(&state, &mut tx, &r.terminal.session, Policy::TerminalActive)
         .await?;
     if view.authority_revision != r.expected_authority_revision {

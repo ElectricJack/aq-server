@@ -1,4 +1,7 @@
 use super::*;
+/// The most bytes of the supervisor document. The supervisor host installs
+/// each turn, with this text in it, as a file of at most 64 KiB.
+const SUPERVISOR_DOCUMENT_BYTES: usize = 16_384;
 /// Apply one change (see the crate documentation). `Error::Problems` when the
 /// resulting set is not valid, `Error::Conflict` when `expected_revision` is
 /// stale or the operation id was used for another request.
@@ -43,7 +46,7 @@ pub async fn apply_referenced(
         .check_references(&mutation.change, references, &mut tx)
         .await?;
     let snapshot = change.snapshot(&mutation.change)?;
-    persist(&mut tx, &mutation.change, change.version).await?;
+    persist(&mut tx, &mutation.change, &change).await?;
     let receipt = change.activate(&mut tx, snapshot).await?;
     operation
         .record(&mut tx, &receipt, change.state.limits.operations_kept)
@@ -141,10 +144,14 @@ impl Candidate {
             }
             Change::RoutingDocument(_) => self.state.routing_revision,
             Change::ObservationLimits(_) => observation_limits(conn).await?.1,
+            Change::SupervisorDocument(_) => supervisor_document(conn).await?.1,
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(_) => self.state.delivery_revision,
             #[cfg(feature = "delivery_playbook")]
-            Change::DeliveryLimits(_) => self.state.delivery_limits_revision,
+            Change::DeliveryLimits(limits) => {
+                self.state.delivery_limits = limits.resolve(self.state.delivery_limits);
+                self.state.delivery_limits_revision
+            }
             #[cfg(feature = "project_environments")]
             Change::EnvironmentLimits(_) => environment_limits_on(conn).await?.1,
         })
@@ -208,12 +215,24 @@ impl Candidate {
             Change::ObservationLimits(limits) => {
                 limits.validate().map_err(|message| invalid(&message))?
             }
+            Change::SupervisorDocument(markdown) => {
+                self.validate_markdown("supervisor", markdown)?;
+                // It goes into every installed supervisor turn, which is bounded.
+                if markdown.len() > SUPERVISOR_DOCUMENT_BYTES {
+                    return Err(invalid(&format!(
+                        "The supervisor document is {} bytes, over the limit of {SUPERVISOR_DOCUMENT_BYTES} bytes",
+                        markdown.len()
+                    )));
+                }
+            }
             #[cfg(feature = "delivery_playbook")]
             Change::DeliveryDocument(markdown) => self.validate_markdown("delivery", markdown)?,
             #[cfg(feature = "delivery_playbook")]
-            Change::DeliveryLimits(limits) => {
-                limits.validate().map_err(|message| invalid(&message))?
-            }
+            Change::DeliveryLimits(_) => self
+                .state
+                .delivery_limits
+                .validate()
+                .map_err(|message| invalid(&message))?,
             // The environment limits, too, compile and activate nothing.
             #[cfg(feature = "project_environments")]
             Change::EnvironmentLimits(limits) => {
@@ -263,8 +282,8 @@ impl Candidate {
         })
     }
 }
-async fn persist(conn: &mut PgConnection, change: &Change, version: Version) -> Result<()> {
-    let Version { revision, now_ms } = version;
+async fn persist(conn: &mut PgConnection, change: &Change, candidate: &Candidate) -> Result<()> {
+    let Version { revision, now_ms } = candidate.version;
     match change {
         Change::Save { kind, id, markdown } => {
             sqlx::query(
@@ -290,10 +309,11 @@ async fn persist(conn: &mut PgConnection, change: &Change, version: Version) -> 
         Change::Limits(limits) => update_json(conn, "UPDATE role_settings SET limits=$2,limits_revision=$1 WHERE singleton",revision,limits).await?,
         Change::RoutingDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,routing_markdown=$2,routing_revision=$1 WHERE singleton", revision,markdown).await?,
         Change::ObservationLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,observation_limits=$2,observation_limits_revision=$1 WHERE singleton",revision,limits).await?,
+        Change::SupervisorDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,supervisor_markdown=$2,supervisor_revision=$1 WHERE singleton", revision,markdown).await?,
         #[cfg(feature = "delivery_playbook")]
         Change::DeliveryDocument(markdown) => update_markdown(conn, "UPDATE role_settings SET revision=$1,delivery_markdown=$2,delivery_revision=$1 WHERE singleton", revision,markdown).await?,
         #[cfg(feature = "delivery_playbook")]
-        Change::DeliveryLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,limits).await?,
+        Change::DeliveryLimits(_) => update_json(conn, "UPDATE role_settings SET revision=$1,delivery_limits=$2,delivery_limits_revision=$1 WHERE singleton",revision,&candidate.state.delivery_limits).await?,
         #[cfg(feature = "project_environments")]
         Change::EnvironmentLimits(limits) => update_json(conn, "UPDATE role_settings SET revision=$1,environment_limits=$2,environment_limits_revision=$1 WHERE singleton",revision,limits).await?,
     }

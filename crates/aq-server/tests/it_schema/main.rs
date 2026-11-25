@@ -12,6 +12,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod central37;
 mod environment_versions_migration;
 mod host9_routing_migration;
 mod migration_catalog;

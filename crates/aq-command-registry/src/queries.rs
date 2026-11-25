@@ -92,7 +92,10 @@ const RESULT_LIMIT: QueryParam = opt(
     "limit",
     r#"{"type":"integer","minimum":1,"maximum":100,"default":20}"#,
 );
-const RESULT_PROFILE: QueryParam = opt("profile", r#"{"enum":["recorded_native_v2"]}"#);
+const RESULT_PROFILE: QueryParam = opt(
+    "profile",
+    r#"{"enum":["recorded_native_v2","recorded_legacy_native_only"]}"#,
+);
 
 const TASK_GRAPH: &[QueryParam] = &[opt(
     "limit",

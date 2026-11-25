@@ -45,6 +45,21 @@ async fn shaped() -> (Case, aq_admission::started::Request) {
         request.binding.launch_manifest_digest.clone();
     request.observation_digest = request.observation.digest().unwrap();
     request.validate().unwrap();
+    retain_shaped_grant(
+        &c,
+        &request,
+        lease.issued_at_ms,
+        accept.original.journal_revision + 1,
+    )
+    .await;
+    (c, request)
+}
+async fn retain_shaped_grant(
+    c: &Case,
+    request: &aq_admission::started::Request,
+    issued_at_ms: u64,
+    prepared_revision: u64,
+) {
     let mut tx = c.env.env.pool.begin().await.unwrap();
     let raw: Value = sqlx::query_scalar(
         "SELECT state FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE",
@@ -55,11 +70,11 @@ async fn shaped() -> (Case, aq_admission::started::Request) {
     .unwrap();
     let mut hot: HotState = serde_json::from_value(raw).unwrap();
     hot.status = Status::Granted;
-    hot.execution_deadline_ms = Some(lease.issued_at_ms + 30_000);
+    hot.execution_deadline_ms = Some(issued_at_ms + 30_000);
     hot.grant = Some(aq_session_protocol::ProfiledGrant {
         binding: request.binding.clone(),
         grant_id: request.grant_id,
-        expires_at_ms: lease.issued_at_ms + 10_000,
+        expires_at_ms: issued_at_ms + 10_000,
     });
     hot.validate_against(&request.binding).unwrap();
     sqlx::query("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1")
@@ -73,13 +88,12 @@ async fn shaped() -> (Case, aq_admission::started::Request) {
         &request.binding,
         hot.owner.as_ref().unwrap(),
         request.grant_id,
-        accept.original.journal_revision + 1,
+        prepared_revision,
         &Digest::of(b"synthetic unsupported-origin Prepared"),
     )
     .await
     .unwrap();
     tx.commit().await.unwrap();
-    (c, request)
 }
 async fn snapshot(c: &Case) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('hot',(SELECT to_jsonb(h) FROM profiled_authority_hot h),'journal',(SELECT to_jsonb(j) FROM profiled_owner_journals j),'accepted',(SELECT to_jsonb(a) FROM profiled_v2_accepts a),'started',(SELECT count(*) FROM profiled_started_receipts),'legacy',(SELECT count(*) FROM profiled_execution_receipts),'held',(SELECT holds_task FROM execution_attempts))")

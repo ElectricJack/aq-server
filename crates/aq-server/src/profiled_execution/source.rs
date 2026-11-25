@@ -106,24 +106,27 @@ async fn ancestry_wait(
     }
     AppError::Conflict(refusal.refusal())
 }
-/// A fixed commit and its central retention handle; `handoff` is evidence.
+/// A fixed commit and its central retention handle; `evidence` names its origin.
 struct Fixed {
     hex: String,
     retention_handle: Uuid,
-    handoff: Option<Value>,
+    evidence: Option<(&'static str, Value)>,
 }
 
 /// A replacement observes the predecessor's exact retained commit and handle.
-/// It does not resolve the configured moving ref again or mint another export.
+/// It does not resolve the configured moving ref again. With `repin` (the predecessor),
+/// for an export under a newer placement-only revision, which export admission checks.
 pub async fn observe_retained(
     state: &AppState,
     project: &FrozenProjectBinding,
     policy: &ProjectPolicyRecord,
     retained: &super::source_exports::Request,
+    repin: Option<Uuid>,
 ) -> Result<Observation, AppError> {
     retained.validate().map_err(|_| refused())?;
     let binding = &project.project.binding;
-    let project_scope = (binding.project_id, project.project.revision);
+    let revision = repin.map_or(project.project.revision, |_| retained.project_revision);
+    let project_scope = (binding.project_id, revision);
     let repository = (binding.repository_id, binding.repository_binding_generation);
     let exact = project_scope == (retained.project_id, retained.project_revision)
         && repository == (retained.repository_id, retained.binding_generation);
@@ -133,7 +136,7 @@ pub async fn observe_retained(
     let fixed = Fixed {
         hex: retained.base.hex.clone(),
         retention_handle: retained.operation_id,
-        handoff: None,
+        evidence: repin.map(|p| ("retained", json!({ "predecessor": p }))),
     };
     Observer::new(state, project, policy)
         .observe(Some(fixed), false, None)
@@ -153,7 +156,7 @@ pub async fn observe_handoff(
     let fixed = Fixed {
         hex: base.oid.clone(),
         retention_handle: base.retention_handle,
-        handoff: Some(handoff),
+        evidence: Some(("handoff", handoff)),
     };
     Observer::new(state, project, policy)
         .observe(Some(fixed), false, None)

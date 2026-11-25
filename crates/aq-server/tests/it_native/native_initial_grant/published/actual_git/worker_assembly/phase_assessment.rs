@@ -39,36 +39,61 @@ pub(super) async fn assess(
     assert!(q.original.identity == *identity);
     assert!(started < accepted.receipt.lease.expires_at_ms);
 
-    // The opaque PreparedInputs owner is still held by the paused worker. Read
-    // and verify its actual fsynced journal; this DTO mints no authority.
-    let journal = std::fs::read(root.join("journal/journal.json")).unwrap();
-    assert!(journal.len() <= 4_194_304);
-    let snapshot: Value = serde_json::from_slice(&journal).unwrap();
-    let mut canonical = snapshot["state"].clone();
-    canonical.sort_all_objects();
-    assert!(json!(Digest::of(&serde_json::to_vec(&canonical).unwrap())) == snapshot["digest"]);
-    let state = &snapshot["state"];
-    assert_eq!(state["format"], super::JOURNAL_FORMAT);
-    assert!(state["identity"] == json!(identity));
-    assert_eq!(state["revision"], paused["prepared_revision"]);
-    let attempt = &state["attempts"][q.original.binding.attempt_id.to_string()];
-    assert!(attempt[phase::PREPARED]["request"] == json!(q));
-    assert!(attempt[phase::EXECUTION].is_null() && attempt["native_host"].is_null());
-    assert!(attempt["source"]["verified"].is_object());
-    assert!(
-        attempt["downloads"]
-            .as_object()
-            .unwrap()
-            .values()
-            .all(|d| !d["receipt"].is_null())
-    );
-    let workspace = Path::new(paused["workspace_path"].as_str().unwrap());
-    assert!(workspace.starts_with(root.join("git/workspaces")));
-    assert!(std::fs::read(workspace.join("source")).unwrap() == b"actual source bytes\n");
+    verify_prepared_journal(root, identity, paused, &q);
 
     // Rehash the actual pinned deterministic program, host helper and tmux now,
     // not merely their earlier configuration. Scope stays synthetic/static.
     assert!(phase_host::configuration() == *original_host);
+    verify_prepared_materials(case, root, identity, &accepted, &q);
+
+    verify_node_inventory(case, identity).await;
+
+    // A new owner-authorized assessment gets its own operation/sequence/time.
+    // The actual observation owner retains sequence2's immutable operation reply.
+    let old: Value = sqlx::query_scalar(
+        "SELECT response FROM intelligence_operations WHERE response->>'sequence'='2'",
+    )
+    .fetch_one(&case.env.env.pool)
+    .await
+    .unwrap();
+    let observed = phase::record_operator_availability_sequence(case, 3).await;
+    let retained: Value = sqlx::query_scalar(
+        "SELECT response FROM intelligence_operations WHERE response->>'observation_id'=$1",
+    )
+    .bind(old["observation_id"].as_str().unwrap())
+    .fetch_one(&case.env.env.pool)
+    .await
+    .unwrap();
+    assert!(retained == old);
+    assert_eq!(observed["sequence"], 3);
+    assert!(observed["scope"] == old["scope"] && observed["source"] == old["source"]);
+    let received = observed["received_at_ms"].as_u64().unwrap();
+    assert!(received >= started && received > old["received_at_ms"].as_u64().unwrap());
+    assert_eq!(
+        observed["expires_at_ms"].as_u64().unwrap() - received,
+        old["expires_at_ms"].as_u64().unwrap() - old["received_at_ms"].as_u64().unwrap()
+    );
+    eprintln!(
+        "bounded new synthetic operator assessment: {}",
+        json!({
+            "scope":"deterministic_static_fixture_only","sequence":3,
+            "checked_at_ms":started,"received_at_ms":received,
+            "expires_at_ms":observed["expires_at_ms"],"prior_sequence":old["sequence"],
+            "prior_received_at_ms":old["received_at_ms"],"original_preparation_expiry_ms":accepted.receipt.lease.expires_at_ms,
+            "prepared_revision":paused["prepared_revision"],"material_revalidated":true,
+            "peer_pins_revalidated":true,"node_identity_revalidated":true,"installed_harness_revalidated":true,
+            "original_observation_retained":true,"provider_availability_claim":false
+        })
+    );
+}
+
+fn verify_prepared_materials(
+    case: &Case,
+    root: &Path,
+    identity: &aq_admission::transport::WorkerIdentity,
+    accepted: &AcceptedDelivery,
+    q: &PrepareRequest,
+) {
     let registry = case.env.env.state.config.intelligence.as_ref().unwrap();
     assert_eq!(accepted.receipt.lease.materials.len(), 1);
     let lease = &accepted.receipt.lease.materials[0];
@@ -104,7 +129,44 @@ pub(super) async fn assess(
             .iter()
             .any(|m| m.lease_id == lease.lease_id && m.material_digest == lease.material_digest)
     );
+}
 
+fn verify_prepared_journal(
+    root: &Path,
+    identity: &aq_admission::transport::WorkerIdentity,
+    paused: &Value,
+    q: &PrepareRequest,
+) {
+    // The opaque PreparedInputs owner is still held by the paused worker. Read
+    // and verify its actual fsynced journal; this DTO mints no authority.
+    let journal = std::fs::read(root.join("journal/journal.json")).unwrap();
+    assert!(journal.len() <= 4_194_304);
+    let snapshot: Value = serde_json::from_slice(&journal).unwrap();
+    let mut canonical = snapshot["state"].clone();
+    canonical.sort_all_objects();
+    assert!(json!(Digest::of(&serde_json::to_vec(&canonical).unwrap())) == snapshot["digest"]);
+    let state = &snapshot["state"];
+    assert_eq!(state["format"], super::JOURNAL_FORMAT);
+    assert!(state["identity"] == json!(identity));
+    assert_eq!(state["revision"], paused["prepared_revision"]);
+    let attempt = &state["attempts"][q.original.binding.attempt_id.to_string()];
+    assert!(attempt[phase::PREPARED]["request"] == json!(q));
+    assert!(attempt[phase::EXECUTION].is_null() && attempt["native_host"].is_null());
+    assert!(attempt["source"]["verified"].is_object());
+    assert!(
+        attempt["downloads"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|d| !d["receipt"].is_null())
+    );
+    let workspace = Path::new(paused["workspace_path"].as_str().unwrap());
+    assert!(workspace.starts_with(root.join("git/workspaces")));
+    assert!(std::fs::read(workspace.join("source")).unwrap() == b"actual source bytes\n");
+}
+
+async fn verify_node_inventory(case: &Case, identity: &aq_admission::transport::WorkerIdentity) {
+    let registry = case.env.env.state.config.intelligence.as_ref().unwrap();
     let node: Value = sqlx::query_scalar("SELECT state FROM execution_nodes WHERE node_id=$1")
         .bind(identity.node_id)
         .fetch_one(&case.env.env.pool)
@@ -152,42 +214,4 @@ pub(super) async fn assess(
         .await
         .unwrap();
     assert!(!revoked);
-
-    // A new owner-authorized assessment gets its own operation/sequence/time.
-    // The actual observation owner retains sequence2's immutable operation reply.
-    let old: Value = sqlx::query_scalar(
-        "SELECT response FROM intelligence_operations WHERE response->>'sequence'='2'",
-    )
-    .fetch_one(&case.env.env.pool)
-    .await
-    .unwrap();
-    let observed = phase::record_operator_availability_sequence(case, 3).await;
-    let retained: Value = sqlx::query_scalar(
-        "SELECT response FROM intelligence_operations WHERE response->>'observation_id'=$1",
-    )
-    .bind(old["observation_id"].as_str().unwrap())
-    .fetch_one(&case.env.env.pool)
-    .await
-    .unwrap();
-    assert!(retained == old);
-    assert_eq!(observed["sequence"], 3);
-    assert!(observed["scope"] == old["scope"] && observed["source"] == old["source"]);
-    let received = observed["received_at_ms"].as_u64().unwrap();
-    assert!(received >= started && received > old["received_at_ms"].as_u64().unwrap());
-    assert_eq!(
-        observed["expires_at_ms"].as_u64().unwrap() - received,
-        old["expires_at_ms"].as_u64().unwrap() - old["received_at_ms"].as_u64().unwrap()
-    );
-    eprintln!(
-        "bounded new synthetic operator assessment: {}",
-        json!({
-            "scope":"deterministic_static_fixture_only","sequence":3,
-            "checked_at_ms":started,"received_at_ms":received,
-            "expires_at_ms":observed["expires_at_ms"],"prior_sequence":old["sequence"],
-            "prior_received_at_ms":old["received_at_ms"],"original_preparation_expiry_ms":accepted.receipt.lease.expires_at_ms,
-            "prepared_revision":paused["prepared_revision"],"material_revalidated":true,
-            "peer_pins_revalidated":true,"node_identity_revalidated":true,"installed_harness_revalidated":true,
-            "original_observation_retained":true,"provider_availability_claim":false
-        })
-    );
 }

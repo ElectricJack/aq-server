@@ -470,6 +470,7 @@ dependencies = [
 name = "aq-machine-control"
 version = "0.1.0"
 dependencies = [
+ "aq-agent-api",
  "aq-intelligence-config",
  "aq-protocol",
  "aq-row-retention",
@@ -1108,6 +1109,7 @@ dependencies = [
  "aq-intelligence-config",
  "aq-internal-work",
  "aq-responses-transport",
+ "aq-role-settings",
  "aq-server",
  "aq-session-host",
  "aq-session-protocol",

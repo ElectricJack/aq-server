@@ -26,10 +26,10 @@ async fn dispatch_candidate(
     let id: Uuid = row.get(1);
     let principal: Uuid = row.get(2);
     let mut tx = super::persistence::begin(state).await?;
-    current_peer(state, &mut tx, node, &r.peer).await?;
+    peer_rows(&mut tx, node, &r.peer, Rows::Lock).await?;
     let view =
         authority::load_locked(state, &mut tx, &t.session, Policy::TerminalHistorical).await?;
-    let active = active_locked(state, &mut tx, &t).await?;
+    let active = active(state, &mut tx, &t, Rows::Lock).await?;
     let access = match AccessSubject::new(&view, &t, principal)
         .authorize(state, &mut tx, Right::Control)
         .await

@@ -737,7 +737,7 @@ mod never_started {
             .map(drop)
     }
     async fn settle(c: &Prepared) -> ClosureSettlement {
-        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id)
+        settlement::settle_and_release(&c.case.env.env.state, c.request.binding.attempt_id, None)
             .await
             .unwrap()
     }
@@ -901,8 +901,8 @@ mod never_started {
         let late = started(&r, c.request.journal_revision);
         let attempt = r.binding.attempt_id;
         let (_, _, start) = tokio::join!(
-            settlement::settle_and_release(state, attempt),
-            settlement::settle_and_release(state, attempt),
+            settlement::settle_and_release(state, attempt, None),
+            settlement::settle_and_release(state, attempt, None),
             started_owner::record(state, &auth, &late)
         );
         assert!(start.is_err());
@@ -942,3 +942,4 @@ mod never_started {
         );
     }
 }
+mod attested;

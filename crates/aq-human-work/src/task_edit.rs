@@ -132,6 +132,75 @@ impl TaskReprioritize {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyAdd {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// The task that must finish first: `blocker blocks subject`.
+    pub blocker_id: Uuid,
+    /// Make the subject, held at a limit an owner retry overrides, wait for the blocker instead:
+    /// after the edge is added, the hold's override is recorded, and the task is replaced once
+    /// the blocker completes. A task without such a hold is refused and no edge is added.
+    #[serde(default)]
+    pub resume_held: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRoleSet {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// The role the task names, stored as Graph metadata `aq:role`; it must
+    /// exist. Null or absent clears it: the project's default role applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub role: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRouteSet {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    /// `<parent>-<effort>`, for example `standard-high`.
+    #[schemars(regex(pattern = "^(simple|standard|complex|deep)-(low|medium|high|max)$"))]
+    pub class: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 16))]
+    pub harnesses: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 16))]
+    pub providers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRouteClear {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyRemove {
+    pub operation_id: Uuid,
+    pub project_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub expected_version: String,
+    pub edge_id: Uuid,
+    #[schemars(regex(pattern = "^[1-9][0-9]{0,18}$"))]
+    pub edge_version: String,
+}
+
 #[cfg(test)]
 mod story_points_tests {
     use super::*;

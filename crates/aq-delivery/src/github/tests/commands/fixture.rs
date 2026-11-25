@@ -149,6 +149,10 @@ pub(super) fn paths(mock: &Mock) -> Vec<(String, String)> {
 /// One poll with a required list: the PR, then the PR and check information.
 pub(super) fn poll(mock: &Mock, state: Value, checked: Value, check_runs: Value) {
     mock.reply(200, vec![], state);
+    read_checks(mock, checked, check_runs);
+}
+/// The reads of `checks`: the PR again, branch protection and the reports.
+pub(super) fn read_checks(mock: &Mock, checked: Value, check_runs: Value) {
     mock.reply(200, vec![], checked);
     mock.reply(200, vec![], json!([]));
     mock.reply(200, vec![], json!({"name": "main", "protected": false}));

@@ -134,6 +134,61 @@ pub(super) async fn exercise(
             .as_ref()
             .unwrap()
             .load(Ordering::SeqCst) as u64;
+    let live = renew_after_restart(f, q, now).await;
+    let stopped = phase_refresh_fixture::stop_request(started);
+    let mut h = headers(&live);
+    h.insert("aq-phase-terminal-api-version", "1".parse().unwrap());
+    assert_eq!(
+        request(
+            &f.c.env.env.state,
+            "/v1/worker/profiled-v2/stopped",
+            &h,
+            serde_json::to_value(&stopped).unwrap()
+        )
+        .await
+        .status(),
+        200
+    );
+    let aq_admission::SessionIdentity::Remote {
+        node_id, boot_id, ..
+    } = started.original.binding.session
+    else {
+        panic!("remote attempt")
+    };
+    let report = aq_admission::transport::ResultReport {
+        schema_version: 1,
+        operation_id: Uuid::new_v4(),
+        report_id: Uuid::new_v4(),
+        identity: aq_admission::transport::WorkerIdentity { node_id, boot_id },
+        binding: started.original.binding.clone(),
+        supersedes: None,
+        outcome: aq_admission::transport::ProcessOutcome::Success,
+        stop: stopped.original.evidence.clone(),
+        source_receipt_ids: vec![],
+        pending_effect_ids: vec![],
+        conclusion: aq_admission::Label::new("Restart result deduplication fixture").unwrap(),
+    };
+    let body = serde_json::to_value(&report).unwrap();
+    let (status, receipt) =
+        fresh_process(f, now, "/v1/worker/profiled/results", &live, body.clone()).await;
+    assert_eq!(status, 200, "result after restart: {receipt}");
+    let (status, replay) = fresh_process(f, now, "/v1/worker/profiled/results", &live, body).await;
+    assert_eq!(status, 200);
+    assert_eq!(receipt, replay);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM profiled_result_reports WHERE attempt_id=$1")
+            .bind(live.binding.attempt_id)
+            .fetch_one(&f.c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1, "restart must not duplicate the result");
+}
+
+async fn renew_after_restart(
+    f: &phase_refresh_fixture::Prepared,
+    q: &RunnerRenewalRequest,
+    now: u64,
+) -> DelegatedPermit {
     let body = serde_json::to_value(SandboxDocument::RunnerRenewalRequest(q.clone())).unwrap();
     let (status, response) =
         fresh_process(f, now, "/v1/worker/profiled/renew", &q.permit, body.clone()).await;
@@ -191,51 +246,5 @@ pub(super) async fn exercise(
         .unwrap();
     assert_eq!(before, after, "expired restart cannot extend authority");
 
-    let stopped = phase_refresh_fixture::stop_request(started);
-    let mut h = headers(live);
-    h.insert("aq-phase-terminal-api-version", "1".parse().unwrap());
-    assert_eq!(
-        request(
-            &f.c.env.env.state,
-            "/v1/worker/profiled-v2/stopped",
-            &h,
-            serde_json::to_value(&stopped).unwrap()
-        )
-        .await
-        .status(),
-        200
-    );
-    let aq_admission::SessionIdentity::Remote {
-        node_id, boot_id, ..
-    } = started.original.binding.session
-    else {
-        panic!("remote attempt")
-    };
-    let report = aq_admission::transport::ResultReport {
-        schema_version: 1,
-        operation_id: Uuid::new_v4(),
-        report_id: Uuid::new_v4(),
-        identity: aq_admission::transport::WorkerIdentity { node_id, boot_id },
-        binding: started.original.binding.clone(),
-        supersedes: None,
-        outcome: aq_admission::transport::ProcessOutcome::Success,
-        stop: stopped.original.evidence.clone(),
-        source_receipt_ids: vec![],
-        pending_effect_ids: vec![],
-        conclusion: aq_admission::Label::new("Restart result deduplication fixture").unwrap(),
-    };
-    let body = serde_json::to_value(&report).unwrap();
-    let (status, receipt) =
-        fresh_process(f, now, "/v1/worker/profiled/results", live, body.clone()).await;
-    assert_eq!(status, 200, "result after restart: {receipt}");
-    let (status, replay) = fresh_process(f, now, "/v1/worker/profiled/results", live, body).await;
-    assert_eq!(status, 200);
-    assert_eq!(receipt, replay);
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM profiled_result_reports WHERE attempt_id=$1")
-            .bind(live.binding.attempt_id)
-            .fetch_one(&f.c.env.env.pool)
-            .await
-            .unwrap();
-    assert_eq!(count, 1, "restart must not duplicate the result");
+    live.clone()
 }

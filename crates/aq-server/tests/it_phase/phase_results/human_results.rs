@@ -1,4 +1,5 @@
 // Actual SQL/router origins with synthetic fixture proof DTOs, not a harness run.
+use crate::common::supervisor::{supervised, supervisor_token};
 use aq_server::profiled_execution::human_results as api;
 use axum::{
     body::{Body, to_bytes},
@@ -43,6 +44,125 @@ fn detail(report: &ResultReport, revision: &str, profile: bool) -> String {
         }
     )
 }
+
+#[tokio::test]
+async fn a_project_supervisor_discovers_native_results_in_both_reads() {
+    let (f, report) = Box::pin(ready()).await;
+    let env = &f.c.env.env;
+    let (state, pool) = (&env.state, &env.pool);
+    let auth = terminal::auth(&f).await;
+    let receipt = results::record(state, &auth, &report).await.unwrap();
+    let (project, task): (Uuid, Uuid) =
+        sqlx::query_as("SELECT project_id,task_id FROM result_revision_pins WHERE report_id=$1")
+            .bind(report.report_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let other = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO project_execution_bindings(project_id,revision,binding,validated_at_ms,binding_observation) VALUES($1,1,$2,1,'{}')",
+    )
+    .bind(other)
+    .bind(serde_json::json!({"name":"Other","enabled":true}))
+    .execute(pool)
+    .await
+    .unwrap();
+    #[cfg(not(feature = "supervisor_full_access"))]
+    let app = aq_server::build_worker_router(state.clone());
+    #[cfg(feature = "supervisor_full_access")]
+    let app = aq_server::build_worker_router_with_owner_app(
+        state.clone(),
+        aq_server::build_admin_router(state.clone()),
+    );
+    let own = supervisor_token(state, pool, Some(project)).await;
+    let foreign = supervisor_token(state, pool, Some(other)).await;
+    let global = supervisor_token(state, pool, None).await;
+    let (status, list) = supervised(&app, &own, "result.list", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["coverage"], api::NATIVE_V2_COVERAGE);
+    assert_eq!(
+        list["items"][0]["report_id"],
+        serde_json::json!(report.report_id)
+    );
+    assert_eq!(list["items"][0]["origin"], ORIGIN);
+    assert_eq!(list["items"][0]["revision"], receipt.report_digest.as_str());
+    let exact =
+        serde_json::json!({"result_id":report.report_id,"revision":receipt.report_digest.as_str()});
+    let (status, found) = supervised(&app, &own, "result.show", exact.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(
+        found["items"][0]["report_id"],
+        serde_json::json!(report.report_id)
+    );
+    assert_eq!(found["items"][0]["current_report_head"], true);
+    assert_eq!(
+        supervised(&app, &foreign, "result.show", exact.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        supervised(&app, &global, "result.show", exact.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let mut legacy = exact;
+    legacy["profile"] = serde_json::json!("recorded_legacy_native_only");
+    assert_eq!(
+        supervised(&app, &own, "result.show", legacy).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, legacy) = supervised(
+        &app,
+        &own,
+        "result.list",
+        serde_json::json!({"profile":"recorded_legacy_native_only"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["coverage"], api::COVERAGE);
+    assert!(legacy["items"].as_array().unwrap().is_empty(), "{legacy}");
+    let (status, defaults) = supervised(&app, &global, "result.list", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{defaults}");
+    assert_eq!(defaults["coverage"], api::COVERAGE);
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({"scope":"project","project_id":project,"task_id":task}),
+    ] {
+        let (status, feed) = supervised(&app, &own, "result.feed", params).await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        assert_eq!(
+            feed["scope"]["project_id"],
+            serde_json::json!(project),
+            "{feed}"
+        );
+        assert_eq!(
+            feed["data"]["items"][0]["revision"]["report_id"],
+            serde_json::json!(report.report_id),
+            "{feed}"
+        );
+    }
+    let (status, refused) = supervised(
+        &app,
+        &foreign,
+        "result.feed",
+        serde_json::json!({"project_id":project}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["error"], "supervisor_refused");
+    let (status, empty) = supervised(
+        &app,
+        &foreign,
+        "result.feed",
+        serde_json::json!({"task_id":task}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["data"]["items"], serde_json::json!([]), "{empty}");
+}
+
 #[tokio::test]
 async fn opt_in_phase_metadata_fences_rebound_owner_after_common_lock_wait() {
     let (f, report) = Box::pin(ready()).await;

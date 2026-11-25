@@ -16,6 +16,7 @@ impl Pins {
     pub(super) fn new(context: &PlanContext<'_>, instructions: &str) -> Result<Self> {
         let (config, control, turn) = (context.config, context.control, context.turn);
         let profile = &control.profile;
+        let selected = context.selection;
         let agent = pin(
             config,
             "supervisor-agent",
@@ -29,12 +30,12 @@ impl Pins {
         let environment = pin(
             config,
             "environment",
-            &json!({"image":config.image_digest,"native":config.native_digest,"native_uid":10001,"private_scope":config.conversation_id,"docker_socket":false}),
+            &json!({"image":config.image_digest,"native":selected.native_digest,"native_uid":10001,"private_scope":config.conversation_id,"docker_socket":false}),
         )?;
         let adapter = pin(
             config,
-            "codex-subscription-adapter",
-            &json!({"version":1,"cli":"0.166.0","native":config.native_digest,"mode":"subscription-exec","final_reply":"generation-dispatch-bound"}),
+            selected.adapter,
+            &json!({"version":1,"cli":selected.cli_version,"native":selected.native_digest,"mode":"subscription-exec","final_reply":"generation-dispatch-bound"}),
         )?;
         let execution = pin(
             config,
@@ -88,8 +89,8 @@ impl Pins {
         };
         let clock = crate::clock()?;
         let harness = HarnessSettings {
-            harness: Text::new("codex")?,
-            cli_version: Text::new("0.166.0")?,
+            harness: Text::new(context.selection.harness)?,
+            cli_version: Text::new(context.selection.cli_version)?,
             adapter: self.adapter.clone(),
             environment: self.environment.clone(),
             required_capabilities: serde_json::from_value(

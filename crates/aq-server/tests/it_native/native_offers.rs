@@ -31,6 +31,8 @@ mod holds;
 mod launches;
 #[path = "native_offers/lost.rs"]
 mod lost;
+#[path = "native_offers/placement.rs"]
+mod placement;
 #[path = "native_offers/routed.rs"]
 mod routed;
 
