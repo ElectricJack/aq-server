@@ -720,6 +720,14 @@ async fn offers(
                         let a =
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
+                        #[cfg(feature = "delivery_playbook")]
+                        if let Some(replacement) = a.replacement()
+                            && replacement::pending_publication_owner(pool, replacement.predecessor)
+                                .await?
+                                .is_some()
+                        {
+                            return Ok(Assessment::Blocked("owner_retry_pending"));
+                        }
                         if let Assessment::Blocked(reason) = a {
                             holds::selection_hold(
                                 pool,
