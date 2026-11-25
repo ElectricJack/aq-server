@@ -22,3 +22,33 @@ AQ_LIVE_URL="$origin" AQ_DISPOSABLE_TERMINAL_SESSION="$session_id" \
 ```
 
 Stop the runner with Ctrl-C. It stops its test server, tmux session, and the disposable containers, and their dedicated bridge. Run again with each immutable dashboard bundle to compare builds. The tmux shell starts in an unprivileged container with no network or host mounts. This exercises the actual HTTP routes, PostgreSQL authority, WebSocket transport, browser controller, and PTY. Task admission and remote worker conditions come from the shared native fixture. The pilot does not run a provider or publish branches or PRs.
+
+
+## Workspace request and review
+
+Use a server source revision containing the workspace resource and checkpoint
+migrations. In a second terminal, stage a private aq-git socket and two local
+repository identities.
+
+```sh
+workspace_git=$(mktemp -d /tmp/aq-task-workspace-git.XXXXXX)
+python3 scripts/task-workspace-pilot-git.py "$workspace_git"
+```
+
+Add `--workspace-git "$workspace_git/repositories.json"` to the runner.
+The optional phase issues a current attempt credential through the actual worker
+API, requests sibling write access and PostgreSQL in one batch, and verifies
+the exact canonical commit, a durable checkpoint intent, and redelivery in the
+authenticated machine control response. It checks a stale
+approval fails, confirms the current target owner approval succeeds, and
+reads the final resource state through the owner API. The phase stages the
+native launch binding and target policy in the fixture. It does not attest
+worker eviction, successor hydration, forge PR creation, or task results.
+
+The aq-git stage fetches only `file:` sources created under its own private
+directory. It exports and checks one distinct local checkpoint bundle per repository and
+prints the exact base and head objects, logical repository IDs, and retention
+handles. These bundles demonstrate the Git substrate and are separate from
+the task's delivery evidence. Ctrl-C stops
+its daemon. The two seed repositories and broker logs remain available for
+local inspection in that directory.

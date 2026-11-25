@@ -194,6 +194,8 @@ def main():
     parser.add_argument("--test-binary", type=Path, required=True,
                         help="existing it_dashboard binary built from this worktree")
     parser.add_argument("--graph-image", default=GRAPH_IMAGE)
+    parser.add_argument("--workspace-git", type=Path,
+                        help="repositories.json from the private workspace Git stage")
     args = parser.parse_args()
     os.umask(0o077)
     database = "aq-terminal-pilot-" + secrets.token_hex(6)
@@ -212,11 +214,14 @@ def main():
                 "--network", "none", "--entrypoint", "sleep",
                 "postgres:17-bookworm", "infinity", stdout=subprocess.DEVNULL)
             pane = Pane(directory, shell_container)
+            workspace = {}
+            if args.workspace_git is not None:
+                workspace["AQ_TERMINAL_PILOT_GIT_INVENTORY"] = str(args.workspace_git.resolve(strict=True))
             server = subprocess.Popen((
                 args.test_binary.resolve(), "terminal_store::pilot::browser_pilot",
                 "--exact", "--ignored", "--nocapture",
             ), env={
-                **os.environ, **graph, "DATABASE_URL": url,
+                **os.environ, **graph, **workspace, "DATABASE_URL": url,
                 "AQ_TERMINAL_PILOT_DIR": str(directory),
                 "AQ_TERMINAL_PILOT_DASHBOARD_DIR": str(args.dist.resolve(strict=True)),
             })

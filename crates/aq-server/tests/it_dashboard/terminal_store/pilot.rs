@@ -7,6 +7,8 @@ use serde_json::json;
 use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf, time::Duration};
 use tokio::net::TcpListener;
 
+mod workspace;
+
 #[tokio::test]
 #[ignore = "manual browser pilot; run with scripts/task-terminal-pilot.py"]
 async fn browser_pilot() {
@@ -51,6 +53,10 @@ async fn browser_pilot() {
         .unwrap();
     graph.verify_workspace(workspace).await.unwrap();
     fixture.state.agent_access = Some(Arc::new(graph));
+    let resources = workspace::Workspace::from_environment();
+    if let Some(resources) = &resources {
+        resources.setup(&mut fixture, &runtime);
+    }
     let offer = &mut fixture.profiled.offer;
     // The retained ticket concerns the live tmux path when finite input is off.
     offer.manifest.terminal.input_enabled = false;
@@ -115,6 +121,10 @@ async fn browser_pilot() {
         .await
         .unwrap();
     assert!(!published.terminal_policy.input_enabled);
+    let workspace_evidence = match resources {
+        Some(resources) => resources.qualify(&mut f).await,
+        None => serde_json::Value::Null,
+    };
     let temporary = runtime.join("peer.json.tmp");
     let mut manifest = std::fs::OpenOptions::new()
         .create_new(true)
@@ -126,7 +136,10 @@ async fn browser_pilot() {
         "origin": origin,
         "worker_websocket": format!("ws://{worker_address}/v1/worker/attempt-terminals/{attempt}/terminal-stream"),
         "worker_token": f.credential,
-        "task_id": f.selection.lineage.task_id,
+        "task_id": task,
+        "project_id": project,
+        "graph_workspace_id": workspace,
+        "workspace_qualification": workspace_evidence,
         "attempt_id": attempt,
         "session_id": session_id,
         "terminal_id": r.terminal.terminal_id,
