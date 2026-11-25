@@ -47,6 +47,8 @@ pub(super) async fn current_policy_locked(
     proposal: &Proposal,
 ) -> Result<(), AppError> {
     let binding = &proposal.original.offered.offer.binding;
+    let scope = &proposal.original.offered.offer.manifest.bindings;
+    crate::task_workspace_resume::fence_start(tx, scope.project_id, scope.task_id, binding.attempt_id).await?;
     let runtime = super::super::registration::current_runtime_locked(
         state,
         tx,

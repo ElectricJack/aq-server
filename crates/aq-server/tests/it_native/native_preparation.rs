@@ -4,6 +4,14 @@ use crate::common;
 use aq_server::profiled_execution::preparation;
 use common::native_preparation::{context, setup};
 use uuid::Uuid;
+async fn assert_material_lease_count(pool: &sqlx::PgPool, expected: i64) {
+    let actual: i64 = sqlx::query_scalar("SELECT count(*) FROM admission_material_leases")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(actual, expected, "material lease count");
+}
+
 #[tokio::test]
 async fn actual_original_plan_lease_mapping_reserved_journal_and_exact_replay_without_grant() {
     let c = setup().await;
@@ -205,13 +213,7 @@ async fn accept_missing_nonce_unknown_and_duplicate_fields_and_body_bound_are_ty
             ControlReply::Failure(_)
         ));
     }
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&c.f.db.pool().await)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_material_lease_count(&c.f.db.pool().await, 0).await;
 }
 #[tokio::test]
 async fn changed_private_file_never_admits_lease_or_reservation_journal() {
@@ -235,13 +237,7 @@ async fn changed_private_file_never_admits_lease_or_reservation_journal() {
             .is_err()
     );
     let pool = c.f.db.pool().await;
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_material_lease_count(&pool, 0).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_owner_journals")
             .fetch_one(&pool)
@@ -282,13 +278,7 @@ async fn expiry_after_observed_node_lock_wait_never_commits_preparation() {
     };
     let (result, ()) = tokio::join!(accept, expire);
     assert!(result.is_err());
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_material_lease_count(&pool, 0).await;
 }
 
 #[tokio::test]
@@ -315,13 +305,7 @@ async fn credential_rotation_during_actual_git_io_never_admits_preparation() {
         result.unwrap_err().status(),
         axum::http::StatusCode::UNAUTHORIZED
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_material_lease_count(&pool, 0).await;
 }
 #[tokio::test]
 async fn issued_grant_cannot_be_discounted_as_an_owned_ungranted_reservation() {
@@ -357,13 +341,7 @@ async fn issued_grant_cannot_be_discounted_as_an_owned_ungranted_reservation() {
             .await
             .is_err()
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        1
-    );
+    assert_material_lease_count(&pool, 1).await;
 }
 
 #[tokio::test]
@@ -422,13 +400,7 @@ async fn concurrent_exact_accept_can_reconcile_original_receipt_without_duplicat
         serde_json::to_value(reconciled.original).unwrap()
     );
     let pool = c.f.db.pool().await;
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        1
-    );
+    assert_material_lease_count(&pool, 1).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_owner_journals")
             .fetch_one(&pool)
@@ -459,13 +431,7 @@ async fn extra_known_worker_capabilities_and_missing_durable_journal_never_quali
                 .await
                 .is_err()
         );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-                .fetch_one(&c.f.db.pool().await)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_material_lease_count(&c.f.db.pool().await, 0).await;
     }
 }
 
@@ -499,13 +465,7 @@ async fn incoming_preparation_bytes_cannot_overshoot_retained_storage_limit() {
             .is_err(),
         "existing bytes are below the cap but the incoming lease/plan do not fit"
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admission_material_leases")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_material_lease_count(&pool, 0).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM profiled_owner_journals")
             .fetch_one(&pool)

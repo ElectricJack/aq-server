@@ -10,14 +10,12 @@ impl SwarmInput {
         let facts = self.machines.get(&id);
         let service = self.services.get(&id);
         let extra = self.extras.iter().find(|e| e.id == id);
-        let key = extra
-            .and_then(|e| e.machine_key.clone())
-            .or_else(|| {
-                facts
-                    .and_then(|f| f.report.machine.key.clone())
-                    .filter(|k| !k.is_empty() && !held.contains(k.as_str()))
-            })
-            .unwrap_or_else(|| format!("node:{id}"));
+        let key = machine_key(
+            id,
+            extra.and_then(|e| e.machine_key.as_deref()),
+            facts.and_then(|f| f.report.machine.key.as_deref()),
+            held,
+        );
         let agents = self
             .agents
             .iter()

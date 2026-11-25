@@ -30,11 +30,21 @@ pub async fn offer(
     project: Uuid,
     at_ms: i64,
 ) {
-    let observation = Uuid::new_v4();
-    sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,'{}'::jsonb,$3,$3+30000)")
-        .bind(observation).bind(project).bind(at_ms).execute(&mut *c).await.unwrap();
+    let observation = source_observation(c, project, at_ms).await;
     sqlx::query("INSERT INTO profiled_launches(attempt_id,decision_id,source_observation_id,launch_binding,launch_manifest,manifest_digest,execution_spec,execution_spec_digest,graph_task_observation,source_binding,offer_expires_at_ms) VALUES($1,$2,$3,jsonb_build_object('session',jsonb_build_object('node_id',$4::text)),'{}'::jsonb,repeat('0',64),'{}'::jsonb,repeat('0',64),'{}'::jsonb,'{}'::jsonb,$5+60000)")
         .bind(attempt).bind(decision).bind(observation).bind(node).bind(at_ms).execute(&mut *c).await.unwrap();
+}
+
+async fn source_observation(c: &mut PgConnection, project: Uuid, at_ms: i64) -> Uuid {
+    let observation = Uuid::new_v4();
+    sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,'{}'::jsonb,$3,$3+30000)")
+        .bind(observation)
+        .bind(project)
+        .bind(at_ms)
+        .execute(&mut *c)
+        .await
+        .unwrap();
+    observation
 }
 
 /// `n` offers on `node`/`project` at `at_ms`, with fresh attempt and decision ids.
@@ -187,14 +197,8 @@ pub async fn report(pool: &PgPool, node: Uuid, sequence: i64, at_ms: i64) -> Res
 /// on: `54000` is the 0105 offer-rate fence (removed by 0124), `23503` means no fence
 /// refused and the insert went on to fail on the decision foreign key.
 pub async fn try_offer(pool: &PgPool, node: Uuid, project: Uuid, at_ms: i64) -> String {
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SET LOCAL session_replication_role='replica'")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let observation = Uuid::new_v4();
-    sqlx::query("INSERT INTO admission_source_observations(observation_id,project_id,source_policy_revision,observation,observed_at_ms,expires_at_ms) VALUES($1,$2,1,'{}'::jsonb,$3,$3+30000)")
-        .bind(observation).bind(project).bind(at_ms).execute(&mut *tx).await.unwrap();
+    let mut tx = replica(pool).await;
+    let observation = source_observation(&mut tx, project, at_ms).await;
     sqlx::query("SET LOCAL session_replication_role='origin'")
         .execute(&mut *tx)
         .await

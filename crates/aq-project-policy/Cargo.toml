@@ -16,3 +16,4 @@ aq-selection = { path = "../aq-selection", version = "=0.1.5" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+schemars = { version = "1", features = ["uuid1"] }

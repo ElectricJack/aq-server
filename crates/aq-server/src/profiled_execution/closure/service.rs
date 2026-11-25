@@ -16,7 +16,7 @@ use crate::{
     worker_api::{self, AuthenticatedNode},
 };
 use aq_admission::{
-    Digest, SessionIdentity,
+    Digest, LaunchBinding, SessionIdentity,
     granted_closure::{Disposition, JournalCheckpoint, Receipt, Request},
 };
 use sqlx::{Postgres, Row, Transaction};
@@ -92,7 +92,84 @@ async fn record_inner(
         tx.commit().await.map_err(database)?;
         return Ok(receipt);
     }
-    if !view.holds_task
+    let original =
+        load_closable_grant_locked(&mut tx, node.id(), request, &hot, view.holds_task).await?;
+    let context = capture_context_locked(&mut tx, policy, node.id(), request, original).await?;
+    context.check_original(&mut tx, node.id(), request).await?;
+    // Acquire quotas before mutating authority. All variable retained bytes use
+    // their actual stored representation; physical row/index overhead is separate.
+    let request_bytes = canonical(request)?;
+    let context_bytes = canonical(&context)?;
+    if context_bytes.len() > 65536 {
+        return Err(conflict());
+    }
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('aq-profiled-launch-closure-quota-v1',0))",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(database)?;
+    let authority_revision = revoke_authority_locked(&mut tx, &mut hot, &request.binding).await?;
+    let recorded_at_ms =
+        u64::try_from((state.clock)().timestamp_millis()).map_err(|_| conflict())?;
+    let receipt = Receipt {
+        schema_version: 1,
+        operation_id: request.operation_id,
+        binding: request.binding.clone(),
+        grant_id: request.grant_id,
+        request_digest: request.digest().map_err(|_| conflict())?,
+        recorded_at_ms,
+        authority_revision_at_record: u64::try_from(authority_revision).map_err(|_| conflict())?,
+        disposition: Disposition::LaunchClosedAwaitingSettlement,
+    };
+    receipt.validate_for(request).map_err(|_| conflict())?;
+    let receipt_bytes = canonical(&receipt)?;
+    let binding = serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?;
+    let verifier = serde_json::to_value(&context.verifier).map_err(|_| AppError::Internal)?;
+    check_capacity_locked(
+        &mut tx,
+        node.id(),
+        &binding,
+        &verifier,
+        request_bytes.len() + context_bytes.len() + receipt_bytes.len(),
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO profiled_launch_closures(attempt_id,node_id,operation_id,binding,grant_id,\
+         initial_prepare_operation_id,registration_id,evidence_kind,verifier,terminal_revision,\
+         request_digest,request_bytes,context_bytes,receipt_bytes,recorded_at_ms,\
+         authority_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+    )
+    .bind(request.binding.attempt_id)
+    .bind(node.id())
+    .bind(request.operation_id)
+    .bind(binding)
+    .bind(request.grant_id)
+    .bind(context.initial_operation_id)
+    .bind(context.registration_id)
+    .bind(EvidenceKind::of(&request.evidence).as_str())
+    .bind(verifier)
+    .bind(request.journal.revision as i64)
+    .bind(receipt.request_digest.as_str())
+    .bind(request_bytes)
+    .bind(context_bytes)
+    .bind(receipt_bytes)
+    .bind(receipt.recorded_at_ms as i64)
+    .bind(authority_revision)
+    .execute(&mut *tx)
+    .await
+    .map_err(database)?;
+    tx.commit().await.map_err(database)?;
+    Ok(receipt)
+}
+async fn load_closable_grant_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    request: &Request,
+    hot: &HotState,
+    holds_task: bool,
+) -> Result<initial_grant::OriginalGrant, AppError> {
+    if !holds_task
         || !matches!(hot.stop, Stop::Unknown)
         || matches!(
             hot.status,
@@ -112,19 +189,15 @@ async fn record_inner(
         "SELECT EXISTS(SELECT 1 FROM profiled_started_receipts WHERE attempt_id=$1)",
     )
     .bind(request.binding.attempt_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(database)?;
     if started {
         return Err(conflict());
     }
-    let original = initial_grant::load_original_grant_locked(
-        &mut tx,
-        node.id(),
-        &request.binding,
-        request.grant_id,
-    )
-    .await?;
+    let original =
+        initial_grant::load_original_grant_locked(tx, node, &request.binding, request.grant_id)
+            .await?;
     if hot.execution_deadline_ms != Some(original.execution_deadline_ms)
         || hot.owner.as_ref().is_none_or(|o| {
             o.guardian_id != original.body.guardian_id
@@ -134,24 +207,35 @@ async fn record_inner(
     {
         return Err(conflict());
     }
-    let registration = history::for_attempt_locked(&mut tx, &request.binding).await?;
+    Ok(original)
+}
+
+async fn capture_context_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    policy: &InstalledPolicy,
+    node: Uuid,
+    request: &Request,
+    original: initial_grant::OriginalGrant,
+) -> Result<Context, AppError> {
+    let registration = history::for_attempt_locked(tx, &request.binding).await?;
     let verifier = policy.verifier(
         &registration.metadata.request.runtime,
         &registration.metadata.qualification,
         &EvidenceKind::of(&request.evidence),
     )?;
     let head = sqlx::query(
-        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR UPDATE",
+        "SELECT phase,revision,digest FROM profiled_owner_journals WHERE attempt_id=$1 FOR \
+         UPDATE",
     )
     .bind(request.binding.attempt_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(database)?
     .ok_or_else(conflict)?;
     if head.get::<String, _>("phase") != "prepared" {
         return Err(conflict());
     }
-    let context = Context {
+    Ok(Context {
         schema_version: 1,
         initial_operation_id: original.operation_id,
         initial_request_digest: original.request_digest,
@@ -166,82 +250,114 @@ async fn record_inner(
         },
         verifier,
         latest_renewal_revision: super::super::renewal::latest_renewal_revision_locked(
-            &mut tx,
-            node.id(),
+            tx,
+            node,
             &request.binding,
         )
         .await?,
-    };
-    context.check_original(&mut tx, node.id(), request).await?;
-    // Acquire quotas before mutating authority. All variable retained bytes use
-    // their actual stored representation; physical row/index overhead is separate.
-    let request_bytes = canonical(request)?;
-    let context_bytes = canonical(&context)?;
-    if context_bytes.len() > 65536 {
-        return Err(conflict());
-    }
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('aq-profiled-launch-closure-quota-v1',0))",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(database)?;
+    })
+}
+
+async fn revoke_authority_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    hot: &mut HotState,
+    binding: &LaunchBinding,
+) -> Result<i64, AppError> {
     // Revoke private permission only. Preserve grant, owner, physical phase,
     // retention/effect facts and the common held task claim.
-    let leases=sqlx::query("SELECT lease_id FROM admission_material_leases WHERE prospective_attempt_id=$1 ORDER BY lease_id LIMIT 65 FOR UPDATE").bind(request.binding.attempt_id).fetch_all(&mut *tx).await.map_err(database)?;
+    let leases = sqlx::query(
+        "SELECT lease_id FROM admission_material_leases WHERE prospective_attempt_id=$1 ORDER \
+         BY lease_id LIMIT 65 FOR UPDATE",
+    )
+    .bind(binding.attempt_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(database)?;
     if leases.len() > 64 {
         return Err(conflict());
     }
-    sqlx::query("UPDATE admission_material_leases SET state='revoked' WHERE prospective_attempt_id=$1 AND state IN ('pending','admitted')").bind(request.binding.attempt_id).execute(&mut *tx).await.map_err(database)?;
-    super::super::journal::revoke(&mut tx, request.binding.attempt_id).await?;
+    sqlx::query(
+        "UPDATE admission_material_leases SET state='revoked' WHERE prospective_attempt_id=$1 \
+         AND state IN ('pending','admitted')",
+    )
+    .bind(binding.attempt_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
+    super::super::journal::revoke(tx, binding.attempt_id).await?;
     hot.status = Status::Cancelling;
     hot.revoked = true;
-    hot.validate_against(&request.binding)
-        .map_err(|_| conflict())?;
-    let authority_revision:i64=sqlx::query_scalar("UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING authority_revision").bind(request.binding.attempt_id).bind(serde_json::to_value(&hot).map_err(|_|AppError::Internal)?).fetch_one(&mut *tx).await.map_err(database)?;
-    let recorded_at_ms =
-        u64::try_from((state.clock)().timestamp_millis()).map_err(|_| conflict())?;
-    let receipt = Receipt {
-        schema_version: 1,
-        operation_id: request.operation_id,
-        binding: request.binding.clone(),
-        grant_id: request.grant_id,
-        request_digest: request.digest().map_err(|_| conflict())?,
-        recorded_at_ms,
-        authority_revision_at_record: u64::try_from(authority_revision).map_err(|_| conflict())?,
-        disposition: Disposition::LaunchClosedAwaitingSettlement,
-    };
-    receipt.validate_for(request).map_err(|_| conflict())?;
-    let receipt_bytes = canonical(&receipt)?;
-    let binding = serde_json::to_value(&request.binding).map_err(|_| AppError::Internal)?;
-    let verifier = serde_json::to_value(&context.verifier).map_err(|_| AppError::Internal)?;
+    hot.validate_against(binding).map_err(|_| conflict())?;
+    let authority_revision = sqlx::query_scalar(
+        "UPDATE profiled_authority_hot SET state=$2 WHERE attempt_id=$1 RETURNING \
+         authority_revision",
+    )
+    .bind(binding.attempt_id)
+    .bind(serde_json::to_value(&*hot).map_err(|_| AppError::Internal)?)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    Ok(authority_revision)
+}
+
+async fn check_capacity_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Uuid,
+    binding: &serde_json::Value,
+    verifier: &serde_json::Value,
+    payload_bytes: usize,
+) -> Result<(), AppError> {
     let incoming: i64 = sqlx::query_scalar(
         "SELECT (octet_length($1::JSONB::TEXT)+octet_length($2::JSONB::TEXT))::BIGINT",
     )
-    .bind(&binding)
-    .bind(&verifier)
-    .fetch_one(&mut *tx)
+    .bind(binding)
+    .bind(verifier)
+    .fetch_one(&mut **tx)
     .await
     .map_err(database)?;
     let incoming = incoming
-        .checked_add((request_bytes.len() + context_bytes.len() + receipt_bytes.len()) as i64)
+        .checked_add(payload_bytes as i64)
         .ok_or_else(conflict)?;
-    let (n,b,pn,pb):(i64,i64,i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)),0),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)) FILTER(WHERE node_id=$1),0) FROM profiled_launch_closures WHERE NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE a.attempt_id=profiled_launch_closures.attempt_id)").bind(node.id()).fetch_one(&mut *tx).await.map_err(database)?;
-    if n >= 4096 || pn >= 256 || b + incoming > 67108864 || pb + incoming > 4194304 {
+    let (total_rows, total_bytes, node_rows, node_bytes): (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*),COALESCE(sum(octet_length(request_bytes)+octet_length(context_bytes)+\
+         octet_length(receipt_bytes)+octet_length(binding::text)+octet_length(verifier::text)),\
+         0),count(*) FILTER(WHERE node_id=$1),COALESCE(sum(octet_length(request_bytes)+\
+         octet_length(context_bytes)+octet_length(receipt_bytes)+octet_length(binding::text)+\
+         octet_length(verifier::text)) FILTER(WHERE node_id=$1),0) FROM \
+         profiled_launch_closures WHERE NOT EXISTS(SELECT 1 FROM profiled_v2_accepts a WHERE \
+         a.attempt_id=profiled_launch_closures.attempt_id)",
+    )
+    .bind(node)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    if total_rows >= 4096
+        || node_rows >= 256
+        || total_bytes + incoming > 67108864
+        || node_bytes + incoming > 4194304
+    {
         return Err(AppError::Conflict(
             "closure retained capacity exhausted".into(),
         ));
     }
-    sqlx::query("INSERT INTO profiled_launch_closures(attempt_id,node_id,operation_id,binding,grant_id,initial_prepare_operation_id,registration_id,evidence_kind,verifier,terminal_revision,request_digest,request_bytes,context_bytes,receipt_bytes,recorded_at_ms,authority_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)").bind(request.binding.attempt_id).bind(node.id()).bind(request.operation_id).bind(binding).bind(request.grant_id).bind(context.initial_operation_id).bind(context.registration_id).bind(EvidenceKind::of(&request.evidence).as_str()).bind(verifier).bind(request.journal.revision as i64).bind(receipt.request_digest.as_str()).bind(request_bytes).bind(context_bytes).bind(receipt_bytes).bind(receipt.recorded_at_ms as i64).bind(authority_revision).execute(&mut *tx).await.map_err(database)?;
-    tx.commit().await.map_err(database)?;
-    Ok(receipt)
+    Ok(())
 }
+
 async fn replay(
     tx: &mut Transaction<'_, Postgres>,
     node: Uuid,
     request: &Request,
 ) -> Result<Option<Receipt>, AppError> {
-    let rows=sqlx::query("SELECT * FROM profiled_launch_closures WHERE attempt_id=$1 OR(node_id=$2 AND operation_id=$3) LIMIT 2 FOR SHARE").bind(request.binding.attempt_id).bind(node).bind(request.operation_id).fetch_all(&mut **tx).await.map_err(database)?;
+    let rows = sqlx::query(
+        "SELECT * FROM profiled_launch_closures WHERE attempt_id=$1 OR(node_id=$2 AND \
+         operation_id=$3) LIMIT 2 FOR SHARE",
+    )
+    .bind(request.binding.attempt_id)
+    .bind(node)
+    .bind(request.operation_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(database)?;
     if rows.is_empty() {
         return Ok(None);
     }

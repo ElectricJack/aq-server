@@ -86,6 +86,13 @@ fn configure_routes(command: &mut CommandSpec) {
     #[cfg(feature = "supervisor_full_access")]
     if let (Some(owner), None) = (command.owner, command.supervisor)
         && owner.body != Body::Local
+        && !matches!(
+            command.name,
+            "task.workspace.show"
+                | "task.workspace.request"
+                | "project.workspace.requests"
+                | "project.workspace.decide"
+        )
     {
         let path = format!("{OWNER_PREFIX}{}", owner.path);
         command.supervisor = Some(Route {

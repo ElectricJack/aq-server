@@ -30,6 +30,28 @@ pub async fn setup_fixture(
     native_admitted: bool,
     spec: Option<&aq_admission::execution_spec::ProfiledExecutionSpec>,
 ) -> (Fixture, Request) {
+    let request = started_request(&f);
+    let native = install_runtime(&mut f, &request).await;
+    let pool = f.db.pool().await;
+    if native_admitted {
+        sqlx::query(
+            "UPDATE execution_nodes SET state=jsonb_set(state,'{native}',$2) WHERE node_id=$1",
+        )
+        .bind(f.node.node_id)
+        .bind(json!(native))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let attempt = if let Some(spec) = spec {
+        super::profiled::insert_typed(&f, spec).await
+    } else {
+        insert(&f).await
+    };
+    seed_granted_authority(&f, &request, &pool, attempt, prepared).await;
+    (f, request)
+}
+fn started_request(f: &Fixture) -> Request {
     let mut request: Request = serde_json::from_str(include_str!(
         "../../../aq-admission/artifacts/started.fixture.json"
     ))
@@ -39,6 +61,10 @@ pub async fn setup_fixture(
     request.observation.guardian.intent.manifest_digest =
         request.binding.launch_manifest_digest.clone();
     request.observation_digest = request.observation.digest().unwrap();
+    request
+}
+
+async fn install_runtime(f: &mut Fixture, request: &Request) -> NativeRegistration {
     let registered = Register {
         schema_version: 1,
         operation_id: uuid::Uuid::new_v4(),
@@ -71,30 +97,24 @@ pub async fn setup_fixture(
     aq_server::profiled_execution::policies::install(&f.state)
         .await
         .unwrap();
-    let native = NativeRegistration {
+    NativeRegistration {
         schema_version: 1,
         semantic_digest: registration::semantic_digest(&registered).unwrap(),
         request: registered,
         qualification: request.qualification.clone(),
         configuration_revision,
         registered_at_ms: NOW,
-    };
-    let pool = f.db.pool().await;
-    if native_admitted {
-        sqlx::query(
-            "UPDATE execution_nodes SET state=jsonb_set(state,'{native}',$2) WHERE node_id=$1",
-        )
-        .bind(f.node.node_id)
-        .bind(json!(native))
-        .execute(&pool)
-        .await
-        .unwrap();
     }
-    let attempt = if let Some(spec) = spec {
-        super::profiled::insert_typed(&f, spec).await
-    } else {
-        insert(&f).await
-    };
+}
+
+// Keep the lock order and journal transitions in the same transaction.
+async fn seed_granted_authority(
+    f: &Fixture,
+    request: &Request,
+    pool: &sqlx::PgPool,
+    attempt: uuid::Uuid,
+    prepared: bool,
+) {
     let mut hot = HotState::from_compat(&f.profiled).unwrap();
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
@@ -156,8 +176,8 @@ pub async fn setup_fixture(
         .unwrap();
     }
     tx.commit().await.unwrap();
-    (f, request)
 }
+
 pub async fn context(f: &Fixture) -> aq_server::worker_api::AuthenticatedNode {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(

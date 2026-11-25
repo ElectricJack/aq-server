@@ -11,6 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use uuid::Uuid;
 
+pub(crate) mod workspaces;
+
 fn socket(state: &AppState) -> Option<&std::path::Path> {
     state.config.delivery.as_ref()?.git_http_socket.as_deref()
 }
@@ -58,7 +60,7 @@ pub fn routes(state: AppState) -> axum::Router<AppState> {
     let routes = aq_supervisor_control::git_routes(&state.store.pool, &state.clock, socket(&state));
     let routes = routes.route("/v1/git/{repository}/{*path}", any(proxy));
     let routes = routes.route("/v1/git/grants/{attempt}", get(grant));
-    routes.with_state(state)
+    routes.merge(workspaces::routes()).with_state(state)
 }
 /// Discovery returns the frozen grant to its node even on replay. Smart HTTP
 /// separately requires a live grant.
@@ -87,17 +89,19 @@ async fn proxy(
     use aq_delivery::git_grant::serve;
     #[cfg(feature = "project_environments")]
     use aq_environments::git::serve;
-    match serve(pool, socket, node.id(), route, request).await {
-        Ok(response) => Ok(response.map(axum::body::Body::new).into_response()),
-        Err(Refusal::NotFound) => Err(AppError::NotFound("not a git route".into())),
-        Err(Refusal::Forbidden(why)) => Err(AppError::Forbidden(why.into())),
-        Err(Refusal::StaleLease) => Err(AppError::Conflict(
-            "the task ref is not at the lease".into(),
-        )),
-        Err(Refusal::TooLarge) => Err(AppError::PayloadTooLarge(
-            "push exceeds max_push_bytes".into(),
-        )),
-        Err(Refusal::BadRequest(why)) => Err(AppError::BadRequest(why.into())),
-        Err(Refusal::Unavailable) => Err(AppError::Maintenance("git endpoint unavailable".into())),
+    serve(pool, socket, node.id(), route, request)
+        .await
+        .map(|response| response.map(axum::body::Body::new).into_response())
+        .map_err(refusal)
+}
+
+fn refusal(error: Refusal) -> AppError {
+    match error {
+        Refusal::NotFound => AppError::NotFound("not a git route".into()),
+        Refusal::Forbidden(why) => AppError::Forbidden(why.into()),
+        Refusal::StaleLease => AppError::Conflict("the task ref is not at the lease".into()),
+        Refusal::TooLarge => AppError::PayloadTooLarge("push exceeds max_push_bytes".into()),
+        Refusal::BadRequest(why) => AppError::BadRequest(why.into()),
+        Refusal::Unavailable => AppError::Maintenance("git endpoint unavailable".into()),
     }
 }

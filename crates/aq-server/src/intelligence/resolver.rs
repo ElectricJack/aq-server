@@ -50,9 +50,13 @@ async fn resolve_with_principal(
         return Ok(decision);
     }
     let (project, input) = inputs::collect(state, request, snapshot.digest()).await?;
-    let mut outcome =
-        select_for_offer(&launch, &input).map_err(|_| bad("selection snapshot refused"))?;
-    check_capacity(state, &input, &mut outcome).await?;
+    use aq_swarm_settings::placement::{self, PlacementError};
+    let outcome = placement::select(&state.store.pool, &launch, &input)
+        .await
+        .map_err(|e| match e {
+            PlacementError::Database(e) => db(e),
+            PlacementError::Selection(_) => bad("selection snapshot refused"),
+        })?;
     publication
         .publish(Decision {
             decision_id: Uuid::new_v4(),
@@ -61,44 +65,6 @@ async fn resolve_with_principal(
             outcome,
         })
         .await
-}
-async fn check_capacity(
-    state: &AppState,
-    input: &SelectionInputs,
-    outcome: &mut SelectionOutcome,
-) -> Result<()> {
-    // Route from task requirements first. Capacity can wait on this exact class,
-    // and never influences the router's model or class selection.
-    if let Some(resolved) = &outcome.resolved {
-        let mut capacity = state.store.pool.begin().await.map_err(db)?;
-        let cell = Some(capacity_cell(input, &resolved.choice));
-        let reason = aq_swarm_settings::admission::observe(
-            &mut capacity,
-            input.project.lineage.task_id,
-            cell.as_ref(),
-            input.now_ms as i64,
-        )
-        .await
-        .map_err(db)?;
-        capacity.commit().await.map_err(db)?;
-        if let Some(reason) = reason {
-            outcome.resolved = None;
-            outcome.reason_codes = vec![reason.into()];
-        }
-    }
-    Ok(())
-}
-
-/// The swarm capacity cell of a choice: its provider at the level it runs on.
-/// A level's id is the intelligence class the swarm limits count.
-fn capacity_cell(
-    inputs: &SelectionInputs,
-    choice: &ConcreteChoice,
-) -> aq_swarm_settings::admission::Cell {
-    aq_swarm_settings::admission::Cell {
-        provider: choice.provider.clone(),
-        intelligence_class: inputs.project.intelligence_profile.clone(),
-    }
 }
 /// AQ-08 must call inside its SERIALIZABLE offer transaction, after resolving
 /// current task/context authority, and retain all locks through atomic offer +
@@ -187,7 +153,7 @@ async fn fence_retained_decision(
     .await?;
     if owned_attempt.is_none() {
         let choice = &decision.outcome.resolved.as_ref().unwrap().choice;
-        let cell = Some(capacity_cell(&decision.inputs, choice));
+        let cell = Some(aq_swarm_settings::placement::cell(&decision.inputs, choice));
         if let Some(reason) = aq_swarm_settings::admission::check(tx, cell.as_ref())
             .await
             .map_err(db)?

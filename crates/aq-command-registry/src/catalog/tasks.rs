@@ -56,7 +56,54 @@ const fn graph_create() -> CommandSpec {
     graph_create
 }
 
+const HOME_TASK: &[(&str, &str)] = &[("home", "home_project_id"), ("task", "task_id")];
+const TARGET_REQUEST: &[(&str, &str)] = &[
+    ("target", "target_project_id"),
+    ("home", "home_project_id"),
+    ("task", "task_id"),
+];
+const OWNER_WORKSPACE_PATH: &str = "/api/projects/{home}/tasks/{task}/workspace";
+const OWNER_WORKSPACE_REQUEST: &str = r##"{"type":"object","additionalProperties":false,"properties":{"home_project_id":{"type":"string","format":"uuid"},"task_id":{"type":"string","format":"uuid"},"target_project_id":{"type":"string","format":"uuid"},"access":{"enum":["read","write"]},"service":{"const":"postgres"},"workspace":{"type":"array","minItems":1,"maxItems":17,"uniqueItems":true,"description":"At most 16 distinct target projects and one PostgreSQL request","items":{"$ref":"#/$defs/requirement"}}},"$defs":{"requirement":{"oneOf":[{"type":"object","additionalProperties":false,"properties":{"target_project_id":{"type":"string","format":"uuid"},"access":{"enum":["read","write"]}},"required":["target_project_id","access"]},{"type":"object","additionalProperties":false,"properties":{"service":{"const":"postgres"}},"required":["service"]}]}},"oneOf":[{"required":["target_project_id","access"],"not":{"anyOf":[{"required":["service"]},{"required":["workspace"]}]}},{"required":["service"],"not":{"anyOf":[{"required":["target_project_id"]},{"required":["access"]},{"required":["workspace"]}]}},{"required":["workspace"],"not":{"anyOf":[{"required":["target_project_id"]},{"required":["access"]},{"required":["service"]}]}}],"required":["home_project_id","task_id"]}"##;
+const AGENT_WORKSPACE_REQUEST: &str = r##"{"type":"object","additionalProperties":false,"properties":{"target_project_id":{"type":"string","format":"uuid"},"access":{"enum":["read","write"]},"service":{"const":"postgres"},"workspace":{"type":"array","minItems":1,"maxItems":17,"uniqueItems":true,"description":"At most 16 distinct target projects and one PostgreSQL request","items":{"$ref":"#/$defs/requirement"}}},"$defs":{"requirement":{"oneOf":[{"type":"object","additionalProperties":false,"properties":{"target_project_id":{"type":"string","format":"uuid"},"access":{"enum":["read","write"]}},"required":["target_project_id","access"]},{"type":"object","additionalProperties":false,"properties":{"service":{"const":"postgres"}},"required":["service"]}]}},"oneOf":[{"required":["target_project_id","access"],"not":{"anyOf":[{"required":["service"]},{"required":["workspace"]}]}},{"required":["service"],"not":{"anyOf":[{"required":["target_project_id"]},{"required":["access"]},{"required":["workspace"]}]}},{"required":["workspace"],"not":{"anyOf":[{"required":["target_project_id"]},{"required":["access"]},{"required":["service"]}]}}]}"##;
+const OWNER_WORKSPACE_DECISION: &str = r#"{"type":"object","additionalProperties":false,"required":["target_project_id","home_project_id","task_id","project_revision","commit_oid","access","decision"],"properties":{"target_project_id":{"type":"string","format":"uuid"},"home_project_id":{"type":"string","format":"uuid"},"task_id":{"type":"string","format":"uuid"},"project_revision":{"type":"integer","minimum":1},"commit_oid":{"type":"string","pattern":"^[0-9a-f]{40}$"},"access":{"enum":["read","write"]},"decision":{"enum":["approved","denied"]}}}"#;
+
 pub(super) const COMMANDS: &[CommandSpec] = &[
+    agent(
+        mutation(
+            "task.workspace.request",
+            op::WORKSPACE_REQUEST,
+            TargetRule::Own,
+            "Request a sibling project checkout or a private PostgreSQL service for this task; AQ retains its edits before relaunch",
+        )
+        .with_owner(Some(post_route(OWNER_WORKSPACE_PATH, HOME_TASK, OWNER_WORKSPACE_REQUEST))),
+        Route::post(
+            "/v1/agent/workspace/request",
+            Body::Params,
+            Params::Inline(AGENT_WORKSPACE_REQUEST),
+        ),
+    ),
+    read("task.workspace.show", "project.admin", T, "Show a task's requested sources and services")
+        .with_owner(Some(Route::get(OWNER_WORKSPACE_PATH, HOME_TASK))),
+    read(
+        "project.workspace.requests",
+        "project.admin",
+        TargetRule::Project("target_project_id"),
+        "List pending and denied workspace source requests for a target project",
+    )
+    .with_owner(Some(Route::get(
+        "/api/projects/{target}/workspace-requests",
+        &[("target", "target_project_id")],
+    ))),
+    owner_write(
+        "project.workspace.decide",
+        "project.admin",
+        "Approve or deny a source request at its reviewed project revision, commit and access",
+        post_route(
+            "/api/projects/{target}/workspace-requests/{home}/{task}/decision",
+            TARGET_REQUEST,
+            OWNER_WORKSPACE_DECISION,
+        ),
+    ),
     task_create(),
     graph_create(),
     read("task.list", op::TASK_READ, P, "Tasks in a project").with_owner(Some(Route::get(
