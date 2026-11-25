@@ -211,8 +211,13 @@ fn pool_exhaustion_can_repoll_but_an_unconfirmed_turn_stays_failed() {
     )));
 }
 
-fn api_error(_: aq_server::error::AppError) -> anyhow::Error {
-    anyhow::anyhow!("Supervisor reservation or dispatch was refused")
+fn api_error(error: aq_server::error::AppError) -> anyhow::Error {
+    anyhow::anyhow!("Supervisor reservation or dispatch was refused: {error:?}")
+}
+/// The re-check note the turn after `prior` starts with (`None` when it replied or never started).
+#[cfg(feature = "test-support")]
+pub async fn recheck_note_for_testing(pool: &PgPool, prior: &Snapshot) -> Result<Option<String>> {
+    retry::recheck_note(pool, Some(prior), default_turn_retries()).await
 }
 fn now() -> u64 {
     std::time::SystemTime::now()
