@@ -152,26 +152,8 @@ pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
                 ..prior.clone()
             }
         };
-        let reference = next.artifact().map_err(|_| AppError::Internal)?;
-        let body = serde_json::to_value(&next).map_err(|_| AppError::Internal)?;
-        if serde_json::to_vec(&body)
-            .map_err(|_| AppError::Internal)?
-            .len()
-            > 65536
-        {
-            return Err(conflict("project policy record bound"));
-        }
-        if let Some(prior) = old.get(&project) {
-            let old_reference = prior.artifact().map_err(|_| AppError::Internal)?;
-            if prior.revision == config.revision {
-                if old_reference != reference {
-                    return Err(conflict("project policy changed at the same revision"));
-                }
-                continue;
-            }
-            sqlx::query("UPDATE admission_source_policies SET revision=$2,policy_digest=$3,policy=$4 WHERE project_id=$1").bind(project).bind(config.revision as i64).bind(reference.digest.as_str()).bind(body).execute(&mut *tx).await.map_err(db)?;
-        } else {
-            sqlx::query("INSERT INTO admission_source_policies(project_id,revision,policy_digest,policy) VALUES($1,$2,$3,$4)").bind(project).bind(config.revision as i64).bind(reference.digest.as_str()).bind(body).execute(&mut *tx).await.map_err(db)?;
+        if !store_policy(&mut tx, &next, old.get(&project)).await? {
+            continue;
         }
         if next.enabled {
             report.installed += 1;
@@ -187,6 +169,36 @@ pub async fn install(state: &AppState) -> Result<InstallReport, AppError> {
     sqlx::query("INSERT INTO meta(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value").bind(OWNER_KEY).bind(serde_json::to_string(&owner).map_err(|_|AppError::Internal)?).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(report)
+}
+
+/// Returns whether a policy was written; exact same-revision replay is a no-op.
+async fn store_policy(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    next: &ProjectPolicyRecord,
+    prior: Option<&ProjectPolicyRecord>,
+) -> Result<bool, AppError> {
+    let reference = next.artifact().map_err(|_| AppError::Internal)?;
+    let body = serde_json::to_value(next).map_err(|_| AppError::Internal)?;
+    if serde_json::to_vec(&body)
+        .map_err(|_| AppError::Internal)?
+        .len()
+        > 65536
+    {
+        return Err(conflict("project policy record bound"));
+    }
+    if let Some(prior) = prior {
+        let old_reference = prior.artifact().map_err(|_| AppError::Internal)?;
+        if prior.revision == next.revision {
+            if old_reference != reference {
+                return Err(conflict("project policy changed at the same revision"));
+            }
+            return Ok(false);
+        }
+        sqlx::query("UPDATE admission_source_policies SET revision=$2,policy_digest=$3,policy=$4 WHERE project_id=$1").bind(next.project_id).bind(next.revision as i64).bind(reference.digest.as_str()).bind(body).execute(&mut **tx).await.map_err(db)?;
+    } else {
+        sqlx::query("INSERT INTO admission_source_policies(project_id,revision,policy_digest,policy) VALUES($1,$2,$3,$4)").bind(next.project_id).bind(next.revision as i64).bind(reference.digest.as_str()).bind(body).execute(&mut **tx).await.map_err(db)?;
+    }
+    Ok(true)
 }
 
 /// Fence the complete installed configuration, including runtime allowlists.
