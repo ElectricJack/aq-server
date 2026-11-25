@@ -330,24 +330,31 @@ impl DeliveryRuns<'_> {
             else {
                 return Ok(Some(stale_completion(command)));
             };
+            // The workspace port loads retained owner facts under the common
+            // node→attempt lock order. Fence below before exposing any answer.
+            let replay = if matches!(command, "branch.publish" | "pull_request.open") {
+                self.operations
+                    .replay_publication(db, &origin, command)
+                    .await?
+            } else {
+                None
+            };
+            let merge = if command == "pull_request.merge" {
+                self.operations.merge_readiness(db, &origin).await?
+            } else {
+                MergeReadiness::Proceed
+            };
             if !self.results.lock_current(db, &origin).await? {
                 return Ok(Some(stale_completion(command)));
             }
-            if matches!(command, "branch.publish" | "pull_request.open")
-                && let Some(receipt) = self
-                    .operations
-                    .replay_publication(db, &origin, command)
-                    .await?
-            {
+            if let Some(receipt) = replay {
                 return Ok(Some(receipt));
             }
-            if command == "pull_request.merge" {
-                match self.operations.merge_readiness(db, &origin).await? {
-                    MergeReadiness::Proceed => {}
-                    MergeReadiness::PendingEvidence => return Ok(None),
-                    MergeReadiness::AlreadyDelivered => {
-                        return Ok(Some(Completion::new("merged", json!({}))));
-                    }
+            match merge {
+                MergeReadiness::Proceed => {}
+                MergeReadiness::PendingEvidence => return Ok(None),
+                MergeReadiness::AlreadyDelivered => {
+                    return Ok(Some(Completion::new("merged", json!({}))));
                 }
             }
         }
