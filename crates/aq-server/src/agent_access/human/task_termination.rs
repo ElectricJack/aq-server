@@ -20,76 +20,52 @@ impl Sweep {
         }
         for (attempt, task, operation, actor, workspace) in rows {
             self.0 = Some(attempt);
-            let termination = Termination {
-                attempt,
-                task,
-                operation,
-                actor,
-                workspace,
-            };
-            let result = termination.cleanup(state).await;
-            if result.is_err() {
+            if cleanup(state, attempt, task, operation, actor, workspace)
+                .await
+                .is_err()
+            {
                 tracing::warn!(%attempt, "task stop cleanup will retry");
             }
         }
         Ok(())
     }
 }
-struct Termination {
+async fn cleanup(
+    state: &AppState,
     attempt: Uuid,
     task: Uuid,
     operation: Uuid,
     actor: Uuid,
     workspace: Uuid,
-}
-impl Termination {
-    async fn cleanup(self, state: &AppState) -> Result<()> {
-        let Self {
-            attempt,
-            task,
-            operation,
-            actor,
-            workspace,
-        } = self;
-        let Some(user) = state.store.find_user(actor).await? else {
-            return Ok(());
-        };
-        crate::dashboard_api::actions::existing::owner(state, &user)
-            .await
-            .map_err(|_| unavailable())?;
-        let raw = runtime(state)?
-            .human_get(
-                &format!("/v1/workspaces/{workspace}/nodes/{task}"),
-                &[],
-                1_000_000,
-            )
-            .await?;
-        if raw["id"] != json!(task)
-            || raw["workspace_id"] != json!(workspace)
-            || raw["kind"] != "task"
-            || (raw["deleted"] != true && raw["task_state"] != "canceled")
-        {
-            return Ok(());
-        }
-        // A deterministic ID per attempt avoids reusing one cancellation
-        // identity if admission raced the Graph lifecycle transition.
-        let id = termination_id(operation, attempt);
-        cancellation::cancel(state, attempt, id, "Owner canceled or deleted task").await?;
-        // This owner alone releases the held claim and requires verified
-        // stopped proof. Until then the worker receives cancellation on
-        // every poll. Source and unresolved effects stay retained.
-        let _ = disposition::abandon(
-            state,
-            &user,
-            attempt,
-            &disposition::Request {
-                operation_id: id,
-                reason: "Owner canceled or deleted task".into(),
-            },
-        )
-        .await;
-        Ok(())
+) -> Result<()> {
+    let Some(user) = state.store.find_user(actor).await? else {
+        return Ok(());
+    };
+    crate::dashboard_api::actions::existing::owner(state, &user)
+        .await
+        .map_err(|_| unavailable())?;
+    let path = format!("/v1/workspaces/{workspace}/nodes/{task}");
+    let raw = runtime(state)?.human_get(&path, &[], 1_000_000).await?;
+    if raw["id"] != json!(task)
+        || raw["workspace_id"] != json!(workspace)
+        || raw["kind"] != "task"
+        || (raw["deleted"] != true && raw["task_state"] != "canceled")
+    {
+        return Ok(());
     }
+    // A deterministic ID per attempt avoids reusing one cancellation
+    // identity if admission raced the Graph lifecycle transition.
+    let id = termination_id(operation, attempt);
+    cancellation::cancel(state, attempt, id, "Owner canceled or deleted task").await?;
+    // This owner alone releases the held claim and requires verified
+    // stopped proof. Until then the worker receives cancellation on
+    // every poll. Source and unresolved effects stay retained.
+    let request = disposition::Request {
+        operation_id: id,
+        reason: "Owner canceled or deleted task".into(),
+    };
+    let _ = disposition::abandon(state, &user, attempt, &request).await;
+    Ok(())
 }
 fn termination_id(operation: Uuid, attempt: Uuid) -> Uuid {
     use sha2::{Digest, Sha256};
