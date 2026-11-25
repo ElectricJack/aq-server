@@ -44,41 +44,7 @@ pub(super) async fn assess(
     // Rehash the actual pinned deterministic program, host helper and tmux now,
     // not merely their earlier configuration. Scope stays synthetic/static.
     assert!(phase_host::configuration() == *original_host);
-    let registry = case.env.env.state.config.intelligence.as_ref().unwrap();
-    assert_eq!(accepted.receipt.lease.materials.len(), 1);
-    let lease = &accepted.receipt.lease.materials[0];
-    let configured = registry
-        .config
-        .credentials
-        .iter()
-        .find(|c| {
-            c.credential.profile == lease.credential_profile
-                && c.credential.revision == lease.credential_revision
-        })
-        .unwrap();
-    assert!(configured.allowed_node_ids.contains(&identity.node_id));
-    let uid = std::fs::metadata(root).unwrap().uid();
-    synthetic_material(
-        configured.secret_file.as_ref().unwrap(),
-        &lease.material_digest,
-        lease.material_bytes,
-        uid,
-    );
-    synthetic_material(
-        &root
-            .join("materials")
-            .join(lease.lease_id.to_string())
-            .join("material.bin"),
-        &lease.material_digest,
-        lease.material_bytes,
-        uid,
-    );
-    assert!(
-        q.original
-            .materials
-            .iter()
-            .any(|m| m.lease_id == lease.lease_id && m.material_digest == lease.material_digest)
-    );
+    verify_prepared_materials(case, root, identity, &accepted, &q);
 
     verify_node_inventory(case, identity).await;
 
@@ -118,6 +84,50 @@ pub(super) async fn assess(
             "peer_pins_revalidated":true,"node_identity_revalidated":true,"installed_harness_revalidated":true,
             "original_observation_retained":true,"provider_availability_claim":false
         })
+    );
+}
+
+fn verify_prepared_materials(
+    case: &Case,
+    root: &Path,
+    identity: &aq_admission::transport::WorkerIdentity,
+    accepted: &AcceptedDelivery,
+    q: &PrepareRequest,
+) {
+    let registry = case.env.env.state.config.intelligence.as_ref().unwrap();
+    assert_eq!(accepted.receipt.lease.materials.len(), 1);
+    let lease = &accepted.receipt.lease.materials[0];
+    let configured = registry
+        .config
+        .credentials
+        .iter()
+        .find(|c| {
+            c.credential.profile == lease.credential_profile
+                && c.credential.revision == lease.credential_revision
+        })
+        .unwrap();
+    assert!(configured.allowed_node_ids.contains(&identity.node_id));
+    let uid = std::fs::metadata(root).unwrap().uid();
+    synthetic_material(
+        configured.secret_file.as_ref().unwrap(),
+        &lease.material_digest,
+        lease.material_bytes,
+        uid,
+    );
+    synthetic_material(
+        &root
+            .join("materials")
+            .join(lease.lease_id.to_string())
+            .join("material.bin"),
+        &lease.material_digest,
+        lease.material_bytes,
+        uid,
+    );
+    assert!(
+        q.original
+            .materials
+            .iter()
+            .any(|m| m.lease_id == lease.lease_id && m.material_digest == lease.material_digest)
     );
 }
 
