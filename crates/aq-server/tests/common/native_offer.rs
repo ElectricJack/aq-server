@@ -65,7 +65,15 @@ pub async fn setup() -> Case {
 
 /// Add one project with its own Graph workspace and task, sharing the fixture repository.
 pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Case {
-    let mut env = selection::selection_fixture().await;
+    setup_with(additional, false).await
+}
+
+pub async fn setup_with_secondary_provider() -> Case {
+    Box::pin(setup_with(None, true)).await
+}
+
+async fn setup_with(additional: Option<aq_selection::TaskLineage>, secondary: bool) -> Case {
+    let mut env = selection::selection_fixture_with_secondary(secondary).await;
     let pool = env.env.pool.clone();
     // This lane intentionally installs the frozen guard explicitly. Ordered
     // registration26/27 is independently owned/qualified by the schema lane.
@@ -293,6 +301,17 @@ pub async fn setup_projects(additional: Option<aq_selection::TaskLineage>) -> Ca
         (art("native-test-policy", policy_body), policy_body.into()),
     ] {
         definitions.push(Definition::new(r, ArtifactKind::Definition, body).unwrap());
+    }
+    if secondary {
+        let account = &env.input.credentials[1].profile;
+        definitions.push(
+            Definition::new(
+                account.clone(),
+                ArtifactKind::Definition,
+                account.id.as_str().to_owned(),
+            )
+            .unwrap(),
+        );
     }
     let handle = Uuid::new_v4();
     let mut config = (*env.env.state.config).clone();

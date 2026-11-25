@@ -414,6 +414,10 @@ tokio::task_local! {
     pub static SUBSCRIPTION_LOGIN: bool;
 }
 pub async fn selection_fixture() -> SelectionFixture {
+    selection_fixture_with_secondary(false).await
+}
+
+pub async fn selection_fixture_with_secondary(secondary: bool) -> SelectionFixture {
     use aq_selection::*;
     use aq_server::intelligence::config::{CredentialConfig, IntelligenceConfig};
     let mut env = setup(false).await;
@@ -438,6 +442,19 @@ pub async fn selection_fixture() -> SelectionFixture {
             })
             .collect::<Vec<_>>()
     );
+    if secondary {
+        use aq_profiles::roles::Kind;
+        assert_eq!(input.credentials[1].provider, "fixture-b");
+        input.credentials[1].provider = "anthropic".into();
+        let execution =
+            super::roles::execution(8192).replace("claude: account-a", "claude: account-b");
+        let actor = sqlx::query_scalar("SELECT id FROM users WHERE role='owner'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+        super::roles::save(&env.pool, actor, Kind::Execution, "sandbox", &execution).await;
+        env.snapshot = super::roles::active(&env.pool).await;
+    }
     env.body["default_intelligence"] = json!(super::roles::DEFAULT_LEVEL);
     bind(&env).await;
     let snapshot = env.snapshot.clone();
@@ -449,6 +466,13 @@ pub async fn selection_fixture() -> SelectionFixture {
     for harness in &mut input.node.harnesses {
         harness.harness = super::roles::HARNESS.into();
         harness.capabilities = execution.required_capabilities();
+    }
+    if secondary {
+        // Use the same synthetic artifacts and runtime qualification on a
+        // second harness. Its named account is bound to a different provider.
+        let mut claude = input.node.harnesses[0].clone();
+        claude.harness = "claude".into();
+        input.node.harnesses.push(claude);
     }
     let request = serde_json::from_value(admission(&env)).unwrap();
     let frozen =

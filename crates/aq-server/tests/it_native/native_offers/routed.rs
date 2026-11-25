@@ -464,3 +464,191 @@ async fn a_pinned_route_whose_provider_is_unavailable_does_not_fail_the_poll() {
     );
     assert_eq!(holds(&c).await, 0);
 }
+
+async fn two_provider_capacity_case(pinned: bool) -> Case {
+    use crate::common::native_offer::setup_with_secondary_provider;
+
+    let c = setup_with_secondary_provider().await;
+    let pool = &c.env.env.pool;
+    let level = format!(
+        "{}| anthropic | model-b | high | claude |\n",
+        roles::level("standard-high", &[("fixture-a", "model-a", "high")])
+    );
+    roles::save(
+        pool,
+        c.env.actor,
+        Kind::Intelligence,
+        "standard-high",
+        &level,
+    )
+    .await;
+    // Availability of both provider accounts is independent of the swarm caps.
+    let mut scope = c.env.input.observations[1].scope.clone();
+    scope.provider = "anthropic".into();
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM intelligence_registry WHERE singleton")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let observation = json!({"operation_id":Uuid::new_v4(),"expected_revision":revision,"sequence":1,
+        "scope":scope,"state":"available","ttl_ms":30_000,"cooldown_ms":0});
+    let (status, body) = crate::common::selection::call(
+        &c.env.env.app,
+        "/api/intelligence/observations",
+        Some(observation),
+        "owner@localhost",
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    if pinned {
+        pinned_route(&c, "standard-high");
+    } else {
+        route(&c, "standard-high", &[]);
+    }
+    c
+}
+
+async fn limits(c: &Case, preferred: u32, secondary: u32) {
+    let limits = json!({"cell_limits": [
+        {"provider":"fixture-a", "intelligence_class":"standard-high", "limit":preferred},
+        {"provider":"anthropic", "intelligence_class":"standard-high", "limit":secondary},
+    ]});
+    sqlx::query("UPDATE swarm_settings SET limits=$1,revision=revision+1 WHERE singleton")
+        .bind(limits)
+        .execute(&c.env.env.pool)
+        .await
+        .unwrap();
+}
+
+async fn provider_offer(
+    c: &Case,
+    provider: &str,
+    model: &str,
+) -> aq_admission::startup::NativeOffer {
+    let (status, body) = poll_offered(c).await;
+    assert_eq!(status, 200, "{body}");
+    let ControlReply::Poll(mut page) = decode_reply(&serde_json::to_vec(&body).unwrap()).unwrap()
+    else {
+        panic!("{body}");
+    };
+    page.validate_for(&c.request).unwrap();
+    assert_eq!(page.offers.len(), 1, "{body}");
+    let offer = page.offers.remove(0);
+    let manifest = &offer.offered.offer.manifest;
+    assert_eq!(manifest.bindings.task_id, c.env.lineage.task_id);
+    assert_eq!(manifest.intelligence_profile.id.as_str(), LEVEL);
+    assert_eq!(manifest.model.provider.as_str(), provider);
+    assert_eq!(manifest.model.model.as_str(), model);
+    let selection: Value = sqlx::query_scalar(
+        "SELECT selection->'choice' FROM intelligence_attempt_selections WHERE attempt_id=$1",
+    )
+    .bind(manifest.bindings.attempt_id)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+    assert_eq!(selection["provider"], provider);
+    assert_eq!(selection["model"], model);
+    offer
+}
+
+async fn assert_capacity_wait(c: &Case) {
+    let (status, body) = poll(c).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(offered(&body).is_empty(), "{body}");
+    assembled(c).await;
+    assert_eq!(
+        attempts(c).await,
+        0,
+        "capacity wait cannot publish an attempt"
+    );
+    assert_eq!(holds(c).await, 0, "capacity wait is transient");
+    assert_eq!(
+        skips(c).await,
+        0,
+        "capacity wait cannot consume a successor retry"
+    );
+    let denied: Option<String> =
+        sqlx::query_scalar("SELECT reason FROM swarm_waiting WHERE task_id=$1")
+            .bind(c.env.lineage.task_id)
+            .fetch_optional(&c.env.env.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        denied.as_deref(),
+        Some(aq_swarm_settings::admission::CEILING)
+    );
+}
+
+#[tokio::test]
+async fn provider_capacity_keeps_the_preferred_choice_when_both_cells_are_open() {
+    let c = two_provider_capacity_case(false).await;
+    limits(&c, 1, 1).await;
+    provider_offer(&c, "fixture-a", "model-a").await;
+}
+
+#[tokio::test]
+async fn provider_capacity_waits_for_the_secondary_without_consuming_attempts() {
+    use crate::common::native_offer::prepare_request;
+    use aq_server::{profiled_execution::initial_grant, worker_api};
+
+    let mut c = two_provider_capacity_case(false).await;
+    limits(&c, 0, 0).await;
+    assert_capacity_wait(&c).await;
+    limits(&c, 0, 1).await;
+    let offer = provider_offer(&c, "anthropic", "model-b").await;
+    assert_eq!(offer.offered.offer.binding.assignment_generation, 1);
+    assert_eq!(attempts(&c).await, 1);
+    assert_eq!(skips(&c).await, 0);
+    assert_eq!(holds(&c).await, 0);
+    let (_, _, request, _) = prepare_request(&mut c, &offer).await;
+    limits(&c, 1, 1).await;
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "authorization",
+        format!("Bearer {}", c.env.env.credential).parse().unwrap(),
+    );
+    let auth = worker_api::authenticate_context(&c.env.env.state, &headers)
+        .await
+        .unwrap();
+    initial_grant::prepare(&c.env.env.state, &auth, &request, Uuid::new_v4())
+        .await
+        .expect("the sealed secondary selection succeeds after preferred capacity reopens");
+    let _: uuid::Uuid = sqlx::query_scalar(
+        "SELECT attempt_id FROM profiled_authority_hot WHERE attempt_id=$1 AND state->>'status'='granted'",
+    )
+    .bind(offer.offered.offer.binding.attempt_id)
+    .fetch_one(&c.env.env.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn provider_capacity_waits_on_a_pinned_route_even_with_a_free_alternate() {
+    let c = two_provider_capacity_case(true).await;
+    limits(&c, 0, 1).await;
+    assert_capacity_wait(&c).await;
+    limits(&c, 1, 1).await;
+    provider_offer(&c, "fixture-a", "model-a").await;
+}
+
+#[tokio::test]
+async fn provider_capacity_wait_does_not_charge_a_blocked_successor() {
+    let c = two_provider_capacity_case(false).await;
+    limits(&c, 1, 1).await;
+    let first = provider_offer(&c, "fixture-a", "model-a").await;
+    fail_and_release(&c, first.offered.offer.binding.attempt_id).await;
+    limits(&c, 0, 0).await;
+    for _ in 0..2 {
+        let (status, body) = poll(&c).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(offered(&body).is_empty(), "{body}");
+        assembled(&c).await;
+    }
+    assert_eq!(attempts(&c).await, 1, "only the stopped predecessor exists");
+    assert_eq!(skips(&c).await, 0);
+    assert_eq!(holds(&c).await, 0);
+    limits(&c, 0, 1).await;
+    let successor = provider_offer(&c, "anthropic", "model-b").await;
+    assert_eq!(successor.offered.offer.binding.assignment_generation, 2);
+    assert_eq!(attempts(&c).await, 2);
+}
