@@ -33,6 +33,25 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         serde_json::from_slice(&std::fs::read(root.join("journal/journal.json")).unwrap()).unwrap();
     let history =
         &snapshot["state"]["attempts"][started.binding.attempt_id.to_string()]["native_host"];
+    verify_physical_history(history, result);
+    let attempt = &snapshot["state"]["attempts"][started.binding.attempt_id.to_string()];
+    verify_terminal_history(history, attempt, result, &started, &delivery);
+    let directory = root.join("host").join(started.launch_id.to_string());
+    assert_eq!(
+        std::fs::read(directory.join("fixture-marker")).unwrap(),
+        std::fs::read(directory.join("context-0.bin")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("fixture-marker.cwd")).unwrap(),
+        result["workspace_path"].as_str().unwrap()
+    );
+    eprintln!(
+        "actual host: Running then durable ECHILD; execution_revision={}, stopped_revision={}",
+        result["execution_revision"], result["host_revision"]
+    );
+}
+
+fn verify_physical_history(history: &Value, result: &Value) {
     assert_eq!(history["running"]["request"], result["host_started"]);
     assert_eq!(history["stopped"], result["host_stopped"]);
     assert_eq!(
@@ -55,6 +74,14 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         history["stopped"]["recorded_revision"].as_u64().unwrap()
             > history["running"]["recorded_revision"].as_u64().unwrap()
     );
+}
+fn verify_terminal_history(
+    history: &Value,
+    attempt: &Value,
+    result: &Value,
+    started: &aq_admission::started::Request,
+    delivery: &wire::ExecutionDelivery,
+) {
     // The selected journal profile pairs physical facts with fsynced envelopes.
     // This host-only probe sends neither envelope and claims no remote ACK.
     let terminal = &history[phase::HOST_TERMINAL];
@@ -65,7 +92,7 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
     assert_eq!(phase_started["original"], result["host_started"]);
     let stopped: aq_admission::stopped::Request =
         serde_json::from_value(phase_stopped["original"].clone()).unwrap();
-    stopped.validate_after(&started).unwrap();
+    stopped.validate_after(started).unwrap();
     assert_eq!(
         serde_json::to_value(&stopped.proof.observation).unwrap(),
         history["stopped"]["observation"]
@@ -76,7 +103,6 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         phase_started["origin"]["execution_receipt_digest"],
         json!(delivery.receipt.digest().unwrap())
     );
-    let attempt = &snapshot["state"]["attempts"][started.binding.attempt_id.to_string()];
     let accepted: wire::AcceptedReceipt =
         serde_json::from_value(attempt[phase::PREPARATION]["delivery"]["receipt"].clone()).unwrap();
     assert_eq!(
@@ -117,17 +143,4 @@ pub(super) fn verify(root: &std::path::Path, result: &Value) {
         assert!(terminal["started"]["receipt"].is_null());
         assert!(terminal["stopped"]["receipt"].is_null());
     }
-    let directory = root.join("host").join(started.launch_id.to_string());
-    assert_eq!(
-        std::fs::read(directory.join("fixture-marker")).unwrap(),
-        std::fs::read(directory.join("context-0.bin")).unwrap()
-    );
-    assert_eq!(
-        std::fs::read_to_string(directory.join("fixture-marker.cwd")).unwrap(),
-        result["workspace_path"].as_str().unwrap()
-    );
-    eprintln!(
-        "actual host: Running then durable ECHILD; execution_revision={}, stopped_revision={}",
-        result["execution_revision"], result["host_revision"]
-    );
 }
