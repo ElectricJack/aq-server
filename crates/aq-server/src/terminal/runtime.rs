@@ -16,7 +16,6 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 struct PollState {
     slot: Arc<Semaphore>,
-    output_slot: Arc<Semaphore>,
     wake: Notify,
     #[cfg(feature = "test-support")]
     waiting: std::sync::atomic::AtomicBool,
@@ -24,38 +23,30 @@ struct PollState {
 pub struct Poll {
     state: Arc<PollState>,
     _permit: OwnedSemaphorePermit,
-    #[cfg(feature = "test-support")]
-    output: bool,
 }
 impl Poll {
     pub async fn wait(&self, hold: u32) {
         #[cfg(feature = "test-support")]
-        if !self.output {
-            self.state
-                .waiting
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
+        self.state
+            .waiting
+            .store(true, std::sync::atomic::Ordering::Release);
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(hold as u64),
             self.state.wake.notified(),
         )
         .await;
         #[cfg(feature = "test-support")]
-        if !self.output {
-            self.state
-                .waiting
-                .store(false, std::sync::atomic::Ordering::Release);
-        }
+        self.state
+            .waiting
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 impl Drop for Poll {
     fn drop(&mut self) {
         #[cfg(feature = "test-support")]
-        if !self.output {
-            self.state
-                .waiting
-                .store(false, std::sync::atomic::Ordering::Release);
-        }
+        self.state
+            .waiting
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 type Polls = BTreeMap<(Uuid, Option<Uuid>), Weak<PollState>>;
@@ -128,16 +119,7 @@ impl Runtime {
     pub fn poll(&self, node: Uuid) -> Result<Poll, AppError> {
         self.poll_channel(node, None)
     }
-    pub fn output_poll(&self, node: Uuid) -> Result<Poll, AppError> {
-        self.output_poll_channel(node, None)
-    }
-    pub fn output_poll_channel(&self, node: Uuid, attempt: Option<Uuid>) -> Result<Poll, AppError> {
-        self.poll_lane(node, attempt, true)
-    }
     pub fn poll_channel(&self, node: Uuid, attempt: Option<Uuid>) -> Result<Poll, AppError> {
-        self.poll_lane(node, attempt, false)
-    }
-    fn poll_lane(&self, node: Uuid, attempt: Option<Uuid>, output: bool) -> Result<Poll, AppError> {
         let key = (node, attempt);
         let mut polls = self.polls.lock().map_err(|_| fail())?;
         polls.retain(|_, v| v.strong_count() > 0);
@@ -151,7 +133,6 @@ impl Runtime {
                 }
                 let v = Arc::new(PollState {
                     slot: Arc::new(Semaphore::new(1)),
-                    output_slot: Arc::new(Semaphore::new(1)),
                     wake: Notify::new(),
                     #[cfg(feature = "test-support")]
                     waiting: Default::default(),
@@ -160,24 +141,15 @@ impl Runtime {
                 v
             }
         };
-        // Control may long-poll while output delivery progresses independently.
-        // Each lane admits one request, under the shared node/attempt channel cap.
-        let slot = if output {
-            &state.output_slot
-        } else {
-            &state.slot
-        };
-        let permit = slot.clone().try_acquire_owned().map_err(|_| {
-            AppError::Conflict(format!(
-                "one terminal {} poll per channel",
-                if output { "output" } else { "control" }
-            ))
-        })?;
+        // One control long-poll per channel; output polls take no slot (they only read).
+        let permit = state
+            .slot
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AppError::Conflict("one terminal control poll per channel".into()))?;
         Ok(Poll {
             state,
             _permit: permit,
-            #[cfg(feature = "test-support")]
-            output,
         })
     }
     #[cfg(feature = "test-support")]
@@ -275,32 +247,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn poll_lanes_share_the_node_cap_and_release_on_drop() {
+    fn control_polls_share_the_channel_cap_and_release_on_drop() {
         let runtime = Runtime::default();
         let nodes: Vec<_> = (0..33).map(|_| Uuid::new_v4()).collect();
         let mut controls: Vec<_> = nodes[..32]
             .iter()
             .map(|id| runtime.poll(*id).unwrap())
             .collect();
-        let mut outputs: Vec<_> = nodes[..32]
-            .iter()
-            .map(|id| runtime.output_poll(*id).unwrap())
-            .collect();
         assert!(matches!(runtime.poll(nodes[0]), Err(AppError::Conflict(_))));
         assert!(matches!(
-            runtime.output_poll(nodes[0]),
-            Err(AppError::Conflict(_))
-        ));
-        assert!(matches!(
-            runtime.output_poll(nodes[32]),
+            runtime.poll(nodes[32]),
             Err(AppError::IdentityUnavailable(_))
         ));
         drop(controls.pop());
-        // An output permit alone still owns that node's capacity.
-        assert!(runtime.poll(nodes[32]).is_err());
-        drop(outputs.pop());
         let _next = runtime.poll(nodes[32]).unwrap();
-        let _next_output = runtime.output_poll(nodes[32]).unwrap();
     }
 }
 
@@ -314,11 +274,8 @@ mod delegated_poll_tests {
         let attempt = Uuid::new_v4();
         let first = runtime.poll_channel(node, Some(attempt)).unwrap();
         let second = runtime.poll_channel(node, Some(Uuid::new_v4())).unwrap();
-        let output = runtime.output_poll_channel(node, Some(attempt)).unwrap();
-        assert!(runtime.output_poll_channel(node, Some(attempt)).is_err());
         assert!(runtime.poll_channel(node, Some(attempt)).is_err());
         assert!(runtime.poll(node).is_ok());
-        assert!(runtime.output_poll(node).is_ok());
         runtime.wake(node);
         tokio::time::timeout(
             std::time::Duration::from_millis(100),
@@ -335,11 +292,7 @@ mod delegated_poll_tests {
         // Both live channels retain their own exclusive slots after a wake.
         assert_eq!(first.state.slot.available_permits(), 0);
         assert_eq!(second.state.slot.available_permits(), 0);
-        assert_eq!(output.state.output_slot.available_permits(), 0);
         drop(first);
         assert!(runtime.poll_channel(node, Some(attempt)).is_ok());
-        assert!(runtime.output_poll_channel(node, Some(attempt)).is_err());
-        drop(output);
-        assert!(runtime.output_poll_channel(node, Some(attempt)).is_ok());
     }
 }

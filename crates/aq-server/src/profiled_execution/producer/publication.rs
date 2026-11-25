@@ -8,7 +8,7 @@ use crate::{
     source_retention::profiled_base::{RetentionObservation, VerifiedExport},
     worker_api::AuthenticatedNode,
 };
-use aq_profiled_state::git_author::{GitAuthor, OfferDelivery};
+use aq_profiled_state::{git_author::*, replacement_sql::repins_retained};
 use aq_selection::ExecutionTarget;
 
 use crate::error::db;
@@ -113,14 +113,12 @@ pub(super) async fn publish(
         .await?;
         let shared = retained.token().request_digest() == export.request_digest()
             && retained.fact().canonical_bytes()? == fact.canonical_bytes()?;
-        // Spec 0007: a handoff successor's own export of the saved commit.
+        // Spec 0007: a handoff successor's own export of the saved commit, or a re-pin.
+        let predecessor = replacement.predecessor_attempt_id;
         if !shared
-            && !super::super::handoff::export_is_handoff(
-                &mut tx,
-                replacement.predecessor_attempt_id,
-                export.request(),
-            )
-            .await?
+            && !super::super::handoff::export_is_handoff(&mut tx, predecessor, export.request())
+                .await?
+            && !repins_retained(&mut tx, predecessor, export.request()).await?
         {
             return Err(refused());
         }
