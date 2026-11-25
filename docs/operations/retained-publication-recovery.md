@@ -40,6 +40,30 @@ aq run result.publication.show \
   --param publication_operation_id=dfd8cb53-9b5e-833c-bfe8-f32b36408c66 --json
 ```
 
+Keep subsequent identities separate as well: owner evidence also names
+`32c10a25-caef-8882-b3f2-20d3f0aa933b`,
+`b46211d8-3123-8705-a756-63ba482a75b0`,
+`f7f30714-360d-84d3-9506-94aaf6d76f42` and
+`72024a5d-7cd8-8af6-a442-9b4d0ac8c0a2`. The latter two have reported
+delivery-host-unreachable responses; these establish neither remote rejection
+nor acceptance. They do not replace either original operation.
+Owner relay additionally names `99d24e83-7f55-885c-ae51-bcf0fb493c58` for
+the same retained result with an unreachable report. Preserve it separately.
+
+A separate evidence case relayed by the owner concerns task
+`a3c72f06-d1a6-428e-bf67-b0f1c734a8c9` v5, attempt
+`0d6984eb-3e1e-59b4-8751-ffb13010a800`, result
+`da345d71-4294-4fe8-8ab8-3bdf70fc8f25` at revision
+`332b46d7252409a9a4b1d1e0963fca467213f8b1a92598df212449391add4e12`,
+retained commit `3bed9a998cd64766f0cdcd0f0da636af21f66da3`. Its original
+`3eed25ec-1f83-850e-b983-b0a718b1e9f5` and later
+`baf61f21-bce8-8713-a57c-74aed3f3212b` operations must be read under that
+task/result's own binding, never through the b57 result above. Reported remote
+refusal and empty receipt lists do not establish a shared cause. Repository
+binding/generation, original journal and runtime capability still need supported
+authenticated verification. This evidence record authorizes no work on that
+task or live action against either publication.
+
 The list returns at most 25 original/subsequent operations. Follow `next_after`
 with `--param after=UUID` until it is null. UUID pagination does not reorder or
 replace historical identities. Selecting one operation additionally reads its
@@ -51,13 +75,20 @@ allowlisted diagnostics are returned, never raw journal state, stderr, remote
 messages, hooks, credentials or arbitrary metadata.
 
 `classification_capability` reports the actual runtime capabilities response,
-not a source-version claim. Without `publication_rejection_classification_v1`,
+not a source-version claim. The token must appear in the protocol-v1
+`capability_tokens` array (`$.result.capability_tokens` in the wire envelope).
+Without `publication_rejection_classification_v1`,
 classification is unsupported; a missing historical classification is
 `not_recorded`. An old `remote_rejected` diagnostic alone does not establish
 which permission or remote rule caused the refusal. The operator must inspect
 the original installation and decide any narrowly scoped permission or policy
 correction. These tools cannot make that change. Ambiguous acknowledgments
 remain indeterminate, with no inferred rejection class.
+Unknown phases are returned as null. Future recorded rejection-class values are
+reported as nonactionable `unknown`; absent historical fields stay unrecorded.
+An original successful journal read includes a bounded `receipt` with verified
+target/old/new/time for `applied`, or observed head/time and no causation claim
+for `already_present`. Invalid or missing acknowledgments never create receipts.
 
 ## Recover a receipt after separate operator authorization
 
@@ -88,6 +119,11 @@ result-ready/delivery path, where ordinary checks, review and settlement gates
 still apply. Recovery does not change source retention, report bytes, budgets,
 dependencies, holds or human decisions. There is no forced-publication or
 permission-override parameter, and no automatic retry of a refused push.
+Only a terminal refusal explicitly recorded by the upgraded host as
+`publication_not_dispatched` proves read-only preflight stopped before Git.
+That refusal does not consume permission for the first dispatch. An existing
+dispatch marker still wins, and historical refusals without that proof stay
+fenced. This distinction does not authorize a retry of a dispatched publication.
 
 ## Evidence and release prerequisites
 
@@ -107,5 +143,16 @@ Before using recovery, obtain a separate decision for the exact original
 operation and result. Any remote-policy correction or later publication retry
 requires its own explicit decision. Existing source leases and review gates
 remain prerequisites; a successful source test is not deployment evidence.
+
+The repair's earlier failed-check input is separately bound by a supported
+`result.review.show` read: report
+`4424f991-19cd-4502-95e9-91b50cd20bf0` at revision
+`d9fac451948dfaf937b2f5300051cf2b47c3fc20ec18ab67d3812b20ac10b0ec`,
+recorded source head `489acd898966ce1d9b07a61b753748ed55779e32`.
+The supported result-read response supplies provenance, without check-job or
+assertion fields. A CI/operator read of that revision's bound required-check
+failure is still needed; PostgreSQL teardown logs do not identify the failure.
+This read does not inspect either original publisher journal or establish
+publication acceptance.
 
 The [source validation record](../implementation/retained-publication-recovery-validation.md) lists the exact code fingerprint, commands, outcomes and unrun checks.

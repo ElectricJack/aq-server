@@ -152,9 +152,13 @@ impl Case {
             "result_ready":{"project_id":id.project_id,"task_id":id.task_id,"attempt_id":id.attempt_id,"result_id":id.report_id}})
     }
     async fn original(&self) -> Uuid {
+        self.original_with(self.request(), json!({"reason":"unreachable"}))
+            .await
+    }
+    async fn original_with(&self, request: Value, output: Value) -> Uuid {
         let op = Uuid::new_v4();
-        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused','{\"reason\":\"unreachable\"}',$6,$6)")
-            .bind(op).bind(self.ns).bind(op.to_string()).bind(self.id.task_id.to_string()).bind(self.request()).bind(NOW as i64).execute(&self.pool).await.unwrap();
+        sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,$5,'refused',$6,$7,$7)")
+            .bind(op).bind(self.ns).bind(op.to_string()).bind(self.id.task_id.to_string()).bind(request).bind(output).bind(NOW as i64).execute(&self.pool).await.unwrap();
         op
     }
     async fn recover(
@@ -493,4 +497,37 @@ async fn a_read_only_preflight_failure_does_not_consume_the_publication_dispatch
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_proven_preflight_refusal_does_not_fence_a_fresh_request_but_a_dispatch_still_does() {
+    let c = Box::pin(Case::new()).await;
+    let mut preflight = c.request();
+    preflight["answer_note"] = json!("publication_not_dispatched");
+    c.original_with(preflight.clone(), json!({"reason":"no_branch"}))
+        .await;
+    let next = c.original().await;
+    assert!(
+        publication::reserve(
+            &c.pool,
+            FrozenCommand::new(next, "branch.publish", &c.request()),
+            &c.target,
+        )
+        .await
+        .unwrap()
+    );
+    // Even a proven non-dispatch cannot erase a committed dispatch fence.
+    let substitute = c
+        .original_with(preflight.clone(), json!({"reason":"no_branch"}))
+        .await;
+    assert!(
+        !publication::reserve(
+            &c.pool,
+            FrozenCommand::new(substitute, "branch.publish", &preflight),
+            &c.target,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(c.env.holds_task().await);
 }

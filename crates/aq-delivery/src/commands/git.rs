@@ -360,11 +360,13 @@ impl GitPort for SocketGit {
             Some(s @ ("pending" | "complete" | "failed")) => s,
             _ => return Err(GitFailure::protocol()),
         };
-        // A phase is a bounded protocol label, never free-form publisher text.
-        let phase = result["phase"]
-            .as_str()
-            .filter(|s| s.len() <= 64 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
-            .ok_or_else(GitFailure::protocol)?;
+        // Unknown historical/future phases stay unrecorded rather than exposing text.
+        let phase = result["phase"].as_str().filter(|s| {
+            matches!(
+                *s,
+                "queued" | "prepared" | "dispatched" | "indeterminate" | "terminal" | "complete"
+            )
+        });
         let reply = &result["result"];
         let outcome = match reply["outcome"].as_str() {
             Some(s @ ("applied" | "already_present" | "rejected" | "indeterminate")) => Some(s),
@@ -401,22 +403,34 @@ impl GitPort for SocketGit {
             .ok();
         let classification = capabilities
             .as_ref()
-            .and_then(|v| v["features"].as_array())
+            .and_then(|v| v["capability_tokens"].as_array())
             .is_some_and(|features| {
                 features
                     .iter()
                     .any(|f| f == "publication_rejection_classification_v1")
             });
-        let class = match reply["rejection_class"].as_str() {
-            Some(s @ ("non_fast_forward" | "stale_lease" | "hook_declined" | "unknown"))
-                if classification
+        let class = reply["rejection_class"]
+            .as_str()
+            .filter(|_| {
+                classification
                     && status == "complete"
                     && outcome == Some("rejected")
-                    && reason == Some("remote_rejected") =>
-            {
-                Some(s)
+                    && reason == Some("remote_rejected")
+            })
+            .map(|s| match s {
+                "non_fast_forward" | "stale_lease" | "hook_declined" => s,
+                _ => "unknown",
+            });
+        let receipt = if published {
+            if outcome == Some("applied") {
+                json!({"outcome":"applied","target":reference,"old":params["expected_old"],"new":params["expected_source"],
+                    "acknowledged_at":reply["acknowledged_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
+            } else {
+                json!({"outcome":"already_present","observed_target":params["expected_source"],"caused_by_this_operation":false,
+                    "observed_at":reply["observed_at"].as_str().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|t.to_rfc3339())})
             }
-            _ => None,
+        } else {
+            Value::Null
         };
         let outcome = if status == "pending" {
             Some("indeterminate")
@@ -439,7 +453,7 @@ impl GitPort for SocketGit {
         };
         Ok(
             json!({"operation_id":operation,"generation":generation,"status":status,"phase":phase,
-            "payload_hash":hash,"outcome":outcome,"reason":reason,"error_code":error_code,"published":published,
+            "payload_hash":hash,"outcome":outcome,"reason":reason,"error_code":error_code,"published":published,"receipt":receipt,
             "classification_capability":if capabilities.is_none() {"unavailable"} else if classification {"supported"} else {"unsupported"},
             "rejection_class":class,"classification_record":if class.is_some() {"recorded"} else {"not_recorded"},
             "repository_id":repo.repository_id,"binding_generation":repo.binding_generation,

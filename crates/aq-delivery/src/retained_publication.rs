@@ -84,14 +84,31 @@ pub async fn identity(
 }
 /// Only structured, bounded diagnostics leave the publisher. No raw stderr or credentials.
 fn summary(id: Uuid, status: &str, request: &Value, output: &Value) -> Value {
-    let bounded = |value: &Value| {
+    fn oid(value: &Value) -> Option<&str> {
         value
             .as_str()
-            .map(|s| s.chars().take(256).collect::<String>())
-    };
-    json!({"operation_id":id,"status":status,"expected_old":bounded(&request["expected_old"]),
-        "head":bounded(&request["result_head"]),"diagnostic":bounded(&request["answer_note"]),
-        "reason":bounded(&output["reason"]),"rejection_detail":"Raw remote rejection text was not retained by this host; do not infer a permission change from this diagnostic."})
+            .filter(|s| s.len() == 40 && crate::commands::object_id(s))
+    }
+    let status =
+        matches!(status, "running" | "published" | "conflict" | "refused").then_some(status);
+    let diagnostic = request["answer_note"].as_str().filter(|s| {
+        matches!(
+            *s,
+            "remote_rejected"
+                | "rejected"
+                | "git_transport"
+                | "git_protocol"
+                | "git_error"
+                | "reconciliation_required"
+                | "publication_not_dispatched"
+        )
+    });
+    let reason = output["reason"]
+        .as_str()
+        .filter(|s| matches!(*s, "no_branch" | "no_access" | "unreachable"));
+    json!({"operation_id":id,"status":status,"expected_old":oid(&request["expected_old"]),
+        "head":oid(&request["result_head"]),"diagnostic":diagnostic,
+        "reason":reason,"rejection_detail":"Raw remote rejection text is not exposed by this host; do not infer a permission change from this diagnostic."})
 }
 /// UUID keyset pagination preserves access to all original and subsequent identities.
 pub async fn inspect(pool: &PgPool, identity: &Identity, after: Option<Uuid>) -> Result<Value> {
@@ -172,7 +189,8 @@ pub async fn dispatched(
     sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM retained_publication_dispatches WHERE report_id=$2)
         OR EXISTS(SELECT 1 FROM playbook_host_operations WHERE command_name='branch.publish'
-        AND operation_id<>$1 AND request#>>'{result_ready,result_id}'=$2::uuid::text)",
+        AND operation_id<>$1 AND request#>>'{result_ready,result_id}'=$2::uuid::text
+        AND NOT (status='refused' AND request->>'answer_note' IS NOT DISTINCT FROM 'publication_not_dispatched'))",
     )
     .bind(operation)
     .bind(report)
@@ -346,4 +364,37 @@ pub async fn inspect_operation(
         "frozen_target":request["publication_target"],"recovery_receipt":receipt,
         "publisher":delivery.inspect_publication(target,original,identity.task_id,request["expected_old"].as_str(),&identity.head).await}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publication_summary_exposes_only_protocol_labels_and_oids() {
+        let private = "private hook or remote text";
+        let request = json!({"expected_old":private,"result_head":private,"answer_note":private});
+        let evidence = summary(
+            Uuid::new_v4(),
+            private,
+            &request,
+            &json!({"reason":private}),
+        );
+        assert!(!evidence.to_string().contains(private));
+        for field in ["status", "expected_old", "head", "diagnostic", "reason"] {
+            assert!(evidence[field].is_null(), "{field}");
+        }
+        let request = json!({"expected_old":"b".repeat(40),"result_head":"a".repeat(40),"answer_note":"remote_rejected"});
+        let evidence = summary(
+            Uuid::new_v4(),
+            "refused",
+            &request,
+            &json!({"reason":"unreachable"}),
+        );
+        assert_eq!(evidence["status"], "refused");
+        assert_eq!(evidence["expected_old"], request["expected_old"]);
+        assert_eq!(evidence["head"], request["result_head"]);
+        assert_eq!(evidence["diagnostic"], "remote_rejected");
+        assert_eq!(evidence["reason"], "unreachable");
+    }
 }

@@ -455,7 +455,15 @@ pub async fn run_step(
             let prepared = FrozenCommand::new(operation, command, with.as_ref().unwrap_or(request));
             let run = if command == "branch.publish" {
                 let task = task.ok_or(DeliveryError::InvalidInput("task"))?;
-                let step = if let Some(step) = prepared.branch_preflight(delivery, target).await {
+                let step = if let Some(mut step) = prepared.branch_preflight(delivery, target).await
+                {
+                    // Only a terminal read-only refusal proves this request
+                    // never reached Git. Historical/uncertain requests remain fenced.
+                    if let Step::Done(completion) = &mut step
+                        && completion.outcome == "refused"
+                    {
+                        completion.diagnostic = Some("publication_not_dispatched");
+                    }
                     step
                 } else if !crate::retained_publication::reserve(pool, frozen, target).await? {
                     Step::Done(crate::retained_publication::recover_step(db, request).await?)

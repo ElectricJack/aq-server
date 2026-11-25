@@ -106,7 +106,7 @@ async fn publisher_inspection_preserves_the_original_request_and_bounds_rejectio
     let original = Uuid::from_u128(9);
     let git = FakeGit::start(move |r| {
         if r["operation"] == "capabilities" {
-            return json!({"features":["publication_rejection_classification_v1"]});
+            return json!({"capability_tokens":["publication_rejection_classification_v1"]});
         }
         let mut reply = json!({"version":1,"id":original,"generation":2,"status":"complete","phase":"complete",
         "payload":{"operation":"publish","repository_id":target().git.repository_id,"expected_binding_generation":3,
@@ -200,6 +200,92 @@ fn journal_reply(operation: Uuid, status: &str, outcome: Value) -> Value {
         "payload_hash":crate::digest(&payload).unwrap(),"payload":payload,"result":outcome})
 }
 #[tokio::test]
+async fn historical_operation_ids_are_inspected_separately_and_unknown_phase_text_is_not_disclosed()
+{
+    let operations = [
+        "dfd8cb53-9b5e-833c-bfe8-f32b36408c66",
+        "de4542bf-b430-8e57-a85e-9eb6f957679d",
+        "f7f30714-360d-84d3-9506-94aaf6d76f42",
+        "72024a5d-7cd8-8af6-a442-9b4d0ac8c0a2",
+    ]
+    .map(|id| Uuid::parse_str(id).unwrap());
+    let git = FakeGit::start(move |r| {
+        if r["operation"] == "capabilities" {
+            return json!({});
+        }
+        let id = Uuid::parse_str(r["params"]["target_operation_id"].as_str().unwrap()).unwrap();
+        assert!(operations.contains(&id));
+        let mut reply = journal_reply(id, "pending", Value::Null);
+        reply["phase"] = json!("private_phase_text");
+        reply
+    });
+    let (delivery, _) = delivery(&git).await;
+    for original in operations {
+        let evidence = delivery
+            .inspect_publication(&target(), original, TASK, None, &sha('a'))
+            .await;
+        assert_eq!(evidence["operation_id"], original.to_string());
+        assert_eq!(evidence["outcome"], "indeterminate");
+        assert!(evidence["phase"].is_null());
+        assert!(!evidence.to_string().contains("private_phase_text"));
+        assert_eq!(
+            delivery
+                .reconcile_publication(&target(), Uuid::new_v4(), original, &sha('a'), &evidence)
+                .await["state"],
+            "held"
+        );
+    }
+    assert!(
+        git.operations()
+            .iter()
+            .all(|op| matches!(op.as_str(), "operation.show" | "capabilities"))
+    );
+}
+#[tokio::test]
+async fn a_separate_tasks_original_journal_cannot_be_read_through_another_retained_result() {
+    // Owner-relayed identities in a synthetic socket fixture, not live evidence.
+    let task = Uuid::parse_str("a3c72f06-d1a6-428e-bf67-b0f1c734a8c9").unwrap();
+    let source = "3bed9a998cd64766f0cdcd0f0da636af21f66da3";
+    let originals = [
+        "3eed25ec-1f83-850e-b983-b0a718b1e9f5",
+        "baf61f21-bce8-8713-a57c-74aed3f3212b",
+    ]
+    .map(|id| Uuid::parse_str(id).unwrap());
+    let git = FakeGit::start(move |r| {
+        if r["operation"] == "capabilities" {
+            return json!({});
+        }
+        let id = Uuid::parse_str(r["params"]["target_operation_id"].as_str().unwrap()).unwrap();
+        assert!(originals.contains(&id));
+        let mut reply = journal_reply(id, "pending", Value::Null);
+        reply["payload"]["params"]["source_ref"] = json!(task_branch(task));
+        reply["payload"]["params"]["target"] = json!(task_branch(task));
+        reply["payload"]["params"]["expected_source"]["hex"] = json!(source);
+        reply["payload_hash"] = json!(crate::digest(&reply["payload"]).unwrap());
+        reply
+    });
+    let (delivery, _) = delivery(&git).await;
+    for original in originals {
+        let evidence = delivery
+            .inspect_publication(&target(), original, task, None, source)
+            .await;
+        assert_eq!(evidence["operation_id"], original.to_string());
+        assert_eq!(evidence["expected_source"], source);
+        for (other_task, other_source) in [(TASK, source), (task, sha('a').as_str())] {
+            let refused = delivery
+                .inspect_publication(&target(), original, other_task, None, other_source)
+                .await;
+            assert_eq!(refused["state"], "unavailable");
+            assert!(refused.get("payload").is_none());
+        }
+    }
+    assert!(
+        git.operations()
+            .iter()
+            .all(|op| matches!(op.as_str(), "operation.show" | "capabilities"))
+    );
+}
+#[tokio::test]
 async fn rejection_class_requires_runtime_capability_and_a_definitive_original_outcome() {
     let original = Uuid::from_u128(9);
     let state = Arc::new(Mutex::new((json!({}), Value::Null)));
@@ -223,9 +309,14 @@ async fn rejection_class_requires_runtime_capability_and_a_definitive_original_o
         (false, "complete", Some("hook_declined"), None),
         (true, "complete", None, None),
         (true, "pending", Some("hook_declined"), None),
-        (true, "complete", Some("private arbitrary text"), None),
+        (
+            true,
+            "complete",
+            Some("private arbitrary text"),
+            Some("unknown"),
+        ),
     ] {
-        let capabilities = json!({"features":if supported { vec!["publication_rejection_classification_v1"] } else { vec![] }});
+        let capabilities = json!({"capability_tokens":if supported { vec!["publication_rejection_classification_v1"] } else { vec![] }});
         let outcome = json!({"outcome":"rejected","reason":"remote_rejected","rejection_class":class,"stderr":"never disclose"});
         *state.lock().unwrap() = (capabilities, journal_reply(original, status, outcome));
         let evidence = delivery
@@ -254,6 +345,20 @@ async fn rejection_class_requires_runtime_capability_and_a_definitive_original_o
             assert!(evidence["reason"].is_null());
         }
     }
+    // A token in an unrelated field is not the runtime's advertised capability.
+    *state.lock().unwrap() = (
+        json!({"features":["publication_rejection_classification_v1"]}),
+        journal_reply(
+            original,
+            "complete",
+            json!({"outcome":"rejected","reason":"remote_rejected","rejection_class":"hook_declined"}),
+        ),
+    );
+    let evidence = delivery
+        .inspect_publication(&target(), original, TASK, None, &sha('a'))
+        .await;
+    assert_eq!(evidence["classification_capability"], "unsupported");
+    assert!(evidence["rejection_class"].is_null());
     assert!(
         git.operations()
             .iter()
@@ -297,6 +402,13 @@ async fn original_success_is_recovered_only_with_valid_bound_oids_and_time() {
         );
         if published {
             assert_eq!(recovered["caused_by_this_operation"], false);
+            assert_eq!(journal["receipt"]["outcome"], "applied");
+            assert_eq!(journal["receipt"]["target"], task_branch(TASK));
+            assert_eq!(journal["receipt"]["new"]["hex"], sha('a'));
+            assert_eq!(journal["receipt"]["old"]["hex"], "0".repeat(40));
+            assert!(journal["receipt"]["acknowledged_at"].as_str().is_some());
+        } else {
+            assert!(journal["receipt"].is_null());
         }
     }
     assert!(
