@@ -8,7 +8,7 @@ use crate::{
     source_retention::profiled_base::{RetentionObservation, VerifiedExport},
     worker_api::AuthenticatedNode,
 };
-use aq_profiled_state::git_author::{GitAuthor, OfferDelivery};
+use aq_profiled_state::{git_author::*, replacement_sql::repins_retained};
 use aq_selection::ExecutionTarget;
 
 use crate::error::db;
@@ -23,12 +23,16 @@ pub(super) enum Outcome {
 pub(super) async fn publish(
     state: &AppState,
     auth: &AuthenticatedNode,
-    built: Built,
+    built: &Built,
     export: &source_exports::ReservedExport,
     fact: &VerifiedExport,
     inspection: &RetentionObservation,
     slot: u32,
 ) -> Result<Outcome, AppError> {
+    let at = now(state)?;
+    if at >= built.deadline || at >= inspection.expires_at_ms() {
+        return Ok(Outcome::Unavailable);
+    }
     let mut digests = built
         .native
         .offered
@@ -57,14 +61,13 @@ pub(super) async fn publish(
         .await
         .map_err(db)?;
     // Recheck stop/drain/availability after the poll's early gate.
-    let mc = |_| refused();
-    if !aq_machine_control::lock_publishing_node(&mut tx, auth.id())
+    if !aq_machine_control::lock_publishing_node(&mut tx, auth.id()).await? {
+        return Err(AppError::Busy);
+    }
+    if aq_machine_control::offer_hold(&mut tx, auth.id())
         .await
-        .map_err(mc)?
-        || aq_machine_control::offer_hold(&mut tx, auth.id())
-            .await
-            .map_err(mc)?
-            .is_some()
+        .map_err(crate::machine_api::mapped)?
+        .is_some()
     {
         return Ok(Outcome::Unavailable);
     }
@@ -110,14 +113,12 @@ pub(super) async fn publish(
         .await?;
         let shared = retained.token().request_digest() == export.request_digest()
             && retained.fact().canonical_bytes()? == fact.canonical_bytes()?;
-        // Spec 0007: a handoff successor's own export of the saved commit.
+        // Spec 0007: a handoff successor's own export of the saved commit, or a re-pin.
+        let predecessor = replacement.predecessor_attempt_id;
         if !shared
-            && !super::super::handoff::export_is_handoff(
-                &mut tx,
-                replacement.predecessor_attempt_id,
-                export.request(),
-            )
-            .await?
+            && !super::super::handoff::export_is_handoff(&mut tx, predecessor, export.request())
+                .await?
+            && !repins_retained(&mut tx, predecessor, export.request()).await?
         {
             return Err(refused());
         }
@@ -159,13 +160,13 @@ pub(super) async fn publish(
     }
     // Final publication clock is sampled after locks, while absolute original
     // expiry is fixed. No persisted original is later retimed on replay.
-    let mut native = built.native;
+    let mut native = built.native.clone();
     native.offered.clock =
         aq_admission::transport::DeliveryClock::new(time, built.deadline).map_err(|_| refused())?;
     let delivery = OfferDelivery { native, git_author };
     let original = StoredOffer {
         schema_version: 1,
-        read_provenance: built.read_provenance,
+        read_provenance: built.read_provenance.clone(),
         native_offer: delivery.clone(),
     }
     .value()
@@ -216,33 +217,23 @@ pub(super) async fn publish(
         .iter()
         .map(|(id, _)| *id)
         .collect::<Vec<_>>();
-    let linked = artifacts::link_locked(
-        &mut tx,
+    let scope = artifacts::LinkScope::new(
         binding.attempt_id,
         built.source.admission.project_id,
-        &ids,
-        time,
-        built.retained.until,
-    )
-    .await?;
-    let mut linked_bytes = linked
-        .iter()
-        .map(super::artifacts::canonical)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut offered_bytes = delivery
-        .native
-        .offered
-        .artifacts
-        .iter()
-        .map(super::artifacts::canonical)
-        .collect::<Result<Vec<_>, _>>()?;
-    linked_bytes.sort();
-    offered_bytes.sort();
-    if linked_bytes != offered_bytes {
+        time..built.retained.until,
+    );
+    let linked = artifacts::link_locked(&mut tx, scope, &ids).await?;
+    if canonical_descriptors(&linked)? != canonical_descriptors(&delivery.native.offered.artifacts)?
+    {
         return Err(refused());
     }
     on_heap(|| {
-        source_exports::link_locked(state, &mut tx, &binding.session, export, fact, inspection)
+        source_exports::link_locked(
+            state,
+            &mut tx,
+            &binding.session,
+            source_exports::LinkEvidence::new(export, fact, inspection),
+        )
     })
     .await?;
     let effective: Vec<_> = m
@@ -280,10 +271,40 @@ pub(super) async fn publish(
     aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
         .await
         .map_err(crate::machine_api::mapped)?;
-    match tx.commit().await {
-        Err(e) if aq_machine_control::is_serialization_failure(&e) => Ok(Outcome::Unavailable),
-        done => done
-            .map(|_| Outcome::Published(Box::new(delivery)))
-            .map_err(db),
+    // At this point the task and compatible slot passed publication's gates.
+    // Keep the episode local to the transaction so a rollback cannot qualify.
+    let capture = state.store.scheduling_diagnostics.as_ref();
+    let eligible = capture.map(|_| (state.clock)().timestamp_millis());
+    tx.commit().await.map_err(db)?;
+    if let Some((capture, eligible)) = capture.zip(eligible) {
+        let claimed = (state.clock)().timestamp_millis();
+        let expires = built
+            .deadline
+            .min(inspection.expires_at_ms())
+            .min(built.source.admission.expires_at_ms)
+            .min(built.decision.inputs.node.expires_at_ms)
+            .min(built.read_provenance.ready_expires_at_ms)
+            .min(built.read_provenance.context_expires_at_ms);
+        if eligible >= time as i64 && (claimed as u64) < expires {
+            capture.claim(
+                binding.attempt_id,
+                task,
+                binding.assignment_generation,
+                eligible,
+                claimed,
+            );
+        }
     }
+    Ok(Outcome::Published(Box::new(delivery)))
+}
+
+fn canonical_descriptors(
+    descriptors: &[aq_admission::RetainedArtifact],
+) -> Result<Vec<Vec<u8>>, AppError> {
+    let mut bytes = descriptors
+        .iter()
+        .map(super::artifacts::canonical)
+        .collect::<Result<Vec<_>, _>>()?;
+    bytes.sort();
+    Ok(bytes)
 }

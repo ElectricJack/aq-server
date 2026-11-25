@@ -1,6 +1,7 @@
 //! SQL source ownership with explicitly synthetic observation/export facts.
 use crate::common;
 use aq_admission::Digest;
+use aq_server::source_retention::profiled_base::{RetentionObservation, VerifiedExport};
 use aq_server::{
     profiled_execution::{
         policies,
@@ -142,13 +143,9 @@ async fn reservation_clock_is_rechecked_after_observed_quota_lock_wait() {
         .unwrap();
     let state = f.state.clone();
     let pending = tokio::spawn(async move { source_exports::reserve(&state, request).await });
-    tokio::time::timeout(std::time::Duration::from_secs(1),async {
-        loop {
-            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock')").bind(blocker_pid).fetch_one(&pool).await.unwrap();
-            if waiting {break;}
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    }).await.expect("observed actual quota lock wait");
+    observed_lock_wait(&pool, blocker_pid)
+        .await
+        .expect("observed actual quota lock wait");
     f.time.store((NOW + 31000) as i64, Ordering::SeqCst);
     blocker.commit().await.unwrap();
     assert!(pending.await.unwrap().is_err());
@@ -266,42 +263,19 @@ async fn linked_attempt_wrapper_has_zero_extra_charge_only_for_exact_verified_ex
     source_exports::finalize(&f.state, &token, &fact)
         .await
         .unwrap();
-    let mut observation = serde_json::json!({"request_digest":token.request_digest(),"export_operation_id":request.operation_id,"inspection":serde_json::from_slice::<serde_json::Value>(&fact.canonical_bytes().unwrap()).unwrap()["retention_inspection"],"observed_at_ms":NOW,"expires_at_ms":NOW+30000});
-    observation.sort_all_objects();
-    let retained = serde_json::from_value(observation).unwrap();
+    let retained = observation(&token, &fact);
     let mut tx = pool.begin().await.unwrap();
     let manifest = source_exports::link_locked(
         &f.state,
         &mut tx,
         &f.profiled.offer.binding.session,
-        &token,
-        &fact,
-        &retained,
+        source_exports::LinkEvidence::new(&token, &fact, &retained),
     )
     .await
     .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(manifest.artifact_id, request.operation_id);
-    use tower::ServiceExt;
-    let router = aq_server::build_worker_router(f.state.clone());
-    for suffix in [String::new(), "/objects.bundle?offset=0&limit=1024".into()] {
-        let response = router
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!(
-                        "/v1/execution/sources/base/{}{}",
-                        f.profiled.offer.binding.attempt_id, suffix
-                    ))
-                    .header("authorization", format!("Bearer {}", f.credential))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
-    }
-
+    assert_unscoped_routes_forbidden(&f).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT reserved_bytes FROM source_bases WHERE attempt_id=$1")
             .bind(f.profiled.offer.binding.attempt_id)
@@ -348,8 +322,7 @@ async fn source_link_rechecks_freshness_after_observed_owned_export_lock_wait() 
     source_exports::finalize(&f.state, &token, &fact)
         .await
         .unwrap();
-    let value = serde_json::json!({"request_digest":token.request_digest(),"export_operation_id":request.operation_id,"inspection":serde_json::from_slice::<serde_json::Value>(&fact.canonical_bytes().unwrap()).unwrap()["retention_inspection"],"observed_at_ms":NOW,"expires_at_ms":NOW+30000});
-    let retained = serde_json::from_value(value).unwrap();
+    let retained = observation(&token, &fact);
     let mut blocker = pool.begin().await.unwrap();
     sqlx::query(
         "SELECT operation_id FROM profiled_source_exports WHERE operation_id=$1 FOR UPDATE",
@@ -367,19 +340,19 @@ async fn source_link_rechecks_freshness_after_observed_owned_export_lock_wait() 
     let pending_pool = f.db.pool().await;
     let pending = tokio::spawn(async move {
         let mut tx = pending_pool.begin().await.unwrap();
-        let result =
-            source_exports::link_locked(&state, &mut tx, &session, &token, &fact, &retained).await;
+        let result = source_exports::link_locked(
+            &state,
+            &mut tx,
+            &session,
+            source_exports::LinkEvidence::new(&token, &fact, &retained),
+        )
+        .await;
         if result.is_ok() {
             tx.commit().await.unwrap();
         }
         result
     });
-    let observed=tokio::time::timeout(std::time::Duration::from_secs(1),async {
-        loop {
-            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock')").bind(blocker_pid).fetch_one(&pool).await.unwrap();
-            if waiting {break;}tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-    }).await;
+    let observed = observed_lock_wait(&pool, blocker_pid).await;
     if observed.is_err() {
         blocker.rollback().await.unwrap();
         panic!(
@@ -487,5 +460,50 @@ mod request_identity {
             serde_json::from_str::<Request>("{\"schema_version\":1,\"chosen_path\":\"x\"}")
                 .is_err()
         );
+    }
+}
+
+fn observation(
+    token: &source_exports::ReservedExport,
+    fact: &VerifiedExport,
+) -> RetentionObservation {
+    let export: serde_json::Value =
+        serde_json::from_slice(&fact.canonical_bytes().unwrap()).unwrap();
+    let mut observation = serde_json::json!({"request_digest":token.request_digest(),"export_operation_id":token.request().operation_id,"inspection":export["retention_inspection"],"observed_at_ms":NOW,"expires_at_ms":NOW+30000});
+    observation.sort_all_objects();
+    serde_json::from_value(observation).unwrap()
+}
+async fn observed_lock_wait(
+    pool: &sqlx::PgPool,
+    blocker: i32,
+) -> Result<(), tokio::time::error::Elapsed> {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock')")
+                .bind(blocker).fetch_one(pool).await.unwrap();
+            if waiting { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }).await
+}
+async fn assert_unscoped_routes_forbidden(f: &common::profiled::Fixture) {
+    use tower::ServiceExt;
+    let router = aq_server::build_worker_router(f.state.clone());
+    for suffix in [String::new(), "/objects.bundle?offset=0&limit=1024".into()] {
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/v1/execution/sources/base/{}{}",
+                        f.profiled.offer.binding.attempt_id, suffix
+                    ))
+                    .header("authorization", format!("Bearer {}", f.credential))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
     }
 }

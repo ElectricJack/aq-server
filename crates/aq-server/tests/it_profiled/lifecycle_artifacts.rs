@@ -7,7 +7,7 @@ use aq_server::{
     config::Config,
     identity::verifier_from_config,
     source_retention::{Runtime, SourceRetentionConfig},
-    store::NewNode,
+    store::{NewNode, Store},
     test_support::TestDb,
     tokens::{new_node_credential, verifier},
 };
@@ -28,6 +28,119 @@ use uuid::Uuid;
 fn hash(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
+async fn register(store: &Store) -> (String, NodeIdentity) {
+    let now = Utc::now();
+    let owner = store
+        .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .create_enrollment("enroll", owner.id, now, now + Duration::minutes(5))
+        .await
+        .unwrap();
+    let token = new_node_credential();
+    let node = store
+        .redeem_enrollment(
+            "enroll",
+            NewNode {
+                name: "artifacts".into(),
+                credential_hash: verifier(&token),
+                worker_version: "0.1.0".into(),
+                protocol_version: 1,
+            },
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let identity = NodeIdentity {
+        node_id: node.id,
+        boot_id: Uuid::new_v4(),
+    };
+    store
+        .execution_register(&RegisterRequest {
+            identity: identity.clone(),
+            operation_id: Uuid::new_v4(),
+            protocol_version: EXECUTION_PROTOCOL_VERSION,
+            worker_version: "0.1.0".into(),
+            capabilities: vec![
+                FAKE_HARNESS_CAPABILITY.into(),
+                GRAPH_ACCESS_CAPABILITY.into(),
+            ],
+        })
+        .await
+        .unwrap();
+    (token, identity)
+}
+fn graph_offer(identity: &NodeIdentity) -> (GraphBinding, Offer) {
+    let graph = GraphBinding {
+        workspace_id: Uuid::new_v4(),
+        profile_id: "profile".into(),
+        profile_revision: "1".into(),
+        profile_digest: "a".repeat(64),
+        context_digest: "b".repeat(64),
+    };
+    let spec = ExecutionSpec {
+        bindings: Some(ExecutionBindings {
+            source: None,
+            graph: Some(graph.clone()),
+        }),
+        project_id: Uuid::new_v4(),
+        harness: FAKE_HARNESS_CAPABILITY.into(),
+        resolved_spec_digest: String::new(),
+        fixture_output: "artifacts".into(),
+        resources: Resources {
+            slots: 1,
+            cpu_millis: 100,
+            memory_bytes: 1024,
+            disk_bytes: 1024,
+        },
+        required_capabilities: vec![
+            FAKE_HARNESS_CAPABILITY.into(),
+            GRAPH_ACCESS_CAPABILITY.into(),
+        ],
+    }
+    .seal();
+    let offer = Offer {
+        offer_id: Uuid::new_v4(),
+        identity: identity.clone(),
+        attempt: AttemptRef {
+            attempt_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            generation: 1,
+        },
+        spec,
+        offer_expires_at_ms: 100000,
+        reservation_ttl_ms: 30000,
+    };
+    (graph, offer)
+}
+fn router(store: Store, path: &std::path::Path) -> Router {
+    let settings = SourceRetentionConfig {
+        keep_per_task: 2,
+        max_age: 30 * 86400,
+        staging_root: path.join("staging"),
+        git_root: path.join("git"),
+        git_socket: path.join("git.sock"),
+        max_staging_bytes: 2 * 1024 * 1024,
+        max_bundle_bytes: 4096,
+        bulk_concurrency: 2,
+        incomplete_ttl_secs: 60,
+        git_deadline_ms: 30_000,
+    };
+    let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
+    let state = AppState {
+        internal_work: Default::default(),
+        agent_access: None,
+        source_retention: Some(Arc::new(Runtime::new(settings).unwrap())),
+        identity: verifier_from_config(&config.auth, reqwest::Client::new()),
+        config: Arc::new(config),
+        store,
+        clock: Arc::new(Utc::now),
+    };
+    build_worker_router(state)
+}
 struct Harness {
     app: Router,
     token: String,
@@ -42,115 +155,13 @@ impl Harness {
     async fn new() -> Self {
         let db = TestDb::create().await;
         let store = db.store().await;
-        let now = Utc::now();
-        let owner = store
-            .bootstrap_owner("owner@localhost", "dev", "owner@localhost", now)
-            .await
-            .unwrap()
-            .unwrap();
-        store
-            .create_enrollment("enroll", owner.id, now, now + Duration::minutes(5))
-            .await
-            .unwrap();
-        let token = new_node_credential();
-        let node = store
-            .redeem_enrollment(
-                "enroll",
-                NewNode {
-                    name: "artifacts".into(),
-                    credential_hash: verifier(&token),
-                    worker_version: "0.1.0".into(),
-                    protocol_version: 1,
-                },
-                now,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        let identity = NodeIdentity {
-            node_id: node.id,
-            boot_id: Uuid::new_v4(),
-        };
-        store
-            .execution_register(&RegisterRequest {
-                identity: identity.clone(),
-                operation_id: Uuid::new_v4(),
-                protocol_version: EXECUTION_PROTOCOL_VERSION,
-                worker_version: "0.1.0".into(),
-                capabilities: vec![
-                    FAKE_HARNESS_CAPABILITY.into(),
-                    GRAPH_ACCESS_CAPABILITY.into(),
-                ],
-            })
-            .await
-            .unwrap();
-        let graph = GraphBinding {
-            workspace_id: Uuid::new_v4(),
-            profile_id: "profile".into(),
-            profile_revision: "1".into(),
-            profile_digest: "a".repeat(64),
-            context_digest: "b".repeat(64),
-        };
-        let spec = ExecutionSpec {
-            bindings: Some(ExecutionBindings {
-                source: None,
-                graph: Some(graph.clone()),
-            }),
-            project_id: Uuid::new_v4(),
-            harness: FAKE_HARNESS_CAPABILITY.into(),
-            resolved_spec_digest: String::new(),
-            fixture_output: "artifacts".into(),
-            resources: Resources {
-                slots: 1,
-                cpu_millis: 100,
-                memory_bytes: 1024,
-                disk_bytes: 1024,
-            },
-            required_capabilities: vec![
-                FAKE_HARNESS_CAPABILITY.into(),
-                GRAPH_ACCESS_CAPABILITY.into(),
-            ],
-        }
-        .seal();
-        let offer = Offer {
-            offer_id: Uuid::new_v4(),
-            identity: identity.clone(),
-            attempt: AttemptRef {
-                attempt_id: Uuid::new_v4(),
-                session_id: Uuid::new_v4(),
-                generation: 1,
-            },
-            spec,
-            offer_expires_at_ms: 100000,
-            reservation_ttl_ms: 30000,
-        };
+        let (token, identity) = register(&store).await;
+        let (graph, offer) = graph_offer(&identity);
         let task_id = Uuid::new_v4();
         store.execution_offer(task_id, &offer).await.unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let settings = SourceRetentionConfig {
-            keep_per_task: 2,
-            max_age: 30 * 86400,
-            staging_root: dir.path().join("staging"),
-            git_root: dir.path().join("git"),
-            git_socket: dir.path().join("git.sock"),
-            max_staging_bytes: 2 * 1024 * 1024,
-            max_bundle_bytes: 4096,
-            bulk_concurrency: 2,
-            incomplete_ttl_secs: 60,
-            git_deadline_ms: 30_000,
-        };
-        let config:Config=toml::from_str("format_version=1\nenvironment='development'\n[server]\nadmin_bind='127.0.0.1:0'\nworker_bind='127.0.0.1:0'\npublic_origin='http://127.0.0.1:8080'\n[auth]\nmode='dev'\ndev_email='owner@localhost'\n[bootstrap]\nowner_email='owner@localhost'\nenabled=true\n").unwrap();
-        let state = AppState {
-            internal_work: Default::default(),
-            agent_access: None,
-            source_retention: Some(Arc::new(Runtime::new(settings).unwrap())),
-            identity: verifier_from_config(&config.auth, reqwest::Client::new()),
-            config: Arc::new(config),
-            store,
-            clock: Arc::new(Utc::now),
-        };
         Self {
-            app: build_worker_router(state),
+            app: router(store, dir.path()),
             token,
             identity,
             task_id,
@@ -184,8 +195,7 @@ impl Harness {
     async fn json(&self, path: &str, body: Value) -> (StatusCode, Value) {
         let (code, bytes) = self
             .raw(
-                "POST",
-                path,
+                Request::post(path),
                 body.to_string().into_bytes(),
                 "application/json",
             )
@@ -194,14 +204,11 @@ impl Harness {
     }
     async fn raw(
         &self,
-        method: &str,
-        path: &str,
+        request: axum::http::request::Builder,
         body: Vec<u8>,
         content: &str,
     ) -> (StatusCode, Vec<u8>) {
-        let r = Request::builder()
-            .method(method)
-            .uri(path)
+        let r = request
             .header("x-aq-request", "1")
             .header("content-type", content)
             .header("authorization", format!("Bearer {}", self.token));
@@ -215,20 +222,13 @@ impl Harness {
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         (code, bytes.to_vec())
     }
-    async fn chunk(
-        &self,
-        transfer: &str,
-        op: Uuid,
-        offset: u64,
-        bytes: Vec<u8>,
-    ) -> (StatusCode, Value) {
+    async fn chunk(&self, transfer: &str, offset: u64, bytes: Vec<u8>) -> (StatusCode, Value) {
         let (code, out) = self
             .raw(
-                "PUT",
-                &format!(
-                    "/v1/execution/artifacts/{transfer}/data?operation_id={op}&offset={offset}&digest={}",
-                    hash(&bytes)
-                ),
+                Request::put(format!(
+                    "/v1/execution/artifacts/{transfer}/data?operation_id={}&offset={offset}&digest={}",
+                    Uuid::new_v4(),hash(&bytes)
+                )),
                 bytes,
                 "application/octet-stream",
             )
@@ -246,31 +246,37 @@ impl Harness {
 async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
     let h = Harness::new().await;
     let payload: Vec<u8> = (0..700u32).map(|i| (i % 251) as u8).collect();
+    let transfer = begin_and_replay(&h, &payload).await;
+    upload_exact_chunks(&h, &transfer, &payload).await;
+    let receipt = commit_and_replay(&h, &transfer, &payload).await;
+    fetch_retained_range(&h, &receipt, &payload).await;
+    reject_digest_mismatch(&h).await;
+}
+async fn begin_and_replay(h: &Harness, payload: &[u8]) -> String {
     let op = Uuid::new_v4();
     let (code, begun) = h
-        .json("/v1/execution/artifacts/begin", h.begin(op, &payload))
+        .json("/v1/execution/artifacts/begin", h.begin(op, payload))
         .await;
     assert_eq!(code, StatusCode::OK, "{begun}");
     assert_eq!(begun["state"], "uploading");
     let transfer = begun["transfer_id"].as_str().unwrap().to_string();
     // Same operation, same body: byte-for-byte replay. Different body: conflict.
     let (code, again) = h
-        .json("/v1/execution/artifacts/begin", h.begin(op, &payload))
+        .json("/v1/execution/artifacts/begin", h.begin(op, payload))
         .await;
     assert_eq!((code, &again), (StatusCode::OK, &begun));
     let (code, _) = h
         .json("/v1/execution/artifacts/begin", h.begin(op, &payload[..10]))
         .await;
     assert_eq!(code, StatusCode::CONFLICT);
+    transfer
+}
+async fn upload_exact_chunks(h: &Harness, transfer: &str, payload: &[u8]) {
     // Chunks are exact-offset; a stale offset is refused and nothing is written.
-    let (code, c1) = h
-        .chunk(&transfer, Uuid::new_v4(), 0, payload[..400].to_vec())
-        .await;
+    let (code, c1) = h.chunk(transfer, 0, payload[..400].to_vec()).await;
     assert_eq!(code, StatusCode::OK, "{c1}");
     assert_eq!(c1["offset"], 400);
-    let (code, _) = h
-        .chunk(&transfer, Uuid::new_v4(), 0, payload[..400].to_vec())
-        .await;
+    let (code, _) = h.chunk(transfer, 0, payload[..400].to_vec()).await;
     assert_eq!(code, StatusCode::CONFLICT);
     // Commit before completion is refused; upload completion is not retention.
     let (code, _) = h
@@ -280,13 +286,13 @@ async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
         )
         .await;
     assert_eq!(code, StatusCode::CONFLICT);
-    let (code, c2) = h
-        .chunk(&transfer, Uuid::new_v4(), 400, payload[400..].to_vec())
-        .await;
+    let (code, c2) = h.chunk(transfer, 400, payload[400..].to_vec()).await;
     assert_eq!(code, StatusCode::OK, "{c2}");
     assert_eq!(c2["offset"], 700);
     assert_eq!(c2["state"], "uploading");
     assert!(c2["receipt"].is_null());
+}
+async fn commit_and_replay(h: &Harness, transfer: &str, payload: &[u8]) -> lc::RetentionReceipt {
     let commit_op = Uuid::new_v4();
     let (code, done) = h
         .json(
@@ -301,7 +307,7 @@ async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
     lc::validate_retention(std::slice::from_ref(&receipt), &h.binding()).unwrap();
     assert_eq!(receipt.role, lc::ArtifactRole::Checkpoint);
     assert_eq!(receipt.bytes, 700);
-    assert_eq!(receipt.artifact.digest.as_str(), hash(&payload));
+    assert_eq!(receipt.artifact.digest.as_str(), hash(payload));
     assert!(receipt.retained_until_ms > receipt.retained_at_ms);
     let (code, replay) = h
         .json(
@@ -310,14 +316,16 @@ async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
         )
         .await;
     assert_eq!((code, &replay), (StatusCode::OK, &done));
+    receipt
+}
+async fn fetch_retained_range(h: &Harness, receipt: &lc::RetentionReceipt, payload: &[u8]) {
     // Fetch returns the retained bytes to an attempt in the same lineage.
     let (code, body) = h
         .raw(
-            "GET",
-            &format!(
+            Request::get(format!(
                 "/v1/execution/artifacts/retained/{}?attempt_id={}&offset=100&limit=1000",
                 receipt.receipt_id, h.offer.attempt.attempt_id
-            ),
+            )),
             Vec::new(),
             "application/octet-stream",
         )
@@ -326,24 +334,25 @@ async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
     assert_eq!(body, payload[100..].to_vec());
     let (code, _) = h
         .raw(
-            "GET",
-            &format!(
+            Request::get(format!(
                 "/v1/execution/artifacts/retained/{}?attempt_id={}",
                 Uuid::new_v4(),
                 h.offer.attempt.attempt_id
-            ),
+            )),
             Vec::new(),
             "application/octet-stream",
         )
         .await;
     assert_eq!(code, StatusCode::NOT_FOUND);
+}
+async fn reject_digest_mismatch(h: &Harness) {
     // A digest mismatch rejects the transfer instead of retaining it.
     let mut wrong = h.begin(Uuid::new_v4(), b"expected");
     wrong["bytes"] = json!(5);
     let (code, b2) = h.json("/v1/execution/artifacts/begin", wrong).await;
     assert_eq!(code, StatusCode::OK, "{b2}");
     let t2 = b2["transfer_id"].as_str().unwrap().to_string();
-    let (code, _) = h.chunk(&t2, Uuid::new_v4(), 0, b"other".to_vec()).await;
+    let (code, _) = h.chunk(&t2, 0, b"other".to_vec()).await;
     assert_eq!(code, StatusCode::OK);
     let (code, _) = h
         .json(
@@ -354,8 +363,7 @@ async fn artifact_upload_commit_returns_lifecycle_receipt_and_replays() {
     assert_eq!(code, StatusCode::CONFLICT);
     let (code, st) = h
         .raw(
-            "GET",
-            &format!("/v1/execution/artifacts/{t2}/status"),
+            Request::get(format!("/v1/execution/artifacts/{t2}/status")),
             Vec::new(),
             "application/json",
         )

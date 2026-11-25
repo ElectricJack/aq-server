@@ -121,6 +121,7 @@ async fn configure_material_delivery(f: &mut Fixture, path: &std::path::Path) {
         definition_bodies: vec![],
         revision: 1,
         qualified_runtimes: vec![QualifiedRuntime {
+            backend_kind: None,
             runtime: registration.runtime.clone(),
             qualification: qualification.clone(),
             capabilities: vec![],

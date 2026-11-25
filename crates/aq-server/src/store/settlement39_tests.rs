@@ -68,3 +68,27 @@ async fn settlement39_registered_upgrade_old_reader_and_critical_drift() {
         tx.rollback().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn fleet_performance_upgrade_attests_the_completion_clock_and_rejects_drift() {
+    let db = TestDb::create().await;
+    let pool = db.pool().await;
+    migrate_known(&pool, &MIGRATIONS[..177], 177).await.unwrap();
+    migrate_known(&pool, MIGRATIONS, crate::STATE_FORMAT_VERSION)
+        .await
+        .unwrap();
+    for mutation in [
+        "ALTER TABLE profiled_task_completions DISABLE TRIGGER performance_pilot_completion_clock",
+        "CREATE OR REPLACE FUNCTION performance_pilot_completion_clock() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NULL; END'",
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(mutation).execute(&mut *tx).await.unwrap();
+        assert!(
+            super::settlement39::validate_compute_reuse(&mut tx, crate::STATE_FORMAT_VERSION)
+                .await
+                .is_err(),
+            "{mutation}"
+        );
+        tx.rollback().await.unwrap();
+    }
+}
