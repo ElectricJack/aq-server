@@ -21,8 +21,8 @@ pub(super) async fn evidence(
     // The report owner's attempt lock also fences delivery host prepare/step.
     // A generic unreachable receipt can still have pushed. Only the explicit
     // remote rejection is conclusive, and only if every publication agrees.
-    let refusal: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT o.operation_id,p.head
+    let refusal: Option<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT o.operation_id,p.head,i.project_revision
          FROM delivery_pushed_results p JOIN profiled_result_reports r USING(report_id,attempt_id)
          JOIN owner_task_retry_intents i ON i.operation_id=$4 AND i.predecessor=p.attempt_id
          JOIN dashboard_operations d ON d.operation_id=i.operation_id
@@ -55,13 +55,24 @@ pub(super) async fn evidence(
     .fetch_optional(&mut **tx)
     .await
     .map_err(db)?;
-    Ok(refusal.map(|(publication, head)| {
-        json!({
+    let Some((publication, head, revision)) = refusal else {
+        return Ok(None);
+    };
+    if !aq_profiled_state::replacement_sql::pinned_binding_current(
+        &mut **tx,
+        attempt,
+        u64::try_from(revision).map_err(|_| AppError::Internal)?,
+    )
+    .await
+    .map_err(|_| AppError::Internal)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(json!({
             "decided_by": "owner_publication_retry",
             "owner_operation_id": owner_operation,
             "publication_operation_id": publication,
             "head": head,
             "report": result.receipt_artifact,
-        })
-    }))
+    })))
 }
