@@ -9,7 +9,7 @@ use axum::{
     routing::get,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgConnection, types::Json as SqlJson};
+use sqlx::{PgConnection, Row, types::Json as SqlJson};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -51,7 +51,6 @@ struct Setting {
 
 type Revision = (i64, i64, Option<SqlJson<Definition>>);
 
-#[derive(sqlx::FromRow)]
 struct Replay {
     actor_id: Uuid,
     project_id: Uuid,
@@ -194,11 +193,21 @@ async fn write(
         .await
         .map_err(db)?;
     let repo = project_repository(&mut tx, project, true).await?;
-    let replay: Option<Replay> = sqlx::query_as(
+    let replay = sqlx::query(
         "SELECT actor_id,project_id,work_class,revision,effective_at_ms,definition \
             FROM performance_delivery_definitions WHERE operation_id=$1",
     )
     .bind(change.operation_id)
+    .try_map(|row| {
+        Ok(Replay {
+            actor_id: row.try_get("actor_id")?,
+            project_id: row.try_get("project_id")?,
+            work_class: row.try_get("work_class")?,
+            revision: row.try_get("revision")?,
+            effective_at_ms: row.try_get("effective_at_ms")?,
+            definition: row.try_get("definition")?,
+        })
+    })
     .fetch_optional(&mut *tx)
     .await
     .map_err(db)?;
