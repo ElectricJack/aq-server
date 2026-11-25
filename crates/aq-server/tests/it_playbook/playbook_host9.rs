@@ -2669,9 +2669,9 @@ mod delivery {
         }
 
         #[tokio::test]
-        async fn a_publication_hold_rejoins_delivery_once_the_forge_matches_its_result() {
+        async fn a_publication_hold_rejoins_delivery_only_after_scoped_recovery_receipt() {
             let (h, forge) = harness().await;
-            let (attempt, task, result, branch) =
+            let (attempt, task, result, _branch) =
                 seed_recoverable_hold(&h, "publish_conflict").await;
             let pool = h.pool().await;
 
@@ -2683,6 +2683,31 @@ mod delivery {
                 0,
                 "forge probes are spaced by the delivery interval"
             );
+            h.later(120_000);
+            assert_eq!(
+                h.asked().await,
+                0,
+                "a matching forge head alone cannot authorize publication replay"
+            );
+            // This is the immutable observation receipt the separately authorized
+            // recovery route writes. No worker retry or hold override is involved.
+            let original = Uuid::new_v4();
+            let recovery = Uuid::new_v4();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL session_replication_role=replica")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let ns: Uuid = sqlx::query_scalar("SELECT namespace_id FROM playbook_namespaces WHERE project_id=$1 ORDER BY generation DESC LIMIT 1")
+                .bind(h.scope.project_id).fetch_one(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO playbook_host_operations(operation_id,namespace_id,generation,intent_id,command_name,subject_id,subject_revision,request,status,output,created_at_ms,completed_at_ms) VALUES($1,$2,1,$3,'branch.publish',$4,0,'{}','refused','{\"reason\":\"unreachable\"}',$5,$5)")
+                .bind(original).bind(ns).bind(original.to_string()).bind(task.to_string()).bind(h.clock()).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO retained_publication_recovery_requests(operation_id,publication_operation_id,report_id,request,publisher) VALUES($1,$2,$3,'{}','{}')")
+                .bind(recovery).bind(original).bind(result).execute(&mut *tx).await.unwrap();
+            let evidence = json!({"identity":{"task_id":task,"head":oid('a')},"observation":{"state":"published","head":oid('a')}});
+            sqlx::query("INSERT INTO retained_publication_recoveries(operation_id,publication_operation_id,report_id,request,evidence) VALUES($1,$2,$3,'{}',$4)")
+                .bind(recovery).bind(original).bind(result).bind(evidence).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
             h.later(120_000);
             assert_eq!(h.asked().await, 1);
             assert_eq!(
@@ -2696,9 +2721,9 @@ mod delivery {
                 0,
                 "the queued event owns the resumed result"
             );
-            assert_eq!(
-                &*forge.log.lock().unwrap(),
-                &vec![format!("observe {branch}"); 3]
+            assert!(
+                forge.log.lock().unwrap().is_empty(),
+                "held probing does not substitute a forge read for a publisher receipt"
             );
             let hold: String =
                 sqlx::query_scalar("SELECT decision FROM delivery_decisions WHERE result_id=$1")

@@ -541,9 +541,8 @@ async fn recover_held_delivery(
             return Ok(false);
         };
         if reason == "publish_conflict" {
-            return Ok(commands
-                .publish_lease_usable(&target, task, head, old.as_deref())
-                .await);
+            return Ok(sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM retained_publication_recoveries WHERE report_id=$1 AND evidence#>>'{observation,state}'='published' AND evidence#>>'{identity,head}'=$2)")
+                .bind(row.get::<Uuid,_>("report_id")).bind(head).fetch_one(&mut *db).await?);
         }
         let Some(request) = check_request.filter(|request| {
             old.as_deref() == Some(accepted)
@@ -675,6 +674,7 @@ pub async fn publication_refusal(db: &mut PgConnection, result: Uuid) -> Result<
            AND o.request#>>'{result_ready,result_id}'=p.report_id::text
            AND o.request#>>'{result_ready,attempt_id}'=p.attempt_id::text AND o.request->>'result_head'=p.head
          WHERE p.report_id=$1 AND a.holds_task AND o.status='refused' AND o.output->>'reason'='unreachable'
+         AND NOT EXISTS(SELECT 1 FROM retained_publication_recoveries rr WHERE rr.report_id=p.report_id AND rr.evidence#>>'{observation,state}'='published')
          AND NOT EXISTS(SELECT 1 FROM playbook_host_operations ok WHERE ok.subject_id=o.subject_id
              AND ok.command_name='branch.publish' AND ok.status='published'
              AND ok.request#>>'{result_ready,result_id}'=p.report_id::text
@@ -718,7 +718,7 @@ fn publication_refusal_text(r: &Refusal<'_>) -> String {
     let (cause, action) = match r.note {
         Some("remote_rejected") => (
             "AQ Git recorded a rejection from the remote",
-            "The remote refused the push and AQ Git does not record its message: check the repository's branch protection or push rules for refs/heads/aq/, and that the publisher may write this commit (for example workflow files need the workflow permission). Escalate what you cannot change. Do not force-push or abandon the attempt.",
+            "Inspect the bound original publisher journal for the recorded rejection class. Any permission or remote-policy correction requires an operator decision. Do not force-push or abandon the attempt.",
         ),
         Some("rejected") => (
             "AQ Git recorded a rejection",
@@ -730,7 +730,7 @@ fn publication_refusal_text(r: &Refusal<'_>) -> String {
         ),
         Some("git_error") => (
             "AQ Git reported an error",
-            "Read its operation record with the operation ID; the push did not complete.",
+            "Read its original publisher journal with the operation ID; the remote effect may still be unknown.",
         ),
         _ => (
             "the delivery host recorded an unreachable response",
@@ -752,7 +752,7 @@ fn publication_refusal_text(r: &Refusal<'_>) -> String {
         , r.refused));
     }
     text.push_str(&format!(
-        " {action} Delivery retries the same commit by itself under the same lease and never forces the push; before refusing, it observes the forge and records the receipt without pushing when the exact commit is already there."
+        " {action} Use result.publication.show for the exact result revision and operation history, then result.publication.reconcile to observe and recover the receipt. Recovery never forces the push and records the receipt without pushing when the exact commit is already there. A refusal requires operator inspection before any separately authorized retry."
     ));
     text
 }

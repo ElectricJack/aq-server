@@ -184,7 +184,10 @@ impl DeliveryRuns<'_> {
             text,
             longest_check_wait_ms,
             check_log_bytes,
-            target: if matches!(name, "pull_request.merge" | "pull_request.await_checks") {
+            target: if matches!(
+                name,
+                "branch.publish" | "pull_request.merge" | "pull_request.await_checks"
+            ) {
                 self.operations.target(subject.project).await?
             } else {
                 None

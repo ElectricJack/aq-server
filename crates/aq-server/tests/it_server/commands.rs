@@ -208,6 +208,13 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
             if !name.ends_with(".rs") || name == "dashboard_assets.rs" {
                 continue;
             }
+            // This module is mounted only by the delivery_playbook build.
+            // Its registered commands carry the same feature gate.
+            if !cfg!(feature = "delivery_playbook")
+                && path.ends_with("profiled_execution/human_results/publication.rs")
+            {
+                continue;
+            }
             let text = std::fs::read_to_string(&path).unwrap();
             for route in parse_source_routes(&path, &text, &consts) {
                 out.entry(route).or_default().insert(name.clone());

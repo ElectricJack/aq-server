@@ -218,6 +218,49 @@ fn failure_diagnostic(failure: &git::GitFailure) -> &'static str {
 }
 
 impl Delivery {
+    /// Exact original aq-git journal, bounded to structured diagnostics. Never resends publish.
+    pub async fn inspect_publication(
+        &self,
+        target: &DeliveryTarget,
+        operation: Uuid,
+        task: Uuid,
+        old: Option<&str>,
+        source: &str,
+    ) -> Value {
+        self.git.inspect_publication(operation,&target.git,&task_branch(task),old,source).await
+            .unwrap_or_else(|_| json!({"state":"unavailable","required_action":"Operator must inspect the original aq-git operation; absence of this read is not proof of absence of a push."}))
+    }
+    /// Reconcile only pending dispatched/indeterminate records of the bound original journal.
+    pub async fn reconcile_publication(
+        &self,
+        target: &DeliveryTarget,
+        operation: Uuid,
+        original: Uuid,
+        source: &str,
+        journal: &Value,
+    ) -> Value {
+        if journal["published"] == true {
+            return json!({"state":"published","head":source,"caused_by_this_operation":false,"receipt":"original_journal"});
+        }
+        if journal["status"] == "complete" && journal["outcome"] == "rejected" {
+            return json!({"state":"held","reason":"publication_rejected","required_action":"Inspect the bound original rejection class. Any remote-policy or publisher permission correction and any retry require a separate operator decision. Do not force, release or replace work."});
+        }
+        if journal["status"] != "pending"
+            || !matches!(
+                journal["phase"].as_str(),
+                Some("dispatched" | "indeterminate")
+            )
+        {
+            return json!({"state":"held","reason":"publisher_inspection_required","required_action":"Read the bound original publisher journal. Unavailable evidence proves neither rejection nor acceptance; no retry, release or replacement is authorized."});
+        }
+        let Some(generation) = journal["generation"].as_u64().filter(|n| *n > 0) else {
+            return json!({"state":"held","reason":"journal_generation_missing"});
+        };
+        self.git
+            .reconcile_publication(operation, &target.git, original, generation, source)
+            .await
+            .unwrap_or_else(|_| json!({"state":"held","reason":"operation_indeterminate"}))
+    }
     /// Confirm the exact result is on the forge or the existing publish lease is usable.
     pub async fn publish_lease_usable(
         &self,

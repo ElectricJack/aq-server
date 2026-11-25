@@ -794,3 +794,34 @@ fn every_owner_command_has_a_supervisor_route() {
         );
     }
 }
+
+#[cfg(feature = "delivery_playbook")]
+#[test]
+fn publication_recovery_exposes_only_scoped_owner_routes_and_keeps_the_original_identity() {
+    let r = Registry::new(&actions()).unwrap();
+    for name in ["result.publication.show", "result.publication.reconcile"] {
+        let c = r.get(name).unwrap();
+        assert!(c.agent.is_none(), "no agent mutation capability is added");
+        assert!(
+            c.owner.unwrap().path.starts_with(
+                "/api/projects/{project_id}/results/{report_id}/revisions/{revision}/"
+            )
+        );
+    }
+    let c = r.get("result.publication.reconcile").unwrap();
+    let op = Uuid::from_u128(5);
+    let original = Uuid::from_u128(6);
+    let q = CommandRequest { operation_id:Some(op), params:json!({"project_id":Uuid::from_u128(1),"report_id":Uuid::from_u128(2),"revision":"a".repeat(64),"repository_id":Uuid::from_u128(3),"publication_operation_id":original}).as_object().unwrap().clone(),..Default::default() };
+    let forwarded = c.forward(&c.owner.unwrap(), &q, None).unwrap();
+    let body = forwarded.body.unwrap();
+    assert_eq!(body["operation_id"], op.to_string());
+    assert_eq!(body["publication_operation_id"], original.to_string());
+    assert!(
+        body.get("project_id").is_none(),
+        "project is carried by the scoped path"
+    );
+    let schema = params_schema(c.owner.as_ref().unwrap(), &BTreeMap::new(), c.name);
+    for key in ["force", "retry", "resolve", "release", "accept"] {
+        assert!(schema["properties"].get(key).is_none());
+    }
+}
