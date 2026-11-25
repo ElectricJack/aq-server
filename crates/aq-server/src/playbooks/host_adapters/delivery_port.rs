@@ -7,9 +7,9 @@
 use super::*;
 use crate::{
     delivery::{
-        CandidateRequest, CandidateState, CommitMetadata, DeliverRequest, DeliveryError,
-        DeliveryOutcome, DeliveryService, ObservationRequest, OperationContext, ReconcileRequest,
-        Resolution, RetryAdvice,
+        CandidateRequest, CandidateResult, CandidateState, CommitMetadata, DeliverRequest,
+        DeliveryError, DeliveryOutcome, DeliveryService, ObservationRequest, OperationContext,
+        ReconcileRequest, Resolution, RetryAdvice,
     },
     error::AppError,
     playbooks::config::IntegrationSettings,
@@ -63,6 +63,38 @@ fn context(operation: Uuid, repository: Uuid, generation: u64) -> OperationConte
     }
 }
 
+// Only deterministic input refusals are final; all other errors retain uncertainty.
+fn delivery_refusal(error: DeliveryError) -> Result<String> {
+    match error {
+        DeliveryError::InvalidInput(_) => Ok("invalid_request".into()),
+        DeliveryError::IdempotencyConflict => Ok("idempotency_conflict".into()),
+        _ => Err(Error::Unknown),
+    }
+}
+
+fn prepare_reply(candidate: CandidateResult) -> Result<PrepareReply> {
+    match candidate.state {
+        CandidateState::Ready => candidate
+            .candidate
+            .map(|candidate| PrepareReply::Prepared { candidate })
+            .ok_or(Error::Unknown),
+        CandidateState::Conflicted => Ok(PrepareReply::Conflict {
+            step: candidate.conflict_step.map(|s| s as u64),
+            paths: candidate
+                .conflicting_paths
+                .iter()
+                .map(|p| {
+                    hex::decode(&p.value)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default()
+                })
+                .collect(),
+            truncated: candidate.conflict_paths_truncated,
+            count: candidate.conflict_path_count as u64,
+        }),
+    }
+}
+
 #[async_trait::async_trait]
 impl Integration for DeliveryIntegration {
     async fn binding(&self, workspace: Uuid, project: Uuid) -> Result<Option<IntegrationBinding>> {
@@ -103,42 +135,18 @@ impl Integration for DeliveryIntegration {
         };
         let receipt = match self.delivery.create_candidate(request).await {
             Ok(r) => r,
-            Err(DeliveryError::InvalidInput(_)) => {
+            // Other errors leave the intent pending for the same operation.
+            Err(error) => {
                 return Ok(PrepareReply::Refused {
-                    reason: "invalid_request".into(),
+                    reason: delivery_refusal(error)?,
                 });
             }
-            Err(DeliveryError::IdempotencyConflict) => {
-                return Ok(PrepareReply::Refused {
-                    reason: "idempotency_conflict".into(),
-                });
-            }
-            // Transport/protocol/storage: the intent stays pending and the
-            // same operation is re-sent on re-dispatch.
-            Err(_) => return Err(Error::Unknown),
         };
-        Ok(match receipt.outcome {
-            Ok(c) => match (c.state, c.candidate) {
-                (CandidateState::Ready, Some(candidate)) => PrepareReply::Prepared { candidate },
-                (CandidateState::Ready, None) => return Err(Error::Unknown),
-                (CandidateState::Conflicted, _) => PrepareReply::Conflict {
-                    step: c.conflict_step.map(|s| s as u64),
-                    paths: c
-                        .conflicting_paths
-                        .iter()
-                        .map(|p| {
-                            hex::decode(&p.value)
-                                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                                .unwrap_or_default()
-                        })
-                        .collect(),
-                    truncated: c.conflict_paths_truncated,
-                    count: c.conflict_path_count as u64,
-                },
-            },
-            Err(e) if e.retry == RetryAdvice::SafeSameOperation => return Err(Error::Unknown),
-            Err(e) => PrepareReply::Refused { reason: e.code },
-        })
+        match receipt.outcome {
+            Ok(candidate) => prepare_reply(candidate),
+            Err(e) if e.retry == RetryAdvice::SafeSameOperation => Err(Error::Unknown),
+            Err(e) => Ok(PrepareReply::Refused { reason: e.code }),
+        }
     }
 
     async fn publish(&self, call: &PublishCall) -> Result<PublishReply> {
@@ -153,18 +161,12 @@ impl Integration for DeliveryIntegration {
             .await
         {
             Ok(o) => o,
-            Err(DeliveryError::InvalidInput(_)) => {
+            // Other errors are ambiguous: reconcile, never re-publish.
+            Err(error) => {
                 return Ok(PublishReply::Refused {
-                    reason: "invalid_request".into(),
+                    reason: delivery_refusal(error)?,
                 });
             }
-            Err(DeliveryError::IdempotencyConflict) => {
-                return Ok(PublishReply::Refused {
-                    reason: "idempotency_conflict".into(),
-                });
-            }
-            // The caller treats an error as ambiguous: reconcile, never re-publish.
-            Err(_) => return Err(Error::Unknown),
         };
         Ok(match outcome {
             DeliveryOutcome::Published { old, new, .. } => PublishReply::Published { old, new },
@@ -264,5 +266,76 @@ impl Integration for DeliveryIntegration {
             approved,
             issuer_authorized,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aq_worker_protocol::ObjectId;
+
+    #[test]
+    fn delivery_refusals_preserve_ambiguous_errors() {
+        assert_eq!(
+            delivery_refusal(DeliveryError::InvalidInput("invalid")).unwrap(),
+            "invalid_request"
+        );
+        assert_eq!(
+            delivery_refusal(DeliveryError::IdempotencyConflict).unwrap(),
+            "idempotency_conflict"
+        );
+        for error in [
+            DeliveryError::Transport,
+            DeliveryError::Protocol,
+            DeliveryError::Indeterminate,
+            DeliveryError::DestinationBlocked,
+            DeliveryError::Database(sqlx::Error::RowNotFound),
+        ] {
+            assert!(matches!(delivery_refusal(error), Err(Error::Unknown)));
+        }
+    }
+
+    #[test]
+    fn candidate_reply_preserves_missing_candidates_and_conflict_paths() {
+        let oid: ObjectId =
+            serde_json::from_value(json!({"algorithm": "sha1", "hex": "a".repeat(40)})).unwrap();
+        let mut candidate = CandidateResult {
+            candidate_id: Uuid::nil(),
+            state: CandidateState::Ready,
+            candidate: None,
+            clean_prefix: oid.clone(),
+            retention_handle: Uuid::nil(),
+            conflict_step: Some(2),
+            conflicting_paths: vec![],
+            conflict_paths_truncated: true,
+            conflict_path_count: 7,
+        };
+        assert!(matches!(
+            prepare_reply(candidate.clone()),
+            Err(Error::Unknown)
+        ));
+        candidate.candidate = Some(oid.clone());
+        assert_eq!(
+            prepare_reply(candidate.clone()).unwrap(),
+            PrepareReply::Prepared { candidate: oid }
+        );
+        candidate.state = CandidateState::Conflicted;
+        candidate.conflicting_paths = ["src/file.rs".as_bytes(), &[255], b""]
+            .into_iter()
+            .map(|bytes| crate::delivery::ConflictPath {
+                encoding: "hex".into(),
+                value: hex::encode(bytes),
+            })
+            .collect();
+        candidate.conflicting_paths[2].value = "invalid hex".into();
+        assert_eq!(
+            prepare_reply(candidate).unwrap(),
+            PrepareReply::Conflict {
+                step: Some(2),
+                paths: vec!["src/file.rs".into(), "\u{fffd}".into(), "".into()],
+                truncated: true,
+                count: 7,
+            }
+        );
     }
 }

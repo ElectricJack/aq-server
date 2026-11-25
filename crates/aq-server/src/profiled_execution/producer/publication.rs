@@ -271,7 +271,30 @@ pub(super) async fn publish(
     aq_machine_control::slots::assign(&mut tx, binding.attempt_id, node, slot)
         .await
         .map_err(crate::machine_api::mapped)?;
+    // At this point the task and compatible slot passed publication's gates.
+    // Keep the episode local to the transaction so a rollback cannot qualify.
+    let capture = state.store.scheduling_diagnostics.as_ref();
+    let eligible = capture.map(|_| (state.clock)().timestamp_millis());
     tx.commit().await.map_err(db)?;
+    if let Some((capture, eligible)) = capture.zip(eligible) {
+        let claimed = (state.clock)().timestamp_millis();
+        let expires = built
+            .deadline
+            .min(inspection.expires_at_ms())
+            .min(built.source.admission.expires_at_ms)
+            .min(built.decision.inputs.node.expires_at_ms)
+            .min(built.read_provenance.ready_expires_at_ms)
+            .min(built.read_provenance.context_expires_at_ms);
+        if eligible >= time as i64 && (claimed as u64) < expires {
+            capture.claim(
+                binding.attempt_id,
+                task,
+                binding.assignment_generation,
+                eligible,
+                claimed,
+            );
+        }
+    }
     Ok(Outcome::Published(Box::new(delivery)))
 }
 
