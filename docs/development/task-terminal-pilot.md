@@ -27,7 +27,8 @@ Stop the runner with Ctrl-C. It stops its test server, tmux session, and the dis
 ## Workspace request and review
 
 Use a server source revision containing the workspace resource and checkpoint
-migrations. In a second terminal, stage a private aq-git socket and two local
+migrations. Add `--features delivery_playbook,project_environments,supervisor_full_access`
+to the build command and use the executable from that build. In a second terminal, stage a private aq-git socket and two local
 repository identities.
 
 ```sh
