@@ -46,6 +46,7 @@ async fn task_route_set_writes_an_owner_route_and_is_refused_for_a_class_without
     assert_eq!(metadata["example:weight"], 2);
     assert_eq!(metadata["aq:route"]["c"], "standard-high");
     assert_eq!(metadata["aq:route"]["h"], json!(["codex"]));
+    assert_eq!(metadata["aq:route"]["i"], "any");
     assert_eq!(metadata["aq:route"]["s"], "owner");
     let history = aq_server::routing::history(&x.f.db.pool().await, task)
         .await

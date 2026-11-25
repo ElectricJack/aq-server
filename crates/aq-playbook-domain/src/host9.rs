@@ -140,57 +140,25 @@ pub struct Provenance<'a> {
     pub ended_attempts: u32,
 }
 
-/// A dimension with an empty input accepts every offer. A nonempty input
-/// must retain at least one of the level's names.
-struct OfferedNames {
-    requested: bool,
-    names: Vec<String>,
-}
-impl OfferedNames {
-    fn select(
-        input: &Value,
-        offers: &[aq_routing::classify::Offer],
-        field: fn(&aq_routing::classify::Offer) -> &String,
-    ) -> Self {
-        let asked = names(input);
-        let requested = !asked.is_empty();
-        let names = asked
-            .into_iter()
-            .filter(|value| offers.iter().any(|o| field(o) == value))
-            .collect();
-        Self { requested, names }
-    }
-    fn missing(&self) -> bool {
-        self.requested && self.names.is_empty()
-    }
-    fn includes(&self, value: &String) -> bool {
-        self.names.is_empty() || self.names.contains(value)
-    }
+fn offered_preferences(
+    input: &Value,
+    offers: &[aq_routing::classify::Offer],
+    field: fn(&aq_routing::classify::Offer) -> &String,
+) -> Vec<String> {
+    names(input)
+        .into_iter()
+        .filter(|name| offers.iter().any(|offer| field(offer) == name))
+        .collect()
 }
 
-/// The route a `work.route` input asks for, within what Settings offers at
-/// its level: the harness, provider and preference lists are intersected
-/// with the level's offers. `None` is `not_offered`: the level has no
-/// profile, a non-empty list has nothing left, or no offered pair is in both
-/// lists. `hold: true` pins the provider.
+/// A queued route retains ordered preferences that Settings offers at its
+/// level. Older documents may still send `hold`; it does not pin a provider.
 pub fn route_from_input(input: &Value, options: &Options, from: Provenance<'_>) -> Option<Route> {
     let class: Class = input["level"].as_str()?.parse().ok()?;
     let offers = options.classes.get(&class).filter(|o| !o.is_empty())?;
-    let harnesses = OfferedNames::select(&input["harnesses"], offers, |o| &o.harness);
-    let providers = OfferedNames::select(&input["providers"], offers, |o| &o.provider);
-    if harnesses.missing() || providers.missing() {
-        return None;
-    }
-    let pair = offers
-        .iter()
-        .any(|offer| harnesses.includes(&offer.harness) && providers.includes(&offer.provider));
-    if !pair {
-        return None;
-    }
-    let prefer = names(&input["prefer"])
-        .into_iter()
-        .filter(|name| offers.iter().any(|o| &o.harness == name) && harnesses.includes(name))
-        .collect();
+    let harnesses = offered_preferences(&input["harnesses"], offers, |o| &o.harness);
+    let providers = offered_preferences(&input["providers"], offers, |o| &o.provider);
+    let prefer = offered_preferences(&input["prefer"], offers, |o| &o.harness);
     let reasons = (input["reasons"].as_array().into_iter().flatten())
         .map(|r| RouteReason {
             code: r["code"].as_str().unwrap_or("").into(),
@@ -199,14 +167,11 @@ pub fn route_from_input(input: &Value, options: &Options, from: Provenance<'_>) 
         .collect();
     Some(Route {
         class,
-        harnesses: harnesses.names,
-        providers: providers.names,
+        harnesses,
+        providers,
         prefer,
         lane: None,
-        provider_intent: match input["hold"] == true {
-            true => ProviderIntent::Pinned,
-            false => ProviderIntent::Any,
-        },
+        provider_intent: ProviderIntent::Any,
         reasons,
         classification: None,
         policy_digest: from.artifact_digest.map(str::to_owned),

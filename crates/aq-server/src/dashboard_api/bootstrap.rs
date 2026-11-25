@@ -186,6 +186,11 @@ impl CapabilitySources<'_> {
         vec![
             capability("dashboard.overview", true, ""),
             capability(
+                "tasks.route.preferences",
+                a.owner,
+                "Task route preferences require an owner account",
+            ),
+            capability(
                 "performance.metrics.v1",
                 a.owner,
                 "Performance requires project inspection access",
