@@ -159,11 +159,7 @@ fn request_reservation(
         _ => return Err(unavailable()),
     })
 }
-pub(super) async fn retained(
-    tx: &mut Transaction<'_, Postgres>,
-    a: &Actor,
-    row: sqlx::postgres::PgRow,
-) -> Result<Lookup> {
+fn decode_retained(a: &Actor, row: &sqlx::postgres::PgRow) -> Result<(Receipt, Option<Uuid>)> {
     let request: String = row.get("request_bytes");
     let result: String = row.get("result_bytes");
     let payload = aq_agent_api::parse(request.as_bytes()).map_err(|_| unavailable())?;
@@ -194,13 +190,17 @@ pub(super) async fn retained(
         return Err(unavailable());
     }
     let request_reservation = request_reservation(a, &kind, operation, &payload["request"])?;
+    validate_outcome(&kind, &receipt)?;
+    Ok((receipt, request_reservation))
+}
+pub(super) fn validate_outcome(kind: &str, receipt: &Receipt) -> Result<()> {
     let success = matches!(
         receipt.disposition,
         Disposition::Configured | Disposition::Reserved | Disposition::CancelledBeforePlan
     );
     if success != receipt.reason.is_none()
         || !matches!(
-            (kind.as_str(), receipt.disposition),
+            (kind, receipt.disposition),
             (
                 "configure",
                 Disposition::Configured | Disposition::NotConfigured
@@ -213,6 +213,47 @@ pub(super) async fn retained(
     {
         return Err(unavailable());
     }
+    Ok(())
+}
+/// A reserve receipt retains its admission-time view even after cancellation
+/// or consumption. Only the reservation's lifecycle fields may have advanced.
+pub(super) fn validate_saved_reservation(
+    receipt: &Receipt,
+    actual: &ReservationView,
+) -> Result<()> {
+    let saved = receipt.reservation.as_ref().ok_or_else(unavailable)?;
+    let mut expected = actual.clone();
+    match receipt.disposition {
+        Disposition::Reserved => {
+            expected.revision = 1;
+            expected.state = ReservationState::AwaitingPreparedPlan;
+            expected.cancel_operation_id = None;
+            if expected.reserve_operation_id != receipt.operation_id
+                || expected.admission_actor_revision != receipt.actor_revision
+            {
+                return Err(unavailable());
+            }
+        }
+        Disposition::CancelledBeforePlan => {
+            if actual.cancel_operation_id != Some(receipt.operation_id)
+                || actual.state != ReservationState::CancelledBeforePlan
+            {
+                return Err(unavailable());
+            }
+        }
+        _ => return Err(unavailable()),
+    }
+    if *saved != expected {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+pub(super) async fn retained(
+    tx: &mut Transaction<'_, Postgres>,
+    a: &Actor,
+    row: sqlx::postgres::PgRow,
+) -> Result<Lookup> {
+    let (receipt, request_reservation) = decode_retained(a, &row)?;
     let mut current = None;
     if let Some(saved) = &receipt.reservation {
         if request_reservation != Some(saved.id) {
@@ -221,28 +262,7 @@ pub(super) async fn retained(
         let actual = reads::reservation(tx, a, saved.id, false)
             .await?
             .ok_or_else(unavailable)?;
-        let mut expected = actual.clone();
-        if receipt.disposition == Disposition::Reserved {
-            expected.revision = 1;
-            expected.state = ReservationState::AwaitingPreparedPlan;
-            expected.cancel_operation_id = None;
-            if expected.reserve_operation_id != operation
-                || expected.admission_actor_revision != receipt.actor_revision
-            {
-                return Err(unavailable());
-            }
-        } else if receipt.disposition == Disposition::CancelledBeforePlan {
-            if actual.cancel_operation_id != Some(operation)
-                || actual.state != ReservationState::CancelledBeforePlan
-            {
-                return Err(unavailable());
-            }
-        } else {
-            return Err(unavailable());
-        }
-        if *saved != expected {
-            return Err(unavailable());
-        }
+        validate_saved_reservation(&receipt, &actual)?;
         current = Some(actual);
     } else if matches!(
         receipt.disposition,

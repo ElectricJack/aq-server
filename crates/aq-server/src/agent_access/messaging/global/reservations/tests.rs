@@ -807,16 +807,102 @@ fn closed_commands_reject_fake_execution_fields_duplicates_and_fractional_revisi
     assert!(parse::<Configure>(&vec![b' '; 16385]).is_err());
 }
 
-#[test]
-fn normative_documents_decode_and_bind_exact_reservation_request_and_batch() {
-    let examples: Value = serde_json::from_slice(
+fn normative_examples() -> Value {
+    serde_json::from_slice(
         &std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../protocol/central-reservation/v1/examples.json"),
         )
         .unwrap(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn retained_outcomes_require_matching_command_kind_and_reason() {
+    let mut receipt: Receipt =
+        serde_json::from_value(normative_examples()["reserve_receipt"]["data"].clone()).unwrap();
+    for (disposition, command, success) in [
+        (Disposition::Configured, "configure", true),
+        (Disposition::NotConfigured, "configure", false),
+        (Disposition::Reserved, "reserve", true),
+        (Disposition::NotReserved, "reserve", false),
+        (Disposition::CancelledBeforePlan, "cancel", true),
+        (Disposition::NotCancelled, "cancel", false),
+    ] {
+        receipt.disposition = disposition;
+        for kind in ["configure", "reserve", "cancel", "unknown"] {
+            for reason in [None, Some(Reason::RevisionChanged)] {
+                receipt.reason = reason;
+                assert_eq!(
+                    writes::validate_outcome(kind, &receipt).is_ok(),
+                    kind == command && success == reason.is_none(),
+                    "{kind} {disposition:?} {reason:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_reservation_replay_preserves_original_and_current_lifecycle_views() {
+    let examples = normative_examples();
+    let receipt: Receipt =
+        serde_json::from_value(examples["reserve_receipt"]["data"].clone()).unwrap();
+    let saved = receipt.reservation.as_ref().unwrap();
+    for state in [
+        ReservationState::AwaitingPreparedPlan,
+        ReservationState::CancelledBeforePlan,
+        ReservationState::Consumed,
+    ] {
+        let mut current = saved.clone();
+        current.state = state;
+        if state != ReservationState::AwaitingPreparedPlan {
+            current.revision = 2;
+        }
+        if state == ReservationState::CancelledBeforePlan {
+            current.cancel_operation_id = Some(Uuid::new_v4());
+        }
+        writes::validate_saved_reservation(&receipt, &current).unwrap();
+        // Lifecycle changes are allowed; the original batch and admission
+        // identity must still match every field of the retained view.
+        for (field, value) in [
+            ("id", json!(Uuid::new_v4())),
+            ("reserve_operation_id", json!(Uuid::new_v4())),
+            (
+                "admission_actor_revision",
+                json!(receipt.actor_revision + 1),
+            ),
+            ("policy_revision", json!(saved.policy_revision + 1)),
+            ("body_bytes", json!(saved.body_bytes + 1)),
+            ("batch_digest", json!(Digest::of(b"changed batch"))),
+        ] {
+            let mut changed = json!(current);
+            changed[field] = value;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(
+                matches!(
+                    writes::validate_saved_reservation(&receipt, &changed),
+                    Err(AppError::IdentityUnavailable(_))
+                ),
+                "{state:?} {field}"
+            );
+        }
+    }
+    let cancelled: Receipt =
+        serde_json::from_value(examples["cancel_receipt"]["data"].clone()).unwrap();
+    let mut current = cancelled.reservation.clone().unwrap();
+    writes::validate_saved_reservation(&cancelled, &current).unwrap();
+    current.cancel_operation_id = Some(Uuid::new_v4());
+    assert!(writes::validate_saved_reservation(&cancelled, &current).is_err());
+    current = cancelled.reservation.clone().unwrap();
+    current.state = ReservationState::Consumed;
+    assert!(writes::validate_saved_reservation(&cancelled, &current).is_err());
+}
+
+#[test]
+fn normative_documents_decode_and_bind_exact_reservation_request_and_batch() {
+    let examples = normative_examples();
     for value in examples.as_object().unwrap().values() {
         let _: Document = serde_json::from_value(value.clone()).unwrap();
     }
