@@ -1,6 +1,7 @@
 SELECT a.task_id,
        home.project_id AS home_project_id,
-       (l.execution_spec #>> '{source,repository_id}')::uuid AS home_repository
+       (l.execution_spec #>> '{source,repository_id}')::uuid AS home_repository,
+       (l.launch_binding->>'assignment_generation')::bigint AS generation
 FROM execution_attempts a
 JOIN profiled_launches l USING (attempt_id)
 JOIN profiled_authority_hot hot USING (attempt_id)

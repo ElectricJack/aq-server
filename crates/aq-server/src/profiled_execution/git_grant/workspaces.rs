@@ -4,7 +4,7 @@ use super::*;
 use aq_delivery::commands::{GitTarget, object_id, task_branch};
 use axum::{Json, Router, http::HeaderMap};
 use serde::Serialize;
-use sqlx::{FromRow, PgConnection, PgPool};
+use sqlx::{FromRow, PgConnection, PgPool, Row, postgres::PgRow};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -12,7 +12,7 @@ use std::{
 
 const MAX_WORKSPACES: usize = 16;
 
-#[derive(Clone, Debug, Eq, PartialEq, FromRow)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Source {
     home_project_id: Uuid,
     task_id: Uuid,
@@ -30,6 +30,7 @@ pub(crate) struct WorkspaceGrant {
     pub(crate) project_revision: u64,
     pub(crate) binding_generation: u64,
     pub(crate) access: String,
+    pub(crate) checkout_head: String,
     #[serde(flatten)]
     pub(crate) grant: GitGrant,
 }
@@ -40,24 +41,60 @@ struct GrantList {
     services: Vec<Service>,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize)]
 struct Service {
     service: String,
 }
 
-#[derive(FromRow)]
 struct Attempt {
     home_project_id: Uuid,
     task_id: Uuid,
     home_repository: Uuid,
+    generation: i64,
 }
 
-#[derive(FromRow)]
 struct Frozen {
-    #[sqlx(flatten)]
     source: Source,
     task_ref: String,
+    checkout_head: String,
     lease: Option<String>,
+}
+
+impl FromRow<'_, PgRow> for Source {
+    fn from_row(row: &PgRow) -> sqlx::Result<Self> {
+        Ok(Self {
+            home_project_id: row.try_get("home_project_id")?,
+            task_id: row.try_get("task_id")?,
+            target_project_id: row.try_get("target_project_id")?,
+            project_revision: row.try_get("project_revision")?,
+            repository_id: row.try_get("repository_id")?,
+            binding_generation: row.try_get("binding_generation")?,
+            commit_oid: row.try_get("commit_oid")?,
+            access: row.try_get("access")?,
+        })
+    }
+}
+
+impl FromRow<'_, PgRow> for Attempt {
+    fn from_row(row: &PgRow) -> sqlx::Result<Self> {
+        Ok(Self {
+            home_project_id: row.try_get("home_project_id")?,
+            task_id: row.try_get("task_id")?,
+            home_repository: row.try_get("home_repository")?,
+            generation: row.try_get("generation")?,
+        })
+    }
+}
+
+impl FromRow<'_, PgRow> for Frozen {
+    fn from_row(row: &PgRow) -> sqlx::Result<Self> {
+        Ok(Self {
+            source: Source::from_row(row)?,
+            task_ref: row.try_get("task_ref")?,
+            checkout_head: row.try_get("checkout_head")?,
+            lease: row.try_get("lease")?,
+        })
+    }
 }
 
 impl Frozen {
@@ -68,6 +105,7 @@ impl Frozen {
             project_revision: s.project_revision as u64,
             binding_generation: s.binding_generation as u64,
             access: s.access,
+            checkout_head: self.checkout_head,
             grant: GitGrant {
                 endpoint: format!(
                     "/v1/git/workspaces/{}/{}",
@@ -178,11 +216,13 @@ async fn list(
         new_sources.push(source.clone());
     }
 
-    use futures_util::{StreamExt, TryStreamExt};
-    let lookups = futures_util::stream::iter(new_sources)
-        .map(|source| freeze(&state, source))
-        .buffered(4)
-        .try_collect::<Vec<_>>();
+    let lookups = async {
+        let mut discovered = Vec::with_capacity(new_sources.len());
+        for source in new_sources {
+            discovered.push(freeze(&state, source, a.generation).await?);
+        }
+        Ok::<_, AppError>(discovered)
+    };
     let enrollments = tokio::time::timeout(Duration::from_secs(10), lookups)
         .await
         .map_err(|_| unavailable())??;
@@ -215,7 +255,7 @@ async fn list(
         .filter(|g| current.get(&g.source.target_project_id) == Some(&g.source))
         .map(Frozen::into_wire)
         .collect();
-    let services = sqlx::query_as(
+    let services: Vec<String> = sqlx::query_scalar(
         "SELECT s.service FROM task_workspace_services s
          JOIN task_workspace_offer_fences f ON f.attempt_id=$3
          WHERE s.home_project_id=$1 AND s.task_id=$2 AND s.requested_attempt_id IS DISTINCT FROM $3
@@ -231,7 +271,10 @@ async fn list(
     tx.commit().await.map_err(crate::error::db)?;
     Ok(Json(GrantList {
         workspaces,
-        services,
+        services: services
+            .into_iter()
+            .map(|service| Service { service })
+            .collect(),
     }))
 }
 
@@ -240,7 +283,7 @@ fn git(state: &AppState) -> Result<SocketGit, AppError> {
     Ok(SocketGit::new(&retention.config.git_socket))
 }
 
-async fn freeze(state: &AppState, source: Source) -> Result<Frozen, AppError> {
+async fn freeze(state: &AppState, source: Source, generation: i64) -> Result<Frozen, AppError> {
     if !object_id(&source.commit_oid) || source.commit_oid == "0".repeat(40) {
         return Err(stale());
     }
@@ -249,28 +292,64 @@ async fn freeze(state: &AppState, source: Source) -> Result<Frozen, AppError> {
     }
     let git = git(state)?;
     let task_ref = task_branch(source.task_id);
-    let lease = if source.access == "write" {
+    let (checkout_head, lease) = if source.access == "write" {
         let target = GitTarget {
             repository_id: source.repository_id,
             binding_generation: source.binding_generation as u64,
         };
-        git.show_ref(&target, &task_ref)
+        let previous = previous_head(&state.store.pool, &source, generation)
             .await
-            .map_err(|_| unavailable())?
+            .map_err(crate::error::db)?;
+        let central = git
+            .show_ref(&target, &task_ref)
+            .await
+            .map_err(|_| unavailable())?;
+        checkout(&source.commit_oid, previous, central)?
     } else {
-        None
+        (source.commit_oid.clone(), None)
     };
-    if lease
-        .as_ref()
-        .is_some_and(|head| head != &source.commit_oid)
-    {
-        return Err(stale());
-    }
     Ok(Frozen {
         source,
         task_ref,
+        checkout_head,
         lease,
     })
+}
+
+async fn previous_head(
+    pool: &PgPool,
+    source: &Source,
+    generation: i64,
+) -> sqlx::Result<Option<Option<String>>> {
+    sqlx::query_scalar(include_str!("workspaces/previous_head.sql"))
+        .bind(source.home_project_id)
+        .bind(source.task_id)
+        .bind(source.target_project_id)
+        .bind(source.project_revision)
+        .bind(source.repository_id)
+        .bind(source.binding_generation)
+        .bind(&source.commit_oid)
+        .bind(generation)
+        .fetch_optional(pool)
+        .await
+}
+
+fn checkout(
+    original: &str,
+    previous: Option<Option<String>>,
+    central: Option<String>,
+) -> Result<(String, Option<String>), AppError> {
+    let expected = match previous {
+        Some(Some(head)) if head.len() == 40 && object_id(&head) => head,
+        None => original.to_owned(),
+        Some(_) => return Err(stale()),
+    };
+    if central.as_deref() == Some(expected.as_str()) || (central.is_none() && expected == original)
+    {
+        Ok((expected, central))
+    } else {
+        Err(stale())
+    }
 }
 
 async fn record(db: &mut PgConnection, attempt: Uuid, frozen: &Frozen) -> sqlx::Result<()> {
@@ -278,8 +357,8 @@ async fn record(db: &mut PgConnection, attempt: Uuid, frozen: &Frozen) -> sqlx::
     sqlx::query(
         "INSERT INTO task_workspace_git_grants
          (attempt_id,home_project_id,task_id,target_project_id,project_revision,repository_id,
-          binding_generation,commit_oid,access,task_ref,lease)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          binding_generation,commit_oid,access,task_ref,checkout_head,lease)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT(attempt_id,target_project_id) DO NOTHING",
     )
     .bind(attempt)
@@ -292,6 +371,7 @@ async fn record(db: &mut PgConnection, attempt: Uuid, frozen: &Frozen) -> sqlx::
     .bind(&s.commit_oid)
     .bind(&s.access)
     .bind(&frozen.task_ref)
+    .bind(&frozen.checkout_head)
     .bind(&frozen.lease)
     .execute(db)
     .await?;
@@ -375,4 +455,28 @@ async fn proxy(
     .map_err(super::refusal)?;
     tx.commit().await.map_err(crate::error::db)?;
     Ok(response.map(axum::body::Body::new).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checkout;
+
+    #[test]
+    fn sibling_checkout_resumes_at_only_the_verified_predecessor_head() {
+        let original = "a".repeat(40);
+        let retained = "b".repeat(40);
+        let expected = Some(Some(retained.clone()));
+        assert_eq!(
+            checkout(&original, None, None).unwrap(),
+            (original.clone(), None)
+        );
+        assert_eq!(
+            checkout(&original, expected.clone(), Some(retained.clone())).unwrap(),
+            (retained.clone(), Some(retained.clone()))
+        );
+        assert!(checkout(&original, None, Some(retained)).is_err());
+        assert!(checkout(&original, expected.clone(), Some("c".repeat(40))).is_err());
+        assert!(checkout(&original, expected, None).is_err());
+        assert!(checkout(&original, Some(None), Some(original.clone())).is_err());
+    }
 }

@@ -11,7 +11,9 @@ CREATE TABLE task_workspace_git_grants (
     commit_oid TEXT NOT NULL CHECK (commit_oid ~ '^[0-9a-f]{40}$'),
     access TEXT NOT NULL CHECK (access IN ('read', 'write')),
     task_ref TEXT NOT NULL CHECK (task_ref ~ '^refs/heads/aq/[0-9a-f-]{36}$'),
-    lease TEXT CHECK (lease IS NULL OR (access = 'write' AND lease = commit_oid)),
+    checkout_head TEXT NOT NULL CHECK (checkout_head ~ '^[0-9a-f]{40}$'),
+    lease TEXT CHECK (lease IS NULL OR (access = 'write' AND lease = checkout_head)),
+    CHECK (checkout_head = commit_oid OR (access = 'write' AND lease IS NOT NULL)),
     PRIMARY KEY (attempt_id, target_project_id),
     UNIQUE (attempt_id, repository_id)
 );
