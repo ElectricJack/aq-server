@@ -181,6 +181,7 @@ pub use effect_profile as effect_ledger;
 pub mod fairness;
 pub mod git_author;
 pub mod native_offer;
+pub mod phase_execution;
 pub mod replacement;
 pub mod replacement_sql;
 pub mod result_facts;

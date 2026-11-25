@@ -1,16 +1,8 @@
-//! Facts are constructed only after actual owning adapters and final SQL fences.
-//! DTO association validation is additional validation, not the source of truth.
-use super::phase::{FactBody, FactValue, FreshConfirmation, OwnerFact, PrepareRequest};
+//! Project actual owning observations only after validation and final SQL fences.
+use super::phase::{FreshConfirmation, PrepareRequest};
 use super::*;
-use aq_admission::Text;
 use uuid::Uuid;
-fn reference(id: String, digest: Digest) -> Result<ArtifactRef, AppError> {
-    Ok(ArtifactRef {
-        id: Text::new(id).map_err(|_| refused())?,
-        version: Text::new("1").map_err(|_| refused())?,
-        digest,
-    })
-}
+
 pub(super) fn confirmation(
     p: &pinned::Pinned,
     q: &PrepareRequest,
@@ -22,248 +14,34 @@ pub(super) fn confirmation(
     o.validate_for(&p.input, time)?;
     c.fresh_at(time)?;
     let confirmation_id = Uuid::new_v4();
-    let values = observed_facts(p, q, o, c, budget_revision, time, confirmation_id)?;
-    let mut facts = Vec::with_capacity(values.len());
-    for value in values {
-        facts.push(seal_fact(p, q, time, confirmation_id, value)?);
-    }
-    let result = FreshConfirmation {
-        schema_version: 2,
-        confirmation_id,
-        prepare_digest: q.digest().map_err(|_| refused())?,
-        accepted_receipt_digest: p.history.receipt.digest().map_err(|_| refused())?,
-        checked_at_ms: time,
-        facts,
+    let inputs = stored::FactInputs {
+        proposal: &p.history.proposal,
+        accepted: &p.history.receipt,
+        accepted_request: &p.history.request,
+        request: q,
+        spec: &p.input.spec,
+        offer: &p.input.offer,
+        material: &p.input.material,
+        full_context_digest: &p.input.full_context_digest,
+        capabilities: &p.capabilities,
+        registry_fact: super::registry_fact(p, c),
+        registry: &c.registry,
+        principal: &c.principal,
+        inventory: &c.inventory,
+        inventory_sequence: c.inventory_sequence,
+        inventory_expires_at_ms: c.inventory_expires_at_ms(),
+        availability: &c.availability,
+        availability_expires_at_ms: c.availability_expires_at_ms,
+        checked_at_ms: c.checked_at_ms,
+        binding_expires_at_ms: o.binding.binding_observation.expires_at_ms,
+        graph: &o.graph,
+        source_digest: digest(&o.source)?,
+        source_observed_at_ms: o.source.observed_at_ms(),
+        source_expires_at_ms: o.source.expires_at_ms(),
+        transfer_id: p.input.source.manifest().transfer_id,
+        file_digest: &o.file.digest,
+        file_started_at_ms: o.file_started_at_ms,
     };
-    result
-        .validate_for(
-            q,
-            &p.history.receipt,
-            &p.history.request,
-            &p.history.proposal,
-        )
-        .map_err(|_| refused())?;
-    Ok(result)
-}
-
-struct FactObservation {
-    revision: u64,
-    observed_at_ms: u64,
-    ceiling: u64,
-    value: FactValue,
-}
-
-fn observed_facts(
-    p: &pinned::Pinned,
-    q: &PrepareRequest,
-    o: &observations::Observed,
-    c: &current::Current,
-    budget_revision: u64,
-    time: u64,
-    confirmation_id: Uuid,
-) -> Result<Vec<FactObservation>, AppError> {
-    let proposal = &p.history.proposal;
-    let a = &p.history.receipt;
-    let retention = reference(
-        format!("aq.phase-retention/{confirmation_id}"),
-        digest(&o.source)?,
-    )?;
-    let provider_observation = reference(
-        format!("aq.phase-availability/{confirmation_id}"),
-        digest(&c.availability)?,
-    )?;
-    let source_receipt = |name: &str| {
-        q.original
-            .artifacts
-            .iter()
-            .find(|r| {
-                r.artifact.id.as_str()
-                    == format!("aq.source-{name}/{}", p.input.source.manifest().transfer_id)
-            })
-            .cloned()
-            .ok_or_else(|| refused())
-    };
-    Ok(vec![
-        FactObservation {
-            revision: p.input.spec.project_revision,
-            observed_at_ms: time,
-            ceiling: o.binding.binding_observation.expires_at_ms,
-            value: FactValue::Project {
-                project_id: p.input.spec.lifecycle.project_id,
-                revision: p.input.spec.project_revision,
-                catalog: p.input.offer.offered.offer.manifest.catalog.clone(),
-                permissions_digest: proposal.choice.permission_digest.clone(),
-            },
-        },
-        FactObservation {
-            revision: c.registry.version.as_str().parse().map_err(|_| refused())?,
-            observed_at_ms: c.checked_at_ms,
-            ceiling: u64::MAX,
-            value: super::registry_fact(p, c),
-        },
-        FactObservation {
-            revision: c
-                .principal
-                .version
-                .as_str()
-                .parse()
-                .map_err(|_| refused())?,
-            observed_at_ms: c.checked_at_ms,
-            ceiling: u64::MAX,
-            value: FactValue::Principal {
-                principal: c.principal.clone(),
-                scope: p.input.spec.graph_access_profile.clone(),
-            },
-        },
-        FactObservation {
-            revision: c.inventory.revision,
-            observed_at_ms: c.checked_at_ms,
-            ceiling: c.inventory_expires_at_ms(),
-            value: FactValue::Inventory {
-                node_id: a.lease.identity.node_id,
-                boot_id: a.lease.identity.boot_id,
-                sequence: c.inventory_sequence,
-                model: proposal.choice.model.clone(),
-                harness: proposal.choice.harness.clone(),
-                capabilities: p.capabilities.clone(),
-                state: phase::InventoryState::Installed,
-                credential_semantics: phase::GlobalCredentialSemantics::ProvisionableOnly,
-                credential_profile: p.input.material.credential_profile.clone(),
-                credential_revision: p.input.material.credential_revision,
-            },
-        },
-        FactObservation {
-            revision: c
-                .availability
-                .iter()
-                .map(|x| x.revision)
-                .max()
-                .ok_or_else(|| refused())?,
-            observed_at_ms: c.checked_at_ms,
-            ceiling: c.availability_expires_at_ms,
-            value: FactValue::Availability {
-                provider: Text::new(p.input.material.provider.as_str()).map_err(|_| refused())?,
-                account_reference: Text::new(p.input.material.account_reference.as_str())
-                    .map_err(|_| refused())?,
-                endpoint_reference: Text::new(p.input.material.endpoint_reference.as_str())
-                    .map_err(|_| refused())?,
-                state: phase::AvailabilityState::Ready,
-                provider_observation,
-            },
-        },
-        FactObservation {
-            revision: budget_revision,
-            observed_at_ms: time,
-            ceiling: u64::MAX,
-            value: FactValue::Budget {
-                lineage_id: p.input.spec.lifecycle.lineage_id,
-                // Each attempt has its own window, the execution profile's
-                // wall time, and has used none of it when it is granted.
-                elapsed_ms: Some(0),
-                maximum_lineage_elapsed_ms: p
-                    .input
-                    .offer
-                    .offered
-                    .offer
-                    .manifest
-                    .resources
-                    .wall_time_ms,
-                remaining_cost_microunits: None,
-            },
-        },
-        FactObservation {
-            revision: p.input.spec.task.version,
-            observed_at_ms: o
-                .graph
-                .ready_requested_at_ms
-                .min(o.graph.context_requested_at_ms),
-            ceiling: o
-                .graph
-                .ready_expires_at_ms
-                .min(o.graph.context_expires_at_ms),
-            value: FactValue::Context {
-                task: p.input.spec.task.clone(),
-                context: p.input.spec.task_context.clone(),
-                full_context_digest: p.input.full_context_digest.clone(),
-                graph_policy: p.input.spec.graph_access_profile.clone(),
-            },
-        },
-        FactObservation {
-            revision: p.input.spec.source.repository_binding_generation,
-            observed_at_ms: o.source.observed_at_ms(),
-            ceiling: o.source.expires_at_ms(),
-            value: FactValue::Git {
-                repository_id: p.input.spec.source.repository_id,
-                binding_generation: p.input.spec.source.repository_binding_generation,
-                base: p.input.spec.source.resolved_object.clone(),
-                policy: p.input.spec.source.policy.clone(),
-                retention,
-                state: phase::RetentionState::Active,
-                manifest: source_receipt("manifest")?,
-                bundle: source_receipt("bundle")?,
-            },
-        },
-        FactObservation {
-            revision: p.input.material.credential_revision,
-            observed_at_ms: o.file_started_at_ms,
-            ceiling: o
-                .file_started_at_ms
-                .checked_add(10_000)
-                .ok_or_else(|| refused())?,
-            value: FactValue::PrivateMaterialBacking {
-                lease_id: p.input.material.lease_id,
-                backing_digest: o.file.digest.clone(),
-                installation_receipt_digest: digest(&q.original.materials[0])?,
-            },
-        },
-    ])
-}
-
-fn seal_fact(
-    p: &pinned::Pinned,
-    q: &PrepareRequest,
-    time: u64,
-    confirmation_id: Uuid,
-    observation: FactObservation,
-) -> Result<OwnerFact, AppError> {
-    let proposal = &p.history.proposal;
-    let a = &p.history.receipt;
-    let FactObservation {
-        revision,
-        observed_at_ms,
-        ceiling,
-        value,
-    } = observation;
-    let kind = value.kind();
-    let authority = proposal
-        .owners
-        .iter()
-        .find(|x| x.kind == kind)
-        .ok_or_else(|| refused())?
-        .authority
-        .clone();
-    let body = FactBody {
-        authority,
-        binding: a.lease.binding.clone(),
-        choice_digest: proposal.choice.digest().map_err(|_| refused())?,
-        revision,
-        observed_at_ms,
-        expires_at_ms: observed_at_ms
-            .checked_add(proposal.policy.maximum_observation_ms)
-            .ok_or_else(|| refused())?
-            .min(ceiling),
-        value,
-    };
-    let fact = OwnerFact {
-        record: ArtifactRef {
-            id: Text::new(format!("aq.phase-fact/{confirmation_id}/{kind:?}"))
-                .map_err(|_| refused())?,
-            version: Text::new(revision.to_string()).map_err(|_| refused())?,
-            digest: OwnerFact::record_digest(&body).map_err(|_| refused())?,
-        },
-        body,
-    };
-    fact.validate_for(proposal, a, q, time)
-        .map_err(|_| refused())?;
-    Ok(fact)
+    stored::confirmation(&inputs, budget_revision, time, confirmation_id)
+        .map_err(history::helper_error)
 }

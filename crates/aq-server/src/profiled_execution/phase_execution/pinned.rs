@@ -10,7 +10,8 @@ use crate::{
     profiled_execution::{artifacts, registration, source_exports},
     worker_api::AuthenticatedNode,
 };
-use aq_admission::{Text, control::Versions, transport::ArtifactReceipt};
+use aq_admission::{control::Versions, transport::ArtifactReceipt};
+use aq_profiled_state::phase_execution as support;
 use sqlx::Row;
 use uuid::Uuid;
 pub(super) struct Pinned {
@@ -257,32 +258,19 @@ async fn load_authority_locked(
     {
         return Err(refused());
     }
-    let (hot, versions) = load_hot_locked(tx, q, h).await?;
-    require_hot_state(mode, &hot, q, h)?;
+    let (hot, versions) = support::load_hot_locked(tx, &q.original.binding, &h.receipt.versions)
+        .await
+        .map_err(history::helper_error)?;
+    let grant_mode = match mode {
+        LoadMode::Fresh => stored::GrantMode::Fresh,
+        LoadMode::Replay(issued) => stored::GrantMode::Replay(&issued.receipt),
+        LoadMode::Continuing(issued) => stored::GrantMode::Continuing(&issued.receipt),
+    };
+    stored::require_hot_state(grant_mode, &hot, q, &h.request).map_err(history::helper_error)?;
     if issued.is_some() {
         view.active_at(now(state)?)?;
     }
     Ok((view, hot, versions))
-}
-
-async fn load_hot_locked(
-    tx: &mut Transaction<'_, Postgres>,
-    q: &PrepareRequest,
-    history: &AcceptedHistory,
-) -> Result<(HotState, Versions), AppError> {
-    let row=sqlx::query("SELECT state,record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1 FOR UPDATE").bind(q.original.binding.attempt_id).fetch_one(&mut **tx).await.map_err(db)?;
-    let hot: HotState = serde_json::from_value(row.get("state")).map_err(|_| refused())?;
-    hot.validate_against(&q.original.binding)
-        .map_err(|_| refused())?;
-    let versions = Versions {
-        record_revision: row.get::<i64, _>("record_revision") as u64,
-        authority_revision: row.get::<i64, _>("authority_revision") as u64,
-        grant_revision: row.get::<i64, _>("grant_revision") as u64,
-    };
-    versions
-        .validate_after(&history.receipt.versions)
-        .map_err(|_| refused())?;
-    Ok((hot, versions))
 }
 
 fn require_runtime_capabilities(
@@ -310,20 +298,14 @@ fn require_runtime_capabilities(
     {
         return Err(refused());
     }
-    for caps in [
-        &qualified.capabilities,
-        &current_registration.request.capabilities,
-    ] {
-        aq_session_protocol::require_capabilities(&offer.offered.offer.required_capabilities, caps)
-            .map_err(|_| refused())?;
-        aq_session_protocol::require_capabilities(
-            &offer.offered.offer.manifest.harness.required_capabilities,
-            caps,
-        )
-        .map_err(|_| refused())?;
-    }
-
-    Ok(())
+    support::require_runtime_capabilities(
+        offer,
+        [
+            &qualified.capabilities,
+            &current_registration.request.capabilities,
+        ],
+    )
+    .map_err(history::helper_error)
 }
 
 async fn load_selection_locked(
@@ -423,64 +405,15 @@ async fn load_artifacts_locked(
             digest: a.descriptor.artifact.digest,
         });
     }
-    expected.extend(source_artifact_receipts(source)?);
-    require_artifact_receipts(&expected, &q.original.artifacts)?;
+    expected.extend(
+        support::source_artifact_receipts(source.manifest()).map_err(history::helper_error)?,
+    );
+    support::require_artifact_receipts(&expected, &q.original.artifacts)
+        .map_err(history::helper_error)?;
     if time >= ceiling {
         return Err(refused());
     }
     Ok((context, ceiling))
-}
-
-fn source_artifact_receipts(
-    source: &source_exports::LinkedExport,
-) -> Result<Vec<ArtifactReceipt>, AppError> {
-    let mut receipts = Vec::with_capacity(2);
-    for (name, hash, size) in [
-        (
-            "manifest",
-            source.manifest().manifest_digest.as_str(),
-            source.manifest().manifest_bytes,
-        ),
-        (
-            "bundle",
-            source
-                .manifest()
-                .bundle_digest
-                .as_deref()
-                .ok_or_else(|| refused())?,
-            source.manifest().bundle_bytes,
-        ),
-    ] {
-        let d: Digest = serde_json::from_value(serde_json::json!(hash)).map_err(|_| refused())?;
-        receipts.push(ArtifactReceipt {
-            artifact: ArtifactRef {
-                id: Text::new(format!(
-                    "aq.source-{name}/{}",
-                    source.manifest().transfer_id
-                ))
-                .map_err(|_| refused())?,
-                version: Text::new("1").map_err(|_| refused())?,
-                digest: d.clone(),
-            },
-            bytes: size,
-            digest: d,
-        });
-    }
-    Ok(receipts)
-}
-
-fn require_artifact_receipts(
-    expected: &[ArtifactReceipt],
-    actual: &[ArtifactReceipt],
-) -> Result<(), AppError> {
-    if expected.len() != actual.len()
-        || expected
-            .iter()
-            .any(|e| !actual.iter().any(|a| same(e, a).unwrap_or(false)))
-    {
-        return Err(refused());
-    }
-    Ok(())
 }
 
 fn require_supported_budget(
@@ -489,6 +422,7 @@ fn require_supported_budget(
     decision: &crate::intelligence::resolver::Decision,
     h: &AcceptedHistory,
 ) -> Result<(), AppError> {
+    let ceilings = &decision.project.project.binding.ceilings;
     // The protocol's lineage time window is the attempt's own: its execution
     // profile's wall time, which the offer's manifest carries.
     if offer.offered.offer.manifest.resources.wall_time_ms
@@ -497,58 +431,12 @@ fn require_supported_budget(
         || policy.budget.max_cost_microunits.is_some()
         || policy.budget.require_complete_accounting
         || policy.budget.require_hard_cost_enforcement
-        || decision
-            .project
-            .project
-            .binding
-            .ceilings
-            .cost_limit_microunits
-            .is_some()
-        || decision
-            .project
-            .project
-            .binding
-            .ceilings
-            .require_hard_cost_enforcement
+        || ceilings.cost_limit_microunits.is_some()
+        || ceilings.require_hard_cost_enforcement
         // A first attempt starts its lineage at zero. A B4 replacement carries
         // the lineage time already used, which limits nothing: each attempt
         // has its own window.
         || (decision.inputs.replacement.is_none() && decision.inputs.budget.elapsed_ms != Some(0))
-    {
-        return Err(refused());
-    }
-    Ok(())
-}
-
-fn require_hot_state(
-    mode: LoadMode<'_>,
-    hot: &HotState,
-    q: &PrepareRequest,
-    h: &AcceptedHistory,
-) -> Result<(), AppError> {
-    let Some(issued) = mode.issued() else {
-        if hot.grant.is_some() || hot.execution_deadline_ms.is_some() {
-            return Err(refused());
-        }
-        return Ok(());
-    };
-    let live = hot.grant.as_ref().ok_or_else(|| refused())?;
-    let grant_matches = if matches!(mode, LoadMode::Continuing(_)) {
-        live.binding == issued.receipt.grant.binding
-            && live.grant_id == issued.receipt.grant.grant_id
-            && live.expires_at_ms >= issued.receipt.grant.expires_at_ms
-            && live.expires_at_ms <= issued.receipt.execution_deadline_ms
-    } else {
-        same(live, &issued.receipt.grant)?
-    };
-    if !grant_matches
-        || hot.execution_deadline_ms != Some(issued.receipt.execution_deadline_ms)
-        || hot.preparation_operation_id != Some(h.request.original.operation_id)
-        || hot.owner.as_ref().is_none_or(|o| {
-            o.guardian_id != q.original.guardian_id
-                || o.launch_id != q.original.launch_id
-                || o.reservation_id != q.original.reservation.reservation_id
-        })
     {
         return Err(refused());
     }

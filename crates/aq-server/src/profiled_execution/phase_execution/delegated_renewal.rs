@@ -205,12 +205,13 @@ async fn extend_locked(
     // As at phase issuance, fresh facts authorize a bounded execution lease.
     // Their observation timestamps are never rewritten. The original hard
     // deadline and the negotiated maximum lease remain absolute ceilings.
-    let expiry = renewed_expiry(
+    let expiry = aq_profiled_state::phase_execution::renewed_expiry(
         time,
         previous_expiry,
         after.history.proposal.policy.maximum_execution_lease_ms,
         q.authority.hard_deadline_ms,
-    )?;
+    )
+    .map_err(history::helper_error)?;
     let mut next = old.clone();
     next.record.issued_at_ms = time;
     next.record.expires_at_ms = expiry;
@@ -267,41 +268,4 @@ async fn remember_renewal_locked(
     }
     handoff::remember(tx, node, q.operation_id, "renewal", q, retained).await?;
     Ok(())
-}
-
-fn renewed_expiry(
-    time: u64,
-    previous_expiry: u64,
-    maximum_lease_ms: u64,
-    hard_deadline_ms: u64,
-) -> Result<u64, AppError> {
-    let expiry = time
-        .checked_add(maximum_lease_ms.min(120_000))
-        .ok_or_else(|| refused())?
-        .min(hard_deadline_ms);
-    if time >= previous_expiry || expiry <= previous_expiry {
-        return Err(refused());
-    }
-    Ok(expiry)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renewal_respects_policy_lease_cap_and_original_hard_deadline() {
-        assert_eq!(renewed_expiry(10, 20, 50, 1_000_000).unwrap(), 60);
-        assert_eq!(renewed_expiry(10, 20, 200_000, 1_000_000).unwrap(), 120_010);
-        assert_eq!(renewed_expiry(10, 20, 50, 40).unwrap(), 40);
-    }
-
-    #[test]
-    fn renewal_cannot_revive_expired_grants_or_fail_to_extend_them() {
-        assert!(renewed_expiry(20, 20, 50, 100).is_err());
-        assert!(renewed_expiry(21, 20, 50, 100).is_err());
-        assert!(renewed_expiry(10, 20, 10, 100).is_err());
-        assert!(renewed_expiry(10, 20, 50, 20).is_err());
-        assert!(renewed_expiry(u64::MAX - 10, u64::MAX, 50, u64::MAX).is_err());
-    }
 }
