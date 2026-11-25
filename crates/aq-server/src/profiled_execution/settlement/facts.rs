@@ -12,9 +12,21 @@ pub(super) use aq_profiled_state::result_facts::{CheckVerdict, DeliveryState};
 
 type SourcePin = (Uuid, String, bool);
 
+#[derive(Default)]
 struct SourceFacts {
     pin: Option<SourcePin>,
     lineage_unknown: bool,
+}
+
+impl SourceFacts {
+    fn retained(operation: Uuid, checkpoint: String, base: Option<String>) -> Self {
+        let lineage_unknown = base.is_none();
+        let changed = base.is_none_or(|base| checkpoint != base);
+        Self {
+            pin: Some((operation, checkpoint, changed)),
+            lineage_unknown,
+        }
+    }
 }
 
 /// What is known of a recorded result under the report/attempt locks.
@@ -63,48 +75,44 @@ async fn gather_source_locked(
     r: &results::RecordedResult,
     enrolled: bool,
 ) -> Result<SourceFacts> {
-    // The exact retained source is the central receipt pinned by this report.
-    let (mut source, mut lineage_unknown) = (None, false);
     // Spec 0016 §5.1: the source is the task ref, confirmed at the reported
     // head when the report was recorded; the report id keys its evidence.
+    if !enrolled {
+        return gather_confirmed_source_locked(tx, r).await;
+    }
     #[cfg(feature = "delivery_playbook")]
-    if enrolled
-        && let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
-            .await
-            .map_err(db)?
+    if let Some(pushed) = aq_delivery::git_grant::pushed_of(&mut **tx, r.report.report_id)
+        .await
+        .map_err(db)?
     {
         let start = &r.spec.source.resolved_object.hex;
         let base = aq_machine_control::lineage_base(tx, r.spec.task.task_id, start).await?;
-        lineage_unknown = base.is_none();
-        let changed = base.is_none_or(|base| pushed.head != base);
-        source = Some((r.report.report_id, pushed.head, changed));
+        return Ok(SourceFacts::retained(r.report.report_id, pushed.head, base));
     }
-    if !enrolled {
-        for op in &r.report.source_receipt_ids {
-            match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
-                Ok(confirmed) => {
-                    // Review C-1: judged against the lineage's original base, never a handoff
-                    // successor's own starting commit (its predecessor's saved edits).
-                    let m = &confirmed.manifest;
-                    let task = r.spec.task.task_id;
-                    let base = aq_machine_control::lineage_base(tx, task, &m.source.base.hex);
-                    // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
-                    // the D3 gate holds only a report that would otherwise succeed.
-                    let base = base.await?;
-                    lineage_unknown = base.is_none();
-                    let changed = base.is_none_or(|base| m.checkpoint.hex != base);
-                    source = Some((*op, m.checkpoint.hex.clone(), changed));
-                    break;
-                }
-                Err(crate::error::AppError::Conflict(_)) => {}
-                Err(e) => return Err(e),
-            }
-        }
+    Ok(SourceFacts::default())
+}
+
+async fn gather_confirmed_source_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    r: &results::RecordedResult,
+) -> Result<SourceFacts> {
+    // The first confirmed central receipt pinned by this report is authoritative.
+    for op in &r.report.source_receipt_ids {
+        let confirmed = match crate::source_retention::load_confirmed_locked(tx, *op, r).await {
+            Ok(confirmed) => confirmed,
+            Err(crate::error::AppError::Conflict(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        // Review C-1: judge against the lineage's original base, never a handoff
+        // successor's own starting commit (its predecessor's saved edits).
+        let m = &confirmed.manifest;
+        let base =
+            aq_machine_control::lineage_base(tx, r.spec.task.task_id, &m.source.base.hex).await?;
+        // R1-M1, R2-M1: past the hop bound the base is unknown (never guessed);
+        // the D3 gate holds only a report that would otherwise succeed.
+        return Ok(SourceFacts::retained(*op, m.checkpoint.hex.clone(), base));
     }
-    Ok(SourceFacts {
-        pin: source,
-        lineage_unknown,
-    })
+    Ok(SourceFacts::default())
 }
 
 async fn gather_checks_locked(
@@ -226,4 +234,24 @@ pub async fn record_facts(state: &AppState, report_id: Uuid) -> Result<Value> {
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(facts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_source_change_is_relative_to_the_original_lineage_base() {
+        let operation = Uuid::from_u128(1);
+        for (base, changed, lineage_unknown) in [
+            (Some("checkpoint"), false, false),
+            (Some("original-base"), true, false),
+            (None, true, true),
+        ] {
+            let facts =
+                SourceFacts::retained(operation, "checkpoint".into(), base.map(str::to_owned));
+            assert_eq!(facts.pin, Some((operation, "checkpoint".into(), changed)));
+            assert_eq!(facts.lineage_unknown, lineage_unknown);
+        }
+    }
 }
