@@ -6,20 +6,7 @@ pub(crate) async fn prepare(
     home: &ProjectRecord,
     request: &Create,
 ) -> Result<Vec<Selected>> {
-    let mut requirements = Vec::with_capacity(request.workspace.len());
-    let mut repositories = std::collections::BTreeSet::new();
-    for requirement in &request.workspace {
-        let selected = select(s, home, request.operation_id, *requirement).await?;
-        if let Selected::Source(pin, _) = &selected
-            && !repositories.insert(pin.repository_id)
-        {
-            return Err(bad(
-                "workspace projects must refer to distinct repositories",
-            ));
-        }
-        requirements.push(selected);
-    }
-    Ok(requirements)
+    select_all(s, home, request.operation_id, &request.workspace).await
 }
 pub(crate) async fn stage(
     tx: &mut Transaction<'_, Postgres>,

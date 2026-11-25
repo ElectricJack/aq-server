@@ -1,7 +1,7 @@
 //! Requests only describe the caller's own task. Approved resources are
 //! provisioned by the node once the target policy and fresh attempt agree.
 use super::*;
-use crate::project_bindings::workspace::{Caller, Requirement, apply};
+use crate::project_bindings::workspace::{Caller, RequestBody, apply};
 const REQUEST: &str = "/v1/agent/workspace/request";
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -11,7 +11,7 @@ pub(super) fn routes() -> Router<AppState> {
 async fn request(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Requirement>,
+    Json(body): Json<RequestBody>,
 ) -> Response {
     let id = Uuid::new_v4();
     let caller = match grant_check::agent_caller(&s, &headers).await {

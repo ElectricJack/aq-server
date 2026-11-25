@@ -26,6 +26,26 @@ mod source;
 mod store;
 
 pub(crate) use aq_project_policy::workspace::{Requirement, Service};
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub(crate) enum RequestBody {
+    One(Requirement),
+    Batch { workspace: Vec<Requirement> },
+}
+impl RequestBody {
+    fn requirements(self) -> Result<Vec<Requirement>> {
+        let list = match self {
+            Self::One(req) => vec![req],
+            Self::Batch { workspace } => workspace,
+        };
+        if list.is_empty() || !aq_project_policy::workspace::valid_list(&list) {
+            return Err(bad(
+                "workspace must name distinct projects and each service only once",
+            ));
+        }
+        Ok(list)
+    }
+}
 #[derive(serde::Serialize, Deserialize)]
 pub(crate) enum Selected {
     Source(SourcePin, Disposition),
@@ -97,7 +117,7 @@ async fn request(
     State(s): State<AppState>,
     RequireOwner(actor): RequireOwner,
     Path((home, task)): Path<(Uuid, Uuid)>,
-    Json(requirement): Json<Requirement>,
+    Json(requirement): Json<RequestBody>,
 ) -> Result<Json<Value>> {
     let project = home_task(&s, home, task).await?;
     apply(&s, &project, task, requirement, Caller::Owner(actor.id))
@@ -134,7 +154,7 @@ pub(crate) async fn apply(
     s: &AppState,
     home: &ProjectRecord,
     task: Uuid,
-    req: Requirement,
+    req: RequestBody,
     caller: Caller<'_>,
 ) -> Result<Value> {
     let home_id = home.binding.project_id;
@@ -143,12 +163,14 @@ pub(crate) async fn apply(
     }
     // Repeated requests reuse the retained pin even after the configured branch moves.
     // Preflight outside any DB transaction. The locked write checks both revisions again.
-    let selected = select(s, home, task, req).await?;
+    let selected = select_all(s, home, task, &req.requirements()?).await?;
     let mut tx = s.store.pool.begin().await.map_err(db)?;
     caller.fence(s, &mut tx).await?;
     store::lock_task(&mut tx, home_id, task).await?;
     store::fence(&mut tx, home_id, home.revision).await?;
-    selected.fence(&mut tx).await?;
+    for requirement in &selected {
+        requirement.fence(&mut tx).await?;
+    }
     let predecessor=match caller.attempt(){
         Some(attempt)=>Some(attempt),
         None=>sqlx::query_scalar("SELECT a.attempt_id FROM execution_attempts a JOIN profiled_launches l USING(attempt_id)
@@ -156,7 +178,11 @@ pub(crate) async fn apply(
             AND NOT EXISTS(SELECT 1 FROM profiled_result_heads h WHERE h.attempt_id=a.attempt_id)")
           .bind(task).bind(home_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?,
     };
-    selected.save(&mut tx, home_id, task, predecessor).await?;
+    for requirement in selected {
+        requirement
+            .save(&mut tx, home_id, task, predecessor)
+            .await?;
+    }
     tx.commit().await.map_err(db)?;
     store::view(s, home_id, task).await
 }
@@ -179,6 +205,27 @@ async fn decide(
     store::target_view(&s, home, task, target).await.map(Json)
 }
 
+async fn select_all(
+    s: &AppState,
+    home: &ProjectRecord,
+    task: Uuid,
+    requested: &[Requirement],
+) -> Result<Vec<Selected>> {
+    let mut requirements = Vec::with_capacity(requested.len());
+    let mut repositories = std::collections::BTreeSet::new();
+    for requirement in requested {
+        let selected = select(s, home, task, *requirement).await?;
+        if let Selected::Source(pin, _) = &selected
+            && !repositories.insert(pin.repository_id)
+        {
+            return Err(bad(
+                "workspace projects must refer to distinct repositories",
+            ));
+        }
+        requirements.push(selected);
+    }
+    Ok(requirements)
+}
 async fn select(
     s: &AppState,
     home: &ProjectRecord,
