@@ -722,12 +722,17 @@ async fn offers(
                             replacement::assess_task_for_revision(state, task, polled_at, revision);
                         let a = a.await?;
                         #[cfg(feature = "delivery_playbook")]
-                        if let Some(replacement) = a.replacement()
-                            && replacement::pending_publication_owner(pool, replacement.predecessor)
-                                .await?
-                                .is_some()
-                        {
-                            return Ok(Assessment::Blocked("owner_retry_pending"));
+                        if let Some(replacement) = a.replacement() {
+                            let mut connection = pool.acquire().await.map_err(db)?;
+                            if replacement::pending_publication_owner(
+                                &mut connection,
+                                replacement.predecessor,
+                            )
+                            .await?
+                            .is_some()
+                            {
+                                return Ok(Assessment::Blocked("owner_retry_pending"));
+                            }
                         }
                         if let Assessment::Blocked(reason) = a {
                             holds::selection_hold(

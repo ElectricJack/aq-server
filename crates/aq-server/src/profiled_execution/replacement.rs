@@ -205,9 +205,15 @@ pub async fn fresh_predecessor(
 /// The stamped owner must finish this release before normal scheduling can offer it.
 #[cfg(feature = "delivery_playbook")]
 pub(super) async fn pending_publication_owner(
-    db: impl sqlx::PgExecutor<'_>,
+    db: &mut sqlx::PgConnection,
     attempt: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
+    if !aq_machine_control::owner_retry::available(db)
+        .await
+        .map_err(internal)?
+    {
+        return Ok(None);
+    }
     sqlx::query_scalar(
         "SELECT (s.evidence->>'owner_operation_id')::uuid
          FROM profiled_result_heads h JOIN profiled_auto_settlements s USING(report_id,attempt_id)
@@ -238,7 +244,7 @@ pub async fn release_as(
         .await
         .map_err(db)?;
     #[cfg(feature = "delivery_playbook")]
-    if let Some(required) = pending_publication_owner(&mut *tx, replacement.predecessor).await?
+    if let Some(required) = pending_publication_owner(&mut tx, replacement.predecessor).await?
         && owner_operation != Some(required)
     {
         return Err(AppError::Conflict(
