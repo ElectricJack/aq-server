@@ -25,6 +25,52 @@ pub fn case() -> Case {
     // Reuse original transport/spec/material input data, never convert an old
     // profile receipt/fact or change its tag to stand in for the new profile.
     let base = legacy_data::case();
+    let proposal = fixture_proposal(&base);
+    let accept = accept_request(&base, &proposal);
+    let accepted = accepted_receipt(&base, &proposal, &accept);
+    let prepare = prepare_request(&base, &proposal, &accept, &accepted);
+    let facts = make_facts(&proposal, &accept, &accepted, &prepare);
+    let confirmation = FreshConfirmation {
+        schema_version: 2,
+        confirmation_id: id(800),
+        prepare_digest: prepare.digest().unwrap(),
+        accepted_receipt_digest: accepted.digest().unwrap(),
+        checked_at_ms: 30000,
+        facts,
+    };
+    confirmation
+        .validate_for(&prepare, &accepted, &accept, &proposal)
+        .unwrap();
+    let execution = ExecutionReceipt {
+        schema_version: 2,
+        negotiation: proposal.negotiation.clone(),
+        operation_id: prepare.original.operation_id,
+        request_digest: prepare.digest().unwrap(),
+        accepted_receipt_digest: accepted.digest().unwrap(),
+        issued_at_ms: 30000,
+        grant: base.execution.grant.clone(),
+        execution_deadline_ms: 90000,
+        confirmation,
+        versions: base.execution.versions.clone(),
+    };
+    execution
+        .validate_for(&prepare, &accepted, &accept, &proposal)
+        .unwrap();
+    let delivery = ExecutionDelivery {
+        schema_version: 2,
+        receipt: execution.clone(),
+        delivery: base.delivery.delivery.clone(),
+    };
+    Case {
+        proposal,
+        accept,
+        accepted,
+        prepare,
+        execution,
+        delivery,
+    }
+}
+fn fixture_proposal(base: &legacy_data::Case) -> Proposal {
     let b = &base.proposal.choice;
     let negotiation = Negotiation {
         contract: contract_artifact().unwrap(),
@@ -32,7 +78,7 @@ pub fn case() -> Case {
     };
     let proposal = Proposal {
         schema_version: 2,
-        negotiation: negotiation.clone(),
+        negotiation,
         policy: PhasePolicy {
             schema_version: 2,
             maximum_preparation_ms: 30000,
@@ -64,10 +110,13 @@ pub fn case() -> Case {
             .collect(),
     };
     proposal.validate().unwrap();
+    proposal
+}
+fn accept_request(base: &legacy_data::Case, proposal: &Proposal) -> AcceptRequest {
     let h = &base.accept.hold;
     let accept = AcceptRequest {
         schema_version: 2,
-        negotiation: negotiation.clone(),
+        negotiation: proposal.negotiation.clone(),
         proposal_digest: proposal.digest().unwrap(),
         original: base.accept.original.clone(),
         hold: ResourceHold {
@@ -78,12 +127,19 @@ pub fn case() -> Case {
             source_disk_bytes: h.source_disk_bytes,
         },
     };
-    accept.validate_for(&proposal).unwrap();
+    accept.validate_for(proposal).unwrap();
+    accept
+}
+fn accepted_receipt(
+    base: &legacy_data::Case,
+    proposal: &Proposal,
+    accept: &AcceptRequest,
+) -> AcceptedReceipt {
     let l = &base.accepted.lease;
     let material = l.materials[0].clone();
     let accepted = AcceptedReceipt {
         schema_version: 2,
-        negotiation: negotiation.clone(),
+        negotiation: proposal.negotiation.clone(),
         operation_id: accept.original.operation_id,
         request_digest: accept.digest().unwrap(),
         lease: AcceptedPreparationLease {
@@ -104,19 +160,67 @@ pub fn case() -> Case {
         },
         versions: base.accepted.versions.clone(),
     };
-    accepted.validate_for(&accept, &proposal).unwrap();
+    accepted.validate_for(accept, proposal).unwrap();
+    accepted
+}
+fn prepare_request(
+    base: &legacy_data::Case,
+    proposal: &Proposal,
+    accept: &AcceptRequest,
+    accepted: &AcceptedReceipt,
+) -> PrepareRequest {
     let prepare = PrepareRequest {
         schema_version: 2,
-        negotiation: negotiation.clone(),
+        negotiation: proposal.negotiation.clone(),
         accepted_receipt_digest: accepted.digest().unwrap(),
         expected_preparation_revision: 1,
         original: base.prepare.original.clone(),
     };
-    prepare.validate_for(&accepted, &accept, &proposal).unwrap();
-    let installed = prepare.original.materials[0].clone();
-    let p = &proposal;
+    prepare.validate_for(accepted, accept, proposal).unwrap();
+    prepare
+}
+fn make_facts(
+    proposal: &Proposal,
+    accept: &AcceptRequest,
+    accepted: &AcceptedReceipt,
+    prepare: &PrepareRequest,
+) -> Vec<OwnerFact> {
+    let mut values = owner_facts(proposal, accepted, accept);
+    values.extend(selection_facts(proposal));
+    values.extend(retained_facts(proposal, accepted, prepare));
+    let p = proposal;
+    values
+        .into_iter()
+        .map(|value| {
+            let kind = value.kind();
+            let revision = if kind == FactKind::Registry { 4 } else { 2 };
+            let body = FactBody {
+                authority: p
+                    .owners
+                    .iter()
+                    .find(|o| o.kind == kind)
+                    .unwrap()
+                    .authority
+                    .clone(),
+                binding: accepted.lease.binding.clone(),
+                choice_digest: accepted.lease.choice_digest.clone(),
+                revision,
+                observed_at_ms: 29900,
+                expires_at_ms: 31900,
+                value,
+            };
+            let record = ArtifactRef {
+                id: Text::new(format!("synthetic-refresh-fact/{kind:?}")).unwrap(),
+                version: Text::new(revision.to_string()).unwrap(),
+                digest: OwnerFact::record_digest(&body).unwrap(),
+            };
+            OwnerFact { record, body }
+        })
+        .collect()
+}
+fn owner_facts(p: &Proposal, accepted: &AcceptedReceipt, accept: &AcceptRequest) -> Vec<FactValue> {
     let c = &p.choice;
-    let values = vec![
+    vec![
         FactValue::Project {
             project_id: p.spec.lifecycle.project_id,
             revision: p.spec.project_revision,
@@ -147,6 +251,11 @@ pub fn case() -> Case {
             credential_profile: c.credential_profile.clone(),
             credential_revision: c.credential_revision,
         },
+    ]
+}
+fn selection_facts(p: &Proposal) -> Vec<FactValue> {
+    let c = &p.choice;
+    vec![
         FactValue::Availability {
             provider: c.model.provider.clone(),
             account_reference: c.account_reference.clone(),
@@ -174,6 +283,16 @@ pub fn case() -> Case {
             full_context_digest: p.full_context_digest.clone(),
             graph_policy: p.spec.graph_access_profile.clone(),
         },
+    ]
+}
+fn retained_facts(
+    p: &Proposal,
+    accepted: &AcceptedReceipt,
+    prepare: &PrepareRequest,
+) -> Vec<FactValue> {
+    let material = &accepted.lease.materials[0];
+    let installed = &prepare.original.materials[0];
+    vec![
         FactValue::Git {
             repository_id: p.spec.source.repository_id,
             binding_generation: p.spec.source.repository_binding_generation,
@@ -187,76 +306,9 @@ pub fn case() -> Case {
         FactValue::PrivateMaterialBacking {
             lease_id: material.lease_id,
             backing_digest: material.material_digest.clone(),
-            installation_receipt_digest: Digest::of(&canonical(&installed)),
+            installation_receipt_digest: Digest::of(&canonical(installed)),
         },
-    ];
-    let facts = values
-        .into_iter()
-        .map(|value| {
-            let kind = value.kind();
-            let revision = if kind == FactKind::Registry { 4 } else { 2 };
-            let body = FactBody {
-                authority: p
-                    .owners
-                    .iter()
-                    .find(|o| o.kind == kind)
-                    .unwrap()
-                    .authority
-                    .clone(),
-                binding: accepted.lease.binding.clone(),
-                choice_digest: accepted.lease.choice_digest.clone(),
-                revision,
-                observed_at_ms: 29900,
-                expires_at_ms: 31900,
-                value,
-            };
-            let record = ArtifactRef {
-                id: Text::new(format!("synthetic-refresh-fact/{kind:?}")).unwrap(),
-                version: Text::new(revision.to_string()).unwrap(),
-                digest: OwnerFact::record_digest(&body).unwrap(),
-            };
-            OwnerFact { record, body }
-        })
-        .collect();
-    let confirmation = FreshConfirmation {
-        schema_version: 2,
-        confirmation_id: id(800),
-        prepare_digest: prepare.digest().unwrap(),
-        accepted_receipt_digest: accepted.digest().unwrap(),
-        checked_at_ms: 30000,
-        facts,
-    };
-    confirmation
-        .validate_for(&prepare, &accepted, &accept, &proposal)
-        .unwrap();
-    let execution = ExecutionReceipt {
-        schema_version: 2,
-        negotiation,
-        operation_id: prepare.original.operation_id,
-        request_digest: prepare.digest().unwrap(),
-        accepted_receipt_digest: accepted.digest().unwrap(),
-        issued_at_ms: 30000,
-        grant: base.execution.grant.clone(),
-        execution_deadline_ms: 90000,
-        confirmation,
-        versions: base.execution.versions.clone(),
-    };
-    execution
-        .validate_for(&prepare, &accepted, &accept, &proposal)
-        .unwrap();
-    let delivery = ExecutionDelivery {
-        schema_version: 2,
-        receipt: execution.clone(),
-        delivery: base.delivery.delivery.clone(),
-    };
-    Case {
-        proposal,
-        accept,
-        accepted,
-        prepare,
-        execution,
-        delivery,
-    }
+    ]
 }
 pub fn resign(f: &mut OwnerFact) {
     f.record.digest = OwnerFact::record_digest(&f.body).unwrap();

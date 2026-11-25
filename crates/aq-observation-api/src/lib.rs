@@ -148,6 +148,12 @@ impl Validate for SessionUsage {
                 && (self.canonical_calls > 0 || self.known_category_subtotals == [0; 5]),
             "usage projection bounds",
         )?;
+        self.validate_known_counters()?;
+        size(self, 16384)
+    }
+}
+impl SessionUsage {
+    fn validate_known_counters(&self) -> Result<(), ContractError> {
         let c = &self.usage.counters;
         for (i, counter) in [
             &c.input,
@@ -169,7 +175,7 @@ impl Validate for SessionUsage {
                 )?;
             }
         }
-        size(self, 16384)
+        Ok(())
     }
 }
 fn size<T: Serialize>(v: &T, max: usize) -> Result<(), ContractError> {
@@ -211,22 +217,20 @@ pub fn usage_schema() -> serde_json::Value {
     s
 }
 fn schema_bounds(value: &mut serde_json::Value) {
-    if let Some(object) = value.as_object_mut() {
-        match object.get("format").and_then(|v| v.as_str()) {
-            Some("uint64") => {
-                object.insert("maximum".into(), serde_json::json!(u64::MAX));
+    use serde_json::Value;
+    match value {
+        Value::Object(object) => {
+            let maximum = match object.get("format").and_then(Value::as_str) {
+                Some("uint64") => Some(u64::MAX),
+                Some("uint32") => Some(u64::from(u32::MAX)),
+                _ => None,
+            };
+            if let Some(maximum) = maximum {
+                object.insert("maximum".into(), maximum.into());
             }
-            Some("uint32") => {
-                object.insert("maximum".into(), serde_json::json!(u32::MAX));
-            }
-            _ => {}
+            object.values_mut().for_each(schema_bounds);
         }
-        for child in object.values_mut() {
-            schema_bounds(child);
-        }
-    } else if let Some(array) = value.as_array_mut() {
-        for child in array {
-            schema_bounds(child);
-        }
+        Value::Array(items) => items.iter_mut().for_each(schema_bounds),
+        _ => {}
     }
 }

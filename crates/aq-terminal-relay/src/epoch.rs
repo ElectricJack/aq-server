@@ -18,22 +18,28 @@ pub struct Request {
 impl Request {
     pub fn validate(&self) -> Result<()> {
         self.input.terminal.validate().map_err(|_| Error::Invalid)?;
-        if self.version != VERSION
-            || self.capability.as_str() != CAPABILITY
-            || self.epoch_id.is_nil()
-            || self.sequence == 0
-            || self.input.operation_id.is_nil()
-            || self.input.lease_id.is_nil()
-            || self.input.expected_session_revision == 0
-            || self.input.expected_controller_generation == 0
-            || self.input.expires_at_ms == 0
-            || self.input.bytes.is_empty()
-            || self.input.bytes.len() > MAX_INPUT_BYTES
-        {
+        let input = &self.input;
+        if !self.has_epoch_header() || !valid_control_input(input) {
             return Err(Error::Invalid);
         }
         Ok(())
     }
+    fn has_epoch_header(&self) -> bool {
+        self.version == VERSION
+            && self.capability.as_str() == CAPABILITY
+            && !self.epoch_id.is_nil()
+            && self.sequence > 0
+    }
+}
+
+fn valid_control_input(input: &InputRequest) -> bool {
+    crate::draft::valid_control_fields(
+        input.operation_id,
+        input.lease_id,
+        input.expected_session_revision,
+        input.expected_controller_generation,
+    ) && input.expires_at_ms > 0
+        && (1..=MAX_INPUT_BYTES).contains(&input.bytes.len())
 }
 impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,11 +65,12 @@ pub struct Open {
 impl Open {
     pub fn validate(&self) -> Result<()> {
         self.terminal.validate().map_err(|_| Error::Invalid)?;
-        if self.operation_id.is_nil()
-            || self.lease_id.is_nil()
-            || self.expected_session_revision == 0
-            || self.expected_controller_generation == 0
-            || self.expires_at_ms == 0
+        if !crate::draft::valid_control_fields(
+            self.operation_id,
+            self.lease_id,
+            self.expected_session_revision,
+            self.expected_controller_generation,
+        ) || self.expires_at_ms == 0
         {
             return Err(Error::Invalid);
         }

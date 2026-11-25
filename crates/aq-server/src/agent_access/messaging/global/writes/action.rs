@@ -8,14 +8,16 @@ use crate::dashboard_api::{
 use async_trait::async_trait;
 pub(crate) struct SendMessage(pub(crate) Arc<Service>);
 pub(super) fn request(conversation: Uuid, payload: &Create) -> ActionRequest {
-    existing::request(
+    existing::VersionedSubject {
+        kind: "conversation",
+        id: conversation,
+        revision: payload.expected_conversation_revision.clone(),
+        version_key: "conversation",
+    }
+    .request(
         "supervisor.message.send",
         payload.operation_id,
-        "conversation",
-        conversation,
-        payload.expected_conversation_revision.clone(),
         json!(payload),
-        "conversation",
     )
 }
 fn result(receipt: Receipt) -> Outcome {

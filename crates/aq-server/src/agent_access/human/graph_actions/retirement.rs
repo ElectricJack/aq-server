@@ -54,14 +54,23 @@ impl Reads for Runtime {
     }
 }
 
+pub(super) use dispatch::GraphReads;
 pub(super) async fn plan(
-    state: &AppState,
-    rt: &Runtime,
+    reads: GraphReads<'_, Runtime>,
     (workspace, actor, project): (Uuid, Uuid, Uuid),
     subject: &Value,
     action: Action<'_>,
 ) -> Result<Vec<Value>> {
-    let service = rt.mutation_actor.as_deref().ok_or_else(unavailable)?;
-    let at = (workspace, actor, project, service);
-    dispatch::plan(rt, &state.store.pool, at, subject, action).await
+    let service = reads
+        .graph
+        .mutation_actor
+        .as_deref()
+        .ok_or_else(unavailable)?;
+    let at = aq_human_work::epic_retirement::Scope {
+        workspace,
+        actor,
+        project,
+        service,
+    };
+    dispatch::plan(reads, at, subject, action).await
 }

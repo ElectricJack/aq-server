@@ -62,17 +62,27 @@ pub async fn in_use_after_release(
     .await
 }
 
+/// A specific generation of a node's observation source.
+#[derive(Clone, Copy)]
+pub struct SourceKey {
+    pub node: Uuid,
+    pub source: Uuid,
+    pub generation: i64,
+}
+
+const UNREVOKED_FOR_ATTEMPT: &str = "FROM observation_sources s WHERE s.attempt_id=$1 \
+    AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r WHERE r.node_id=s.node_id \
+    AND r.source_id=s.source_id AND r.generation=s.generation)";
+
 /// The attempt's newest unrevoked source, across nodes: (generation, digest).
 pub async fn current(pool: &PgPool, attempt: Uuid) -> sqlx::Result<Option<(i64, String)>> {
-    sqlx::query_as(
-        "SELECT s.generation,s.authority_digest FROM observation_sources s \
-         WHERE s.attempt_id=$1 AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r \
-          WHERE r.node_id=s.node_id AND r.source_id=s.source_id AND r.generation=s.generation) \
-         ORDER BY s.generation DESC LIMIT 1",
-    )
-    .bind(attempt)
-    .fetch_optional(pool)
-    .await
+    let query = format!(
+        "SELECT s.generation,s.authority_digest {UNREVOKED_FOR_ATTEMPT} ORDER BY s.generation DESC LIMIT 1"
+    );
+    sqlx::query_as(&query)
+        .bind(attempt)
+        .fetch_optional(pool)
+        .await
 }
 
 /// The ledger facts of the attempts of `sessions`, by session, in one query
@@ -126,41 +136,42 @@ pub async fn unrevoked(
     conn: &mut PgConnection,
     attempt: Uuid,
 ) -> sqlx::Result<Vec<(Uuid, Uuid, i64)>> {
-    sqlx::query_as(
-        "SELECT s.node_id,s.source_id,s.generation FROM observation_sources s \
-         WHERE s.attempt_id=$1 AND NOT EXISTS(SELECT 1 FROM observation_source_revocations r \
-          WHERE r.node_id=s.node_id AND r.source_id=s.source_id AND r.generation=s.generation) \
-         ORDER BY s.node_id,s.source_id,s.generation FOR UPDATE OF s",
-    )
-    .bind(attempt)
-    .fetch_all(conn)
-    .await
+    let query = format!(
+        "SELECT s.node_id,s.source_id,s.generation {UNREVOKED_FOR_ATTEMPT} ORDER BY s.node_id,s.source_id,s.generation FOR UPDATE OF s"
+    );
+    sqlx::query_as(&query).bind(attempt).fetch_all(conn).await
 }
 
-/// Revokes `old` (node, source, generation) of `attempt`, superseded by `by`.
-pub async fn revoke(
-    conn: &mut PgConnection,
-    old: (Uuid, Uuid, i64),
-    attempt: Uuid,
-    by: (Uuid, Uuid, i64),
-    at_ms: i64,
-) -> sqlx::Result<()> {
-    sqlx::query(
-        "INSERT INTO observation_source_revocations(node_id,source_id,generation,attempt_id,\
+/// A replacement source and the timestamp at which it superseded prior generations.
+pub struct Supersession {
+    pub attempt: Uuid,
+    pub by: SourceKey,
+    pub at_ms: i64,
+}
+
+impl Supersession {
+    pub async fn revoke(
+        &self,
+        conn: &mut PgConnection,
+        old: (Uuid, Uuid, i64),
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO observation_source_revocations(node_id,source_id,generation,attempt_id,\
          superseded_by_node_id,superseded_by_source_id,superseded_by_generation,revoked_at_ms) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-    )
-    .bind(old.0)
-    .bind(old.1)
-    .bind(old.2)
-    .bind(attempt)
-    .bind(by.0)
-    .bind(by.1)
-    .bind(by.2)
-    .bind(at_ms)
-    .execute(conn)
-    .await
-    .map(|_| ())
+        )
+        .bind(old.0)
+        .bind(old.1)
+        .bind(old.2)
+        .bind(self.attempt)
+        .bind(self.by.node)
+        .bind(self.by.source)
+        .bind(self.by.generation)
+        .bind(self.at_ms)
+        .execute(&mut *conn)
+        .await?;
+        Ok(())
+    }
 }
 
 /// The source a batch event names, as ingest checks it: `None` when it is unknown or was
@@ -168,9 +179,7 @@ pub async fn revoke(
 /// `authority`, `authority_digest`, `revoked` and `refused` (a durable source refusal).
 pub async fn for_ingest(
     conn: &mut PgConnection,
-    node: Uuid,
-    source: Uuid,
-    generation: i64,
+    key: SourceKey,
     now_ms: i64,
 ) -> sqlx::Result<Option<sqlx::postgres::PgRow>> {
     sqlx::query(
@@ -183,5 +192,5 @@ pub async fn for_ingest(
          SELECT 1 FROM observation_source_releases x WHERE x.node_id=s.node_id AND x.source_id=s.source_id \
          AND x.generation=s.generation AND x.accept_until_ms<$4)",
     )
-    .bind(node).bind(source).bind(generation).bind(now_ms).fetch_optional(conn).await
+    .bind(key.node).bind(key.source).bind(key.generation).bind(now_ms).fetch_optional(conn).await
 }

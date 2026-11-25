@@ -1,0 +1,21 @@
+{
+  "document": "stuck/fastest.md",
+  "why": "This version chooses by something no command returns: work.read lists each allowed environment with only an id and what it provides, so nothing the playbook can read says how fast an environment starts. Never stand another fact in for it (the number of capabilities, the order of the list): that draft would check, its cases would pass because you wrote them, and it would save. Ask, name the sentence by its lines, and end. The sentence spans lines 12 and 13, so the question names both.",
+  "run": [
+    "ask",
+    "--lines",
+    "12-13",
+    "The document picks the environment that starts fastest, but nothing this playbook can read says how fast an environment starts: it sees only the capabilities each allowed environment provides. How should the environment be chosen when the default does not provide everything the task needs, or should this sentence go?"
+  ],
+  "writes": {
+    "kind": "question",
+    "question": "The document picks the environment that starts fastest, but nothing this playbook can read says how fast an environment starts: it sees only the capabilities each allowed environment provides. How should the environment be chosen when the default does not provide everything the task needs, or should this sentence go?",
+    "sentences": [
+      {
+        "line": 12,
+        "end_line": 13,
+        "text": "If it does not, use the environment the project allows that starts\nfastest."
+      }
+    ]
+  }
+}

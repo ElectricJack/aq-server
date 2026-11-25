@@ -55,8 +55,7 @@ async fn inbox(
             .inbox(
                 user.id,
                 page.recipient.unwrap_or(user.id),
-                page.after,
-                page.limit,
+                (page.after, page.limit),
             )
             .await?,
     ))

@@ -100,15 +100,13 @@ pub(crate) fn schemas(r: &mut Registry) {
 }
 pub(super) fn request<P: Payload + serde::Serialize>(id: Uuid, p: P) -> ActionRequest {
     let cmd = p.clone().command();
-    existing::request(
-        P::KIND,
-        cmd.id(),
-        P::ENTITY,
+    existing::VersionedSubject {
+        kind: P::ENTITY,
         id,
-        cmd.version().into(),
-        json!(p),
-        P::VERSION_KEY,
-    )
+        revision: cmd.version().into(),
+        version_key: P::VERSION_KEY,
+    }
+    .request(P::KIND, cmd.id(), json!(p))
 }
 fn native(state: &AppState) -> crate::agent_access::human::TaskCreate {
     crate::agent_access::human::TaskCreate {
@@ -117,15 +115,7 @@ fn native(state: &AppState) -> crate::agent_access::human::TaskCreate {
     }
 }
 fn native_request(v: &FeedbackDraft) -> ActionRequest {
-    existing::request(
-        "task.create",
-        v.operation_id,
-        "project",
-        v.project_id,
-        v.expected_project_revision.clone(),
-        json!({"operation_id":v.operation_id,"expected_project_revision":v.expected_project_revision,"title":v.title,"body":v.description,"acceptance_criteria":v.acceptance_criteria,"labels":["feedback"],"task_state":"draft","parent_id":v.parent_id}),
-        "project",
-    )
+    existing::VersionedSubject{kind:"project",id:v.project_id,revision:v.expected_project_revision.clone(),version_key:"project"}.request("task.create",v.operation_id,json!({"operation_id":v.operation_id,"expected_project_revision":v.expected_project_revision,"title":v.title,"body":v.description,"acceptance_criteria":v.acceptance_criteria,"labels":["feedback"],"task_state":"draft","parent_id":v.parent_id}))
 }
 #[async_trait]
 impl<P: Payload> ActionKind for Adapter<P> {

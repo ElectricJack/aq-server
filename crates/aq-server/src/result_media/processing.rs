@@ -1,37 +1,97 @@
-use super::{Content, Error, Owner, Result, User, db, files, media, now, sql};
-use media::Validate;
+use super::generation::{Generation, JobError};
+use super::{Error, OperationLock, Owner, Result, User, db, files, media, now, sql};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
+
+#[derive(Clone, Copy)]
+enum Job {
+    Receive,
+    Finalize,
+}
+
+struct JobLease {
+    operation: Uuid,
+    id: Uuid,
+}
+
+impl Job {
+    fn can_start(self, intent: &db::Intent) -> bool {
+        use media::UploadState as State;
+        match self {
+            Self::Receive => intent.state == State::Reserved,
+            Self::Finalize => {
+                matches!(intent.state, State::Received | State::Finalizing) && intent.attempts < 8
+            }
+        }
+    }
+
+    fn claim_query(self) -> &'static str {
+        match self {
+            Self::Receive => {
+                "UPDATE result_media_intents SET lease_id=$2,lease_expires_at_ms=$3,transition_at_ms=$4 WHERE operation_id=$1"
+            }
+            Self::Finalize => {
+                "UPDATE result_media_intents SET state='finalizing',lease_id=$2,lease_expires_at_ms=$3,processing_attempts=processing_attempts+1,transition_at_ms=$4 WHERE operation_id=$1"
+            }
+        }
+    }
+}
 
 impl Owner {
     async fn job(
         &self,
         actor: &User,
         id: Uuid,
-        processing: bool,
-    ) -> Result<(db::Intent, Uuid, files::ActivityGuard)> {
+        job: Job,
+    ) -> Result<(db::Intent, JobLease, files::ActivityGuard)> {
         let guard = self.root.active(id, true)?;
         let mut tx = db::transaction(&self.state).await?;
-        let row = self.lock_operation(&mut tx, actor, id, true).await?;
+        let row = self
+            .lock_operation(&mut tx, actor, OperationLock::Change(id))
+            .await?;
         let at = now(&self.state)?;
         row.live(at)?;
-        use media::UploadState as S;
         if row.lease_expires.is_some_and(|end| at < end) {
             return Err(Error::Busy);
         }
-        if processing && (!matches!(row.state, S::Received | S::Finalizing) || row.attempts >= 8)
-            || !processing && row.state != S::Reserved
-        {
+        if !job.can_start(&row) {
             return Err(Error::Conflict);
         }
-        let lease = Uuid::new_v4();
+        let lease = JobLease {
+            operation: id,
+            id: Uuid::new_v4(),
+        };
         let deadline = row
             .upload
             .min(at.checked_add(30_000).ok_or(Error::Invalid)?);
-        sqlx::query(if processing{"UPDATE result_media_intents SET state='finalizing',lease_id=$2,lease_expires_at_ms=$3,processing_attempts=processing_attempts+1,transition_at_ms=$4 WHERE operation_id=$1"}else{"UPDATE result_media_intents SET lease_id=$2,lease_expires_at_ms=$3,transition_at_ms=$4 WHERE operation_id=$1"})
-            .bind(id).bind(lease).bind(deadline as i64).bind(at as i64).execute(&mut *tx).await.map_err(sql)?;
+        sqlx::query(job.claim_query())
+            .bind(id)
+            .bind(lease.id)
+            .bind(deadline as i64)
+            .bind(at as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql)?;
         tx.commit().await.map_err(sql)?;
         Ok((row, lease, guard))
     }
+    async fn lock_current_job(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &User,
+        lease: &JobLease,
+    ) -> Result<(db::Intent, u64)> {
+        let current = self
+            .lock_operation(tx, actor, OperationLock::Change(lease.operation))
+            .await?;
+        let at = now(&self.state)?;
+        current.live(at)?;
+        if current.lease != Some(lease.id) || current.lease_expires.is_none_or(|v| at >= v) {
+            return Err(Error::Conflict);
+        }
+        Ok((current, at))
+    }
+
     /// Callers pass bounded bytes already associated with the immutable intent;
     /// the owner checks both exact length and digest before disk work.
     pub async fn put(&self, actor: &User, id: Uuid, bytes: Vec<u8>) -> Result<media::UploadStatus> {
@@ -42,30 +102,12 @@ impl Owner {
         if bytes.len() as u64 > status.media.max_input_bytes() {
             return Err(Error::Invalid);
         }
-        if bytes.len() != status.input.bytes as usize
-            || media::Digest::of(&bytes) != status.input.digest
-        {
-            return Err(Error::Conflict);
-        }
-        if matches!(
-            status.state,
-            media::UploadState::Received | media::UploadState::Retained
-        ) {
-            // Exact lost-response replay is a read. Never renew a lease or
-            // rewrite even an expired/cleaned retained generation.
-            if status.state == media::UploadState::Received
-                && now(&self.state)? >= status.upload_expires_at_ms
-            {
-                return Err(Error::Expired);
-            }
+        verify_input(&bytes, status.input.bytes, &status.input.digest)?;
+        if self.replayed_receive(&status)? {
             return Ok(status);
         }
-        let (row, lease, guard) = self.job(actor, id, false).await?;
-        if bytes.len() != row.request.input_bytes as usize
-            || media::Digest::of(&bytes) != row.request.input_digest
-        {
-            return Err(Error::Conflict);
-        }
+        let (row, lease, guard) = self.job(actor, id, Job::Receive).await?;
+        verify_input(&bytes, row.request.input_bytes, &row.request.input_digest)?;
         let root = self.root.clone();
         let digest = row.request.input_digest.clone();
         let kind = row.request.media;
@@ -82,19 +124,28 @@ impl Owner {
         .map_err(|_| Error::Storage)?;
         result?;
         let mut tx = db::transaction(&self.state).await?;
-        let current = self.lock_operation(&mut tx, actor, id, true).await?;
-        let at = now(&self.state)?;
-        current.live(at)?;
-        if current.lease != Some(lease) || current.lease_expires.is_none_or(|v| at >= v) {
-            return Err(Error::Conflict);
-        }
+        let (_, at) = self.lock_current_job(&mut tx, actor, &lease).await?;
         sqlx::query("UPDATE result_media_intents SET state='received',received_at_ms=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$2 WHERE operation_id=$1 AND lease_id=$3")
-            .bind(id).bind(at as i64).bind(lease).execute(&mut *tx).await.map_err(sql)?;
+            .bind(id).bind(at as i64).bind(lease.id).execute(&mut *tx).await.map_err(sql)?;
         self.root.check()?;
         tx.commit().await.map_err(sql)?;
         drop(guard);
         self.status(actor, id).await
     }
+    fn replayed_receive(&self, status: &media::UploadStatus) -> Result<bool> {
+        use media::UploadState as State;
+        match status.state {
+            // Exact lost-response replay is a read. It does not renew a lease
+            // or rewrite even an expired or cleaned retained generation.
+            State::Retained => Ok(true),
+            State::Received if now(&self.state)? >= status.upload_expires_at_ms => {
+                Err(Error::Expired)
+            }
+            State::Received => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
     pub async fn finalize(&self, actor: &User, id: Uuid) -> Result<media::UploadStatus> {
         // A response-loss retry of a committed receipt is a read, never a new
         // physical write or a new artifact identity.
@@ -102,7 +153,7 @@ impl Owner {
         if status.state == media::UploadState::Retained {
             return Ok(status);
         }
-        let (row, lease, guard) = self.job(actor, id, true).await?;
+        let (row, lease, guard) = self.job(actor, id, Job::Finalize).await?;
         let kind = row.request.media;
         // A clip's preview is a verified copy of a retained image's preview.
         let poster = match (kind, row.request.poster_artifact_id) {
@@ -114,124 +165,42 @@ impl Owner {
             None => None,
         };
         let root = self.root.clone();
-        let input = row.request.input_digest.clone();
-        let size = row.request.input_bytes as usize;
-        let limits = row.limits.clone();
+        let generation = Generation {
+            id,
+            kind,
+            input: row.request.input_digest.clone(),
+            size: row.request.input_bytes as usize,
+            limits: row.limits.clone(),
+        };
         let (prepared, guard) = tokio::task::spawn_blocking(move || {
-            let result = (|| {
-                let published = root.generation(id, true).is_ok();
-                let bytes = root.input(id, published, kind, size, &input)?;
-                let prepared = match kind {
-                    media::MediaKind::Image => Prepared::Image(prepare_image(&bytes, &limits)?),
-                    media::MediaKind::Video => {
-                        let header = prepare_clip(&bytes, &limits)?;
-                        let (poster_id, preview) =
-                            poster.ok_or(JobError::Reject(media::Rejection::PosterUnavailable))?;
-                        let preview_bytes = root
-                            .variant(poster_id, "preview.png", &preview)
-                            .map_err(|_| JobError::Reject(media::Rejection::PosterUnavailable))?;
-                        let render = media::Variant {
-                            digest: input.clone(),
-                            bytes: size as u64,
-                            mime: media::Mime::Mp4,
-                            width: header.width,
-                            height: header.height,
-                        };
-                        Prepared::Clip {
-                            header,
-                            render,
-                            preview,
-                            bytes,
-                            preview_bytes,
-                        }
-                    }
-                };
-                let (r, p) = prepared.descriptors();
-                if r.bytes > limits.max_render_bytes.max(limits.max_clip_bytes)
-                    || p.bytes > limits.max_preview_bytes
-                    || u64::from(r.width) * u64::from(r.height) > limits.max_pixels
-                    || r.width > limits.max_dimension
-                    || r.height > limits.max_dimension
-                {
-                    return Err(JobError::Reject(media::Rejection::ProcessingLimit));
-                }
-                if published {
-                    root.variant(id, files::render_name(r.mime), r)?;
-                    root.variant(id, "preview.png", p)?;
-                    root.confirm_published(id)?;
-                } else {
-                    root.remove_variants(id)?;
-                    match &prepared {
-                        Prepared::Image(image) => root.variants(id, image)?,
-                        Prepared::Clip {
-                            bytes,
-                            preview_bytes,
-                            ..
-                        } => root.clip_variants(id, bytes, preview_bytes)?,
-                    }
-                    root.publish(id)?;
-                }
-                let charge = root.charge(id, kind)?;
-                if charge > 10_485_760 {
-                    return Err(JobError::Reject(media::Rejection::StorageFailure));
-                }
-                root.point("before_receipt_commit")?;
-                Ok((prepared, charge))
-            })();
+            let result = generation.finalize(&root, poster);
             drop(poster_guard);
             (result, guard)
         })
         .await
         .map_err(|_| Error::Storage)?;
         let mut tx = db::transaction(&self.state).await?;
-        let current = self.lock_operation(&mut tx, actor, id, true).await?;
-        let at = now(&self.state)?;
-        current.live(at)?;
-        if current.lease != Some(lease) || current.lease_expires.is_none_or(|v| at >= v) {
-            return Err(Error::Conflict);
-        }
+        let (current, at) = self.lock_current_job(&mut tx, actor, &lease).await?;
         match prepared {
             Err(JobError::Storage(error)) => return Err(error),
             Err(JobError::Reject(rejection)) => {
                 sqlx::query("UPDATE result_media_intents SET state='rejected',rejection=$2,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$3 WHERE operation_id=$1 AND lease_id=$4")
-                    .bind(id).bind(super::json(&rejection)?.as_str().ok_or(Error::Owner)?).bind(at as i64).bind(lease).execute(&mut *tx).await.map_err(sql)?;
+                    .bind(id).bind(super::json(&rejection)?.as_str().ok_or(Error::Owner)?).bind(at as i64).bind(lease.id).execute(&mut *tx).await.map_err(sql)?;
             }
             Ok((prepared, charge)) => {
-                let (render, preview) = prepared.descriptors();
-                let clip = match &prepared {
-                    Prepared::Image(_) => None,
-                    Prepared::Clip { header, .. } => Some(media::Clip {
-                        duration_ms: header.duration_ms,
-                        poster_artifact_id: current
-                            .request
-                            .poster_artifact_id
-                            .ok_or(Error::Owner)?,
-                    }),
-                };
-                let receipt = media::Receipt {
-                    schema_version: 1,
-                    artifact_id: media::Id::new(id).map_err(|_| Error::Owner)?,
-                    binding: current.binding.clone(),
-                    uploader_id: media::Id::new(current.actor).map_err(|_| Error::Owner)?,
-                    input: media::Input {
-                        digest: current.request.input_digest.clone(),
-                        bytes: current.request.input_bytes,
-                        filename: current.request.filename.clone(),
-                    },
-                    capture: current.request.capture.clone(),
-                    rendering_policy: kind.policy(),
-                    variants: media::Variants {
-                        render: render.clone(),
-                        preview: preview.clone(),
-                    },
-                    clip,
-                    retained_at_ms: at,
-                    retain_until_ms: current.retain,
-                };
-                receipt.validate().map_err(|_| Error::Owner)?;
-                let bytes = media::canonical_bytes(&receipt).map_err(|_| Error::Owner)?;
+                let bytes = prepared
+                    .receipt_bytes(media::ReceiptSource {
+                        artifact: id,
+                        uploader: current.actor,
+                        binding: &current.binding,
+                        request: &current.request,
+                        kind,
+                        retained_at_ms: at,
+                        retain_until_ms: current.retain,
+                    })
+                    .map_err(|_| Error::Owner)?;
                 sqlx::query("UPDATE result_media_intents SET state='retained',receipt_bytes=$2,receipt_digest=$3,reserved_bytes=0,retained_bytes=$4,lease_id=NULL,lease_expires_at_ms=NULL,transition_at_ms=$5 WHERE operation_id=$1 AND lease_id=$6")
-                    .bind(id).bind(&bytes).bind(media::Digest::of(&bytes).as_str()).bind(charge as i64).bind(at as i64).bind(lease).execute(&mut *tx).await.map_err(sql)?;
+                    .bind(id).bind(&bytes).bind(media::Digest::of(&bytes).as_str()).bind(charge as i64).bind(at as i64).bind(lease.id).execute(&mut *tx).await.map_err(sql)?;
             }
         }
         self.root.check()?;
@@ -240,190 +209,13 @@ impl Owner {
         drop(guard);
         self.status(actor, id).await
     }
-    pub async fn list(
-        &self,
-        actor: &User,
-        report: Uuid,
-        revision: &str,
-    ) -> Result<media::MediaPage> {
-        let revision = media::ReportRevision::parse(revision).map_err(|_| Error::Invalid)?;
-        let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        let binding = db::binding(&self.state, &mut tx, report, &revision).await?;
-        let ids:Vec<Uuid>=sqlx::query_scalar("SELECT operation_id FROM result_media_intents WHERE report_id=$1 AND report_revision=$2 AND state='retained' ORDER BY operation_id LIMIT 9").bind(report).bind(revision.as_str()).fetch_all(&mut *tx).await.map_err(sql)?;
-        if ids.len() > 8 {
-            return Err(Error::Owner);
-        }
-        let mut snapshots = Vec::new();
-        for id in ids {
-            let row = db::load(&mut tx, id).await?;
-            if row.binding != binding || row.storage != self.root.id {
-                return Err(Error::Owner);
-            }
-            snapshots.push((row.receipt.ok_or(Error::Owner)?, row.withheld));
-        }
-        tx.commit().await.map_err(sql)?;
-        let owner = self.clone();
-        let items = tokio::task::spawn_blocking(move || {
-            snapshots
-                .into_iter()
-                .map(|(receipt, withheld)| {
-                    Ok(media::Artifact {
-                        receipt_digest: receipt.digest().map_err(|_| Error::Owner)?,
-                        availability: owner.observation(&receipt, withheld),
-                        receipt,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .await
-        .map_err(|_| Error::Storage)??;
-        let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        if db::binding(&self.state, &mut tx, report, &revision).await? != binding {
-            return Err(Error::Owner);
-        }
-        for item in &items {
-            let current = db::load(&mut tx, item.receipt.artifact_id.as_uuid()).await?;
-            if current.receipt.as_ref() != Some(&item.receipt)
-                || current.withheld
-                    != (item.availability.state == media::AvailabilityState::Withheld)
-            {
-                return Err(Error::Conflict);
-            }
-        }
-        let page = media::MediaPage {
-            contract: media::Contract::HumanResultMedia1,
-            server_time_ms: now(&self.state)?,
-            binding,
-            limits: self.limits.clone(),
-            items,
-        };
-        page.validate().map_err(|_| Error::Owner)?;
-        tx.commit().await.map_err(sql)?;
-        Ok(page)
-    }
-    pub async fn content(
-        &self,
-        actor: &User,
-        report: Uuid,
-        revision: &str,
-        id: Uuid,
-        preview: bool,
-    ) -> Result<Content> {
-        let revision = media::ReportRevision::parse(revision).map_err(|_| Error::Invalid)?;
-        let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        let binding = db::binding(&self.state, &mut tx, report, &revision).await?;
-        let row = db::load(&mut tx, id).await?;
-        if row.binding != binding || row.storage != self.root.id {
-            return Err(Error::NotFound);
-        }
-        if row.withheld {
-            return Err(Error::Withheld);
-        }
-        let receipt = row.receipt.ok_or(Error::NotFound)?;
-        if now(&self.state)? >= receipt.retain_until_ms {
-            return Err(Error::Expired);
-        }
-        tx.commit().await.map_err(sql)?;
-        let descriptor = if preview {
-            receipt.variants.preview.clone()
-        } else {
-            receipt.variants.render.clone()
-        };
-        let root = self.root.clone();
-        let expected = descriptor.clone();
-        let (bytes, guard) = match self.root.active(id, false) {
-            Ok(guard) => tokio::task::spawn_blocking(move || {
-                (
-                    root.variant(
-                        id,
-                        if preview {
-                            "preview.png"
-                        } else {
-                            files::render_name(expected.mime)
-                        },
-                        &expected,
-                    ),
-                    Some(guard),
-                )
-            })
-            .await
-            .unwrap_or_else(|_| (Err(Error::Storage), None)),
-            Err(error) => (Err(error), None),
-        };
-        let mut tx = db::transaction(&self.state).await?;
-        db::principal(&mut tx, actor).await?;
-        if db::binding(&self.state, &mut tx, report, &revision).await? != binding {
-            return Err(Error::Owner);
-        }
-        let current = db::load(&mut tx, id).await?;
-        if current.receipt.as_ref() != Some(&receipt) || current.cleanup != "none" {
-            return Err(Error::NotFound);
-        }
-        if current.withheld {
-            return Err(Error::Withheld);
-        }
-        if now(&self.state)? >= receipt.retain_until_ms {
-            return Err(Error::Expired);
-        }
-        self.root.check()?;
-        tx.commit().await.map_err(sql)?;
-        let bytes = bytes?;
-        Ok(Content {
-            bytes,
-            _guard: guard.ok_or(Error::Owner)?,
-            descriptor,
-            receipt_digest: receipt.digest().map_err(|_| Error::Owner)?,
-        })
-    }
 }
-enum Prepared {
-    Image(media::PreparedImage),
-    Clip {
-        header: media::ClipHeader,
-        render: media::Variant,
-        preview: media::Variant,
-        bytes: Vec<u8>,
-        preview_bytes: Vec<u8>,
-    },
-}
-impl Prepared {
-    fn descriptors(&self) -> (&media::Variant, &media::Variant) {
-        match self {
-            Self::Image(image) => (image.render().descriptor(), image.preview().descriptor()),
-            Self::Clip {
-                render, preview, ..
-            } => (render, preview),
-        }
+
+fn verify_input(bytes: &[u8], expected_bytes: u64, expected_digest: &media::Digest) -> Result<()> {
+    if bytes.len() != expected_bytes as usize || &media::Digest::of(bytes) != expected_digest {
+        return Err(Error::Conflict);
     }
-}
-fn prepare_image(
-    bytes: &[u8],
-    _limits: &media::Limits,
-) -> std::result::Result<media::PreparedImage, JobError> {
-    media::prepare_png(bytes).map_err(|invalid| match invalid {
-        media::Invalid::UnsupportedPng => JobError::Reject(media::Rejection::UnsupportedPng),
-        media::Invalid::Limit(_) => JobError::Reject(media::Rejection::ProcessingLimit),
-        _ => JobError::Reject(media::Rejection::InvalidPng),
-    })
-}
-fn prepare_clip(
-    bytes: &[u8],
-    limits: &media::Limits,
-) -> std::result::Result<media::ClipHeader, JobError> {
-    let header = media::preflight_mp4(bytes).map_err(|invalid| match invalid {
-        media::Invalid::UnsupportedVideo => JobError::Reject(media::Rejection::UnsupportedVideo),
-        media::Invalid::Limit(_) => JobError::Reject(media::Rejection::ProcessingLimit),
-        _ => JobError::Reject(media::Rejection::InvalidVideo),
-    })?;
-    if bytes.len() as u64 > limits.max_clip_bytes
-        || header.duration_ms > limits.max_clip_duration_ms
-    {
-        return Err(JobError::Reject(media::Rejection::ProcessingLimit));
-    }
-    Ok(header)
+    Ok(())
 }
 impl Owner {
     /// The poster must be a live retained image on the same revision and store.
@@ -438,28 +230,15 @@ impl Owner {
         };
         tx.commit().await.map_err(sql)?;
         let at = now(&self.state)?;
-        Ok(match found.receipt {
-            Some(receipt)
-                if found.binding == row.binding
-                    && found.storage == self.root.id
-                    && !found.withheld
-                    && found.cleanup == "none"
-                    && receipt.clip.is_none()
-                    && receipt.rendering_policy == media::RenderingPolicy::Rgba8SrgbV1
-                    && at < receipt.retain_until_ms =>
-            {
-                Some((poster, receipt.variants.preview))
-            }
-            _ => None,
-        })
-    }
-}
-enum JobError {
-    Storage(Error),
-    Reject(media::Rejection),
-}
-impl From<Error> for JobError {
-    fn from(value: Error) -> Self {
-        Self::Storage(value)
+        let same_owner = found.binding == row.binding && found.storage == self.root.id;
+        let available = !found.withheld && found.cleanup == "none";
+        let receipt = found.receipt.filter(|receipt| {
+            let image = receipt.clip.is_none()
+                && receipt.rendering_policy == media::RenderingPolicy::Rgba8SrgbV1;
+            image && at < receipt.retain_until_ms
+        });
+        Ok(receipt
+            .filter(|_| same_owner && available)
+            .map(|receipt| (poster, receipt.variants.preview)))
     }
 }

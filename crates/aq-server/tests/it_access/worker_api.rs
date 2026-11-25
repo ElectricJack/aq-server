@@ -741,10 +741,12 @@ async fn control_reports_desired_state_and_pending_handoffs() {
         &mut c,
         "desk",
         aq_machine_control::DesiredState::Stopped,
-        1,
-        who,
-        uuid::Uuid::new_v4(),
-        t0(),
+        aq_machine_control::OwnerChange {
+            expected_generation: 1,
+            actor: who,
+            operation_id: uuid::Uuid::new_v4(),
+            now: t0(),
+        },
     )
     .await
     .unwrap();
@@ -808,10 +810,12 @@ async fn machine_control_generation_conflicts_and_idempotent_handoffs() {
                 &mut pool.acquire().await.unwrap(),
                 "desk",
                 aq_machine_control::DesiredState::Stopped,
-                expected,
-                who,
-                uuid::Uuid::new_v4(),
-                t0(),
+                aq_machine_control::OwnerChange {
+                    expected_generation: expected,
+                    actor: who,
+                    operation_id: uuid::Uuid::new_v4(),
+                    now: t0(),
+                },
             )
             .await
         }

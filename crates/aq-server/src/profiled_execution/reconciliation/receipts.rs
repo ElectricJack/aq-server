@@ -1,5 +1,5 @@
 use super::*;
-use aq_admission::Text;
+use aq_admission::{ArtifactRef, Digest, Text, transport::PreparationPlan};
 pub(super) async fn preparation(
     tx: &mut Transaction<'_, Postgres>,
     binding: &LaunchBinding,

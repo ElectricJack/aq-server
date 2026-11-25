@@ -165,45 +165,61 @@ fn node_pin(workspace: Uuid, id: Uuid, node: &Value) -> Result<GraphTaskPin> {
         content_revision,
     })
 }
-impl RealGraphFixture {
-    pub async fn start(pin: BinaryPin, seed: TaskSeed) -> Result<Self> {
+impl BinaryPin {
+    fn read_image(&self) -> Result<Vec<u8>> {
         ensure!(
-            pin.sha256 == EXISTING_GRAPH_SHA256,
+            self.sha256 == EXISTING_GRAPH_SHA256,
             "only reviewed existing Graph pin is allowed"
         );
-        let metadata = fs::symlink_metadata(&pin.path)?;
+        let metadata = fs::symlink_metadata(&self.path)?;
         ensure!(
             metadata.file_type().is_file()
                 && metadata.len() <= 32 * 1024 * 1024
                 && metadata.permissions().mode() & 0o111 != 0,
             "Graph pin must be bounded regular executable"
         );
-        let image = fs::read(&pin.path)?;
+        let image = fs::read(&self.path)?;
         ensure!(
-            hex::encode(Sha256::digest(&image)) == pin.sha256,
+            hex::encode(Sha256::digest(&image)) == self.sha256,
             "Graph executable digest mismatch"
         );
+        Ok(image)
+    }
+}
+impl TaskSeed {
+    fn validate(&self) -> Result<()> {
         ensure!(
-            seed.workspace_id.get_version_num() == 4 && seed.task_id.get_version_num() == 4,
+            self.workspace_id.get_version_num() == 4 && self.task_id.get_version_num() == 4,
             "fixture workspace/task must be fresh v4 UUIDs"
         );
         ensure!(
-            !seed.title.trim().is_empty()
-                && seed.title.len() <= 512
-                && seed.body.len() <= 8192
-                && seed.acceptance_criteria.len() <= 4096,
+            !self.title.trim().is_empty()
+                && self.title.len() <= 512
+                && self.body.len() <= 8192
+                && self.acceptance_criteria.len() <= 4096,
             "bounded explicit task seed required"
         );
-        let admin = PgConnectOptions::from_str(
-            &std::env::var("DATABASE_URL").context("test admin database required")?,
-        )?;
-        ensure!(
-            admin.get_host() == "127.0.0.1"
-                && admin.get_port() == 55432
-                && admin.get_database() == Some("postgres")
-                && admin.get_username() == "postgres",
-            "fixture requires existing test55432 admin database"
-        );
+        Ok(())
+    }
+}
+fn test_admin_options() -> Result<PgConnectOptions> {
+    let admin = PgConnectOptions::from_str(
+        &std::env::var("DATABASE_URL").context("test admin database required")?,
+    )?;
+    ensure!(
+        admin.get_host() == "127.0.0.1"
+            && admin.get_port() == 55432
+            && admin.get_database() == Some("postgres")
+            && admin.get_username() == "postgres",
+        "fixture requires existing test55432 admin database"
+    );
+    Ok(admin)
+}
+impl RealGraphFixture {
+    pub async fn start(pin: BinaryPin, seed: TaskSeed) -> Result<Self> {
+        let image = pin.read_image()?;
+        seed.validate()?;
+        let admin = test_admin_options()?;
         let directory = tempfile::Builder::new()
             .prefix("aq-gate04-real-graph-")
             .tempdir()?;
@@ -314,14 +330,19 @@ impl RealGraphFixture {
                 .spawn()
                 .context("spawn exact owned Graph process")?,
         );
+        fixture.await_listening().await?;
+        fixture.seed_task(seed, &admin_token).await?;
+        Ok(fixture)
+    }
+    async fn await_listening(&mut self) -> Result<()> {
         let until = Instant::now() + Duration::from_secs(15);
         loop {
             ensure!(
-                fixture.child.as_mut().unwrap().try_wait()?.is_none(),
+                self.child.as_mut().unwrap().try_wait()?.is_none(),
                 "owned Graph process exited during startup"
             );
-            if let Some(address) = listening_address(&bounded_file(&fixture.stderr)?)? {
-                fixture.origin = format!("http://{address}");
+            if let Some(address) = listening_address(&bounded_file(&self.stderr)?)? {
+                self.origin = format!("http://{address}");
                 break;
             }
             ensure!(
@@ -330,7 +351,10 @@ impl RealGraphFixture {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let (status, health) = fixture
+        Ok(())
+    }
+    async fn seed_task(&mut self, seed: TaskSeed, admin_token: &str) -> Result<()> {
+        let (status, health) = self
             .request(Method::GET, "/health/ready", None, None)
             .await?;
         ensure!(
@@ -338,12 +362,12 @@ impl RealGraphFixture {
             "actual Graph readiness refused"
         );
         let path = format!("/v1/workspaces/{}/credentials", seed.workspace_id);
-        let (status, _) = fixture
+        let (status, _) = self
             .request(
                 Method::POST,
                 &path,
-                Some(&admin_token),
-                Some(json!({"actor_id":fixture.actor,"token":fixture.token,"capability":"write"})),
+                Some(admin_token),
+                Some(json!({"actor_id":self.actor,"token":self.token,"capability":"write"})),
             )
             .await?;
         ensure!(
@@ -351,7 +375,7 @@ impl RealGraphFixture {
             "actual Graph writer grant refused"
         );
         let mutation = json!({"idempotency_key":Uuid::new_v4().to_string(),"reason":"Owned disposable GATE04 task seed","operations":[{"op":"create_node","id":seed.task_id,"kind":"task","task_state":"active","title":seed.title,"body":seed.body,"acceptance_criteria":seed.acceptance_criteria}]});
-        let (status, receipt) = fixture.mutation(mutation.clone()).await?;
+        let (status, receipt) = self.mutation(mutation.clone()).await?;
         ensure!(
             status == StatusCode::OK
                 && receipt["change_set_id"]
@@ -361,20 +385,20 @@ impl RealGraphFixture {
                 && receipt["results"].as_array().is_some_and(|v| v.len() == 1),
             "actual task creation receipt refused"
         );
-        fixture.task = node_pin(seed.workspace_id, seed.task_id, &receipt["results"][0])?;
+        self.task = node_pin(seed.workspace_id, seed.task_id, &receipt["results"][0])?;
         ensure!(
-            fixture.task.version == 1 && fixture.task.content_revision == 1,
+            self.task.version == 1 && self.task.content_revision == 1,
             "fresh task did not begin at actual version1"
         );
-        fixture.receipt = receipt;
-        let (status, replay) = fixture.mutation(mutation).await?;
+        self.receipt = receipt;
+        let (status, replay) = self.mutation(mutation).await?;
         ensure!(
-            status == StatusCode::OK && replay == fixture.receipt,
+            status == StatusCode::OK && replay == self.receipt,
             "actual Graph seed receipt is not stable"
         );
-        fixture.assert_task_only_context().await?;
-        fixture.owner_evidence().await?;
-        Ok(fixture)
+        self.assert_task_only_context().await?;
+        self.owner_evidence().await?;
+        Ok(())
     }
     async fn request(
         &self,
@@ -656,6 +680,53 @@ impl Drop for RealGraphFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn task_seed_requires_fresh_ids_and_bounds_utf8_bytes() {
+        let mut seed = TaskSeed {
+            workspace_id: Uuid::new_v4(),
+            task_id: Uuid::new_v4(),
+            title: "é".repeat(256),
+            body: "b".repeat(8192),
+            acceptance_criteria: "a".repeat(4096),
+        };
+        seed.validate().unwrap();
+        seed.title.push('é');
+        assert!(seed.validate().is_err());
+        seed.title = " ".into();
+        assert!(seed.validate().is_err());
+        seed.title = "Task".into();
+        seed.body.push('b');
+        assert!(seed.validate().is_err());
+        seed.body.clear();
+        seed.acceptance_criteria.push('a');
+        assert!(seed.validate().is_err());
+        seed.acceptance_criteria.clear();
+        seed.task_id = Uuid::nil();
+        assert!(seed.validate().is_err());
+        seed.task_id = Uuid::new_v4();
+        seed.workspace_id = Uuid::nil();
+        assert!(seed.validate().is_err());
+    }
+
+    #[test]
+    fn binary_pin_rejects_unreviewed_digest_symlinks_and_changed_image() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("image");
+        private_file(&path, b"synthetic image, never executed").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o500)).unwrap();
+        let mut pin = BinaryPin {
+            path: path.clone(),
+            sha256: "0".repeat(64),
+        };
+        assert!(pin.read_image().is_err());
+        pin.sha256 = EXISTING_GRAPH_SHA256.into();
+        assert!(pin.read_image().is_err());
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        pin.path = link;
+        assert!(pin.read_image().is_err());
+    }
+
     #[test]
     fn listening_log_is_bounded_exact_loopback_and_rejects_ambiguity() {
         assert_eq!(
