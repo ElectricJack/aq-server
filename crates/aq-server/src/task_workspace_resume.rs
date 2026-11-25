@@ -76,6 +76,7 @@ impl Scope {
             .is_some_and(|services| !services.is_empty())
     }
 
+    #[cfg(feature = "project_environments")]
     pub(crate) fn apply_service_needs(&self, metadata: &mut Value) {
         if !self.has_services() {
             return;

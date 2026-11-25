@@ -793,11 +793,16 @@ async fn offers(
             skipped.insert(task.task_id);
             continue;
         }
-        let mut metadata = (ready.items.iter())
+        let metadata = (ready.items.iter())
             .find(|r| r.revision == task)
             .map(|r| r.node["metadata"].clone())
             .ok_or_else(|| refused())?;
-        workspace.apply_service_needs(&mut metadata);
+        #[cfg(feature = "project_environments")]
+        let metadata = {
+            let mut metadata = metadata;
+            workspace.apply_service_needs(&mut metadata);
+            metadata
+        };
         let context = on_heap(|| {
             graph.scheduling_context_current(&task, 1, 64, 1_048_576, state.clock.as_ref())
         })
