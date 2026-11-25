@@ -4113,7 +4113,7 @@
       "principals": {
         "owner": {
           "body": "params",
-          "params_digest": "sha256:1d5d512340d15caaf3fd54f8e26a32594b7aefac923a54645c9b384c5d70f070",
+          "params_digest": "sha256:428819c5fa72e925770fcea16b4d620cb92958cfb5a7e4c20ef962686d0041cf",
           "params_schema": {
             "additionalProperties": false,
             "properties": {
