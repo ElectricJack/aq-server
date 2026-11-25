@@ -33,3 +33,11 @@ cargo test --locked -p aq-server --test it_dashboard -- performance::
 | Canonical model receipts with a synthetic USD rate book | USD 0.50 estimated across three canonical calls. A later correction replaces USD 0.05 with USD 0.07, yielding USD 0.52. Replaying both packets after reopening the store preserves one contribution per call and the report at the earlier cutoff. |
 
 The fixture seeds the scheduler's durable clock rows and the historical result and forge evidence directly in the disposable database. It checks their interpretation by the mounted reads. Canonical usage goes through the observation owner. The three calls share one enrolled source, so they exercise cost correction across model groups without establishing separate failure, escalation or delegation attribution. Server restart coverage reopens the store and reconstructs the router against the same database.
+
+## Restored AQ database
+
+The previous format-177 database backup restored into an isolated PostgreSQL instance (894 MB after restore) and migrated to 178. With the cutoff fixed to the backup time, the seven-day fleet queries found 4,209 canonical calls across two models, 443 attempts with expected usage, and 575 retained claims. None of the historical claims had an observed eligibility clock. The calls used subscription billing and had no price references or provider-reported prices. This dataset supports token and coverage comparisons. It does not establish spend per delivered task.
+
+The qualifying sample included 41,871 retained observation events. Across twelve runs on a host with concurrent builds, the fleet call query took 401 ms at p50 and 576 ms at p95. Queue diagnostics took 3.3 ms and 6.1 ms respectively. Project-scoped outcomes took 22 ms and 43 ms. These are SQL execution times.
+
+In an alternating twelve-run comparison, projecting attempt identity and the unresolved flag before grouping removed 4,543 temporary blocks from the usage-attempt query. The same 443 result rows were returned, and p50/p95 fell from 398/682 ms to 272/357 ms. The release includes the narrower projection.
