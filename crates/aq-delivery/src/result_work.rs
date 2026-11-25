@@ -72,16 +72,22 @@ pub struct Subject<'a> {
     pub source_receipt_ids: &'a [Uuid],
 }
 
+/// The task ref and commit range named by a retained result.
+pub struct RetainedRef<'a> {
+    pub base: &'a str,
+    pub head: &'a str,
+    pub task_ref: &'a str,
+}
+
 /// Digest of the provenance: the report revision, repository, base, head and
 /// ref. It is not a digest of patch bytes; the reader recomputes the diff from
 /// `base` and `head` and compares those two commits, not this value.
-pub fn provenance_digest(
-    revision: &str,
-    repository: Uuid,
-    base: &str,
-    head: &str,
-    task_ref: &str,
-) -> String {
+pub fn provenance_digest(revision: &str, repository: Uuid, reference: RetainedRef<'_>) -> String {
+    let RetainedRef {
+        base,
+        head,
+        task_ref,
+    } = reference;
     let text = format!("aq-result-work-v1\n{revision}\n{repository}\n{base}\n{head}\n{task_ref}");
     hex::encode(Sha256::digest(text.as_bytes()))
 }
@@ -107,7 +113,15 @@ pub fn describe(subject: &Subject<'_>, recorded: &Recorded) -> Value {
     };
     match (&recorded.task_ref, &recorded.head, recorded.row) {
         (Some(task_ref), Some(head), true) => {
-            let digest = provenance_digest(subject.revision, repository, base, head, task_ref);
+            let digest = provenance_digest(
+                subject.revision,
+                repository,
+                RetainedRef {
+                    base,
+                    head,
+                    task_ref,
+                },
+            );
             json!({
                 "state": "pushed_ref",
                 "report_id": id(&subject.report_id), "attempt_id": id(&subject.attempt_id),
@@ -191,9 +205,11 @@ mod tests {
             provenance_digest(
                 "ab",
                 Uuid::from_u128(4),
-                "3333333333333333333333333333333333333333",
-                HEAD,
-                "refs/heads/aq/t"
+                RetainedRef {
+                    base: "3333333333333333333333333333333333333333",
+                    head: HEAD,
+                    task_ref: "refs/heads/aq/t"
+                }
             )
         );
         assert_eq!(v["patch"]["served"], false);
@@ -233,7 +249,15 @@ mod tests {
         assert_eq!(v["provenance"]["base"], base);
         assert_eq!(
             v["provenance"]["digest"],
-            provenance_digest(REVISION, repository, base, head, task_ref)
+            provenance_digest(
+                REVISION,
+                repository,
+                RetainedRef {
+                    base,
+                    head,
+                    task_ref
+                }
+            )
         );
         // Empty legacy receipts do not hide the retained ref; a changed
         // revision binds a different digest.
@@ -251,7 +275,17 @@ mod tests {
     #[test]
     fn digest_changes_with_each_bound_field() {
         let r = Uuid::from_u128(4);
-        let d = |rev, repo, base, head, rf| provenance_digest(rev, repo, base, head, rf);
+        let d = |rev, repo, base, head, rf| {
+            provenance_digest(
+                rev,
+                repo,
+                RetainedRef {
+                    base,
+                    head,
+                    task_ref: rf,
+                },
+            )
+        };
         let one = d("ab", r, BASE, HEAD, "refs/heads/aq/t");
         for other in [
             d("ac", r, BASE, HEAD, "refs/heads/aq/t"),

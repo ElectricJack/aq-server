@@ -1,6 +1,7 @@
 //! DOCX: a ZIP package whose `word/document.xml` holds the body text.
 //! Headers, footers, footnotes and text inside embedded objects are not read.
 use super::{Budget, Res, Stop};
+use crate::zip::{end_record, u16_at, u32_at};
 use flate2::Crc;
 
 const MAX_ENTRIES: usize = 4096;
@@ -40,31 +41,25 @@ fn damaged(why: &str) -> Stop {
     ))
 }
 
-fn directory(bytes: &[u8]) -> Res<Vec<Entry<'_>>> {
-    let u16_at = |i: usize| {
-        bytes
-            .get(i..i + 2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
-    };
-    let u32_at = |i: usize| {
-        bytes
-            .get(i..i + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
-    };
+struct Directory {
+    start: usize,
+    end: usize,
+    count: usize,
+}
+
+fn directory_bounds(bytes: &[u8]) -> Res<Directory> {
     if !bytes.starts_with(b"PK\x03\x04") || bytes.len() < 22 {
         return Err(damaged("it is not a ZIP package"));
     }
-    let floor = bytes.len().saturating_sub(22 + 0xffff);
-    let end = (floor..=bytes.len() - 22)
-        .rev()
-        .find(|&i| bytes[i..].starts_with(b"PK\x05\x06"))
-        .ok_or_else(|| damaged("the ZIP end record is missing"))?;
-    let (Some(count), Some(size), Some(start)) =
-        (u16_at(end + 10), u32_at(end + 12), u32_at(end + 16))
-    else {
+    let end = end_record(bytes).ok_or_else(|| damaged("the ZIP end record is missing"))?;
+    let (Some(count), Some(size), Some(start)) = (
+        u16_at(bytes, end + 10),
+        u32_at(bytes, end + 12),
+        u32_at(bytes, end + 16),
+    ) else {
         return Err(damaged("the ZIP end record is cut short"));
     };
-    if count == 0xffff || size == 0xffff_ffff || start == 0xffff_ffff {
+    if count == u16::MAX as usize || [size, start].contains(&(u32::MAX as usize)) {
         return Err(Stop::Failed("ZIP64 packages are not supported".into()));
     }
     if count > MAX_ENTRIES {
@@ -75,34 +70,41 @@ fn directory(bytes: &[u8]) -> Res<Vec<Entry<'_>>> {
     if start.checked_add(size).is_none_or(|e| e > end) {
         return Err(damaged("the ZIP directory is out of range"));
     }
+    Ok(Directory { start, end, count })
+}
+
+fn directory_entry(bytes: &[u8], at: usize) -> Res<(Entry<'_>, usize)> {
+    if !bytes
+        .get(at..)
+        .is_some_and(|b| b.starts_with(b"PK\x01\x02"))
+    {
+        return Err(damaged("a ZIP directory entry is invalid"));
+    }
+    let field = |i, f: fn(&[u8], usize) -> Option<usize>| {
+        f(bytes, at + i).ok_or_else(|| damaged("a ZIP directory entry is cut short"))
+    };
+    let (n, x, c) = (field(28, u16_at)?, field(30, u16_at)?, field(32, u16_at)?);
+    let entry = Entry {
+        name: bytes
+            .get(at + 46..at + 46 + n)
+            .ok_or_else(|| damaged("a ZIP entry name is cut short"))?,
+        flags: field(8, u16_at)? as u16,
+        method: field(10, u16_at)? as u16,
+        crc: field(16, u32_at)? as u32,
+        packed: field(20, u32_at)?,
+        size: field(24, u32_at)?,
+        local: field(42, u32_at)?,
+    };
+    Ok((entry, at + 46 + n + x + c))
+}
+
+fn directory(bytes: &[u8]) -> Res<Vec<Entry<'_>>> {
+    let Directory { start, end, count } = directory_bounds(bytes)?;
     let (mut at, mut out) = (start, Vec::with_capacity(count));
     for _ in 0..count {
-        if !bytes
-            .get(at..)
-            .is_some_and(|b| b.starts_with(b"PK\x01\x02"))
-        {
-            return Err(damaged("a ZIP directory entry is invalid"));
-        }
-        let field = |i, f: &dyn Fn(usize) -> Option<usize>| {
-            f(at + i).ok_or_else(|| damaged("a ZIP directory entry is cut short"))
-        };
-        let (n, x, c) = (
-            field(28, &u16_at)?,
-            field(30, &u16_at)?,
-            field(32, &u16_at)?,
-        );
-        out.push(Entry {
-            name: bytes
-                .get(at + 46..at + 46 + n)
-                .ok_or_else(|| damaged("a ZIP entry name is cut short"))?,
-            flags: field(8, &u16_at)? as u16,
-            method: field(10, &u16_at)? as u16,
-            crc: field(16, &u32_at)? as u32,
-            packed: field(20, &u32_at)?,
-            size: field(24, &u32_at)?,
-            local: field(42, &u32_at)?,
-        });
-        at += 46 + n + x + c;
+        let (entry, next) = directory_entry(bytes, at)?;
+        out.push(entry);
+        at = next;
     }
     if at > end {
         return Err(damaged("the ZIP directory is out of range"));
@@ -166,39 +168,13 @@ fn body_text(xml: &[u8]) -> Res<String> {
         }
         rest = &rest[lt..];
         if let Some(cdata) = rest.strip_prefix("<![CDATA[") {
-            let end = cdata
-                .find("]]>")
-                .ok_or_else(|| damaged("unterminated CDATA in word/document.xml"))?;
-            if in_text {
-                out.push_str(&cdata[..end]);
-            }
-            rest = &cdata[end + 3..];
+            rest = consume_cdata(cdata, in_text, &mut out)?;
             continue;
         }
-        let skip = if rest.starts_with("<!--") {
-            rest.find("-->").map(|i| i + 3)
-        } else {
-            tag_end(rest).map(|i| i + 1)
-        }
-        .ok_or_else(|| damaged("word/document.xml is cut short inside a tag"))?;
+        let skip = tag_length(rest)?;
         let tag = &rest[1..skip - 1];
         rest = &rest[skip..];
-        let (closing, tag) = tag.strip_prefix('/').map_or((false, tag), |t| (true, t));
-        let selfclosing = tag.ends_with('/');
-        let name = tag
-            .split(|c: char| c.is_whitespace() || c == '/')
-            .next()
-            .unwrap_or("");
-        let local = name.rsplit(':').next().unwrap_or(name);
-        match (local, closing) {
-            ("t", false) => in_text = !selfclosing,
-            ("t", true) => in_text = false,
-            ("tab", false) => out.push('\t'),
-            ("br" | "cr", false) => out.push('\n'),
-            ("noBreakHyphen", false) => out.push('-'),
-            ("p", true) => out.push('\n'),
-            _ => {}
-        }
+        append_tag(tag, &mut out, &mut in_text);
         if out.len() > super::MAX_TEXT_BYTES * 2 {
             return Err(Stop::Limit(
                 "the document text is far over the extraction limit".into(),
@@ -207,6 +183,44 @@ fn body_text(xml: &[u8]) -> Res<String> {
     }
     Ok(out.trim_end().to_owned())
 }
+fn consume_cdata<'a>(cdata: &'a str, in_text: bool, out: &mut String) -> Res<&'a str> {
+    let end = cdata
+        .find("]]>")
+        .ok_or_else(|| damaged("unterminated CDATA in word/document.xml"))?;
+    if in_text {
+        out.push_str(&cdata[..end]);
+    }
+    Ok(&cdata[end + 3..])
+}
+
+fn tag_length(rest: &str) -> Res<usize> {
+    if rest.starts_with("<!--") {
+        rest.find("-->").map(|i| i + 3)
+    } else {
+        tag_end(rest).map(|i| i + 1)
+    }
+    .ok_or_else(|| damaged("word/document.xml is cut short inside a tag"))
+}
+
+fn append_tag(tag: &str, out: &mut String, in_text: &mut bool) {
+    let (closing, tag) = tag.strip_prefix('/').map_or((false, tag), |t| (true, t));
+    let selfclosing = tag.ends_with('/');
+    let name = tag
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()
+        .unwrap_or("");
+    let local = name.rsplit(':').next().unwrap_or(name);
+    match (local, closing) {
+        ("t", false) => *in_text = !selfclosing,
+        ("t", true) => *in_text = false,
+        ("tab", false) => out.push('\t'),
+        ("br" | "cr", false) => out.push('\n'),
+        ("noBreakHyphen", false) => out.push('-'),
+        ("p", true) => out.push('\n'),
+        _ => {}
+    }
+}
+
 /// Index of the `>` ending the tag at the start of `s`, outside quotes.
 fn tag_end(s: &str) -> Option<usize> {
     let mut quote = None;

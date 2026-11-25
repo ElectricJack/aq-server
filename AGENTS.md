@@ -40,10 +40,10 @@ again. Follow them in interactive sessions and in AQ task sessions.
   subset" below). Run the full suite
   (`cargo nextest run --workspace --locked --no-fail-fast`) only when the task
   needs it. See [`docs/development.md`](docs/development.md#tests).
-- **Every `cargo test` or `cargo nextest` in an agent session runs under a
-  timeout**, for example `timeout 900 cargo nextest run ...`, so a hung test
-  ends the command instead of the session. nextest also stops any single test
-  that runs longer than `.config/nextest.toml` allows.
+- **Builds and tests run without a time limit.** Do not wrap `cargo` in
+  `timeout`. A first build of a large crate can take a long time on a busy
+  machine, so let it finish. If a test truly hangs, say so in your result with
+  the command and how long you waited.
 
 ### Tests
 
@@ -96,18 +96,18 @@ again. Follow them in interactive sessions and in AQ task sessions.
 Prefix filters with the module (the former binary). With nextest:
 
 ```sh
-timeout 900 cargo nextest run -p aq-server --test it_profiled                 # one binary
-timeout 900 cargo nextest run -p aq-server --test it_profiled -E 'test(/^profiled_results::/)'   # one module
-timeout 900 cargo nextest run -p aq-server -E 'binary(it_profiled) & test(/^profiled_results::settlement_owner39::/)'
-timeout 900 cargo nextest run -p aq-server --test it_dashboard dashboard_actions::session_message_send   # substring filter
+cargo nextest run -p aq-server --test it_profiled                 # one binary
+cargo nextest run -p aq-server --test it_profiled -E 'test(/^profiled_results::/)'   # one module
+cargo nextest run -p aq-server -E 'binary(it_profiled) & test(/^profiled_results::settlement_owner39::/)'
+cargo nextest run -p aq-server --test it_dashboard dashboard_actions::session_message_send   # substring filter
 ```
 
 With `cargo test` (libtest filters are substrings of `<module>::<test>`; add
 `--exact` for one full name):
 
 ```sh
-timeout 900 cargo test -p aq-server --test it_profiled -- profiled_results::
-timeout 900 cargo test -p aq-server --test it_schema -- store::migrations_are_idempotent --exact
+cargo test -p aq-server --test it_profiled -- profiled_results::
+cargo test -p aq-server --test it_schema -- store::migrations_are_idempotent --exact
 ```
 
 A substring such as `config::` also matches `profiled_config::...` in another

@@ -26,18 +26,14 @@ fn private(path: &Path, content: String) {
         .unwrap();
 }
 
-async fn read_scope(
-    canary: &Canary,
+async fn insert_out_of_scope_merges(
+    pool: &sqlx::PgPool,
     source: &GraphMergeHost,
     merge: Uuid,
     other_revision: &str,
-    client: &Path,
-) -> PathBuf {
-    let host = source.fixture();
-    let pool = host.db.pool().await;
-    let project = host.selection.lineage.project_id;
-    let enrollment = (host.state.clock)().timestamp_millis();
-
+    enrollment: i64,
+) {
+    let project = source.fixture().selection.lineage.project_id;
     // The current origin/main commit is already built. Even so, rows from a
     // different project, repository, branch or enrollment window are invisible.
     for (project_id, repo, target_ref, observed) in [
@@ -72,10 +68,31 @@ async fn read_scope(
         .bind(other_revision)
         .bind(observed)
         .bind(merge)
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
     }
+}
+
+fn assert_permission_denied(client: &Path, reader: &Path, sql: &str) {
+    let denied = psql(client, reader).args(["-c", sql]).output().unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("permission denied"));
+}
+
+async fn read_scope(
+    canary: &Canary,
+    source: &GraphMergeHost,
+    merge: Uuid,
+    other_revision: &str,
+    client: &Path,
+) -> PathBuf {
+    let host = source.fixture();
+    let pool = host.db.pool().await;
+    let project = host.selection.lineage.project_id;
+    let enrollment = (host.state.clock)().timestamp_millis();
+
+    insert_out_of_scope_merges(&pool, source, merge, other_revision, enrollment).await;
     let role = format!("aq_graph_reader_{}", Uuid::new_v4().simple());
     let password = Uuid::new_v4().simple().to_string();
     sqlx::query(&format!(
@@ -124,21 +141,16 @@ async fn read_scope(
         ])),
         merge.to_string()
     );
-    let denied = psql(client, &reader)
-        .args(["-c", "SELECT * FROM public.delivery_merge_evidence"])
-        .output()
-        .unwrap();
-    assert!(!denied.status.success());
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("permission denied"));
-    let denied = psql(client, &reader)
-        .args([
-            "-c",
-            "DELETE FROM aq_graph_deploy_export.merged WHERE false",
-        ])
-        .output()
-        .unwrap();
-    assert!(!denied.status.success());
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("permission denied"));
+    assert_permission_denied(
+        client,
+        &reader,
+        "SELECT * FROM public.delivery_merge_evidence",
+    );
+    assert_permission_denied(
+        client,
+        &reader,
+        "DELETE FROM aq_graph_deploy_export.merged WHERE false",
+    );
     reader
 }
 

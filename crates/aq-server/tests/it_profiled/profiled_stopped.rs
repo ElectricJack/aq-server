@@ -33,6 +33,28 @@ async fn observe_blocked_transaction(pool: &sqlx::PgPool, xid: &str) {
     }
 }
 
+async fn hold_node(
+    pool: &sqlx::PgPool,
+    node: uuid::Uuid,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, String) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    (tx, blocker_xid)
+}
+
+async fn hot_revisions(pool: &sqlx::PgPool, attempt: uuid::Uuid) -> (i64, i64, i64) {
+    sqlx::query_as("SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1")
+        .bind(attempt).fetch_one(pool).await.unwrap()
+}
+
 #[tokio::test]
 async fn expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_new_authority() {
     let (mut f, started_request) = setup(true).await;
@@ -90,15 +112,13 @@ async fn expired_and_cancelled_stop_is_atomic_keeps_claim_and_replays_without_ne
             .await
             .unwrap();
     assert_eq!(phase, "stopped");
-    let revisions:(i64,i64,i64)=sqlx::query_as("SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1")
-        .bind(started_request.binding.attempt_id).fetch_one(&pool).await.unwrap();
+    let revisions = hot_revisions(&pool, started_request.binding.attempt_id).await;
     f.time.store((NOW + 80_000) as i64, Ordering::SeqCst);
     assert_eq!(
         json!(stopped::record(&f.state, &auth, &request).await.unwrap()),
         json!(receipt)
     );
-    let again:(i64,i64,i64)=sqlx::query_as("SELECT record_revision,authority_revision,grant_revision FROM profiled_authority_hot WHERE attempt_id=$1")
-        .bind(started_request.binding.attempt_id).fetch_one(&pool).await.unwrap();
+    let again = hot_revisions(&pool, started_request.binding.attempt_id).await;
     assert_eq!(again, revisions);
     assert_eq!(state(&f, &started_request).await, after);
     let mut changed = request.clone();
@@ -230,16 +250,7 @@ async fn stop_waiting_for_node_lock_accepts_expiry_and_records_time_after_lock()
     let auth = context(&f).await;
     started::record(&f.state, &auth, &start).await.unwrap();
     let pool = f.db.pool().await;
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(f.node.node_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+    let (tx, blocker_xid) = hold_node(&pool, f.node.node_id).await;
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });
@@ -326,16 +337,7 @@ async fn credentials_rotated_during_lock_wait_refuse_first_stop_without_mutation
     let auth = context(&f).await;
     started::record(&f.state, &auth, &start).await.unwrap();
     let pool = f.db.pool().await;
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
-        .bind(f.node.node_id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    let blocker_xid: String = sqlx::query_scalar("SELECT txid_current()::text")
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+    let (mut tx, blocker_xid) = hold_node(&pool, f.node.node_id).await;
     let app = f.state.clone();
     let request = stop_request(&start);
     let call = tokio::spawn(async move { stopped::record(&app, &auth, &request).await });

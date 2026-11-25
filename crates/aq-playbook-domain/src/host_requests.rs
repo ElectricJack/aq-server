@@ -302,18 +302,9 @@ impl JudgmentJob {
             Some(Err(ProviderFailure::Error)) => failed("provider_error"),
             Some(Err(ProviderFailure::Unavailable)) => failed("provider_unavailable"),
             Some(Ok(reply)) => {
-                if reply.input_tokens > request.max_input_tokens
-                    || reply.output_tokens > request.max_output_tokens
-                    || reply.cost_microunits > request.max_cost_microunits
-                {
+                if !request.within_budget(&reply) {
                     refusal(provenance(&reply, Value::Null), "budget_exceeded")
-                } else if !request.choices.contains(&reply.choice)
-                    || reply.rationale.len() as u64 > request.rationale_max_bytes
-                    || reply.provider.is_empty()
-                    || reply.provider.len() > 128
-                    || reply.model.is_empty()
-                    || reply.model.len() > 256
-                {
+                } else if !request.valid_reply(&reply) {
                     refusal(Value::Null, "invalid_output")
                 } else {
                     let output_digest =
@@ -327,5 +318,20 @@ impl JudgmentJob {
                 }
             }
         })
+    }
+}
+
+impl JudgmentRequest {
+    fn within_budget(&self, reply: &JudgmentReply) -> bool {
+        reply.input_tokens <= self.max_input_tokens
+            && reply.output_tokens <= self.max_output_tokens
+            && reply.cost_microunits <= self.max_cost_microunits
+    }
+    fn valid_reply(&self, reply: &JudgmentReply) -> bool {
+        let known = self.choices.contains(&reply.choice)
+            && reply.rationale.len() as u64 <= self.rationale_max_bytes;
+        let identities =
+            (1..=128).contains(&reply.provider.len()) && (1..=256).contains(&reply.model.len());
+        known && identities
     }
 }

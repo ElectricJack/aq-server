@@ -110,10 +110,9 @@ fn registry_agent_path(name: &str) -> String {
         .to_string()
 }
 
-/// `.route(path, ...)` in the lib sources, outside `#[cfg(test)] mod` tails.
-fn mounted() -> BTreeMap<String, BTreeSet<String>> {
+fn route_constants() -> BTreeMap<(&'static str, &'static str), String> {
     // Paths given by a constant rather than a literal.
-    let consts: BTreeMap<(&str, &str), String> = [
+    [
         (
             ("questions.rs", "ROUTES[0].0"),
             aq_server::agent_access::questions::ROUTES[0].0.to_string(),
@@ -177,7 +176,12 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         ),
     ]
     .into_iter()
-    .collect();
+    .collect()
+}
+
+/// `.route(path, ...)` in the lib sources, outside `#[cfg(test)] mod` tails.
+fn mounted() -> BTreeMap<String, BTreeSet<String>> {
+    let consts = route_constants();
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut stack = vec![
@@ -189,6 +193,9 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
         root.join("../aq-internal-work/src"),
         root.join("../aq-playbook-authoring/src"),
     ];
+    // Spec 0017: the node routes of `project_environments` (see `reviewed_node_route`).
+    #[cfg(feature = "project_environments")]
+    stack.push(root.join("../aq-environments/src"));
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -201,46 +208,93 @@ fn mounted() -> BTreeMap<String, BTreeSet<String>> {
             if !name.ends_with(".rs") || name == "dashboard_assets.rs" {
                 continue;
             }
-            let mut text = std::fs::read_to_string(&path).unwrap();
-            if let Some(i) = text.find("\n#[cfg(test)]\nmod ") {
-                text.truncate(i);
-            }
-            let mut rest = text.as_str();
-            while let Some(i) = rest.find(".route(") {
-                let head = &rest[..i];
-                let before = head.chars().next_back();
-                rest = &rest[i + 7..];
-                // A router chain (`.route(` after whitespace or a closing
-                // paren) or a router variable (`routes.route(`).
-                let chained = before.is_some_and(|c| c.is_whitespace() || c == ')');
-                if !chained && !head.ends_with("routes") && !head.ends_with("router") {
-                    continue;
-                }
-                let arg = rest[..rest.find(',').unwrap()].trim();
-                let route = if let Some(lit) = arg.strip_prefix('"') {
-                    lit.trim_end_matches('"').to_string()
-                } else {
-                    consts
-                        .get(&(name.as_str(), arg))
-                        .unwrap_or_else(|| {
-                            panic!("{}: unresolved route path `{arg}`", path.display())
-                        })
-                        .clone()
-                };
+            let text = std::fs::read_to_string(&path).unwrap();
+            for route in parse_source_routes(&path, &text, &consts) {
                 out.entry(route).or_default().insert(name.clone());
-            }
-            // A nest mounts its prefix; the nested routes are scanned where declared.
-            let mut rest = text.as_str();
-            while let Some(i) = rest.find(".nest(") {
-                rest = &rest[i + 6..];
-                if let Some(lit) = rest.trim_start().strip_prefix('"') {
-                    let prefix = lit[..lit.find('"').unwrap()].to_string();
-                    out.entry(prefix).or_default().insert(name.clone());
-                }
             }
         }
     }
     out
+}
+
+fn parse_source_routes(
+    path: &Path,
+    text: &str,
+    consts: &BTreeMap<(&str, &str), String>,
+) -> Vec<String> {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let mut out = Vec::new();
+    let text = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
+    let mut rest = text;
+    while let Some(i) = rest.find(".route(") {
+        let head = &rest[..i];
+        let before = head.chars().next_back();
+        rest = &rest[i + 7..];
+        // A router chain (`.route(` after whitespace or a closing
+        // paren) or a router variable (`routes.route(`).
+        let chained = before.is_some_and(|c| c.is_whitespace() || c == ')');
+        if !chained && !head.ends_with("routes") && !head.ends_with("router") {
+            continue;
+        }
+        let arg = rest[..rest.find(',').unwrap()].trim();
+        let route = if let Some(lit) = arg.strip_prefix('"') {
+            lit.trim_end_matches('"').to_string()
+        } else {
+            consts
+                .get(&(name, arg))
+                .unwrap_or_else(|| panic!("{}: unresolved route path `{arg}`", path.display()))
+                .clone()
+        };
+        out.push(route);
+    }
+    // A nest mounts its prefix; the nested routes are scanned where declared.
+    let mut rest = text;
+    while let Some(i) = rest.find(".nest(") {
+        rest = &rest[i + 6..];
+        if let Some(lit) = rest.trim_start().strip_prefix('"') {
+            let prefix = lit[..lit.find('"').unwrap()].to_string();
+            out.push(prefix);
+        }
+    }
+    out
+}
+
+#[test]
+fn source_scan_keeps_router_routes_constants_and_nests_outside_test_modules() {
+    let source = r#"
+Router::new()
+    .route("/chained", get(handler))
+    .nest("/nested", nested);
+routes.route(PATH, get(handler));
+router.route("/variable", get(handler));
+registry.route("/not-a-router", get(handler));
+#[cfg(test)]
+mod tests {
+    router.route("/test-only", get(handler));
+}
+"#;
+    let consts = BTreeMap::from([(("fixture.rs", "PATH"), "/constant".to_owned())]);
+    assert_eq!(
+        parse_source_routes(Path::new("fixture.rs"), source, &consts),
+        ["/chained", "/constant", "/variable", "/nested"]
+    );
+}
+
+/// Node routes reviewed here rather than in the published `routes.json`,
+/// which documents the default build: spec 0017's builder and environment
+/// routes under the node credential (`worker_api::authenticate_context`;
+/// claim and complete only for the `template-build` worker group), mounted
+/// only with `project_environments`. They join `routes.json` when the
+/// feature is removed.
+fn reviewed_node_route(path: &str) -> bool {
+    cfg!(feature = "project_environments")
+        && matches!(
+            path,
+            "/v1/worker/environments"
+                | "/v1/worker/environments/ready"
+                | "/v1/worker/environments/claim"
+                | "/v1/worker/environments/complete"
+        )
 }
 
 #[test]
@@ -250,7 +304,9 @@ fn every_mounted_route_is_a_command_or_reviewed() {
     assert!(mounted.len() > 150, "the scan found the routes");
     let unclassified: Vec<_> = mounted
         .iter()
-        .filter(|(path, _)| routes::classify(registry, path).is_none())
+        .filter(|(path, _)| {
+            routes::classify(registry, path).is_none() && !reviewed_node_route(path)
+        })
         .collect();
     assert!(
         unclassified.is_empty(),

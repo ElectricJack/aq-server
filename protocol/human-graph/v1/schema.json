@@ -1204,7 +1204,7 @@
               },
               "reasons": {
                 "type": "array",
-                "maxItems": 4,
+                "maxItems": 8,
                 "items": {
                   "anyOf": [
                     {
@@ -1224,6 +1224,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/HumanResultHoldReason"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanOwnerRetryWait"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanAttemptRecoveryWait"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HumanSupervisorFollowup"
                     }
                   ]
                 }
@@ -1630,6 +1639,16 @@
             "minLength": 1,
             "maxLength": 96
           },
+          "blocker_owner": {
+            "const": "project_owner"
+          },
+          "result_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wake_condition": {
+            "const": "owner_retry_authorized"
+          },
           "attempt_id": {
             "type": "string",
             "format": "uuid"
@@ -1640,7 +1659,7 @@
           },
           "message": {
             "type": "string",
-            "maxLength": 512
+            "maxLength": 16384
           }
         },
         "required": [
@@ -1945,14 +1964,71 @@
         ],
         "additionalProperties": false
       },
+      "HumanOwnerRetryWait": {
+        "type": "object",
+        "description": "An original owner retry approval awaiting its automatic check.",
+        "properties": {
+          "code": { "const": "owner_retry_pending" },
+          "operation_id": { "type": "string", "format": "uuid" },
+          "attempt_id": { "type": ["string", "null"], "format": "uuid" },
+          "hold_reason": { "type": ["string", "null"], "minLength": 1, "maxLength": 96 },
+          "blocker_owner": { "enum": ["aq_scheduler", "project_owner", "aq_worker", "aq_effects", "aq_operator"] },
+          "wake_condition": { "enum": ["scheduled_owner_retry_check", "original_retry_authority_restored", "prior_execution_verified", "original_effects_reconciled", "original_source_retained", "original_lineage_history_restored"] },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "operation_id", "blocker_owner", "wake_condition", "next_check_at_ms", "message"],
+        "additionalProperties": false
+      },
+      "HumanAttemptRecoveryWait": {
+        "type": "object",
+        "description": "The recovery a stopped or closed holding attempt waits for, or the backoff before AQ reoffers a task after repeated verified launch failures.",
+        "properties": {
+          "code": { "enum": ["closure_does_not_prove_nonstart", "closed_launch_settlement_pending", "stopped_result_recovery_pending", "launch_retry_backoff"] },
+          "attempt_id": { "type": "string", "format": "uuid" },
+          "blocker_owner": { "enum": ["aq_operator", "aq_scheduler", "aq_worker"] },
+          "wake_condition": { "enum": ["original_launch_evidence_reconciled", "closed_launch_settlement", "stopped_result_reconciled", "launch_retry_backoff_elapsed"] },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "attempt_id", "blocker_owner", "wake_condition", "message"],
+        "additionalProperties": false
+      },
+      "HumanSupervisorFollowup": {
+        "type": "object",
+        "description": "The next supervisor observation of the current hold. AQ evaluates retry authorization independently.",
+        "properties": {
+          "code": { "const": "supervisor_hold_followup" },
+          "attempt_id": { "type": "string", "format": "uuid" },
+          "result_id": { "type": ["string", "null"], "format": "uuid" },
+          "status": { "enum": ["scheduled", "awaiting_supervisor", "awaiting_scope"] },
+          "hold_reason": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "next_check_at_ms": { "type": "integer", "minimum": 1 },
+          "reminders_sent": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "blocker_owner": { "enum": ["project_supervisor", "project_owner"] },
+          "wake_condition": { "enum": ["current_hold_evidence_or_authority_changed", "project_supervisor_enabled", "original_graph_workspace_verified"] },
+          "message": { "type": "string", "maxLength": 512 }
+        },
+        "required": ["code", "attempt_id", "result_id", "status", "hold_reason", "next_check_at_ms", "reminders_sent", "blocker_owner", "wake_condition", "message"],
+        "additionalProperties": false
+      },
       "HumanResultHoldReason": {
         "type": "object",
-        "description": "Why a stopped attempt's recorded result still holds an active task (spec 0016 §7, servers built with delivery by playbook): no playbook has decided the result. `result_ready_no_delivery_policy`: no delivery playbook is active for the project, so the result waits; `result_ready`: one is active and has not decided yet.",
+        "description": "The next action on a stopped attempt's recorded result, including delivery and Graph settlement.",
         "properties": {
           "code": {
             "enum": [
               "result_ready_no_delivery_policy",
-              "result_ready"
+              "result_ready",
+              "delivery_settlement_pending",
+              "delivery_settlement_grant_required",
+              "replacement_facts_pending",
+              "replacement_facts_ready",
+              "graph_completion_identity_required",
+              "graph_completion_permission_required",
+              "graph_version_conflict",
+              "graph_completion_receipt_conflict",
+              "graph_completion_receipt_pending"
             ]
           },
           "attempt_id": {
@@ -1962,6 +2038,26 @@
           "result_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "blocker_owner": {
+            "enum": ["aq_delivery", "delivery_policy_owner", "aq_scheduler", "aq_settlement", "aq_operator", "graph_workspace_admin", "project_owner", "graph_operator", "aq_graph_settlement"]
+          },
+          "wake_condition": {
+            "enum": ["delivery_reconciliation", "delivery_policy_activated", "scoped_delivery_authorization", "worker_poll", "replacement_evidence_reconciliation", "original_graph_service_restored", "graph_mutation_permission_restored", "current_task_version_reconciled", "original_graph_receipt_reconciled", "scheduled_graph_receipt_check"]
+          },
+          "next_check_at_ms": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "missing_evidence": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": { "enum": ["retained_source", "quiescent_effects"] }
           },
           "message": {
             "type": "string",
@@ -2015,7 +2111,7 @@
         "additionalProperties": false
       },
       "HumanOfferRefusalReason": {
-        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. With spec 0017's project_environments feature: `environment_missing_capability`, no allowed environment provides every label of the task's `aq:needs` (`missing` names those `environment` lacks); `no_node_has_environment`, no node's inventory lists the environment the task was placed in. Recorded by the offer path and removed when a later offer of the task composes.",
+        "description": "Why the last offer of an active task was refused before any attempt existed (spec 0014 §6.1). `startup_over_limit`: the assembled startup text is `bytes` long, over `limit`, the smaller of the execution profile's `startup_context_bytes` (`profile_limit`) and the project's `context_bytes` ceiling (`project_ceiling`); `limiting` says which of the two it is. `platform_text_missing`: the server has no platform text for the environment. With spec 0017's project_environments feature: `environment_missing_capability`, no allowed environment provides every label of the task's `aq:needs` (`missing` names those `environment` lacks); `no_node_has_environment`, no node's inventory lists the environment the task was placed in. `slot_resources_short`: the offer needs more cpu, memory or disk (`required`) than one slot of node `node_id` provides (`available`); kept until an offer of the task is published. Recorded by the offer path and removed when a later offer of the task composes.",
         "oneOf": [
           {
             "type": "object",
@@ -2066,8 +2162,31 @@
             },
             "required": ["code", "environment", "message", "recorded_at_ms"],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": { "enum": ["slot_resources_short"] },
+              "node_id": { "type": "string", "format": "uuid" },
+              "required": { "$ref": "#/components/schemas/HumanSlotResources" },
+              "available": { "$ref": "#/components/schemas/HumanSlotResources" },
+              "message": { "type": "string", "maxLength": 512 },
+              "recorded_at_ms": { "type": "integer" }
+            },
+            "required": ["code", "node_id", "required", "available", "message", "recorded_at_ms"],
+            "additionalProperties": false
           }
         ]
+      },
+      "HumanSlotResources": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": { "type": "integer", "minimum": 0 },
+          "memory_bytes": { "type": "integer", "minimum": 0 },
+          "disk_bytes": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["cpu_millis", "memory_bytes", "disk_bytes"],
+        "additionalProperties": false
       }
     }
   }

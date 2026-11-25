@@ -7,8 +7,8 @@
 //! The setup token reaches the native only in its environment and is never
 //! written to disk, so nothing is copied back.
 use super::{
-    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, execute_into, failure,
-    in_run_dirs, scrub, unavailable,
+    DETAIL_BYTES, Failure, Harness, Place, Run, agent, clip, execute, failure, in_run_dirs, scrub,
+    unavailable,
 };
 use crate::{
     config::protected_read,
@@ -25,13 +25,12 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-/// Every run's environment besides `HOME`, `PATH`, `CLAUDE_CONFIG_DIR` and
-/// the token.
 /// How much of what an agent harness printed outside its event stream is
 /// kept for a failure's detail.
 const STRAY_BYTES: usize = 600;
 
-const ENVIRONMENT: [(&str, &str); 5] = [
+/// The quiet, non-updating Claude Code environment for headless runs.
+pub(crate) const ENVIRONMENT: [(&str, &str); 5] = [
     ("DISABLE_AUTOUPDATER", "1"),
     ("DISABLE_TELEMETRY", "1"),
     ("DISABLE_ERROR_REPORTING", "1"),
@@ -42,18 +41,13 @@ const ENVIRONMENT: [(&str, &str); 5] = [
 /// The efforts the worker's interactive Claude launch passes as `--effort`
 /// (it also accepts `default`, passing nothing, and `off`); the same values
 /// `claude --help` lists for `--effort`.
-const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub(crate) const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Runs `run`'s task once on the Claude login of `h` in its session.
 /// The per-run home under `homes` and working directory under `scratch` are
 /// removed afterwards, whatever the outcome.
-pub(crate) async fn claude(
-    h: &Harness,
-    homes: &Path,
-    scratch: &Path,
-    run: Run<'_>,
-) -> Result<(String, Option<Usage>), Failure> {
-    in_run_dirs(h, homes, scratch, run, async |executable, place| {
+pub(super) async fn claude(h: &Harness, run: Run<'_>) -> Result<(String, Option<Usage>), Failure> {
+    in_run_dirs(h, run, async |executable, place| {
         attempt(h, executable, place, run).await
     })
     .await
@@ -65,12 +59,8 @@ async fn attempt(
     place: &Place,
     run: Run<'_>,
 ) -> Result<(String, Option<Usage>), Failure> {
-    let (home, cwd) = (place.home.as_path(), place.cwd.as_path());
     let Run {
-        claimed,
-        identity,
-        session,
-        ..
+        claimed, session, ..
     } = run;
     let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let token = protected_read(&h.secret_file, 65536)
@@ -79,6 +69,30 @@ async fn attempt(
         .map_err(|_| failure(Reason::ProviderUnavailable, "login file unusable"))?;
     // Printable ASCII, as `normalize_claude_token` checked.
     let secret = std::str::from_utf8(&token).map_err(|_| setup())?;
+    let command = native(executable, place, run, &token)?;
+    // The redaction takes every login's secrets, read once the native has
+    // ended, and this run's token.
+    if claimed.request.agent.is_some() {
+        return agent_reply(command, place, run, secret).await;
+    }
+    let ran = execute(command, validate::prompt(&claimed.request), session).await;
+    let secrets = run.secrets();
+    let redact = |text: &str| scrub(text.replace(secret, agent::REDACTED), &secrets);
+    match ran {
+        Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
+        Ok((status, stdout)) => outcome(status, &stdout, redact),
+    }
+}
+
+fn native(
+    executable: &std::fs::File,
+    place: &Place,
+    run: Run<'_>,
+    token: &[u8],
+) -> Result<std::process::Command, Failure> {
+    let claimed = run.claimed;
+    let (home, cwd, identity) = (&place.home, &place.cwd, run.identity);
+    let setup = || failure(Reason::ProviderError, "native run could not be prepared");
     let work = claimed.request.agent.as_ref();
     // An agent's settings are the host's, beside its home, not in it.
     let settings = place.root.join("settings.json");
@@ -90,7 +104,12 @@ async fn attempt(
         None => arguments(&candidate.model, effort, &settings),
     };
     let args = args.ok_or_else(setup)?;
-    let mut command = native_command(executable, args, home, cwd, identity);
+    let mut command = native_command(
+        executable,
+        args,
+        crate::subscription::CommandHome { home, cwd },
+        identity,
+    );
     if effort == Some("off") {
         command.env("MAX_THINKING_TOKENS", "0");
     }
@@ -101,7 +120,7 @@ async fn attempt(
         .envs(ENVIRONMENT)
         .env(
             "CLAUDE_CODE_OAUTH_TOKEN",
-            std::ffi::OsStr::from_bytes(&token),
+            std::ffi::OsStr::from_bytes(token),
         )
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -120,52 +139,45 @@ async fn attempt(
             });
         }
     }
-    // The redaction takes every login's secrets, read once the native has
-    // ended, and this run's token.
-    if work.is_some() {
-        let prompt = validate::agent_prompt(&claimed.request);
-        let (mut transcript, mut result) = (agent::Transcript::default(), None);
-        let mut stray = String::new();
-        let mut each = |line: &[u8]| match serde_json::from_slice::<Value>(line) {
-            Ok(event) if event["type"] == "result" => result = Some(event),
-            Ok(event) => transcript.claude(&event),
-            Err(_) if stray.len() < STRAY_BYTES => {
-                stray.extend(String::from_utf8_lossy(line).chars().take(STRAY_BYTES));
-                stray.push(' ');
-            }
-            Err(_) => {}
-        };
-        let mut lines = agent::Lines::default();
-        let ran = execute_into(command, prompt, session, &mut |chunk| {
-            lines.feed(chunk, &mut each)
-        })
-        .await;
-        lines.end(&mut each);
-        let secrets = run.secrets();
-        let redact = |text: &str| scrub(text.replace(secret, agent::REDACTED), &secrets);
-        run.keep(transcript.finish(|text| Some(redact(text))));
-        let status =
-            ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
-        // The harness's own failure counts only when there is no outcome.
-        let failed = match &result {
-            Some(result) => outcome(status, result.to_string().as_bytes(), redact).err(),
-            None if status.success() => None,
-            None => Some((
-                Reason::ProviderError,
-                format!("native exited with {status}: {}", redact(stray.trim())),
-            )),
-        };
-        let limit = claimed.request.max_output_bytes;
-        let reply = agent::conclude(cwd, limit, failed, |text| Some(redact(&text)))?;
-        return Ok((reply, result.as_ref().and_then(usage)));
-    }
-    let ran = execute(command, validate::prompt(&claimed.request), session).await;
+    Ok(command)
+}
+
+async fn agent_reply(
+    command: std::process::Command,
+    place: &Place,
+    run: Run<'_>,
+    secret: &str,
+) -> Result<(String, Option<Usage>), Failure> {
+    let cwd = place.cwd.as_path();
+    let prompt = validate::agent_prompt(&run.claimed.request);
+    let (mut transcript, mut result) = (agent::Transcript::default(), None);
+    let mut stray = String::new();
+    let mut each = |line: &[u8]| match serde_json::from_slice::<Value>(line) {
+        Ok(event) if event["type"] == "result" => result = Some(event),
+        Ok(event) => transcript.claude(&event),
+        Err(_) if stray.len() < STRAY_BYTES => {
+            stray.extend(String::from_utf8_lossy(line).chars().take(STRAY_BYTES));
+            stray.push(' ');
+        }
+        Err(_) => {}
+    };
+    let ran = agent::stream_events(command, prompt, run.session, &mut each).await;
     let secrets = run.secrets();
     let redact = |text: &str| scrub(text.replace(secret, agent::REDACTED), &secrets);
-    match ran {
-        Err(_) => Err(failure(Reason::ProviderError, "native run could not start")),
-        Ok((status, stdout)) => outcome(status, &stdout, redact),
-    }
+    run.keep(transcript.finish(|text| Some(redact(text))));
+    let status = ran.map_err(|_| failure(Reason::ProviderError, "native run could not start"))?;
+    // The harness's own failure counts only when there is no outcome.
+    let failed = match &result {
+        Some(result) => outcome(status, result.to_string().as_bytes(), redact).err(),
+        None if status.success() => None,
+        None => Some((
+            Reason::ProviderError,
+            format!("native exited with {status}: {}", redact(stray.trim())),
+        )),
+    };
+    let limit = run.claimed.request.max_output_bytes;
+    let reply = agent::conclude(cwd, limit, failed, |text| Some(redact(&text)))?;
+    Ok((reply, result.as_ref().and_then(usage)))
 }
 
 /// The run's arguments: print mode, one JSON result, the prompt as text on

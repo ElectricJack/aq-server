@@ -150,6 +150,13 @@ pub(super) fn for_adapter(
         .profiled_execution
         .as_ref()
         .ok_or_else(|| refused())?;
+    // A derived adapter (spec 0017) reports as the boot adapter it derives from.
+    #[cfg(feature = "project_environments")]
+    let adapter = &(aq_environments::boot_adapter(
+        adapter,
+        config.definition_bodies.iter().map(Definition::artifact),
+    ))
+    .unwrap_or_else(|| adapter.clone());
     from_definitions(adapter, &config.definition_bodies)
 }
 impl ReportingInstruction {

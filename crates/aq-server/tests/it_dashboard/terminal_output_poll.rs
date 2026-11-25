@@ -10,7 +10,7 @@ use aq_server::{
         service,
     },
 };
-use aq_session_protocol::{Capability, ProfiledGrant, TerminalIdentity, Text};
+use aq_session_protocol::{Capability, ControllerLease, ProfiledGrant, TerminalIdentity, Text};
 use aq_terminal_relay::{
     api::MutationReply,
     draft::{
@@ -151,11 +151,11 @@ async fn queue_snapshot(f: &Fixture) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('inputs',(SELECT jsonb_agg(to_jsonb(i) ORDER BY operation_id) FROM terminal_input_receipts i),'outbox',(SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM terminal_outbox o),'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY terminal_id) FROM terminal_sessions s))").fetch_one(&f.db.pool().await).await.unwrap()
 }
 
-#[tokio::test]
-async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_full_poll_is_unchanged()
- {
-    let (f, _dir, r) = Box::pin(setup()).await;
-    let node = auth(&f).await;
+async fn acquire_and_acknowledge_control(
+    f: &Fixture,
+    r: &Register,
+    node: &terminal::peer::AuthenticatedNode,
+) -> ControllerLease {
     let MutationReply::Control { status, .. } = service::mutate(
         &f.state,
         f.actor,
@@ -172,7 +172,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         panic!()
     };
     let lease = status.lease.unwrap();
-    let first = terminal::peer::poll(&f.state, &node, &request(&r))
+    let first = terminal::peer::poll(&f.state, node, &request(r))
         .await
         .unwrap();
     let fence = first
@@ -188,7 +188,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         .unwrap();
     terminal::peer::upload(
         &f.state,
-        &node,
+        node,
         &PeerUpload {
             version: 1,
             capability: r.capability.clone(),
@@ -210,9 +210,13 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
     )
     .await
     .unwrap();
+    lease
+}
+
+async fn assert_input_deadline_errors(f: &Fixture, r: &Register, lease: &ControllerLease) {
     // The human boundary must preserve the specific deadline rule rather than
     // replacing it with the dashboard's generic invalid-request envelope.
-    let before = queue_snapshot(&f).await;
+    let before = queue_snapshot(f).await;
     for expires_at_ms in [NOW, NOW + 2001] {
         let invalid = service::Mutation::Input(aq_session_api::InputRequest {
             terminal: r.terminal.clone(),
@@ -248,8 +252,17 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
         assert_eq!(body["code"], "input_deadline", "{body}");
         assert!(body["message"].as_str().unwrap().contains("2000"));
         assert!(!body.to_string().contains("PRIVATE_INPUT_SENTINEL"));
-        assert_eq!(before, queue_snapshot(&f).await);
+        assert_eq!(before, queue_snapshot(f).await);
     }
+}
+
+#[tokio::test]
+async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_full_poll_is_unchanged()
+ {
+    let (f, _dir, r) = Box::pin(setup()).await;
+    let node = auth(&f).await;
+    let lease = acquire_and_acknowledge_control(&f, &r, &node).await;
+    assert_input_deadline_errors(&f, &r, &lease).await;
     service::mutate(
         &f.state,
         f.actor,
@@ -304,9 +317,7 @@ async fn output_poll_returns_watch_only_without_claiming_input_or_control_and_fu
 fn resize(
     r: &Register,
     lease: &aq_session_protocol::ControllerLease,
-    sequence: u64,
-    columns: u16,
-    rows: u16,
+    dimensions: (u16, u16),
 ) -> service::Mutation {
     service::Mutation::Resize(aq_session_api::ResizeRequest {
         terminal: r.terminal.clone(),
@@ -315,87 +326,34 @@ fn resize(
         expected_controller_generation: lease.generation,
         expected_session_revision: 1,
         expires_at_ms: NOW + 2000,
-        sequence,
-        columns,
-        rows,
+        sequence: 1,
+        columns: dimensions.0,
+        rows: dimensions.1,
     })
 }
 #[tokio::test]
 async fn resize_is_accepted_only_from_the_current_controller_within_bounds() {
     let (f, _dir, r) = Box::pin(setup()).await;
     let node = auth(&f).await;
-    let MutationReply::Control { status, .. } = service::mutate(
-        &f.state,
-        f.actor,
-        &service::Mutation::Control(aq_session_api::AcquireControlRequest {
-            terminal: r.terminal.clone(),
-            operation_id: Uuid::new_v4(),
-            expected_session_revision: 1,
-            expected_controller_generation: 0,
-            expires_at_ms: NOW + 4000,
-        }),
-    )
-    .await
-    .unwrap() else {
-        panic!()
-    };
-    let lease = status.lease.unwrap();
-    let first = terminal::peer::poll(&f.state, &node, &request(&r))
-        .await
-        .unwrap();
-    let fence = first
-        .effects
-        .iter()
-        .find_map(|e| {
-            if let Effect::Fence(f) = e {
-                Some(f)
-            } else {
-                None
-            }
-        })
-        .unwrap();
-    terminal::peer::upload(
-        &f.state,
-        &node,
-        &PeerUpload {
-            version: 1,
-            capability: r.capability.clone(),
-            peer: r.peer.clone(),
-            exchange_id: Uuid::new_v4(),
-            cursor: first.cursor,
-            receipts: vec![],
-            epoch_receipts: vec![],
-            resize_receipts: vec![],
-            fence_acks: vec![FenceAck {
-                terminal: r.terminal.clone(),
-                fence_id: fence.fence_id,
-                generation: fence.generation,
-            }],
-            frames: vec![],
-            snapshots: vec![],
-            gaps: vec![],
-        },
-    )
-    .await
-    .unwrap();
+    let lease = acquire_and_acknowledge_control(&f, &r, &node).await;
     // Out-of-range geometry and a caller with no scope on the terminal change nothing.
     let before = queue_snapshot(&f).await;
     for (columns, rows) in [(0, 24), (80, 0), (1001, 24), (80, 1001)] {
-        service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, columns, rows))
+        service::mutate(&f.state, f.actor, &resize(&r, &lease, (columns, rows)))
             .await
             .unwrap_err();
     }
-    service::mutate(&f.state, Uuid::new_v4(), &resize(&r, &lease, 1, 80, 24))
+    service::mutate(&f.state, Uuid::new_v4(), &resize(&r, &lease, (80, 24)))
         .await
         .unwrap_err();
     let mut stale = lease.clone();
     stale.generation += 1;
-    service::mutate(&f.state, f.actor, &resize(&r, &stale, 1, 80, 24))
+    service::mutate(&f.state, f.actor, &resize(&r, &stale, (80, 24)))
         .await
         .unwrap_err();
     assert_eq!(before, queue_snapshot(&f).await);
     // The current controller's resize is accepted and queued for the worker.
-    let reply = service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, 1000, 1000))
+    let reply = service::mutate(&f.state, f.actor, &resize(&r, &lease, (1000, 1000)))
         .await
         .unwrap();
     assert!(matches!(reply, MutationReply::Resize { sequence: 1, .. }));
@@ -421,34 +379,47 @@ async fn resize_is_accepted_only_from_the_current_controller_within_bounds() {
     assert_eq!(sent[0].lease.lease_id, lease.lease_id);
     assert_eq!(sent[0].lease.generation, lease.generation);
     // A replayed sequence is stale.
-    service::mutate(&f.state, f.actor, &resize(&r, &lease, 1, 80, 24))
+    service::mutate(&f.state, f.actor, &resize(&r, &lease, (80, 24)))
         .await
         .unwrap_err();
 }
 #[tokio::test]
-async fn output_poll_progresses_during_control_poll_and_limits_each_lane() {
+async fn output_polls_of_one_node_run_together_beside_control_and_node_row_locks() {
     let (f, _dir, r) = Box::pin(setup()).await;
     let subscription = watch(&f, &r, 15000).await;
     let runtime = &f.state.config.terminals.as_ref().unwrap().runtime;
     // Own the exact permit held by a sleeping control poll, without a real sleep.
     let control = runtime.poll(f.node.node_id).unwrap();
-    let (status, body) = http(&f, &request(&r)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let envelope: Envelope = serde_json::from_value(body).unwrap();
-    assert!(
-        matches!(&envelope.effects[..], [Effect::Watch(w)] if w.subscription_id == subscription)
-    );
+    // A heartbeat or offer holding the node row exclusively does not delay output.
+    let mut held = f.db.pool().await.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(f.node.node_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    // Every agent of the node polls with the node credential at once: no 409/503.
+    let q = request(&r);
+    let polls = (0..4).map(|_| http(&f, &q));
+    for (status, body) in futures_util::future::join_all(polls).await {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let envelope: Envelope = serde_json::from_value(body).unwrap();
+        assert!(
+            matches!(&envelope.effects[..], [Effect::Watch(w)] if w.subscription_id == subscription)
+        );
+    }
+    held.rollback().await.unwrap();
+    drop(control);
+    // A node revoked after it authenticated is still refused.
+    let node = auth(&f).await;
+    sqlx::query("UPDATE nodes SET revoked_at=now() WHERE id=$1")
+        .bind(f.node.node_id)
+        .execute(&f.db.pool().await)
+        .await
+        .unwrap();
     assert!(matches!(
-        runtime.poll(f.node.node_id),
-        Err(aq_server::error::AppError::Conflict(_))
+        terminal::peer::output_poll(&f.state, &node, &request(&r)).await,
+        Err(aq_server::error::AppError::CredentialRevoked)
     ));
-    let output = runtime.output_poll(f.node.node_id).unwrap();
-    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::CONFLICT);
-    drop(control);
-    let control = runtime.poll(f.node.node_id).unwrap();
-    drop(output);
-    assert_eq!(http(&f, &request(&r)).await.0, StatusCode::OK);
-    drop(control);
 }
 
 #[tokio::test]
@@ -543,12 +514,10 @@ async fn output_poll_refuses_non_output_modes_stale_credentials_boot_and_runtime
     ));
 }
 
-#[tokio::test]
-async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
-    use aq_session_protocol::{ArtifactRef, Digest, OutputFrame, OutputGap, Snapshot};
-    let (f, _dir, r) = Box::pin(setup()).await;
+fn unwatched_upload(r: &Register) -> PeerUpload {
+    use aq_session_protocol::{ArtifactRef, Digest, OutputFrame, Snapshot};
     let bytes = b"unwatched output".to_vec();
-    let upload = PeerUpload {
+    PeerUpload {
         version: 1,
         capability: r.capability.clone(),
         peer: r.peer.clone(),
@@ -581,7 +550,14 @@ async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
             digest: Digest::of(&bytes),
         }],
         gaps: vec![],
-    };
+    }
+}
+
+#[tokio::test]
+async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
+    use aq_session_protocol::OutputGap;
+    let (f, _dir, r) = Box::pin(setup()).await;
+    let upload = unwatched_upload(&r);
     let router = aq_server::build_worker_router(f.state.clone());
     let send = |body: &PeerUpload| {
         Request::post("/v1/terminal-relay/upload")
@@ -617,12 +593,8 @@ async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
     );
     // A trailing upload after the last watch expires is equally disposable.
     watch(&f, &r, 1000).await;
-    f.state
-        .config
-        .terminals
-        .as_ref()
-        .unwrap()
-        .runtime
+    let runtime = &f.state.config.terminals.as_ref().unwrap().runtime;
+    runtime
         .gap(
             &r.peer,
             &OutputGap {
@@ -633,20 +605,10 @@ async fn upload_without_watcher_discards_output_and_keeps_peer_checks() {
             NOW + 1001,
         )
         .unwrap();
-    f.state
-        .config
-        .terminals
-        .as_ref()
-        .unwrap()
-        .runtime
+    runtime
         .frame(&r.peer, upload.frames[0].clone(), NOW + 1001)
         .unwrap();
-    f.state
-        .config
-        .terminals
-        .as_ref()
-        .unwrap()
-        .runtime
+    runtime
         .snapshot(&r.peer, upload.snapshots[0].clone(), NOW + 1001)
         .unwrap();
     assert_eq!(

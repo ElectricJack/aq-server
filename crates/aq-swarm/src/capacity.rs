@@ -151,20 +151,18 @@ pub fn slot_summary(
     if truncated {
         gaps.push("Worker inventory exceeds the bounded read");
     }
-    let unknown_total = unadvertised || truncated;
+    let observed_total = |value| {
+        if unadvertised || truncated {
+            Total::unknown()
+        } else {
+            exact(value)
+        }
+    };
     let reason = (!gaps.is_empty()).then(|| gaps.join("; "));
     let summary = SlotSummary {
-        total: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(total)
-        },
+        total: observed_total(total),
         occupied: exact(occupied_all),
-        idle: if unknown_total {
-            Total::unknown()
-        } else {
-            exact(idle)
-        },
+        idle: observed_total(idle),
         observed_at: timestamp(now_ms)?,
         coverage: Coverage {
             state: if reason.is_some() {

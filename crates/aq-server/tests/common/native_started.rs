@@ -82,6 +82,7 @@ async fn install_runtime(f: &mut Fixture, request: &Request) -> NativeRegistrati
             definition_bodies: vec![],
             revision: 1,
             qualified_runtimes: vec![QualifiedRuntime {
+                backend_kind: None,
                 runtime: request.runtime.clone(),
                 qualification: request.qualification.clone(),
                 capabilities: vec![],

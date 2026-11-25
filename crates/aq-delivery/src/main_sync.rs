@@ -5,22 +5,18 @@
 //! offer starts from, and whether a handle is one a sync returned for a head.
 //! It decides nothing about results. Every limit is a Settings value
 //! (`delivery-limits`).
-use crate::{
-    DeliveryError, OperationContext, Result,
-    protocol::{self, WireResult},
-    source_checks::hex40,
-};
+use crate::{DeliveryError, OperationContext, Result, protocol::WireResult, source_checks::hex40};
 use aq_role_settings::delivery::DeliveryLimits;
 use aq_worker_protocol::ObjectId;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sqlx::{PgExecutor, PgPool, Row};
-use std::{path::Path, time::Duration};
-use tokio::sync::watch;
 use uuid::Uuid;
 
 mod ancestry;
-pub use ancestry::{OfferAncestry, dependent_current};
+mod follower;
+pub use ancestry::OfferAncestry;
+pub use follower::{MainFollower, sync_bound};
 
 /// The named ref of one repository binding that a project follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,18 +41,30 @@ impl Scope {
             reference,
         }
     }
+    fn valid_identity(&self) -> bool {
+        !self.project_id.is_nil()
+            && !self.repository_id.is_nil()
+            && (1..=i64::MAX as u64).contains(&self.binding_generation)
+    }
+    fn valid_branch(&self) -> bool {
+        self.reference.starts_with("refs/heads/")
+            && self.reference.len() <= 1024
+            && !self.reference.chars().any(char::is_control)
+    }
     fn validate(&self) -> Result<()> {
-        if self.project_id.is_nil()
-            || self.repository_id.is_nil()
-            || !(1..=i64::MAX as u64).contains(&self.binding_generation)
-            || !self.reference.starts_with("refs/heads/")
-            || self.reference.len() > 1024
-            || self.reference.chars().any(char::is_control)
-        {
+        if !self.valid_identity() || !self.valid_branch() {
             return Err(DeliveryError::InvalidInput("invalid main sync scope"));
         }
         Ok(())
     }
+}
+
+/// The retained commit and handle named by an admission at its observation time.
+#[derive(Clone, Copy)]
+pub struct ObservedHead<'a> {
+    pub head: &'a str,
+    pub handle: Uuid,
+    pub observed_at_ms: u64,
 }
 
 /// One head central aq-git synced from the remote and retained for a scope.
@@ -96,29 +104,21 @@ impl MainSync {
     pub fn fresh(&self, now_ms: u64, freshness_ms: u64) -> bool {
         now_ms >= self.synced_at_ms && now_ms - self.synced_at_ms < freshness_ms
     }
-    /// This record proves that `scope` resolved to `head`, retained by
-    /// `handle`, no later than `observed_at_ms`.
-    pub fn proves(&self, scope: &Scope, head: &str, handle: Uuid, observed_at_ms: u64) -> bool {
+    /// This record independently confirms the scope, retained commit, handle and observation time.
+    pub fn proves(&self, scope: &Scope, observation: ObservedHead<'_>) -> bool {
         self.validate()
             && self.scope() == *scope
-            && self.head == head
-            && self.retention_handle == handle
-            && self.synced_at_ms <= observed_at_ms
+            && self.head == observation.head
+            && self.retention_handle == observation.handle
+            && self.synced_at_ms <= observation.observed_at_ms
     }
 }
 
-/// Admission evidence (a serialized [`MainSync`]) proves `scope` resolved to
-/// `head`, retained by `handle`, no later than `observed_at_ms`.
-pub fn proves(
-    evidence: Option<&Value>,
-    scope: &Scope,
-    head: &str,
-    handle: Uuid,
-    observed_at_ms: u64,
-) -> bool {
+/// Check the admission observation against a serialized [`MainSync`].
+pub fn proves(evidence: Option<&Value>, scope: &Scope, observation: ObservedHead<'_>) -> bool {
     evidence
         .and_then(|value| serde_json::from_value::<MainSync>(value.clone()).ok())
-        .is_some_and(|synced| synced.proves(scope, head, handle, observed_at_ms))
+        .is_some_and(|synced| synced.proves(scope, observation))
 }
 
 /// The `repo.retain_ref` result: `{ref, head:{algorithm,hex}, retention_handle, synced_at_ms}`.
@@ -145,50 +145,6 @@ pub async fn limits(pool: &PgPool) -> Result<DeliveryLimits> {
         .await
         .map(|(limits, _)| limits)
         .map_err(|_| DeliveryError::InvalidInput("delivery limits unavailable"))
-}
-
-/// Sync `scope`'s ref from the remote and retain its head under one new
-/// operation, waiting at most `wait_ms`, then record the head.
-pub async fn retain(
-    pool: &PgPool,
-    socket: &Path,
-    scope: &Scope,
-    wait_ms: u64,
-    now_ms: impl Fn() -> u64,
-) -> Result<MainSync> {
-    scope.validate()?;
-    let context = OperationContext {
-        operation_id: Uuid::new_v4(),
-        repository_id: scope.repository_id,
-        binding_generation: scope.binding_generation,
-    };
-    context.validate()?;
-    let params = json!({"ref": scope.reference});
-    let mut request = serde_json::to_vec(&json!({"protocol_version":1,
-        "request_id":context.operation_id,"operation":"repo.retain_ref",
-        "repository_id":scope.repository_id,"operation_id":context.operation_id,
-        "expected_binding_generation":scope.binding_generation,"params":params,
-        "deadline_ms":wait_ms}))?;
-    request.push(b'\n');
-    let raw = protocol::exchange_within(socket, &request, Duration::from_millis(wait_ms)).await?;
-    let receipt = protocol::decode::<Retained>(raw, &context, "repo.retain_ref", &params)?;
-    let retained = receipt.outcome.map_err(|_| DeliveryError::Transport)?;
-    let synced = MainSync {
-        schema_version: 1,
-        project_id: scope.project_id,
-        repository_id: scope.repository_id,
-        binding_generation: scope.binding_generation,
-        reference: retained.reference,
-        head: retained.head.hex,
-        retention_handle: retained.retention_handle,
-        synced_at_ms: retained.synced_at_ms,
-    };
-    let now = now_ms();
-    if !synced.validate() || synced.synced_at_ms > now {
-        return Err(DeliveryError::Protocol);
-    }
-    record(pool, &synced, now).await?;
-    Ok(synced)
 }
 
 /// Record one retained head. A handle keeps the head it was first recorded
@@ -275,46 +231,6 @@ pub async fn accepts<'e>(
     .await?)
 }
 
-/// The head an offer for `scope` starts from: the latest record while it is
-/// younger than `main_freshness_ms`, otherwise one synced now.
-pub async fn current(
-    pool: &PgPool,
-    socket: &Path,
-    scope: &Scope,
-    now_ms: impl Fn() -> u64,
-) -> Result<MainSync> {
-    let limits = limits(pool).await?;
-    if let Some(synced) = cached(pool, scope, &limits, &now_ms).await? {
-        return Ok(synced);
-    }
-    refresh(pool, socket, scope, &limits, now_ms).await
-}
-
-async fn cached(
-    pool: &PgPool,
-    scope: &Scope,
-    limits: &DeliveryLimits,
-    now_ms: impl Fn() -> u64,
-) -> Result<Option<MainSync>> {
-    Ok(latest(pool, scope)
-        .await?
-        .filter(|synced| synced.fresh(now_ms(), limits.main_freshness_ms)))
-}
-
-async fn refresh(
-    pool: &PgPool,
-    socket: &Path,
-    scope: &Scope,
-    limits: &DeliveryLimits,
-    now_ms: impl Fn() -> u64,
-) -> Result<MainSync> {
-    let synced = retain(pool, socket, scope, limits.git_transfer_timeout_ms, &now_ms).await?;
-    if !synced.fresh(now_ms(), limits.main_freshness_ms) {
-        return Err(DeliveryError::Protocol);
-    }
-    Ok(synced)
-}
-
 /// The scopes of `projects` (project, followed named ref) whose execution
 /// binding exists and is enabled.
 pub async fn bound(pool: &PgPool, projects: &[(Uuid, String)]) -> Result<Vec<Scope>> {
@@ -350,71 +266,11 @@ pub async fn bound(pool: &PgPool, projects: &[(Uuid, String)]) -> Result<Vec<Sco
     Ok(scopes)
 }
 
-/// One pass of the sync loop: sync every bound scope; returns how many
-/// synced. One project's failure does not stop the others.
-pub async fn sync_bound(
-    pool: &PgPool,
-    socket: &Path,
-    projects: &[(Uuid, String)],
-    now_ms: impl Fn() -> u64,
-) -> Result<usize> {
-    let limits = limits(pool).await?;
-    let mut synced = 0;
-    for scope in bound(pool, projects).await? {
-        match retain(
-            pool,
-            socket,
-            &scope,
-            limits.git_transfer_timeout_ms,
-            &now_ms,
-        )
-        .await
-        {
-            Ok(_) => synced += 1,
-            Err(error) => {
-                tracing::warn!(project = %scope.project_id, %error, "main sync deferred")
-            }
-        }
-    }
-    Ok(synced)
-}
-
-/// The background loop: a pass now, then one every `main_sync_interval_ms`
-/// (read from Settings before each wait), until `stop`. `clock` is now.
-pub async fn run(
-    pool: PgPool,
-    socket: std::path::PathBuf,
-    projects: Vec<(Uuid, String)>,
-    clock: impl Fn() -> chrono::DateTime<chrono::Utc>,
-    mut stop: watch::Receiver<bool>,
-) {
-    if projects.is_empty() {
-        return;
-    }
-    let now_ms = || u64::try_from(clock().timestamp_millis()).unwrap_or(0);
-    loop {
-        tokio::select! {
-            biased;
-            _ = stop.wait_for(|stop| *stop) => return,
-            result = sync_bound(&pool, &socket, &projects, &now_ms) => {
-                if let Err(error) = result { tracing::warn!(%error, "main sync pass deferred"); }
-            }
-        }
-        let interval = limits(&pool)
-            .await
-            .unwrap_or_default()
-            .main_sync_interval_ms;
-        tokio::select! {
-            biased;
-            _ = stop.wait_for(|stop| *stop) => return,
-            _ = tokio::time::sleep(Duration::from_millis(interval)) => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol;
+    use serde_json::json;
     fn synced() -> MainSync {
         MainSync {
             schema_version: 1,
@@ -439,20 +295,52 @@ mod tests {
     #[test]
     fn a_record_proves_only_its_exact_scope_head_and_handle() {
         let s = synced();
-        let (scope, head, handle) = (s.scope(), s.head.clone(), s.retention_handle);
-        assert!(s.proves(&scope, &head, handle, 1000));
+        let scope = s.scope();
+        let observed = ObservedHead {
+            head: &s.head,
+            handle: s.retention_handle,
+            observed_at_ms: 1000,
+        };
+        assert!(s.proves(&scope, observed));
         assert!(
-            !s.proves(&scope, &head, handle, 999),
+            !s.proves(
+                &scope,
+                ObservedHead {
+                    observed_at_ms: 999,
+                    ..observed
+                }
+            ),
             "observed before the sync"
         );
-        assert!(!s.proves(&scope, &"b".repeat(40), handle, 2000));
-        assert!(!s.proves(&scope, &head, Uuid::new_v4(), 2000));
+        let later = ObservedHead {
+            observed_at_ms: 2000,
+            ..observed
+        };
+        assert!(!s.proves(
+            &scope,
+            ObservedHead {
+                head: &"b".repeat(40),
+                ..later
+            }
+        ));
+        assert!(!s.proves(
+            &scope,
+            ObservedHead {
+                handle: Uuid::new_v4(),
+                ..later
+            }
+        ));
         let mut other = scope.clone();
         other.reference = "refs/heads/other".into();
-        assert!(!s.proves(&other, &head, handle, 2000));
+        assert!(!s.proves(&other, later));
         other = scope.clone();
         other.binding_generation = 3;
-        assert!(!s.proves(&other, &head, handle, 2000));
+        assert!(!s.proves(&other, later));
+    }
+
+    #[test]
+    fn malformed_sync_evidence_is_rejected() {
+        let s = synced();
         for bad in [
             MainSync {
                 schema_version: 2,

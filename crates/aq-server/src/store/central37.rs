@@ -24,21 +24,18 @@ pub(super) fn function_body(name: &str, version: u32) -> Result<&'static str> {
     let stopped = include_str!("../../migrations/0136_stopped_handoff_consumption.sql");
     // A turn that stopped without a reply holds its mail until it is released.
     let released = include_str!("../../migrations/0137_release_stopped_turn.sql");
-    let source = if version >= 137 && released.contains(&format!("FUNCTION {name}(")) {
-        released
-    } else if version >= 136 && stopped.contains(&format!("FUNCTION {name}(")) {
-        stopped
-    } else if version >= 119 && internal.contains(&format!("FUNCTION {name}(")) {
-        internal
-    } else if version >= 109 && scoped.contains(&format!("FUNCTION {name}(")) {
-        scoped
-    } else if version >= 84 && agent.contains(&format!("FUNCTION {name}(")) {
-        agent
-    } else if version >= 49 && latest.contains(&format!("FUNCTION {name}(")) {
-        latest
-    } else {
-        MIGRATION
-    };
+    let marker = format!("FUNCTION {name}(");
+    let source = [
+        (137, released),
+        (136, stopped),
+        (119, internal),
+        (109, scoped),
+        (84, agent),
+        (49, latest),
+    ]
+    .into_iter()
+    .find(|(introduced, sql)| version >= *introduced && sql.contains(&marker))
+    .map_or(MIGRATION, |(_, sql)| sql);
     aq_profiled_state::sql_function_body(source, name).ok_or_else(corrupt)
 }
 

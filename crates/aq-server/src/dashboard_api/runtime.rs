@@ -32,12 +32,56 @@ pub struct Snapshot {
     pub expires: u64,
     pub created: u64,
 }
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct PageKey<'a> {
+    pub actor: Uuid,
+    pub partition: &'a str,
+    pub scope: &'a Scope,
+    pub resource: Resource,
+    pub limit: u16,
+    pub filters: &'a serde_json::Value,
+}
+
+impl PageKey<'_> {
+    fn binding(&self) -> Binding {
+        Binding {
+            principal: self.actor,
+            authorization_partition: self.partition.into(),
+            scope: serde_json::json!(self.scope),
+            filters: self.filters.clone(),
+            sort: "snapshot_membership,id".into(),
+            page_size: self.limit,
+            resource: format!("{:?}", self.resource),
+        }
+    }
+}
+
+impl Snapshot {
+    fn page_key(&self, limit: u16) -> PageKey<'_> {
+        PageKey {
+            actor: self.actor,
+            partition: &self.partition,
+            scope: &self.scope,
+            resource: self.resource,
+            limit,
+            filters: &self.filters,
+        }
+    }
+
+    fn member_count(&self) -> usize {
+        self.search
+            .as_ref()
+            .map_or(self.ids.len(), |s| s.hits.len())
+    }
+}
+
 pub struct Runtime {
     pub reviews: Option<std::sync::Arc<crate::reviews::Service>>,
     pub pool: PgPool,
+    pub(super) performance_pool: PgPool,
     pub gate: Semaphore,
     pub quota: super::quota::Collector,
-    codec: CursorCodec,
+    pub(super) codec: CursorCodec,
     snapshots: Mutex<BTreeMap<Uuid, Snapshot>>,
 }
 impl Runtime {
@@ -49,7 +93,19 @@ impl Runtime {
             .as_ref()
             .clone()
             .application_name("aq-dashboard-read");
+        let performance_options = options
+            .clone()
+            .application_name("aq-performance-read")
+            .options([
+                ("statement_timeout", "3500ms"),
+                ("lock_timeout", "500ms"),
+                ("default_transaction_read_only", "on"),
+            ]);
         Self {
+            performance_pool: PgPoolOptions::new()
+                .max_connections(3)
+                .acquire_timeout(Duration::from_millis(700))
+                .connect_lazy_with(performance_options),
             pool: PgPoolOptions::new()
                 .max_connections(2)
                 .acquire_timeout(Duration::from_millis(500))
@@ -89,80 +145,27 @@ impl Runtime {
         all.insert(snapshot.id, snapshot.clone());
         Ok(snapshot)
     }
-    fn binding(
-        actor: Uuid,
-        partition: &str,
-        scope: &Scope,
-        resource: Resource,
-        limit: u16,
-        filters: &serde_json::Value,
-    ) -> Binding {
-        Binding {
-            principal: actor,
-            authorization_partition: partition.into(),
-            scope: serde_json::json!(scope),
-            filters: filters.clone(),
-            sort: "snapshot_membership,id".into(),
-            page_size: limit,
-            resource: format!("{resource:?}"),
-        }
-    }
     pub fn next(&self, s: &Snapshot, offset: usize, limit: u16) -> Result<String> {
-        if offset > s.search.as_ref().map_or(s.ids.len(), |s| s.hits.len()) {
+        if offset > s.member_count() {
             return Err(Error::Invalid);
         }
         self.codec
-            .encode(
-                &Self::binding(
-                    s.actor,
-                    &s.partition,
-                    &s.scope,
-                    s.resource,
-                    limit,
-                    &s.filters,
-                ),
+            .encode(s.page_key(limit).binding().position(
                 &s.id.to_string(),
                 &offset.to_string(),
-                s.created,
-                s.expires,
-            )
+                s.created..s.expires,
+            ))
             .map_err(|_| Error::Unavailable)
     }
-    pub fn resume(
+    pub(super) fn resume(
         &self,
         token: &str,
-        actor: Uuid,
-        partition: &str,
-        target: (&Scope, Resource),
-        limit: u16,
+        key: PageKey<'_>,
         now: u64,
     ) -> Result<(Snapshot, usize)> {
-        self.resume_filtered(
-            token,
-            actor,
-            partition,
-            (target.0, target.1, &serde_json::json!({})),
-            limit,
-            now,
-        )
-    }
-    pub fn resume_filtered(
-        &self,
-        token: &str,
-        actor: Uuid,
-        partition: &str,
-        target: (&Scope, Resource, &serde_json::Value),
-        limit: u16,
-        now: u64,
-    ) -> Result<(Snapshot, usize)> {
-        let (scope, resource, filters) = target;
         let c = self
             .codec
-            .decode(
-                token,
-                &Self::binding(actor, partition, scope, resource, limit, filters),
-                now,
-            )
+            .decode(token, &key.binding(), now)
             .map_err(|error| match error {
                 CursorError::AuthorizationChanged => Error::AuthorizationChanged,
                 CursorError::RestartRequired => Error::Restart,
@@ -175,14 +178,8 @@ impl Runtime {
             .get(&snapshot)
             .filter(|s| s.expires > now)
             .ok_or(Error::Restart)?;
-        if s.actor != actor
-            || s.partition != partition
-            || &s.scope != scope
-            || s.resource != resource
-            || s.expires != c.expires
-            || &s.filters != filters
-            || offset > s.search.as_ref().map_or(s.ids.len(), |s| s.hits.len())
-        {
+        let same_page = s.page_key(key.limit) == key && s.expires == c.expires;
+        if !same_page || offset > s.member_count() {
             return Err(Error::Restart);
         }
         Ok((s.clone(), offset))
@@ -193,6 +190,9 @@ mod tests {
     use super::*;
     fn runtime() -> Runtime {
         Runtime {
+            performance_pool: PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/unused")
+                .unwrap(),
             pool: PgPoolOptions::new()
                 .connect_lazy("postgres://localhost/unused")
                 .unwrap(),
@@ -224,81 +224,41 @@ mod tests {
         let actor = Uuid::new_v4();
         let s = r.insert(snapshot(actor, 1), 1).unwrap();
         let t = r.next(&s, 1, 1).unwrap();
-        assert_eq!(
-            r.resume(
-                &t,
-                actor,
-                "1",
-                (&Scope::AllAuthorized, Resource::Sessions),
-                1,
-                2
-            )
-            .unwrap()
-            .1,
-            1
-        );
-        for (who, partition, scope, resource, limit, now) in [
-            (
-                Uuid::new_v4(),
-                "1",
-                Scope::AllAuthorized,
-                Resource::Sessions,
-                1,
-                2,
-            ),
-            (actor, "2", Scope::AllAuthorized, Resource::Sessions, 1, 2),
-            (
-                actor,
-                "1",
-                Scope::Project {
-                    project_id: Uuid::new_v4(),
-                },
-                Resource::Sessions,
-                1,
-                2,
-            ),
-            (actor, "1", Scope::AllAuthorized, Resource::Projects, 1, 2),
-            (actor, "1", Scope::AllAuthorized, Resource::Sessions, 2, 2),
-            (
-                actor,
-                "1",
-                Scope::AllAuthorized,
-                Resource::Sessions,
-                1,
-                TTL + 1,
-            ),
+        let key = s.page_key(1);
+        assert_eq!(r.resume(&t, key, 2).unwrap().1, 1);
+        let project_scope = Scope::Project {
+            project_id: Uuid::new_v4(),
+        };
+        for changed in [
+            PageKey {
+                actor: Uuid::new_v4(),
+                ..key
+            },
+            PageKey {
+                partition: "2",
+                ..key
+            },
+            PageKey {
+                scope: &project_scope,
+                ..key
+            },
+            PageKey {
+                resource: Resource::Projects,
+                ..key
+            },
+            PageKey { limit: 2, ..key },
         ] {
-            assert!(
-                r.resume(&t, who, partition, (&scope, resource), limit, now)
-                    .is_err()
-            );
+            assert!(r.resume(&t, changed, 2).is_err());
         }
+        assert!(r.resume(&t, key, TTL + 1).is_err());
         let mut restarted = runtime();
         restarted.codec = CursorCodec::default();
-        assert!(
-            restarted
-                .resume(
-                    &t,
-                    actor,
-                    "1",
-                    (&Scope::AllAuthorized, Resource::Sessions),
-                    1,
-                    2
-                )
-                .is_err()
-        );
+        assert!(restarted.resume(&t, key, 2).is_err());
         let mut bad = t.into_bytes();
         bad[30] = if bad[30] == b'a' { b'b' } else { b'a' };
         assert!(
-            r.resume(
-                std::str::from_utf8(&bad).unwrap(),
-                actor,
-                "1",
-                (&Scope::AllAuthorized, Resource::Sessions),
-                1,
-                2
-            )
-            .is_err()
+            r.resume(std::str::from_utf8(&bad).unwrap(), key, 2)
+                .is_err()
         );
     }
     #[tokio::test]
@@ -310,17 +270,7 @@ mod tests {
         for n in 2..=5 {
             r.insert(snapshot(actor, n), n).unwrap();
         }
-        assert!(
-            r.resume(
-                &token,
-                actor,
-                "1",
-                (&Scope::AllAuthorized, Resource::Sessions),
-                1,
-                6
-            )
-            .is_err()
-        );
+        assert!(r.resume(&token, first.page_key(1), 6).is_err());
         let mut too_many = snapshot(actor, 6);
         too_many.ids = vec![Uuid::new_v4(); MEMBERS + 1];
         assert!(r.insert(too_many, 6).is_err());

@@ -5,7 +5,7 @@
 //! record an action touches is derived from that registration, never taken
 //! from the request, and each must carry the registered owner, project and
 //! the configured Graph service's own verification.
-use super::META;
+use super::{META, Scope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -50,38 +50,10 @@ fn trusted(node: &Value, service: &str) -> bool {
         && node["deleted"] == false
         && node["retired"] == false
 }
-fn canonical(value: &Value, out: &mut String) {
-    match value {
-        Value::Object(map) => {
-            let mut keys: Vec<_> = map.keys().collect();
-            keys.sort();
-            out.push('{');
-            for (i, key) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&Value::String(key.clone()).to_string());
-                out.push(':');
-                canonical(&map[key], out);
-            }
-            out.push('}');
-        }
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                canonical(item, out);
-            }
-            out.push(']');
-        }
-        other => out.push_str(&other.to_string()),
-    }
-}
 fn digest(value: &Value) -> String {
-    let mut text = String::new();
-    canonical(value, &mut text);
+    let mut canonical = value.clone();
+    canonical.sort_all_objects();
+    let text = canonical.to_string();
     Sha256::digest(text.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -157,15 +129,57 @@ pub struct Registration {
     service: String,
 }
 
+fn owner_setup(state: &Map<String, Value>, spec: &Value, id: Uuid, closure: Uuid) -> bool {
+    spec["adopt"] == true
+        && closure == Uuid::new_v5(&id, b"closure-gate")
+        && state.get("setup") == Some(&json!(id))
+        && state
+            .get("repositories")
+            .and_then(Value::as_object)
+            .is_some_and(|r| (1..=32).contains(&r.len()) && r.values().all(Value::is_string))
+        && ["merges", "ordinary"]
+            .iter()
+            .all(|key| state.get(*key).is_some_and(Value::is_object))
+}
+type GateLink<'a> = (&'a str, Option<Uuid>, Option<Uuid>);
+fn gate_link(edge: &Value, id: Uuid, cleanup: bool) -> Option<GateLink<'_>> {
+    let kind = edge["edge_type"].as_str().unwrap_or_default();
+    let ends = (id_of(&edge["source"]), id_of(&edge["target"]));
+    // Cleanup work may have subtasks; only its own prerequisites
+    // and parent are registered.
+    let structural = edge["deleted"] != true && matches!(kind, "blocks" | "parent-child");
+    let relevant = ends.1 == Some(id) || (!cleanup && ends.0 == Some(id));
+    (structural && relevant).then_some((kind, ends.0, ends.1))
+}
+enum Receipt<'a> {
+    Decision(&'a Value),
+    Evidence(&'a Value),
+    Closure(&'a Value),
+}
+
+pub struct GateRevision<'a> {
+    pub tombstone: &'a Value,
+    pub snapshot: &'a Value,
+}
+
+pub struct ClosureReads<'a> {
+    pub epic: &'a Value,
+    pub gates: [&'a Value; 3],
+    pub records: &'a BTreeMap<Uuid, Value>,
+    pub tree: &'a Value,
+}
+
 impl Registration {
     /// Only a registration made by `epic.retirement.register` for this
     /// owner: the Graph-direct workflow's registrations name a Graph actor.
     pub fn load(
         node: &Value,
-        workspace: Uuid,
-        actor: Uuid,
-        service: &str,
-        project: Uuid,
+        Scope {
+            workspace,
+            actor,
+            service,
+            project,
+        }: Scope<'_>,
     ) -> Result<Self, Refusal> {
         let meta = metadata(node)?;
         let state = meta
@@ -206,18 +220,7 @@ impl Registration {
             "registration belongs to another owner",
         )?;
         require(
-            spec["adopt"] == true
-                && closure == Uuid::new_v5(&id, b"closure-gate")
-                && state.get("setup") == Some(&json!(id))
-                && state
-                    .get("repositories")
-                    .and_then(Value::as_object)
-                    .is_some_and(|r| {
-                        (1..=32).contains(&r.len()) && r.values().all(Value::is_string)
-                    })
-                && ["merges", "ordinary"]
-                    .iter()
-                    .all(|key| state.get(*key).is_some_and(Value::is_object)),
+            owner_setup(state, spec, id, closure),
             "registration state is not an AQ owner setup",
         )?;
         Ok(Self {
@@ -303,14 +306,12 @@ impl Registration {
             && data["kind"] == kind)
             .then(|| data.clone())
     }
-    fn create(
-        &self,
-        id: Uuid,
-        title: &str,
-        content_type: &str,
-        event: &Value,
-        evidence: Vec<Value>,
-    ) -> [Value; 2] {
+    fn create(&self, id: Uuid, receipt: Receipt<'_>, evidence: Vec<Value>) -> [Value; 2] {
+        let (title, content_type, event) = match receipt {
+            Receipt::Decision(event) => ("Record owner retirement decision", "decision", event),
+            Receipt::Evidence(event) => ("Record epic retirement evidence", "reference", event),
+            Receipt::Closure(event) => ("Close epic feature retirement", "decision", event),
+        };
         [
             json!({"op":"create_node","id":id,"kind":"knowledge","content_type":content_type,"title":title,
                 "metadata":{"aq:project_id":self.project,"aq:human_actor_id":self.actor,(META):event}}),
@@ -333,50 +334,40 @@ impl Registration {
 
     /// The approval, cleanup and closure tasks with exactly their registered
     /// dependencies, from their `/context` reads.
+    fn gate<'a>(
+        &self,
+        context: &'a Value,
+        id: Uuid,
+        cleanup: bool,
+    ) -> Result<(&'a Value, BTreeSet<GateLink<'a>>), Refusal> {
+        let node = &context["node"];
+        require(
+            context["truncated"] == false
+                && self.owned(node, id, "task")
+                && node["metadata"]["aq:human_actor_id"] == json!(self.actor),
+            "a retirement task is missing or belongs to another owner or project",
+        )?;
+        let edges = context["edges"].as_array().ok_or("no dependency context")?;
+        let links = edges
+            .iter()
+            .filter_map(|edge| gate_link(edge, id, cleanup))
+            .collect();
+        Ok((node, links))
+    }
     fn gates<'a>(
         &self,
-        approval: &'a Value,
-        cleanup: &'a Value,
-        closure: &'a Value,
+        [approval, cleanup, closure]: [&'a Value; 3],
     ) -> Result<[&'a Value; 3], Refusal> {
-        static NONE: Value = Value::Null;
-        let mut nodes = [&NONE; 3];
-        let mut links = [BTreeSet::new(), BTreeSet::new(), BTreeSet::new()];
-        for (i, (context, id)) in [
-            (approval, self.approval),
-            (cleanup, self.cleanup),
-            (closure, self.closure),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let node = &context["node"];
-            require(
-                context["truncated"] == false
-                    && self.owned(node, id, "task")
-                    && node["metadata"]["aq:human_actor_id"] == json!(self.actor),
-                "a retirement task is missing or belongs to another owner or project",
-            )?;
-            for edge in context["edges"].as_array().ok_or("no dependency context")? {
-                let kind = edge["edge_type"].as_str().unwrap_or_default();
-                let ends = (id_of(&edge["source"]), id_of(&edge["target"]));
-                // Cleanup work may have subtasks; only its own prerequisites
-                // and parent are registered.
-                if edge["deleted"] != true
-                    && matches!(kind, "blocks" | "parent-child")
-                    && (ends.1 == Some(id) || (i != 1 && ends.0 == Some(id)))
-                {
-                    links[i].insert((kind, ends.0, ends.1));
-                }
-            }
-            nodes[i] = node;
-        }
+        let (approval, a) = self.gate(approval, self.approval, false)?;
+        let (cleanup, c) = self.gate(cleanup, self.cleanup, true)?;
+        let (closure, g) = self.gate(closure, self.closure, false)?;
+        let nodes = [approval, cleanup, closure];
         let blocker = ("blocks", Some(self.approval), Some(self.cleanup));
         let child = |id| ("parent-child", Some(self.epic), Some(id));
         require(
-            links[0] == BTreeSet::from([blocker])
-                && links[1] == BTreeSet::from([blocker, child(self.cleanup)])
-                && links[2] == BTreeSet::from([child(self.closure)]),
+            a == BTreeSet::from([blocker])
+                && c == BTreeSet::from([blocker, child(self.cleanup)])
+                && g == BTreeSet::from([child(self.closure)]),
             "the retirement dependencies no longer match the registration",
         )?;
         require(
@@ -555,553 +546,14 @@ fn ids_valid(ids: [Uuid; 3]) -> bool {
     ids.iter().all(|id| !id.is_nil())
 }
 
-impl Restore {
-    pub fn valid(&self) -> bool {
-        ids_valid([self.operation_id, self.project_id, self.registration_id]) && self.revision >= 1
-    }
-    /// Undelete the registration's own closure gate at its guarded revision
-    /// through Graph restoration, then verify it again: restoration never
-    /// carries a verification badge forward.
-    pub fn plan(
-        &self,
-        reg: &Registration,
-        epic: &Value,
-        tombstone: &Value,
-        snapshot: &Value,
-    ) -> Planned {
-        require(
-            reg.id == self.registration_id && !reg.closed(),
-            "the registration is closed",
-        )?;
-        require(
-            reg.open_epic(epic),
-            "restore the gate of this project's open epic",
-        )?;
-        let guarded = json!({"aq:project_id":reg.project,"aq:human_actor_id":reg.actor,
-            (META):{"registration":reg.id,"role":"closure_gate"}});
-        require(
-            tombstone["id"] == json!(reg.closure)
-                && tombstone["kind"] == "task"
-                && tombstone["deleted"] == true
-                && tombstone["created_by"] == reg.service.as_str()
-                && tombstone["metadata"]["aq:project_id"] == json!(reg.project)
-                && reg.registered(tombstone, "closure_gate"),
-            "only the registration's deleted closure gate can be restored",
-        )?;
-        let node = &snapshot["node"];
-        require(
-            snapshot["relationships_available"] == true
-                && node["id"] == json!(reg.closure)
-                && node["content_revision"].as_i64() == Some(self.revision)
-                && node["kind"] == "task"
-                && node["title"] == GATE_TITLE
-                && node["task_state"] == "draft"
-                && node["metadata"] == guarded
-                && trusted(node, &reg.service)
-                && node["provenance"]
-                    .as_array()
-                    .is_some_and(|p| p.contains(&task_evidence(reg.epic, "epic"))),
-            "the revision is not the registration's verified closure gate",
-        )?;
-        let edge = Uuid::new_v5(
-            &reg.id,
-            format!("parent-child/{}/{}", reg.epic, reg.closure).as_bytes(),
-        );
-        let links: Vec<_> = snapshot["links"]
-            .as_array()
-            .ok_or("the revision has no relationship snapshot")?
-            .iter()
-            .filter(|l| l["deleted"] != true)
-            .collect();
-        require(
-            links.len() == 1
-                && links[0]["id"] == json!(edge)
-                && links[0]["edge_type"] == "parent-child"
-                && links[0]["source"] == json!(reg.epic)
-                && links[0]["target"] == json!(reg.closure),
-            "the revision lacks exactly its epic relationship",
-        )?;
-        let deleted = version(tombstone)?;
-        Ok(vec![
-            guard(&reg.node),
-            guard(epic),
-            json!({"op":"restore_node","id":reg.closure,"expected_version":deleted,"revision":self.revision,"include_lifecycle":true}),
-            verify(
-                reg.closure,
-                deleted + 1,
-                vec![task_evidence(reg.epic, "epic")],
-            ),
-        ])
-    }
-}
+mod restore;
 
-impl Decide {
-    pub fn valid(&self) -> bool {
-        ids_valid([self.operation_id, self.project_id, self.registration_id])
-            && self.revision >= 1
-            && (1..=32).contains(&self.vetted.len())
-            && commits(&self.vetted)
-            && self.evidence.valid()
-    }
-    /// Whether the approval task, from its `/context` read, is no longer
-    /// draft: then the plan reconciles an earlier release and needs the AQ
-    /// journal's registration provenance.
-    pub fn released(approval: &Value) -> bool {
-        approval["node"]["task_state"] != "draft"
-    }
-    /// Record the owner's decision. Approval completes the approval gate and
-    /// releases the existing cleanup task once, in the same batch.
-    ///
-    /// `journaled` says whether the AQ journal holds this owner's confirmed
-    /// operation that created the registration; it is read only when the
-    /// approval task was already [`released`](Self::released).
-    pub fn plan(
-        &self,
-        reg: &Registration,
-        approval: &Value,
-        cleanup: &Value,
-        closure: &Value,
-        journaled: bool,
-    ) -> Planned {
-        require(reg.id == self.registration_id, "wrong registration")?;
-        require(
-            reg.same_repositories(&self.vetted),
-            "vet exactly the registered repositories",
-        )?;
-        require(
-            reg.get("approved").is_null() && !reg.closed(),
-            "this generation has already released its cleanup",
-        )?;
-        require(
-            u64::try_from(self.revision).ok() == Some(reg.decision_revision() + 1),
-            "the decision revision must follow the last decision",
-        )?;
-        let [approval, cleanup, closure] = reg.gates(approval, cleanup, closure)?;
-        if approval["task_state"] != "draft" {
-            return self.reconcile(reg, [approval, cleanup, closure], journaled);
-        }
-        require(
-            approval["task_state"] == "draft"
-                && cleanup["task_state"] == "draft"
-                && trusted(cleanup, &reg.service),
-            "approval and the protected cleanup must both still be draft",
-        )?;
-        let anchor = reg.anchor(&format!("decision/{}", self.revision));
-        let event = json!({"registration":reg.id,"kind":"decision","revision":self.revision,
-            "choice":self.choice,"vetted":self.vetted,"evidence":self.evidence.json()});
-        let mut evidence = git_evidence(&self.vetted);
-        evidence.push(self.evidence.proof("integrated-vetting"));
-        let mut operations = reg
-            .create(
-                anchor,
-                "Record owner retirement decision",
-                "decision",
-                &event,
-                evidence,
-            )
-            .to_vec();
-        let mut state = reg.state.clone();
-        state.insert("decision".into(), json!(anchor));
-        state.insert("decision_revision".into(), json!(self.revision));
-        if self.choice == Choice::Approve {
-            operations.extend([
-                patch(approval, json!({"task_state":"completed",
-                    "metadata":marked(approval, json!({"registration":reg.id,"role":"approval","decision":anchor}))?})),
-                verify(reg.approval, version(approval)? + 1, vec![self.evidence.proof("integrated-vetting")]),
-                patch(cleanup, json!({"task_state":"active",
-                    "metadata":marked(cleanup, json!({"registration":reg.id,"role":"cleanup","approval":anchor}))?})),
-            ]);
-            state.insert("approved".into(), json!(anchor));
-        }
-        operations.extend(reg.save(state)?);
-        Ok(operations)
-    }
+mod decide;
 
-    /// Record the owner's approval for an existing registration whose
-    /// approval task finished as ordinary work, releasing the cleanup task,
-    /// before any decision was recorded. The task state is never taken as
-    /// approval: only this explicit, vetted owner decision is. The original
-    /// tasks are version-guarded and left as they are, so nothing is released
-    /// again and the work that ran is preserved.
-    fn reconcile(&self, reg: &Registration, gates: [&Value; 3], journaled: bool) -> Planned {
-        let [approval, cleanup, closure] = gates;
-        require(
-            journaled,
-            "the registration was not created by this owner's AQ registration",
-        )?;
-        require(
-            self.choice == Choice::Approve,
-            "released cleanup work cannot be returned for changes",
-        )?;
-        require(
-            reg.get("decision").is_null() && reg.decision_revision() == 0,
-            "a decision is already recorded for this registration",
-        )?;
-        require(
-            approval["task_state"] == "completed" && metadata(approval)?.get(META).is_none(),
-            "the approval task did not complete outside a decision",
-        )?;
-        require(
-            matches!(cleanup["task_state"].as_str(), Some("active" | "completed"))
-                && cleanup["metadata"][META] == json!({"registration":reg.id,"role":"cleanup"}),
-            "the cleanup task is not the registered task released before a decision",
-        )?;
-        require(
-            closure["task_state"] == "draft",
-            "the closure gate is not the registration's open draft",
-        )?;
-        let observed = |node: &Value| json!({"id":node["id"],"version":node["version"],"task_state":node["task_state"]});
-        let anchor = reg.anchor(&format!("decision/{}", self.revision));
-        let event = json!({"registration":reg.id,"kind":"decision","revision":self.revision,
-            "choice":self.choice,"vetted":self.vetted,"evidence":self.evidence.json(),
-            "released_before_decision":{"approval":observed(approval),"cleanup":observed(cleanup)}});
-        let mut evidence = git_evidence(&self.vetted);
-        evidence.push(self.evidence.proof("integrated-vetting"));
-        evidence.push(task_evidence(reg.approval, "approval"));
-        let mut operations: Vec<Value> = [approval, cleanup, closure].map(guard).to_vec();
-        operations.extend(reg.create(
-            anchor,
-            "Record owner retirement decision",
-            "decision",
-            &event,
-            evidence,
-        ));
-        let mut state = reg.state.clone();
-        state.insert("decision".into(), json!(anchor));
-        state.insert("decision_revision".into(), json!(self.revision));
-        state.insert("approved".into(), json!(anchor));
-        state.insert("reconciled".into(), json!(anchor));
-        operations.extend(reg.save(state)?);
-        Ok(operations)
-    }
-}
+mod evidence;
+mod evidence_fields;
 
-fn https(url: &str) -> bool {
-    url.strip_prefix("https://").is_some_and(|rest| {
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        !authority.is_empty()
-            && !authority.contains('@')
-            && url.bytes().all(|b| b.is_ascii_graphic())
-    })
-}
-
-impl Evidence {
-    pub fn valid(&self) -> bool {
-        let repository = self
-            .repository
-            .as_ref()
-            .is_some_and(|r| (1..=96).contains(&r.len()));
-        let sha = self.sha.as_deref().is_some_and(commit);
-        let fields = match self.kind {
-            EvidenceKind::Merge => {
-                repository
-                    && sha
-                    && self
-                        .pull_request
-                        .as_deref()
-                        .is_some_and(|u| u.len() <= 2048 && https(u))
-                    && self.supersedes_merge.is_none_or(|id| !id.is_nil())
-                    && self.passed.is_none()
-                    && self.flag_absent.is_none()
-                    && self.revisions.is_none()
-                    && self.builds.is_none()
-            }
-            EvidenceKind::Ordinary => {
-                repository
-                    && sha
-                    && self.passed.is_some()
-                    && self.flag_absent.is_some()
-                    && self.pull_request.is_none()
-                    && self.supersedes_merge.is_none()
-                    && self.revisions.is_none()
-                    && self.builds.is_none()
-            }
-            EvidenceKind::Integrated => {
-                self.revisions
-                    .as_ref()
-                    .is_some_and(|r| (1..=32).contains(&r.len()) && commits(r))
-                    && self.builds.as_ref().is_some_and(|b| {
-                        (1..=32).contains(&b.len()) && b.values().all(Artifact::valid)
-                    })
-                    && self.passed.is_some()
-                    && self.repository.is_none()
-                    && self.sha.is_none()
-                    && self.pull_request.is_none()
-                    && self.supersedes_merge.is_none()
-                    && self.flag_absent.is_none()
-            }
-        };
-        ids_valid([self.operation_id, self.project_id, self.registration_id])
-            && self.approval_revision >= 1
-            && self.evidence.valid()
-            && fields
-    }
-    fn event(&self, reg: &Registration) -> Value {
-        let mut event = json!({"registration":reg.id,"kind":self.kind,
-            "approval_revision":self.approval_revision,"evidence":self.evidence.json()});
-        let map = event.as_object_mut().expect("object");
-        let mut put = |key: &str, value: Option<Value>| {
-            if let Some(value) = value {
-                map.insert(key.into(), value);
-            }
-        };
-        put("repository", self.repository.as_ref().map(|v| json!(v)));
-        put("pull_request", self.pull_request.as_ref().map(|v| json!(v)));
-        put("sha", self.sha.as_ref().map(|v| json!(v)));
-        put("supersedes_merge", self.supersedes_merge.map(|v| json!(v)));
-        put("flag_absent", self.flag_absent.map(|v| json!(v)));
-        put("revisions", self.revisions.as_ref().map(|v| json!(v)));
-        put(
-            "builds",
-            self.builds
-                .as_ref()
-                .map(|b| b.iter().map(|(r, a)| (r.clone(), a.json())).collect()),
-        );
-        put("passed", self.passed.map(|v| json!(v)));
-        event
-    }
-    /// Record one owner-attested cleanup receipt against the approved
-    /// decision: a merge, the ordinary build at that merge, or the integrated
-    /// check over exactly the passing flag-free ordinary builds.
-    pub fn plan(
-        &self,
-        reg: &Registration,
-        gates: [&Value; 3],
-        records: &BTreeMap<Uuid, Value>,
-    ) -> Planned {
-        require(
-            reg.id == self.registration_id && !reg.closed(),
-            "this epic retirement is closed",
-        )?;
-        let (_, decision) = reg.approved(records)?;
-        require(
-            decision["revision"].as_i64() == Some(i64::from(self.approval_revision)),
-            "evidence must name the approved decision revision",
-        )?;
-        let [approval, _, _] = reg.gates(gates[0], gates[1], gates[2])?;
-        require(
-            approval["task_state"] == "completed",
-            "the approval gate has not released cleanup",
-        )?;
-        let current = reg.evidence(records)?;
-        let event = self.event(reg);
-        let anchor = reg.anchor(&format!("evidence/{}", digest(&event)));
-        let mut state = reg.state.clone();
-        let commits: BTreeMap<String, String> = match self.kind {
-            EvidenceKind::Merge | EvidenceKind::Ordinary => {
-                let repo = self.repository.clone().unwrap_or_default();
-                let sha = self.sha.clone().unwrap_or_default();
-                require(
-                    reg.repositories().contains_key(repo.as_str()),
-                    "the repository is not registered",
-                )?;
-                if self.kind == EvidenceKind::Merge {
-                    require(
-                        reg.get("merges")[&repo]
-                            == self.supersedes_merge.map_or(Value::Null, |id| json!(id)),
-                        "a merge must supersede the repository's current receipt",
-                    )?;
-                    require(
-                        current
-                            .merges
-                            .get(&repo)
-                            .is_none_or(|m| m["sha"] != sha.as_str()),
-                        "a repair merge must have a different SHA",
-                    )?;
-                    let mut merges = reg.get("merges").as_object().cloned().unwrap_or_default();
-                    merges.insert(repo.clone(), json!(anchor));
-                    let mut ordinary = reg.get("ordinary").as_object().cloned().unwrap_or_default();
-                    ordinary.remove(&repo);
-                    state.insert("merges".into(), Value::Object(merges));
-                    state.insert("ordinary".into(), Value::Object(ordinary));
-                    state.insert("integrated".into(), Value::Null);
-                } else {
-                    require(
-                        current
-                            .merges
-                            .get(&repo)
-                            .is_some_and(|m| m["sha"] == sha.as_str()),
-                        "the ordinary build must match the recorded merge SHA",
-                    )?;
-                    let mut ordinary = reg.get("ordinary").as_object().cloned().unwrap_or_default();
-                    ordinary.insert(repo.clone(), json!(anchor));
-                    state.insert("ordinary".into(), Value::Object(ordinary));
-                }
-                BTreeMap::from([(repo, sha)])
-            }
-            EvidenceKind::Integrated => {
-                let merged = current.merge_shas();
-                require(
-                    json!(self.revisions) == json!(merged)
-                        && merged
-                            .keys()
-                            .map(String::as_str)
-                            .eq(reg.repositories().into_keys()),
-                    "the integrated check must name every registered repository's merge SHA",
-                )?;
-                let builds: BTreeMap<_, _> = current
-                    .ordinary
-                    .iter()
-                    .filter(|(_, b)| b["passed"] == true && b["flag_absent"] == true)
-                    .map(|(repo, b)| (repo.clone(), b["evidence"].clone()))
-                    .collect();
-                require(
-                    event["builds"] == json!(builds) && builds.keys().eq(merged.keys()),
-                    "the integrated check must name the passing flag-free ordinary builds",
-                )?;
-                state.insert("integrated".into(), json!(anchor));
-                self.revisions.clone().unwrap_or_default()
-            }
-        };
-        let mut evidence = git_evidence(&commits);
-        evidence.push(self.evidence.proof(match self.kind {
-            EvidenceKind::Merge => "merge",
-            EvidenceKind::Ordinary => "ordinary",
-            EvidenceKind::Integrated => "integrated",
-        }));
-        let mut operations = reg
-            .create(
-                anchor,
-                "Record epic retirement evidence",
-                "reference",
-                &event,
-                evidence,
-            )
-            .to_vec();
-        operations.extend(reg.save(state)?);
-        Ok(operations)
-    }
-}
-
-/// What still keeps the epic open, first item only.
-fn outstanding(
-    reg: &Registration,
-    recorded: &Recorded<'_>,
-    cleanup: &Value,
-    tree: &Value,
-) -> Result<(), Refusal> {
-    for repo in reg.repositories().into_keys() {
-        let merge = recorded
-            .merges
-            .get(repo)
-            .ok_or("a cleanup merge is pending")?;
-        let build = recorded
-            .ordinary
-            .get(repo)
-            .filter(|b| b["sha"] == merge["sha"])
-            .ok_or("an ordinary build is pending")?;
-        require(
-            build["passed"] == true && build["flag_absent"] == true,
-            "an ordinary build or flag removal check failed",
-        )?;
-    }
-    let integrated = recorded
-        .integrated
-        .as_ref()
-        .ok_or("the integrated acceptance check is pending")?;
-    require(
-        integrated["passed"] == true,
-        "the integrated acceptance check failed",
-    )?;
-    let builds: Map<String, Value> = recorded
-        .ordinary
-        .iter()
-        .map(|(repo, b)| (repo.clone(), b["evidence"].clone()))
-        .collect();
-    require(
-        integrated["revisions"] == json!(recorded.merge_shas())
-            && integrated["builds"] == Value::Object(builds),
-        "the integrated check no longer matches the ordinary builds",
-    )?;
-    require(
-        cleanup["task_state"] == "completed",
-        "the cleanup task has not completed through normal delivery",
-    )?;
-    require(
-        tree["truncated"] == false && tree["node"]["id"] == json!(reg.epic),
-        "the epic task list is unavailable",
-    )?;
-    for child in tree["children"]
-        .as_array()
-        .ok_or("the epic task list is unavailable")?
-    {
-        let task = &child["node"];
-        let own = [json!(reg.cleanup), json!(reg.closure)].contains(&task["id"]);
-        require(
-            own || matches!(task["task_state"].as_str(), Some("completed" | "canceled")),
-            "another epic task is still open",
-        )?;
-    }
-    Ok(())
-}
-
-impl Close {
-    pub fn valid(&self) -> bool {
-        ids_valid([self.operation_id, self.project_id, self.registration_id])
-    }
-    /// Complete the closure gate and the epic atomically with a verified
-    /// closure receipt, only after the approved decision, every registered
-    /// repository's merge and passing flag-free ordinary build, the passing
-    /// integrated check over exactly those builds, and the cleanup task's
-    /// ordinary completion.
-    pub fn plan(
-        &self,
-        reg: &Registration,
-        epic: &Value,
-        gates: [&Value; 3],
-        records: &BTreeMap<Uuid, Value>,
-        tree: &Value,
-    ) -> Planned {
-        require(
-            reg.id == self.registration_id && !reg.closed(),
-            "this epic retirement is closed",
-        )?;
-        let [approval, cleanup, closure] = reg.gates(gates[0], gates[1], gates[2])?;
-        let (decision, approved) = reg.approved(records)?;
-        require(
-            approval["task_state"] == "completed" && closure["task_state"] == "draft",
-            "the retirement gates are in the wrong state for closure",
-        )?;
-        let recorded = reg.evidence(records)?;
-        outstanding(reg, &recorded, cleanup, tree)?;
-        require(
-            reg.open_epic(epic),
-            "the epic was closed outside the workflow",
-        )?;
-        let anchor = reg.anchor("close");
-        let event = json!({"registration":reg.id,"kind":"closure","approval_revision":approved["revision"],
-            "decision":decision["id"],"cleanup":reg.cleanup,"merges":reg.get("merges"),
-            "ordinary":reg.get("ordinary"),"integrated":reg.get("integrated")});
-        let integrated = recorded
-            .integrated
-            .as_ref()
-            .ok_or("the integrated acceptance check is pending")?;
-        let proof = json!({"kind":"artifact","source_id":"integrated-acceptance",
-            "artifact_id":integrated["evidence"]["artifact_id"],"sha256":integrated["evidence"]["sha256"]});
-        let mut operations: Vec<Value> = [approval, cleanup, decision]
-            .into_iter()
-            .chain(recorded.nodes.iter().copied())
-            .map(guard)
-            .collect();
-        operations.extend(reg.create(
-            anchor,
-            "Close epic feature retirement",
-            "decision",
-            &event,
-            vec![proof.clone(), task_evidence(reg.cleanup, "cleanup")],
-        ));
-        operations.extend([
-            patch(closure, json!({"task_state":"completed",
-                "metadata":marked(closure, json!({"registration":reg.id,"role":"closure_gate","receipt":anchor}))?})),
-            verify(reg.closure, version(closure)? + 1, vec![proof]),
-            patch(epic, json!({"task_state":"completed"})),
-        ]);
-        let mut state = reg.state.clone();
-        state.insert("closed".into(), json!(anchor));
-        operations.extend(reg.save(state)?);
-        Ok(operations)
-    }
-}
+mod close;
 
 #[cfg(test)]
 mod tests;

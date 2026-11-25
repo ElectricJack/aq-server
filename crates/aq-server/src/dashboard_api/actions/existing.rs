@@ -68,35 +68,46 @@ pub(crate) async fn owner(state: &AppState, user: &User) -> Result<(), ApiError>
         .fetch_optional(&state.store.pool)
         .await?
         .ok_or_else(|| ApiError::for_status(StatusCode::FORBIDDEN))?;
-    if row.get::<String, _>("role") != "owner"
-        || row.get::<String, _>("email") != user.email
-        || row.get::<Option<String>, _>("issuer") != user.issuer
-        || row.get::<Option<String>, _>("subject") != user.subject
-    {
+    let same_account =
+        row.get::<String, _>("role") == "owner" && row.get::<String, _>("email") == user.email;
+    if !same_account {
+        return Err(ApiError::for_status(StatusCode::FORBIDDEN));
+    }
+    let same_identity = row.get::<Option<String>, _>("issuer") == user.issuer
+        && row.get::<Option<String>, _>("subject") == user.subject;
+    if !same_identity {
         return Err(ApiError::for_status(StatusCode::FORBIDDEN));
     }
     Ok(())
 }
-pub(crate) fn request(
-    kind: &str,
-    id: Uuid,
-    entity: &str,
-    subject: Uuid,
-    revision: String,
-    payload: serde_json::Value,
-    version_key: &str,
-) -> ActionRequest {
-    ActionRequest {
-        operation_id: id,
-        kind: kind.into(),
-        subject: EntityRef {
-            entity_type: entity.into(),
-            id: subject.to_string(),
-            revision: Some(revision.clone()),
-        },
-        expected_versions: std::collections::BTreeMap::from([(version_key.into(), revision)]),
-        reason: None,
-        payload,
+pub(crate) struct VersionedSubject<'a> {
+    pub kind: &'a str,
+    pub id: Uuid,
+    pub revision: String,
+    pub version_key: &'a str,
+}
+impl VersionedSubject<'_> {
+    pub(crate) fn request(
+        self,
+        kind: &str,
+        operation_id: Uuid,
+        payload: serde_json::Value,
+    ) -> ActionRequest {
+        ActionRequest {
+            operation_id,
+            kind: kind.into(),
+            subject: EntityRef {
+                entity_type: self.kind.into(),
+                id: self.id.to_string(),
+                revision: Some(self.revision.clone()),
+            },
+            expected_versions: std::collections::BTreeMap::from([(
+                self.version_key.into(),
+                self.revision,
+            )]),
+            reason: None,
+            payload,
+        }
     }
 }
 pub(crate) fn subject(
@@ -110,12 +121,11 @@ pub(crate) fn subject(
         .id
         .parse::<Uuid>()
         .map_err(|_| ApiError::invalid())?;
-    if id.is_nil()
-        || request.subject.entity_type != entity
-        || request.subject.revision.as_deref() != Some(expected)
-        || request.expected_versions
-            != std::collections::BTreeMap::from([(key.into(), expected.into())])
-    {
+    let matches_subject = !id.is_nil() && request.subject.entity_type == entity;
+    let pinned_revision = request.subject.revision.as_deref() == Some(expected)
+        && request.expected_versions
+            == std::collections::BTreeMap::from([(key.into(), expected.into())]);
+    if !matches_subject || !pinned_revision {
         return Err(ApiError::invalid());
     }
     Ok(id)
