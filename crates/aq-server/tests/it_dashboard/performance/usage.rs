@@ -12,7 +12,7 @@ use aq_accounting::{
 };
 use aq_server::{
     execution::{
-        authority::hot::HotState,
+        authority::hot::{HotState, LaunchOwner},
         profiled::{Effects, Retention, Status, Stop},
     },
     intelligence::config::{AccountingCatalog, IntelligenceConfig, LoadedRegistry},
@@ -148,20 +148,33 @@ async fn seed_failed_attempt(f: &Fixture, at_ms: i64) {
         .execute(&mut *tx)
         .await
         .unwrap();
-    let mut state = HotState::from_compat(&f.profiled).unwrap();
     let stopped = artifact("synthetic-stop", b"stop");
     let retained = artifact("synthetic-retained", b"retained");
     let quiescent = artifact("synthetic-effects", b"effects");
-    state.status = Status::Finished;
-    state.stop = Stop::Stopped {
-        receipt: stopped.clone(),
+    let state = HotState {
+        schema_version: 1,
+        status: Status::Finished,
+        grant: f.profiled.grant.clone(),
+        execution_deadline_ms: f.profiled.execution_deadline_ms,
+        owner: Some(LaunchOwner {
+            guardian_id: Uuid::new_v4(),
+            launch_id: Uuid::new_v4(),
+            reservation_id: Uuid::new_v4(),
+        }),
+        preparation_operation_id: None,
+        cancellation_id: None,
+        revoked: false,
+        stop: Stop::Stopped {
+            receipt: stopped.clone(),
+        },
+        retention: Retention::Retained {
+            receipt: retained.clone(),
+        },
+        effects: Effects::Quiescent {
+            receipt: quiescent.clone(),
+        },
     };
-    state.retention = Retention::Retained {
-        receipt: retained.clone(),
-    };
-    state.effects = Effects::Quiescent {
-        receipt: quiescent.clone(),
-    };
+    state.validate_against(&f.profiled.offer.binding).unwrap();
     sqlx::query(
         "INSERT INTO profiled_authority_hot(attempt_id,state,record_revision,authority_revision,
          grant_revision) VALUES($1,$2,2,2,1)",
