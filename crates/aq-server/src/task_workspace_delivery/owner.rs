@@ -233,6 +233,16 @@ async fn write(
     }
     let body = read_plan(&mut tx, &plan).await?;
     tx.commit().await.map_err(crate::error::db)?;
+    // Bundle-backed Home tasks use the existing default settlement loop.
+    // Replaying it after evidence changes also recovers a lost response.
+    if let Err(error) = Box::pin(crate::profiled_execution::settlement::settle_after_record(
+        &state,
+        subject.report,
+    ))
+    .await
+    {
+        tracing::warn!(report = %subject.report, ?error, "workspace evidence retained; Home settlement deferred");
+    }
     Ok(Json(body))
 }
 

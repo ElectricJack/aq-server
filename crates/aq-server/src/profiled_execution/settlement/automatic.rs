@@ -91,10 +91,6 @@ pub async fn settle_after_record(
             AutoDisposition::Held => conflict = s.reason.filter(|reason| terminal_conflict(reason)),
         }
     }
-    #[cfg(feature = "delivery_playbook")]
-    if crate::task_workspace_delivery::has_supplemental(state, &mut tx, &r).await? {
-        return Ok(None);
-    }
     // H5: a parked (Held / RetainedSuspended) predecessor is suspended, never
     // success or failure; the hold survives until the successor's BootstrapAck.
     let suspended =
@@ -102,6 +98,14 @@ pub async fn settle_after_record(
     let (verdict, evidence) = match suspended {
         Some((reason, evidence)) => (Verdict::Hold(reason), evidence),
         None => evaluate_locked(state, &mut tx, &r, delivery).await?,
+    };
+    #[cfg(feature = "delivery_playbook")]
+    let verdict = if matches!(verdict, Verdict::Complete)
+        && !crate::task_workspace_delivery::gate(state, &mut tx, &r, true).await?
+    {
+        Verdict::Hold("workspace_delivery_pending")
+    } else {
+        verdict
     };
     let time = now(state)?;
     let (disposition, reason) = match verdict {

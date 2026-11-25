@@ -5,7 +5,7 @@ mod owner;
 
 use crate::{AppState, error::AppError, profiled_execution::results::RecordedResult};
 use serde::Serialize;
-use sqlx::{PgConnection, Row};
+use sqlx::{PgConnection, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -65,7 +65,7 @@ fn available(_state: &AppState) -> bool {
 
 async fn load(
     state: &AppState,
-    db: &mut PgConnection,
+    db: &mut Transaction<'_, Postgres>,
     result: &RecordedResult,
 ) -> Result<Option<Plan>, AppError> {
     if !available(state) {
@@ -82,7 +82,7 @@ async fn load(
     }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind(format!("workspace:{home}:{task}"))
-        .execute(&mut *db)
+        .execute(&mut **db)
         .await
         .map_err(crate::error::db)?;
     sqlx::query(
@@ -91,7 +91,7 @@ async fn load(
            SELECT target_project_id FROM task_workspace_sources WHERE home_project_id=$1 AND task_id=$2
          )
          ORDER BY project_id FOR SHARE",
-    ).bind(home).bind(task).fetch_all(&mut *db).await.map_err(crate::error::db)?;
+    ).bind(home).bind(task).fetch_all(&mut **db).await.map_err(crate::error::db)?;
     let supplemental = sqlx::query(
         "WITH required AS (
            SELECT target_project_id FROM task_workspace_git_grants WHERE attempt_id=$3
@@ -116,7 +116,7 @@ async fn load(
          LEFT JOIN task_workspace_result_sources r ON r.attempt_id=g.attempt_id AND r.target_project_id=g.target_project_id
          LEFT JOIN project_execution_bindings b ON b.project_id=p.target_project_id
          ORDER BY p.target_project_id",
-    ).bind(home).bind(task).bind(attempt).fetch_all(&mut *db).await.map_err(crate::error::db)?;
+    ).bind(home).bind(task).bind(attempt).fetch_all(&mut **db).await.map_err(crate::error::db)?;
     let mut plan = Plan {
         home,
         task,
@@ -151,33 +151,82 @@ async fn load(
     let generation =
         i64::try_from(source.repository_binding_generation).map_err(|_| AppError::Internal)?;
     let home_result = sqlx::query(
-        "SELECT r.head,b.binding#>>'{publication,target}' AS target_ref,b.binding#>>'{publication,mode}' AS publication_mode
-         FROM delivery_pushed_results r CROSS JOIN project_execution_bindings b
-         WHERE r.report_id=$1 AND r.attempt_id=$2 AND r.head IS NOT NULL
-           AND b.project_id=$3 AND b.revision=$4 AND b.binding->>'repository_id'=$5::uuid::text
+        "SELECT r.head,
+           EXISTS(SELECT 1 FROM delivery_git_grants g WHERE g.attempt_id=$2) AS enrolled,
+           b.binding#>>'{publication,target}' AS target_ref,
+           b.binding#>>'{publication,mode}' AS publication_mode
+         FROM project_execution_bindings b
+         LEFT JOIN delivery_pushed_results r ON r.report_id=$1 AND r.attempt_id=$2
+         WHERE b.project_id=$3 AND b.revision=$4 AND b.binding->>'repository_id'=$5::uuid::text
            AND b.binding->>'repository_binding_generation'=$6::bigint::text AND b.binding->>'enabled'='true'",
     ).bind(result.report.report_id).bind(attempt).bind(home).bind(revision).bind(source.repository_id).bind(generation)
-     .fetch_optional(&mut *db).await.map_err(crate::error::db)?;
-    if let Some(row) = home_result {
-        let base = aq_machine_control::lineage_base(db, task, &source.resolved_object.hex).await?;
-        let head: String = row.get("head");
-        plan.sources.insert(
-            home,
-            Source {
-                project_id: home,
-                project_revision: revision,
-                repository_id: source.repository_id,
-                binding_generation: generation,
-                changed: base.as_deref() != Some(head.as_str()),
-                head,
-                target_ref: row.get("target_ref"),
-                publication_mode: row.get("publication_mode"),
-            },
-        );
-    } else {
-        plan.missing_projects.push(home);
+     .fetch_optional(&mut **db).await.map_err(crate::error::db)?;
+    match home_result {
+        Some(row) if row.get::<bool, _>("enrolled") => {
+            if let Some(head) = row.get::<Option<String>, _>("head") {
+                let base =
+                    aq_machine_control::lineage_base(db, task, &source.resolved_object.hex).await?;
+                let changed = base.as_deref() != Some(head.as_str());
+                plan.sources.insert(
+                    home,
+                    home_source(
+                        home,
+                        revision,
+                        generation,
+                        source.repository_id,
+                        head,
+                        changed,
+                        &row,
+                    ),
+                );
+            } else {
+                plan.missing_projects.push(home);
+            }
+        }
+        Some(row) => {
+            if let Some((head, changed)) =
+                crate::profiled_execution::settlement::retained_bundle_head(db, result).await?
+            {
+                plan.sources.insert(
+                    home,
+                    home_source(
+                        home,
+                        revision,
+                        generation,
+                        source.repository_id,
+                        head,
+                        changed,
+                        &row,
+                    ),
+                );
+            } else {
+                plan.missing_projects.push(home);
+            }
+        }
+        None => plan.missing_projects.push(home),
     }
     Ok(Some(plan))
+}
+
+fn home_source(
+    project_id: Uuid,
+    project_revision: i64,
+    binding_generation: i64,
+    repository_id: Uuid,
+    head: String,
+    changed: bool,
+    row: &sqlx::postgres::PgRow,
+) -> Source {
+    Source {
+        project_id,
+        project_revision,
+        repository_id,
+        binding_generation,
+        head,
+        changed,
+        target_ref: row.get("target_ref"),
+        publication_mode: row.get("publication_mode"),
+    }
 }
 
 async fn check_passed(db: &mut PgConnection, plan: &Plan) -> Result<bool, AppError> {
@@ -218,7 +267,7 @@ async fn target_accepted(
 
 pub(crate) async fn gate(
     state: &AppState,
-    db: &mut PgConnection,
+    db: &mut Transaction<'_, Postgres>,
     result: &RecordedResult,
     human_home_review: bool,
 ) -> Result<bool, AppError> {
@@ -247,21 +296,6 @@ async fn accepts_plan(
     Ok(true)
 }
 
-pub(crate) async fn has_supplemental(
-    state: &AppState,
-    db: &mut PgConnection,
-    result: &RecordedResult,
-) -> Result<bool, AppError> {
-    has_scope(
-        state,
-        db,
-        result.report.binding.attempt_id,
-        result.spec.lifecycle.project_id,
-        result.spec.task.task_id,
-    )
-    .await
-}
-
 pub(crate) async fn has_scope(
     state: &AppState,
     db: &mut PgConnection,
@@ -282,7 +316,7 @@ pub(crate) async fn has_scope(
 /// the removed branch or create a replacement PR for that same revision.
 pub(crate) async fn replay_home_publication(
     state: &AppState,
-    db: &mut PgConnection,
+    db: &mut Transaction<'_, Postgres>,
     result: &RecordedResult,
     command: &str,
 ) -> Result<Option<aq_delivery::commands::Completion>, AppError> {
@@ -323,7 +357,7 @@ pub(crate) async fn replay_home_publication(
     .bind(&home.target_ref)
     .bind(home.repository_id)
     .bind(home.binding_generation)
-    .fetch_optional(&mut *db)
+    .fetch_optional(&mut **db)
     .await
     .map_err(crate::error::db)?;
     if let Some((number, url)) = proof {
@@ -346,7 +380,7 @@ pub(crate) async fn replay_home_publication(
     .bind(home.binding_generation)
     .bind(&home.head)
     .bind(&home.target_ref)
-    .fetch_optional(&mut *db)
+    .fetch_optional(&mut **db)
     .await
     .map_err(crate::error::db)?;
     if let Some(url) = url
@@ -364,7 +398,7 @@ pub(crate) async fn replay_home_publication(
 
 pub(crate) async fn merge_readiness(
     state: &AppState,
-    db: &mut PgConnection,
+    db: &mut Transaction<'_, Postgres>,
     result: &RecordedResult,
 ) -> Result<aq_playbook_domain::delivery_runs::MergeReadiness, AppError> {
     use aq_admission::outcome::ReviewRequirement;

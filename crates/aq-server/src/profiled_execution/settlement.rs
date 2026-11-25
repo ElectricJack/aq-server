@@ -10,6 +10,8 @@ mod automatic;
 mod completion;
 use aq_profiled_state::default_policy;
 mod facts;
+#[cfg(feature = "delivery_playbook")]
+pub(crate) use facts::retained_bundle_head;
 mod owner;
 pub mod publication;
 #[cfg(feature = "delivery_playbook")]
