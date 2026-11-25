@@ -123,7 +123,8 @@ pub enum Refusal {
 /// source's repository from the source's commit. The lease is the task ref's
 /// head in central aq-git now, or absent when it has none. `update_from_main`
 /// follows the return decision. An authorized retry after the return limit
-/// also refreshes a retained head with a recorded PR conflict on that result.
+/// also refreshes a retained head with a recorded PR conflict or a confirmed
+/// branch publication rejection on that result.
 pub async fn offer(
     pool: &PgPool,
     git: &SocketGit,
@@ -137,30 +138,26 @@ pub async fn offer(
     };
     let task_ref = task_branch(task);
     let lease = git.show_ref(&target, &task_ref).await?;
-    let update_from_main: Option<bool> = sqlx::query_scalar(
-        "SELECT (decision='returned' AND COALESCE(update_from_main,false)) OR
-                (decision='held' AND COALESCE(reason='returns_exhausted',false) AND EXISTS(
-                  SELECT 1 FROM playbook_host_operations o
-                  WHERE o.subject_id=d.task_id::text AND o.command_name IN ('pull_request.await_checks','pull_request.merge')
-                    AND o.status='conflict' AND o.request#>>'{result_ready,result_id}'=d.result_id::text
-                    AND COALESCE(o.request->>'result_head',o.request->>'expected_head_sha')=$2
-                    AND COALESCE(o.request->'check_target',o.request->'merge_target')->'git'
-                      @> $3::jsonb))
-         FROM delivery_decisions d WHERE task_id=$1 ORDER BY decided_at_ms DESC,result_id LIMIT 1",
-    )
-    .bind(task)
-    .bind(lease.as_deref())
-    .bind(serde_json::json!({"repository_id":repository,"binding_generation":source.repository_binding_generation}))
-    .fetch_optional(pool)
-    .await
-    .map_err(|_| GitFailure::transport())?;
+    let project_revision =
+        i64::try_from(source.project_revision).map_err(|_| GitFailure::transport())?;
+    let update_from_main =
+        sqlx::query_scalar(include_str!("git_grant/publication_retry_refresh.sql"))
+            .bind(task)
+            .bind(lease.as_deref())
+            .bind(serde_json::json!({"repository_id":repository,"binding_generation":source.repository_binding_generation}))
+            .bind(source.project_id)
+            .bind(project_revision)
+            .bind(&task_ref)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| GitFailure::transport())?;
     Ok(GitGrant {
         endpoint: endpoint(repository),
         repository_id: repository,
         base: source.resolved_object.hex.clone(),
         task_ref,
         lease,
-        update_from_main: update_from_main.unwrap_or(false),
+        update_from_main,
     })
 }
 
