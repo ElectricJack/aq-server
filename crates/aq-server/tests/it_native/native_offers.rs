@@ -111,6 +111,10 @@ async fn actual_native_offer_seals_real_owner_artifacts_source_and_graph_without
         original["native_offer"],
         serde_json::to_value(native).unwrap()
     );
+    assert_eq!(
+        original["native_offer"]["offered"]["clock"]["server_time_ms"],
+        native.offered.clock.server_time_ms
+    );
     let (status, replayed) = poll_offered(&c).await;
     assert_eq!(status, 200, "{replayed}");
     let ControlReply::Poll(replayed) =

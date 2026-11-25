@@ -1,3 +1,4 @@
+-- StoredOffer uses OfferWire, which preserves the original flat NativeOffer fields.
 WITH window_claims AS (
     SELECT l.attempt_id, a.task_id, l.launch_binding->>'assignment_generation' AS generation,
            (l.graph_task_observation#>>'{native_offer,offered,clock,server_time_ms}')::BIGINT AS recorded_at_ms
