@@ -574,19 +574,12 @@ mod adapters {
     }
 
     #[tokio::test]
-    async fn a_route_naming_an_unoffered_level_or_harness_is_refused() {
+    async fn a_route_naming_an_unoffered_level_is_refused_but_preferences_are_optional() {
         let h = host(true, None).await;
         let task = h.graph.task("Nothing can take it", json!({}));
-        for change in [
-            json!({"level": "deep-high"}),
-            json!({"harnesses": ["cursor"]}),
-            json!({"providers": ["google"]}),
-            json!({"level": "complex-high", "harnesses": ["codex"]}),
-        ] {
-            let refused = h.route(task, 3, change.clone()).await;
-            assert_eq!(refused.outcome, "refused", "{change}");
-            assert_eq!(refused.output["reason"], "not_offered", "{change}");
-        }
+        let refused = h.route(task, 3, json!({"level": "deep-high"})).await;
+        assert_eq!(refused.outcome, "refused");
+        assert_eq!(refused.output["reason"], "not_offered");
         assert!(h.routing.writes.lock().unwrap().is_empty());
         // Recorded, so the server does not ask again until something changes.
         let (version, outcome, reasons) = h.emission(task).await.unwrap();
@@ -602,7 +595,7 @@ mod adapters {
             .await;
         assert_eq!(kept.outcome, "routed");
         assert_eq!(kept.output["harnesses"], json!(["codex"]));
-        assert_eq!(kept.output["prefer"], json!(["codex"]));
+        assert_eq!(kept.output["prefer"], json!(["codex", "claude"]));
         assert_eq!(h.graph.stored(task).unwrap().h, ["codex"]);
     }
 
@@ -626,7 +619,7 @@ mod adapters {
     }
 
     #[tokio::test]
-    async fn the_route_records_the_artifact_digest_and_hold_pins_the_provider() {
+    async fn the_route_records_the_artifact_digest_and_uses_only_preferences() {
         let h = host(true, None).await;
         let digest = format!("sha256:{}", "ab".repeat(32));
         h.activated(&digest).await;
@@ -642,7 +635,7 @@ mod adapters {
         assert_eq!(stored.d.as_deref(), Some(&digest[..16]));
         assert_eq!(
             (stored.s, stored.i, stored.a),
-            (Source::Router, ProviderIntent::Pinned, 2)
+            (Source::Router, ProviderIntent::Any, 2)
         );
         let (_, route) = h.routing.writes.lock().unwrap()[0].clone();
         let route = route.unwrap();
